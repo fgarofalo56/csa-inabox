@@ -17759,11 +17759,17 @@ export function DatamartEditor({ item, id }: { item: FabricItemType; id: string 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
-        {/* Always-visible deprecation banner */}
+        {/* Always-visible deprecation banner — datamart is a MIGRATION TEMPLATE, not a creatable editor.
+            The "Deprecated" badge renders in every state (new / loading / existing) so the migration
+            framing is unmistakable. deprecated:true keeps this item out of the New-item gallery. */}
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>Datamarts are deprecated.</MessageBarTitle>
-            Migrate to a Synapse Serverless warehouse + semantic model.
+            <MessageBarTitle>
+              Datamarts are deprecated{' '}
+              <Badge appearance="outline" color="warning">Deprecated</Badge>
+            </MessageBarTitle>
+            Migration template — migrate to a Synapse Serverless warehouse + Azure Analysis Services
+            semantic model. No Fabric or Power BI capacity is required.
           </MessageBarBody>
           {!isNew && !alreadyMigrated && (
             <MessageBarActions>

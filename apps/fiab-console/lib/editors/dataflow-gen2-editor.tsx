@@ -30,6 +30,7 @@ import {
   Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible-side-panel';
 import { EmptyState } from '@/lib/components/empty-state';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { DataflowCopilotPane } from '@/lib/components/pipeline/dataflow/dataflow-copilot-pane';
@@ -119,7 +120,15 @@ export function DataflowGen2Editor({ item, id }: Props) {
   const [sink, setSink] = useState<DataflowSink | null>(null);
   const [dirty, setDirty] = useState(false);
   const [tab, setTab] = useState<'authoring' | 'output' | 'script'>('authoring');
-  const [copilotOpen, setCopilotOpen] = useState(true);
+  // Copilot pane open/collapsed persists PER SURFACE — collapsed hands the
+  // Power Query canvas its full width back, leaving a thin re-expand rail.
+  // `collapsed` is the inverse of the existing `copilotOpen` flag, so every
+  // call site below keeps working (incl. the `(v) => !v` updater form).
+  const [copilotCollapsed, setCopilotCollapsed] = useCollapsibleState(`dataflow-copilot.${id}`, false);
+  const copilotOpen = !copilotCollapsed;
+  const setCopilotOpen = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
+    setCopilotCollapsed((prev) => !(typeof v === 'function' ? (v as (p: boolean) => boolean)(!prev) : v));
+  }, [setCopilotCollapsed]);
   const [activeQuery, setActiveQuery] = useState('');
   const [listErr, setListErr] = useState<string | null>(null);
   const [listHint, setListHint] = useState<string | null>(null);
@@ -380,12 +389,14 @@ export function DataflowGen2Editor({ item, id }: Props) {
                   onChange={(v) => { setDefText(v); setDirty(true); }}
                   onActiveQueryChange={setActiveQuery}
                 />
-                {copilotOpen && (
+                {copilotOpen ? (
                   <DataflowCopilotPane
                     mScript={defText}
                     activeQuery={activeQuery}
                     onApply={(nextM) => { setDefText(nextM); setDirty(true); }}
                   />
+                ) : (
+                  <CollapsedRail side="right" label="Copilot" onExpand={() => setCopilotOpen(true)} />
                 )}
               </div>
             ) : (

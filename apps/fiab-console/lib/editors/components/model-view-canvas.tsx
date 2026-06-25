@@ -46,6 +46,11 @@ import {
   MathFormula20Regular, Play16Regular,
 } from '@fluentui/react-icons';
 import { accentTint, accentGradient, portStyle } from '@/lib/components/canvas/canvas-node-kit';
+// Shared drag-to-resize host: supplies the definite outer height React Flow
+// needs to frame fitView and persists the per-surface height to localStorage.
+// Pointer + keyboard + ARIA live in the primitive; this surface only declares
+// its bounds/storage key (mirrors pipeline-designer.tsx wiring).
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 /**
@@ -360,7 +365,11 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     width: '100%',
-    height: '520px',
+    // Fills the wrapping <ResizableCanvasRegion>, which now owns the definite
+    // pixel height React Flow needs to frame fitView and makes it user-resizable
+    // + persisted (was a fixed height:520px before the region took ownership).
+    height: '100%',
+    minHeight: 0,
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -512,6 +521,16 @@ function ModelViewCanvasInner({
     tables.find((t) => t.id === tableId)?.columns || [];
 
   return (
+    // User-resizable outer height (drag the bottom grip or use the keyboard),
+    // persisted per-surface. Bounds: minPx 320 (the inherent floor for the
+    // table-card grid) up to ~80vh, default 520 — matching the shell's prior
+    // fixed height so first paint is visually unchanged.
+    <ResizableCanvasRegion
+      storageKey="semantic-model-view"
+      defaultPx={520}
+      minPx={320}
+      ariaLabel="Resize model diagram canvas height"
+    >
     <div className={st.shell} data-testid="model-view-canvas" aria-label="Model view relationship canvas">
       <ReactFlow
         nodes={rfNodes}
@@ -631,6 +650,7 @@ function ModelViewCanvasInner({
         </DialogSurface>
       </Dialog>
     </div>
+    </ResizableCanvasRegion>
   );
 }
 

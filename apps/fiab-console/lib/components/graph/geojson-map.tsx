@@ -137,8 +137,12 @@ export function GeoJsonMap({ geojson, width = 640, height = 360, rasterUrl, laye
   }, [bounds, width, height]);
 
   if (!project) {
+    // Fill a flexible-height host (e.g. a drag-resizable canvas region) while
+    // never collapsing standalone: `minHeight` falls back to the surface's
+    // intrinsic default (`height`, an inherent layout dim) when no definite
+    // parent height is imposed.
     return (
-      <div style={{ width, maxWidth: '100%', height, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground3 }}>
+      <div style={{ width: '100%', maxWidth: '100%', height: '100%', minHeight: height, display: 'flex', alignItems: 'center', justifyContent: 'center', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground3 }}>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No coordinates to plot.</Caption1>
       </div>
     );
@@ -148,11 +152,19 @@ export function GeoJsonMap({ geojson, width = 640, height = 360, rasterUrl, laye
   const fill = tokens.colorBrandBackground2;
 
   return (
-    <div style={{ position: 'relative', width, maxWidth: '100%' }}>
+    // Column flex so the SVG and caption share whatever height the host gives
+    // us: `height:100%` lets a drag-resizable canvas region (geo-editors'
+    // ResizableCanvasRegion) drive the height, while `minHeight` floors the
+    // box at the surface's intrinsic default (`height`, an inherent layout
+    // dim) so it never collapses when used standalone. The viewBox/projection
+    // are unchanged — `preserveAspectRatio` just scales the same drawing into
+    // the resized box (uniform, centered; no geometry change).
+    <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', width: '100%', maxWidth: '100%', minWidth: 0, height: '100%', minHeight: height }}>
       <svg
-        width="100%" viewBox={`0 0 ${width} ${height}`}
+        width="100%" height="100%" viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="xMidYMid meet"
         role="img" aria-label="GeoJSON map"
-        style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: rasterUrl ? 'transparent' : tokens.colorNeutralBackground3, display: 'block' }}
+        style={{ flex: '1 1 0', minHeight: 0, width: '100%', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: rasterUrl ? 'transparent' : tokens.colorNeutralBackground3, display: 'block' }}
       >
         {rasterUrl && (
           // eslint-disable-next-line @next/next/no-img-element

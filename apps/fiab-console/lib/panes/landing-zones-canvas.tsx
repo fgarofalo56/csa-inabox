@@ -22,6 +22,7 @@ import '@xyflow/react/dist/style.css';
 import { makeStyles, tokens, Subtitle2, Body1 } from '@fluentui/react-components';
 import { Building20Regular, Box20Regular } from '@fluentui/react-icons';
 import { accentTint } from '@/lib/components/canvas/canvas-node-kit';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import type { LandingZone, HubCoords, DlzAttachState } from '@/lib/setup/landing-zones-model';
 
 /**
@@ -41,13 +42,14 @@ const STATE_STYLE: Record<DlzAttachState, { bg: string; border: string; label: s
 
 const useStyles = makeStyles({
   shell: {
-    // Definite height — NOT `height: 100%`. The canvas is rendered inside an
-    // auto-height flex-column card, so a percentage height resolves against an
-    // indefinite parent and collapses to ~0; ReactFlow then measures the
-    // container as 0×0 at mount and `fitView` zooms the (small) hub+DLZ cluster
-    // to nothing → blank canvas. A definite height makes the container real on
-    // the first paint so the map (nodes, edges, Controls, MiniMap, legend) shows.
-    position: 'relative', width: '100%', height: '480px', minHeight: '420px',
+    // Fills the wrapping <ResizableCanvasRegion>, which now owns the definite
+    // pixel height (user-resizable, persisted per-surface; was a fixed 480px).
+    // ReactFlow needs a definite height to measure the container at mount and
+    // frame `fitView`; the region supplies it, so `height: 100%` here resolves
+    // against the region's resolved height instead of an indefinite parent
+    // (a percentage height against an indefinite parent collapses to ~0, which
+    // is why the surface previously pinned a fixed height).
+    position: 'relative', width: '100%', height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge, overflow: 'hidden',
@@ -203,21 +205,17 @@ function CanvasInner({
     if (zone) onSelect(zone);
   }, [onSelect]);
 
-  if (zones.length === 0) {
-    return (
-      <div className={styles.shell}>
-        <div className={styles.empty}>
-          <Subtitle2>No Data Landing Zones attached yet</Subtitle2>
-          <Body1 style={{ color: tokens.colorNeutralForeground3, maxWidth: 420 }}>
-            Resource Graph found no <code>rg-csa-loom-dlz-*</code> resource groups the Console can see.
-            Attach a Data Landing Zone to populate this map.
-          </Body1>
-        </div>
+  const body = zones.length === 0 ? (
+    <div className={styles.shell}>
+      <div className={styles.empty}>
+        <Subtitle2>No Data Landing Zones attached yet</Subtitle2>
+        <Body1 style={{ color: tokens.colorNeutralForeground3, maxWidth: 420 }}>
+          Resource Graph found no <code>rg-csa-loom-dlz-*</code> resource groups the Console can see.
+          Attach a Data Landing Zone to populate this map.
+        </Body1>
       </div>
-    );
-  }
-
-  return (
+    </div>
+  ) : (
     <div className={styles.shell}>
       <ReactFlowProvider>
         <ReactFlow nodes={nodes} edges={edges} onNodeClick={onNodeClick} fitView fitViewOptions={FIT_VIEW_OPTIONS} minZoom={0.2} attributionPosition="bottom-left">
@@ -238,6 +236,23 @@ function CanvasInner({
         </ReactFlow>
       </ReactFlowProvider>
     </div>
+  );
+
+  return (
+    // User-resizable outer height (drag the bottom grip or use the keyboard —
+    // Arrow/Shift+Arrow/PageUp-Down/Home/End), persisted per-surface under
+    // `loom.canvasHeight.landing-zones`. Bounds: minPx 360 (the inherent floor
+    // for the hub+DLZ ring plus the legend) up to ~80vh; default 480 matches
+    // the shell's prior fixed height so first paint is visually unchanged. The
+    // region hands React Flow the definite pixel height fitView needs to frame.
+    <ResizableCanvasRegion
+      storageKey="landing-zones"
+      defaultPx={480}
+      minPx={360}
+      ariaLabel="Resize landing zones canvas height"
+    >
+      {body}
+    </ResizableCanvasRegion>
   );
 }
 

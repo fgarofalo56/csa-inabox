@@ -19,12 +19,16 @@
  * prompt-flow REST) and run (POST to the run route). No mock data lives here.
  */
 
-import { useMemo, useState, type ReactNode } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Field, Dropdown, Option,
-  Tab, TabList, makeStyles, tokens,
+  Tab, TabList, makeStyles, mergeClasses, tokens,
   Tooltip,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Add20Regular, Delete20Regular, BrainCircuit20Regular,
   Code20Regular, DocumentText20Regular, ArrowEnterLeft20Regular, ArrowExportLtr20Regular,
@@ -38,9 +42,12 @@ import {
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, flex: 1, minHeight: 0 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', padding: '4px 0' },
-  body: { display: 'grid', gridTemplateColumns: '1fr 360px', gap: tokens.spacingHorizontalS, flex: 1, minHeight: '420px' },
+  // The canvas column (1fr) is wrapped in <ResizableCanvasRegion> which owns the
+  // user-set height; the 360px side panel stretches to match. `minHeight:0` keeps
+  // both columns from blowing out the grid track.
+  body: { display: 'grid', gridTemplateColumns: '1fr 360px', gap: tokens.spacingHorizontalS, alignItems: 'stretch', minHeight: 0 },
   canvasWrap: {
-    position: 'relative', minHeight: '420px', overflow: 'hidden',
+    position: 'relative', height: '100%', minHeight: 0, overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     backgroundImage: `radial-gradient(${tokens.colorNeutralStroke2} 1px, transparent 1px)`,
@@ -205,7 +212,8 @@ export function PromptFlowBuilder({ dag, onChange, connections, connectionsLoadi
       </div>
 
       <div className={s.body}>
-        {/* ---- Graph canvas ---- */}
+        {/* ---- Graph canvas (drag the bottom grip to resize the canvas height) ---- */}
+        <ResizableCanvasRegion storageKey="prompt-flow" defaultPx={420} minPx={280} ariaLabel="Resize prompt flow canvas height">
         <div className={s.canvasWrap} data-testid="prompt-flow-canvas" aria-label="Prompt flow graph">
           <div className={s.inner}>
             <svg className={s.svg} width="100%" height="100%" aria-hidden="true">
@@ -264,6 +272,7 @@ export function PromptFlowBuilder({ dag, onChange, connections, connectionsLoadi
             )}
           </div>
         </div>
+        </ResizableCanvasRegion>
 
         {/* ---- Side panel ---- */}
         <div className={s.panel}>

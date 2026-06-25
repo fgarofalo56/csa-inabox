@@ -121,11 +121,21 @@ export interface FabricItemType {
   /** When this item opens the unified pipeline editor, lock the runtime selector to this value. */
   runtimePreset?: 'adf' | 'synapse' | 'fabric';
   /**
-   * This item is a TEMPLATE that instantiates aliasOf/templateOf with a pre-wired
-   * spec (templateId resolves the spec via lib/components/pipeline/templates/catalog.ts).
+   * This item is a TEMPLATE. templateOf names the PRIMARY head slug the user lands
+   * in (page.tsx: applyTemplate = !!templateOf && isNew → effective editor =
+   * findItemType(templateOf); already-created instances open their OWN editor for
+   * back-compat). Two flavors of templateId resolve against two registries:
+   *   • a pipeline-template id → seeds ONE pre-wired spec (PIPELINE_TEMPLATES in
+   *     lib/components/pipeline/templates/catalog.ts), or
+   *   • an app-template id → scaffolds MULTIPLE real, wired backing items
+   *     server-side (app-templates registry + instantiation route). For the
+   *     app-template flavor the dialog POSTs the route and routes to the returned
+   *     primary item id, so the demote stays fully Azure-native + no-vaporware.
    */
   templateOf?: string;
-  /** Template id resolved by lib/components/pipeline/templates/catalog.ts. */
+  /** Template id — resolves via PIPELINE_TEMPLATES (single seeded spec) OR the
+   *  app-templates registry (multi-item Azure-native scaffold, e.g.
+   *  'slate-workshop-app', 'rayfin-azure-stack'). */
   templateId?: string;
   /** HIDDEN from the default browse grid, but STILL returned by search. Distinct
    *  from hiddenFromGallery (fully hidden everywhere). Use for consolidated
@@ -149,29 +159,30 @@ export interface FabricItemType {
 export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   // Fabric Apps — Rayfin (Build 2026 preview)
   { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true,
-    description: 'Code-first app backend (database, auth, Data APIs, storage) — and model-bound web apps backed by a real semantic model — deployed with the Rayfin SDK + CLI.',
+    templateOf: 'slate-app', templateId: 'rayfin-azure-stack',
+    description: 'Backed template — scaffolds an Azure-native equivalent of the Fabric Rayfin stack: Azure Functions (user-data-function) + Cosmos DB (azure-cosmos-account) + a Static Web App (slate-app) you can actually run. No Fabric.',
     learnContent: {
-      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). You define data models, auth, APIs, storage, and business logic in TypeScript with the @microsoft/rayfin-core decorators, then `npx rayfin up` deploys it to your Fabric workspace. Beyond the general code-first case, Build 2026 #28 lets you build a web app backed by a real semantic model — in Loom's Model binding tab you pick a model, select its measures + group-by fields, see a live data preview, and Loom emits a typed read-view connector. The Azure-native default for model binding is Azure Analysis Services, so it works with no Fabric or Power BI workspace. The Rayfin CLI itself runs on your dev machine; Loom authors the spec and emits the SDK model, the connector, and the exact deploy commands.",
+      "overview": "Rayfin is Microsoft's open-source Backend-as-a-Service for Fabric (Build 2026 preview). The CSA Loom equivalent is a BACKED template that scaffolds the same shape with real Azure services: picking it INSTANTIATES three real, editable Loom items — a user-data-function item (the API tier on Azure Functions), an azure-cosmos-account item (the data store on Cosmos DB), and a slate-app item (the Static Web App web tier) — and wires them together so the web app calls the Functions route and the Functions item reads/writes the Cosmos store. Azure-native: no Fabric workspace required, and every scaffolded item is a runnable Loom item, not a stub. (The original code-first Rayfin SDK/CLI path — TypeScript + @microsoft/rayfin-core decorators deployed with `npx rayfin up` — remains available as an opt-in alternative.)",
       "steps": [
         {
-          "title": "Define entities + services",
-          "body": "Add entities (with text/boolean/date/number fields) and toggle the services you need — database, storage, Fabric (Entra) auth, static hosting."
+          "title": "Pick workspace + name",
+          "body": "Choose the target Loom workspace and a name for the app stack."
         },
         {
-          "title": "Bind a semantic model (Build 2026 #28)",
-          "body": "In the Model binding tab, pick a semantic model (Azure Analysis Services tabular models by default — no Fabric needed), select measures + group-by fields, and run a live preview to see the exact data your app would render. Loom emits a typed data connector that issues that DAX."
+          "title": "Instantiate the stack",
+          "body": "Loom creates a real user-data-function item (Azure Functions API), an azure-cosmos-account item (Cosmos DB store), and a slate-app item (Static Web App), then wires the web app to the Functions route and the Functions item to the Cosmos store."
         },
         {
-          "title": "Generate the model + connector + commands",
-          "body": "Loom emits rayfin/model.ts (entities), rayfin/data/model-view.ts (the model-bound read view), and the exact CLI sequence — copy them into your project."
+          "title": "Land in the web app",
+          "body": "You open the slate-app web tier, already bound to the Functions + Cosmos backend. Add widgets and queries over the live API."
         },
         {
-          "title": "Scaffold + deploy",
-          "body": "Run `npm create @microsoft/rayfin@latest <app> --workspace <ws>`, then `npx rayfin init --services db,storage --auth-methods fabric`, set AAS_SERVER for the bound model, then `npx rayfin up` to deploy."
+          "title": "Author the backend",
+          "body": "Open the user-data-function item to author the API (Python/TypeScript) and the azure-cosmos-account item to manage containers — all real, editable Loom items."
         },
         {
-          "title": "It runs in your tenant",
-          "body": "The deployed Rayfin item runs under your identity/network/governance; app data lands in OneLake and the bound model is read over the AAS data-plane under the app's identity."
+          "title": "Run it on your tenant",
+          "body": "The stack runs on your tenant's Azure Functions, Cosmos DB, and Static Web Apps under your identity/network/governance; any unprovisioned runtime surfaces each editor's honest infra-gate while the full UI still renders."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/apps/overview"
@@ -628,13 +639,13 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   // Data Warehouse — DEPRECATED datamart (migration-only; no create path).
   { slug: 'datamart', displayName: 'Datamart (deprecated)', restType: 'Datamart', category: 'Data Warehouse',
     noRestApi: true, deprecated: true,
-    description: 'DEPRECATED — Power BI datamarts are replaced by a Synapse Serverless database + Azure Analysis Services semantic model. No new datamarts can be created; existing ones can be migrated.',
+    description: 'DEPRECATED — migration template. Power BI datamarts migrate to a Synapse Serverless warehouse + Azure Analysis Services semantic model. No new datamarts can be created; use the Migrate action on existing ones.',
     learnContent: {
-      "overview": "Power BI datamarts are deprecated. The Loom replacement is a Synapse Serverless user database (always-on OPENROWSET / external-table analytics) plus an Azure Analysis Services tabular model (Import or DirectQuery over Synapse) — no Fabric or Power BI Premium capacity required. The Migrate action provisions both automatically and stamps a migration receipt on the original item.",
+      "overview": "Power BI datamarts are deprecated, so this is a MIGRATION template — not a create surface. No new datamarts can be authored; the entry exists only to migrate existing ones. The Loom migration path converts a datamart into a Synapse Serverless user database (always-on OPENROWSET / external-table analytics — the warehouse tier) plus an Azure Analysis Services tabular model (Import or DirectQuery over Synapse — the semantic-model tier) — no Fabric or Power BI Premium capacity required. The Migrate action provisions both automatically via /api/items/datamart/migrate and stamps a migration receipt on the original item.",
       "steps": [
         {
           "title": "Review datamart definition",
-          "body": "Open the deprecated datamart to see its name and the deprecation banner. No authoring surface is offered — datamarts are migration-only."
+          "body": "Open the deprecated datamart to see its name and the deprecation banner. No authoring surface is offered — this is a migration template, not a create surface."
         },
         {
           "title": "Migrate",
@@ -1121,14 +1132,15 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/power-apps/maker/canvas-apps/getting-started"
     } },
   { slug: 'slate-app', displayName: 'Slate app', restType: 'SlateApp', category: 'Fabric IQ', preview: true,
-    description: 'Custom HTML/JS dashboard app generated over an Ontology SDK / Data API and deployed to Azure Static Web Apps.',
+    templateOf: 'workshop-app', templateId: 'slate-workshop-app',
+    description: 'Backed template — scaffolds a real Workshop app + Data API (data-api-builder) stack over a query surface. Azure-native; deploys to Azure Static Web Apps. No Fabric.',
     learnContent: {
-      "overview": "Slate is Palantir Foundry's pixel-perfect custom application builder. The CSA Loom equivalent authors a widget-and-query app spec over the Ontology SDK / Data API, then generates a deployable Azure Static Web Apps bundle (HTML/JS) — the same target the migration doc maps Slate onto. Azure-native: no Fabric workspace required; the generated app calls the ontology Data API published through APIM.",
+      "overview": "Slate is Palantir Foundry's pixel-perfect custom application builder. The CSA Loom equivalent is now a BACKED template: instead of only generating a copy-to-repo bundle, picking it INSTANTIATES two real, editable Loom items — a data-api-builder item (the query surface; Microsoft Data API Builder on Azure Container Apps, publishing REST/GraphQL through APIM) and a workshop-app item (the runnable low-code app) — and wires them together so the Workshop app is bound to the real Data API on first open. Azure-native: no Fabric workspace required. You can still emit a deployable Azure Static Web Apps bundle (HTML/JS) for the web tier when you want to ship the app outside Loom.",
       "steps": [
-        { "title": "Pick a data binding", "body": "Bind to an Ontology SDK or Data API Builder endpoint that exposes the query results the app needs." },
-        { "title": "Add widgets", "body": "Compose table / chart / metric widgets, each bound to a named query." },
-        { "title": "Generate the bundle", "body": "Loom emits a real index.html + app.js + staticwebapp.config.json artifact you can deploy to Azure Static Web Apps." },
-        { "title": "Deploy", "body": "Copy the generated bundle into your SWA repo, or wire it through the release-environment promotion flow." }
+        { "title": "Pick workspace + name", "body": "Choose the target Loom workspace and a name for the app stack." },
+        { "title": "Instantiate the stack", "body": "Loom creates a real data-api-builder item (the query surface) and a real workshop-app item, then wires the Workshop app's data binding to the Data API — both are fully editable, runnable Loom items, not stubs or a copied bundle." },
+        { "title": "Author in the Workshop app", "body": "You land in the runnable Workshop app, already bound to the real Data API. Add object views, actions, and widgets over the live query surface." },
+        { "title": "Generate the SWA bundle (optional)", "body": "When you want to ship the web tier outside Loom, emit a real index.html + app.js + staticwebapp.config.json artifact and deploy it to Azure Static Web Apps." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/static-web-apps/overview"
     } },

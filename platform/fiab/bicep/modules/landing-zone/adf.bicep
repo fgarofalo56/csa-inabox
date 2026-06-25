@@ -7,7 +7,11 @@
 // Posture (consistent with sibling DLZ modules):
 //   - System-assigned identity (so ADF can reach linked services via MI later)
 //   - publicNetworkAccess: Disabled (private link only)
-//   - PE on snet-private-endpoints (groupId 'dataFactory')
+//   - Managed VNet + MANAGED AutoResolve IR + managed PE to the DLZ lake's
+//     dfs endpoint — so data movement (copy / Dataflow Gen2 sinks) can reach
+//     the PE-only lake. Without this the factory has no runtime able to write
+//     the private lake. (See the Managed VNet section below.)
+//   - PE on snet-private-endpoints (groupId 'dataFactory') for the portal/mgmt plane
 //   - Private DNS zone group → privatelink.adf.azure.com (commercial)
 //   - RBAC: Loom Console UAMI → "Data Factory Contributor" on the factory
 //     (covers pipelines/datasets/triggers AND adfcdcs/* — list/get/status/
@@ -127,7 +131,68 @@ resource geoEnrichPipeline 'Microsoft.DataFactory/factories/pipelines@2018-06-01
 }
 
 // =====================================================================
-// Private endpoint
+// Managed VNet + managed Azure IR + managed PE to the DLZ lake
+//
+// WHY: the factory is publicNetworkAccess=Disabled and the DLZ lake is
+// PE-only (publicNetworkAccess=Disabled, defaultAction=Deny). The factory's
+// implicit AutoResolveIntegrationRuntime is a PUBLIC Azure IR that CANNOT
+// reach the private lake — so any copy / Dataflow Gen2 sink writing Delta/
+// Parquet to ADLS (incl. the "Practice with sample data" pipeline) fails with
+// no functional runtime. The Azure-native fix (no Fabric, no SHIR VM) is a
+// Managed VNet with the AutoResolve IR made MANAGED, plus a managed private
+// endpoint to the lake's dfs endpoint. Making AutoResolveIntegrationRuntime
+// managed means every connectVia=null linked service (the default Loom emits)
+// routes through the managed VNet, so MSI copy + Dataflow Gen2 sinks to the
+// lake work day-one. The managed IR cold-starts (~1-3 min) on first use.
+// (Proven live 2026-06-25: a Copy pulled 847 rows Azure SQL -> lake Parquet
+// only after this managed VNet + managed PE was in place.)
+// =====================================================================
+
+resource managedVnet 'Microsoft.DataFactory/factories/managedVirtualNetworks@2018-06-01' = {
+  parent: adf
+  name: 'default'
+  properties: {}
+}
+
+resource managedAutoResolveIr 'Microsoft.DataFactory/factories/integrationRuntimes@2018-06-01' = {
+  parent: adf
+  name: 'AutoResolveIntegrationRuntime'
+  properties: {
+    type: 'Managed'
+    managedVirtualNetwork: {
+      type: 'ManagedVirtualNetworkReference'
+      referenceName: managedVnet.name
+    }
+    typeProperties: {
+      computeProperties: {
+        location: 'AutoResolve'
+      }
+    }
+  }
+}
+
+// Managed private endpoint from the factory's managed VNet to the DLZ lake's
+// dfs (ADLS Gen2) endpoint so the managed IR can write Delta/Parquet into the
+// PE-only storage. Auto-approved when the deploy identity has approval rights
+// on the same-tenant storage account (Owner/Contributor — the DLZ deployer).
+// If a tenant policy ever blocks auto-approval, the post-deploy bootstrap
+// approves the Pending connection:
+//   az storage account private-endpoint-connection approve \
+//     --account-name <sblobAccountName> -g <rg> --name <conn>
+resource managedPeLake 'Microsoft.DataFactory/factories/managedVirtualNetworks/managedPrivateEndpoints@2018-06-01' = if (!empty(sblobAccountName)) {
+  parent: managedVnet
+  name: 'pe-lake-dfs'
+  properties: {
+    privateLinkResourceId: storageForAdfRbac.id
+    groupId: 'dfs'
+    // environment().suffixes.storage = core.windows.net (commercial) /
+    // core.usgovcloudapi.net (Gov) — sovereign-cloud aware per the all-Gov posture.
+    fqdns: [ '${sblobAccountName}.dfs.${environment().suffixes.storage}' ]
+  }
+}
+
+// =====================================================================
+// Private endpoint (factory portal/management plane)
 // =====================================================================
 
 resource peAdf 'Microsoft.Network/privateEndpoints@2024-03-01' = {

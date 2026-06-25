@@ -13,6 +13,7 @@ import { PanelLeftContract20Regular, PanelLeftExpand20Regular } from '@fluentui/
 import { PageShell } from '@/lib/components/page-shell';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
+import { useCollapsibleState, CollapsedRail, CollapseToggle, RAIL_WIDTH } from '@/lib/components/collapsible-side-panel';
 import { LineageDrawer } from '@/lib/components/onelake/lineage-drawer';
 import { ThreadMenu } from '@/lib/components/thread/thread-menu';
 import { BundleContentBar } from '@/lib/components/bundle-content-bar';
@@ -28,6 +29,11 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     flex: 1,
     minHeight: 0,
+    // Smoothly animate the column resize when a side panel collapses/expands.
+    transitionProperty: 'grid-template-columns',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    '@media screen and (prefers-reduced-motion: reduce)': { transitionDuration: '0.01ms' },
   },
   leftPanel: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -86,11 +92,20 @@ interface Props {
   main: ReactNode;
   /** Right rail (Copilot, properties, etc.). Phase 6 wires this in across all editors. */
   rightPanel?: ReactNode;
+  /**
+   * Label for the right rail's collapse/expand affordance + collapsed vertical
+   * rail caption. Defaults to "Copilot" (most rightPanels are a Copilot pane);
+   * pass e.g. "Properties" for an attribute/details rail.
+   */
+  rightPanelLabel?: string;
 }
 
-export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel }: Props) {
+export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot' }: Props) {
   const styles = useStyles();
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  // Right rail (Copilot / properties) collapse — persisted PER SURFACE so the
+  // canvas keeps the width the operator chose across visits to this item type.
+  const [rightCollapsed, setRightCollapsed] = useCollapsibleState(`right.${item.slug}`, false);
   const isNew = id === 'new';
   const title = isNew ? `New ${item.displayName.toLowerCase()}` : `${item.displayName} (${id.substring(0, 8)})`;
 
@@ -104,7 +119,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
         gridTemplateColumns: [
           ...(leftPanel ? [leftCollapsed ? '32px' : 'minmax(220px, 280px)'] : []),
           'minmax(0, 1fr)',
-          ...(rightPanel ? ['minmax(280px, 340px)'] : []),
+          ...(rightPanel ? [rightCollapsed ? RAIL_WIDTH : 'minmax(280px, 340px)'] : []),
         ].join(' '),
       }
     : undefined;
@@ -149,7 +164,17 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
             )
           )}
           {hasGrid ? <div className={styles.mainPanel}>{main}</div> : <div className={styles.singlePanel}>{main}</div>}
-          {rightPanel && <div className={styles.rightPanel}>{rightPanel}</div>}
+          {rightPanel && (
+            rightCollapsed ? (
+              <CollapsedRail side="right" label={rightPanelLabel} onExpand={() => setRightCollapsed(false)} />
+            ) : (
+              <div className={styles.rightPanel}>
+                <CollapseToggle side="right" label={rightPanelLabel} onCollapse={() => setRightCollapsed(true)}
+                  style={{ float: 'right', margin: tokens.spacingVerticalXXS }} />
+                {rightPanel}
+              </div>
+            )
+          )}
         </div>
       </div>
     </PageShell>

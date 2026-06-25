@@ -941,14 +941,35 @@ export function CopilotTopicEditor({ item, id }: { item: FabricItemType; id: str
 // ActionsPanel + CopilotActionEditor
 // ============================================================
 
+// Action-type labels for the picker (kept out of the render so the Dropdown
+// `value` shows a friendly label rather than the raw slug).
+const ACTION_TYPE_LABELS: Record<string, string> = {
+  'power-automate-flow': 'Power Automate flow',
+  'connector': 'Connector (certified)',
+  'custom-connector': 'Custom connector',
+  'prebuilt': 'Prebuilt action',
+};
+
 function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   const s = useStyles();
   const [items, setItems] = useState<Action[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // No-freeform-config: the flow / connector reference is chosen from live
+  // Power Platform resources (a picker), NOT hand-typed GUIDs/ids. The picked
+  // resource's id is mapped into the bind payload — flowId ← a cloud flow's
+  // name (GUID); connectorId ← a connector's name. Lists come from the real
+  // Power Platform admin REST endpoints (/api/powerplatform/flows ·
+  // /api/powerplatform/connectors), which honest-gate with a 503 (naming the
+  // env var to set) when Power Platform isn't configured — surfaced inline as a
+  // warning MessageBar rather than a silent empty picker.
   const [form, setForm] = useState<{ name: string; type: string; connectorId: string; flowId: string }>({
     name: '', type: 'power-automate-flow', connectorId: '', flowId: '',
   });
+  const [flows, setFlows] = useState<{ name: string; displayName: string; state?: string }[] | null>(null);
+  const [connectors, setConnectors] = useState<{ name: string; displayName: string; isCustomApi?: boolean; tier?: string }[] | null>(null);
+  const [flowGate, setFlowGate] = useState<string | null>(null);
+  const [connectorGate, setConnectorGate] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!envId || !agentId) { setItems(null); return; }
@@ -962,8 +983,61 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   }, [envId, agentId]);
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Reset the cached reference lists whenever the environment changes.
+  useEffect(() => { setFlows(null); setConnectors(null); setFlowGate(null); setConnectorGate(null); }, [envId]);
+
+  const loadFlows = useCallback(async () => {
+    if (!envId) return;
+    setFlowGate(null);
+    try {
+      const r = await fetch(`/api/powerplatform/flows?envId=${encodeURIComponent(envId)}`);
+      const j = await r.json();
+      if (!j.ok) { setFlowGate(j.error || 'Failed to load Power Automate flows'); setFlows([]); return; }
+      setFlows(j.flows || []);
+    } catch (e: any) { setFlowGate(e?.message || String(e)); setFlows([]); }
+  }, [envId]);
+
+  const loadConnectors = useCallback(async () => {
+    if (!envId) return;
+    setConnectorGate(null);
+    try {
+      const r = await fetch(`/api/powerplatform/connectors?envId=${encodeURIComponent(envId)}`);
+      const j = await r.json();
+      if (!j.ok) { setConnectorGate(j.error || 'Failed to load connectors'); setConnectors([]); return; }
+      setConnectors(j.connectors || []);
+    } catch (e: any) { setConnectorGate(e?.message || String(e)); setConnectors([]); }
+  }, [envId]);
+
+  // Lazily load the reference list the selected action type needs.
+  useEffect(() => {
+    if (!envId) return;
+    if (form.type === 'power-automate-flow' && flows === null) loadFlows();
+    if ((form.type === 'custom-connector' || form.type === 'connector') && connectors === null) loadConnectors();
+  }, [envId, form.type, flows, connectors, loadFlows, loadConnectors]);
+
+  // Connector choices filtered to match the action type (custom vs certified).
+  const connectorChoices = useMemo(() => {
+    const all = connectors || [];
+    if (form.type === 'custom-connector') return all.filter((c) => c.isCustomApi);
+    if (form.type === 'connector') return all.filter((c) => !c.isCustomApi);
+    return all;
+  }, [connectors, form.type]);
+
+  // A flow/connector reference is mandatory for the binding action types so we
+  // never POST an empty reference (a silent no-op bind). Prebuilt needs none.
+  const refOk =
+    form.type === 'power-automate-flow' ? !!form.flowId
+    : (form.type === 'custom-connector' || form.type === 'connector') ? !!form.connectorId
+    : true;
+
+  // Switching type clears any previously-picked reference so the payload only
+  // ever carries the reference that matches the selected type.
+  const setType = useCallback((type: string) => {
+    setForm((f) => ({ ...f, type, connectorId: '', flowId: '' }));
+  }, []);
+
   const bind = useCallback(async () => {
-    if (!envId || !agentId || !form.name) return;
+    if (!envId || !agentId || !form.name || !refOk) return;
     setBusy(true); setError(null);
     try {
       const r = await fetch('/api/items/copilot-studio-action', {
@@ -976,7 +1050,7 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
       await refresh();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [envId, agentId, form, refresh]);
+  }, [envId, agentId, form, refOk, refresh]);
 
   const remove = useCallback(async (aid: string) => {
     if (!envId) return;
@@ -1003,23 +1077,73 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         </Field>
         <Field label="Type">
           <Dropdown
-            value={form.type}
+            value={ACTION_TYPE_LABELS[form.type] || form.type}
             selectedOptions={[form.type]}
-            onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, type: d.optionValue! }))}
+            onOptionSelect={(_, d) => d.optionValue && setType(d.optionValue)}
           >
-            <Option value="power-automate-flow">Power Automate flow</Option>
-            <Option value="custom-connector">Custom connector</Option>
-            <Option value="prebuilt">Prebuilt</Option>
+            <Option value="power-automate-flow" text="Power Automate flow">Power Automate flow</Option>
+            <Option value="connector" text="Connector (certified)">Connector (certified)</Option>
+            <Option value="custom-connector" text="Custom connector">Custom connector</Option>
+            <Option value="prebuilt" text="Prebuilt action">Prebuilt action</Option>
           </Dropdown>
         </Field>
-        <Field label="Flow id" hint="Power Automate flow GUID (when type = power-automate-flow)">
-          <Input value={form.flowId} onChange={(_, d) => setForm((f) => ({ ...f, flowId: d.value }))} />
-        </Field>
-        <Field label="Connector id" hint="Custom connector resource id (when type = custom-connector)">
-          <Input value={form.connectorId} onChange={(_, d) => setForm((f) => ({ ...f, connectorId: d.value }))} />
-        </Field>
+        {form.type === 'power-automate-flow' && (
+          <Field label="Power Automate flow" required hint="Pick a cloud flow in this environment — its id is bound to the action (no hand-typed GUIDs).">
+            {flowGate && (
+              <MessageBar intent="warning">
+                <MessageBarBody><MessageBarTitle>Flows unavailable</MessageBarTitle>{flowGate}</MessageBarBody>
+              </MessageBar>
+            )}
+            <Dropdown
+              value={flows?.find((f) => f.name === form.flowId)?.displayName || ''}
+              selectedOptions={form.flowId ? [form.flowId] : []}
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, flowId: d.optionValue!, connectorId: '' }))}
+              placeholder={flows === null ? 'Loading flows…' : (flows.length === 0 ? 'No cloud flows in this environment' : 'Select a flow')}
+              disabled={!flows || flows.length === 0}
+            >
+              {(flows || []).map((f) => (
+                <Option key={f.name} value={f.name} text={f.displayName}>
+                  {f.displayName}{f.state ? ` · ${f.state}` : ''}
+                </Option>
+              ))}
+            </Dropdown>
+          </Field>
+        )}
+        {(form.type === 'custom-connector' || form.type === 'connector') && (
+          <Field
+            label={form.type === 'custom-connector' ? 'Custom connector' : 'Connector'}
+            required
+            hint="Pick a connector visible in this environment — its id is bound to the action (no hand-typed ids)."
+          >
+            {connectorGate && (
+              <MessageBar intent="warning">
+                <MessageBarBody><MessageBarTitle>Connectors unavailable</MessageBarTitle>{connectorGate}</MessageBarBody>
+              </MessageBar>
+            )}
+            <Dropdown
+              value={connectorChoices.find((c) => c.name === form.connectorId)?.displayName || ''}
+              selectedOptions={form.connectorId ? [form.connectorId] : []}
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, connectorId: d.optionValue!, flowId: '' }))}
+              placeholder={connectors === null ? 'Loading connectors…' : (connectorChoices.length === 0 ? 'No matching connectors in this environment' : 'Select a connector')}
+              disabled={!connectors || connectorChoices.length === 0}
+            >
+              {connectorChoices.map((c) => (
+                <Option key={c.name} value={c.name} text={c.displayName}>
+                  {c.displayName}{c.tier ? ` · ${c.tier}` : ''}
+                </Option>
+              ))}
+            </Dropdown>
+          </Field>
+        )}
+        {form.type === 'prebuilt' && (
+          <Field label="Reference">
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Prebuilt actions need no flow/connector reference.
+            </Caption1>
+          </Field>
+        )}
         <div style={{ alignSelf: 'end' }}>
-          <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !form.name} onClick={bind}>Bind action</Button>
+          <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !form.name || !refOk} onClick={bind}>Bind action</Button>
         </div>
       </div>
       <Subtitle2 className={s.sectionHeader}>

@@ -15,7 +15,10 @@
  */
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode,
+} from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel, Handle, Position,
   useReactFlow, useNodesState,
@@ -25,8 +28,9 @@ import '@xyflow/react/dist/style.css';
 import {
   Button, Badge, Caption1, Body1, Input, Dropdown, Option, Label, Field, SpinButton,
   Divider, Text,
-  tokens, makeStyles, shorthands,
+  tokens, makeStyles, mergeClasses, shorthands,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Add20Regular, Delete20Regular, DatabaseMultiple20Regular, Table20Regular,
 } from '@fluentui/react-icons';
@@ -54,6 +58,9 @@ const useStyles = makeStyles({
     gridTemplateColumns: '1fr 340px',
     gap: tokens.spacingHorizontalL,
     minHeight: '520px',
+    // Top-anchor both columns so the user-resized canvas region keeps its set
+    // height instead of being stretched to match the inspector (and vice versa).
+    alignItems: 'start',
   },
   canvas: {
     position: 'relative',
@@ -61,7 +68,10 @@ const useStyles = makeStyles({
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     overflow: 'hidden',
-    minHeight: '500px',
+    // Fill the ResizableCanvasRegion (which now owns the definite height ReactFlow
+    // needs); minHeight:0 lets the region shrink to its user-set / min bound.
+    height: '100%',
+    minHeight: 0,
   },
   inspector: {
     backgroundColor: tokens.colorNeutralBackground1,
@@ -250,14 +260,21 @@ export function DbtModelGraph({ graph, onChange }: DbtModelGraphProps) {
 
   return (
     <div className={s.designer} role="region" aria-label="dbt visual model builder">
-      <DbtCanvas
-        sources={sources}
-        models={models}
-        selected={selected}
-        onSelect={setSelected}
-        onAddSource={addSource}
-        onAddModel={addModel}
-      />
+      <ResizableCanvasRegion
+        storageKey="dbt-model-graph"
+        defaultPx={520}
+        minPx={320}
+        ariaLabel="Resize dbt model graph canvas height"
+      >
+        <DbtCanvas
+          sources={sources}
+          models={models}
+          selected={selected}
+          onSelect={setSelected}
+          onAddSource={addSource}
+          onAddModel={addModel}
+        />
+      </ResizableCanvasRegion>
       <aside className={s.inspector} aria-label="Node properties">
         {!selected && (
           <>

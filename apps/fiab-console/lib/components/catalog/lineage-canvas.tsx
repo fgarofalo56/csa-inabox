@@ -48,6 +48,7 @@ import '@xyflow/react/dist/style.css';
 import {
   Badge, Button, Caption1, Input, Text, Tooltip, makeStyles, tokens,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   FullScreenMaximize20Regular, Organization20Regular, TargetRegular,
   Table16Regular, Document16Regular, Notebook16Regular, Flow16Regular,
@@ -291,7 +292,9 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     width: '100%',
-    height: '560px',
+    // Fills the user-resizable ResizableCanvasRegion (default 560px, persisted
+    // per-surface, bounded 320px–80vh). React Flow needs this definite height.
+    height: '100%',
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -475,6 +478,12 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
   }, [selectedId]);
 
   return (
+    <ResizableCanvasRegion
+      storageKey="catalog-lineage"
+      defaultPx={560}
+      minPx={320}
+      ariaLabel="Resize lineage canvas height"
+    >
     <div className={s.shell} data-testid="lineage-canvas" aria-label="Data lineage canvas">
       <ReactFlow
         nodes={rfNodes}
@@ -620,6 +629,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
         </div>
       )}
     </div>
+    </ResizableCanvasRegion>
   );
 });
 

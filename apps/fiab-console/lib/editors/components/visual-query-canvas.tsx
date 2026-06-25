@@ -22,7 +22,10 @@
  * The ONLY freeform slot is the Filter step's single WHERE expression box.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   useReactFlow, useNodesState, useEdgesState, Handle, Position,
@@ -38,8 +41,9 @@ import {
   createTableColumn, useArrowNavigationGroup,
   type TableColumnDefinition, type TableColumnSizingOptions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  makeStyles, shorthands, tokens,
+  makeStyles, mergeClasses, shorthands, tokens,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Add20Regular, Delete20Regular, Play20Regular, Table20Regular,
   Filter20Regular, ColumnTriple20Regular, GroupList20Regular, BranchFork20Regular,
@@ -137,7 +141,8 @@ const useStyles = makeStyles({
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     overflow: 'hidden',
-    minHeight: '420px',
+    // Fills the user-resizable ResizableCanvasRegion (which now owns the height).
+    height: '100%',
   },
   palette: {
     display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap',
@@ -599,7 +604,19 @@ function CanvasInner(props: VisualQueryCanvasProps) {
   return (
     <div className={s.root}>
       <div className={s.body}>
-        <div className={s.canvas} data-canvas="visual-query" onDrop={onDrop} onDragOver={onDragOver}>
+        {/* Canvas region — user-resizable height (drag the grip below the canvas,
+            or focus it and use Arrow / Shift+Arrow / Home / End). Height is
+            persisted per-surface in localStorage; the canvas FILLS this region,
+            handing React Flow the definite px height fitView needs. Canvas
+            behaviour / nodes / edges are unchanged. The inspector column is
+            untouched. */}
+        <ResizableCanvasRegion
+          storageKey="visual-query"
+          defaultPx={420}
+          minPx={280}
+          ariaLabel="Resize visual query canvas height"
+        >
+          <div className={s.canvas} data-canvas="visual-query" onDrop={onDrop} onDragOver={onDragOver} style={{ flex: 1, height: '100%', minHeight: 0 }}>
           <ReactFlow
             nodes={renderNodes}
             edges={edges}
@@ -647,7 +664,8 @@ function CanvasInner(props: VisualQueryCanvasProps) {
               <Caption1>Click <strong>Add table</strong> to drop a source onto the canvas, then add Filter / Choose columns / Group by steps and Merge two chains. The generated SQL updates live below.</Caption1>
             </div>
           )}
-        </div>
+          </div>
+        </ResizableCanvasRegion>
 
         {/* Applied Steps / inspector */}
         <aside className={s.inspector} aria-label="Applied steps">

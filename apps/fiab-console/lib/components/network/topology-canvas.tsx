@@ -42,6 +42,7 @@ import {
   type FluentIcon,
 } from '@fluentui/react-icons';
 import { accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import type {
   PrivateEndpointInfo, VNetInfo, SubnetInfo, NsgInfo, NsgRule, PrivateDnsZoneInfo,
 } from '@/lib/azure/network-discovery';
@@ -799,7 +800,18 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
   }
 
   return (
-    <div className={styles.shell}>
+    // Drag-to-resize canvas height via the shared Web-5.0 primitive (pointer +
+    // keyboard + per-surface localStorage, bounded 360px–80vh). The shell keeps
+    // height:100% and resolves against the region; minHeight is overridden to 0
+    // here so the region's bounds win (the shared style's 520px floor stays for
+    // the empty-state return above, which is not wrapped).
+    <ResizableCanvasRegion
+      storageKey="network-topology"
+      defaultPx={560}
+      minPx={360}
+      ariaLabel="Resize network topology canvas height"
+    >
+    <div className={styles.shell} style={{ minHeight: 0 }}>
       <ReactFlowProvider>
         <ReactFlow
           nodes={nodes}
@@ -876,6 +888,7 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
         </DrawerBody>
       </OverlayDrawer>
     </div>
+    </ResizableCanvasRegion>
   );
 }
 

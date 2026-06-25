@@ -58,6 +58,8 @@
 
 import {
   forwardRef, memo, useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode, type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap,
@@ -73,8 +75,9 @@ import {
   Title3, Tooltip,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuGroup, MenuGroupHeader,
   Textarea, Toast, ToastTitle, Toaster, useToastController, useId,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Add16Filled, Add20Regular, Bug20Regular, Save20Regular,
   Code20Regular, Delete20Regular, FullScreenMaximize20Regular,
@@ -834,9 +837,15 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
   },
   toolbarSpacer: { flex: 1 },
-  body: { display: 'flex', flex: 1, gap: tokens.spacingHorizontalM, minHeight: 0, width: '100%' },
+  // The body fills the ResizableCanvasRegion (which now owns the definite
+  // height); `height:100%/minHeight:0` lets it shrink with the region instead
+  // of forcing its old fixed `flex:1` height.
+  body: { display: 'flex', height: '100%', gap: tokens.spacingHorizontalM, minHeight: 0, width: '100%' },
   canvasShell: {
-    position: 'relative', flex: 1, minHeight: '420px', overflow: 'hidden',
+    // `minHeight:0` (was 420) — the region supplies the definite height React
+    // Flow needs, so the canvas stretches to the region and never overflows it
+    // when dragged down to the region's min.
+    position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
@@ -1237,13 +1246,22 @@ function DesignerInner({
         </MessageBar>
       )}
 
-      <div className={s.body}>
-        {/* Canvas */}
-        <div
-          className={s.canvasShell}
-          data-canvas="mapping-dataflow"
-          aria-label="Mapping data flow design canvas"
-        >
+      {/* The canvas + inspector live in a drag-resizable, height-bounded region
+          (240px floor … 80vh ceiling) whose height persists per-surface. The
+          region supplies the definite px height React Flow needs for fitView. */}
+      <ResizableCanvasRegion
+        storageKey="mapping-dataflow"
+        defaultPx={520}
+        minPx={360}
+        ariaLabel="Resize mapping data flow canvas height"
+      >
+        <div className={s.body}>
+          {/* Canvas */}
+          <div
+            className={s.canvasShell}
+            data-canvas="mapping-dataflow"
+            aria-label="Mapping data flow design canvas"
+          >
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -1317,7 +1335,8 @@ function DesignerInner({
             </Caption1>
           </div>
         )}
-      </div>
+        </div>
+      </ResizableCanvasRegion>
 
       {/* Hidden anchor + Menu for the per-stream "＋ add transformation". */}
       <div style={anchorStyle}>

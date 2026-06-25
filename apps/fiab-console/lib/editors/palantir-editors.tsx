@@ -20,6 +20,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
   Tab, TabList, Field, Dropdown, Option,
@@ -283,11 +284,17 @@ function useOntologyBinding(slug: string, id: string) {
 interface WorkshopAction { id: string; label: string; kind: 'create' | 'update' | 'delete'; entity: string }
 interface WorkshopState {
   boundOntologyId?: string; boundOntologyName?: string;
-  objectViews?: string[]; actions?: WorkshopAction[]; [k: string]: unknown;
+  objectViews?: string[]; actions?: WorkshopAction[];
+  // Set by the slate-workshop-app demote-to-template scaffold: the backing
+  // Data API Builder item this Workshop app was wired to (proves the template
+  // created REAL, navigable sibling items — no placeholder).
+  dataApiItemId?: string; dataApiBaseUrl?: string;
+  [k: string]: unknown;
 }
 
 export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const router = useRouter();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<WorkshopState>('workshop-app', id, { objectViews: [], actions: [] });
   const onto = useOntologyBinding('workshop-app', id);
   const [pickOnto, setPickOnto] = useState('');
@@ -420,6 +427,17 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
           <MessageBarTitle>Workshop app (Palantir Workshop → Atelier)</MessageBarTitle>
           Bind a Loom Ontology, choose which object types become app pages, and define write-back actions. The app runs on Azure Container Apps over the ontology's bound Lakehouse/Warehouse — no Microsoft Fabric required.
         </MessageBarBody></MessageBar>
+
+        {state.dataApiItemId && (
+          <MessageBar intent="success"><MessageBarBody>
+            <MessageBarTitle>Wired to a Data API</MessageBarTitle>
+            This app was scaffolded with a backing Data API Builder item as its query surface{state.dataApiBaseUrl ? <> at <strong>{String(state.dataApiBaseUrl)}</strong></> : ''}.
+            <Button appearance="transparent" size="small" icon={<Link20Regular />}
+              onClick={() => router.push(`/items/data-api-builder/${encodeURIComponent(String(state.dataApiItemId))}`)}>
+              Open Data API
+            </Button>
+          </MessageBarBody></MessageBar>
+        )}
 
         <div className={s.section}>
           <SectionHead icon={<Link20Regular />} title="Bound ontology" hint="Pick a saved Ontology; its object/link types become the app's object views." />
@@ -671,10 +689,18 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
 
 // ───────────────────────── Slate app ─────────────────────────
 interface SlateWidgetDef { id: string; title: string; kind: 'table' | 'chart' | 'metric'; query: string }
-interface SlateState { apiBaseUrl?: string; widgets?: SlateWidgetDef[]; lastGeneratedAt?: string; [k: string]: unknown }
+interface SlateState {
+  apiBaseUrl?: string; widgets?: SlateWidgetDef[]; lastGeneratedAt?: string;
+  // Set by the rayfin-azure-stack demote-to-template scaffold: the backing
+  // Azure Functions API item this SWA web tier calls (apiBaseUrl is seeded to
+  // its route). Proves the template wired a REAL Functions sibling.
+  functionItemId?: string;
+  [k: string]: unknown;
+}
 
 export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const router = useRouter();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<SlateState>('slate-app', id, { apiBaseUrl: '/api', widgets: [] });
   const [wTitle, setWTitle] = useState('');
   const [wKind, setWKind] = useState<'table' | 'chart' | 'metric'>('table');
@@ -735,6 +761,15 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
         <div className={s.section}>
           <SectionHead icon={<Database20Regular />} title="Data API base" hint="The DAB / Ontology-SDK REST base the generated app calls (e.g. /api or an APIM URL)." />
           <Field label="API base URL"><Input value={String(state.apiBaseUrl || '/api')} onChange={(_, d) => setState((p) => ({ ...p, apiBaseUrl: d.value }))} placeholder="/api" /></Field>
+          {state.functionItemId && (
+            <Caption1 className={s.hint}>
+              Backed by an Azure Functions API scaffolded with this app — the base URL above points at its route.
+              <Button appearance="transparent" size="small" icon={<Link20Regular />}
+                onClick={() => router.push(`/items/user-data-function/${encodeURIComponent(String(state.functionItemId))}`)}>
+                Open Functions API
+              </Button>
+            </Caption1>
+          )}
         </div>
 
         <div className={s.section}>

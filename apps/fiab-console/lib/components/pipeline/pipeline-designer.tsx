@@ -57,15 +57,25 @@ import {
   setLevelActivities, type DrillBranch, type DrillPath,
 } from './drill-path';
 import { getActivityVisual, accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
+// Shared drag-to-resize host: supplies the definite outer height (React Flow
+// needs a definite height to frame, see canvas.tsx) and persists the
+// per-surface height to localStorage. Pointer + keyboard + ARIA live in the
+// primitive; this surface only declares its bounds/storage key.
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import type {
   PipelineActivity, PipelineParameter, PipelineVariable,
 } from './types';
 
 const useStyles = makeStyles({
+  // The palette + canvas row. The definite outer height is now supplied by the
+  // wrapping <ResizableCanvasRegion> (user-resizable, persisted); the shell just
+  // fills it. (minHeight:0 lets the inner flex children scroll/shrink instead of
+  // forcing overflow; height:100% claims the region's resolved height.)
   shell: {
     display: 'flex',
     flex: 1,
-    minHeight: '560px',
+    minHeight: 0,
+    height: '100%',
     gap: tokens.spacingHorizontalM,
     width: '100%',
   },
@@ -437,6 +447,16 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   );
 
   return (
+    // User-resizable outer height (drag the bottom grip or use the keyboard),
+    // persisted per-surface. Bounds: minPx 360 (the inherent layout floor for
+    // palette + canvas + dock) up to ~80vh, default 560 — which matches the
+    // shell's prior fixed height so first paint is visually unchanged.
+    <ResizableCanvasRegion
+      storageKey="pipeline-designer"
+      defaultPx={560}
+      minPx={360}
+      ariaLabel="Resize pipeline design canvas height"
+    >
     <div className={s.shell} data-pipeline-designer>
       {paletteCollapsed ? (
         <div className={s.paletteRail}>
@@ -619,5 +639,6 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
         </Caption1>
       </div>
     </div>
+    </ResizableCanvasRegion>
   );
 });

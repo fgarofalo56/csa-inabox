@@ -27,6 +27,19 @@
  * equivalent that does real in-Loom CRUD over the ontology's Synapse warehouse.
  * For write-back inside Loom use Atelier. See docs/fiab/parity/rayfin-app.md.
  *
+ * Demote-to-template (no-vaporware / no-fabric-dependency): NEW Rayfin apps are
+ * no longer created as a single empty `rayfin-app` shell. The `rayfin-azure-stack`
+ * app-template scaffolds a fully-backed, Azure-native stack — a Static Web App
+ * (`slate-app`, the runnable web tier), an Azure Functions API
+ * (`user-data-function`), and a Cosmos store (`azure-cosmos-account`), wired
+ * together server-side — so a new pick lands the user in real, runnable items
+ * (no Fabric/Power BI dependency on the default path). THIS editor is retained
+ * unchanged as the authoring surface for **existing** `rayfin-app` instances and
+ * the opt-in Rayfin SDK + CLI path: define the backend model, bind it to a real
+ * semantic model (Azure Analysis Services default), and assemble the read-view
+ * visual app. Existing instances open here directly (isNew=false → no template
+ * indirection); the model-binding / preview / render backends are untouched.
+ *
  * Everything renders with an honest Fluent MessageBar when AAS is unset — never
  * an empty picker (no-vaporware.md).
  *
@@ -405,6 +418,9 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
           Define the backend and bind it to a real semantic model below, then assemble a visual app in the App builder.
           Loom generates the real <code>@microsoft/rayfin-core</code> model, a model-bound connector, a typed
           <code> app.config.ts</code>, and the exact CLI commands. Run them locally (<code>npx rayfin up</code>) to deploy.
+          New Rayfin apps are now scaffolded as a fully-backed Azure-native stack (Static Web App + Azure Functions + Cosmos)
+          via the <strong>Rayfin Azure stack</strong> template — this surface remains the authoring tool for existing apps
+          and the opt-in Rayfin SDK / CLI path.
         </MessageBarBody>
       </MessageBar>
 

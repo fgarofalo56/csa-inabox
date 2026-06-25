@@ -53,6 +53,7 @@ import {
   type FabricItemType,
   type WorkloadCategory,
 } from '@/lib/catalog/fabric-item-types';
+import { isAppTemplate } from '@/lib/catalog/app-templates';
 
 /**
  * WAVE C — unified create-step contract. These mirror the optional
@@ -337,6 +338,49 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
       const headSlug =
         runtimeChoice?.slug ?? templateChoice?.slug ??
         picked.aliasOf ?? picked.templateOf ?? picked.slug;
+
+      // DEMOTE-TO-TEMPLATE — fully-backed app templates (slate-workshop-app,
+      // rayfin-azure-stack). Unlike a pipeline template (which seeds ONE head
+      // item via createItem + ?templateId=), an app template must scaffold
+      // SEVERAL real Azure-native items (primary + backing) wired together. So
+      // when the picked entry's templateId resolves to an app-template id, we
+      // bypass the single-item createItem path and POST the instantiation route,
+      // which creates ALL items atomically server-side (real Cosmos writes +
+      // search/governance/Purview mirroring, no Fabric/Power BI host on the
+      // default path per no-fabric-dependency.md) and returns the primary item.
+      // We then route to the primary's REAL id so the user lands in a working,
+      // editable Loom item — never a /new create-gate, never an empty shell.
+      // Every other path (pipeline family, plain items) is unchanged.
+      const appTplId =
+        picked.templateId && isAppTemplate(picked.templateId) ? picked.templateId : undefined;
+      if (appTplId) {
+        setCreating(true);
+        setError(null);
+        try {
+          const r = await fetch(
+            `/api/app-templates/${encodeURIComponent(appTplId)}/instantiate`,
+            {
+              method: 'POST',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                workspaceId: effectiveWorkspaceId,
+                displayName: displayName.trim(),
+              }),
+            },
+          );
+          const j = await r.json();
+          if (!j.ok || !j.primaryItemId) throw new Error(j.error || `HTTP ${r.status}`);
+          setOpen(false);
+          reset();
+          router.push(
+            `/items/${encodeURIComponent(j.primarySlug)}/${encodeURIComponent(j.primaryItemId)}`,
+          );
+        } catch (e) {
+          setError((e as Error).message);
+          setCreating(false);
+        }
+        return;
+      }
 
       const item = await createItem(effectiveWorkspaceId, {
         itemType: headSlug,

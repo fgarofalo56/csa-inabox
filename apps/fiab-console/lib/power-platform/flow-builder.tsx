@@ -48,6 +48,7 @@ import {
   Compose20Regular,
   QuestionCircle20Regular,
 } from '@fluentui/react-icons';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -454,7 +455,18 @@ function uniqueActionName(kind: ActionKind, existingNames: string[]): string {
 // ---------------------------------------------------------------------------
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  root: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    // Fills the wrapping <ResizableCanvasRegion>, which now owns the definite
+    // (user-resizable, persisted) pixel height; the flow list scrolls within it.
+    height: '100%',
+    minHeight: 0,
+    overflowY: 'auto',
+    // Small inset so card elevation + the bottom drag grip never clip the nodes.
+    padding: tokens.spacingHorizontalS,
+  },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
@@ -1068,8 +1080,17 @@ export function FlowBuilder({ definition, onChange }: FlowBuilderProps) {
   }
 
   return (
-    <div className={s.root} data-testid="flow-builder">
-      {/* Trigger */}
+    // The flow canvas (trigger + linear action nodes + add palette) lives in a
+    // user-resizable, persisted region. Canvas behaviour / nodes / edges are
+    // unchanged — only the region height becomes drag/keyboard controllable.
+    <ResizableCanvasRegion
+      storageKey="power-automate-flow"
+      defaultPx={420}
+      minPx={280}
+      ariaLabel="Resize flow canvas height"
+    >
+      <div className={s.root} data-testid="flow-builder">
+        {/* Trigger */}
       {trigger ? (
         <TriggerCard trigger={trigger} onChange={handleTriggerChange} />
       ) : (
@@ -1108,6 +1129,7 @@ export function FlowBuilder({ definition, onChange }: FlowBuilderProps) {
         existingNames={actions.map((a) => a.name)}
         onAdd={handleAdd}
       />
-    </div>
+      </div>
+    </ResizableCanvasRegion>
   );
 }

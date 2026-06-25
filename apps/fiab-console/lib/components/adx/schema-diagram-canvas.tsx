@@ -22,7 +22,10 @@
  * against the live ADX cluster via the existing /query route.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   Handle, Position, useReactFlow, useNodesState,
@@ -33,6 +36,7 @@ import '@xyflow/react/dist/style.css';
 import {
   Badge, Button, Caption1, Text, Tooltip, makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   FullScreenMaximize20Regular, Organization20Regular,
   DocumentTable16Regular, Table16Regular, MathFormula16Regular, Link16Regular,
@@ -334,7 +338,8 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     width: '100%',
-    height: '560px',
+    // Height is owned by the surrounding <ResizableCanvasRegion>; fill it.
+    height: '100%',
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -425,7 +430,13 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
   }, [srcNodes]);
 
   return (
-    <div className={s.shell} data-testid="schema-diagram-canvas" aria-label="KQL database entity diagram">
+    <ResizableCanvasRegion
+      storageKey="adx-schema-diagram"
+      defaultPx={560}
+      minPx={320}
+      ariaLabel="Resize schema diagram canvas height"
+    >
+      <div className={s.shell} data-testid="schema-diagram-canvas" aria-label="KQL database entity diagram">
       <ReactFlow
         nodes={rfNodes}
         edges={rfEdges}
@@ -485,7 +496,8 @@ function SchemaDiagramCanvasInner({ nodes: srcNodes, edges: srcEdges, onQueryNod
           </Caption1>
         </div>
       )}
-    </div>
+      </div>
+    </ResizableCanvasRegion>
   );
 }
 

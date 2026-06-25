@@ -29,6 +29,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, shorthands, mergeClasses,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Play20Regular, AddCircle20Regular, BranchCompare20Regular,
   ZoomIn20Regular, ZoomOut20Regular, ArrowReset20Regular, Delete16Regular,
@@ -45,10 +46,12 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   canvasWrap: {
-    display: 'grid', gridTemplateColumns: '1fr 260px', gap: tokens.spacingHorizontalM, minHeight: 0,
+    display: 'grid', gridTemplateColumns: '1fr 260px', gap: tokens.spacingHorizontalM,
+    // Fill the resizable region body; the inner svg/side then take height:100%.
+    flexGrow: 1, minHeight: 0, height: '100%',
   },
   svg: {
-    width: '100%', height: '460px',
+    width: '100%', height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground2,
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
@@ -60,7 +63,7 @@ const useStyles = makeStyles({
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
-    overflow: 'auto', maxHeight: '460px',
+    overflow: 'auto', maxHeight: '100%',
   },
   json: {
     margin: 0, fontSize: tokens.fontSizeBase100, fontFamily: tokens.fontFamilyMonospace,
@@ -389,7 +392,13 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
           </Caption1>
         </div>
       ) : graph.nodes.length === 0 ? null : (
-        <div className={s.canvasWrap}>
+        <ResizableCanvasRegion
+          storageKey="gremlin-graph"
+          defaultPx={460}
+          minPx={300}
+          ariaLabel="Resize graph canvas height"
+        >
+          <div className={s.canvasWrap}>
           <svg
             className={mergeClasses(s.svg, drag.current.active && s.svgDragging)}
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -508,7 +517,8 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
               </>
             )}
           </div>
-        </div>
+          </div>
+        </ResizableCanvasRegion>
       )}
 
       {/* Add-vertex dialog */}

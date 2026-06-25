@@ -17,6 +17,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { useQuery } from '@tanstack/react-query';
 import { Spinner, MessageBar, MessageBarBody } from '@fluentui/react-components';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
+import { isAppTemplate } from '@/lib/catalog/app-templates';
 import { getEditor } from '@/lib/editors/registry';
 import { ItemEditorChrome } from '@/lib/editors/item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -91,7 +92,18 @@ export default function ItemEditorPage(props: Props) {
   // creation — an ALREADY-CREATED geo-pipeline instance keeps its own native
   // GeoPipelineEditor + load path (back-compat); seeding a template over a saved
   // instance would clobber it.
-  const applyTemplate = !!item.templateOf && isNew;
+  // [DEMOTE-TO-TEMPLATE carve-out] App templates (slate-workshop-app /
+  // rayfin-azure-stack) carry a `templateId` that is NOT a pipeline-style head
+  // seed — they are materialized SERVER-SIDE by the instantiation route, which
+  // creates SEVERAL real Azure-native backing items and wires them together,
+  // then routes the user to the scaffolded primary item's real id. They are
+  // therefore never seeded by a head editor on `/new`. Excluding app-templates
+  // here means a DIRECT navigation to /items/slate-app/new (or /rayfin-app/new)
+  // still resolves to that slug's OWN create editor (SlateAppEditor /
+  // RayfinAppEditor) — preserving exact pre-demote behavior — while the
+  // pipeline-family template path (geo-pipeline → data-pipeline seed) is
+  // untouched (its templateId is not an app-template id, so isAppTemplate=false).
+  const applyTemplate = !!item.templateOf && isNew && !isAppTemplate(item.templateId);
   const effective = item.aliasOf
     ? (findItemType(item.aliasOf) ?? item)
     : applyTemplate

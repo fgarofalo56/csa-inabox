@@ -23,18 +23,19 @@
  * a node → Fluent OverlayDrawer with that resource's live ARM detail.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   MarkerType, useReactFlow, useNodesInitialized, type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
   Spinner, MessageBar, MessageBarBody, MessageBarTitle,
   OverlayDrawer, DrawerHeader, DrawerHeaderTitle, DrawerBody, Button,
   Badge, Body1, Body1Strong, Caption1, Subtitle2, Divider,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Dismiss24Regular,
   VirtualNetwork20Regular, Subtract20Regular, PlugConnected20Regular,
@@ -74,13 +75,15 @@ const KIND_STYLE: Record<TopoNodeKind, { accent: string; Icon: FluentIcon; label
 
 const useStyles = makeStyles({
   shell: {
-    // Definite height — NOT `height: 100%`. This canvas renders inside an
-    // auto-height card (network-pane), so a percentage height resolves against
-    // an indefinite parent and collapses to ~0; ReactFlow then measures the
-    // container as 0×0 at mount and `fitView` zooms the (large, multi-sub)
-    // estate to nothing → blank canvas even though the data loaded. A definite
-    // height makes the container real on first paint so the map renders.
-    position: 'relative', width: '100%', height: '640px', minHeight: '560px',
+    // Fills the <ResizableCanvasRegion> wrapper, which supplies the DEFINITE
+    // height ReactFlow needs to measure its container on first paint. A bare
+    // `height: 100%` against the auto-height network-pane card would resolve
+    // against an indefinite parent and collapse to ~0; ReactFlow would then
+    // measure the container as 0×0 at mount and `fitView` would zoom the
+    // (large, multi-sub) estate to nothing → blank canvas. The wrapper's body
+    // is height-bounded (user-resizable, persisted), so 100% here is definite
+    // and the map renders correctly while the region stays drag-resizable.
+    position: 'relative', width: '100%', height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge, overflow: 'hidden',
@@ -487,21 +490,34 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
 
   if (nodes.length === 0) {
     return (
-      <div className={styles.shell}>
-        <div className={styles.empty}>
-          <Subtitle2>No network resources to map</Subtitle2>
-          <Body1 style={{ color: tokens.colorNeutralForeground3, maxWidth: 380 }}>
-            Azure Resource Graph returned no virtual networks, private endpoints, firewalls, or other
-            network resources for the readable subscription(s). Once the network bicep module deploys the
-            hub/spoke vNets and their endpoints, the live topology renders here.
-          </Body1>
+      <ResizableCanvasRegion
+        storageKey="full-network-topology"
+        defaultPx={640}
+        minPx={400}
+        ariaLabel="Resize topology canvas height"
+      >
+        <div className={styles.shell}>
+          <div className={styles.empty}>
+            <Subtitle2>No network resources to map</Subtitle2>
+            <Body1 style={{ color: tokens.colorNeutralForeground3, maxWidth: 380 }}>
+              Azure Resource Graph returned no virtual networks, private endpoints, firewalls, or other
+              network resources for the readable subscription(s). Once the network bicep module deploys the
+              hub/spoke vNets and their endpoints, the live topology renders here.
+            </Body1>
+          </div>
         </div>
-      </div>
+      </ResizableCanvasRegion>
     );
   }
 
   return (
-    <div className={styles.shell}>
+    <ResizableCanvasRegion
+      storageKey="full-network-topology"
+      defaultPx={640}
+      minPx={400}
+      ariaLabel="Resize topology canvas height"
+    >
+      <div className={styles.shell}>
       <ReactFlowProvider>
         <ReactFlow
           nodes={nodes}
@@ -556,7 +572,8 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
           {selected ? <DetailBody topo={selected} /> : <Body1>Select a node.</Body1>}
         </DrawerBody>
       </OverlayDrawer>
-    </div>
+      </div>
+    </ResizableCanvasRegion>
   );
 }
 

@@ -20,14 +20,18 @@
  * pipelines are NOT deployed in this Loom instance — the MessageBars say so.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import {
+  useState, useCallback, useEffect, useMemo, useRef,
+  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Label, Spinner,
   TabList, Tab, Checkbox, Dropdown, Option, Field, Divider,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular, Save20Regular, Open16Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
@@ -326,7 +330,13 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
           {!parseErr && parsed && (
             <>
               <Subtitle2>Map render ({featureCount} feature{featureCount === 1 ? '' : 's'}{rasterUrl ? ` · Azure Maps basemap zoom ${zoom}` : ''})</Subtitle2>
-              <GeoJsonMap geojson={parsed} rasterUrl={rasterUrl} />
+              {/* Drag/keyboard-resizable canvas region. The map SVG fills width:100%/height:100%
+                  of this bounded region (see geojson-map.tsx); only the region height is
+                  user-controlled — map behaviour/features are unchanged. Height persists per
+                  surface under localStorage key `loom:canvas-height:geo-map`. */}
+              <ResizableCanvasRegion storageKey="geo-map" defaultPx={420} minPx={280} ariaLabel="Resize map canvas height">
+                <GeoJsonMap geojson={parsed} rasterUrl={rasterUrl} />
+              </ResizableCanvasRegion>
             </>
           )}
           <Caption1>Persisted into Cosmos item state via PATCH /api/cosmos-items/geo-map/{`{id}`}.</Caption1>

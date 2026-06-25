@@ -49,6 +49,7 @@ import {
   MoreHorizontal20Regular, Folder20Regular, Open20Regular, ArrowClockwise20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible-side-panel';
 import { ResultsPanel } from './components/results-panel';
 import type { BatchQueryResponse } from './components/results-panel';
 import { buildConnectionStrings, getSqlHostSuffix } from './components/connection-strings-builder';
@@ -833,7 +834,15 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   // Only the Azure SQL (T-SQL) family is wired to the SQL Copilot; PostgreSQL /
   // SQL MI fall outside the T-SQL prompt contract and stay honest-gated.
   const copilotEligible = family === 'azure-sql' && !!server && !!database;
-  const [copilotOpen, setCopilotOpen] = useState(false);
+  // SQL Copilot pane open/collapsed persists PER SURFACE — collapsed hands the
+  // query canvas its width back, leaving a thin re-expand rail. `collapsed` is
+  // the inverse of `copilotOpen`, so every existing call site (incl. the
+  // `(v) => !v` updater + `setCopilotOpen(true/false)`) keeps working.
+  const [copilotCollapsed, setCopilotCollapsed] = useCollapsibleState(`sql-copilot.${id}`, true);
+  const copilotOpen = !copilotCollapsed;
+  const setCopilotOpen = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
+    setCopilotCollapsed((prev) => !(typeof v === 'function' ? (v as (p: boolean) => boolean)(!prev) : v));
+  }, [setCopilotCollapsed]);
   const [copilotMessages, setCopilotMessages] = useState<{ role: 'user' | 'assistant'; text: string }[]>([]);
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotGate, setCopilotGate] = useState<string | null>(null);
@@ -1886,6 +1895,9 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       </Button>
                     </div>
                   </div>
+                )}
+                {!copilotOpen && family === 'azure-sql' && (
+                  <CollapsedRail side="right" label="SQL Copilot" onExpand={() => setCopilotOpen(true)} />
                 )}
               </div>
             </>

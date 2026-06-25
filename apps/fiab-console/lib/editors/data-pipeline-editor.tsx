@@ -29,7 +29,10 @@
  * MessageBar so the editor stays honest.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select, Field, Textarea,
@@ -40,6 +43,7 @@ import {
   makeStyles, mergeClasses, tokens,
   Toast, ToastTitle, useToastController, Toaster, useId,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
   Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
@@ -115,20 +119,27 @@ const useStyles = makeStyles({
   canvasWrap: { flex: 1, minHeight: '180px', display: 'flex', overflow: 'hidden' },
   splitter: {
     flexShrink: 0,
-    height: '10px',
+    height: '10px',  // inherent: drag-grip bar thickness — no spacing token is this thin
     cursor: 'row-resize',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     touchAction: 'none',
     ':hover': { backgroundColor: tokens.colorNeutralBackground3 },
+    // Keyboard-focus affordance — the handle is focusable (tabIndex=0) and
+    // Arrow/Page/Home/End resizable, matching the canvas handle above it.
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '-2px',
+    },
   },
   splitterActive: { backgroundColor: tokens.colorBrandBackground2 },
   splitterGrip: {
-    width: '44px',
-    height: '4px',
+    width: '44px',   // inherent: grip-pill width (decorative drag affordance — no token expresses it)
+    height: '4px',   // inherent: grip-pill thickness
     borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorNeutralStroke1,
+    pointerEvents: 'none',  // pointer events belong to the separator, not the grip
   },
   configDock: {
     flexShrink: 0,
@@ -136,7 +147,13 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusSmall,
-    minHeight: '120px',
+    minHeight: '240px',  // inherent: matches DOCK_MIN_PX floor
+    // Smooth keyboard-driven height changes; during a pointer drag the
+    // transition is suppressed inline (onPointerDown) so dragging stays direct.
+    transitionProperty: 'height',
+    transitionDuration: tokens.durationFast,
+    transitionTimingFunction: tokens.curveEasyEase,
+    '@media (prefers-reduced-motion: reduce)': { transitionProperty: 'none' },
   },
 
   // ── Web-5.0 polish: elevated, interactive start-cards (blank / practice /
@@ -191,6 +208,25 @@ function fromB64(b: string): string {
     return typeof window === 'undefined' ? Buffer.from(b, 'base64').toString('utf-8')
       : decodeURIComponent(escape(atob(b)));
   } catch { return ''; }
+}
+
+// ── Activity-config dock divider — inherent layout dimensions ───────────────
+// Raw px below are layout bounds / drag-steps that no Fluent token expresses
+// (mirrors resizable-canvas.tsx). They are the documented carve-out from the
+// web3-ui token-discipline rule (resize min/max bounds + step sizes). The
+// ceiling is NOT a fixed px: it tracks 80vh of the viewport (recomputed on
+// resize, exactly like the shared primitive); the const below is only the
+// SSR-safe placeholder used until the first client measurement.
+const DOCK_MIN_PX = 240;          // floor — below this the config form is unusable
+const DOCK_MAX_FALLBACK = 680;    // SSR-safe ceiling placeholder; corrected to 80vh on mount
+const DOCK_DEFAULT_PX = 300;      // initial dock height
+const DOCK_STEP = 24;             // Arrow-key resize step (px)
+const DOCK_STEP_LARGE = 96;       // Shift+Arrow / PageUp-Down resize step (px)
+// Per-surface persistence (matches the canvas region's storageKey).
+const DOCK_STORAGE_KEY = 'loom.dockHeight.adf-data-pipeline';
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(Math.round(value), min), Math.max(min, max));
 }
 
 const STARTER: PipelineSpec = {
@@ -285,26 +321,127 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   // Activity-config dock height (ADF Studio docks config at the bottom of the
   // canvas with a draggable divider). Explicit height + internal scroll means
   // expanding/collapsing sections never resizes the canvas above it.
-  const [configHeight, setConfigHeight] = useState(300);
+  //
+  // The divider matches the canvas handle's accessible Pointer-Events standard
+  // (see ResizableCanvasRegion): pointer-capture drag that works for mouse /
+  // touch / pen and survives the pointer leaving the handle; rAF-coalesced,
+  // DOM-direct height writes during drag (no per-frame React re-render →
+  // smooth, no layout thrash); keyboard resize (Arrow ±24 / Shift+Arrow /
+  // PageUp-Down ±96 / Home=min / End=max); full ARIA; and a height persisted
+  // per-surface in localStorage. Dragging UP grows the dock.
+  const configDockRef = useRef<HTMLDivElement | null>(null);
+  const [configHeight, setConfigHeight] = useState(DOCK_DEFAULT_PX);
   const [resizing, setResizing] = useState(false);
-  const startResize = useCallback((e: React.MouseEvent) => {
+  // Ceiling tracks 80vh of the viewport (recomputed on resize); the fallback
+  // keeps SSR and the first client render identical (no hydration mismatch).
+  const [dockMax, setDockMax] = useState(DOCK_MAX_FALLBACK);
+  const configHeightRef = useRef(configHeight);
+  configHeightRef.current = configHeight;
+  // Render-synced mirror so pointer/keyboard handlers read the live ceiling
+  // without being torn down and rebuilt on every resize.
+  const dockMaxRef = useRef(dockMax);
+  dockMaxRef.current = dockMax;
+  const dockDragRef = useRef(false);
+  const dockStartYRef = useRef(0);
+  const dockStartHRef = useRef(0);
+  const dockPendingYRef = useRef(0);
+  const dockRafRef = useRef<number | null>(null);
+
+  // Commit a dock height: clamp into bounds → state → localStorage.
+  const commitDockHeight = useCallback((next: number) => {
+    const clamped = clamp(next, DOCK_MIN_PX, dockMaxRef.current);
+    setConfigHeight(clamped);
+    try { window.localStorage.setItem(DOCK_STORAGE_KEY, String(clamped)); }
+    catch { /* storage unavailable (private mode / quota) — height still applies */ }
+  }, []);
+
+  // Track the 80vh ceiling — recomputed on viewport resize (mirrors the shared
+  // canvas primitive). SSR keeps the fallback; the client corrects on mount.
+  useEffect(() => {
+    const recompute = () => setDockMax(Math.round(window.innerHeight * 0.8));
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, []);
+
+  // Apply the persisted dock height once, after mount. Init stays at the
+  // default so SSR and first client render match (avoids a hydration mismatch).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(DOCK_STORAGE_KEY);
+      if (raw != null) {
+        const parsed = parseInt(raw, 10);
+        if (Number.isFinite(parsed)) setConfigHeight(clamp(parsed, DOCK_MIN_PX, dockMaxRef.current));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // Re-clamp the current height whenever the ceiling changes (e.g. viewport shrank).
+  useEffect(() => { setConfigHeight((h) => clamp(h, DOCK_MIN_PX, dockMax)); }, [dockMax]);
+
+  const startResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const startY = e.clientY;
-    const startH = configHeight;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer capture best-effort */ }
+    dockStartYRef.current = e.clientY;
+    dockStartHRef.current = configDockRef.current?.offsetHeight ?? configHeightRef.current;
+    dockDragRef.current = true;
     setResizing(true);
-    const onMove = (ev: MouseEvent) => {
-      // Dragging up (clientY decreases) grows the bottom dock.
-      const next = Math.max(120, Math.min(680, startH - (ev.clientY - startY)));
-      setConfigHeight(next);
-    };
-    const onUp = () => {
-      setResizing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [configHeight]);
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    // Suppress the keyboard transition so direct DOM writes never lag the drag.
+    if (configDockRef.current) configDockRef.current.style.transition = 'none';
+  }, []);
+
+  const onDockPointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dockDragRef.current) return;
+    dockPendingYRef.current = e.clientY;
+    if (dockRafRef.current != null) return;
+    dockRafRef.current = requestAnimationFrame(() => {
+      dockRafRef.current = null;
+      // Dragging UP (clientY decreases) grows the bottom dock.
+      const dy = dockPendingYRef.current - dockStartYRef.current;
+      const next = clamp(dockStartHRef.current - dy, DOCK_MIN_PX, dockMaxRef.current);
+      // Write height DIRECTLY — no setState during drag → smooth, no thrash.
+      if (configDockRef.current) configDockRef.current.style.height = `${next}px`;
+    });
+  }, []);
+
+  const endDockResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dockDragRef.current) return;
+    dockDragRef.current = false;
+    if (dockRafRef.current != null) { cancelAnimationFrame(dockRafRef.current); dockRafRef.current = null; }
+    setResizing(false);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    // Read back what the drag painted, restore the transition (revert the inline
+    // override to the stylesheet), then commit to state + storage.
+    const committed = configDockRef.current?.offsetHeight ?? configHeightRef.current;
+    if (configDockRef.current) configDockRef.current.style.transition = '';
+    commitDockHeight(committed);
+  }, [commitDockHeight]);
+
+  const onDockKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
+    let next: number | null = null;
+    switch (e.key) {
+      // Dragging the divider UP grows the dock, so ArrowUp/PageUp grow it.
+      case 'ArrowUp':   next = configHeightRef.current + (e.shiftKey ? DOCK_STEP_LARGE : DOCK_STEP); break;
+      case 'ArrowDown': next = configHeightRef.current - (e.shiftKey ? DOCK_STEP_LARGE : DOCK_STEP); break;
+      case 'PageUp':    next = configHeightRef.current + DOCK_STEP_LARGE; break;
+      case 'PageDown':  next = configHeightRef.current - DOCK_STEP_LARGE; break;
+      case 'Home':      next = DOCK_MIN_PX; break;
+      case 'End':       next = dockMaxRef.current; break;
+      default: return;
+    }
+    e.preventDefault();
+    commitDockHeight(next);
+  }, [commitDockHeight]);
+
+  // Cancel any in-flight rAF on unmount; restore body styles defensively.
+  useEffect(() => () => {
+    if (dockRafRef.current != null) cancelAnimationFrame(dockRafRef.current);
+    if (dockDragRef.current) { document.body.style.cursor = ''; document.body.style.userSelect = ''; }
+  }, []);
 
   // Lifecycle state
   const [saving, setSaving] = useState(false);
@@ -1205,36 +1342,57 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
                     <ActivityPalette onInsert={(d) => insertActivity(d)} />
                   </div>
                   <div className={s.designerMain}>
-                    {/* Canvas FILLS the space above the dock — fixed relative to
-                        the dock height, never resized by config expand/collapse. */}
-                    <div className={s.canvasWrap}>
-                      <PipelineCanvas
-                        ref={canvasRef}
-                        activities={activities}
-                        selectedName={selectedActivity || undefined}
-                        onSelect={setSelectedActivity}
-                        snapToGrid={snapToGrid}
-                        showGrid={showGrid}
-                        onDropPaletteKey={(key) => {
-                          const def = findByKey(key);
-                          if (def) insertActivity(def);
-                        }}
-                        onConnect={connect}
-                      />
-                    </div>
-                    {/* Draggable divider — drag up/down to resize the config dock. */}
+                    {/* Canvas region — user-resizable height (drag the grip below
+                        the canvas, or focus it and use Arrow keys). Height is
+                        persisted per-surface; the canvas FILLS this region and is
+                        never resized by config expand/collapse. The dock divider
+                        below is complementary and resizes only the config dock. */}
+                    <ResizableCanvasRegion
+                      storageKey="adf-data-pipeline"
+                      defaultPx={460}
+                      minPx={300}
+                      ariaLabel="Resize pipeline canvas height"
+                    >
+                      <div className={s.canvasWrap} style={{ flex: 1, height: '100%', minHeight: 0 }}>
+                        <PipelineCanvas
+                          ref={canvasRef}
+                          activities={activities}
+                          selectedName={selectedActivity || undefined}
+                          onSelect={setSelectedActivity}
+                          snapToGrid={snapToGrid}
+                          showGrid={showGrid}
+                          onDropPaletteKey={(key) => {
+                            const def = findByKey(key);
+                            if (def) insertActivity(def);
+                          }}
+                          onConnect={connect}
+                        />
+                      </div>
+                    </ResizableCanvasRegion>
+                    {/* Draggable divider — same accessible Pointer-Events standard
+                        as the canvas handle above: pointer-capture drag (mouse /
+                        touch / pen), Arrow/Page/Home/End keyboard resize, full
+                        ARIA. Drag UP (or ArrowUp) grows the dock below. */}
                     <div
                       className={mergeClasses(s.splitter, resizing && s.splitterActive)}
-                      onMouseDown={startResize}
                       role="separator"
                       aria-orientation="horizontal"
-                      aria-label="Resize activity configuration panel"
-                      title="Drag to resize the configuration panel"
+                      aria-label="Resize activity configuration panel. Use Arrow Up and Arrow Down keys."
+                      aria-valuemin={DOCK_MIN_PX}
+                      aria-valuemax={dockMax}
+                      aria-valuenow={configHeight}
+                      tabIndex={0}
+                      title="Drag, or focus and use Arrow keys, to resize the configuration panel"
+                      onPointerDown={startResize}
+                      onPointerMove={onDockPointerMove}
+                      onPointerUp={endDockResize}
+                      onLostPointerCapture={endDockResize}
+                      onKeyDown={onDockKeyDown}
                     >
                       <div className={s.splitterGrip} />
                     </div>
                     {/* Bottom-docked activity configuration — explicit height + own scroll. */}
-                    <div className={s.configDock} style={{ height: configHeight }}>
+                    <div ref={configDockRef} className={s.configDock} style={{ height: configHeight }}>
                       <PropertiesPanel
                         activity={selected}
                         allActivities={activities}

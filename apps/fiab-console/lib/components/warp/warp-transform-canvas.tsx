@@ -34,6 +34,7 @@
  */
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { ReactNode, PointerEvent as ReactPointerEvent, KeyboardEvent as ReactKeyboardEvent } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   useReactFlow, useNodesState, useEdgesState, useNodesInitialized, Handle, Position,
@@ -50,6 +51,7 @@ import {
   Text, Body1,
   makeStyles, shorthands, tokens,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Add20Regular, Delete20Regular, Play20Regular, Table20Regular,
   Filter20Regular, ColumnTriple20Regular, GroupList20Regular, BranchFork20Regular,
@@ -128,9 +130,11 @@ const useStyles = makeStyles({
   body: { display: 'grid', gridTemplateColumns: '1fr 340px', gap: tokens.spacingHorizontalL },
   canvas: {
     position: 'relative',
-    // Definite height (NOT 100%) so React Flow measures a real container on
-    // first paint and fitView frames the graph — the #1480 sizing fix.
-    height: '520px', minHeight: '460px',
+    // Fill the ResizableCanvasRegion, which supplies a DEFINITE px height to
+    // its inner wrapper (height:100% resolves against it). React Flow still
+    // measures a real container on first paint and fitView frames the graph —
+    // the #1480 sizing fix — but the height is now user-resizable per surface.
+    height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground3,
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
@@ -640,6 +644,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
 
       {view === 'canvas' ? (
         <div className={s.body}>
+          <ResizableCanvasRegion storageKey="warp-transform" defaultPx={520} minPx={360} ariaLabel="Resize Warp transform canvas height">
           <div className={s.canvas} data-canvas="warp-transform">
             <ReactFlow
               nodes={renderNodes}
@@ -698,6 +703,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
               </div>
             )}
           </div>
+          </ResizableCanvasRegion>
 
           <aside className={s.inspector} aria-label="Node configuration">
             {colError && <MessageBar intent="warning"><MessageBarBody>{colError}</MessageBarBody></MessageBar>}

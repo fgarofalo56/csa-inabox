@@ -38,6 +38,11 @@ import {
   CATEGORY_ACCENT, CATEGORY_ICON, accentTint, accentGradient,
 } from '@/lib/components/canvas/canvas-node-kit';
 import { EmptyState } from '@/lib/components/empty-state';
+// Shared Web-5.0 drag-to-resize canvas-height primitive (pointer + keyboard +
+// ARIA + per-surface localStorage persistence all live in the primitive). This
+// surface only declares its bounds/storage key; the diagram + steps region
+// height becomes user-controlled while canvas behaviour stays unchanged.
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 
 /**
  * Power Query is a data-wrangling surface → it belongs to the kit's `transform`
@@ -81,7 +86,11 @@ const useStyles = makeStyles({
     background: accentGradient(PQ_ACCENT), color: PQ_ACCENT,
     border: `1px solid ${accentTint(PQ_ACCENT, 24)}`,
   },
-  body: { display: 'flex', gap: tokens.spacingHorizontalM, flex: 1, minHeight: '320px' },
+  // The definite height is now supplied by the wrapping <ResizableCanvasRegion>
+  // (user-resizable, persisted); the body just fills it (height:100% claims the
+  // region's resolved height; minHeight:0 lets the panes scroll instead of
+  // forcing overflow). Was a fixed minHeight:320 flex:1 region.
+  body: { display: 'flex', gap: tokens.spacingHorizontalM, height: '100%', minHeight: 0 },
   pane: {
     width: '244px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     padding: tokens.spacingHorizontalS, overflow: 'auto',
@@ -293,6 +302,17 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
         />
       </div>
 
+      {/* The Power Query diagram + steps area is a bounded canvas region whose
+          height the user can drag (or keyboard-resize) and which persists per
+          surface. Bounds: minPx 300 (floor for the 3-pane layout) up to ~80vh,
+          default 420 — matching the prior fixed minHeight:320 + flex so first
+          paint is visually unchanged. Canvas behaviour/contents are untouched. */}
+      <ResizableCanvasRegion
+        storageKey="power-query-gen2"
+        defaultPx={420}
+        minPx={300}
+        ariaLabel="Resize Power Query canvas height"
+      >
       <div className={s.body}>
         {/* Queries pane */}
         <div className={mergeClasses(s.card, s.pane)} role="navigation" aria-label="Queries">
@@ -405,6 +425,7 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
           </Caption1>
         </div>
       </div>
+      </ResizableCanvasRegion>
     </div>
   );
 }

@@ -2842,7 +2842,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   return (
     <>
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={isNew ? undefined : (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanelLabel="Properties" rightPanel={isNew ? undefined : (
       <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
         <SelectAttributePanel
           title="Update frequency"
