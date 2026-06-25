@@ -40,11 +40,11 @@
 import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import {
   Breadcrumb, BreadcrumbItem, BreadcrumbButton, BreadcrumbDivider,
-  Button, Caption1, Input, MessageBar, MessageBarBody, Tab, TabList, Tooltip,
+  Button, Caption1, Input, Tab, TabList, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  Add16Regular, Dismiss16Regular, Home16Regular,
+  Add16Regular, Dismiss16Regular, Home16Regular, Apps20Regular,
   PanelLeftContract20Regular, PanelLeftExpand20Regular,
 } from '@fluentui/react-icons';
 import { ActivityPalette } from './palette';
@@ -56,6 +56,7 @@ import {
   branchLabel, branchesOf, canAddTypeAtLevel, containerAt, getLevelActivities,
   setLevelActivities, type DrillBranch, type DrillPath,
 } from './drill-path';
+import { getActivityVisual, accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
 import type {
   PipelineActivity, PipelineParameter, PipelineVariable,
 } from './types';
@@ -68,30 +69,62 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalM,
     width: '100%',
   },
+  // Floating palette panel — elevation + large radius + hover lift, matching
+  // the upgraded palette tiles / canvas nodes.
   paletteCol: {
     flexShrink: 0,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
     overflow: 'hidden',
     display: 'flex',
     flexDirection: 'column',
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow8 },
+    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '0.01ms' },
   },
   paletteHeader: {
     display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-    padding: '4px 6px 4px 10px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    fontWeight: 600, fontSize: tokens.fontSizeBase200,
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalXS,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    background: `linear-gradient(180deg, ${tokens.colorNeutralBackground2}, ${tokens.colorNeutralBackground1})`,
   },
+  paletteHeaderLeft: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0,
+  },
+  paletteHeaderTitle: {
+    fontWeight: tokens.fontWeightSemibold,
+    fontSize: tokens.fontSizeBase300,
+    color: tokens.colorNeutralForeground1,
+  },
+  // Reusable accent-tinted glyph chip (palette header icon, collapsed rail icon,
+  // drill-context icon) — fixed 28px chip geometry per kit convention.
+  iconChip: {
+    flexShrink: 0,
+    width: '28px', height: '28px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  // Collapsed palette rail — also elevated so it reads as the same floating panel.
   paletteRail: {
-    flexShrink: 0, width: '36px', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingHorizontalS,
-    paddingTop: tokens.spacingVerticalXS,
+    flexShrink: 0, width: '44px', display: 'flex', flexDirection: 'column',
+    alignItems: 'center', gap: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
   },
   railLabel: {
     writingMode: 'vertical-rl', transform: 'rotate(180deg)',
-    color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, userSelect: 'none', marginTop: tokens.spacingVerticalXS,
+    color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightMedium,
+    userSelect: 'none', marginTop: tokens.spacingVerticalXS,
   },
   // The canvas + bottom dock stack — this is the ADF "authoring canvas + the
   // panel at the bottom of the canvas" arrangement.
@@ -102,25 +135,55 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     minWidth: 0,
   },
-  // Breadcrumb + (for If/Switch) branch selector — the drill navigation strip.
+  // Breadcrumb + (for If/Switch) branch selector — the floating drill toolbar.
   navStrip: {
     flexShrink: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalXS,
-    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    gap: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+  },
+  branchRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  caseInput: { width: '160px' },
+  // Accent-tinted drill-context banner — reuses the active container's kit
+  // accent so it reads with the same colour language as the container node.
+  drillContext: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
   },
-  branchRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' },
-  canvasWrap: { display: 'flex', flex: 1, minHeight: 0 },
-  dock: { flexShrink: 0 },
+  drillContextText: { color: tokens.colorNeutralForeground2, minWidth: 0 },
+  // Canvas region — carries the Fabric-like dot-grid depth (className) and the
+  // same floating-panel elevation as its siblings.
+  canvasWrap: {
+    display: 'flex', flex: 1, minHeight: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    overflow: 'hidden',
+  },
+  // Bottom properties dock — elevated floating panel.
+  dock: {
+    flexShrink: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+  },
   status: {
     color: tokens.colorNeutralForeground3,
     paddingLeft: tokens.spacingHorizontalXS,
   },
 });
+
+/** Accent for the generic "Activities" palette chrome — the kit's generic
+ *  (Apps → move/blue) accent, so the shell matches the palette tiles' language. */
+const PALETTE_ACCENT = getActivityVisual().accent;
 
 export interface PipelineDesignerHandle {
   fitToScreen: () => void;
@@ -366,6 +429,13 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
   const showBranchSelector = !!currentContainer
     && (currentContainer.type === 'IfCondition' || currentContainer.type === 'Switch');
 
+  // Reuse the canvas-node-kit's per-type glyph + accent so the drill context
+  // reads with the SAME colour/icon language as the container node on the canvas.
+  const containerVisual = useMemo(
+    () => (currentContainer ? getActivityVisual(currentContainer.type) : null),
+    [currentContainer],
+  );
+
   return (
     <div className={s.shell} data-pipeline-designer>
       {paletteCollapsed ? (
@@ -374,12 +444,28 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
             <Button appearance="subtle" size="small" icon={<PanelLeftExpand20Regular />}
               aria-label="Expand activities" onClick={() => setPaletteCollapsed(false)} />
           </Tooltip>
+          <span
+            className={s.iconChip}
+            style={{ background: accentTint(PALETTE_ACCENT, 14), color: PALETTE_ACCENT }}
+            aria-hidden="true"
+          >
+            <Apps20Regular />
+          </span>
           <span className={s.railLabel}>Activities</span>
         </div>
       ) : (
         <div className={s.paletteCol}>
           <div className={s.paletteHeader}>
-            <span>Activities</span>
+            <span className={s.paletteHeaderLeft}>
+              <span
+                className={s.iconChip}
+                style={{ background: accentGradient(PALETTE_ACCENT), color: PALETTE_ACCENT }}
+                aria-hidden="true"
+              >
+                <Apps20Regular />
+              </span>
+              <span className={s.paletteHeaderTitle}>Activities</span>
+            </span>
             <Tooltip content="Collapse activities" relationship="label">
               <Button appearance="subtle" size="small" icon={<PanelLeftContract20Regular />}
                 aria-label="Collapse activities" onClick={() => setPaletteCollapsed(true)} />
@@ -450,11 +536,11 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
                   )}
                   <Input
                     size="small"
+                    className={s.caseInput}
                     placeholder="New case value"
                     value={newCaseValue}
                     onChange={(_, d) => setNewCaseValue(d.value)}
                     onKeyDown={(e) => { if (e.key === 'Enter') addSwitchCase(newCaseValue); }}
-                    style={{ width: 140 }}
                     aria-label="New Switch case value"
                   />
                   <Button
@@ -470,13 +556,22 @@ export const PipelineDesigner = forwardRef<PipelineDesignerHandle, PipelineDesig
           )}
 
           {currentContainer && (
-            <MessageBar intent="info" politeness="polite" data-drill-context>
-              <MessageBarBody>
+            <div className={s.drillContext} data-drill-context>
+              {containerVisual && (
+                <span
+                  className={s.iconChip}
+                  style={{ background: accentGradient(containerVisual.accent), color: containerVisual.accent }}
+                  aria-hidden="true"
+                >
+                  {containerVisual.icon}
+                </span>
+              )}
+              <Caption1 className={s.drillContextText}>
                 Editing inner activities of <strong>{currentContainer.name}</strong>
                 {branchLabel(currentBranch) ? ` — ${branchLabel(currentBranch)} branch` : ''}.
                 These run inside the {ACTIVITY_CATALOG.find((d) => d.type === currentContainer.type)?.label || currentContainer.type}.
-              </MessageBarBody>
-            </MessageBar>
+              </Caption1>
+            </div>
           )}
         </div>
 

@@ -17,10 +17,24 @@
  *   type (with auto-incremented name) and hands it to the parent for
  *   insertion into its JSON state. Drag-to-reorder + properties pane are
  *   queued for Phase 3.
+ *
+ * Web-5.0 chrome: the read-only DAG REUSES the shared canvas-node-kit so every
+ * node carries the SAME per-type glyph + per-category accent the editable
+ * canvas nodes use (`getActivityVisual`), the legend / palette chips draw their
+ * accents from the same tokens, and edge colours come from the kit's status
+ * palette (`StatusChip` tokens) rather than raw hex. Every colour/space/radius/
+ * shadow is a Fluent v9 `tokens.*` value or a `--loom-accent-*` var combined via
+ * the kit's token-only `accentTint` / `accentGradient` helpers — no raw px /
+ * hex / hardcoded shadow. The empty-DAG pane uses the shared `EmptyState`.
  */
 
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button, Caption1, MessageBar, MessageBarBody, makeStyles, tokens } from '@fluentui/react-components';
+import { Badge, Button, Caption1, makeStyles, tokens } from '@fluentui/react-components';
+import { Flowchart24Regular } from '@fluentui/react-icons';
+import {
+  getActivityVisual, accentTint, accentGradient,
+} from '@/lib/components/canvas/canvas-node-kit';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
   shell: {
@@ -31,44 +45,116 @@ const useStyles = makeStyles({
     overflow: 'auto',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusLarge,
     padding: tokens.spacingHorizontalL,
+    boxShadow: tokens.shadow4,
   },
   legend: {
     display: 'flex',
+    alignItems: 'center',
     gap: tokens.spacingHorizontalM,
     marginBottom: tokens.spacingVerticalS,
     flexWrap: 'wrap',
   },
+  legendItem: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+  },
+  legendSwatch: {
+    width: '14px',
+    height: '4px',
+    borderRadius: tokens.borderRadiusCircular,
+    flexShrink: 0,
+  },
   grid: {
     position: 'relative',
     display: 'flex',
-    gap: '32px',
+    gap: tokens.spacingHorizontalXXL,
     alignItems: 'flex-start',
     zIndex: 1,
   },
   column: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingHorizontalM,
+    gap: tokens.spacingVerticalM,
     minWidth: '180px',
   },
+  // Node card — rail + gradient header + body, matching the editable canvas node.
   activity: {
-    padding: '8px 10px',
+    position: 'relative',
+    overflow: 'hidden',
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: '0 1px 2px rgba(0,0,0,0.06)',
-    fontSize: tokens.fontSizeBase200,
+    boxShadow: tokens.shadow4,
     minHeight: '56px',
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingHorizontalXS,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-1px)',
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0.01ms',
+      ':hover': { transform: 'none' },
+    },
+  },
+  rail: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '6px',
+    borderRadius: tokens.borderRadiusSmall,
+    zIndex: 1,
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    marginLeft: '6px',
+    paddingTop: tokens.spacingVerticalS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalS,
+  },
+  iconChip: {
+    flexShrink: 0,
+    width: '28px',
+    height: '28px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   activityName: {
-    fontWeight: 600,
+    flex: 1,
+    minWidth: 0,
+    fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorNeutralForeground1,
-    fontSize: '13px',
+    fontSize: tokens.fontSizeBase300,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  body: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    marginLeft: '6px',
+    paddingTop: 0,
+    paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalS,
+  },
+  description: {
+    color: tokens.colorNeutralForeground3,
   },
   edgeOverlay: {
     position: 'absolute',
@@ -79,6 +165,7 @@ const useStyles = makeStyles({
   },
   palette: {
     display: 'flex',
+    alignItems: 'center',
     flexWrap: 'wrap',
     gap: tokens.spacingHorizontalSNudge,
     marginBottom: tokens.spacingVerticalM,
@@ -88,6 +175,11 @@ const useStyles = makeStyles({
   paletteLabel: {
     alignSelf: 'center',
     marginRight: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground3,
+  },
+  footer: {
+    marginTop: tokens.spacingVerticalS,
+    display: 'block',
     color: tokens.colorNeutralForeground3,
   },
 });
@@ -105,41 +197,31 @@ export interface PipelineActivity {
   [key: string]: unknown;
 }
 
-const TYPE_COLORS: Record<string, { bg: string; fg: string }> = {
-  Copy: { bg: '#0078d4', fg: '#fff' },
-  ExecuteDataFlow: { bg: '#7719aa', fg: '#fff' },
-  DatabricksNotebook: { bg: '#ff3621', fg: '#fff' },
-  SynapseNotebook: { bg: '#0a4f7a', fg: '#fff' },
-  Notebook: { bg: '#0078d4', fg: '#fff' },
-  SqlServerStoredProcedure: { bg: '#3aaaaa', fg: '#fff' },
-  AzureFunctionActivity: { bg: '#0062ad', fg: '#fff' },
-  WebActivity: { bg: '#107c10', fg: '#fff' },
-  Lookup: { bg: '#5c2d91', fg: '#fff' },
-  ForEach: { bg: '#dca900', fg: '#000' },
-  IfCondition: { bg: '#bd7800', fg: '#fff' },
-  Switch: { bg: '#bd7800', fg: '#fff' },
-  Until: { bg: '#bd7800', fg: '#fff' },
-  Wait: { bg: '#666', fg: '#fff' },
-  SetVariable: { bg: '#444', fg: '#fff' },
-  AppendVariable: { bg: '#444', fg: '#fff' },
-  ExecutePipeline: { bg: '#005a9e', fg: '#fff' },
-};
-
-function typeColor(type?: string): { bg: string; fg: string } {
-  if (!type) return { bg: tokens.colorNeutralBackground1, fg: tokens.colorNeutralForeground1 };
-  return TYPE_COLORS[type] || { bg: tokens.colorBrandBackground2, fg: tokens.colorNeutralForeground1 };
-}
-
+/**
+ * Dependency-condition → edge colour. Mapped to the SAME theme-aware status
+ * tokens the kit's StatusChip uses (succeeded/failed/brand/skipped) so the DAG
+ * edges read identically to the rest of the canvas. The neutral fallback is the
+ * tokenized neutral stroke. No raw hex.
+ */
 const COND_COLORS: Record<string, string> = {
-  Succeeded: '#107c10',
-  Failed: '#d13438',
-  Completed: '#0078d4',
-  Skipped: '#888',
+  Succeeded: tokens.colorPaletteGreenForeground1,
+  Failed: tokens.colorPaletteRedForeground1,
+  Completed: tokens.colorBrandForeground1,
+  Skipped: tokens.colorNeutralForeground3,
 };
+const COND_FALLBACK = tokens.colorNeutralStroke1;
 function condColor(c?: string): string {
-  if (!c) return '#888';
-  return COND_COLORS[c] || '#888';
+  if (!c) return COND_FALLBACK;
+  return COND_COLORS[c] || COND_FALLBACK;
 }
+
+/** Legend rows — label + the tokenized edge colour drawn as a swatch. */
+const LEGEND: Array<{ label: string; color: string }> = [
+  { label: 'Succeeded', color: COND_COLORS.Succeeded },
+  { label: 'Failed', color: COND_COLORS.Failed },
+  { label: 'Completed', color: COND_COLORS.Completed },
+  { label: 'Skipped', color: COND_COLORS.Skipped },
+];
 
 /**
  * Topological ranking: source nodes go in column 0, each downstream node
@@ -281,14 +363,15 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
     <div className={s.palette} role="toolbar" aria-label="Add activity">
       <Caption1 className={s.paletteLabel}>Add activity:</Caption1>
       {PALETTE.map((p) => {
-        const c = typeColor(p.type);
+        // Reuse the SAME accent the canvas node uses for this activity type.
+        const { accent } = getActivityVisual(p.type);
         return (
           <Button
             key={p.label}
             size="small"
             appearance="outline"
             data-palette-type={p.type}
-            style={{ borderLeft: `4px solid ${c.bg}` }}
+            style={{ borderLeft: `4px solid ${accent}` }}
             onClick={() => {
               const n = nextNameSuffix(activities, p.namePrefix);
               onActivityAdd(p.build(`${p.namePrefix}${n}`));
@@ -326,7 +409,7 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
           if (conds.length === 0) {
             next.push({
               d: `M ${sx} ${sy} C ${sx + dx} ${sy}, ${ex - dx} ${ey}, ${ex} ${ey}`,
-              color: '#888',
+              color: condColor(),
               key: `${dep.activity}->${a.name}`,
             });
           } else {
@@ -385,13 +468,13 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
     return (
       <div className={s.shell}>
         {palette}
-        <MessageBar intent="info">
-          <MessageBarBody>
-            {emptyHint || (onActivityAdd
-              ? 'No activities yet. Click a palette button above to add one.'
-              : 'No activities yet. Add one via the JSON editor — the DAG view will render automatically.')}
-          </MessageBarBody>
-        </MessageBar>
+        <EmptyState
+          icon={<Flowchart24Regular />}
+          title="No activities yet"
+          body={emptyHint || (onActivityAdd
+            ? 'Click a palette button above to add the first activity — the DAG will render it and draw dependency edges automatically.'
+            : 'Add an activity via the JSON editor — the DAG view will render it and draw dependency edges automatically.')}
+        />
       </div>
     );
   }
@@ -401,10 +484,12 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
       {palette}
       <div className={s.legend}>
         <Caption1>Edge color:</Caption1>
-        <Badge appearance="filled" color="success" size="small">Succeeded</Badge>
-        <Badge appearance="filled" color="danger" size="small">Failed</Badge>
-        <Badge appearance="filled" color="brand" size="small">Completed</Badge>
-        <Badge appearance="filled" color="subtle" size="small">Skipped</Badge>
+        {LEGEND.map((l) => (
+          <span key={l.label} className={s.legendItem}>
+            <span className={s.legendSwatch} style={{ background: l.color }} aria-hidden="true" />
+            {l.label}
+          </span>
+        ))}
       </div>
       <svg
         className={s.edgeOverlay}
@@ -414,10 +499,10 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
         aria-hidden="true"
       >
         <defs>
-          {Object.entries(COND_COLORS).concat([['default', '#888']]).map(([k, c]) => (
+          {LEGEND.map((l) => (
             <marker
-              key={k}
-              id={`arrow-${k}`}
+              key={l.label}
+              id={`arrow-${l.label}`}
               viewBox="0 0 10 10"
               refX="9"
               refY="5"
@@ -425,13 +510,24 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
               markerHeight="6"
               orient="auto-start-reverse"
             >
-              <path d="M 0 0 L 10 5 L 0 10 z" fill={c} />
+              <path d="M 0 0 L 10 5 L 0 10 z" fill={l.color} />
             </marker>
           ))}
+          <marker
+            id="arrow-default"
+            viewBox="0 0 10 10"
+            refX="9"
+            refY="5"
+            markerWidth="6"
+            markerHeight="6"
+            orient="auto-start-reverse"
+          >
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={COND_FALLBACK} />
+          </marker>
         </defs>
         {paths.map((p) => {
           // Match color back to its marker id so arrowheads stay color-consistent.
-          const markerKey = (Object.entries(COND_COLORS).find(([, v]) => v === p.color)?.[0]) || 'default';
+          const markerKey = (LEGEND.find((l) => l.color === p.color)?.label) || 'default';
           return (
             <path
               key={p.key}
@@ -448,22 +544,45 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
         {columns.map((col, ci) => (
           <div key={ci} className={s.column}>
             {col.map((a) => {
-              const c = typeColor(a.type);
+              // Reuse the SAME glyph + accent the editable canvas node uses.
+              const { icon, accent } = getActivityVisual(a.type);
               return (
                 <div
                   key={a.name}
                   id={`activity-node-${a.name}`}
                   className={s.activity}
                   data-activity-name={a.name}
-                  style={{ borderLeft: `4px solid ${c.bg}` }}
                 >
-                  <div className={s.activityName}>{a.name}</div>
-                  <div>
-                    <Badge appearance="filled" size="small" style={{ backgroundColor: c.bg, color: c.fg }}>
-                      {a.type || 'Unknown'}
-                    </Badge>
+                  {/* Accent rail anchoring the category colour. */}
+                  <span className={s.rail} style={{ background: accent }} aria-hidden="true" />
+                  {/* Header — icon chip + name, with the category gradient wash. */}
+                  <div className={s.header} style={{ background: accentGradient(accent) }}>
+                    <span
+                      className={s.iconChip}
+                      style={{ background: accentTint(accent, 14), color: accent }}
+                      aria-hidden="true"
+                    >
+                      {icon}
+                    </span>
+                    <span className={s.activityName} title={a.name}>{a.name}</span>
                   </div>
-                  {a.description && <Caption1>{a.description}</Caption1>}
+                  {/* Body — type badge + optional description. */}
+                  <div className={s.body}>
+                    <div>
+                      <Badge
+                        appearance="tint"
+                        size="small"
+                        style={{
+                          backgroundColor: accentTint(accent, 14),
+                          color: accent,
+                          borderColor: accentTint(accent, 28),
+                        }}
+                      >
+                        {a.type || 'Unknown'}
+                      </Badge>
+                    </div>
+                    {a.description && <Caption1 className={s.description}>{a.description}</Caption1>}
+                  </div>
                 </div>
               );
             })}
@@ -471,7 +590,7 @@ export function PipelineDagView({ activities, emptyHint, onActivityAdd }: Pipeli
         ))}
       </div>
       {edges.length > 0 && (
-        <Caption1 style={{ marginTop: 8, display: 'block', color: tokens.colorNeutralForeground3 }}>
+        <Caption1 className={s.footer}>
           {edges.length} dependency edge{edges.length === 1 ? '' : 's'} drawn from <code>dependsOn[]</code>.
         </Caption1>
       )}

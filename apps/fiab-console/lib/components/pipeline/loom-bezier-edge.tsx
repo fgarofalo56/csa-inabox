@@ -21,6 +21,7 @@
  * `canvas.tsx` (edgeTypes key `'loom'` + `buildEdges`) is untouched.
  */
 
+import { tokens } from '@fluentui/react-components';
 import { type EdgeProps } from '@xyflow/react';
 import { CanvasEdge } from '@/lib/components/canvas/canvas-node-kit';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
@@ -35,7 +36,7 @@ export interface LoomEdgeData {
 export function LoomBezierEdge(props: EdgeProps) {
   const data = props.data as LoomEdgeData | undefined;
   const cond = data?.condition;
-  const stroke = cond ? CONNECTOR_COLORS[cond] : '#888888';
+  const stroke = cond ? CONNECTOR_COLORS[cond] : tokens.colorNeutralForeground3;
 
   return <CanvasEdge {...props} stroke={stroke} flowing={!!data?.active} />;
 }
@@ -51,5 +52,5 @@ export const MARKER_DEFS: Array<[string, string]> = [
   ['Failed', CONNECTOR_COLORS.Failed],
   ['Completed', CONNECTOR_COLORS.Completed],
   ['Skipped', CONNECTOR_COLORS.Skipped],
-  ['default', '#888888'],
+  ['default', tokens.colorNeutralForeground3],
 ];

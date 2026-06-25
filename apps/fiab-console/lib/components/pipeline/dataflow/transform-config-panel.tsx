@@ -49,21 +49,15 @@
 import { useMemo, useState } from 'react';
 import {
   Tab, TabList, Field, Input, Dropdown, Option, Switch, Textarea,
-  Caption1, Subtitle2, Body1, Badge, Button, Tooltip, Divider,
+  Caption1, Subtitle2, Badge, Button, Tooltip, Divider,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
-  DatabaseArrowDownRegular, DatabaseArrowUpRegular, ColumnRegular,
-  CalculatorMultipleRegular, MathSymbolsRegular, TableRegular, TableSwitchRegular,
-  PanelLeftHeaderRegular, KeyMultipleRegular, NumberSymbolRegular, ArrowSwapRegular,
-  PlugConnectedRegular, FilterRegular, ArrowSortDownRegular, TableEditRegular,
-  CheckmarkCircleRegular, MergeRegular, SearchInfoRegular, CheckboxCheckedRegular,
-  ArrowJoinRegular, BranchForkRegular, BranchRegular, FlowchartRegular,
-  DocumentBulletListRegular, TextQuoteRegular, DataUsageRegular, AddRegular,
-  DeleteRegular, ArrowImportRegular, BeakerRegular, FlashRegular,
-  type FluentIcon,
+  DataUsageRegular, AddRegular, DeleteRegular, ArrowImportRegular,
+  BeakerRegular, FlashRegular, ColumnRegular, TableRegular,
+  TopSpeedRegular,
 } from '@fluentui/react-icons';
 import { ExpressionField } from '../expression-field';
 import { DatasetSelectOrCreate, type DatasetProvider } from '../dataset-wizard';
@@ -73,6 +67,10 @@ import {
   type TransformField,
   type TransformCategory,
 } from '@/lib/pipeline/dataflow-transform-catalog';
+import {
+  getTransformVisual, transformIcon, accentTint, accentGradient,
+} from '@/lib/components/canvas/canvas-node-kit';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { PipelineParameter, PipelineVariable } from '../types';
 
 // ===========================================================================
@@ -133,40 +131,11 @@ export interface TransformConfigPanelProps {
 }
 
 // ===========================================================================
-// Icon map — catalog `icon` string → Fluent glyph (best-effort, with a default).
+// Icons + accents — the panel chrome reuses the SHARED canvas-node-kit so the
+// properties panel carries the SAME per-type glyph + per-category accent the
+// canvas node for this transform uses (`getTransformVisual` / `transformIcon`).
+// No duplicate local icon map: one source of truth with the canvas.
 // ===========================================================================
-
-const ICONS: Record<string, FluentIcon> = {
-  DatabaseArrowDown: DatabaseArrowDownRegular,
-  DatabaseArrowUp: DatabaseArrowUpRegular,
-  Column: ColumnRegular,
-  CalculatorMultiple: CalculatorMultipleRegular,
-  MathSymbols: MathSymbolsRegular,
-  Table: TableRegular,
-  TableSwitch: TableSwitchRegular,
-  PanelLeftHeader: PanelLeftHeaderRegular,
-  KeyMultiple: KeyMultipleRegular,
-  NumberSymbol: NumberSymbolRegular,
-  ArrowSwap: ArrowSwapRegular,
-  PlugConnected: PlugConnectedRegular,
-  Filter: FilterRegular,
-  ArrowSortDown: ArrowSortDownRegular,
-  TableEdit: TableEditRegular,
-  CheckmarkCircle: CheckmarkCircleRegular,
-  Merge: MergeRegular,
-  SearchInfo: SearchInfoRegular,
-  CheckboxChecked: CheckboxCheckedRegular,
-  ArrowJoin: ArrowJoinRegular,
-  BranchFork: BranchForkRegular,
-  Branch: BranchRegular,
-  Flowchart: FlowchartRegular,
-  DocumentBulletList: DocumentBulletListRegular,
-  TextQuote: TextQuoteRegular,
-};
-
-function iconFor(def: TransformDef): FluentIcon {
-  return (def.icon && ICONS[def.icon]) || DataUsageRegular;
-}
 
 /** Map a transform category to a Fluent Badge colour for the header chip. */
 function categoryColor(cat: TransformCategory): React.ComponentProps<typeof Badge>['color'] {
@@ -260,14 +229,17 @@ const useStyles = makeStyles({
   headTitleRow: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
   },
+  // Accent-driven glyph chip — the per-category gradient + accent comes from the
+  // shared kit (set inline per node) so the panel header matches the canvas node.
   headIcon: {
+    flexShrink: 0,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: tokens.spacingHorizontalXXXL, height: tokens.spacingHorizontalXXXL,
+    width: '32px', height: '32px',
     borderRadius: tokens.borderRadiusMedium,
-    color: tokens.colorBrandForeground1,
-    backgroundColor: tokens.colorBrandBackground2,
     fontSize: tokens.fontSizeBase500,
+    boxShadow: tokens.shadow4,
   },
+  muted: { color: tokens.colorNeutralForeground3 },
   tabStrip: {
     paddingInline: tokens.spacingHorizontalL,
     borderBottom: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
@@ -278,6 +250,7 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
     padding: tokens.spacingHorizontalL,
   },
+  // Elevated, rounded section card with hover lift — matches the palette tiles.
   sectionCard: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
     padding: tokens.spacingHorizontalM,
@@ -285,6 +258,26 @@ const useStyles = makeStyles({
     border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
     boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16 },
+    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '0.01ms' },
+  },
+  // Icon-led section header (glyph chip + title + caption).
+  sectionHead: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalS,
+  },
+  sectionHeadIcon: {
+    flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '28px', height: '28px',
+    borderRadius: tokens.borderRadiusMedium,
+    color: tokens.colorBrandForeground1,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  sectionHeadText: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0,
   },
   dfFieldHeadRow: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
@@ -301,13 +294,12 @@ const useStyles = makeStyles({
   },
   nameCellInput: { width: '100%' },
   rowActionCell: { width: tokens.spacingHorizontalXXXL, textAlign: 'right' },
-  empty: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-    gap: tokens.spacingVerticalS, flex: 1, minHeight: 0,
-    padding: tokens.spacingHorizontalXXL,
-    color: tokens.colorNeutralForeground3, textAlign: 'center',
+  // Centered host for the shared EmptyState (no-transform-selected).
+  emptyHost: {
+    flex: 1, minHeight: 0, overflowY: 'auto',
+    display: 'flex', flexDirection: 'column', justifyContent: 'center',
+    padding: tokens.spacingHorizontalL,
   },
-  emptyGlyph: { fontSize: tokens.fontSizeHero700, color: tokens.colorNeutralForeground4 },
 });
 
 // ===========================================================================
@@ -578,15 +570,20 @@ function ProjectionGrid({
   return (
     <div className={s.sectionCard}>
       <div className={s.gridToolbar}>
-        <div>
-          <Subtitle2>{def.type === 'sink' ? 'Sink mapping schema' : 'Projection'}</Subtitle2>
-          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
-            {def.type === 'source'
-              ? 'The columns and types this source emits downstream.'
-              : def.type === 'sink'
-                ? 'The incoming columns mapped onto the sink store.'
-                : 'The columns this transformation outputs (name + type).'}
-          </Caption1>
+        <div className={s.sectionHead}>
+          <span className={s.sectionHeadIcon} aria-hidden>
+            {def.type === 'sink' ? <TableRegular /> : <ColumnRegular />}
+          </span>
+          <div className={s.sectionHeadText}>
+            <Subtitle2>{def.type === 'sink' ? 'Sink mapping schema' : 'Projection'}</Subtitle2>
+            <Caption1 className={s.muted}>
+              {def.type === 'source'
+                ? 'The columns and types this source emits downstream.'
+                : def.type === 'sink'
+                  ? 'The incoming columns mapped onto the sink store.'
+                  : 'The columns this transformation outputs (name + type).'}
+            </Caption1>
+          </div>
         </div>
         <div className={s.gridToolbarBtns}>
           <Tooltip
@@ -771,19 +768,21 @@ export function TransformConfigPanel({
   if (!node || !def) {
     return (
       <div className={s.root}>
-        <div className={s.empty}>
-          <DataUsageRegular className={s.emptyGlyph} />
-          <Subtitle2>No transformation selected</Subtitle2>
-          <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
-            Select a transformation on the canvas to edit its settings, projection, and
-            optimization. Add transformations from the palette to build your mapping data flow.
-          </Body1>
+        <div className={s.emptyHost}>
+          <EmptyState
+            icon={<DataUsageRegular />}
+            title="No transformation selected"
+            body="Select a transformation on the canvas to edit its settings, projection, and optimization — or drag one in from the palette to build your mapping data flow."
+          />
         </div>
       </div>
     );
   }
 
-  const HeadIcon = iconFor(def);
+  // Same per-type glyph + per-category accent the canvas node uses for this
+  // transform — one source of truth with the canvas (canvas-node-kit).
+  const visual = getTransformVisual(def.type);
+  const accent = visual.accent;
   // Settings-tab fields = catalog settings minus those that live on Optimize.
   const settingsFields = def.settings.filter((f) => !isOptimizeField(f));
   const optimizeFields = def.settings.filter(isOptimizeField);
@@ -792,7 +791,17 @@ export function TransformConfigPanel({
     <div className={s.root}>
       <div className={s.header}>
         <div className={s.headTitleRow}>
-          <span className={s.headIcon} aria-hidden><HeadIcon /></span>
+          <span
+            className={s.headIcon}
+            style={{
+              background: accentGradient(accent),
+              color: accent,
+              border: `${tokens.strokeWidthThin} solid ${accentTint(accent, 24)}`,
+            }}
+            aria-hidden
+          >
+            {transformIcon(def)}
+          </span>
           <Subtitle2>{def.displayName}</Subtitle2>
           <Badge appearance="tint" color={categoryColor(def.category)} size="small">
             {def.category}
@@ -802,7 +811,7 @@ export function TransformConfigPanel({
             {node.name || node.config.outputStreamName as string || '(unnamed stream)'}
           </Badge>
         </div>
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{def.description}</Caption1>
+        <Caption1 className={s.muted}>{def.description}</Caption1>
       </div>
 
       <div className={s.tabStrip}>
@@ -847,6 +856,15 @@ export function TransformConfigPanel({
 
         {activeTab === 'optimize' && (
           <>
+            <div className={s.sectionHead}>
+              <span className={s.sectionHeadIcon} aria-hidden><TopSpeedRegular /></span>
+              <div className={s.sectionHeadText}>
+                <Subtitle2>Optimize</Subtitle2>
+                <Caption1 className={s.muted}>
+                  Partitioning + broadcast settings for this transformation’s Spark stage.
+                </Caption1>
+              </div>
+            </div>
             <FieldList
               fields={optimizeFields}
               def={def}
@@ -860,7 +878,7 @@ export function TransformConfigPanel({
               emptyText="Use current partitioning. This transformation has no extra optimization options."
             />
             <Divider />
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Caption1 className={s.muted}>
               Partitioning is applied per the run-level Optimize strategy unless overridden
               here. Leave on “Use current partitioning” unless you have a measured hot-spot.
             </Caption1>

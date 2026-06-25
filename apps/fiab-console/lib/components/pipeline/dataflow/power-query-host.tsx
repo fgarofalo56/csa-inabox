@@ -24,49 +24,116 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Subtitle2, Caption1, Body1, Body1Strong, Button, Input, Tab, TabList,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle, Badge,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Add16Regular, Delete16Regular, Table16Regular, ChevronRight16Regular,
+  TableSettings20Regular, NumberSymbolSquare20Regular,
 } from '@fluentui/react-icons';
 import {
   parseSharedQueries, parseLetBody, buildLetBody, setQueryBody,
   appendStep, renameIdentifier, RIBBON_TRANSFORMS, type RibbonTransform,
 } from './m-script';
+import {
+  CATEGORY_ACCENT, CATEGORY_ICON, accentTint, accentGradient,
+} from '@/lib/components/canvas/canvas-node-kit';
+import { EmptyState } from '@/lib/components/empty-state';
+
+/**
+ * Power Query is a data-wrangling surface → it belongs to the kit's `transform`
+ * category. Reuse the SAME accent (violet) + section glyph the mapping-data-flow
+ * transform nodes use, so this frame reads as the same product as the canvas.
+ */
+const PQ_ACCENT = CATEGORY_ACCENT.transform;
+const PQ_GLYPH = CATEGORY_ICON.transform;
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, flex: 1, minHeight: 0 },
+  // Shared elevated-card chrome for every panel (ribbon / formula bar / panes / center).
+  card: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    backgroundColor: tokens.colorNeutralBackground1,
+    transitionProperty: 'box-shadow, border-color',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow8 },
+    '@media (prefers-reduced-motion: reduce)': { transitionDuration: '0.01ms' },
+  },
   ribbon: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingHorizontalS, backgroundColor: tokens.colorNeutralBackground1,
+    padding: tokens.spacingHorizontalS,
   },
   ribbonRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center' },
   formulaBar: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    padding: `2px ${tokens.spacingHorizontalS}`, backgroundColor: tokens.colorNeutralBackground1,
+    paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
   },
-  fx: { fontStyle: 'italic', color: tokens.colorBrandForeground1, fontWeight: 700, flexShrink: 0 },
+  // Accent-tinted "fx" chip, mirroring the kit's iconChip.
+  fxChip: {
+    flexShrink: 0,
+    width: '28px', height: '28px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    fontStyle: 'italic', fontWeight: tokens.fontWeightBold,
+    background: accentGradient(PQ_ACCENT), color: PQ_ACCENT,
+    border: `1px solid ${accentTint(PQ_ACCENT, 24)}`,
+  },
   body: { display: 'flex', gap: tokens.spacingHorizontalM, flex: 1, minHeight: '320px' },
   pane: {
-    width: '240px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingHorizontalS, overflow: 'auto', backgroundColor: tokens.colorNeutralBackground1,
+    width: '244px', flexShrink: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingHorizontalS, overflow: 'auto',
   },
   center: {
     flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingHorizontalM, backgroundColor: tokens.colorNeutralBackground2,
+    padding: tokens.spacingHorizontalM,
+    backgroundColor: tokens.colorNeutralBackground2,
   },
   paneHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalXS },
+  paneTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  // Accent-tinted section glyph chip on pane / center headers (matches palette + node headers).
+  headerIcon: {
+    flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '28px', height: '28px',
+    borderRadius: tokens.borderRadiusMedium,
+    background: accentTint(PQ_ACCENT, 14), color: PQ_ACCENT,
+  },
   listItem: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
-    padding: `4px 6px`, borderRadius: tokens.borderRadiusSmall, cursor: 'pointer',
+    paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalXS, paddingRight: tokens.spacingHorizontalXS,
+    borderRadius: tokens.borderRadiusMedium, cursor: 'pointer',
+    transitionProperty: 'background-color',
+    transitionDuration: tokens.durationFaster,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
-  listItemActive: { backgroundColor: tokens.colorBrandBackground2 },
-  itemText: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '13px' },
+  listItemActive: {
+    backgroundColor: accentTint(PQ_ACCENT, 12),
+    boxShadow: `inset 3px 0 0 0 ${PQ_ACCENT}`,
+  },
+  listIcon: { flexShrink: 0, color: PQ_ACCENT, display: 'inline-flex', alignItems: 'center' },
+  itemText: {
+    flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    fontSize: tokens.fontSizeBase300,
+  },
+  fillInput: { flex: 1 },
+  hint: { marginTop: 'auto', color: tokens.colorNeutralForeground3 },
+  mPreviewLabel: { color: tokens.colorNeutralForeground3 },
+  mPreview: {
+    margin: 0,
+    padding: tokens.spacingHorizontalM,
+    overflow: 'auto',
+    background: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke3}`,
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground2,
+    whiteSpace: 'pre-wrap',
+  },
 });
 
 const RIBBON_TABS: Array<{ id: RibbonTransform['tab']; label: string }> = [
@@ -182,14 +249,14 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
   if (queries.length === 0) {
     return (
       <div className={s.root}>
-        <MessageBar intent="info">
-          <MessageBarBody>
-            <MessageBarTitle>No queries yet</MessageBarTitle>
-            This dataflow has no Power Query declarations the visual editor can read.
-            Add one below, or author raw M on the Script (M) tab.
-          </MessageBarBody>
-        </MessageBar>
-        <Button appearance="primary" icon={<Add16Regular />} onClick={addQuery} disabled={readOnly}>Add query</Button>
+        <EmptyState
+          icon={PQ_GLYPH}
+          title="No queries yet"
+          body="This dataflow has no Power Query declarations the visual editor can read. Add one to start shaping data with the ribbon, or author raw M on the Script (M) tab."
+          primaryAction={readOnly
+            ? undefined
+            : { label: 'Add query', appearance: 'primary', onClick: addQuery }}
+        />
       </div>
     );
   }
@@ -197,7 +264,7 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
   return (
     <div className={s.root}>
       {/* Ribbon */}
-      <div className={s.ribbon}>
+      <div className={mergeClasses(s.card, s.ribbon)}>
         <TabList selectedValue={ribbonTab} onTabSelect={(_, d) => setRibbonTab(d.value as RibbonTransform['tab'])} size="small">
           {RIBBON_TABS.map((t) => <Tab key={t.id} value={t.id}>{t.label}</Tab>)}
         </TabList>
@@ -213,11 +280,11 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
       </div>
 
       {/* Formula bar */}
-      <div className={s.formulaBar}>
-        <span className={s.fx}>fx</span>
+      <div className={mergeClasses(s.card, s.formulaBar)}>
+        <span className={s.fxChip} aria-hidden="true">fx</span>
         <Input
           appearance="filled-lighter"
-          style={{ flex: 1 }}
+          className={s.fillInput}
           value={activeStep?.expr || ''}
           placeholder={activeStep ? '' : 'Select an applied step'}
           disabled={readOnly || !activeStep}
@@ -228,9 +295,12 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
 
       <div className={s.body}>
         {/* Queries pane */}
-        <div className={s.pane} role="navigation" aria-label="Queries">
+        <div className={mergeClasses(s.card, s.pane)} role="navigation" aria-label="Queries">
           <div className={s.paneHeader}>
-            <Subtitle2>Queries</Subtitle2>
+            <span className={s.paneTitle}>
+              <span className={s.headerIcon} aria-hidden="true"><TableSettings20Regular /></span>
+              <Subtitle2>Queries</Subtitle2>
+            </span>
             <Tooltip content="New query" relationship="label">
               <Button size="small" appearance="subtle" icon={<Add16Regular />} onClick={addQuery} disabled={readOnly} aria-label="New query" />
             </Tooltip>
@@ -238,16 +308,16 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
           {queries.map((q) => (
             <div
               key={q.name}
-              className={`${s.listItem} ${q.name === activeQuery ? s.listItemActive : ''}`}
+              className={mergeClasses(s.listItem, q.name === activeQuery && s.listItemActive)}
               onClick={() => { setActiveQuery(q.name); setActiveStepIdx(0); }}
               onDoubleClick={() => setRenaming({ kind: 'query', value: q.name })}
               role="button" tabIndex={0}
               onKeyDown={(e) => { if (e.key === 'Enter') { setActiveQuery(q.name); setActiveStepIdx(0); } }}
             >
-              <Table16Regular />
+              <span className={s.listIcon} aria-hidden="true"><Table16Regular /></span>
               {renaming?.kind === 'query' && q.name === activeQuery ? (
                 <Input
-                  size="small" style={{ flex: 1 }} defaultValue={q.name} autoFocus
+                  size="small" className={s.fillInput} defaultValue={q.name} autoFocus
                   onBlur={(e) => commitRenameQuery(q.name, e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') commitRenameQuery(q.name, (e.target as HTMLInputElement).value); if (e.key === 'Escape') setRenaming(null); }}
                   aria-label="Rename query"
@@ -263,15 +333,18 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
               )}
             </div>
           ))}
-          <Caption1 style={{ marginTop: 'auto', color: tokens.colorNeutralForeground3 }}>
+          <Caption1 className={s.hint}>
             Double-click a query to rename.
           </Caption1>
         </div>
 
         {/* Data preview (honest-gated) */}
-        <div className={s.center}>
+        <div className={mergeClasses(s.card, s.center)}>
           <div className={s.paneHeader}>
-            <Body1Strong>Data preview — {current?.name}</Body1Strong>
+            <span className={s.paneTitle}>
+              <span className={s.headerIcon} aria-hidden="true"><Table16Regular /></span>
+              <Body1Strong>Data preview — {current?.name}</Body1Strong>
+            </span>
             <Badge appearance="tint" color="informative">{steps.length} step{steps.length === 1 ? '' : 's'}</Badge>
           </div>
           <MessageBar intent="warning">
@@ -283,34 +356,35 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
               (<code>LOOM_DATAFLOW_BACKEND=fabric</code> + a bound workspace) for inline preview.
             </MessageBarBody>
           </MessageBar>
-          <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
+          <Body1 className={s.mPreviewLabel}>
             Applied step expression (M):
           </Body1>
-          <pre style={{
-            margin: 0, padding: tokens.spacingHorizontalM, overflow: 'auto',
-            background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium,
-            fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, whiteSpace: 'pre-wrap',
-          }}>
+          <pre className={s.mPreview}>
             {activeStep ? `${activeStep.name} =\n    ${activeStep.expr}` : '— select an applied step —'}
           </pre>
         </div>
 
         {/* Applied steps pane */}
-        <div className={s.pane} role="navigation" aria-label="Applied steps">
-          <Subtitle2>Applied steps</Subtitle2>
+        <div className={mergeClasses(s.card, s.pane)} role="navigation" aria-label="Applied steps">
+          <div className={s.paneHeader}>
+            <span className={s.paneTitle}>
+              <span className={s.headerIcon} aria-hidden="true"><NumberSymbolSquare20Regular /></span>
+              <Subtitle2>Applied steps</Subtitle2>
+            </span>
+          </div>
           {steps.map((st, i) => (
             <div
               key={`${st.name}-${i}`}
-              className={`${s.listItem} ${i === safeStepIdx ? s.listItemActive : ''}`}
+              className={mergeClasses(s.listItem, i === safeStepIdx && s.listItemActive)}
               onClick={() => setActiveStepIdx(i)}
               onDoubleClick={() => setRenaming({ kind: 'step', value: st.name })}
               role="button" tabIndex={0}
               onKeyDown={(e) => { if (e.key === 'Enter') setActiveStepIdx(i); }}
             >
-              <ChevronRight16Regular />
+              <span className={s.listIcon} aria-hidden="true"><ChevronRight16Regular /></span>
               {renaming?.kind === 'step' && i === safeStepIdx ? (
                 <Input
-                  size="small" style={{ flex: 1 }} defaultValue={st.name} autoFocus
+                  size="small" className={s.fillInput} defaultValue={st.name} autoFocus
                   onBlur={(e) => commitRenameStep(st.name, e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') commitRenameStep(st.name, (e.target as HTMLInputElement).value); if (e.key === 'Escape') setRenaming(null); }}
                   aria-label="Rename step"
@@ -326,7 +400,7 @@ export function PowerQueryHost({ mScript, onChange, readOnly = false, onActiveQu
               )}
             </div>
           ))}
-          <Caption1 style={{ marginTop: 'auto', color: tokens.colorNeutralForeground3 }}>
+          <Caption1 className={s.hint}>
             Double-click a step to rename. Add steps from the ribbon.
           </Caption1>
         </div>

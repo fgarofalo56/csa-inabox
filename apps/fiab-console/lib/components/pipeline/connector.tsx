@@ -18,11 +18,13 @@ import { tokens } from '@fluentui/react-components';
 
 export type ConnectorCondition = 'Succeeded' | 'Failed' | 'Completed' | 'Skipped';
 
+// Theme-aware semantic tokens — same source the read-only DAG view (COND_COLORS)
+// uses, so the editable canvas edges and the DAG edges share one palette.
 export const CONNECTOR_COLORS: Record<ConnectorCondition, string> = {
-  Succeeded: '#107c10',
-  Failed:    '#d13438',
-  Completed: '#0078d4',
-  Skipped:   '#888888',
+  Succeeded: tokens.colorPaletteGreenForeground1,
+  Failed:    tokens.colorPaletteRedForeground1,
+  Completed: tokens.colorBrandForeground1,
+  Skipped:   tokens.colorNeutralForeground3,
 };
 
 export interface ConnectorProps {
@@ -36,7 +38,7 @@ export interface ConnectorProps {
 }
 
 export function Connector({ sx, sy, ex, ey, condition, selected, id, onClick }: ConnectorProps) {
-  const color = condition ? CONNECTOR_COLORS[condition] : (tokens.colorNeutralForeground3 || '#888');
+  const color = condition ? CONNECTOR_COLORS[condition] : tokens.colorNeutralForeground3;
   const dx = Math.max(48, Math.abs(ex - sx) / 2);
   const d = `M ${sx} ${sy} C ${sx + dx} ${sy}, ${ex - dx} ${ey}, ${ex} ${ey}`;
   const markerKey = condition || 'default';
@@ -68,7 +70,7 @@ export function ConnectorMarkers() {
     ['Failed',    CONNECTOR_COLORS.Failed],
     ['Completed', CONNECTOR_COLORS.Completed],
     ['Skipped',   CONNECTOR_COLORS.Skipped],
-    ['default',   '#888888'],
+    ['default',   tokens.colorNeutralForeground3],
   ];
   return (
     <defs>
