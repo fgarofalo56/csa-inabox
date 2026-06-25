@@ -61,8 +61,8 @@ import {
 } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap,
-  Panel, BaseEdge, getBezierPath, useReactFlow, useNodesState,
-  ConnectionMode, MarkerType, Position, Handle,
+  Panel, useReactFlow, useNodesState,
+  ConnectionMode, Position, Handle,
   type Node, type Edge, type Connection, type NodeChange, type NodeProps,
   type EdgeProps, type NodeTypes, type EdgeTypes,
 } from '@xyflow/react';
@@ -79,21 +79,16 @@ import {
   Add16Filled, Add20Regular, Bug20Regular, Save20Regular,
   Code20Regular, Delete20Regular, FullScreenMaximize20Regular,
   Organization20Regular, Eye20Regular, Beaker20Regular,
-  DatabaseArrowDown20Regular, DatabaseArrowUp20Regular, Filter20Regular,
-  Merge20Regular, Branch20Regular, BranchFork20Regular, Column20Regular,
-  CalculatorMultiple20Regular, MathSymbols20Regular, Table20Regular,
-  TableSwitch20Regular, PanelLeftHeader20Regular, KeyMultiple20Regular,
-  NumberSymbol20Regular, ArrowSwap20Regular, PlugConnected20Regular,
-  ArrowSortDown20Regular, TableEdit20Regular, CheckmarkCircle20Regular,
-  SearchInfo20Regular, CheckboxChecked20Regular, ArrowJoin20Regular,
-  Flowchart20Regular, DocumentBulletList20Regular, TextQuote20Regular,
-  Apps20Regular,
+  DatabaseArrowDown20Regular, Flowchart20Regular,
 } from '@fluentui/react-icons';
-import type { JSX } from 'react';
 import {
   TRANSFORM_CATEGORIES, transformByType, transformsByCategory,
-  type TransformDef, type TransformField, type TransformCategory,
+  type TransformField,
 } from '@/lib/pipeline/dataflow-transform-catalog';
+import {
+  CanvasNode, CanvasEdge, getTransformVisual, transformIcon, portStyle,
+  type CanvasNodeStatus,
+} from '@/lib/components/canvas/canvas-node-kit';
 import { DatasetPicker } from '../dataset-picker';
 import { ExpressionField } from '../expression-field';
 import type { AdfDataset, AdfDataFlow } from '@/lib/azure/adf-client';
@@ -115,6 +110,11 @@ export interface DfTransformInstance {
   position?: { x: number; y: number };
   /** Bound dataset for Source/Sink nodes (DatasetReference name). */
   dataset?: string;
+  /**
+   * Optional run/config status driving the node's `StatusChip` (defaults to
+   * `idle`, which shows the type label). Editor-only; not serialised to ADF.
+   */
+  status?: CanvasNodeStatus;
 }
 
 /** A data-stream connection: one transform's output feeds another's input. */
@@ -140,48 +140,11 @@ export interface MappingDataFlowGraph {
   streams: DfStream[];
 }
 
-// Accent palette (theme-aware loom vars; never raw hex) per category.
-const CATEGORY_COLOR: Record<TransformCategory, string> = {
-  'Source & sink': 'var(--loom-accent-blue)',
-  'Schema modifier': 'var(--loom-accent-teal)',
-  'Row modifier': 'var(--loom-accent-amber)',
-  'Multiple inputs/outputs': 'var(--loom-accent-violet)',
-  Formatters: 'var(--loom-accent-magenta)',
-};
-
-// Catalog `icon` string → Fluent glyph. Every icon used in the catalog is
-// mapped; anything unmapped falls back to the generic glyph.
-const TRANSFORM_ICONS: Record<string, JSX.Element> = {
-  DatabaseArrowDown: <DatabaseArrowDown20Regular />,
-  DatabaseArrowUp: <DatabaseArrowUp20Regular />,
-  Column: <Column20Regular />,
-  CalculatorMultiple: <CalculatorMultiple20Regular />,
-  MathSymbols: <MathSymbols20Regular />,
-  Table: <Table20Regular />,
-  TableSwitch: <TableSwitch20Regular />,
-  PanelLeftHeader: <PanelLeftHeader20Regular />,
-  KeyMultiple: <KeyMultiple20Regular />,
-  NumberSymbol: <NumberSymbol20Regular />,
-  ArrowSwap: <ArrowSwap20Regular />,
-  PlugConnected: <PlugConnected20Regular />,
-  Filter: <Filter20Regular />,
-  ArrowSortDown: <ArrowSortDown20Regular />,
-  TableEdit: <TableEdit20Regular />,
-  CheckmarkCircle: <CheckmarkCircle20Regular />,
-  Merge: <Merge20Regular />,
-  SearchInfo: <SearchInfo20Regular />,
-  CheckboxChecked: <CheckboxChecked20Regular />,
-  ArrowJoin: <ArrowJoin20Regular />,
-  BranchFork: <BranchFork20Regular />,
-  Branch: <Branch20Regular />,
-  Flowchart: <Flowchart20Regular />,
-  DocumentBulletList: <DocumentBulletList20Regular />,
-  TextQuote: <TextQuote20Regular />,
-};
-
-function transformIcon(def: TransformDef | undefined): JSX.Element {
-  return (def?.icon && TRANSFORM_ICONS[def.icon]) || <Apps20Regular />;
-}
+// Node visuals (icon + category accent + gradient) are resolved from the shared
+// canvas kit via `getTransformVisual(type)` / `transformIcon(def)` — the kit is
+// the single source of node tinting (theme-aware `--loom-accent-*` via
+// `color-mix`, never raw hex). The catalog `TransformDef.category` drives which
+// of the five canvas categories (and thus accent) a transform gets.
 
 const NODE_W = 210;
 const NODE_H = 86;
@@ -494,11 +457,6 @@ interface TransformNodeData {
   [key: string]: unknown;
 }
 
-const HANDLE_BASE: React.CSSProperties = {
-  width: 11, height: 11, borderRadius: '50%',
-  background: tokens.colorNeutralBackground1, zIndex: 3,
-};
-
 /** Distribute N ports evenly down an edge as top-% strings. */
 function portTops(n: number): string[] {
   if (n <= 1) return ['50%'];
@@ -510,7 +468,8 @@ function TransformNodeImpl({ data, selected }: NodeProps) {
   const nodeData = data as TransformNodeData;
   const t = nodeData.instance;
   const def = transformByType(t.type);
-  const color = def ? CATEGORY_COLOR[def.category] : 'var(--loom-accent-blue)';
+  const visual = getTransformVisual(t.type);
+  const accent = visual.accent;
 
   // Port counts. 'n' (variable) shows the declared minimum + room to add via ＋.
   const inN = def?.ports.inputs === 'n' ? 2 : (def?.ports.inputs ?? 1);
@@ -519,22 +478,25 @@ function TransformNodeImpl({ data, selected }: NodeProps) {
   const outTops = portTops(outN);
 
   return (
-    <div
-      id={`df-node-${t.name}`}
-      data-transform-name={t.name}
-      data-transform-type={t.type}
-      aria-label={`${def?.displayName || t.type} transformation ${t.name}`}
-      style={{
-        position: 'relative', width: NODE_W, padding: '10px 12px',
-        borderRadius: tokens.borderRadiusLarge,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected ? tokens.shadow16 : tokens.shadow4,
-        display: 'flex', flexDirection: 'column', gap: 4,
-        cursor: 'pointer', userSelect: 'none',
+    <CanvasNode
+      width={NODE_W}
+      title={t.name}
+      visual={visual}
+      selected={selected}
+      status={t.status}
+      typeLabel={def?.displayName || t.type}
+      badges={def?.preview ? (
+        <Badge appearance="outline" color="warning" size="small">Preview</Badge>
+      ) : undefined}
+      rootProps={{
+        id: `df-node-${t.name}`,
+        'data-transform-name': t.name,
+        'data-transform-type': t.type,
+        'aria-label': `${def?.displayName || t.type} transformation ${t.name}`,
       }}
     >
-      {/* Input handle(s) on the left edge. */}
+      {/* Input handle(s) on the left edge — kit `portStyle('in', accent)` owns the
+          handle visual; the caller layers only the positional left/top. */}
       {inN > 0 && inTops.map((top, i) => (
         <Tooltip key={`in-${i}`} content={i === 0 ? 'Primary input stream' : `Secondary input ${i}`} relationship="label" positioning="before">
           <Handle
@@ -542,7 +504,7 @@ function TransformNodeImpl({ data, selected }: NodeProps) {
             type="target"
             position={Position.Left}
             data-input-slot={i}
-            style={{ ...HANDLE_BASE, left: -6, top, border: `2px solid ${tokens.colorBrandStroke1}` }}
+            style={{ ...portStyle('in', accent), left: -6, top }}
           />
         </Tooltip>
       ))}
@@ -556,7 +518,7 @@ function TransformNodeImpl({ data, selected }: NodeProps) {
             position={Position.Right}
             data-output-slot={i}
             aria-label={i === 0 ? 'Output stream — drag to connect' : `Branch output ${i}`}
-            style={{ ...HANDLE_BASE, right: -6, top, border: `2px solid ${color}` }}
+            style={{ ...portStyle('out', accent), right: -6, top }}
           />
           {nodeData.onAddFromOutput && (
             <Tooltip content="Add a transformation on this stream" relationship="label" positioning="after">
@@ -574,8 +536,8 @@ function TransformNodeImpl({ data, selected }: NodeProps) {
                   position: 'absolute', right: -28, top: `calc(${top} - 9px)`,
                   width: 18, height: 18, padding: 0, zIndex: 4, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  borderRadius: '50%', border: `1px solid ${color}`,
-                  background: tokens.colorNeutralBackground1, color,
+                  borderRadius: '50%', border: `1px solid ${accent}`,
+                  background: tokens.colorNeutralBackground1, color: accent,
                 }}
               >
                 <Add16Filled />
@@ -584,56 +546,20 @@ function TransformNodeImpl({ data, selected }: NodeProps) {
           )}
         </div>
       ))}
-
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-        <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: color }} />
-        <div
-          style={{
-            flexShrink: 0, width: 28, height: 28, borderRadius: tokens.borderRadiusMedium,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: tokens.colorNeutralBackground3, color,
-          }}
-          aria-hidden="true"
-        >
-          {transformIcon(def)}
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
-          <div
-            style={{
-              fontWeight: 600, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}
-          >
-            {t.name}
-          </div>
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Badge appearance="tint" color="brand" size="small">{def?.displayName || t.type}</Badge>
-            {def?.preview && <Badge appearance="outline" color="warning" size="small">Preview</Badge>}
-          </div>
-        </div>
-      </div>
-    </div>
+    </CanvasNode>
   );
 }
 
 const TransformNode = memo(TransformNodeImpl);
 
 // =============================================================================
-// Canvas edge — the data stream (Bezier, modeled on loom-bezier-edge.tsx).
+// Canvas edge — the data stream (Bezier). A thin wrapper over the shared
+// `CanvasEdge` (stroke = `--loom-accent-blue`, always lightly "flowing" so it
+// reads as live data movement).
 // =============================================================================
 
-function DataStreamEdge({
-  id, sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition, selected, markerEnd,
-}: EdgeProps) {
-  const [path] = getBezierPath({ sourceX, sourceY, targetX, targetY, sourcePosition, targetPosition });
-  return (
-    <BaseEdge
-      id={id}
-      path={path}
-      markerEnd={markerEnd}
-      style={{ stroke: 'var(--loom-accent-blue)', strokeWidth: selected ? 2.5 : 1.7 }}
-    />
-  );
+function DataStreamEdge(props: EdgeProps) {
+  return <CanvasEdge {...props} stroke="var(--loom-accent-blue)" flowing />;
 }
 
 const nodeTypes: NodeTypes = { transform: TransformNode };
@@ -677,7 +603,7 @@ function ConfigPanel({
     <div className={s.panel} data-config-panel={instance.name}>
       <div className={s.panelHeader}>
         <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 }}>
-          <span style={{ color: CATEGORY_COLOR[def.category], display: 'inline-flex' }} aria-hidden="true">
+          <span style={{ color: getTransformVisual(def.type).accent, display: 'inline-flex' }} aria-hidden="true">
             {transformIcon(def)}
           </span>
           <Subtitle2 style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -837,10 +763,10 @@ function SettingField({
     return (
       <Field
         label={(
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
             {field.label}
             <Tooltip content="Data flow expression (Spark column DSL)" relationship="label">
-              <Code20Regular style={{ fontSize: 14, color: tokens.colorBrandForeground1 }} />
+              <Code20Regular style={{ fontSize: tokens.fontSizeBase300, color: tokens.colorBrandForeground1 }} />
             </Tooltip>
           </span>
         )}
@@ -1053,6 +979,9 @@ function DesignerInner({
 
   useEffect(() => { syncNodes(); }, [syncNodes]);
 
+  // The `stream` edge type (DataStreamEdge → CanvasEdge) owns its arrow marker
+  // and colours it to match the `--loom-accent-blue` stroke (token-only, no raw
+  // hex), so the edge object carries no `markerEnd`.
   const edges = useMemo<Edge[]>(() => graph.streams.map((st) => ({
     id: `${st.from}:${st.fromSlot ?? 0}->${st.to}:${st.toSlot ?? 0}`,
     source: st.from,
@@ -1060,7 +989,6 @@ function DesignerInner({
     sourceHandle: `out-${st.fromSlot ?? 0}`,
     targetHandle: `in-${st.toSlot ?? 0}`,
     type: 'stream',
-    markerEnd: { type: MarkerType.ArrowClosed, color: '#0078d4', width: 16, height: 16 },
   })), [graph.streams]);
 
   const handleNodesChange = useCallback((changes: NodeChange[]) => {
@@ -1240,7 +1168,7 @@ function DesignerInner({
                   {transformsByCategory(cat).map((def) => (
                     <MenuItem
                       key={def.type}
-                      icon={<span style={{ color: CATEGORY_COLOR[cat], display: 'inline-flex' }}>{transformIcon(def)}</span>}
+                      icon={<span style={{ color: getTransformVisual(def.type).accent, display: 'inline-flex' }}>{transformIcon(def)}</span>}
                       onClick={() => addTransform(def.type)}
                     >
                       {def.displayName}
@@ -1338,7 +1266,7 @@ function DesignerInner({
           >
             <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
             <Panel position="top-left">
-              <div style={{ display: 'flex', gap: 4, background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: 2 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalXXS }}>
                 <Tooltip content="Fit to screen" relationship="label">
                   <Button size="small" appearance="subtle" icon={<Organization20Regular />} onClick={fitToScreen} aria-label="Fit to screen" />
                 </Tooltip>
@@ -1356,7 +1284,7 @@ function DesignerInner({
           {graph.transforms.length === 0 && (
             <div className={s.emptyCanvas}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, alignItems: 'center', pointerEvents: 'auto' }}>
-                <Flowchart20Regular style={{ fontSize: 36, color: tokens.colorNeutralForeground3 }} />
+                <Flowchart20Regular style={{ fontSize: tokens.fontSizeHero800, color: tokens.colorNeutralForeground3 }} />
                 <Text>Start your data flow with a Source.</Text>
                 <Button appearance="primary" icon={<DatabaseArrowDown20Regular />} disabled={readOnly} onClick={() => addTransform('source')}>
                   Add a source
@@ -1381,7 +1309,7 @@ function DesignerInner({
           />
         ) : (
           <div className={s.panelEmpty} data-config-panel="empty">
-            <Beaker20Regular style={{ fontSize: 28 }} />
+            <Beaker20Regular style={{ fontSize: tokens.fontSizeHero700 }} />
             <Title3 style={{ fontSize: tokens.fontSizeBase400 }}>No transformation selected</Title3>
             <Caption1>
               Select a node to configure it, or use <strong>Add transformation</strong>
@@ -1414,7 +1342,7 @@ function DesignerInner({
                       {defs.map((def) => (
                         <MenuItem
                           key={def.type}
-                          icon={<span style={{ color: CATEGORY_COLOR[cat], display: 'inline-flex' }}>{transformIcon(def)}</span>}
+                          icon={<span style={{ color: getTransformVisual(def.type).accent, display: 'inline-flex' }}>{transformIcon(def)}</span>}
                           onClick={() => handleAddFromMenu(def.type)}
                         >
                           {def.displayName}

@@ -222,3 +222,10 @@ html[data-theme='dark'] .loom-app-grid-bg {
 
 /* Sticky table header */
 .loom-sticky-thead thead { position: sticky; top: 0; z-index: 1; background-color: var(--loom-surface-raised); box-shadow: 0 1px 0 var(--loom-stroke-subtle); }
+
+/* Animated "marching-ants" dashed flow on canvas edges (data-flow direction cue) */
+@keyframes loom-edge-dash { to { stroke-dashoffset: -10; } }
+.loom-canvas-edge-flowing { animation: loom-edge-dash 0.6s linear infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .loom-canvas-edge-flowing { animation: none; }
+}

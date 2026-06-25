@@ -4,10 +4,16 @@
  * FlowActivityNode — the React Flow custom node for a pipeline activity.
  *
  * This is the @xyflow/react (React Flow) port of the old hand-rolled
- * ActivityNode. The visual is identical to ADF / Synapse / Fabric Studio
- * (swatch + name + type badge + optional description), but connection ports
- * are now real React Flow <Handle>s so wiring, hit-testing, and the rubber-band
- * connector come from the library instead of bespoke mouse math:
+ * ActivityNode. The node chrome (accent rail + gradient header + type-specific
+ * glyph chip + title + StatusChip + body badges) is now rendered by the shared
+ * Web-5.0 `CanvasNode` primitive from `@/lib/components/canvas/canvas-node-kit`
+ * so the pipeline and mapping-data-flow canvases share one richer, token-only
+ * visual system that out-classes ADF / Synapse / Fabric Studio. Container
+ * activities (ForEach / If / Until / Switch) render with the framed-container
+ * variant + live branch chips.
+ *
+ * Connection ports stay owned HERE and are real React Flow <Handle>s so wiring,
+ * hit-testing, and the rubber-band connector come from the library:
  *
  *   • one TARGET handle on the left edge (id `in`)
  *   • four SOURCE handles on the right edge, one per ADF conditional path —
@@ -15,18 +21,29 @@
  *     Upon Skip (gray). The handle id IS the dependency condition, so the
  *     canvas's onConnect maps sourceHandle → dependencyCondition directly.
  *
+ * Handle visuals (11px circles, typed colored border) come from the shared
+ * `portStyle` helper so both canvases derive identical ports. All colors /
+ * spacing / radius / shadow flow from Loom tokens or `--loom-accent-*` via the
+ * kit — no raw hex or px in this file (the fixed 11px handle geometry React
+ * Flow needs lives inside `portStyle`).
+ *
  * Bezier connectors (React Flow's default edge curvature) are configured on
  * the edges, not here — see loom-bezier-edge.tsx.
  */
 
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Badge, Button, Caption1, Tooltip, tokens } from '@fluentui/react-components';
+import { Badge, Button, Tooltip, tokens } from '@fluentui/react-components';
 import { Edit16Regular } from '@fluentui/react-icons';
 import { findByType } from './activity-catalog';
-import { activityIcon } from './activity-icons';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
-import { isContainerType, totalInnerCount, miniPreviewSections } from './drill-path';
+import { isContainerType, totalInnerCount, branchesOf, miniPreviewSections } from './drill-path';
+import {
+  CanvasNode,
+  getActivityVisual,
+  portStyle,
+  type CanvasNodeStatus,
+} from '@/lib/components/canvas/canvas-node-kit';
 import type { PipelineActivity } from './types';
 
 export const FLOW_NODE_W = 200;
@@ -61,55 +78,86 @@ export interface ActivityNodeData {
    * shortcut / the "Nested" toolbar button on the canvas.
    */
   showNestedPreview?: boolean;
+  /**
+   * Optional run/config state reflected in the header StatusChip. Defaults to
+   * 'idle' (shows the type-label chip) so existing call sites compile
+   * unchanged.
+   */
+  status?: CanvasNodeStatus;
   [key: string]: unknown;
 }
-
-const HANDLE_BASE: React.CSSProperties = {
-  width: 11,
-  height: 11,
-  borderRadius: '50%',
-  background: tokens.colorNeutralBackground1,
-  zIndex: 3,
-};
 
 function FlowActivityNodeImpl({ data, selected }: NodeProps) {
   const nodeData = data as ActivityNodeData;
   const activity = nodeData.activity;
   const def = findByType(activity.type);
-  const swatch = def?.color || tokens.colorBrandBackground;
+  const visual = getActivityVisual(activity.type);
   const isContainer = isContainerType(activity.type);
   const innerCount = isContainer ? totalInnerCount(activity) : 0;
 
   return (
-    <div
-      // The id keeps DOM parity with the old node for any existing selectors.
-      id={`activity-node-${activity.name}`}
-      data-activity-name={activity.name}
-      data-activity-type={activity.type || ''}
-      aria-label={`Activity ${activity.name} of type ${activity.type || 'unknown'}`}
-      style={{
-        position: 'relative',
-        width: FLOW_NODE_W,
-        padding: '10px 12px',
-        borderRadius: 6,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected
-          ? `0 0 0 2px ${tokens.colorBrandBackground2}`
-          : '0 1px 2px rgba(0,0,0,0.06)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 4,
-        cursor: 'pointer',
-        userSelect: 'none',
+    <CanvasNode
+      width={FLOW_NODE_W}
+      title={activity.name}
+      visual={visual}
+      typeLabel={def?.label || activity.type || 'Unknown'}
+      selected={selected}
+      status={nodeData.status}
+      description={activity.description as string | undefined}
+      framed={isContainer}
+      branchChips={
+        isContainer
+          ? branchesOf(activity).map((b) => ({ label: b.label, count: b.count }))
+          : undefined
+      }
+      headerAction={
+        isContainer && nodeData.onDrill ? (
+          <Tooltip content={`Edit ${def?.label || activity.type} activities`} relationship="label">
+            <Button
+              size="small"
+              appearance="subtle"
+              icon={<Edit16Regular />}
+              aria-label={`Edit ${activity.name} inner activities`}
+              data-drill-into={activity.name}
+              className="nodrag"
+              onClick={(e) => { e.stopPropagation(); nodeData.onDrill!(activity.name); }}
+            />
+          </Tooltip>
+        ) : undefined
+      }
+      badges={
+        <>
+          {isContainer && (
+            <Badge
+              appearance="tint"
+              size="small"
+              color="informative"
+              data-inner-count={innerCount}
+              title="Inner activities — double-click or use the pencil to edit"
+            >
+              Activities ({innerCount})
+            </Badge>
+          )}
+          {def && !def.runnable && (
+            <Badge size="small" appearance="outline" color="warning">Save-only</Badge>
+          )}
+        </>
+      }
+      rootProps={{
+        // The id keeps DOM parity with the old node for any existing selectors.
+        id: `activity-node-${activity.name}`,
+        'data-activity-name': activity.name,
+        'data-activity-type': activity.type || '',
+        'aria-label': `Activity ${activity.name} of type ${activity.type || 'unknown'}`,
       }}
     >
-      {/* Input port (left edge) */}
+      {/* Input port (left edge). Handles stay owned here; visuals come from the
+          shared portStyle helper (11px circle, typed colored border). */}
       <Handle
         id="in"
         type="target"
         position={Position.Left}
-        style={{ ...HANDLE_BASE, left: -6, border: `2px solid ${tokens.colorBrandStroke1}` }}
+        style={{ ...portStyle('in', tokens.colorBrandStroke1), left: -6 }}
         title="Input — drop a connector here"
       />
 
@@ -123,78 +171,10 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
             position={Position.Right}
             data-handle-condition={cond}
             aria-label={`${COND_LABEL[cond]} output — drag to connect`}
-            style={{ ...HANDLE_BASE, right: -6, top: PORT_TOP[cond], border: `2px solid ${CONNECTOR_COLORS[cond]}` }}
+            style={{ ...portStyle(cond, CONNECTOR_COLORS[cond]), right: -6, top: PORT_TOP[cond] }}
           />
         </Tooltip>
       ))}
-
-      {/* Pencil drill button — only on control-flow container nodes. Clicking
-          it opens that container's inner-activities sub-canvas (ADF parity).
-          ForEach/Until additionally drill on double-click (handled in the
-          canvas), but the pencil works for every container type. */}
-      {isContainer && nodeData.onDrill && (
-        <Tooltip content={`Edit ${def?.label || activity.type} activities`} relationship="label">
-          <Button
-            size="small"
-            appearance="subtle"
-            icon={<Edit16Regular />}
-            aria-label={`Edit ${activity.name} inner activities`}
-            data-drill-into={activity.name}
-            className="nodrag"
-            onClick={(e) => { e.stopPropagation(); nodeData.onDrill!(activity.name); }}
-            style={{
-              position: 'absolute', top: 4, right: 4, zIndex: 4,
-              minWidth: 24, width: 24, height: 24, padding: 0,
-            }}
-          />
-        </Tooltip>
-      )}
-
-      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-start' }}>
-        <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: swatch }} />
-        <div style={{
-          flexShrink: 0, width: 28, height: 28, borderRadius: 6,
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          background: `${swatch}1a`, color: swatch,
-        }} aria-hidden="true">{activityIcon(activity.type)}</div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
-          <div
-            style={{
-              fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1,
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-              paddingRight: isContainer ? 22 : 0,
-            }}
-          >
-            {activity.name}
-          </div>
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
-            <Badge
-              appearance="filled"
-              size="small"
-              style={{ backgroundColor: swatch, color: def?.fg || '#fff' }}
-            >
-              {def?.label || activity.type || 'Unknown'}
-            </Badge>
-            {isContainer && (
-              <Badge
-                appearance="tint"
-                size="small"
-                color="informative"
-                data-inner-count={innerCount}
-                title="Inner activities — double-click or use the pencil to edit"
-              >
-                Activities ({innerCount})
-              </Badge>
-            )}
-          </div>
-          {activity.description && (
-            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{activity.description as string}</Caption1>
-          )}
-          {def && !def.runnable && (
-            <Badge size="small" appearance="outline" color="warning">Save-only</Badge>
-          )}
-        </div>
-      </div>
 
       {/* Inline nested-activity mini-preview — Fabric "updated canvas
           experience": a container summarises its inner activities right on the
@@ -206,37 +186,44 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
           data-nested-preview={activity.name}
           aria-label={`Inner activities preview for ${activity.name}`}
           style={{
-            marginTop: 6,
+            marginTop: tokens.spacingVerticalXS,
             borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-            paddingTop: 6,
+            paddingTop: tokens.spacingVerticalXS,
             display: 'flex',
             flexDirection: 'column',
-            gap: 6,
+            gap: tokens.spacingVerticalXS,
             pointerEvents: 'none',
           }}
         >
           {miniPreviewSections(activity, 3).map((sec) => (
             <div key={sec.label}>
               <div style={{
-                fontSize: 10, fontWeight: 600, color: tokens.colorNeutralForeground3, marginBottom: 2,
+                fontSize: tokens.fontSizeBase100,
+                fontWeight: tokens.fontWeightSemibold,
+                color: tokens.colorNeutralForeground3,
+                marginBottom: tokens.spacingVerticalXXS,
               }}>
                 {sec.label} ({sec.totalCount})
               </div>
               {sec.activities.length === 0 ? (
-                <div style={{ fontSize: 10, color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>
+                <div style={{
+                  fontSize: tokens.fontSizeBase100,
+                  color: tokens.colorNeutralForeground3,
+                  fontStyle: 'italic',
+                }}>
                   empty
                 </div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
                   {sec.activities.map((inner) => {
-                    const iDef = findByType(inner.type);
+                    const iVisual = getActivityVisual(inner.type);
                     return (
                       <div key={inner.name} style={{
-                        display: 'flex', gap: 4, alignItems: 'center',
-                        fontSize: 11, color: tokens.colorNeutralForeground2,
+                        display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center',
+                        fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2,
                       }}>
-                        <span style={{ color: iDef?.color ?? tokens.colorBrandBackground, flexShrink: 0, display: 'inline-flex' }} aria-hidden="true">
-                          {activityIcon(inner.type)}
+                        <span style={{ color: iVisual.accent, flexShrink: 0, display: 'inline-flex' }} aria-hidden="true">
+                          {iVisual.icon}
                         </span>
                         <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                           {inner.name}
@@ -245,7 +232,7 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
                     );
                   })}
                   {sec.totalCount > sec.activities.length && (
-                    <div style={{ fontSize: 10, color: tokens.colorNeutralForeground3 }}>
+                    <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
                       +{sec.totalCount - sec.activities.length} more
                     </div>
                   )}
@@ -255,7 +242,7 @@ function FlowActivityNodeImpl({ data, selected }: NodeProps) {
           ))}
         </div>
       )}
-    </div>
+    </CanvasNode>
   );
 }
 

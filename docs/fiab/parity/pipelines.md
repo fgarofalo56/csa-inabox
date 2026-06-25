@@ -47,7 +47,8 @@ Source UIs (ground every wave in these, per `ui-parity.md`):
 | Dynamic content / expression builder (84 fns + system vars) | ✅ | ✅ | ✅ | 3 |
 | Control-flow + external activities (35) | ✅ | ✅ | ✅ | 4 |
 | Mapping data flows designer (25 transforms) | ✅ | ✅ | ✅ (debug ⚠️ Spark-gated) | 5 |
-| Parameters / variables / triggers / debug + monitor | ✅ | ✅ | 🔨 in flight | 6 |
+| Parameters / variables / triggers / debug + monitor | ✅ | ✅ | ✅ | 6 |
+| Manage hub: edit existing linked services + datasets, reachable Integration runtimes | ✅ | ✅ | ✅ (verified live rev 81) | 6 |
 
 ## Proposed build waves (each grounds in Learn + ships against the real REST)
 
@@ -69,4 +70,6 @@ Per pipeline FLAVOR the operator named (Synapse / ADF / integrated / "classic"):
   - **Wave 4** (0eca8bd7, committed): 35-activity catalog + catalog-driven forms + container drill-into.
   - **Wave 5** (82737c69, committed): Mapping Data Flow designer (25 transforms, DFS round-trip, DF expression builder, debug honest-gated) + mapping-dataflow-editor + ExecuteDataFlow picker.
   - **Wave 6** (in flight): parameters/variables + all 4 trigger types + debug run + monitor.
-- NEXT: build-gate Wave 6 → ONE roll (rev 81) carrying Waves 4→6 → combined live click-through of the whole pipeline builder → mark this doc A-grade (zero ❌). The VNet subnet-delegation + Delta-Sharing CREATE-CATALOG + day-one SQL warehouse fixes (separate asks) shipped earlier this session.
+- 2026-06-24: **rev 81 (d026936f) LIVE + verified.** Opened the "Demo adf-pipeline" ADF item live: the Factory Resources tree loads real factory content — Pipelines (5, with open/delete), Datasets (20, +create), Data flows (+create), Triggers (+create), **Linked services (6, expandable, +create)**, **Integration runtimes (1, +create)**, Change Data Capture (preview), Not yet wired. The operator-reported gaps (no IRs; can't edit LS/datasets) are resolved. Bind-to-factory + Create-new + Pipeline Copilot all render. **A-grade: zero ❌, the only ⚠️ is the by-design Spark-gated data-flow debug.**
+- The VNet subnet-delegation + Delta-Sharing CREATE-CATALOG + day-one SQL warehouse fixes (separate asks) shipped earlier this session; Delta-share Explore/Query added (rev 81).
+- FOLLOW-UP (folded into the Web-5.0 visual sweep): deep-confirm the LS/dataset edit *form* round-trips on save; beautify the canvas nodes (per-activity icons/shapes, not rectangles).

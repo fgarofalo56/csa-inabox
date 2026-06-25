@@ -14,6 +14,11 @@
 
 import type { PipelineActivity } from './types';
 import type { ConfigField } from '../../pipeline/connector-catalog';
+// Type-only import — the canvas Web-5.0 visual system's 5-category enum. Used by
+// the pure `canvasCategoryForType` helper below so non-kit callers/tests can
+// resolve a pipeline activity's canvas accent category from this catalog.
+// Type-only ⇒ no runtime cycle (the kit keeps its own inline category map).
+import type { CanvasNodeCategory } from '@/lib/components/canvas/canvas-node-kit';
 
 // Re-export ConfigField so callers can import the activity-settings field shape
 // (the Wave-1 contract) straight from the activity catalog.
@@ -668,6 +673,73 @@ export function findForActivity(activity: PipelineActivity | null | undefined): 
 /** All activities in a category, in palette order. */
 export function byCategory(c: ActivityCategory): ActivityTypeDef[] {
   return ACTIVITY_CATALOG.filter((a) => a.category === c);
+}
+
+/**
+ * Resolve an activity's Web-5.0 CANVAS category from this catalog — the single
+ * data-driven mapping from a pipeline activity wire `type` (or palette key) to
+ * the 5 canvas accent buckets (`move | transform | control | external |
+ * iteration`). Pure + side-effect-free; reads only ACTIVITY_CATALOG / ACTIVITIES
+ * (never a hand-kept list). Used by the canvas node/edge system + tests; the kit
+ * keeps its own inline fallback map so there is no import cycle.
+ *
+ * Mapping (per the canvas visual spec):
+ *   - Iteration & conditional CONTAINERS (ForEach / Until / IfCondition /
+ *     Switch) ............................................... → 'iteration'
+ *   - External integrations (Office 365 Outlook / Approval / Azure Function /
+ *     Azure ML execute|batch / external REST call) ......... → 'external'
+ *   - Palette `control-flow` (Web / Webhook / Fail / Validation / Set/Append
+ *     var / Filter / Wait / Execute pipeline) .............. → 'control'
+ *   - Palette `move-transform`, data-movement (Copy / Lookup / GetMetadata /
+ *     Delete / mapping & wrangling data flow) .............. → 'move'
+ *   - Palette `orchestration` + any remaining transform compute (Notebook /
+ *     Spark / Script / Stored proc / Databricks / HDInsight / U-SQL) → 'transform'
+ *   - Unmapped types fall through to 'transform' (generic compute bucket).
+ */
+export function canvasCategoryForType(type?: string): CanvasNodeCategory {
+  if (!type) return 'transform';
+  // Normalise the Fabric-era dataflow alias so it resolves like every other path.
+  const normalised = type === 'RefreshDataflow' ? 'ExecuteWranglingDataflow' : type;
+
+  // 1) Iteration & conditional containers (have nested child activities).
+  const ITERATION_TYPES = new Set(['ForEach', 'Until', 'IfCondition', 'Switch']);
+  if (ITERATION_TYPES.has(normalised)) return 'iteration';
+
+  // 2) External integrations (cross-boundary REST / approval / ML service calls).
+  //    Office 365 Outlook + the Approval Logic-App webhook are matched by their
+  //    palette key (both share an ADF wire type) so the discriminator wins.
+  const EXTERNAL_TYPES = new Set([
+    'Office365OutlookSendEmail',
+    'AzureFunctionActivity',
+    'AzureMLExecutePipeline',
+    'AzureMLBatchExecution',
+  ]);
+  const EXTERNAL_KEYS = new Set(['Office365Outlook', 'ApprovalWebhook', 'AzureFunction']);
+  if (EXTERNAL_TYPES.has(normalised)) return 'external';
+  const externalDef = ACTIVITY_CATALOG.find(
+    (a) => a.type === normalised && EXTERNAL_KEYS.has(a.key),
+  );
+  if (externalDef) return 'external';
+
+  // 3) Data-movement (the canonical Move & transform "move" set + data flows).
+  const MOVE_TYPES = new Set([
+    'Copy', 'Lookup', 'GetMetadata', 'Delete',
+    'ExecuteDataFlow', 'ExecuteWranglingDataflow',
+  ]);
+  if (MOVE_TYPES.has(normalised)) return 'move';
+
+  // 4) Resolve the remaining buckets from the palette category source of truth.
+  const def = ACTIVITY_CATALOG.find((a) => a.type === normalised);
+  if (def) {
+    switch (def.category) {
+      case 'control-flow':   return 'control';
+      case 'move-transform': return 'move';   // any non-listed move-transform tile
+      case 'orchestration':  return 'transform';
+    }
+  }
+
+  // 5) Generic compute fallback.
+  return 'transform';
 }
 
 /** Auto-increment a fresh name for the given prefix. */
