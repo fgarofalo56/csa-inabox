@@ -36,6 +36,7 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  RadioGroup, Radio,
   makeStyles, mergeClasses, tokens,
   Toast, ToastTitle, useToastController, Toaster, useId,
 } from '@fluentui/react-components';
@@ -58,18 +59,34 @@ import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
 import { TemplateGalleryFlyout } from '@/lib/components/pipeline/templates/gallery';
-import type { PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
+import { PIPELINE_TEMPLATES, type PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
 import {
   ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef,
 } from '@/lib/components/pipeline/activity-catalog';
 import {
   type PipelineActivity, type PipelineSpec, type PipelineParameter, type PipelineVariable,
-  type PipelineParameterType,
+  type PipelineParameterType, type PipelineRuntime, DEFAULT_PIPELINE_RUNTIME,
   textToSpec, specToText, paramsFromSpec, paramsToSpec, varsFromSpec, varsToSpec,
 } from '@/lib/components/pipeline/types';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+// Azure-native runtime delegates (Contract B): when this unified editor is the
+// one mounted for a slug — `data-pipeline`, or `adf-pipeline` (the ONLY slug
+// that carries `aliasOf:'data-pipeline'` in the catalog, so the item page resolves
+// it to THIS editor with runtimePreset 'adf') — its 'adf'/'synapse' runtime paths
+// delegate to the SAME purpose-built editors so bind/run/save/validate/debug/
+// runs/triggers reuse the EXISTING `/api/items/{adf-pipeline|synapse-pipeline}/{id}/*`
+// routes (no new routes, no duplicated binding logic).
+//
+// IMPORTANT — `synapse-pipeline` is NOT an alias of `data-pipeline`. Its catalog
+// entry has `runtimePreset:'synapse'` but no `aliasOf`, so the item page opens
+// `SynapsePipelineEditor` DIRECTLY; that editor's `{item,id}` signature does not
+// accept (and so ignores) runtimePreset. Back-compat for existing
+// adf-pipeline / synapse-pipeline / geo-pipeline instances still holds because
+// `SynapsePipelineEditor` is PipelineEditorCore-backed — the same core this file
+// delegates to. 'fabric' keeps this file's existing body.
+import { AdfPipelineEditor, SynapsePipelineEditor } from './azure-services-editors';
 
 const useStyles = makeStyles({
   shell: {
@@ -204,11 +221,44 @@ function useWorkspaces() {
   return { workspaces, error, hint, loading };
 }
 
-interface Props { item: FabricItemType; id: string; }
+interface Props {
+  item: FabricItemType;
+  id: string;
+  /**
+   * Lock the runtime selector to this backend (Contract D). Set by the item
+   * page when the opened slug is an alias/preset (e.g. `adf-pipeline` →
+   * runtimePreset 'adf', `synapse-pipeline` → 'synapse'). When undefined the
+   * selector defaults to the Azure-native ADF runtime and stays user-changeable.
+   */
+  runtimePreset?: PipelineRuntime;
+  /**
+   * Instantiate this template's spec onto the canvas on mount when creating a
+   * NEW pipeline (Contract F — e.g. the geo-pipeline alias passes 'geo-enrich').
+   */
+  templateId?: string;
+}
 
-export function DataPipelineEditor({ item, id }: Props) {
+export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
+
+  // ── Runtime selector (Contract A/B) — the ONE unified pipeline authoring
+  //    experience. 'adf' (Azure-native ADF, standalone factory) is the DEFAULT
+  //    per no-fabric-dependency.md. 'synapse' is the Azure-native Synapse path.
+  //    'fabric' is STRICTLY opt-in: selectable only when a Fabric workspace is
+  //    bound, never auto-selected, never a gate. When a runtimePreset prop is
+  //    set, the selector is locked. In practice the only slug that reaches THIS
+  //    editor with a preset is `adf-pipeline` (aliasOf:'data-pipeline' → preset
+  //    'adf'); `synapse-pipeline` has no aliasOf and opens SynapsePipelineEditor
+  //    directly, so its preset never flows in here. geo-pipeline (templateOf →
+  //    'adf' preset + templateId) also reaches this editor and locks to ADF.
+  const [runtime, setRuntime] = useState<PipelineRuntime>(runtimePreset ?? DEFAULT_PIPELINE_RUNTIME);
+  useEffect(() => { if (runtimePreset) setRuntime(runtimePreset); }, [runtimePreset]);
+  const runtimeLocked = !!runtimePreset;
+  // The Fabric path reuses the existing /api/loom/workspaces picker below; the
+  // 'fabric' option is enabled only once at least one Fabric workspace is
+  // reachable (i.e. a workspace IS bound). We never auto-select it.
+  const fabricAvailable = (ws.workspaces?.length ?? 0) > 0;
   const toastId = useId('pipeline-toaster');
   const { dispatchToast } = useToastController(toastId);
   const canvasRef = useRef<CanvasHandle>(null);
@@ -758,6 +808,23 @@ export function DataPipelineEditor({ item, id }: Props) {
     );
   }, [dispatchToast]);
 
+  // ── Contract F: when opened to create a NEW pipeline with a templateId (e.g.
+  //    the geo-pipeline alias → 'geo-enrich'), instantiate that template's
+  //    complete, ADF-runnable spec onto the canvas once on mount. Guarded to a
+  //    fresh/new item with an empty canvas so we never clobber a loaded pipeline.
+  const templateSeeded = useRef(false);
+  useEffect(() => {
+    if (templateSeeded.current) return;
+    if (!templateId) return;
+    if (id && id !== 'new') return;
+    if (activities.length > 0) return;
+    const t = PIPELINE_TEMPLATES.find((x) => x.id === templateId);
+    if (!t) return;
+    templateSeeded.current = true;
+    instantiateTemplate(t.spec, t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateId, id, instantiateTemplate]);
+
   // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
   // paramBindings carry per-parameter value sources (direct / Key Vault / App
   // Config); the BFF route resolves KV/App Config server-side at creation time.
@@ -869,6 +936,87 @@ export function DataPipelineEditor({ item, id }: Props) {
   ]);
 
   // ============ Render ============
+  // Runtime selector (Contract A/B) — rendered at the top of EVERY runtime path
+  // so this stays the single, unified pipeline authoring experience. Fluent v9
+  // RadioGroup, Loom tokens only (web3-ui), no JSON/freeform. Locked (read-only
+  // Caption) when the editor was opened from an alias/preset slug.
+  const runtimeSelector = (
+    <div
+      style={{
+        display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+        padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+        backgroundColor: tokens.colorNeutralBackground1,
+        border: `1px solid ${tokens.colorNeutralStroke2}`,
+        borderRadius: tokens.borderRadiusMedium,
+      }}
+    >
+      <div className={s.sectionHead}>
+        <Flow20Regular style={{ color: tokens.colorBrandForeground1 }} />
+        <Subtitle2>Runtime</Subtitle2>
+        {runtimeLocked && <Badge size="small" appearance="outline" color="brand">{runtime === 'adf' ? 'ADF preset' : runtime === 'synapse' ? 'Synapse preset' : 'preset'}</Badge>}
+      </div>
+      <RadioGroup
+        layout="horizontal"
+        value={runtime}
+        disabled={runtimeLocked}
+        onChange={(_, d) => {
+          const next = d.value as PipelineRuntime;
+          // Never auto-/force-select fabric without a bound workspace.
+          if (next === 'fabric' && !fabricAvailable) return;
+          setRuntime(next);
+        }}
+        aria-label="Pipeline runtime"
+      >
+        <Radio value="adf" label="Azure Data Factory (standalone)" />
+        <Radio value="synapse" label="Synapse workspace" />
+        <Radio value="fabric" label="Microsoft Fabric (opt-in)" disabled={!fabricAvailable} />
+      </RadioGroup>
+      {runtimeLocked ? (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Runtime is locked to the{' '}
+          {runtime === 'synapse' ? 'Synapse' : 'Azure Data Factory'} preset for this item type.
+        </Caption1>
+      ) : !fabricAvailable ? (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Azure Data Factory is the default. Bind a Fabric workspace to enable the Microsoft Fabric runtime (opt-in).
+        </Caption1>
+      ) : (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Azure-native by default — ADF or Synapse. Microsoft Fabric is opt-in.
+        </Caption1>
+      )}
+    </div>
+  );
+
+  // For the Azure-native runtimes ('adf' / 'synapse') delegate the full
+  // bind/run/save/validate/debug/runs/triggers surface to the SAME purpose-built
+  // editors (Contract B) — they consume the existing
+  // `/api/items/{adf-pipeline|synapse-pipeline}/{id}/*` routes and ship the same
+  // rich three-pane designer. We only prepend the runtime selector so the user
+  // can switch backends. (Note: the `synapse-pipeline` SLUG itself isn't routed
+  // here — it has no aliasOf and opens SynapsePipelineEditor directly; this
+  // delegation only fires when the user picks the 'synapse' runtime inside the
+  // unified editor.) 'fabric' keeps this file's existing body below.
+  //
+  // Exception (Contract F): when this editor is hosting a TEMPLATE instantiation
+  // (templateId set on a new item, e.g. the geo-pipeline alias → 'geo-enrich'),
+  // we stay on THIS file's own canvas so the seeded, ADF-runnable spec is
+  // visible and editable here (the delegate editors take no spec/template prop).
+  const hostTemplate = !!templateId && (!id || id === 'new');
+  if (!hostTemplate && (runtime === 'adf' || runtime === 'synapse')) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minHeight: 0, flex: 1 }}>
+        <Toaster toasterId={toastId} />
+        {runtimeSelector}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {runtime === 'adf'
+            ? <AdfPipelineEditor item={item} id={id} />
+            : <SynapsePipelineEditor item={item} id={id} />}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
@@ -894,8 +1042,11 @@ export function DataPipelineEditor({ item, id }: Props) {
       main={
         <div className={s.shell}>
           <Toaster toasterId={toastId} />
+          {runtimeSelector}
           <div className={s.topbar}>
-            <Badge appearance="filled" color="brand">Fabric Data Pipeline</Badge>
+            <Badge appearance="filled" color="brand">
+              {runtime === 'adf' ? 'Azure Data Factory' : runtime === 'synapse' ? 'Synapse pipeline' : 'Microsoft Fabric'}
+            </Badge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
@@ -947,9 +1098,12 @@ export function DataPipelineEditor({ item, id }: Props) {
               )}
               <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalS }}>
                 <MessageBarBody>
-                  Design your pipeline below — drag activities from the palette onto the canvas and wire them
-                  up. To <strong>Save / Validate / Run</strong> against the live backing, pick a workspace
-                  and pipeline from the left rail, click <strong>New pipeline</strong>, or start from a card below.
+                  Pipelines run Azure-native by default — switch the <strong>Runtime</strong> above to
+                  <strong> Azure Data Factory</strong> (the default) or <strong>Synapse</strong> to author against
+                  Azure with no Fabric capacity required. The <strong>Microsoft Fabric</strong> runtime shown here
+                  is opt-in. Design your pipeline below — drag activities from the palette onto the canvas and wire
+                  them up. To <strong>Save / Validate / Run</strong> against the Fabric backing, pick a workspace and
+                  pipeline from the left rail, click <strong>New pipeline</strong>, or start from a card below.
                 </MessageBarBody>
               </MessageBar>
               <TileGrid minTileWidth={220}>

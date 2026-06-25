@@ -112,3 +112,36 @@ export function varsToSpec(vars: PipelineVariable[]): Record<string, { type: str
   }
   return out;
 }
+
+// ---------------------------------------------------------------------------
+// Pipeline runtime model — single source of truth (Wave A, Contract A)
+//
+// This type lives here, in the leaf DAG-types module (no React / no Azure-SDK
+// deps), so BOTH the unified DataPipelineEditor and PipelineEditorCore can
+// import it without creating an import cycle. The runtime selector, the
+// bind/run/save apiBase resolution, and the per-runtime backend-client choice
+// (adf-client / synapse-dev-client / Fabric routes) all key off this shape.
+//
+// Per .claude/rules/no-fabric-dependency.md: 'adf' (Azure-native ADF) is the
+// DEFAULT. 'synapse' is the Azure-native Synapse path. 'fabric' is STRICTLY
+// opt-in — selectable ONLY when a Fabric workspace is bound; it is never
+// auto-selected and no code path may gate on fabricWorkspaceId.
+// ---------------------------------------------------------------------------
+
+/** Backend that authors/executes the pipeline. Azure-native ('adf'|'synapse') by default; 'fabric' is opt-in only. */
+export type PipelineRuntime = 'adf' | 'synapse' | 'fabric';
+
+/** Resolved backend context the unified editor carries while authoring/binding/running a pipeline. */
+export interface PipelineRuntimeContext {
+  /** Selected backend. */
+  runtime: PipelineRuntime;
+  /** ADF-standalone factory ARM id when runtime==='adf' and operator chose a non-default factory. */
+  factory?: { id: string; name: string; subscriptionId: string; resourceGroup: string } | null;
+  /** Synapse workspace name when runtime==='synapse'. */
+  synapseWorkspace?: string | null;
+  /** Fabric workspace id when runtime==='fabric' (opt-in only). */
+  fabricWorkspaceId?: string | null;
+}
+
+/** Azure-native default backend per no-fabric-dependency.md. Never default to 'fabric'. */
+export const DEFAULT_PIPELINE_RUNTIME: PipelineRuntime = 'adf';

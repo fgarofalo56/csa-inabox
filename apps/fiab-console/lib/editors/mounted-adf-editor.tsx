@@ -39,7 +39,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Play20Regular, Delete20Regular, BoxMultiple20Regular,
-  Save20Regular, Database20Regular, FullScreenMaximize20Regular,
+  Save20Regular, Database20Regular, FullScreenMaximize20Regular, LockClosed20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -936,8 +936,8 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
         </Button>
         <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={() => load(name)}>Refresh</Button>
         <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} onClick={() => rf.fitView({ padding: 0.2 })}>Fit</Button>
-        <Tooltip content="Live data preview needs an ADF data-flow debug session" relationship="label">
-          <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => setPreviewGate(true)}>Data preview</Button>
+        <Tooltip content="Live data preview needs an ADF data-flow debug session (createDataFlowDebugSession + executeDataFlowDebugCommand)" relationship="label">
+          <Button size="small" appearance="subtle" icon={<LockClosed20Regular />} onClick={() => setPreviewGate(true)}>Data preview (needs debug cluster)</Button>
         </Tooltip>
       </div>
 

@@ -11,8 +11,27 @@
 import dynamic from 'next/dynamic';
 import type { ComponentType } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import type { PipelineRuntime } from '@/lib/components/pipeline/types';
 
-export interface EditorProps { item: FabricItemType; id: string; }
+export interface EditorProps {
+  item: FabricItemType;
+  id: string;
+  /**
+   * Runtime preset forwarded by the item page when the opened item is an
+   * alias/preset of the unified pipeline item (Contract D). Locks the unified
+   * editor's runtime selector to this backend. `'adf'` is the Azure-native
+   * default per no-fabric-dependency.md; `'fabric'` is opt-in only. Editors
+   * that ignore this prop behave identically to today.
+   */
+  runtimePreset?: PipelineRuntime;
+  /**
+   * Template id forwarded by the item page when the opened item is a template
+   * (templateOf/templateId in the catalog, Contract F). Resolved by
+   * lib/components/pipeline/templates/catalog.ts into a pre-wired spec.
+   * Undefined for non-template items — no behavior change.
+   */
+  templateId?: string;
+}
 
 type EditorComponent = ComponentType<EditorProps>;
 

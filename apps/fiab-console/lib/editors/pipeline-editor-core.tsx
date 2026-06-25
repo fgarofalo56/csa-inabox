@@ -18,7 +18,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Dropdown, Option, Field,
-  Tab, TabList, Spinner,
+  Tab, TabList, Spinner, RadioGroup, Radio,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -29,7 +29,7 @@ import {
   DocumentTable20Regular, Play20Regular, Server20Regular,
   ArrowSync20Regular, Save20Regular, Bug20Regular, Checkmark20Regular,
   Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
-  PlugConnected20Regular, Database20Regular,
+  PlugConnected20Regular, Database20Regular, Dismiss24Regular,
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
 import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
@@ -53,8 +53,23 @@ import {
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { safePipelineJson } from './pipeline-fetch';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
+import { LinkedServiceGallery } from '@/lib/components/pipeline/linked-service-gallery';
+import { IntegrationRuntimeManager } from '@/lib/components/pipeline/integration-runtime-manager';
+import type { PipelineRuntimeContext } from '@/lib/components/pipeline/types';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+
+// Common Azure regions for the "Create new factory" location picker (Commercial
+// + US Government). The default is the chosen resource group's location.
+const ADF_FACTORY_REGIONS = [
+  'eastus', 'eastus2', 'centralus', 'southcentralus', 'westus', 'westus2', 'westus3',
+  'northcentralus', 'westcentralus', 'canadacentral', 'northeurope', 'westeurope',
+  'uksouth', 'francecentral', 'germanywestcentral', 'switzerlandnorth',
+  'norwayeast', 'swedencentral', 'eastasia', 'southeastasia', 'japaneast',
+  'australiaeast', 'centralindia', 'koreacentral', 'brazilsouth', 'uaenorth',
+  // US Government
+  'usgovvirginia', 'usgovarizona', 'usgovtexas',
+];
 
 const useStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
@@ -92,8 +107,20 @@ interface PipelineRunDTO {
 }
 
 export function PipelineEditorCore({
-  item, id, config,
-}: { item: FabricItemType; id: string; config: PipelineEditorConfig }) {
+  item, id, config, runtimeContext,
+}: {
+  item: FabricItemType;
+  id: string;
+  config: PipelineEditorConfig;
+  /**
+   * Optional runtime context so the unified DataPipelineEditor can drive this
+   * same core with a runtime selector (adf / synapse / fabric). When omitted the
+   * behaviour is IDENTICAL to today: the runtime is inferred from `config.slug`
+   * (adf-pipeline → adf, synapse-pipeline → synapse) and every existing caller
+   * (the Synapse / Adf wrappers) keeps compiling and rendering unchanged.
+   */
+  runtimeContext?: PipelineRuntimeContext;
+}) {
   const s = useStyles();
   const apiBase = `/api/items/${config.slug}/${encodeURIComponent(id)}`;
 
@@ -111,11 +138,34 @@ export function PipelineEditorCore({
   const [bindBusy, setBindBusy] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
 
+  // Effective runtime: the explicit runtimeContext wins (unified editor), else
+  // it's inferred from the slug. Azure-native 'adf' is the DEFAULT per
+  // no-fabric-dependency.md; 'fabric' is never auto-selected here.
+  const runtime = runtimeContext?.runtime ?? (config.slug === 'synapse-pipeline' ? 'synapse' : 'adf');
+
   // Cross-subscription factory selection (ADF only). Lets the operator point
   // this pipeline item at WHICH Data Factory — across every subscription they
-  // have RBAC for — before binding to one of its pipelines.
-  const isAdf = config.slug === 'adf-pipeline';
+  // have RBAC for — before binding to one of its pipelines. ADF surfaces show
+  // for the adf-pipeline slug OR when the unified editor selects runtime 'adf'.
+  const isAdf = runtime === 'adf';
   const [factory, setFactory] = useState<{ id: string; name: string; subscriptionId: string; resourceGroup: string } | null>(null);
+
+  // ---- Backing-service "Create new" affordances (bind gate) ----
+  // Each picker is Use-existing | Create-new. Use-existing is the default and is
+  // unchanged from today; Create-new opens a STRUCTURED wizard (no JSON) that
+  // calls the real ARM/REST route, then refreshes the pipeline list / counts.
+  const [factoryMode, setFactoryMode] = useState<'existing' | 'create'>('existing');
+  // New-factory wizard state — name + target RG (carries subscriptionId via the
+  // AzureResourcePicker) + location. POSTs /api/adf/factories/create (Contract E#1).
+  const [newFactoryName, setNewFactoryName] = useState('');
+  const [newFactoryRg, setNewFactoryRg] = useState<{ id: string; name: string; subscriptionId: string; resourceGroup: string; location: string } | null>(null);
+  const [newFactoryLocation, setNewFactoryLocation] = useState('');
+  const [factoryCreateBusy, setFactoryCreateBusy] = useState(false);
+  const [factoryCreateError, setFactoryCreateError] = useState<string | null>(null);
+  // Linked-service / integration-runtime create-new dialogs (reuse the shared
+  // structured wizards — connector gallery + IR type catalog; real ARM REST).
+  const [lsDialogOpen, setLsDialogOpen] = useState(false);
+  const [irDialogOpen, setIrDialogOpen] = useState(false);
 
   // ---- Spec / run state ----
   const [spec, setSpec] = useState<string>('');
@@ -208,6 +258,43 @@ export function PipelineEditorCore({
       setBindBusy(false);
     }
   }, [apiBase, loadBinding]);
+
+  // Create a NEW Data Factory across any subscription/RG the operator can reach,
+  // then select it (setFactory) so binding can proceed against it. Real ARM PUT
+  // via the create route (Contract E#1) — no mock. The honest 403 gate message
+  // (Console UAMI lacks Contributor on the RG) is surfaced verbatim from the
+  // route, per no-vaporware.md.
+  const createFactory = useCallback(async () => {
+    const name = newFactoryName.trim();
+    const target = newFactoryRg;
+    const location = (newFactoryLocation || target?.location || '').trim();
+    if (!name || !target || !location) return;
+    setFactoryCreateBusy(true); setFactoryCreateError(null);
+    try {
+      const res = await fetch('/api/adf/factories/create', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          location,
+          subscriptionId: target.subscriptionId,
+          resourceGroup: target.resourceGroup || target.name,
+        }),
+      });
+      const { ok, data, error: e } = await safePipelineJson(res);
+      if (!ok || !data?.factory) { setFactoryCreateError(e || data?.error || 'factory create failed'); return; }
+      const f = data.factory as { id: string; name: string; subscriptionId: string; resourceGroup: string };
+      setFactory({ id: f.id, name: f.name, subscriptionId: f.subscriptionId, resourceGroup: f.resourceGroup });
+      setFactoryMode('existing');
+      setNewFactoryName('');
+      setFactoryRefreshKey((k) => k + 1);
+      // Re-list pipelines in the (now bindable) factory.
+      await loadBinding();
+    } catch (e: any) {
+      setFactoryCreateError(e?.message || String(e));
+    } finally {
+      setFactoryCreateBusy(false);
+    }
+  }, [newFactoryName, newFactoryRg, newFactoryLocation, loadBinding]);
 
   // ------------------------------------------------------------------
   // Spec + runs (only meaningful once bound; routes 412 otherwise)
@@ -555,34 +642,149 @@ export function PipelineEditorCore({
                 </div>
               )}
               {isAdf && (
-                <div>
-                  <Subtitle2>Select a Data Factory (any subscription)</Subtitle2>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  <Subtitle2>Data Factory</Subtitle2>
                   <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
-                    Pick which Azure Data Factory backs this pipeline — across every subscription your account can see (Azure Resource Graph, your RBAC).
+                    Use an existing Azure Data Factory across any subscription your account can see (Azure Resource Graph, your RBAC), or create a new one.
                   </Body1>
-                  <div style={{ marginTop: tokens.spacingVerticalS }}>
-                    <AzureResourcePicker
-                      type="Microsoft.DataFactory/factories"
-                      label="Data Factory"
-                      placeholder="Select a factory across all subscriptions"
-                      value={factory?.id}
-                      onChange={(r) => setFactory(r)}
-                    />
-                  </div>
-                  {factory && (
-                    <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
-                      <MessageBarBody>
-                        <MessageBarTitle>Factory selected: {factory.name}</MessageBarTitle>
-                        Pipeline binding below lists pipelines from the deployment-default factory
-                        (LOOM_ADF_NAME / LOOM_DLZ_RG). If <strong>{factory.name}</strong> is a different
-                        factory, grant the Loom UAMI &quot;Data Factory Contributor&quot; on it and set
-                        LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID to point at it, or use the
-                        MountedDataFactory editor which targets an external factory by reference.
-                      </MessageBarBody>
-                    </MessageBar>
+                  <RadioGroup
+                    layout="horizontal"
+                    value={factoryMode}
+                    onChange={(_, d) => { setFactoryMode(d.value as 'existing' | 'create'); setFactoryCreateError(null); }}
+                  >
+                    <Radio value="existing" label="Use existing factory" />
+                    <Radio value="create" label="Create new factory" />
+                  </RadioGroup>
+
+                  {factoryMode === 'existing' ? (
+                    <>
+                      <AzureResourcePicker
+                        type="Microsoft.DataFactory/factories"
+                        label="Data Factory"
+                        placeholder="Select a factory across all subscriptions"
+                        value={factory?.id}
+                        onChange={(r) => setFactory(r)}
+                      />
+                      {factory && (
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>Factory selected: {factory.name}</MessageBarTitle>
+                            Pipeline binding below lists pipelines from the deployment-default factory
+                            (LOOM_ADF_NAME / LOOM_DLZ_RG). If <strong>{factory.name}</strong> is a different
+                            factory, grant the Loom UAMI &quot;Data Factory Contributor&quot; on it and set
+                            LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID to point at it, or use the
+                            MountedDataFactory editor which targets an external factory by reference.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </>
+                  ) : (
+                    // Create-new factory wizard — name + target resource group
+                    // (carries the subscription) + location. Real ARM PUT via
+                    // /api/adf/factories/create (Contract E#1). No JSON textarea.
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '560px' }}>
+                      <Field label="New factory name" required hint="Globally unique within Azure; 3-63 chars, letters/digits/hyphens.">
+                        <Input
+                          value={newFactoryName}
+                          onChange={(_, d) => { setNewFactoryName(d.value); setFactoryCreateError(null); }}
+                          placeholder="adf-loom-myteam"
+                        />
+                      </Field>
+                      <AzureResourcePicker
+                        type="Microsoft.Resources/subscriptions/resourceGroups"
+                        label="Target resource group"
+                        placeholder="Select a resource group (across all subscriptions)"
+                        value={newFactoryRg?.id}
+                        onChange={(r) => {
+                          setNewFactoryRg(r);
+                          // Default the factory's region to the resource group's
+                          // location; the operator can override below.
+                          if (r?.location && !newFactoryLocation) setNewFactoryLocation(r.location);
+                          setFactoryCreateError(null);
+                        }}
+                      />
+                      <Field label="Location" required hint="Azure region for the new Data Factory.">
+                        <Dropdown
+                          placeholder="Select a region"
+                          value={newFactoryLocation}
+                          selectedOptions={newFactoryLocation ? [newFactoryLocation] : []}
+                          onOptionSelect={(_, d) => setNewFactoryLocation(d.optionValue || '')}
+                        >
+                          {ADF_FACTORY_REGIONS.map((r) => (<Option key={r} value={r} text={r}>{r}</Option>))}
+                        </Dropdown>
+                      </Field>
+                      <div className={s.row}>
+                        <Button
+                          appearance="primary"
+                          icon={<Add20Regular />}
+                          disabled={factoryCreateBusy || !newFactoryName.trim() || !newFactoryRg || !(newFactoryLocation || newFactoryRg?.location)}
+                          onClick={createFactory}
+                        >
+                          {factoryCreateBusy ? 'Creating…' : 'Create factory'}
+                        </Button>
+                      </div>
+                      {factoryCreateError && (
+                        <MessageBar intent="error">
+                          <MessageBarBody>
+                            <MessageBarTitle>Could not create the factory</MessageBarTitle>
+                            {factoryCreateError}
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
+
+              {!isAdf && (
+                // Synapse runtime: the workspace picker's "Create new" is an
+                // HONEST infra-gate (Contract E#4) — workspace provisioning is a
+                // heavy deploy out of scope for in-editor creation. "Use existing"
+                // remains fully functional via the env-pinned workspace.
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  <Subtitle2>Synapse workspace</Subtitle2>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                    Pipelines below are listed from the deployment-bound Synapse workspace.
+                  </Body1>
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Create a new Synapse workspace from infrastructure</MessageBarTitle>
+                      Provisioning a Synapse Analytics workspace is a full infrastructure deploy, not an
+                      in-editor create. Deploy one with the bicep module
+                      <code> platform/fiab/bicep/modules/data/synapse.bicep</code> and set
+                      <code> LOOM_SYNAPSE_WORKSPACE</code> on the Console to point this editor at it. Using an
+                      existing workspace (the binding below) works today with no further action.
+                    </MessageBarBody>
+                  </MessageBar>
+                </div>
+              )}
+
+              {/* Backing services — Linked services & Integration runtimes.
+                  Use-existing (the Manage hub, opened from the ribbon) | Create-new
+                  (a STRUCTURED wizard: connector gallery → typed fields → name, or
+                  IR type catalog → typed fields → name). Both POST the EXISTING
+                  real ARM REST routes (no JSON textarea, no mock). IRs are
+                  ADF-only (Synapse uses its own workspace IRs). */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                <Subtitle2>Backing services</Subtitle2>
+                <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                  Connect data stores (linked services){isAdf ? ' and integration runtimes' : ''} this pipeline&apos;s
+                  activities use. Use existing ones, or create new ones with a guided wizard — all real Azure REST.
+                </Body1>
+                <div className={s.row}>
+                  <Button appearance="secondary" icon={<Add20Regular />} onClick={() => setLsDialogOpen(true)}>
+                    Create linked service
+                  </Button>
+                  {isAdf && (
+                    <Button appearance="secondary" icon={<Add20Regular />} onClick={() => setIrDialogOpen(true)}>
+                      Create integration runtime
+                    </Button>
+                  )}
+                  <Button appearance="subtle" icon={<PlugConnected20Regular />} onClick={() => openManageHub('linked-services')}>
+                    Manage existing
+                  </Button>
+                </div>
+              </div>
               <div>
                 <Subtitle2>Bind to an existing pipeline</Subtitle2>
                 <div className={s.row} style={{ marginTop: tokens.spacingVerticalS }}>
@@ -765,6 +967,64 @@ export function PipelineEditorCore({
             engine={isAdf ? 'adf' : 'synapse'}
             initialTab={manageHubTab}
           />
+
+          {/* Create-new LINKED SERVICE (bind-gate entry point) — reuses the
+              shared structured connector wizard: a searchable connector gallery →
+              per-connector typed fields (NO JSON textarea) → name, posting the
+              real /api/adf/linked-services (or /api/synapse/linkedservices) ARM
+              upsert. On create we bump the navigator so the new connection shows
+              in its live counts. */}
+          <Dialog open={lsDialogOpen} onOpenChange={(_, d) => { if (!d.open) setLsDialogOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '920px', width: '92vw' }}>
+              <DialogBody>
+                <DialogTitle
+                  action={<Button appearance="subtle" icon={<Dismiss24Regular />} aria-label="Close" onClick={() => setLsDialogOpen(false)} />}>
+                  New linked service
+                </DialogTitle>
+                <DialogContent>
+                  <LinkedServiceGallery
+                    engine={isAdf ? 'adf' : 'synapse'}
+                    hideExisting
+                    onSelected={() => {
+                      setLsDialogOpen(false);
+                      if (isAdf) setFactoryRefreshKey((k) => k + 1);
+                      else setWorkspaceRefreshKey((k) => k + 1);
+                    }}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setLsDialogOpen(false)}>Cancel</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Create-new INTEGRATION RUNTIME (bind-gate entry point, ADF only) —
+              reuses the shared IR manager (factory-scoped → /api/adf/
+              integration-runtimes). Type catalog (Azure / Self-Hosted / Azure-SSIS)
+              → typed config fields (NO JSON), real ARM upsert. */}
+          {isAdf && (
+            <Dialog open={irDialogOpen} onOpenChange={(_, d) => { if (!d.open) setIrDialogOpen(false); }}>
+              <DialogSurface style={{ maxWidth: '860px', width: '92vw' }}>
+                <DialogBody>
+                  <DialogTitle
+                    action={<Button appearance="subtle" icon={<Dismiss24Regular />} aria-label="Close" onClick={() => setIrDialogOpen(false)} />}>
+                    Integration runtimes
+                  </DialogTitle>
+                  <DialogContent>
+                    <IntegrationRuntimeManager
+                      factoryScoped
+                      engine="adf"
+                      onSelect={() => { setFactoryRefreshKey((k) => k + 1); }}
+                    />
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setIrDialogOpen(false)}>Close</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+          )}
 
           {/* Change Data Capture (preview) detail panel — opened from the
               Factory Resources navigator. Inspect status + source→target

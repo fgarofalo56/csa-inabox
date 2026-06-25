@@ -351,7 +351,7 @@ export function LogicAppEditor({ item, id }: Props) {
                   <EmptyState
                     icon={<Flash20Regular />}
                     title="No triggers or actions yet"
-                    body="This workflow has no triggers or actions defined. Add a trigger and actions to its Workflow Definition Language definition to build out the designer flow."
+                    body="This workflow has no triggers or actions defined. This Designer is a read-only flow view; add a trigger and actions to the workflow's Workflow Definition Language definition where the app is authored, then re-install/deploy to populate it here."
                   />
                 ) : (
                 <div className={s.flow}>
@@ -417,7 +417,9 @@ export function LogicAppEditor({ item, id }: Props) {
               <>
                 <Body1>Workflow Definition Language (WDL) — read-only view of the deployed definition.</Body1>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalS }}>
-                  Edit triggers and actions in the Designer tab; this shows the resulting WDL the runtime executes.
+                  The Designer tab shows a read-only flow of this workflow&apos;s triggers and actions; this Code tab shows
+                  the deployed Workflow Definition Language (WDL). To change triggers/actions, edit the workflow&apos;s WDL
+                  definition where the app is authored and re-install/deploy.
                 </Caption1>
                 <MonacoTextarea
                   value={definitionJson}

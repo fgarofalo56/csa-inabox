@@ -58,6 +58,16 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
   },
   breakText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0, maxWidth: '100%' },
+  // Honest infra-gate banner for the data-flow Spark debug cluster — sits with
+  // the designer it applies to so the gated Debug/Preview affordance is never
+  // ambiguous (per no-vaporware.md). Subtle elevation to match sibling cards.
+  debugGate: { boxShadow: tokens.shadow2 },
+  gateCode: {
+    fontFamily: tokens.fontFamilyMonospace,
+    backgroundColor: tokens.colorNeutralBackground3,
+    paddingInline: tokens.spacingHorizontalXXS,
+    borderRadius: tokens.borderRadiusSmall,
+  },
 });
 
 const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
@@ -203,14 +213,42 @@ export function MappingDataFlowEditor({ item, id }: EditorProps) {
         // The designer owns the canvas + config panel + Save. For a NEW flow we
         // pass the (validated) name so its Save targets the right resource; the
         // designer disables nothing structurally — it just needs a stable name.
-        <MappingDataFlowDesigner
-          key={`${reloadKey}:${isNew ? name || 'new' : id}`}
-          name={isNew ? (nameValid ? name.trim() : 'dataflow1') : id}
-          initial={initial}
-          datasets={datasets}
-          datasetGate={datasetGate}
-          debugClusterAvailable={false}
-        />
+        <>
+          {/* Honest infra-gate (per no-vaporware.md): authoring is fully
+              functional — add transform / configure / Save write the REAL ADF
+              data-flow definition now — but Data preview / Debug needs a Spark
+              data-flow debug cluster that is not wired in this deployment. We
+              surface that EXPLICITLY here (not just implicitly via the designer's
+              disabled toggle) so `debugClusterAvailable={false}` reads as an
+              honest gate, not a silent dead control. */}
+          <MessageBar intent="warning" className={s.debugGate}>
+            <MessageBarBody className={s.breakText}>
+              <MessageBarTitle>Data preview / debug is gated in this deployment</MessageBarTitle>
+              Data preview / debug needs a Spark data-flow debug cluster
+              (<code className={s.gateCode}>createDataFlowDebugSession</code> +{' '}
+              <code className={s.gateCode}>executeDataFlowDebugCommand</code> on{' '}
+              <code className={s.gateCode}>Microsoft.DataFactory/factories</code>),
+              which is not wired in this deployment — authoring (add transform /
+              configure / save) writes the real ADF data-flow definition now;
+              preview lights up once the debug-session helper is added to{' '}
+              <code className={s.gateCode}>lib/azure/adf-client.ts</code>.
+            </MessageBarBody>
+          </MessageBar>
+
+          <MappingDataFlowDesigner
+            key={`${reloadKey}:${isNew ? name || 'new' : id}`}
+            name={isNew ? (nameValid ? name.trim() : 'dataflow1') : id}
+            initial={initial}
+            datasets={datasets}
+            datasetGate={datasetGate}
+            // No Spark data-flow debug cluster is wired in this deployment, so the
+            // designer's Debug toggle + per-transform Data preview render their
+            // honest "start a debug session" gate rather than faking rows. This
+            // flag is the single switch the helper above flips on once
+            // createDataFlowDebugSession is added to lib/azure/adf-client.ts.
+            debugClusterAvailable={false}
+          />
+        </>
       )}
     </div>
   );

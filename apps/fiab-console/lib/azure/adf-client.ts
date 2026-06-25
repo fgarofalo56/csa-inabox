@@ -1502,3 +1502,77 @@ export async function runMountedFactoryPipeline(
   );
   return jsonOrThrow<PipelineRunResponse>(r, `runMountedFactoryPipeline(${pipelineName})`);
 }
+
+// ============================================================
+// Factory provisioning — create a NEW ADF-standalone factory (Wave A
+// binder "Create new factory" flow). The unified Data pipeline editor's
+// runtime selector lets the operator target a non-default ADF factory; the
+// binder UI can provision one inline rather than only reusing an existing
+// one via AzureResourcePicker.
+//
+// This is the ONE op in this client that targets an OPERATOR-CHOSEN
+// (subscription, resourceGroup, name) — NOT the env-pinned default factory.
+// It therefore builds its own cross-sub/rg ARM URL from ARM_BASE and goes
+// through `callRaw` (raw UAMI ARM token, NO self-heal): `call()`'s
+// 404/403 → Resource-Graph-by-name self-heal keys on LOOM_ADF_NAME, which is
+// only correct for the default factory — applying it to a brand-new factory
+// name would be wrong (and the resource intentionally doesn't exist yet).
+//
+// Real ARM REST (no mock, per no-vaporware.md):
+//   PUT .../Microsoft.DataFactory/factories/{name}?api-version=2018-06-01
+//   body { location, properties: {} }
+// Azure-native default per no-fabric-dependency.md — ADF is the default
+// pipeline runtime; no Fabric workspace is involved.
+// ============================================================
+
+/** Lightweight view of a created/resolved ADF factory (binder create-new). */
+export interface AdfFactoryLite {
+  id: string;
+  name: string;
+  subscriptionId: string;
+  resourceGroup: string;
+  location: string;
+}
+
+/**
+ * Create (idempotent PUT) an ADF-standalone factory at an operator-chosen
+ * (subscription, resourceGroup, name, location). Backs
+ * `POST /api/adf/factories/create` for the unified pipeline editor's binder.
+ *
+ * Builds its OWN ARM URL (NOT `base()`, which is pinned to the env factory)
+ * and uses `callRaw` so the default-factory self-heal in `call()` never
+ * rewrites the target. Throws with the raw ARM error text on a non-2xx so the
+ * route can map it to an honest 403 (Console UAMI lacks Contributor on the RG)
+ * or 502 — never a mock.
+ */
+export async function createFactory(args: {
+  name: string;
+  location: string;
+  subscriptionId: string;
+  resourceGroup: string;
+}): Promise<AdfFactoryLite> {
+  const url =
+    `${ARM_BASE}/subscriptions/${encodeURIComponent(args.subscriptionId)}` +
+    `/resourceGroups/${encodeURIComponent(args.resourceGroup)}` +
+    `/providers/Microsoft.DataFactory/factories/${encodeURIComponent(args.name)}` +
+    `?api-version=${API}`;
+  const r = await callRaw(url, {
+    method: 'PUT',
+    body: JSON.stringify({ location: args.location, properties: {} }),
+  });
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`createFactory(${args.name}) failed ${r.status}: ${await r.text()}`);
+  }
+  const body = await jsonOrThrow<{
+    id?: string;
+    name?: string;
+    location?: string;
+  }>(r, `createFactory(${args.name})`);
+  return {
+    id: body.id || `/subscriptions/${args.subscriptionId}/resourceGroups/${args.resourceGroup}/providers/Microsoft.DataFactory/factories/${args.name}`,
+    name: body.name || args.name,
+    subscriptionId: args.subscriptionId,
+    resourceGroup: args.resourceGroup,
+    location: body.location || args.location,
+  };
+}

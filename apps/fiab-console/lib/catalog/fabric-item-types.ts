@@ -87,6 +87,22 @@ export interface FabricItemType {
    * under the unified Loom Marketplace (/marketplace).
    */
   coreSurface?: boolean;
+  /**
+   * This slug is an alias/preset of another item type; the editor + new-item flow
+   * resolve to aliasOf's editor (the unified one), while this entry's own slug +
+   * restType + per-item BFF routes stay intact for back-compat with already-created
+   * items. See Wave-A catalog-merge (no-fabric-dependency.md): Azure-native default.
+   */
+  aliasOf?: string;
+  /** When this item opens the unified pipeline editor, lock the runtime selector to this value. */
+  runtimePreset?: 'adf' | 'synapse' | 'fabric';
+  /**
+   * This item is a TEMPLATE that instantiates aliasOf/templateOf with a pre-wired
+   * spec (templateId resolves the spec via lib/components/pipeline/templates/catalog.ts).
+   */
+  templateOf?: string;
+  /** Template id resolved by lib/components/pipeline/templates/catalog.ts. */
+  templateId?: string;
   /** Learn / Getting started popup content. Required for every type. */
   learnContent?: LearnContent;
 }
@@ -276,7 +292,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'data-pipeline', displayName: 'Data pipeline', restType: 'DataPipeline', category: 'Data Factory',
     description: 'Orchestrate Copy, Lookup, ForEach, Notebook, Stored procedure, Web, and more.',
     learnContent: {
-      "overview": "A Data pipeline is visual ETL/ELT orchestration — Copy, Lookup, ForEach, Notebook, Stored procedure, Web and more. In Loom it shares run history with notebooks and dataflows and is backed by the Fabric Data Factory runtime.",
+      "overview": "A Data pipeline is visual ETL/ELT orchestration — Copy, Lookup, ForEach, Notebook, Stored procedure, Web and more. Azure-native by default: authored on the standalone Azure Data Factory runtime (or a Synapse workspace), with Microsoft Fabric available as an opt-in runtime. Shares run history with notebooks and dataflows.",
       "steps": [
         {
           "title": "Add a Copy activity",
@@ -1372,6 +1388,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/spark/apache-spark-pool-configurations"
     } },
   { slug: 'synapse-pipeline',            displayName: 'Synapse pipeline',            restType: 'SynapsePipeline',           category: 'Synapse Analytics',
+    runtimePreset: 'synapse',
     description: 'Synapse Integrate canvas — pipelines, dataflows, triggers native to Synapse.',
     learnContent: {
       "overview": "A Synapse pipeline is the Synapse Integrate canvas — ADF-shaped pipelines, dataflows, and triggers that run inside a Synapse workspace. In Loom it reuses Synapse-attached linked services and integration runtimes.",
@@ -1494,9 +1511,10 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
   // Azure Data Factory (separate from Fabric Data Factory)
   { slug: 'adf-pipeline',                displayName: 'ADF pipeline',                restType: 'AdfPipeline',               category: 'Azure Data Factory',
-    description: 'Classic ADF pipeline — 90+ activities, IR-aware, on-prem via Self-hosted IR.',
+    aliasOf: 'data-pipeline', runtimePreset: 'adf',
+    description: 'The ADF-runtime preset of the Data pipeline — classic Azure Data Factory: 90+ activities, IR-aware, on-prem via Self-hosted IR.',
     learnContent: {
-      "overview": "An ADF pipeline is a classic Azure Data Factory pipeline — 90+ activities, integration-runtime-aware, on-prem via Self-hosted IR. In Loom it sits alongside Synapse and Fabric pipelines and reuses ADF linked services and IRs.",
+      "overview": "An ADF pipeline is the ADF-runtime preset of the unified Data pipeline — a classic Azure Data Factory pipeline with 90+ activities, integration-runtime-aware, and on-prem reach via Self-hosted IR. It opens the same unified pipeline editor as Data pipeline with the runtime locked to Azure Data Factory (the Azure-native default), reusing ADF linked services and integration runtimes. Already-created ADF pipeline items and their existing routes keep working unchanged.",
       "steps": [
         {
           "title": "Add activities",
@@ -2397,25 +2415,26 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/sql/query-parquet-files"
     } },
   { slug: 'geo-pipeline',                displayName: 'Geo pipeline',                restType: 'GeoPipeline',               category: 'Azure Geoanalytics',
-    description: 'ADF/Synapse pipeline specialized for geo enrichment (H3 index, reverse geocode, buffer).',
+    templateOf: 'data-pipeline', templateId: 'geo-enrich', runtimePreset: 'adf',
+    description: 'A Data-pipeline template that builds a real geo-enrichment pipeline (H3 index, reverse geocode, buffer) pre-wired against Azure Maps + ADF.',
     learnContent: {
-      "overview": "A Geo pipeline is an ADF/Synapse pipeline specialized for geo enrichment — H3 index, reverse geocode, buffer. In Loom it is a Cosmos-backed pointer to an ADF pipeline with a geo-enrichment flag. Trigger run fires a real ADF createRun against the bound pipeline and returns a live run id; the enrichment activities themselves are operator-built in ADF (the seeded loom-geo-enrich pipeline ships empty).",
+      "overview": "A Geo pipeline is a Data-pipeline TEMPLATE for geo enrichment. On instantiate it builds a REAL Azure Data Factory pipeline whose activities are already wired — H3 indexing, reverse geocode against Azure Maps, and buffer generation — with parameters (enrichH3, reverseGeocode, bufferMeters) you can tune; it runs as-is on the Azure-native ADF runtime, no empty seeded pipeline. Newly created geo pipelines instantiate the geo-enrich template into a Data pipeline (runtime ADF) and run via the unified run path; already-created geo items keep their existing route and run unchanged.",
       "steps": [
         {
-          "title": "Define the enrichment",
-          "body": "Set the geo step: H3 indexing, reverse geocode, or buffer."
+          "title": "Tune the enrichment parameters",
+          "body": "Set the template parameters: enrichH3 (add an H3 spatial index), reverseGeocode (resolve coordinates to addresses via Azure Maps), and bufferMeters (generate a buffer polygon)."
         },
         {
-          "title": "Point at an ADF pipeline",
-          "body": "Reference the ADF pipeline and set the geo-enrichment flag; the spec persists to Cosmos."
+          "title": "Instantiate the template",
+          "body": "Creating a Geo pipeline materializes the geo-enrich template into a real Data pipeline (ADF runtime) with the H3, reverse-geocode, and buffer activities already wired — no empty seeded pipeline."
         },
         {
-          "title": "Save",
-          "body": "Save persists the configuration. Trigger run fires a real ADF createRun on the bound pipeline; the geo-enrichment activities are operator-built in ADF (the seeded pipeline ships empty), which the receipt discloses."
+          "title": "Run it",
+          "body": "Trigger run fires a real ADF createRun on the instantiated pipeline via the unified run path and returns a live run id; the wired enrichment activities execute against ADF + Azure Maps."
         },
         {
           "title": "Output a geo-dataset",
-          "body": "The pipeline is intended to write an enriched, queryable geo-dataset."
+          "body": "The pipeline writes an enriched, queryable geo-dataset."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-factory/concepts-pipelines-activities"

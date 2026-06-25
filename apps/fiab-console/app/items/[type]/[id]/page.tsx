@@ -55,6 +55,36 @@ export default function ItemEditorPage(props: Props) {
 
   const isNew = id === 'new';
 
+  // [catalog-merge] Resolve aliases + templates (no-fabric-dependency.md catalog
+  // merge): some slugs are presets/aliases of a UNIFIED authoring item. e.g.
+  //   adf-pipeline / synapse-pipeline  → aliasOf 'data-pipeline' (runtime locked)
+  //   geo-pipeline                     → templateOf 'data-pipeline' (geo-enrich)
+  // The `effective` entry selects which EDITOR opens (the unified one), while we
+  // keep passing the ORIGINAL `item` for display name + Learn content. Already-
+  // created adf-pipeline/synapse-pipeline/geo-pipeline instances still load via
+  // their OWN per-item BFF routes (/api/items/<slug>/[id]/*) — the unified editor
+  // parameterizes its apiBase by the resolved runtime, so back-compat holds.
+  // Resolve BOTH aliasOf (adf-/synapse-pipeline → data-pipeline, runtime-locked)
+  // AND templateOf (geo-pipeline → data-pipeline, pre-wired with templateId
+  // 'geo-enrich'). Without resolving templateOf, slug 'geo-pipeline' fell through
+  // to its own legacy GeoPipelineEditor in the registry, so the unified
+  // DataPipelineEditor (and its Contract-F templateId seeding) never opened —
+  // the comment above claimed geo-pipeline→data-pipeline(geo-enrich) but routing
+  // never did it. `?? item` keeps a self-load fallback if the target is missing.
+  // aliasOf (adf-/synapse-pipeline → data-pipeline) resolves UNCONDITIONALLY:
+  // the unified editor keys its BFF apiBase by the locked runtime, so existing
+  // instances still hit /api/items/<original-slug>/[id]/*. templateOf
+  // (geo-pipeline → data-pipeline + 'geo-enrich' seed) resolves ONLY for NEW
+  // creation — an ALREADY-CREATED geo-pipeline instance keeps its own native
+  // GeoPipelineEditor + load path (back-compat); seeding a template over a saved
+  // instance would clobber it.
+  const applyTemplate = !!item.templateOf && isNew;
+  const effective = item.aliasOf
+    ? (findItemType(item.aliasOf) ?? item)
+    : applyTemplate
+      ? (findItemType(item.templateOf!) ?? item)
+      : item;
+
   // Hydrate the live record into the React Query cache so editors
   // that read ['item', type, id] get the persisted state.
   const q = useQuery<WorkspaceItem>({
@@ -63,7 +93,7 @@ export default function ItemEditorPage(props: Props) {
     enabled: !isNew,
   });
 
-  const Editor = getEditor(type);
+  const Editor = getEditor(effective.slug);
 
   // A dedicated editor ALWAYS renders its full ribbon + surface IMMEDIATELY
   // (ui-parity.md) — it must NOT be gated behind the page-level getItem query.
@@ -77,7 +107,12 @@ export default function ItemEditorPage(props: Props) {
   // The page-level Spinner/error below is only for the generic (no-editor)
   // fallback view.
   if (Editor) {
-    return <Editor item={item} id={id} />;
+    // Pass the ORIGINAL `item` (display name / Learn) plus the resolved
+    // runtime preset + template id from the catalog. With both undefined the
+    // editor behaves identically to today (no regression). `runtimePreset`
+    // locks the unified pipeline editor's runtime selector (adf default per
+    // no-fabric-dependency.md); `templateId` pre-wires its spec (e.g. geo-enrich).
+    return <Editor item={item} id={id} runtimePreset={item.runtimePreset} templateId={applyTemplate ? item.templateId : undefined} />;
   }
 
   if (!isNew && q.isLoading) {
