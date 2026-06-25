@@ -14,13 +14,14 @@
  * no-vaporware.md — no dead controls, no mock state.
  */
 
-import { useState } from 'react';
+import { ReactNode, useState } from 'react';
 import {
   Body1Strong, Caption1, Button, Select, Input, Field, Spinner, Link, Tooltip,
   MessageBar, MessageBarBody, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Edit16Regular, Delete16Regular, Add16Regular, Checkmark16Regular, Dismiss16Regular,
+  LinkMultiple20Regular,
 } from '@fluentui/react-icons';
 import type { ExternalLink } from '@/lib/dataproducts/attributes';
 
@@ -41,12 +42,26 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalS,
     padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
   },
   header: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
+  titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  titleIcon: { display: 'flex', alignItems: 'center', color: tokens.colorBrandForeground1 },
   value: { color: tokens.colorNeutralForeground1 },
   muted: { color: tokens.colorNeutralForeground3 },
+  inlineEmpty: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    color: tokens.colorNeutralForeground3,
+  },
+  inlineEmptyIcon: { display: 'flex', alignItems: 'center', color: tokens.colorNeutralForeground4 },
   editRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, margin: 0, padding: 0, listStyle: 'none' },
@@ -96,11 +111,13 @@ export interface SelectAttributePanelProps {
   value: string;
   options: readonly string[];
   placeholder?: string;
+  /** Optional Fluent icon shown beside the panel title. */
+  icon?: ReactNode;
   /** Persist the chosen value; returns the PATCH receipt. */
   onSave: (value: string) => Promise<AttrReceipt>;
 }
 
-export function SelectAttributePanel({ title, value, options, placeholder, onSave }: SelectAttributePanelProps) {
+export function SelectAttributePanel({ title, value, options, placeholder, icon, onSave }: SelectAttributePanelProps) {
   const s = useStyles();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
@@ -129,7 +146,10 @@ export function SelectAttributePanel({ title, value, options, placeholder, onSav
   return (
     <div className={s.panel}>
       <div className={s.header}>
-        <Body1Strong>{title}</Body1Strong>
+        <div className={s.titleRow}>
+          {icon && <span className={s.titleIcon} aria-hidden>{icon}</span>}
+          <Body1Strong>{title}</Body1Strong>
+        </div>
         {!editing && (
           <Tooltip content={`Edit ${title.toLowerCase()}`} relationship="label">
             <Button appearance="subtle" size="small" icon={<Edit16Regular />}
@@ -173,13 +193,15 @@ export function SelectAttributePanel({ title, value, options, placeholder, onSav
 export interface LinkListAttributePanelProps {
   title: string;
   entries: ExternalLink[];
+  /** Optional Fluent icon shown beside the panel title. */
+  icon?: ReactNode;
   /** Append an entry; returns the PATCH receipt. */
   onAdd: (entry: ExternalLink) => Promise<AttrReceipt>;
   /** Remove the entry at index; returns the PATCH receipt. */
   onRemove: (index: number) => Promise<AttrReceipt>;
 }
 
-export function LinkListAttributePanel({ title, entries, onAdd, onRemove }: LinkListAttributePanelProps) {
+export function LinkListAttributePanel({ title, entries, icon, onAdd, onRemove }: LinkListAttributePanelProps) {
   const s = useStyles();
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState('');
@@ -229,13 +251,21 @@ export function LinkListAttributePanel({ title, entries, onAdd, onRemove }: Link
   return (
     <div className={s.panel}>
       <div className={s.header}>
-        <Body1Strong>{title}</Body1Strong>
+        <div className={s.titleRow}>
+          {icon && <span className={s.titleIcon} aria-hidden>{icon}</span>}
+          <Body1Strong>{title}</Body1Strong>
+        </div>
         {!adding && (
           <Button appearance="subtle" size="small" icon={<Add16Regular />} onClick={beginAdd}>Add link</Button>
         )}
       </div>
 
-      {entries.length === 0 && !adding && <Caption1 className={s.muted}>No links yet.</Caption1>}
+      {entries.length === 0 && !adding && (
+        <div className={s.inlineEmpty} role="status">
+          <span className={s.inlineEmptyIcon} aria-hidden><LinkMultiple20Regular /></span>
+          <Caption1>No links yet. Use <strong>Add link</strong> to attach one.</Caption1>
+        </div>
+      )}
 
       {entries.length > 0 && (
         <ul className={s.list}>

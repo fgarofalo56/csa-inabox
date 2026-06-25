@@ -35,6 +35,7 @@ import {
   History20Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -478,9 +479,12 @@ export default function GovernancePage() {
           searchPlaceholder="Find a governance surface…"
         />
         {nav.length === 0 && (
-          <Caption1 className={s.muted}>
-            No governance surface matches &quot;{navQuery}&quot;.
-          </Caption1>
+          <EmptyState
+            icon={<DatabaseSearch20Regular className={s.chipIcon20} />}
+            title="No matching governance surface"
+            body={`Nothing matches "${navQuery}". Try a broader term, or clear the search to see every catalog, discovery, Data Map, and health surface.`}
+            primaryAction={{ label: 'Clear search', appearance: 'secondary', onClick: () => setNavQuery('') }}
+          />
         )}
         {nav.map((grp) => (
           <div key={grp.group} className={s.navGroup}>

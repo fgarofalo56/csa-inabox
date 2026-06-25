@@ -19,11 +19,16 @@ import { useRouter } from 'next/navigation';
 import {
   Spinner, makeStyles, tokens, Badge, Input, Button, Caption1, Subtitle2, Tooltip,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Field, Textarea, MessageBar, MessageBarBody,
+  Field, Textarea, MessageBar, MessageBarBody, Skeleton, SkeletonItem,
 } from '@fluentui/react-components';
-import { Search24Regular, Add24Regular, Delete20Regular } from '@fluentui/react-icons';
+import {
+  Search24Regular, Add24Regular, Delete20Regular,
+  CheckmarkStarburst20Regular, Star20Regular, AppsAddIn20Regular, Apps24Regular,
+} from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { EmptyState } from '@/lib/components/empty-state';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { matchWorkloadKey } from '@/lib/catalog/workload-hub';
 
@@ -49,28 +54,46 @@ const useStyles = makeStyles({
   sectionHeader: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalM,
   },
-  sectionTitle: {
-    fontSize: tokens.fontSizeBase400, fontWeight: 600, color: tokens.colorNeutralForeground1,
+  sectionIcon: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '32px', height: '32px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusLarge,
   },
+  sectionIconIncluded: {
+    color: tokens.colorPaletteGreenForeground1,
+    backgroundColor: tokens.colorPaletteGreenBackground2,
+  },
+  sectionIconCsa: {
+    color: tokens.colorBrandForeground1,
+    backgroundColor: tokens.colorBrandBackground2,
+  },
+  sectionIconOptional: {
+    color: tokens.colorNeutralForeground3,
+    backgroundColor: tokens.colorNeutralBackground3,
+  },
+  sectionTitleCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
   sectionCount: {
-    color: tokens.colorNeutralForeground3, fontSize: '13px',
-  },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(min(320px, 100%), 1fr))',
-    gap: tokens.spacingHorizontalL,
+    color: tokens.colorNeutralForeground3,
   },
   card: {
-    padding: tokens.spacingHorizontalL, borderRadius: tokens.borderRadiusXLarge,
+    padding: tokens.spacingHorizontalL, borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
     cursor: 'pointer',
-    transition: 'transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    transitionProperty: 'transform, box-shadow, border-color',
     display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS,
+    minWidth: 0,
     ':hover': {
       transform: 'translateY(-2px)',
-      boxShadow: tokens.shadow8,
-      borderColor: tokens.colorBrandStroke1,
+      boxShadow: tokens.shadow16,
+      border: `1px solid ${tokens.colorBrandStroke1}`,
+    },
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '2px',
     },
   },
   cardHeader: { display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM },
@@ -78,7 +101,7 @@ const useStyles = makeStyles({
   cardRel: { position: 'relative' },
   dialogCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, minWidth: '440px', maxWidth: '100%' },
   iconBox: {
-    width: '40px', height: '40px', borderRadius: tokens.borderRadiusXLarge,
+    width: '40px', height: '40px', borderRadius: tokens.borderRadiusLarge,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     flexShrink: 0,
     color: tokens.colorBrandForeground1,
@@ -93,26 +116,35 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
   },
   titleCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS, minWidth: 0, flex: 1 },
-  name: { fontSize: '15px', fontWeight: 600, color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  name: {
+    fontSize: tokens.fontSizeBase400, fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0,
+  },
   desc: {
-    fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45,
+    fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, lineHeight: tokens.lineHeightBase200,
     overflow: 'hidden', display: '-webkit-box',
     WebkitLineClamp: 3, WebkitBoxOrient: 'vertical',
     overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0,
   },
   features: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
   pill: {
-    fontSize: '11px', padding: '2px 8px', borderRadius: tokens.borderRadiusCircular,
+    fontSize: tokens.fontSizeBase100,
+    paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorNeutralBackground2,
     color: tokens.colorNeutralForeground2,
     whiteSpace: 'nowrap',
   },
-  empty: {
-    padding: '32px', borderRadius: tokens.borderRadiusXLarge,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    color: tokens.colorNeutralForeground3,
-    fontSize: '13px', textAlign: 'center',
+  // skeleton loading tile mirrors the real card footprint
+  skelCard: {
+    padding: tokens.spacingHorizontalL, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
   },
+  skelHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
 });
 
 /** Representative item-type slug for a workload — its first featureSlug, which
@@ -225,27 +257,80 @@ export default function WorkloadsPage() {
 
       <AddWorkloadDialog open={addOpen} onClose={() => setAddOpen(false)} onCreated={() => { setAddOpen(false); void load(); }} />
 
-      {items === null && <Spinner label="Loading workloads…" />}
-
-      {items !== null && items.length === 0 && (
-        <div className={s.empty}>
-          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>No workloads in this tenant yet</Subtitle2>
-          <div>POST <code>/api/admin/bootstrap-catalogs</code> once per environment to seed GLOBAL.</div>
-          <div style={{ marginTop: 4 }}>First <code>/api/workloads-catalog</code> GET copies into your tenant automatically.</div>
+      {items === null && (
+        <div className={s.section}>
+          <div className={s.sectionHeader}>
+            <span className={`${s.sectionIcon} ${s.sectionIconCsa}`} aria-hidden>
+              <Apps24Regular />
+            </span>
+            <div className={s.sectionTitleCol}>
+              <Subtitle2>Loading workloads…</Subtitle2>
+            </div>
+          </div>
+          <TileGrid minTileWidth={320}>
+            {Array.from({ length: 6 }).map((_, i) => (
+              <div key={i} className={s.skelCard} aria-hidden>
+                <Skeleton aria-label="Loading workload">
+                  <div className={s.skelHead}>
+                    <SkeletonItem shape="rectangle" style={{ width: 40, height: 40, flexShrink: 0 }} />
+                    <SkeletonItem shape="rectangle" style={{ width: `${50 + (i * 13) % 30}%`, height: 16 }} />
+                  </div>
+                </Skeleton>
+                <Skeleton aria-label="">
+                  <SkeletonItem shape="rectangle" style={{ width: '100%', height: 12 }} />
+                  <SkeletonItem shape="rectangle" style={{ width: '80%', height: 12, marginTop: tokens.spacingVerticalXS }} />
+                </Skeleton>
+              </div>
+            ))}
+          </TileGrid>
         </div>
       )}
 
-      {items !== null && items.length > 0 && shownCount === 0 && (
-        <div className={s.empty}>No workloads match &ldquo;{q}&rdquo;.</div>
+      {items !== null && items.length === 0 && (
+        <EmptyState
+          icon={<Apps24Regular />}
+          title="No workloads in this tenant yet"
+          body="POST /api/admin/bootstrap-catalogs once per environment to seed the GLOBAL catalog. The first /api/workloads-catalog GET then copies it into your tenant automatically."
+          primaryAction={{ label: 'Add custom workload', onClick: () => setAddOpen(true) }}
+        />
       )}
 
-      {sections.map((section) => (
+      {items !== null && items.length > 0 && shownCount === 0 && (
+        <EmptyState
+          icon={<Search24Regular />}
+          title="No matching workloads"
+          body={`No workloads match “${q}”. Try a different name, capability, or category.`}
+          primaryAction={{ label: 'Clear filter', onClick: () => setQ('') }}
+        />
+      )}
+
+      {sections.map((section) => {
+        const SectionIcon =
+          section.tone === 'csa' ? Star20Regular :
+          section.tone === 'optional' ? AppsAddIn20Regular :
+          CheckmarkStarburst20Regular;
+        const sectionIconClass =
+          section.tone === 'csa' ? s.sectionIconCsa :
+          section.tone === 'optional' ? s.sectionIconOptional :
+          s.sectionIconIncluded;
+        const sectionHint =
+          section.tone === 'csa' ? 'CSA-built accelerators tailored for federal & regulated workloads' :
+          section.tone === 'optional' ? 'Opt-in workloads you can add to any workspace' :
+          'Ready to use in every workspace out of the box';
+        return (
         <div key={section.label} className={s.section}>
           <div className={s.sectionHeader}>
-            <div className={s.sectionTitle}>{section.label}</div>
-            <Caption1 className={s.sectionCount}>· {section.items.length}</Caption1>
+            <span className={`${s.sectionIcon} ${sectionIconClass}`} aria-hidden>
+              <SectionIcon />
+            </span>
+            <div className={s.sectionTitleCol}>
+              <Subtitle2>
+                {section.label} <Caption1 className={s.sectionCount}>· {section.items.length}</Caption1>
+              </Subtitle2>
+              <Caption1 className={s.sectionCount}>{sectionHint}</Caption1>
+            </div>
           </div>
-          <div className={s.grid}>
+          <TileGrid minTileWidth={320}>
             {section.items.map((w) => {
               const iconClass =
                 section.tone === 'csa' ? s.iconBoxCsa :
@@ -317,9 +402,10 @@ export default function WorkloadsPage() {
                 </div>
               );
             })}
-          </div>
+          </TileGrid>
         </div>
-      ))}
+        );
+      })}
     </PageShell>
   );
 }

@@ -28,6 +28,8 @@ import {
   ArrowSync24Regular, Shield24Regular,
   ShieldRegular, DataUsageRegular, TagRegular,
   LockClosedRegular, EyeRegular, HistoryRegular,
+  DatabaseRegular, TagMultipleRegular, ShieldCheckmarkRegular,
+  DocumentBulletListRegular, KeyMultipleRegular, ClipboardTaskRegular,
 } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { PurviewPanel } from '@/lib/components/admin-security/purview-panel';
@@ -36,6 +38,8 @@ import { DlpPanel } from '@/lib/components/admin-security/dlp-panel';
 import { AuditPanel } from '@/lib/components/admin-security/audit-panel';
 import { DspmAiPanel } from '@/lib/components/admin-security/dspm-ai-panel';
 import { Section } from '@/lib/components/ui/section';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { EmptyState } from '@/lib/components/empty-state';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 
@@ -59,21 +63,23 @@ const useStyles = makeStyles({
   topTabs: { marginBottom: tokens.spacingVerticalL },
   statsRow: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(180px, 100%), 1fr))',
-    gap: tokens.spacingHorizontalM,
-  },
-  statCard: {
-    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  statVal: { fontSize: tokens.fontSizeBase600, fontWeight: 600, color: tokens.colorBrandForeground1 },
-  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS },
-  bar: { height: '6px', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden', marginTop: tokens.spacingVerticalS },
-  barFill: { height: '100%', backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
-  twoCol: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(360px, 100%), 1fr))',
     gap: tokens.spacingHorizontalL,
   },
+  statCard: {
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
+  },
+  statHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
+  statIcon: { fontSize: '22px', color: tokens.colorNeutralForeground3, flexShrink: 0 },
+  statVal: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1, lineHeight: tokens.lineHeightHero700 },
+  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, textTransform: 'uppercase', letterSpacing: '0.04em' },
+  bar: { height: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden', marginTop: tokens.spacingVerticalS },
+  barFill: { height: '100%', backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
   chip: {
     fontSize: tokens.fontSizeBase100,
     paddingTop: tokens.spacingVerticalXS,
@@ -133,7 +139,7 @@ export default function SecurityPage() {
         <Tab value="audit" icon={<HistoryRegular />}>Audit</Tab>
       </TabList>
 
-      {tab === 'overview' && <OverviewTab />}
+      {tab === 'overview' && <OverviewTab onNavigateTab={setTab} />}
       {/* Gated panels own their internal layout/logic; the page only frames them. */}
       {tab === 'purview' && <Section bare><PurviewPanel /></Section>}
       {tab === 'mip' && <Section bare><MipPanel /></Section>}
@@ -144,7 +150,7 @@ export default function SecurityPage() {
   );
 }
 
-function OverviewTab() {
+function OverviewTab({ onNavigateTab }: { onNavigateTab: (t: TopTab) => void }) {
   const s = useStyles();
   const a = useAdminTabStyles();
   const [insights, setInsights] = useState<Insights | null>(null);
@@ -216,14 +222,20 @@ function OverviewTab() {
       {!loading && (insights || sensitivity || classifications) && (
         <>
           {insights && (
-            <Section title="Posture">
+            <Section title={<span><ShieldCheckmarkRegular className={a.headIcon} />Posture</span>}>
               <div className={s.statsRow}>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.totalItems}</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.totalItems}</div>
+                    <DatabaseRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>data items</div>
                 </div>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.sensitiveCoveragePct}%</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.sensitiveCoveragePct}%</div>
+                    <TagMultipleRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>sensitivity coverage</div>
                   <div className={s.bar}>
                     {/* dynamic: fill width is the live coverage percentage */}
@@ -231,7 +243,10 @@ function OverviewTab() {
                   </div>
                 </div>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.classificationCoveragePct}%</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.classificationCoveragePct}%</div>
+                    <DocumentBulletListRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>classification coverage</div>
                   <div className={s.bar}>
                     {/* dynamic: fill width is the live coverage percentage */}
@@ -239,18 +254,24 @@ function OverviewTab() {
                   </div>
                 </div>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.activePolicies}</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.activePolicies}</div>
+                    <KeyMultipleRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>active policies</div>
                 </div>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.auditEvents30d}</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.auditEvents30d}</div>
+                    <ClipboardTaskRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>audit events (30d)</div>
                 </div>
               </div>
             </Section>
           )}
 
-          <div className={s.twoCol}>
+          <TileGrid minTileWidth={360}>
             <Section title={<span><Shield24Regular className={a.headIcon} />Sensitivity label distribution</span>}>
               {sensitivity && sensitivity.distribution.length > 0 ? (
                 <LoomDataTable
@@ -262,9 +283,14 @@ function OverviewTab() {
                   empty="No labels applied yet."
                 />
               ) : (
-                <Caption1 className={a.muted}>No labels applied yet.</Caption1>
+                <EmptyState
+                  icon={<TagMultipleRegular />}
+                  title="No sensitivity labels yet"
+                  body="Apply sensitivity labels to your data items to see the distribution here. Labels classify how sensitive each item is and drive protection policies."
+                  primaryAction={{ label: 'Open Information Protection', href: '/governance/sensitivity', appearance: 'primary' }}
+                />
               )}
-              {sensitivity && (
+              {sensitivity && sensitivity.distribution.length > 0 && (
                 <Caption1 className={a.mutedBlock}>
                   {sensitivity.unlabeled} of {sensitivity.total} items are unlabeled.
                   <a href="/governance/sensitivity" className={a.badgeGap}>Open full view</a>
@@ -272,7 +298,7 @@ function OverviewTab() {
               )}
             </Section>
 
-            <Section title="Top classifications">
+            <Section title={<span><DocumentBulletListRegular className={a.headIcon} />Top classifications</span>}>
               {classifications && classifications.classifications.length > 0 ? (
                 <>
                   <div>
@@ -285,12 +311,17 @@ function OverviewTab() {
                   </Caption1>
                 </>
               ) : (
-                <Caption1 className={a.muted}>No classifications applied yet.</Caption1>
+                <EmptyState
+                  icon={<DocumentBulletListRegular />}
+                  title="No classifications yet"
+                  body="Run Purview scans or apply classifications to your data items to surface the most common data categories here."
+                  primaryAction={{ label: 'Open classifications', href: '/governance/classifications', appearance: 'primary' }}
+                />
               )}
             </Section>
-          </div>
+          </TileGrid>
 
-          <Section title="Recent permission changes">
+          <Section title={<span><HistoryRegular className={a.headIcon} />Recent permission changes</span>}>
             {shareEvents.length > 0 ? (
               <LoomDataTable
                 columns={shareColumns}
@@ -300,9 +331,12 @@ function OverviewTab() {
                 empty="No recent permission changes."
               />
             ) : (
-              <Caption1 className={a.muted}>
-                No recent share / permission events in the last 30 days. Use the <strong>Audit</strong> tab for full history + CSV export.
-              </Caption1>
+              <EmptyState
+                icon={<HistoryRegular />}
+                title="No recent permission changes"
+                body="No share, permission, or role-assignment events were recorded in the last 30 days. Open the Audit tab for the full history and a CSV export."
+                primaryAction={{ label: 'Open Audit log', onClick: () => onNavigateTab('audit'), appearance: 'primary' }}
+              />
             )}
           </Section>
         </>

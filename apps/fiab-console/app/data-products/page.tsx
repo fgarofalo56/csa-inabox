@@ -23,6 +23,7 @@ import {
 } from '@fluentui/react-components';
 import { Add20Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { EmptyState } from '@/lib/components/empty-state';
 import { dataProductTypeLabel, DATA_PRODUCT_TYPES } from '@/lib/catalog/data-product-enums';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
@@ -151,7 +152,12 @@ export default function DataProductsPage() {
       {error && <MessageBar intent="error"><MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{error}</MessageBarBody></MessageBar>}
 
       {!loading && rows.length === 0 && !error && (
-        <MessageBar intent="info"><MessageBarBody>No data products yet. Select <strong>New data product</strong> to create one.</MessageBarBody></MessageBar>
+        <EmptyState
+          icon={<visual.icon />}
+          title="No data products yet"
+          body="Curated, governed data products bundle datasets, dashboards, and APIs into one shareable asset — Microsoft Purview Unified Catalog parity. Create your first to populate this page."
+          primaryAction={{ label: 'New data product', onClick: () => router.push('/data-products/new') }}
+        />
       )}
 
       {!loading && hasRows && (

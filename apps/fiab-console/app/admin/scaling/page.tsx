@@ -6,6 +6,12 @@ import {
   Body1, Caption1, Button, MessageBar, MessageBarBody,
   Input, makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  DataPie24Regular, DatabasePerson24Regular, Flash24Regular,
+  Database24Regular, Server24Regular, Search24Regular,
+  PlugConnected24Regular, DatabaseSearch24Regular, Box24Regular,
+  BrainCircuit24Regular,
+} from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ServiceCard, type UtilizationSnapshot } from '@/lib/components/admin-scaling/service-card';
@@ -660,6 +666,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="Fabric / Power BI Capacity"
           subtitle="F-SKU (F2 → F2048) for Fabric; P-SKU for Power BI Premium."
+          icon={<DataPie24Regular />}
+          accent={tokens.colorPaletteBlueBorderActive}
           loading={!capacityData}
           gateMessage={capacityData && !capacityData.ok ? {
             title: 'Capacity unavailable',
@@ -683,6 +691,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="Synapse Dedicated SQL Pool (DWU)"
           subtitle="DW100c → DW30000c — scale-out via ARM PATCH on sqlPools/{n}."
+          icon={<DatabasePerson24Regular />}
+          accent={tokens.colorPalettePurpleForeground2}
           loading={!dwuData}
           gateMessage={dwuData && !dwuData.ok ? { title: 'Synapse not configured', body: `${dwuData.error}${dwuData.hint ? ' — ' + dwuData.hint : ''}` } : undefined}
           utilization={utilData?.['microsoft.synapse/workspaces/sqlpools']}
@@ -703,6 +713,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="Azure Data Explorer (ADX)"
           subtitle="vCore tier (Dev / E2 / E4 / E8 / E16 / E64) + capacity."
+          icon={<Flash24Regular />}
+          accent={tokens.colorPaletteTealForeground2}
           loading={!adxData}
           gateMessage={adxData && !adxData.ok ? { title: 'ADX not configured', body: `${adxData.error}${adxData.hint ? ' — ' + adxData.hint : ''}` } : undefined}
           currentLabel={adxData?.cluster ? `${adxData.cluster.sku?.name} · ${adxData.cluster.sku?.capacity || 1} instance(s) · ${adxData.cluster.state || 'Running'}` : undefined}
@@ -729,6 +741,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="Databricks SQL Warehouse"
           subtitle="cluster_size (2X-Small → 4X-Large) via /api/2.0/sql/warehouses/{id}/edit."
+          icon={<Database24Regular />}
+          accent={tokens.colorPaletteMarigoldForeground2}
           loading={!whData}
           gateMessage={whData && !whData.ok ? { title: 'Databricks not configured', body: whData.error } : undefined}
           utilization={utilData?.['microsoft.databricks/warehouse']}
@@ -749,6 +763,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="Databricks Cluster"
           subtitle="node_type_id + num_workers via /api/2.0/clusters/edit."
+          icon={<Server24Regular />}
+          accent={tokens.colorPaletteRedForeground2}
           loading={!clusterData}
           gateMessage={clusterData && !clusterData.ok ? { title: 'Databricks not configured', body: clusterData.error } : undefined}
           utilization={utilData?.['microsoft.databricks/cluster']}
@@ -769,6 +785,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="Azure AI Search"
           subtitle="SKU (S0/S1/S2/S3/S3HD) + replicas + partitions."
+          icon={<Search24Regular />}
+          accent={tokens.colorPaletteBerryForeground2}
           loading={!searchData}
           gateMessage={searchData && !searchData.ok ? { title: 'AI Search not configured', body: `${searchData.error}${searchData.hint ? ' — ' + searchData.hint : ''}` } : undefined}
           currentLabel={searchData?.service ? `${searchData.service.sku?.name} · ${searchData.service.replicaCount}R × ${searchData.service.partitionCount}P · ${searchData.service.status || 'Running'}` : undefined}
@@ -814,6 +832,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="API Management"
           subtitle="SKU (Developer / Basic / Standard / Premium / *V2) + capacity."
+          icon={<PlugConnected24Regular />}
+          accent={tokens.colorPaletteLavenderForeground2}
           loading={!apimData}
           gateMessage={apimData && !apimData.ok ? { title: 'APIM not configured', body: `${apimData.error}${apimData.hint ? ' — ' + apimData.hint : ''}` } : undefined}
           currentLabel={apimData?.service ? `${apimData.service.sku?.name} × ${apimData.service.sku?.capacity} · ${apimData.service.provisioningState || 'Succeeded'}` : undefined}
@@ -849,6 +869,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="Cosmos DB containers"
           subtitle="Per-container RU/s (manual) or autoscale max RU/s."
+          icon={<DatabaseSearch24Regular />}
+          accent={tokens.colorPalettePeachForeground2}
           loading={!cosmosData}
           gateMessage={cosmosData && !cosmosData.ok ? { title: 'Cosmos not configured', body: `${cosmosData.error}${cosmosData.hint ? ' — ' + cosmosData.hint : ''}` } : undefined}
           utilization={utilData?.['microsoft.documentdb/databaseaccounts']}
@@ -869,6 +891,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="Container Apps (Loom services)"
           subtitle="workload profile (Consumption / D-/E-series) + replicas."
+          icon={<Box24Regular />}
+          accent={tokens.colorPaletteDarkOrangeForeground1}
           loading={!acaData}
           gateMessage={acaData && !acaData.ok ? { title: 'Container Apps not configured', body: `${acaData.error}${acaData.hint ? ' — ' + acaData.hint : ''}` } : undefined}
           utilization={utilData?.['microsoft.app/containerapps']}
@@ -947,6 +971,8 @@ export default function ScalingPage() {
         <ServiceCard
           title="AI Foundry — AML compute"
           subtitle="vmSize + min/max nodes for AmlCompute targets. Requires a Microsoft.MachineLearningServices/workspaces resource."
+          icon={<BrainCircuit24Regular />}
+          accent={tokens.colorPaletteGreenForeground2}
           loading={!foundryData}
           utilization={utilData?.['microsoft.machinelearningservices/workspaces/computes']}
           utilizationLoading={utilLoading}

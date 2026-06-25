@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Field,
+  Subtitle2, Caption1, Badge, Button, Spinner, Skeleton, SkeletonItem, Input, Field,
   Dropdown, Option, Tooltip, Persona,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -29,7 +29,9 @@ import {
 } from '@fluentui/react-components';
 import {
   PeopleTeam20Regular, PersonAdd20Regular, Delete20Regular, Search20Regular, Copy20Regular,
+  ShieldKeyhole20Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const ROLE_OPTIONS = [
   { name: 'Reader', desc: 'View the database resource (control-plane read).' },
@@ -68,14 +70,30 @@ interface Props {
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
-  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
-  searchRow: { display: 'grid', gridTemplateColumns: '160px 1fr auto', gap: tokens.spacingHorizontalS, alignItems: 'end' },
-  resultsWrap: { maxHeight: '200px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  card: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingVerticalL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  headText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  headIcon: { display: 'inline-flex', color: tokens.colorBrandForeground1, flexShrink: 0 },
+  hint: { color: tokens.colorNeutralForeground3 },
+  searchRow: { display: 'grid', gridTemplateColumns: '160px minmax(0, 1fr) auto', gap: tokens.spacingHorizontalS, alignItems: 'end' },
+  resultsWrap: { maxHeight: '200px', overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground1 },
   resultRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, cursor: 'pointer', borderBottom: `1px solid ${tokens.colorNeutralStroke3}` },
-  selectedRow: { background: tokens.colorBrandBackground2 },
-  assignRow: { display: 'grid', gridTemplateColumns: '1fr 220px auto', gap: tokens.spacingHorizontalS, alignItems: 'end' },
+  selectedRow: { backgroundColor: tokens.colorBrandBackground2 },
+  assignRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 220px auto', gap: tokens.spacingHorizontalS, alignItems: 'end' },
   tableWrap: { overflow: 'auto', maxHeight: '280px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100 },
+  loadingWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM },
+  refreshBtn: { marginLeft: 'auto' },
+  badgeEnd: { marginLeft: 'auto' },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, wordBreak: 'break-all' },
 });
 
 async function fetchJson(input: string, init?: RequestInit): Promise<any> {
@@ -210,7 +228,13 @@ export function ShareDialog({ itemId, server, database, open }: Props) {
 
       {view === 'assign' && (
         <div className={s.card}>
-          <Subtitle2><Search20Regular style={{ verticalAlign: 'middle' }} /> Find a principal</Subtitle2>
+          <div className={s.cardHead}>
+            <span className={s.headIcon}><Search20Regular /></span>
+            <div className={s.headText}>
+              <Subtitle2>Find a principal</Subtitle2>
+              <Caption1 className={s.hint}>Search Entra ID for the user or group to grant access, then pick a role.</Caption1>
+            </div>
+          </div>
           <div className={s.searchRow}>
             <Field label="Principal type">
               <Dropdown selectedOptions={[queryKind]} value={queryKind === 'group' ? 'Group' : 'User'}
@@ -248,7 +272,7 @@ export function ShareDialog({ itemId, server, database, open }: Props) {
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedPrincipal(p); } }}
                 >
                   <Persona name={p.displayName} secondaryText={p.upn || p.mail || p.description || p.type} avatar={{ color: 'colorful' }} />
-                  <Badge appearance="outline" style={{ marginLeft: 'auto' }}>{p.type}</Badge>
+                  <Badge appearance="outline" className={s.badgeEnd}>{p.type}</Badge>
                 </div>
               ))}
             </div>
@@ -291,51 +315,67 @@ export function ShareDialog({ itemId, server, database, open }: Props) {
 
       {view === 'current' && (
         <div className={s.card}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
-            <Subtitle2><PeopleTeam20Regular style={{ verticalAlign: 'middle' }} /> Role assignments at this database</Subtitle2>
-            <Button size="small" appearance="outline" onClick={loadAssignments} disabled={loadingAssignments} style={{ marginLeft: 'auto' }}>
+          <div className={s.cardHead}>
+            <span className={s.headIcon}><PeopleTeam20Regular /></span>
+            <div className={s.headText}>
+              <Subtitle2>Role assignments at this database</Subtitle2>
+              <Caption1 className={s.hint}>Live ARM role assignments scoped directly to this database.</Caption1>
+            </div>
+            <Button size="small" appearance="outline" onClick={loadAssignments} disabled={loadingAssignments} className={s.refreshBtn}>
               {loadingAssignments ? 'Refreshing…' : 'Refresh'}
             </Button>
           </div>
           {listError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>List failed</MessageBarTitle>{listError}</MessageBarBody></MessageBar>}
-          <div className={s.tableWrap}>
-            <Table size="small" aria-label="Database role assignments">
-              <TableHeader>
-                <TableRow>
-                  <TableHeaderCell>Principal (object id)</TableHeaderCell>
-                  <TableHeaderCell>Type</TableHeaderCell>
-                  <TableHeaderCell>Role</TableHeaderCell>
-                  <TableHeaderCell>Action</TableHeaderCell>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {assignments.length === 0 && (
-                  <TableRow><TableCell colSpan={4}><Caption1>{loadingAssignments ? 'Loading…' : 'No role assignments declared at this database scope.'}</Caption1></TableCell></TableRow>
-                )}
-                {assignments.map((a) => (
-                  <TableRow key={a.id}>
-                    <TableCell><code className={s.mono}>{a.principalId}</code></TableCell>
-                    <TableCell>{a.principalType || '—'}</TableCell>
-                    <TableCell>
-                      {a.roleName
-                        ? <Badge appearance="tint" color="brand">{a.roleName}</Badge>
-                        : <code className={s.mono}>{a.roleDefinitionId.split('/').pop()}</code>}
-                    </TableCell>
-                    <TableCell>
-                      <Tooltip content="Revoke this role assignment" relationship="label">
-                        <Button size="small" appearance="subtle" icon={<Delete20Regular />}
-                          aria-label={`Revoke ${a.roleName || 'role'} from ${a.principalId}`}
-                          disabled={revoking === a.id} onClick={() => revoke(a.id)}>
-                          {revoking === a.id ? 'Revoking…' : 'Revoke'}
-                        </Button>
-                      </Tooltip>
-                    </TableCell>
+          {loadingAssignments && assignments.length === 0 ? (
+            <Skeleton aria-label="Loading role assignments" className={s.loadingWrap}>
+              <SkeletonItem />
+              <SkeletonItem />
+              <SkeletonItem />
+            </Skeleton>
+          ) : !listError && assignments.length === 0 ? (
+            <EmptyState
+              icon={<ShieldKeyhole20Regular />}
+              title="No role assignments at this scope"
+              body="No Azure RBAC roles are declared directly at this database. Switch to Assign access to grant a user or group Reader, Contributor, or SQL DB Contributor here."
+              primaryAction={{ label: 'Assign access', onClick: () => setView('assign') }}
+            />
+          ) : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label="Database role assignments">
+                <TableHeader>
+                  <TableRow>
+                    <TableHeaderCell>Principal (object id)</TableHeaderCell>
+                    <TableHeaderCell>Type</TableHeaderCell>
+                    <TableHeaderCell>Role</TableHeaderCell>
+                    <TableHeaderCell>Action</TableHeaderCell>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-          <Body1><Caption1>Only role assignments declared directly at the database scope are shown. Inherited assignments (subscription / resource group / server) are managed at those scopes.</Caption1></Body1>
+                </TableHeader>
+                <TableBody>
+                  {assignments.map((a) => (
+                    <TableRow key={a.id}>
+                      <TableCell><code className={s.mono}>{a.principalId}</code></TableCell>
+                      <TableCell>{a.principalType || '—'}</TableCell>
+                      <TableCell>
+                        {a.roleName
+                          ? <Badge appearance="tint" color="brand">{a.roleName}</Badge>
+                          : <code className={s.mono}>{a.roleDefinitionId.split('/').pop()}</code>}
+                      </TableCell>
+                      <TableCell>
+                        <Tooltip content="Revoke this role assignment" relationship="label">
+                          <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                            aria-label={`Revoke ${a.roleName || 'role'} from ${a.principalId}`}
+                            disabled={revoking === a.id} onClick={() => revoke(a.id)}>
+                            {revoking === a.id ? 'Revoking…' : 'Revoke'}
+                          </Button>
+                        </Tooltip>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+          <Caption1 className={s.hint}>Only role assignments declared directly at the database scope are shown. Inherited assignments (subscription / resource group / server) are managed at those scopes.</Caption1>
         </div>
       )}
     </div>

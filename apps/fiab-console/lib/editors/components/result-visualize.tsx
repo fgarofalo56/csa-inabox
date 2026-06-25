@@ -12,20 +12,25 @@
  * results grid shows. No second BFF call, no mock data.
  */
 
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, type ReactElement } from 'react';
 import {
-  Dropdown, Option, Field, Caption1, Text, TabList, Tab, MessageBar, MessageBarBody,
+  Dropdown, Option, Field, Caption1, Subtitle2, TabList, Tab, MessageBar, MessageBarBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  ChartMultiple20Regular, DataBarVertical20Regular, DataLine20Regular,
+  DataArea20Regular, DataPie20Regular, DataScatter20Regular, DataTrending24Regular,
+} from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 
 export type ChartKind = 'bar' | 'line' | 'area' | 'pie' | 'scatter';
 
-const CHART_KINDS: { key: ChartKind; label: string }[] = [
-  { key: 'bar', label: 'Bar' },
-  { key: 'line', label: 'Line' },
-  { key: 'area', label: 'Area' },
-  { key: 'pie', label: 'Pie' },
-  { key: 'scatter', label: 'Scatter' },
+const CHART_KINDS: { key: ChartKind; label: string; icon: ReactElement }[] = [
+  { key: 'bar', label: 'Bar', icon: <DataBarVertical20Regular /> },
+  { key: 'line', label: 'Line', icon: <DataLine20Regular /> },
+  { key: 'area', label: 'Area', icon: <DataArea20Regular /> },
+  { key: 'pie', label: 'Pie', icon: <DataPie20Regular /> },
+  { key: 'scatter', label: 'Scatter', icon: <DataScatter20Regular /> },
 ];
 
 // Loom brand-leaning categorical palette (works in light + dark) — same set
@@ -37,14 +42,32 @@ const SERIES_COLORS = [
 const useStyles = makeStyles({
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
+    borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    padding: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalL,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalM,
     minWidth: 0,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16 },
   },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  headerIcon: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '32px',
+    height: '32px',
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground2,
+    flexShrink: 0,
+  },
+  headerText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   controls: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
   picker: { minWidth: '160px' },
   legend: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalM, alignItems: 'center' },
@@ -133,9 +156,11 @@ export function ResultVisualize({ columns, rows }: ResultVisualizeProps) {
   if (!columns.length || !rows.length) {
     return (
       <div className={s.card}>
-        <MessageBar intent="info">
-          <MessageBarBody>No rows to visualize. Run a query that returns rows.</MessageBarBody>
-        </MessageBar>
+        <EmptyState
+          icon={<DataTrending24Regular />}
+          title="Nothing to visualize yet"
+          body="Run a query that returns rows and they will chart here — pick a chart type and the X / Y axes to explore the result set."
+        />
       </div>
     );
   }
@@ -143,6 +168,13 @@ export function ResultVisualize({ columns, rows }: ResultVisualizeProps) {
   if (numericIdx.length === 0) {
     return (
       <div className={s.card}>
+        <div className={s.header}>
+          <span className={s.headerIcon} aria-hidden><ChartMultiple20Regular /></span>
+          <div className={s.headerText}>
+            <Subtitle2>Visualization</Subtitle2>
+            <Caption1 className={s.meta}>Chart this query result without leaving Loom</Caption1>
+          </div>
+        </div>
         <MessageBar intent="warning">
           <MessageBarBody>
             No numeric column in this result, so there is nothing to plot. Add an
@@ -166,8 +198,16 @@ export function ResultVisualize({ columns, rows }: ResultVisualizeProps) {
 
   return (
     <div className={s.card}>
+      <div className={s.header}>
+        <span className={s.headerIcon} aria-hidden><ChartMultiple20Regular /></span>
+        <div className={s.headerText}>
+          <Subtitle2>Visualization</Subtitle2>
+          <Caption1 className={s.meta}>Chart this query result without leaving Loom</Caption1>
+        </div>
+      </div>
+
       <TabList selectedValue={kind} onTabSelect={(_, d) => setKind(d.value as ChartKind)} size="small">
-        {CHART_KINDS.map((c) => <Tab key={c.key} value={c.key}>{c.label}</Tab>)}
+        {CHART_KINDS.map((c) => <Tab key={c.key} value={c.key} icon={c.icon}>{c.label}</Tab>)}
       </TabList>
 
       <div className={s.controls}>
@@ -213,9 +253,9 @@ export function ResultVisualize({ columns, rows }: ResultVisualizeProps) {
         <LineAreaSvg data={data} valueLabel={columns[effectiveY]} color={seriesColor} area={kind === 'area'} />
       )}
 
-      <Text className={s.meta}>
+      <Caption1 className={s.meta}>
         {data.length} of {rows.length} rows plotted · X = {columns[xIdx]} · Y = {columns[effectiveY]}
-      </Text>
+      </Caption1>
     </div>
   );
 }

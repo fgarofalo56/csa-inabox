@@ -35,6 +35,7 @@ import {
   CheckmarkCircle20Regular, DismissCircle20Regular, Warning20Regular,
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 
 export interface MirrorTableSpec { schema: string; table: string }
 
@@ -97,15 +98,16 @@ const useStyles = makeStyles({
   tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalS },
+  sourceGrid: { marginTop: tokens.spacingVerticalS },
   card: {
     position: 'relative',
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, cursor: 'pointer',
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px',
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
     transitionProperty: 'transform, box-shadow', transitionDuration: tokens.durationFaster,
-    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8, borderColor: tokens.colorNeutralStroke1 },
+    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow16, borderColor: tokens.colorNeutralStroke1 },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   cardActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px', backgroundColor: tokens.colorBrandBackground2 },
@@ -419,7 +421,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
               <div>
                 <div className={s.stepHead}><span className={s.stepNum}>1</span><Subtitle2>Choose a source</Subtitle2></div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Each source mirrors into ADLS Bronze Delta — no Fabric capacity required.</Caption1>
-                <div className={s.grid} style={{ marginTop: tokens.spacingVerticalS }}>
+                <TileGrid minTileWidth={200} className={s.sourceGrid}>
                   {MIRROR_SOURCES.map((src) => {
                     const active = createSrc === src.id;
                     return (
@@ -434,7 +436,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                       </div>
                     );
                   })}
-                </div>
+                </TileGrid>
               </div>
 
               {srcDef.external && (
@@ -515,17 +517,17 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 )}
                 {connTest.status === 'ok' && (
                   <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}>
-                    <MessageBarBody><CheckmarkCircle20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />{connTest.msg}</MessageBarBody>
+                    <MessageBarBody><CheckmarkCircle20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />{connTest.msg}</MessageBarBody>
                   </MessageBar>
                 )}
                 {connTest.status === 'warn' && (
                   <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
-                    <MessageBarBody><Warning20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />{connTest.msg}</MessageBarBody>
+                    <MessageBarBody><Warning20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />{connTest.msg}</MessageBarBody>
                   </MessageBar>
                 )}
                 {connTest.status === 'err' && (
                   <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
-                    <MessageBarBody><DismissCircle20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />{connTest.msg}</MessageBarBody>
+                    <MessageBarBody><DismissCircle20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />{connTest.msg}</MessageBarBody>
                   </MessageBar>
                 )}
                 {isBigQuery ? (

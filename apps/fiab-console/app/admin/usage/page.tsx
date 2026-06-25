@@ -20,14 +20,19 @@
  */
 
 import { clientFetch } from '@/lib/client-fetch';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Spinner, Caption1, Body1, Subtitle2, Button, Badge,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dropdown, Option, Link as FluentLink,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular, Dismiss16Regular, Open24Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync24Regular, Open16Regular, Dismiss16Regular, Open24Regular,
+  Building24Regular, Apps24Regular, DataPie24Regular, People24Regular,
+  Edit24Regular, Pulse24Regular, DataHistogram24Regular, DataTrending24Regular,
+  type FluentIcon,
+} from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section } from '@/lib/components/ui/section';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
@@ -103,14 +108,26 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalL,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
+    backgroundColor: tokens.colorNeutralBackground1,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 120ms ease, transform 120ms ease',
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-2px)',
+    },
+  },
+  statIconRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    color: tokens.colorBrandForeground1,
   },
   statVal: {
     fontSize: tokens.fontSizeHero800,
-    lineHeight: '34px',
+    lineHeight: tokens.lineHeightHero800,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorBrandForeground1,
   },
@@ -119,6 +136,16 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground3,
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
+  },
+  /** Icon + label sub-header inside a Distribution panel (replaces bare Subtitle2). */
+  panelHead: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  panelHeadIcon: {
+    color: tokens.colorBrandForeground1,
+    flexShrink: 0,
   },
   twoCol: {
     display: 'grid',
@@ -216,7 +243,8 @@ const useStyles = makeStyles({
     width: '100%',
     height: '640px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
   },
   featureSelect: { minWidth: '180px' },
   docIcon: { fontSize: tokens.fontSizeBase300, verticalAlign: 'middle' },
@@ -227,6 +255,23 @@ const useStyles = makeStyles({
     wordBreak: 'break-word',
   },
 });
+
+type UsageStyles = ReturnType<typeof useStyles>;
+
+/** Elevated KPI tile with a leading Fluent icon, big brand value, and uppercase label. */
+function StatCard({
+  className: s, icon: Icon, value, label,
+}: { className: UsageStyles; icon: FluentIcon; value: ReactNode; label: string }) {
+  return (
+    <div className={s.statCard}>
+      <div className={s.statIconRow}>
+        <Icon />
+        <span className={s.statLabel}>{label}</span>
+      </div>
+      <div className={s.statVal}>{value}</div>
+    </div>
+  );
+}
 
 export default function UsagePage() {
   const s = useStyles();
@@ -419,31 +464,16 @@ export default function UsagePage() {
         <>
           <Section title="Tenant inventory" bare>
             <div className={s.statsRow}>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{data.totals.workspaces}</div>
-                <div className={s.statLabel}>workspaces</div>
-              </div>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{data.totals.items}</div>
-                <div className={s.statLabel}>items</div>
-              </div>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{data.totals.itemTypes}</div>
-                <div className={s.statLabel}>distinct types</div>
-              </div>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{peakDau || '—'}</div>
-                <div className={s.statLabel}>peak daily active users ({data.days}d)</div>
-              </div>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{data.totals.auditEvents30d}</div>
-                <div className={s.statLabel}>edits ({data.days}d)</div>
-              </div>
+              <StatCard className={s} icon={Building24Regular} value={data.totals.workspaces} label="workspaces" />
+              <StatCard className={s} icon={Apps24Regular} value={data.totals.items} label="items" />
+              <StatCard className={s} icon={DataPie24Regular} value={data.totals.itemTypes} label="distinct types" />
+              <StatCard className={s} icon={People24Regular} value={peakDau || '—'} label={`peak daily active users (${data.days}d)`} />
+              <StatCard className={s} icon={Edit24Regular} value={data.totals.auditEvents30d} label={`edits (${data.days}d)`} />
             </div>
           </Section>
 
           {/* Active users — Log Analytics DAU */}
-          <Section title="Active users">
+          <Section title={<span className={s.panelHead}><Pulse24Regular className={s.panelHeadIcon} />Active users</span>}>
             <div className={s.panel}>
               {!data.laConfigured ? (
                 <MessageBar intent="info">
@@ -481,7 +511,7 @@ export default function UsagePage() {
           </Section>
 
           {/* Feature adoption — Log Analytics events/users per route prefix */}
-          <Section title="Feature adoption">
+          <Section title={<span className={s.panelHead}><DataTrending24Regular className={s.panelHeadIcon} />Feature adoption</span>}>
             <div className={s.panel}>
               {!data.laConfigured ? (
                 <MessageBar intent="info">
@@ -528,7 +558,10 @@ export default function UsagePage() {
           <Section title="Distribution" bare>
             <div className={s.twoCol}>
               <div className={s.panel}>
-                <Subtitle2>Items by type</Subtitle2>
+                <span className={s.panelHead}>
+                  <DataPie24Regular className={s.panelHeadIcon} />
+                  <Subtitle2>Items by type</Subtitle2>
+                </span>
                 {data.itemsByType.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
                 {data.itemsByType.slice(0, 15).map((row) => (
                   <div key={row.type} className={s.bar}>
@@ -543,7 +576,10 @@ export default function UsagePage() {
               </div>
 
               <div className={s.panel}>
-                <Subtitle2>Items by workspace (top 20)</Subtitle2>
+                <span className={s.panelHead}>
+                  <Building24Regular className={s.panelHeadIcon} />
+                  <Subtitle2>Items by workspace (top 20)</Subtitle2>
+                </span>
                 {data.itemsByWorkspace.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
                 {data.itemsByWorkspace.map((row) => (
                   <div key={row.workspaceId} className={s.bar}>
@@ -559,7 +595,7 @@ export default function UsagePage() {
             </div>
           </Section>
 
-          <Section title={`Activity (last ${data.days} days)`}>
+          <Section title={<span className={s.panelHead}><DataHistogram24Regular className={s.panelHeadIcon} />Activity (last {data.days} days)</span>}>
             <div className={s.panel}>
               <Caption1 className={s.muted}>
                 Since {new Date(data.since).toLocaleDateString()} · {data.totals.auditEvents30d} edits

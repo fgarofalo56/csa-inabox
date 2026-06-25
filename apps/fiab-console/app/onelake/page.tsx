@@ -397,18 +397,6 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     color: tokens.colorNeutralForeground2,
   },
-  emptyBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalXXXL,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
-    color: tokens.colorNeutralForeground2,
-    textAlign: 'center',
-  },
 
   // ── right details pane ──
   details: {
@@ -1243,14 +1231,24 @@ export default function OneLakeCatalogPage() {
           {activeSection === 'explore' && items === null && <Spinner label="Loading catalog…" />}
 
           {activeSection === 'explore' && items !== null && visible.length === 0 && (
-            <div className={styles.emptyBox}>
-              <Text weight="semibold">No items match your filters.</Text>
-              <Caption1>
-                {(items ?? []).length === 0
-                  ? 'This tenant has no lakehouses, warehouses, or databases yet. Create one from any workspace.'
-                  : 'Try clearing the search, type, or workspace filter.'}
-              </Caption1>
-            </div>
+            (items ?? []).length === 0 ? (
+              <EmptyState
+                icon={<AppsList20Regular />}
+                title="No items in this tenant yet"
+                body="This tenant has no lakehouses, warehouses, or databases yet. Create one from any workspace and it will appear in the OneLake catalog."
+              />
+            ) : (
+              <EmptyState
+                icon={<FolderOpen20Regular />}
+                title="No items match your filters"
+                body="Nothing matches the current search, type, or workspace filter. Clear the filters to see every catalog item again."
+                primaryAction={{
+                  label: 'Clear filters',
+                  appearance: 'secondary',
+                  onClick: () => { setQ(''); setTypeFilter('all'); setWsFilter(null); },
+                }}
+              />
+            )
           )}
 
           {activeSection === 'explore' && items !== null && visible.length > 0 && view === 'tile' && (

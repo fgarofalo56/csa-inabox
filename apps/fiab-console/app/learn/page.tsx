@@ -33,7 +33,7 @@
 import * as React from 'react';
 import Link from 'next/link';
 import {
-  Text, Badge, Dropdown, Option, Button,
+  Text, Badge, Dropdown, Option, Button, Subtitle2, Caption1,
   TabList, Tab, type SelectTabData,
   MessageBar, MessageBarBody, Spinner,
   makeStyles, tokens,
@@ -42,9 +42,10 @@ import {
   BookOpen24Regular, Open16Regular, DocumentBulletList16Regular, ArrowDownload16Regular,
   NotebookAdd24Regular, Apps16Regular, SearchInfo24Regular,
   Grid24Regular, Notebook24Regular, Database24Regular, CompassNorthwest24Regular,
-  BookStar24Regular,
+  BookStar24Regular, FolderOpen20Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { EmptyState as SharedEmptyState } from '@/lib/components/empty-state';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -101,9 +102,15 @@ const useStyles = makeStyles({
   drop: { minWidth: '160px' },
 
   groupSection: { marginBottom: tokens.spacingVerticalXXL },
-  sectionHead: { display: 'flex', flexDirection: 'column', gap: '2px', marginBottom: tokens.spacingVerticalS },
+  sectionHead: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginBottom: tokens.spacingVerticalM },
   sectionBlurb: { color: tokens.colorNeutralForeground3, lineHeight: 1.5 },
   rowCenter: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  groupHeadIcon: {
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '32px', height: '32px', borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground2, flexShrink: 0,
+  },
+  groupHeadHint: { color: tokens.colorNeutralForeground3, marginLeft: '44px' },
 
   // ── Samples band ────────────────────────────────────────────────────────
   band: {
@@ -125,16 +132,6 @@ const useStyles = makeStyles({
 
   // ── Mobile Copilot (below content when rail is hidden) ──────────────────
   mobileCopilot: { marginTop: tokens.spacingVerticalXXL, '@media (min-width: 1101px)': { display: 'none' } },
-
-  empty: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalXXL, textAlign: 'center', color: tokens.colorNeutralForeground3,
-  },
-  emptyIcon: {
-    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: '56px', height: '56px', borderRadius: tokens.borderRadiusCircular,
-    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalXS,
-  },
 
   // ── List view (guides) ──────────────────────────────────────────────────
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
@@ -372,12 +369,7 @@ export default function LearnPage(): React.ReactElement {
               {grouped.length === 0 && <EmptyState onClear={() => { setQuery(''); setCategory('all'); }} />}
               {grouped.map(({ cat, rows }) => (
                 <section key={cat} className={s.groupSection}>
-                  <div className={s.sectionHead}>
-                    <div className={s.rowCenter}>
-                      <Text size={500} weight="semibold">{cat}</Text>
-                      <Badge appearance="tint" color="brand">{rows.length}</Badge>
-                    </div>
-                  </div>
+                  <GroupHeader cat={cat} rows={rows} />
                   <TileGrid minTileWidth={300}>
                     {rows.map((t) => <LearnTopicCard key={t.id} topic={t} />)}
                   </TileGrid>
@@ -467,12 +459,7 @@ export default function LearnPage(): React.ReactElement {
               {grouped.length === 0 && <EmptyState onClear={() => { setQuery(''); setCategory('all'); }} />}
               {grouped.map(({ cat, rows }) => (
                 <section key={cat} className={s.groupSection}>
-                  <div className={s.sectionHead}>
-                    <div className={s.rowCenter}>
-                      <Text size={500} weight="semibold">{cat}</Text>
-                      <Badge appearance="tint" color="brand">{rows.length}</Badge>
-                    </div>
-                  </div>
+                  <GroupHeader cat={cat} rows={rows} />
                   <TileGrid minTileWidth={300}>
                     {rows.map((t) => <LearnTopicCard key={t.id} topic={t} />)}
                   </TileGrid>
@@ -487,12 +474,7 @@ export default function LearnPage(): React.ReactElement {
               {filtered.length === 0 && <EmptyState onClear={() => { setQuery(''); setCategory('all'); }} />}
               {filtered.length > 0 && view === 'tile' && grouped.map(({ cat, rows }) => (
                 <section key={cat} className={s.groupSection}>
-                  <div className={s.sectionHead}>
-                    <div className={s.rowCenter}>
-                      <Text size={500} weight="semibold">{cat}</Text>
-                      <Badge appearance="tint" color="brand">{rows.length}</Badge>
-                    </div>
-                  </div>
+                  <GroupHeader cat={cat} rows={rows} />
                   <TileGrid minTileWidth={300}>
                     {rows.map((t) => <LearnTopicCard key={t.id} topic={t} />)}
                   </TileGrid>
@@ -584,15 +566,40 @@ export default function LearnPage(): React.ReactElement {
   );
 }
 
-/** Shared empty-state for a filtered section. */
-function EmptyState({ onClear }: { onClear: () => void }): React.ReactElement {
+/**
+ * GroupHeader — a category section header with a Fluent icon chip, a
+ * Subtitle2 title, the count badge, and a Caption1 hint. Icon is derived from
+ * the category's first topic visual so each group reads as a distinct surface.
+ */
+function GroupHeader({ cat, rows }: { cat: string; rows: LearnTopic[] }): React.ReactElement {
   const s = useStyles();
+  const Icon = (rows[0] && itemVisual(rows[0].visualType).icon) || FolderOpen20Regular;
   return (
-    <div className={s.empty}>
-      <span className={s.emptyIcon} aria-hidden><SearchInfo24Regular /></span>
-      <Text size={400} weight="semibold">Nothing matches your search</Text>
-      <Text size={300}>Try a different keyword or clear the filters.</Text>
-      <Button appearance="secondary" onClick={onClear}>Clear filters</Button>
+    <div className={s.sectionHead}>
+      <div className={s.rowCenter}>
+        <span className={s.groupHeadIcon} aria-hidden><Icon /></span>
+        <Subtitle2>{cat}</Subtitle2>
+        <Badge appearance="tint" color="brand">{rows.length}</Badge>
+      </div>
+      <Caption1 className={s.groupHeadHint}>
+        {rows.length} {rows.length === 1 ? 'item' : 'items'} in this category
+      </Caption1>
     </div>
+  );
+}
+
+/**
+ * Empty-state for a filtered section — delegates to the shared Web3.0
+ * EmptyState primitive (gradient illustration + icon + CTA) so every empty
+ * pane matches the rest of the site. Keeps the `onClear` call-site signature.
+ */
+function EmptyState({ onClear }: { onClear: () => void }): React.ReactElement {
+  return (
+    <SharedEmptyState
+      icon={<SearchInfo24Regular />}
+      title="Nothing matches your search"
+      body="Try a different keyword, or clear the filters to see everything in this section."
+      primaryAction={{ label: 'Clear filters', appearance: 'secondary', onClick: onClear }}
+    />
   );
 }

@@ -26,12 +26,13 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Spinner, tokens, Badge, Button, Subtitle2, Text, Tooltip,
+  Spinner, tokens, Badge, Button, Text, Tooltip,
   makeStyles,
 } from '@fluentui/react-components';
-import { ArrowDownload20Regular } from '@fluentui/react-icons';
+import { ArrowDownload20Regular, AppsAddIn24Regular, Search24Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { EmptyState } from '@/lib/components/empty-state';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
@@ -58,20 +59,26 @@ const useStyles = makeStyles({
     alignItems: 'center',
     flexWrap: 'wrap',
   },
-  empty: {
-    padding: tokens.spacingVerticalL,
-    borderRadius: tokens.borderRadiusLarge,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    color: tokens.colorNeutralForeground3,
-    fontSize: tokens.fontSizeBase200,
-    textAlign: 'center',
-    lineHeight: 1.6,
-    maxWidth: '100%',
-    overflowWrap: 'anywhere',
-    wordBreak: 'break-word',
-  },
   spinnerWrap: {
     padding: tokens.spacingVerticalM,
+  },
+  // Seed-instruction detail rendered under the EmptyState body so the
+  // <code> snippets stay monospaced + on-brand (EmptyState's body is a
+  // plain string). Tokenized so it tracks the theme + sibling surfaces.
+  emptyHint: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200,
+    lineHeight: tokens.lineHeightBase300,
+    textAlign: 'center',
+    maxWidth: '520px',
+    marginTop: tokens.spacingVerticalM,
+    marginLeft: 'auto',
+    marginRight: 'auto',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
   nameCell: {
     display: 'inline-flex',
@@ -334,19 +341,28 @@ export default function AppsPage() {
       )}
 
       {apps !== null && apps.length === 0 && (
-        <div className={styles.empty}>
-          <Subtitle2 style={{ display: 'block', marginBottom: 8 }}>No apps in this tenant yet</Subtitle2>
-          <div>
-            Run <code>scripts/csa-loom/seed-catalogs.sh</code> to seed the curated CSA apps.
+        <>
+          <EmptyState
+            icon={<AppsAddIn24Regular />}
+            title="No apps in this tenant yet"
+            body="Curated CSA apps bundle items, dashboards, and pipelines into one click. Seed the catalog to populate this page."
+          />
+          <div className={styles.emptyHint}>
+            <span>
+              Run <code>scripts/csa-loom/seed-catalogs.sh</code> to seed the curated CSA apps.
+            </span>
+            <span>First sign-in also triggers a copy from the GLOBAL seed.</span>
           </div>
-          <div style={{ marginTop: 4 }}>
-            First sign-in also triggers a copy from the GLOBAL seed.
-          </div>
-        </div>
+        </>
       )}
 
       {apps !== null && apps.length > 0 && shownCount === 0 && (
-        <div className={styles.empty}>No apps match &ldquo;{q}&rdquo;.</div>
+        <EmptyState
+          icon={<Search24Regular />}
+          title="No matching apps"
+          body={`No apps match “${q}”. Try a different name, category, or bundled item type.`}
+          primaryAction={{ label: 'Clear filter', appearance: 'secondary', onClick: () => setQ('') }}
+        />
       )}
 
       {/* Tile view: one Section card per category. */}

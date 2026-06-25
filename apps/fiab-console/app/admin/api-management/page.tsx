@@ -1,11 +1,15 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
   makeStyles, tokens, Tab, TabList, Spinner, MessageBar, MessageBarBody, MessageBarTitle,
-  Body1,
+  Body1, Subtitle2, Caption1,
 } from '@fluentui/react-components';
+import {
+  Globe24Regular, Apps24Regular, Box24Regular, Key24Regular, Tag24Regular,
+  Server24Regular, ShieldTask24Regular, PersonBoard24Regular,
+} from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ApimServicePane } from '@/lib/components/admin/apim-service-pane';
@@ -28,7 +32,35 @@ interface GateResponse {
 }
 
 const useStyles = makeStyles({
-  intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
+  // Modern lede: a Fluent icon + subtitle row over a constrained-width hint,
+  // matching the icon-headed sections on the polished Health / Scaling pages.
+  lede: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalM,
+    marginBottom: tokens.spacingVerticalL,
+  },
+  ledeIcon: {
+    flexShrink: 0,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+    fontSize: '22px',
+    boxShadow: tokens.shadow4,
+  },
+  ledeText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  ledeHint: { color: tokens.colorNeutralForeground2, lineHeight: 1.5, maxWidth: '760px' },
+  loading: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: '200px',
+  },
   gateBody: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
@@ -68,7 +100,11 @@ export default function ApiManagementPage() {
   if (gate === null) {
     return (
       <AdminShell sectionTitle="API Management">
-        <Section><Spinner label="Checking APIM configuration..." /></Section>
+        <Section>
+          <div className={styles.loading}>
+            <Spinner label="Checking APIM configuration..." />
+          </div>
+        </Section>
       </AdminShell>
     );
   }
@@ -76,10 +112,16 @@ export default function ApiManagementPage() {
   if (!gate.configured) {
     return (
       <AdminShell sectionTitle="API Management">
-        <Body1 className={styles.intro}>
-          Azure API Management is not provisioned for this deployment. To enable the marketplace and admin
-          dashboard, deploy APIM and wire the environment variables.
-        </Body1>
+        <div className={styles.lede}>
+          <span className={styles.ledeIcon}><Globe24Regular /></span>
+          <div className={styles.ledeText}>
+            <Subtitle2>Azure API Management</Subtitle2>
+            <Body1 className={styles.ledeHint}>
+              APIM is not provisioned for this deployment. To enable the marketplace and admin
+              dashboard, deploy APIM and wire the environment variables.
+            </Body1>
+          </div>
+        </div>
         <MessageBar intent="warning">
           <MessageBarTitle>APIM not configured</MessageBarTitle>
           <MessageBarBody className={styles.gateBody}>
@@ -92,21 +134,32 @@ export default function ApiManagementPage() {
 
   return (
     <AdminShell sectionTitle="API Management">
-      <Body1 className={styles.intro}>
-        Full APIM management: define APIs, organize into products, manage consumer subscriptions,
-        set global/product/API policies, and configure named values and backends for the marketplace.
-      </Body1>
-      
+      <div className={styles.lede}>
+        <span className={styles.ledeIcon}><Globe24Regular /></span>
+        <div className={styles.ledeText}>
+          <Subtitle2>Marketplace gateway administration</Subtitle2>
+          <Body1 className={styles.ledeHint}>
+            Full APIM management: define APIs, organize into products, manage consumer subscriptions,
+            set global/product/API policies, and configure named values and backends for the marketplace.
+          </Body1>
+          {gate.apimName && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Service: {gate.apimName}{gate.resourceGroup ? ` · ${gate.resourceGroup}` : ''}
+            </Caption1>
+          )}
+        </div>
+      </div>
+
       <Section>
         <TabList selectedValue={activeTab} onTabSelect={(_, d) => setActiveTab(d.value as string)}>
-          <Tab value="service">Service & SKU</Tab>
-          <Tab value="apis">APIs</Tab>
-          <Tab value="products">Products</Tab>
-          <Tab value="subscriptions">Subscriptions</Tab>
-          <Tab value="named-values">Named values</Tab>
-          <Tab value="backends">Backends</Tab>
-          <Tab value="policies">Policies</Tab>
-          <Tab value="developer-portal">Developer portal</Tab>
+          <Tab value="service" icon={<Server24Regular />}>Service &amp; SKU</Tab>
+          <Tab value="apis" icon={<Apps24Regular />}>APIs</Tab>
+          <Tab value="products" icon={<Box24Regular />}>Products</Tab>
+          <Tab value="subscriptions" icon={<Key24Regular />}>Subscriptions</Tab>
+          <Tab value="named-values" icon={<Tag24Regular />}>Named values</Tab>
+          <Tab value="backends" icon={<Server24Regular />}>Backends</Tab>
+          <Tab value="policies" icon={<ShieldTask24Regular />}>Policies</Tab>
+          <Tab value="developer-portal" icon={<PersonBoard24Regular />}>Developer portal</Tab>
         </TabList>
       </Section>
 

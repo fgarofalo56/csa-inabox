@@ -22,12 +22,16 @@ import {
   TabList, Tab, Dropdown, Option, Field,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { AddRegular, ShieldKeyhole24Regular, PeopleTeam24Regular, ShieldTask24Regular, Organization24Regular } from '@fluentui/react-icons';
+import {
+  AddRegular, ShieldKeyhole24Regular, PeopleTeam24Regular, ShieldTask24Regular,
+  Organization24Regular, KeyMultiple24Regular, CursorClick24Regular,
+} from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { CapabilityTree } from '@/lib/components/feature-rbac/capability-tree';
 import { GrantRow } from '@/lib/components/feature-rbac/grant-row';
 import { GrantDialog } from '@/lib/components/feature-rbac/grant-dialog';
 import { Section } from '@/lib/components/ui/section';
+import { EmptyState } from '@/lib/components/empty-state';
 import { WorkspaceAccessPane } from '@/lib/panes/workspace-access';
 import { DomainAccessPane } from '@/lib/panes/domain-access';
 import type { Capability } from '@/lib/auth/feature-catalog';
@@ -51,8 +55,21 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     overflow: 'hidden',
     minWidth: 0,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
-  detail: { padding: tokens.spacingVerticalL, overflowY: 'auto', minWidth: 0 },
+  detail: {
+    padding: tokens.spacingVerticalL,
+    overflowY: 'auto',
+    minWidth: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
   header: {
     display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
     gap: tokens.spacingHorizontalM,
@@ -62,7 +79,6 @@ const useStyles = makeStyles({
   },
   titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   grants: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalM },
-  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase300 },
   wsPicker: { maxWidth: '480px', marginBottom: tokens.spacingVerticalL },
   hidden: { display: 'none' },
   fieldNote: { marginTop: tokens.spacingVerticalXS },
@@ -73,7 +89,6 @@ const useStyles = makeStyles({
     fontFamily: 'monospace', color: tokens.colorNeutralForeground3,
     overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
-  noteStack: { marginTop: tokens.spacingVerticalS },
 });
 
 export default function PermissionsPage() {
@@ -213,12 +228,12 @@ function FeaturePermissionsTab({ styles }: { styles: Styles }) {
                 <Subtitle2>Current grants ({grantsForSelected.length})</Subtitle2>
                 <div className={styles.grants}>
                   {grantsForSelected.length === 0 && (
-                    <div className={styles.empty}>
-                      <Body1>No grants yet for this capability.</Body1>
-                      <div className={styles.noteStack}>
-                        Tenant admins always have full access; add explicit grants to delegate.
-                      </div>
-                    </div>
+                    <EmptyState
+                      icon={<KeyMultiple24Regular />}
+                      title="No grants yet for this capability"
+                      body="Tenant admins always have full access. Add an explicit grant to delegate this capability to other users or groups."
+                      primaryAction={{ label: 'Add grant', onClick: () => setDialogOpen(true) }}
+                    />
                   )}
                   {grantsForSelected.map((g) => (
                     <GrantRow key={g.id} grant={g} onRemoved={load} />
@@ -226,7 +241,11 @@ function FeaturePermissionsTab({ styles }: { styles: Styles }) {
                 </div>
               </>
             ) : (
-              <div className={styles.empty}>Select a capability from the tree.</div>
+              <EmptyState
+                icon={<CursorClick24Regular />}
+                title="Select a capability"
+                body="Pick a capability from the tree on the left to review and delegate its grants."
+              />
             )}
           </div>
         </div>
@@ -293,7 +312,11 @@ function WorkspaceAccessTab({ styles, active }: { styles: Styles; active: boolea
       {workspaces === null && <Spinner size="small" label="Loading workspaces…" />}
 
       {workspaces && workspaces.length === 0 && !error && (
-        <div className={styles.empty}>No workspaces found in this tenant.</div>
+        <EmptyState
+          icon={<PeopleTeam24Regular />}
+          title="No workspaces found"
+          body="This tenant has no workspaces yet. Create a workspace first, then return here to manage its members and roles."
+        />
       )}
 
       {workspaces && workspaces.length > 0 && (
@@ -315,7 +338,11 @@ function WorkspaceAccessTab({ styles, active }: { styles: Styles; active: boolea
             {selectedWs ? (
               <WorkspaceAccessPane key={selectedWs} workspaceId={selectedWs} workspaceName={selectedName} />
             ) : (
-              <div className={styles.empty}>Select a workspace to manage its access.</div>
+              <EmptyState
+                icon={<CursorClick24Regular />}
+                title="Select a workspace"
+                body="Choose a workspace from the picker above to manage its members and their roles."
+              />
             )}
           </Section>
         </>

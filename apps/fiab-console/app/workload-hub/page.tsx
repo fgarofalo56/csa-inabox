@@ -26,11 +26,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Spinner, makeStyles, tokens, Badge, Button, Body1, Text, Tooltip,
+  Spinner, makeStyles, tokens, Badge, Button, Body1, Text, Tooltip, Caption1,
 } from '@fluentui/react-components';
-import { ArrowRight20Regular } from '@fluentui/react-icons';
+import {
+  ArrowRight20Regular, Star20Filled, AppsAddIn20Filled,
+} from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { EmptyState } from '@/lib/components/empty-state';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { clientFetch } from '@/lib/client-fetch';
@@ -102,7 +105,7 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow4,
   },
   heroStatVal: {
-    fontSize: '32px', fontWeight: 700,
+    fontSize: tokens.fontSizeHero700, fontWeight: 700,
     color: tokens.colorBrandForeground1, lineHeight: 1.1,
   },
   heroStatLabel: {
@@ -123,14 +126,24 @@ const useStyles = makeStyles({
   spinnerWrap: { padding: tokens.spacingVerticalM },
   // Name-cell list rendering: static layout extracted; chip tint + icon colour
   // stay inline (data-driven), per item-tile.tsx:194-200.
-  nameCell: { display: 'inline-flex', alignItems: 'center', gap: '10px', minWidth: 0 },
+  nameCell: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   nameChip: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium, flexShrink: 0,
   },
   nameChipIcon: { width: '18px', height: '18px' },
   muted2: { color: tokens.colorNeutralForeground2 },
-  muted3: { color: tokens.colorNeutralForeground3 },
+  // Section header: icon + Title3 + Caption1 hint — matches the home page
+  // reference look (app/page.tsx sectionHeading / sectionIcon).
+  sectionHead: {
+    display: 'flex', alignItems: 'center',
+    gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+  },
+  sectionIcon: {
+    color: tokens.colorBrandForeground1,
+    display: 'flex', alignItems: 'center',
+  },
+  sectionHint: { color: tokens.colorNeutralForeground3 },
 });
 
 export default function WorkloadHubPage() {
@@ -291,10 +304,20 @@ export default function WorkloadHubPage() {
   function collection(list: HubWorkload[], total: number, label: string) {
     if (view === 'tile') {
       if (list.length === 0) {
-        return (
-          <Text className={s.muted3}>
-            {total === 0 ? `No ${label} available.` : `No ${label} match "${q}".`}
-          </Text>
+        return total === 0 ? (
+          <EmptyState
+            icon={<AppsAddIn20Filled />}
+            title={`No ${label} available`}
+            body={`Optional CSA accelerators stay opt-in until you enable them. Browse the full workload catalog to add ${label} to this tenant.`}
+            primaryAction={{ label: 'Browse all workloads', href: '/workloads' }}
+          />
+        ) : (
+          <EmptyState
+            icon={<AppsAddIn20Filled />}
+            title={`No ${label} match "${q}"`}
+            body={`No ${label} match your filter. Clear the search to see every workload.`}
+            primaryAction={{ label: 'Clear filter', onClick: () => setQ('') }}
+          />
         );
       }
       return tileGrid(list);
@@ -367,13 +390,33 @@ export default function WorkloadHubPage() {
       )}
 
       {!loading && (
-        <Section title="My workloads">
+        <Section
+          title={
+            <span className={s.sectionHead}>
+              <span className={s.sectionIcon} aria-hidden><Star20Filled /></span>
+              My workloads
+              <Caption1 className={s.sectionHint}>
+                Core workloads plus the accelerators enabled in this tenant
+              </Caption1>
+            </span>
+          }
+        >
           {collection(mine, totals.mine, 'workloads')}
         </Section>
       )}
 
       {!loading && totals.more > 0 && (
-        <Section title="More workloads">
+        <Section
+          title={
+            <span className={s.sectionHead}>
+              <span className={s.sectionIcon} aria-hidden><AppsAddIn20Filled /></span>
+              More workloads
+              <Caption1 className={s.sectionHint}>
+                Optional CSA accelerators you can enable
+              </Caption1>
+            </span>
+          }
+        >
           {collection(more, totals.more, 'add-ons')}
           <div className={s.ctaCard}>
             <div className={s.ctaText}>

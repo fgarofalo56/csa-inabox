@@ -4,9 +4,12 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Button, Field, Dropdown, Option, Textarea, MessageBar, MessageBarTitle,
-  MessageBarBody, Spinner, Badge, makeStyles, tokens,
+  MessageBarBody, Spinner, Skeleton, SkeletonItem, Badge, Caption1, Subtitle2,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
-import { KeyRegular } from '@fluentui/react-icons';
+import {
+  KeyRegular, CheckmarkCircleFilled, ShieldKeyholeRegular,
+} from '@fluentui/react-icons';
 import type { AccessRequest } from '@/lib/types/access-request';
 import type { PermittedPurpose } from '@/app/api/data-products/[id]/policies/route';
 
@@ -22,6 +25,70 @@ const useStyles = makeStyles({
   surface: { maxWidth: '520px' },
   field: { marginBottom: tokens.spacingVerticalM },
   receipt: { marginTop: tokens.spacingVerticalS },
+  // Web3.0 dialog header — Fluent icon chip + title + caption
+  titleRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+  },
+  titleIcon: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '36px',
+    height: '36px',
+    flexShrink: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2}, ${tokens.colorBrandBackground})`,
+    color: tokens.colorNeutralForegroundOnBrand,
+    fontSize: '20px',
+    boxShadow: tokens.shadow4,
+  },
+  titleText: { display: 'flex', flexDirection: 'column', minWidth: 0, gap: tokens.spacingVerticalXXS },
+  titleSub: { color: tokens.colorNeutralForeground3 },
+  // Skeleton loading block that mirrors the form shape
+  loadingBlock: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  skelLabel: { width: '40%' },
+  skelDropdown: { width: '100%' },
+  skelTextarea: { width: '100%' },
+  // Elevated success-receipt card
+  receiptCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalL,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorPaletteGreenBorder1}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow16,
+  },
+  receiptHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    color: tokens.colorPaletteGreenForeground1,
+  },
+  receiptHeaderIcon: { fontSize: '22px' },
+  receiptRow: {
+    display: 'flex',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: tokens.spacingHorizontalS,
+    color: tokens.colorNeutralForeground2,
+  },
+  receiptCode: {
+    fontFamily: tokens.fontFamilyMonospace,
+    fontSize: tokens.fontSizeBase200,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground1,
+  },
+  receiptHint: { color: tokens.colorNeutralForeground3 },
 });
 
 /**
@@ -98,24 +165,45 @@ export function RequestAccessDialog({
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
       <DialogSurface className={styles.surface}>
         <DialogBody>
-          <DialogTitle>Request access — {dataProductName}</DialogTitle>
+          <DialogTitle>
+            <div className={styles.titleRow}>
+              <span className={styles.titleIcon} aria-hidden><ShieldKeyholeRegular /></span>
+              <span className={styles.titleText}>
+                <Subtitle2>Request access</Subtitle2>
+                <Caption1 className={styles.titleSub}>{dataProductName}</Caption1>
+              </span>
+            </div>
+          </DialogTitle>
           <DialogContent>
             {receipt ? (
-              <MessageBar intent="success" className={styles.receipt}>
-                <MessageBarBody>
-                  <MessageBarTitle>Request submitted</MessageBarTitle>
-                  Purpose: <strong>{receipt.purposeName}</strong> · Status:{' '}
-                  <Badge appearance="tint" color="warning">pending</Badge>
-                  <br />
-                  Request ID: <code>{receipt.id}</code>
-                  <br />
+              <div className={styles.receiptCard} role="status">
+                <div className={styles.receiptHeader}>
+                  <CheckmarkCircleFilled className={styles.receiptHeaderIcon} aria-hidden />
+                  <Subtitle2>Request submitted</Subtitle2>
+                </div>
+                <div className={styles.receiptRow}>
+                  Purpose:&nbsp;<strong>{receipt.purposeName}</strong>
+                  <span aria-hidden>·</span>
+                  Status:&nbsp;<Badge appearance="tint" color="warning">pending</Badge>
+                </div>
+                <div className={styles.receiptRow}>
+                  Request ID:&nbsp;<span className={styles.receiptCode}>{receipt.id}</span>
+                </div>
+                <Caption1 className={styles.receiptHint}>
                   The owner reviews it in their approver inbox; you can track it
                   under <strong>My data access</strong>.
-                </MessageBarBody>
-              </MessageBar>
+                </Caption1>
+              </div>
             ) : (
               <>
-                {loadingPolicies && <Spinner size="small" label="Loading permitted purposes…" />}
+                {loadingPolicies && (
+                  <Skeleton aria-label="Loading permitted purposes" className={styles.loadingBlock}>
+                    <SkeletonItem size={16} className={styles.skelLabel} />
+                    <SkeletonItem size={32} className={styles.skelDropdown} />
+                    <SkeletonItem size={16} className={styles.skelLabel} />
+                    <SkeletonItem size={72} className={styles.skelTextarea} />
+                  </Skeleton>
+                )}
                 {noPolicies && !error && (
                   <MessageBar intent="warning">
                     <MessageBarBody>

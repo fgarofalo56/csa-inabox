@@ -9,7 +9,10 @@ import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Open16Regular, Dismiss24Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
+import {
+  Open16Regular, Dismiss24Regular, ArrowClockwise16Regular,
+  Server20Regular, CloudCube20Regular, Money20Regular,
+} from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -115,15 +118,34 @@ const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
   stats: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: tokens.spacingHorizontalM,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+    gap: tokens.spacingHorizontalL,
   },
   stat: {
-    padding: tokens.spacingVerticalM,
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalL,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
   },
+  statIcon: {
+    flexShrink: 0,
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+  },
+  statBody: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   statLabel: {
     fontSize: tokens.fontSizeBase100, textTransform: 'uppercase', letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3, fontWeight: 600,
@@ -142,9 +164,20 @@ const useStyles = makeStyles({
   dim: { color: tokens.colorNeutralForeground3 },
   totalBar: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
-    marginTop: tokens.spacingVerticalM, padding: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalM, padding: tokens.spacingVerticalL,
     borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+  },
+  totalIcon: {
+    flexShrink: 0,
+    width: '36px',
+    height: '36px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
   },
   totalVal: { fontSize: tokens.fontSizeBase500, fontWeight: 700, fontVariantNumeric: 'tabular-nums' },
   detailMeta: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, marginBottom: tokens.spacingVerticalL, fontSize: tokens.fontSizeBase300 },
@@ -550,13 +583,19 @@ export default function CapacityPage() {
           <Section title="Inventory summary">
             <div className={styles.stats}>
               <div className={styles.stat}>
-                <div className={styles.statLabel}>Total resources</div>
-                <div className={styles.statValue}>{data.totalResources}</div>
+                <span className={styles.statIcon} aria-hidden><Server20Regular /></span>
+                <div className={styles.statBody}>
+                  <div className={styles.statLabel}>Total resources</div>
+                  <div className={styles.statValue}>{data.totalResources}</div>
+                </div>
               </div>
               {Object.entries(data.byProvider || {}).slice(0, 5).map(([p, n]) => (
                 <div className={styles.stat} key={p}>
-                  <div className={styles.statLabel}>{p}</div>
-                  <div className={styles.statValue}>{n}</div>
+                  <span className={styles.statIcon} aria-hidden><CloudCube20Regular /></span>
+                  <div className={styles.statBody}>
+                    <div className={styles.statLabel}>{p}</div>
+                    <div className={styles.statValue}>{n}</div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -625,6 +664,7 @@ export default function CapacityPage() {
               ariaLabel="Azure resources"
             />
             <div className={styles.totalBar}>
+              <span className={styles.totalIcon} aria-hidden><Money20Regular /></span>
               <Text className={styles.statLabel}>Estimated month-to-date cost (loaded rows)</Text>
               <span className={styles.totalVal}>{fmtCurrency(costSum, currencyRef.current)}</span>
               <Caption1 className={a.muted}>

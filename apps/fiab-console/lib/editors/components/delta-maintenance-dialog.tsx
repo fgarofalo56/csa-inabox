@@ -20,7 +20,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, Badge,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Wrench20Regular } from '@fluentui/react-icons';
+import { Wrench20Regular, PlayCircle16Regular } from '@fluentui/react-icons';
 import { useComputes } from '@/lib/components/compute-picker';
 import { ALLOWED_RETENTION_HOURS } from '@/lib/azure/delta-maintenance';
 
@@ -34,8 +34,26 @@ const RETENTION_LABELS: Record<number, string> = {
 
 const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '440px' },
+  titleIcon: { verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS, color: tokens.colorBrandForeground1 },
   hint: { color: tokens.colorNeutralForeground3 },
-  ops: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
+  // Elevated "Will run" preview card — reads like the polished load/mirror wizard summaries.
+  preview: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground3,
+    boxShadow: tokens.shadow4,
+  },
+  previewHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    color: tokens.colorNeutralForeground2,
+  },
+  ops: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  monitorLink: { color: 'inherit', fontWeight: tokens.fontWeightSemibold },
   vacuumRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 });
 
@@ -115,7 +133,7 @@ export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableNam
       <DialogSurface>
         <DialogBody>
           <DialogTitle>
-            <Wrench20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />
+            <Wrench20Regular className={s.titleIcon} />
             Maintain table — {tableName}
           </DialogTitle>
           <DialogContent>
@@ -210,8 +228,11 @@ export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableNam
               </Field>
 
               {ops.length > 0 && (
-                <div>
-                  <Caption1 className={s.hint}>Will run:</Caption1>
+                <div className={s.preview}>
+                  <div className={s.previewHeader}>
+                    <PlayCircle16Regular />
+                    <Caption1>Will run on Synapse Spark</Caption1>
+                  </div>
                   <div className={s.ops}>
                     {ops.map((op) => <Badge key={op} appearance="outline" color="brand">{op}</Badge>)}
                   </div>
@@ -224,7 +245,7 @@ export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableNam
                     <MessageBarTitle>Maintenance job submitted</MessageBarTitle>
                     Spark session {result.sessionId} on pool <strong>{result.pool}</strong>
                     {result.sessionState ? ` (${result.sessionState})` : ''}. Operations: {result.ops?.join(', ')}.{' '}
-                    <a href="/monitor?tab=maintenance" style={{ color: 'inherit' }}>View in Monitor →</a>
+                    <a href="/monitor?tab=maintenance" className={s.monitorLink}>View in Monitor →</a>
                   </MessageBarBody>
                 </MessageBar>
               )}

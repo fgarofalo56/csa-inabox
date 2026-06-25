@@ -22,7 +22,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Label, Tooltip,
+  Subtitle2, Caption1, Badge, Button, Spinner, Label, Tooltip,
   Dropdown, Option, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens, Text,
 } from '@fluentui/react-components';
@@ -30,7 +30,9 @@ import {
   ChartMultiple20Regular, ArrowClockwise20Regular, DataBarVertical20Regular,
   Copy20Regular, DocumentText20Regular, Timer20Regular, TopSpeed20Regular,
   Clock20Regular, CheckmarkCircle20Regular, DataTrending20Regular,
+  DataBarVertical24Regular, DataPie24Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 
 // ── Types mirror the BFF response shapes (sql-objects-client) ──
 interface QsStatus {
@@ -94,9 +96,10 @@ const useStyles = makeStyles({
   leftCol: { flex: '1 1 460px', minWidth: '380px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   rightCol: {
     flex: '1 1 420px', minWidth: '360px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
-    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
   },
   barRow: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, cursor: 'pointer',
@@ -124,11 +127,25 @@ const useStyles = makeStyles({
   },
   metricChips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   chip: {
-    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
-    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3, minWidth: '96px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground1, minWidth: '96px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, boxShadow: tokens.shadow2,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow4 },
   },
   detailsSummary: { cursor: 'pointer', fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 },
+  sectionHeader: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  selectedHeader: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  labelRow: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    marginBottom: tokens.spacingVerticalXS,
+  },
+  planMeta: {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalXS,
+  },
+  toolbarSplit: { justifyContent: 'space-between' },
 });
 
 function fmtMetric(row: TopQueryRow, metric: Metric): number {
@@ -275,7 +292,7 @@ export function SqlPerformanceDashboard({ id, server, database }: SqlPerformance
   return (
     <div className={s.root}>
       {/* Status badge + intro */}
-      <div className={s.toolbar} style={{ justifyContent: 'space-between' }}>
+      <div className={`${s.toolbar} ${s.toolbarSplit}`}>
         <div className={s.metricChips}>
           <Badge appearance="filled" color="brand" icon={<ChartMultiple20Regular />}>
             Query Performance Insight · sys.query_store_*
@@ -377,15 +394,25 @@ export function SqlPerformanceDashboard({ id, server, database }: SqlPerformance
       {/* Split: bar chart (left) + detail pane (right) */}
       <div className={s.split}>
         <div className={s.leftCol}>
-          <Subtitle2>
-            Top {rows.length} queries by {METRICS.find((m) => m.key === metric)!.label.toLowerCase()}
-          </Subtitle2>
+          <div className={s.sectionHeader}>
+            <Subtitle2 className={s.sectionTitle}>
+              <DataBarVertical24Regular />
+              Top {rows.length} queries by {METRICS.find((m) => m.key === metric)!.label.toLowerCase()}
+            </Subtitle2>
+            <Caption1>Ranked from <code>sys.query_store_runtime_stats</code> over the selected window — click a bar for detail.</Caption1>
+          </div>
+          {topLoading && rows.length === 0 && (
+            <Spinner size="tiny" label="Querying Query Store…" labelPosition="after" />
+          )}
           {!topLoading && rows.length === 0 && (
-            <Body1 className={s.empty}>
-              No queries captured in this window. {collecting
-                ? 'Run some workload against the database, then Refresh.'
-                : 'Enable Query Store above to begin capturing.'}
-            </Body1>
+            <EmptyState
+              icon={<DataBarVertical24Regular />}
+              title="No queries captured in this window"
+              body={collecting
+                ? 'Query Store is collecting but no runtime statistics fall in the selected time range. Run some workload against the database, widen the time range, then refresh.'
+                : 'Query Store is not collecting yet. Enable it above to begin capturing query runtime statistics.'}
+              primaryAction={{ label: 'Refresh', onClick: () => { loadStatus(); loadTop(); }, appearance: 'outline' }}
+            />
           )}
           {rows.map((row) => {
             const v = fmtMetric(row, metric);
@@ -415,11 +442,15 @@ export function SqlPerformanceDashboard({ id, server, database }: SqlPerformance
 
         <div className={s.rightCol}>
           {!selected ? (
-            <Body1 className={s.empty}>Select a query on the left to see its text, runtime-stats time series, and execution plan.</Body1>
+            <EmptyState
+              icon={<DataPie24Regular />}
+              title="Select a query for detail"
+              body="Pick a query on the left to see its text, aggregate metrics, runtime-stats time series, and execution plan."
+            />
           ) : (
             <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <Subtitle2><DocumentText20Regular style={{ verticalAlign: 'middle' }} /> Query #{selected.queryId}</Subtitle2>
+              <div className={s.selectedHeader}>
+                <Subtitle2 className={s.sectionTitle}><DocumentText20Regular /> Query #{selected.queryId}</Subtitle2>
                 {selected.lastExecutionTime && (
                   <Caption1>last run {new Date(selected.lastExecutionTime).toLocaleString()}</Caption1>
                 )}
@@ -435,7 +466,7 @@ export function SqlPerformanceDashboard({ id, server, database }: SqlPerformance
 
               {/* Query text */}
               <div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.spacingVerticalXS }}>
+                <div className={s.labelRow}>
                   <Label size="small"><DocumentText20Regular style={{ verticalAlign: 'middle' }} /> Query text</Label>
                   <Tooltip content="Copy query text" relationship="label">
                     <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy query text"
@@ -462,7 +493,7 @@ export function SqlPerformanceDashboard({ id, server, database }: SqlPerformance
                   <Spinner size="tiny" label="Loading plan…" labelPosition="after" />
                 ) : plan?.queryPlanXml ? (
                   <>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', margin: `${tokens.spacingVerticalXS} 0` }}>
+                    <div className={s.planMeta}>
                       <Caption1>plan #{plan.planId}{plan.lastCompileTime && ` · compiled ${new Date(plan.lastCompileTime).toLocaleString()}`}</Caption1>
                       <Tooltip content="Copy plan XML" relationship="label">
                         <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy plan XML"

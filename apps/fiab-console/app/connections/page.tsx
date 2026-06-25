@@ -14,7 +14,7 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Title2, Body1, Caption1, Badge, Button, Spinner, MessageBar, MessageBarBody,
+  Caption1, Badge, Button, Spinner, MessageBar, MessageBarBody,
   MessageBarTitle, Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -22,6 +22,9 @@ import {
   PlugConnected24Regular, Add20Regular, Delete20Regular, Key16Regular, ShieldKeyhole16Regular,
   MoreHorizontal20Regular, CloudDatabase20Regular,
 } from '@fluentui/react-icons';
+import { PageShell } from '@/lib/components/page-shell';
+import { Section } from '@/lib/components/ui/section';
+import { EmptyState } from '@/lib/components/empty-state';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
@@ -33,14 +36,23 @@ import { AddExistingConnectionWizard } from '@/lib/components/connections/add-ex
 const LS_VIEW = 'loom.connections.viewMode.v1';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, padding: tokens.spacingVerticalXXL, maxWidth: '1100px', margin: '0 auto', width: '100%' },
-  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
-  headIcon: { color: tokens.colorBrandForeground1 },
-  intro: { color: tokens.colorNeutralForeground2, maxWidth: '780px' },
-  bar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
-  toggleSlot: { marginLeft: 'auto' },
+  loadingBox: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: tokens.spacingVerticalXXXL,
+    minHeight: '200px',
+  },
   authLine: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   tileFooter: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  hostCode: {
+    fontSize: tokens.fontSizeBase100,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    maxWidth: '100%',
+    display: 'inline-block',
+  },
+  typeIcon: { fontSize: tokens.fontSizeBase400 },
 });
 
 const TYPE_LABEL: Record<string, string> = {
@@ -119,7 +131,7 @@ export default function ConnectionsPage() {
         const TypeIcon = itemVisual(CONN_TILE_TYPE[c.type] ?? c.type).icon;
         return (
           <span className={s.authLine}>
-            <TypeIcon style={{ fontSize: 16 }} />
+            <TypeIcon className={s.typeIcon} />
             <Badge appearance="tint" color="brand" size="small">{TYPE_LABEL[c.type] || c.type}</Badge>
           </span>
         );
@@ -135,7 +147,7 @@ export default function ConnectionsPage() {
         </span>
       ),
     },
-    { key: 'host', label: 'Host', sortable: true, filterable: true, getValue: (c) => c.host || '—', render: (c) => <code style={{ fontSize: 11, overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', display: 'inline-block' }}>{c.host || '—'}</code> },
+    { key: 'host', label: 'Host', sortable: true, filterable: true, getValue: (c) => c.host || '—', render: (c) => <code className={s.hostCode}>{c.host || '—'}</code> },
     { key: 'database', label: 'Database', sortable: true, filterable: true, getValue: (c) => c.database || '—', render: (c) => c.database || '—' },
     {
       key: 'actions', label: '', sortable: false, filterable: false, width: 90,
@@ -146,27 +158,16 @@ export default function ConnectionsPage() {
   const hasRows = !!conns && conns.length > 0;
 
   return (
-    <div className={s.root}>
-      <div className={s.header}>
-        <PlugConnected24Regular className={s.headIcon} />
-        <Title2>Connections</Title2>
-      </div>
-      <Body1 className={s.intro}>
-        Reusable, Key Vault-backed connections to your data sources. Enter credentials once — the secret is
-        stored in Key Vault (only a reference is kept) and reused by mirroring, ADF / Synapse linked services,
-        and datasets, so you never paste a password into item config.
-      </Body1>
-
-      <div className={s.bar}>
-        <Button appearance="primary" icon={<Add20Regular />} onClick={() => setBuilderOpen(true)}>New connection</Button>
-        <Button appearance="secondary" icon={<CloudDatabase20Regular />} onClick={() => setAddExistingOpen(true)}>Add existing</Button>
-        {hasRows && (
-          <span className={s.toggleSlot}>
-            <ViewToggle value={view} onChange={setView} ariaLabel="Connection view" />
-          </span>
-        )}
-      </div>
-
+    <PageShell
+      title="Connections"
+      subtitle="Reusable, Key Vault-backed connections to your data sources — credentials entered once, reused by mirroring, ADF / Synapse linked services, and datasets."
+      actions={
+        <>
+          <Button appearance="primary" icon={<Add20Regular />} onClick={() => setBuilderOpen(true)}>New connection</Button>
+          <Button appearance="secondary" icon={<CloudDatabase20Regular />} onClick={() => setAddExistingOpen(true)}>Add existing</Button>
+        </>
+      }
+    >
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>
@@ -176,51 +177,69 @@ export default function ConnectionsPage() {
         </MessageBar>
       )}
 
-      {conns == null ? (
-        <Spinner label="Loading connections…" />
-      ) : view === 'tile' && hasRows ? (
-        <TileGrid>
-          {conns.map((c) => (
-            <ItemTile
-              key={c.id}
-              type={CONN_TILE_TYPE[c.type] ?? c.type}
-              title={c.name}
-              subtitle={TYPE_LABEL[c.type] || c.type}
-              meta={c.host || '—'}
-              badge={c.hasSecret ? <Badge appearance="outline" size="small" color="success">Key Vault</Badge> : undefined}
-              overflowMenu={
-                <Menu>
-                  <MenuTrigger disableButtonEnhancement>
-                    <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label={`Actions for ${c.name}`} />
-                  </MenuTrigger>
-                  <MenuPopover>
-                    <MenuList>
-                      <MenuItem icon={<Delete20Regular />} disabled={busy} onClick={() => remove(c.id, c.name)}>Delete</MenuItem>
-                    </MenuList>
-                  </MenuPopover>
-                </Menu>
-              }
-              footer={
-                <span className={s.tileFooter}>
-                  {c.hasSecret ? <Key16Regular /> : <ShieldKeyhole16Regular />}
-                  <Caption1>{METHOD_LABEL[c.authMethod] || c.authMethod}</Caption1>
-                  {c.database && <Badge appearance="outline" size="small">{c.database}</Badge>}
-                </span>
-              }
-            />
-          ))}
-        </TileGrid>
-      ) : (
-        <LoomDataTable<ConnectionView>
-          columns={columns}
-          rows={conns}
-          getRowId={(c) => c.id}
-          empty="No connections yet. Click “New connection” to create a Key Vault-backed connection."
-        />
-      )}
+      <Section
+        title="Data source connections"
+        actions={
+          hasRows ? <ViewToggle value={view} onChange={setView} ariaLabel="Connection view" /> : undefined
+        }
+        bare={view === 'tile' && hasRows}
+      >
+        {conns == null ? (
+          <div className={s.loadingBox}>
+            <Spinner label="Loading connections…" />
+          </div>
+        ) : !hasRows ? (
+          <EmptyState
+            icon={<PlugConnected24Regular />}
+            title="No connections yet"
+            body="Create a Key Vault-backed connection to your data sources. Enter credentials once — only a secret reference is stored — then reuse it across mirroring, ADF / Synapse linked services, and datasets."
+            primaryAction={{ label: 'New connection', onClick: () => setBuilderOpen(true) }}
+            secondaryAction={{ label: 'Add existing', appearance: 'secondary', onClick: () => setAddExistingOpen(true) }}
+          />
+        ) : view === 'tile' ? (
+          <TileGrid>
+            {conns.map((c) => (
+              <ItemTile
+                key={c.id}
+                type={CONN_TILE_TYPE[c.type] ?? c.type}
+                title={c.name}
+                subtitle={TYPE_LABEL[c.type] || c.type}
+                meta={c.host || '—'}
+                badge={c.hasSecret ? <Badge appearance="outline" size="small" color="success">Key Vault</Badge> : undefined}
+                overflowMenu={
+                  <Menu>
+                    <MenuTrigger disableButtonEnhancement>
+                      <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label={`Actions for ${c.name}`} />
+                    </MenuTrigger>
+                    <MenuPopover>
+                      <MenuList>
+                        <MenuItem icon={<Delete20Regular />} disabled={busy} onClick={() => remove(c.id, c.name)}>Delete</MenuItem>
+                      </MenuList>
+                    </MenuPopover>
+                  </Menu>
+                }
+                footer={
+                  <span className={s.tileFooter}>
+                    {c.hasSecret ? <Key16Regular /> : <ShieldKeyhole16Regular />}
+                    <Caption1>{METHOD_LABEL[c.authMethod] || c.authMethod}</Caption1>
+                    {c.database && <Badge appearance="outline" size="small">{c.database}</Badge>}
+                  </span>
+                }
+              />
+            ))}
+          </TileGrid>
+        ) : (
+          <LoomDataTable<ConnectionView>
+            columns={columns}
+            rows={conns}
+            getRowId={(c) => c.id}
+            empty="No connections yet. Click “New connection” to create a Key Vault-backed connection."
+          />
+        )}
+      </Section>
 
       <ConnectionBuilder open={builderOpen} onClose={() => setBuilderOpen(false)} onCreated={() => void load()} />
       <AddExistingConnectionWizard open={addExistingOpen} onClose={() => setAddExistingOpen(false)} onImported={() => void load()} />
-    </div>
+    </PageShell>
   );
 }
