@@ -44,6 +44,7 @@ import {
   Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { OpenInPbiDesktopButton } from './components/open-in-pbi-desktop-button';
 import { EmptyState } from '@/lib/components/empty-state';
 import { DeltaMaintenanceDialog } from './components/delta-maintenance-dialog';
 import { TierDialog, type BlobAccessTier } from '@/lib/components/onelake/tier-dialog';
@@ -3595,6 +3596,7 @@ export function LakehouseEditor({ item, id }: Props) {
               <>
                 <div className={s.toolbar}>
                   <Body1>OPENROWSET via Synapse Serverless</Body1>
+                  <OpenInPbiDesktopButton type="lakehouse" id={id} name={item?.displayName} />
                   <Button
                     appearance="primary"
                     icon={<Play20Regular />}

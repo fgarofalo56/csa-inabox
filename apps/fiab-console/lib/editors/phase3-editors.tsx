@@ -76,6 +76,7 @@ import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 import { BulkDescribeAction } from '@/lib/components/catalog/bulk-describe-action';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { OpenInPbiDesktopButton } from './components/open-in-pbi-desktop-button';
 import { ReportDesigner } from './report-designer';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
 import { EmptyState } from '@/lib/components/empty-state';
@@ -4474,6 +4475,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </Badge>
             )}
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
+            <OpenInPbiDesktopButton type="kql-database" id={id} name={info?.database} />
             {info?.isFollower && (
               <Button appearance="outline" icon={<Delete20Regular />} disabled={detaching} onClick={detachFollower}>
                 {detaching ? 'Detaching…' : 'Detach follower'}
@@ -10348,6 +10350,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="outline">{schema?.warehouse || 'warehouse —'}</Badge>
             <Badge appearance="outline">{schema?.sku || 'DW—'}</Badge>
             <Button appearance="outline" onClick={loadSchema}>Refresh</Button>
+            <OpenInPbiDesktopButton type="warehouse" id={id} name={schema?.warehouse} />
             <Dropdown
               aria-label="Database"
               placeholder={schema?.warehouse || 'database'}
@@ -12664,6 +12667,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
             <div className={s.toolbar}>
               <Badge appearance="filled" color="brand">Semantic model</Badge>
               <Button appearance="outline" icon={<DatabaseLink20Regular />} onClick={() => { setGetDataOpen(true); setIngestTab('source'); }} title="Power Query (M) → Delta in ADLS → semantic layer (Azure-native, no Fabric required)">Get data</Button>
+              <OpenInPbiDesktopButton type="semantic-model" id={id} name={detail?.dataset?.name} mode="directQuery" />
               {powerBiConfigured && (
                 <>
                   <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
