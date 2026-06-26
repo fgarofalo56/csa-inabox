@@ -382,6 +382,12 @@ var deSynapseEnabled = byoExisting.?deSynapse ?? true
 var deDatabricksEnabled = byoExisting.?deDatabricks ?? true
 var deAdfEnabled = byoExisting.?deAdf ?? true
 var deShirEnabled = byoExisting.?deShir ?? true
+// Service Bus namespace name (service-bus-namespace navigator). Carried on the
+// byoExisting object — NOT a new scalar param — to stay under admin-plane's
+// 256-param ceiling. main.bicep sets it to the deterministic single-sub name
+// (sbns-loom-default-<region>) when Service Bus is provisioned, else '' so the
+// editor honest-gates. SUB/RG fall back to the deployment sub / LOOM_DLZ_RG.
+var loomServiceBusNamespace = byoExisting.?serviceBusNamespace ?? ''
 
 @description('Deploy the SHARED admin-zone Purview self-hosted IR VMSS (scale-to-zero). A Purview SHIR cannot be the DLZ ADF SHIR (Microsoft constraint — separate machine), so this is its own VMSS. Honest-gated: only deploys when purviewEnabled AND purviewIrAuthKey AND purviewShirAdminPassword are all set.')
 param purviewShirEnabled bool = true
@@ -818,6 +824,12 @@ var byoEventHubSub       = !empty(byoExisting.?eventHubSub ?? '') ? byoExisting.
 // lookup fails even though the topic exists.
 var effEventGridRg       = !empty(loomEventGridRg) ? loomEventGridRg : loomDlzRg
 var effEventGridSub      = !empty(loomEventGridSub) ? loomEventGridSub : subscription().subscriptionId
+// Service Bus navigator — RG/sub default to the DLZ RG / deployment sub (mirrors
+// the Event Hub navigator fallbacks). The servicebus-client reads
+// LOOM_SERVICEBUS_SUB||LOOM_SUBSCRIPTION_ID and LOOM_SERVICEBUS_RG||LOOM_DLZ_RG;
+// these explicit values keep the navigator correct without relying on fallbacks.
+var effServiceBusRg      = loomDlzRg
+var effServiceBusSub     = subscription().subscriptionId
 // Databricks navigator — reuse hostname > provisioned/patched hostname.
 var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
 var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : (deDatabricksEnabled ? loomDatabricksHostname : '')
@@ -2596,6 +2608,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
             { name: 'LOOM_EVENTHUB_RG', value: effEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: byoEventHubSub }
+            // Service Bus namespace navigator (service-bus-namespace item: queues
+            // + topics). Empty namespace → the editor honest-gates. RG/SUB default
+            // to the DLZ RG / deployment sub (the servicebus-client also falls back
+            // to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID). Provisioned by
+            // modules/landing-zone/servicebus.bicep.
+            { name: 'LOOM_SERVICEBUS_NAMESPACE', value: loomServiceBusNamespace }
+            { name: 'LOOM_SERVICEBUS_RG', value: effServiceBusRg }
+            { name: 'LOOM_SERVICEBUS_SUB', value: effServiceBusSub }
             // Event Hubs Data Explorer "View / Peek events" (AMQP receive). The
             // @azure/event-hubs SDK is bundled in the Console image (package.json)
             // and loaded lazily only on the receive path; default-on (opt-out) so

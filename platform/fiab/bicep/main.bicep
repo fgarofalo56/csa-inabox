@@ -351,6 +351,12 @@ param loomEventHubEnabled bool = true
 @description('Provision the per-DLZ Azure Stream Analytics starter job (backs the stream-analytics-job editor + the Eventstream transform node). Default true (opt-out). Set false to skip the streaming-units cost — the editor then surfaces an honest infra-gate naming LOOM_ASA_RG. Distinct from streamAnalyticsEnabled (the deploy-planner tile), which provisions a separate planner job.')
 param loomStreamAnalyticsEnabled bool = true
 
+@description('Provision a per-DLZ Service Bus namespace (Standard) backing the service-bus-namespace navigator (queues + topics). Default true (opt-out). Set false to skip the namespace cost — the editor then honest-gates (admin-plane blanks LOOM_SERVICEBUS_NAMESPACE). Azure-native, no Fabric.')
+param deployServiceBus bool = true
+
+@description('Provision a per-DLZ dedicated PE-locked Event Grid custom topic backing the event-grid-topic navigator. Default true (opt-out). Set false to skip it — the navigator still lists the always-on business-events topic in the same DLZ RG. Azure-native, no Fabric.')
+param deployEventGrid bool = true
+
 // =====================================================================
 // Data-engineering backend opt-out flags (default ON — provision new).
 // Forwarded to BOTH the admin-plane (env-blank mirror) and every DLZ
@@ -1012,6 +1018,13 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       deDatabricks: loomDatabricksEnabled
       deAdf: loomDataFactoryEnabled
       deShir: loomSelfHostedIrEnabled
+      // Service Bus navigator binding (service-bus-namespace item). Single-sub:
+      // the namespace name is deterministic over the DLZ (matches servicebus.bicep's
+      // sbns-loom-<domain>-<region>, domain 'default'), so the Console binds to the
+      // real namespace. Empty in tenant/multi-sub (no local DLZ) or when Service Bus
+      // is disabled → the editor honest-gates. Carried here (not a scalar param) to
+      // stay under admin-plane's 256-param ceiling.
+      serviceBusNamespace: (useSingleDlz && deployServiceBus) ? 'sbns-loom-default-${location}' : ''
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
@@ -1370,6 +1383,10 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     loomEventHubEnabled: loomEventHubEnabled
     existingEventHubNamespaceName: existingEventHubNamespace
     enableStreamAnalytics: loomStreamAnalyticsEnabled && empty(existingAsaJob)
+    // Service Bus + Event Grid navigators (queues/topics + custom topics). Both
+    // default-on (opt-out). Single-sub binds the admin-plane env to these names.
+    deployServiceBus: deployServiceBus
+    deployEventGrid: deployEventGrid
   }
 }
 
@@ -1573,6 +1590,10 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     // — see adxEnabled:false above), so only the enable flags forward.
     loomEventHubEnabled: loomEventHubEnabled
     enableStreamAnalytics: loomStreamAnalyticsEnabled
+    // Service Bus + Event Grid navigators on the attached DLZ (default-on). The
+    // names flow back via dlzAttach outputs into the hub-console env patch above.
+    deployServiceBus: deployServiceBus
+    deployEventGrid: deployEventGrid
   }
 }
 
@@ -1674,6 +1695,14 @@ module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' =
     // the cross-sub DLZ rather than the admin/single-sub defaults baked at deploy.
     dlzDatabricksWorkspaceUrl: loomDatabricksEnabled ? dlzAttach!.outputs.databricksWorkspaceUrl : ''
     dlzAdfFactoryName: loomDataFactoryEnabled ? dlzAttach!.outputs.adfFactoryName : ''
+    // Service Bus + Event Grid navigators on the attached DLZ. The dlzAttach
+    // landing-zone deploys these by default (deployServiceBus/deployEventGrid);
+    // the eventgrid.bicep/servicebus.bicep modules already grant the hub Console
+    // UAMI the data/control-plane roles (consolePrincipalId = effHubConsolePrincipalId).
+    // Thread the names so the console env is re-pointed at the attached DLZ; empty
+    // (service disabled) => the var is skipped and the editor honest-gates.
+    dlzServiceBusNamespace: dlzAttach!.outputs.serviceBusNamespaceName
+    dlzEventGridTopic: dlzAttach!.outputs.eventGridTopicName
     complianceTags: complianceTags
   }
 }
