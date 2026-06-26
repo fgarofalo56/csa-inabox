@@ -63,6 +63,7 @@ import {
   type ReportFilterInput,
   type SqlSource,
   type SqlSourceColumn,
+  type SqlSourceFrom,
 } from '@/lib/azure/wells-to-sql';
 import {
   loadConnection,
@@ -80,6 +81,8 @@ import { executePostgresQuery, postgresQueryGate } from '@/lib/azure/postgres-fl
 import { queryItems } from '@/lib/azure/cosmos-data-client';
 import { pathToHttpsUrl, downloadFile } from '@/lib/azure/adls-client';
 import { parseDeltaSchema } from '@/lib/azure/delta-schema-parse';
+import { resolveMlvDeltaUrl } from '@/lib/azure/materialized-lake-view-engine';
+import { safeSegment, type MlvSpec } from '@/lib/azure/materialized-lake-view-model';
 
 export const SEMANTIC_MODEL_ITEM_TYPE = 'semantic-model';
 
@@ -260,6 +263,47 @@ function objectRefComplete(ref: ReportObjectRef): boolean {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Storage mode (WAVE 2) — string-validated MIRROR of the `StorageMode` /
+// `ConnectivityMode` union OWNED BY lib/editors/report/storage-mode-pane.tsx (a
+// `'use client'` module this server file cannot import). This is the SAME
+// mirroring pattern WAVE 1 used for `ReportConnType` across
+// report-data-source.ts ↔ this resolver: the pane is the single documented
+// definition; the resolver + wells-to-sql carry validated string mirrors so the
+// contract is shared without a client→server import.
+//
+// Each Power BI storage mode maps 1:1 to an Azure-native execution, with NO
+// Fabric / Power BI workspace and NO OneLake on the default path
+// (no-fabric-dependency.md):
+//   • DirectQuery → today's live Synapse / connector SQL (byte-identical default)
+//   • Import      → a MATERIALIZED Delta cache (materialized-lake-view-engine),
+//                   read with serverless OPENROWSET(FORMAT='DELTA')
+//   • Dual        → both; the cache serves aggregations once materialized, live
+//                   Synapse is the always-available fallback
+//   • DirectLake  → serverless OPENROWSET over the table's own Delta (no
+//                   materialization step)
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Power BI storage modes mapped 1:1 to Azure-native execution (pane mirror). */
+export type StorageMode = 'DirectQuery' | 'Import' | 'Dual' | 'DirectLake';
+
+/** Every `StorageMode`, in picker order (drives `isStorageMode`). */
+export const STORAGE_MODES: readonly StorageMode[] = ['DirectQuery', 'Import', 'Dual', 'DirectLake'];
+
+/** True when `v` is one of the recognized `StorageMode` literals. */
+export function isStorageMode(v: unknown): v is StorageMode {
+  return typeof v === 'string' && (STORAGE_MODES as readonly string[]).includes(v);
+}
+
+/** Per-table storage selection persisted on report `state.tableStorage[table]`
+ *  (additive — absent ⇒ every table DirectQuery in one 'primary' group). */
+export interface TableStorage {
+  mode: StorageMode;
+  /** Source-group id; default 'primary'. Cross-group = a limited relationship. */
+  group?: string;
+}
+export type TableStorageMap = Record<string, TableStorage>;
+
+// ───────────────────────────────────────────────────────────────────────────
 // SQL-source descriptor — what the loom-native backend hands to the wells→SQL
 // compiler so it can build a `SELECT … GROUP BY` for each visual. Either a
 // base-table map (one relation per model table) or a single derived SELECT.
@@ -298,7 +342,55 @@ export interface DerivedSqlSource extends SqlSourceCommon {
   tableName: string;
 }
 
-export type ReportSqlSource = TableMapSqlSource | DerivedSqlSource;
+/**
+ * One model table's per-table SOURCE-GROUP binding (WAVE 2): the live relation +
+ * (when Import/Dual/DirectLake) its materialized Delta cache relation, plus the
+ * storage mode and a `cacheReady` flag. Consumed by the wells→SQL cache-vs-live
+ * pick (`wells-to-sql.pickRelation` / `groupVisualBindings`) and the two routes'
+ * `source-groups` branch. `live` runs on its Synapse pool; `cache` is a
+ * serverless OPENROWSET over the report-table MLV's Delta (the SAME Delta the
+ * Azure-native refresh route's Spark batch writes — see `reportTableMlvSpec`).
+ */
+export interface TableSourceBinding {
+  /** Source-group id ('primary' for single-source reports). */
+  group: string;
+  /** Mirror of the owned `StorageMode` union (string-validated). */
+  storageMode: StorageMode;
+  /** LIVE relation (DirectQuery / Dual-live) + the Synapse pool it runs on. */
+  live?: { from: SqlSourceFrom; target: SynapseTarget; kind: 'warehouse' | 'lakehouse' };
+  /** CACHE relation (Import / Dual-cache / DirectLake): serverless OPENROWSET over Delta. */
+  cache?: { from: SqlSourceFrom; target: SynapseTarget; deltaUrl: string };
+  /** True once an Import/Dual cache exists (state.lastRefresh[table] present). */
+  cacheReady: boolean;
+  /** Smaller-side detection for cross-group ("limited relationship") joins. */
+  rowEstimate?: number;
+}
+
+/**
+ * GENERALIZED arm (WAVE 2): model-table → its per-table source-group binding.
+ * Emitted ONLY when `state.tableStorage` has entries (or >1 source group exists);
+ * otherwise the resolver keeps emitting `TableMapSqlSource` / `DerivedSqlSource`
+ * byte-identical (zero behavioural change for existing single-source reports).
+ *
+ * `tableMap` is carried alongside `bindings` purely for BACK-COMPAT: it is the
+ * flattened LIVE (DirectQuery) relation map, so any consumer that has not yet
+ * grown a `mode === 'source-groups'` branch (the routes' `toSqlSource`, which
+ * today only special-cases `'derived'` and otherwise reads `.tableMap`) keeps
+ * type-checking AND runs the live relation — the correct, honest fallback (live
+ * Synapse rows, never a mock/blank) until that branch lands. The rich `bindings`
+ * are what the WAVE-2 source-groups branch consumes for the cache-vs-live pick.
+ * `target`/`kind` are the PRIMARY group's.
+ */
+export interface SourceGroupSqlSource extends SqlSourceCommon {
+  mode: 'source-groups';
+  /** Per-model-table source-group binding (live + cache + storage mode). */
+  bindings: Record<string, TableSourceBinding>;
+  /** Back-compat: flattened live-relation map for un-upgraded `.tableMap` reads. */
+  tableMap: Record<string, SqlBaseRelation>;
+}
+
+export type ReportSqlSource = TableMapSqlSource | DerivedSqlSource | SourceGroupSqlSource;
+
 
 // ───────────────────────────────────────────────────────────────────────────
 // Resolver result.
@@ -522,6 +614,175 @@ export function isReportDataSource(v: unknown): v is ReportDataSource {
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Per-table source groups (WAVE 2) — Azure-native storage modes.
+//
+// `reportTableMlvSpec` is the SHARED source of truth used by BOTH this resolver's
+// cache path AND the Azure-native refresh route, so the Delta URL the resolver
+// reads from is EXACTLY the Delta the refresh route's Spark batch writes. The
+// resolver wraps the existing table→relation map into a `SourceGroupSqlSource`
+// ONLY when `state.tableStorage` is set (or >1 group exists); otherwise it keeps
+// emitting the existing `TableMapSqlSource` / `DerivedSqlSource` byte-identical.
+// Nothing here reaches Fabric / Power BI / OneLake — every cache is a serverless
+// OPENROWSET over an ADLS Delta produced by the Synapse Spark MLV engine.
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Strip a `loom:` content prefix so the bare-Cosmos-id and the `loom:<id>`
+ *  content-id form of a report id derive the SAME MLV schema. The resolver reads
+ *  the cache the refresh route writes — both call `reportTableMlvSpec`, so this
+ *  normalization keeps their Delta paths aligned regardless of which id form each
+ *  caller passes. */
+function normalizeReportId(reportId: string): string {
+  return String(reportId).replace(/^loom:/, '');
+}
+
+/**
+ * The MLV spec for one report table's Import/Dual materialized Delta cache —
+ * the SHARED SoT for the resolver's cache relation AND the Azure-native refresh
+ * route's Spark batch. Both resolve the cache's Delta URL from this same spec
+ * (`resolveMlvDeltaUrl`), so the report reads exactly what the refresh batch
+ * writes. 100% Azure-native (Synapse Spark → ADLS Delta); no Fabric required.
+ */
+export function reportTableMlvSpec(reportId: string, table: string, baseSelectSql: string): MlvSpec {
+  return {
+    language: 'sql',
+    container: 'silver',
+    schema: `report_${safeSegment(normalizeReportId(reportId))}`,
+    viewName: safeSegment(table),
+    sql: `SELECT * FROM (${baseSelectSql}) AS _src`,
+    refreshMode: 'full',
+  };
+}
+
+/** What each model table contributes to the source-group wrap: its LIVE relation
+ *  FROM, the base SELECT its Import/Dual cache materializes, and (when table-
+ *  backed) the `SqlBaseRelation` used to flatten the back-compat `tableMap`. */
+interface BaseTableInput {
+  liveFrom: SqlSourceFrom;
+  baseSelectSql: string;
+  baseRelation?: SqlBaseRelation;
+}
+
+/** Validate a persisted `state.tableStorage` bag into a `TableStorageMap`. */
+function parseTableStorageState(value: unknown): TableStorageMap {
+  if (!value || typeof value !== 'object') return {};
+  const out: TableStorageMap = {};
+  for (const [table, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    if (!isStorageMode(r.mode)) continue;
+    const group = typeof r.group === 'string' && r.group.trim() ? r.group.trim() : undefined;
+    out[table] = { mode: r.mode, ...(group ? { group } : {}) };
+  }
+  return out;
+}
+
+/** Tables that have a materialized cache (a `state.lastRefresh[table]` record). */
+function parseLastRefreshTables(value: unknown): Set<string> {
+  const set = new Set<string>();
+  if (value && typeof value === 'object') {
+    for (const [table, raw] of Object.entries(value as Record<string, unknown>)) {
+      if (raw && typeof raw === 'object') set.add(table);
+    }
+  }
+  return set;
+}
+
+/**
+ * Build a table's CACHE relation — a serverless OPENROWSET over the report-table
+ * MLV's Delta. Returns null when serverless SQL isn't configured (the binding
+ * then keeps only its live relation, so Import/Dual tables fall back to live —
+ * never a blank or a mock). The Delta URL == `resolveMlvDeltaUrl(reportTableMlvSpec(…))`,
+ * the exact location the refresh route's Spark batch writes.
+ */
+function buildTableCacheRelation(
+  reportId: string,
+  table: string,
+  baseSelectSql: string,
+): { from: SqlSourceFrom; target: SynapseTarget; deltaUrl: string } | null {
+  const deltaUrl = resolveMlvDeltaUrl(reportTableMlvSpec(reportId, table, baseSelectSql));
+  if (!deltaUrl) return null;
+  let target: SynapseTarget;
+  try {
+    target = serverlessTarget('master');
+  } catch {
+    return null;
+  }
+  const url = deltaUrl.replace(/'/g, "''");
+  return {
+    from: { kind: 'derived', sql: `SELECT * FROM OPENROWSET(BULK '${url}', FORMAT='DELTA') AS r` },
+    target,
+    deltaUrl,
+  };
+}
+
+/**
+ * Wrap a loom-native table→relation map into a `SourceGroupSqlSource` when the
+ * report has per-table storage config (`state.tableStorage`) or more than one
+ * source group. Returns null otherwise, so the caller emits its existing
+ * `TableMapSqlSource` / `DerivedSqlSource` byte-identical (back-compat). Each
+ * table's `live` is its current relation + target; `cache` (Import/Dual/DirectLake)
+ * is a serverless OPENROWSET over `reportTableMlvSpec`'s Delta; `cacheReady` reads
+ * `state.lastRefresh`. A table with no persisted entry defaults to DirectQuery in
+ * the 'primary' group (the same base relation it has today).
+ */
+function buildSourceGroups(
+  reportItem: WorkspaceItem,
+  common: SqlSourceCommon,
+  relations: Record<string, BaseTableInput>,
+): SourceGroupSqlSource | null {
+  const state = (reportItem.state || {}) as Record<string, unknown>;
+  const tableStorage = parseTableStorageState(state.tableStorage);
+  const cachedTables = parseLastRefreshTables(state.lastRefresh);
+
+  const groups = new Set<string>();
+  for (const ts of Object.values(tableStorage)) groups.add(ts.group || 'primary');
+
+  // Back-compat: no per-table storage AND a single group ⇒ DON'T wrap.
+  if (Object.keys(tableStorage).length === 0 && groups.size <= 1) return null;
+
+  const reportId = reportItem.id;
+  const bindings: Record<string, TableSourceBinding> = {};
+  const tableMap: Record<string, SqlBaseRelation> = {};
+
+  for (const [tableName, rel] of Object.entries(relations)) {
+    const ts = tableStorage[tableName];
+    const storageMode: StorageMode = ts?.mode ?? 'DirectQuery';
+    const group = ts?.group || 'primary';
+
+    const live: TableSourceBinding['live'] = { from: rel.liveFrom, target: common.target, kind: common.kind };
+
+    let cache: TableSourceBinding['cache'];
+    let cacheReady = false;
+    if (storageMode === 'Import' || storageMode === 'Dual' || storageMode === 'DirectLake') {
+      const built = buildTableCacheRelation(reportId, tableName, rel.baseSelectSql);
+      if (built) {
+        cache = built;
+        cacheReady = cachedTables.has(tableName);
+      }
+    }
+
+    bindings[tableName] = { group, storageMode, live, ...(cache ? { cache } : {}), cacheReady };
+    if (rel.baseRelation) tableMap[tableName] = rel.baseRelation;
+  }
+
+  return { mode: 'source-groups', target: common.target, kind: common.kind, bindings, tableMap };
+}
+
+/** Adapt a semantic-model `tableMap` to the source-group wrap input (each model
+ *  table → its live base relation + the SELECT its cache would materialize). */
+function relationsFromTableMap(tableMap: Record<string, SqlBaseRelation>): Record<string, BaseTableInput> {
+  const out: Record<string, BaseTableInput> = {};
+  for (const [name, rel] of Object.entries(tableMap)) {
+    out[name] = {
+      liveFrom: { kind: 'table', schema: rel.schema, table: rel.table },
+      baseSelectSql: `SELECT * FROM ${rel.relation}`,
+      baseRelation: rel,
+    };
+  }
+  return out;
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Backend builders.
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -606,6 +867,7 @@ function tableMapFromContent(
 async function resolveSemanticModel(
   source: SemanticModelDataSource,
   tenantId: string,
+  reportItem: WorkspaceItem,
 ): Promise<ResolvedReportModel> {
   const id = source.itemId;
   const model = isLoomContentId(id)
@@ -658,15 +920,21 @@ async function resolveSemanticModel(
     );
   }
 
+  const tableMap = tableMapFromContent(content, schema);
+  const base: TableMapSqlSource = {
+    mode: 'table-map',
+    target: built.target,
+    kind: sourceKind,
+    tableMap,
+  };
   return {
     backend: 'loom-native',
     tables,
-    sqlSource: {
-      mode: 'table-map',
-      target: built.target,
-      kind: sourceKind,
-      tableMap: tableMapFromContent(content, schema),
-    },
+    // WAVE 2: wrap into per-table source groups when `state.tableStorage` is set;
+    // else emit the existing TableMapSqlSource byte-identical (back-compat).
+    sqlSource:
+      buildSourceGroups(reportItem, { target: built.target, kind: sourceKind }, relationsFromTableMap(tableMap)) ??
+      base,
     source,
   };
 }
@@ -675,6 +943,7 @@ async function resolveSemanticModel(
  *  column names, then expose it as a single-table derived source. */
 async function resolveDirectQuery(
   source: DirectQueryDataSource,
+  reportItem: WorkspaceItem,
 ): Promise<ResolvedReportModel> {
   const guarded = readOnlySelect(source.sql);
   if (!guarded.ok) {
@@ -719,16 +988,23 @@ async function resolveDirectQuery(
     isHidden: false,
   }));
 
+  const derived: DerivedSqlSource = {
+    mode: 'derived',
+    target: built.target,
+    kind: source.target,
+    sql: guarded.sql,
+    tableName,
+  };
   return {
     backend: 'loom-native',
     tables: [{ name: tableName, columns: fieldColumns, measures: [] }],
-    sqlSource: {
-      mode: 'derived',
-      target: built.target,
-      kind: source.target,
-      sql: guarded.sql,
-      tableName,
-    },
+    // WAVE 2: a single-table direct query is one 'primary' group; wrap into
+    // source groups only when per-table storage is set, else emit the
+    // DerivedSqlSource byte-identical (back-compat).
+    sqlSource:
+      buildSourceGroups(reportItem, { target: built.target, kind: source.target }, {
+        [tableName]: { liveFrom: { kind: 'derived', sql: guarded.sql }, baseSelectSql: guarded.sql },
+      }) ?? derived,
     source,
   };
 }
@@ -1528,9 +1804,9 @@ export async function resolveReportModel(
     case 'aas':
       return resolveAas(source.server, source.database, source);
     case 'semantic-model':
-      return resolveSemanticModel(source, tenantId);
+      return resolveSemanticModel(source, tenantId, reportItem);
     case 'direct-query':
-      return resolveDirectQuery(source);
+      return resolveDirectQuery(source, reportItem);
     case 'connection':
     case 'file-upload':
     case 'adls-file':

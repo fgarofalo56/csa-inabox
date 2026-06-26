@@ -80,6 +80,18 @@ import {
   describeSource,
 } from './report-data-source';
 
+// ── WAVE 2 surfaces (sibling files, this chunk) ───────────────────────────────
+// Mounted inside this drawer once a source is bound. StorageModePane OWNS the
+// shared StorageMode / TableStorageMap contract (per-table storage); NavigatorDialog
+// browses a bound connection's real objects (tree + TOP-100 preview) and returns a
+// primary ConnectionDataSource + a tableStorage seed; RefreshPane runs the
+// Azure-native refresh (re-materialize Import/Dual Delta caches) + last-refreshed
+// badges + the honest schedule gate. All persist via the SAME /data-source +
+// /refresh routes — no new persistence model, no Power BI / Fabric workspace.
+import { StorageModePane, type TableStorageMap } from './storage-mode-pane';
+import { NavigatorDialog, type NavigatorResult } from './navigator-dialog';
+import { RefreshPane } from './refresh-pane';
+
 /** Local alias so existing call sites keep reading `DirectTarget`
  *  (= the SoT's `DirectQueryTarget`); the target dropdown binds to this. */
 type DirectTarget = DirectQueryTarget;
@@ -227,9 +239,14 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
   const [getData, setGetData] = useState<GetDataSource | null>(isGetDataSource(value) ? value : null);
   const [galleryOpen, setGalleryOpen] = useState(false);
 
+  // (e) WAVE 2 — Navigator dialog + the per-table storage map (mirrored locally so
+  // the RefreshPane rows reflect edits immediately; persisted via PUT /data-source).
+  const [navigatorOpen, setNavigatorOpen] = useState(false);
+  const [tableStorage, setTableStorage] = useState<TableStorageMap>({});
+
   // Re-seed the form whenever the drawer (re)opens against a (possibly new) value.
   useEffect(() => {
-    if (!open) { setGalleryOpen(false); return; }
+    if (!open) { setGalleryOpen(false); setNavigatorOpen(false); return; }
     setKind(value?.kind ?? 'semantic-model');
     setModelId(value?.kind === 'semantic-model' ? value.itemId : '');
     setTarget(value?.kind === 'direct-query' ? value.target : 'warehouse');
@@ -238,6 +255,8 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
     setAasDatabase(value?.kind === 'aas' ? value.database : '');
     setGetData(isGetDataSource(value) ? value : null);
     setGalleryOpen(false);
+    setNavigatorOpen(false);
+    setTableStorage({});
     setPreviewCols(null); setPreviewErr(null);
   }, [open, value]);
 
@@ -311,6 +330,83 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
     onChange(ds);
   }, [onChange]);
 
+  // ── WAVE 2 — bound-source signals + storage/Navigator wiring ────────────────
+  // A source is "bound" for W2 once it is fully specified — the persisted `value`,
+  // or the gallery/Navigator choice the parent has just persisted. Storage mode +
+  // refresh apply to ANY bound source; the Navigator additionally needs a bound
+  // CONNECTION (it browses that connection's live objects). Both memos keep a
+  // stable identity across re-renders, so the child panes don't refetch on churn.
+  const boundForW2: ReportDataSource | null = useMemo(() => {
+    if (isBound(value)) return value;
+    if (isBound(getData)) return getData;
+    return null;
+  }, [value, getData]);
+  const w2Visible = boundForW2 !== null;
+
+  const connSource: ConnectionDataSource | null = useMemo(() => {
+    if (getData && getData.kind === 'connection') return getData;
+    if (value && value.kind === 'connection') return value;
+    return null;
+  }, [getData, value]);
+
+  // Seed the persisted per-table storage map (drives the RefreshPane rows) once a
+  // source is bound + the report is saved. StorageModePane reads this too, but we
+  // fetch it here so RefreshPane reflects Import/Dual tables that have NOT been
+  // materialized yet (those wouldn't surface from GET /refresh's lastRefresh alone).
+  useEffect(() => {
+    if (!open || !reportId || !w2Visible) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/report/${reportId}/data-source`);
+        const j = await r.json().catch(() => ({}));
+        if (!cancelled && j && typeof j === 'object' && j.tableStorage && typeof j.tableStorage === 'object') {
+          setTableStorage(j.tableStorage as TableStorageMap);
+        }
+      } catch { /* RefreshPane still derives its rows from its own GET /refresh */ }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, reportId, w2Visible]);
+
+  // Per-table storage persists additively through the SAME PUT /data-source the W1
+  // source uses (the route accepts a body carrying only `{ tableStorage }` and
+  // merges it alongside `state.dataSource` — no new persistence model).
+  const persistTableStorage = useCallback(async (map: TableStorageMap) => {
+    if (!reportId) return;
+    try {
+      await fetch(`/api/items/report/${reportId}/data-source`, {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ tableStorage: map }),
+      });
+    } catch {
+      // Best-effort: StorageModePane re-persists on any per-table edit, and the
+      // local mirror keeps the UI honest in the meantime. No silent data loss.
+    }
+  }, [reportId]);
+
+  // StorageModePane persists each per-table change itself; mirror its map locally
+  // so the RefreshPane rows reflect the change without a round-trip.
+  const onStorageChange = useCallback((map: TableStorageMap) => {
+    setTableStorage(map);
+  }, []);
+
+  // Navigator confirm → a complete primary ConnectionDataSource (the first
+  // selection) + a one-group tableStorage seed at the chosen connectivity's
+  // StorageMode. Persist the source through the existing onChange (parent PUT
+  // /data-source) and merge + persist the storage seed so the Import/DirectQuery
+  // choice the author made in the Navigator sticks.
+  const onNavigatorConfirm = useCallback((result: NavigatorResult) => {
+    setNavigatorOpen(false);
+    setGetData(result.primarySource);
+    setKind('connection');
+    onChange(result.primarySource);
+    const merged: TableStorageMap = { ...tableStorage, ...(result.tableStorage as TableStorageMap) };
+    setTableStorage(merged);
+    void persistTableStorage(merged);
+  }, [onChange, tableStorage, persistTableStorage]);
+
   // ── render ─────────────────────────────────────────────────────────────────
   return (
     <>
@@ -383,6 +479,11 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
                 <Subtitle2>Get data source</Subtitle2>
                 <Badge appearance="tint" color="brand" size="small">Connection-backed</Badge>
                 <div className={styles.spacer} />
+                {getData?.kind === 'connection' && (
+                  <Button size="small" appearance="subtle" icon={<TableSearch20Regular />} onClick={() => setNavigatorOpen(true)}>
+                    Browse with Navigator
+                  </Button>
+                )}
                 <Button size="small" appearance="subtle" icon={<DatabaseSearch20Regular />} onClick={() => setGalleryOpen(true)}>
                   Change source
                 </Button>
@@ -571,6 +672,39 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
               </Field>
             </div>
           )}
+
+          {/* ── WAVE 2 — per-table storage modes + Azure-native refresh ──────────
+              After a source is bound, surface the per-table StorageModePane (live
+              DirectQuery vs a materialized Import/Dual/Direct-Lake Delta cache) and
+              the RefreshPane (re-materialize on demand + last-refreshed + the honest
+              schedule gate). Both are 100% Azure-native — no Power BI / Fabric
+              workspace — and persist through the SAME /data-source + /refresh
+              routes. The map persists additively; the existing W1 flow is intact. */}
+          {w2Visible && (
+            <>
+              <Divider />
+              <Caption1 className={styles.muted}>
+                Storage &amp; refresh — set each model table to run live (DirectQuery) or as a materialized Delta cache
+                (Import / Dual / Direct Lake), then refresh the caches on demand. All Azure-native; no Power BI or
+                Fabric workspace.
+              </Caption1>
+              {reportId ? (
+                <>
+                  <StorageModePane reportId={reportId} dataSource={boundForW2} onChange={onStorageChange} />
+                  <Divider />
+                  <RefreshPane reportId={reportId} tableStorage={tableStorage} bound={isBound(boundForW2)} />
+                </>
+              ) : (
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    <MessageBarTitle>Save the report to configure storage &amp; refresh</MessageBarTitle>
+                    Storage mode and data refresh are configured per saved report. Save this report once, then reopen
+                    this drawer to set each table&apos;s storage mode and materialize its Delta cache.
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+            </>
+          )}
         </div>
       </DrawerBody>
 
@@ -598,6 +732,24 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
         onChosen={onGalleryChosen}
         onDismiss={() => setGalleryOpen(false)}
       />
+
+      {/* Navigator — browse the bound connection's REAL objects (catalog → schema
+          → tables/views), preview TOP-100 rows, multi-select + an Import-vs-
+          DirectQuery connectivity radio. onConfirm returns a primary
+          ConnectionDataSource + a tableStorage seed we persist (source via the
+          parent PUT, seed via the additive /data-source PUT). Rendered only for a
+          bound CONNECTION — the Navigator introspects one live connection. */}
+      {connSource && (
+        <NavigatorDialog
+          open={navigatorOpen}
+          reportId={reportId}
+          connectionId={connSource.connectionId}
+          connType={connSource.connType}
+          connectionLabel={describeSource(connSource)}
+          onConfirm={onNavigatorConfirm}
+          onDismiss={() => setNavigatorOpen(false)}
+        />
+      )}
     </>
   );
 }

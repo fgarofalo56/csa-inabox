@@ -79,7 +79,7 @@ import {
   type DaxWellField,
 } from '@/lib/azure/aas-client';
 import { loadModelItem } from '@/lib/azure/model-binding';
-import { executeQuery } from '@/lib/azure/synapse-sql-client';
+import { executeQuery, type SynapseTarget } from '@/lib/azure/synapse-sql-client';
 import {
   resolveReportModel,
   type FieldTable,
@@ -90,6 +90,7 @@ import {
   buildSqlFromVisual,
   type SqlSource,
   type SqlSourceColumn,
+  type SqlSourceFrom,
 } from '@/lib/azure/wells-to-sql';
 import {
   isLoomContentId,
@@ -155,9 +156,188 @@ function whitelist(table: FieldTable | undefined): SqlSourceColumn[] {
 }
 
 type ToSqlSourceResult =
-  | { kind: 'ok'; source: SqlSource }
+  | { kind: 'ok'; source: SqlSource; target?: SynapseTarget }
   | { kind: 'no-columns' }
-  | { kind: 'multi-table'; tables: string[] };
+  | { kind: 'multi-table'; tables: string[] }
+  | { kind: 'limited'; smaller: string; cacheReady: boolean; groups: string[] };
+
+// ── REPORT-DESIGNER PARITY · WAVE 2 — per-table STORAGE MODES (source groups) ──
+//
+// Mirror of the …/query route's Wave-2 path so an R/Python SCRIPT VISUAL reads the
+// SAME cache-vs-live relation a chart visual does — Import really reads the
+// materialized Delta cache, DirectQuery really runs live, Dual picks per-visual.
+// The resolver emits a `source-groups` ReportSqlSource ONLY when the report has
+// per-table storage configured (else it keeps emitting the single-source
+// table-map / derived arms below, byte-identical — script visuals on pure
+// single-source reports are unchanged). Its bindings map each model table to a
+// { live, cache } relation pair + the table's storage mode; this route picks
+// live-vs-cache and runs the projection on THAT relation's own Synapse target
+// (the pinned pool for live, serverless for an Import/Dual/Direct-Lake Delta
+// cache). Azure-native end to end — no Fabric / Power BI (no-fabric-dependency.md),
+// no mock (no-vaporware.md).
+//
+// SHARED CONTRACT: storage-mode-pane.tsx owns the `StorageMode` union; the
+// resolver owns `SourceGroupSqlSource` / `TableSourceBinding`; wells-to-sql owns
+// the `isAggregateVisual` / `pickRelation` / `groupVisualBindings` helpers. They
+// are consumed here through small string-validated LOCAL MIRRORS — the exact
+// client→server mirror pattern Wave 1 used for `ReportConnType` — so this route
+// compiles standalone and binds to the SAME `resolved.sqlSource` shape at runtime
+// as the …/query route. (Script visuals carry no Filters-pane channel — PBI
+// applies report/page filters upstream — so the projection runs filter-free, the
+// one difference from the query route's mirror.)
+
+/** Local mirror of the storage-mode-pane `StorageMode` union (string-validated). */
+type StorageMode = 'DirectQuery' | 'Import' | 'Dual' | 'DirectLake';
+
+/** Local mirror of the resolver's per-table source-group binding (relation pair
+ *  + storage mode). `live` is the DirectQuery / Dual-live relation on its Synapse
+ *  pool; `cache` is the Import / Dual-cache / Direct-Lake serverless OPENROWSET
+ *  over Delta. `cacheReady` is true once an Import/Dual cache has materialized
+ *  (Direct Lake reads its own Delta, so the resolver marks it ready). */
+interface TableSourceBinding {
+  group: string;
+  storageMode: StorageMode;
+  live?: { from: SqlSourceFrom; target: SynapseTarget; kind: 'warehouse' | 'lakehouse' };
+  cache?: { from: SqlSourceFrom; target: SynapseTarget; deltaUrl: string };
+  cacheReady: boolean;
+  rowEstimate?: number;
+}
+
+/** Local mirror of the resolver's generalized `source-groups` SQL-source arm. */
+interface SourceGroupSqlSource {
+  mode: 'source-groups';
+  target: SynapseTarget;
+  kind: 'warehouse' | 'lakehouse';
+  bindings: Record<string, TableSourceBinding>;
+}
+
+/**
+ * Structural detection of a `source-groups` ReportSqlSource. Reads the value as
+ * `unknown` so it never trips a no-overlap (TS2367) comparison whether or not the
+ * resolver's `ReportSqlSource` union carries the arm at this module's compile
+ * time. Returns the binding map when present, else null (the single-source
+ * table-map / derived case).
+ */
+function asSourceGroups(ss: unknown): SourceGroupSqlSource | null {
+  if (
+    ss && typeof ss === 'object' &&
+    (ss as { mode?: unknown }).mode === 'source-groups' &&
+    (ss as { bindings?: unknown }).bindings &&
+    typeof (ss as { bindings?: unknown }).bindings === 'object'
+  ) {
+    return ss as SourceGroupSqlSource;
+  }
+  return null;
+}
+
+/** Aggregating visuals (card / chart / matrix) vs row visuals (table / slicer).
+ *  Mirror of wells-to-sql.isAggregateVisual — drives the Dual cache-vs-live pick.
+ *  A script visual's inline projection is a `table` (raw rows), so it resolves to
+ *  the live relation for a Dual table, exactly as PBI streams full rows to R/Python. */
+function isAggregateVisual(visual: DaxVisual): boolean {
+  const t = (visual.type || '').toLowerCase();
+  return t !== 'table' && t !== 'slicer';
+}
+
+/**
+ * Per-table relation pick (mirror of wells-to-sql.pickRelation):
+ *   • Import / DirectLake → `cache`, falling back to `live` when no cache yet;
+ *   • Dual                → `cache` when (cacheReady && the visual aggregates),
+ *                           else `live` (always a live fallback);
+ *   • DirectQuery         → `live`.
+ */
+function pickRelation(b: TableSourceBinding, isAggregate: boolean): 'live' | 'cache' {
+  switch (b.storageMode) {
+    case 'Import':
+    case 'DirectLake':
+      return b.cacheReady ? 'cache' : 'live';
+    case 'Dual':
+      return b.cacheReady && isAggregate ? 'cache' : 'live';
+    case 'DirectQuery':
+    default:
+      return 'live';
+  }
+}
+
+/**
+ * Group a visual's referenced model tables by `binding.group` (mirror of
+ * wells-to-sql.groupVisualBindings). One group → the representative table to
+ * bind (the single-relation pick); many groups → a limited relationship via the
+ * materialized SMALLER side (least `rowEstimate`) — the table the caller requires
+ * an Import cache for.
+ */
+function groupVisualBindings(
+  s: SourceGroupSqlSource,
+  refs: string[],
+): { single: string } | { groups: string[]; smaller: string } {
+  const present = refs.filter((r) => s.bindings[r]);
+  const groups = Array.from(new Set(present.map((r) => s.bindings[r].group)));
+  if (groups.length <= 1) {
+    return { single: present[0] || Object.keys(s.bindings)[0] || '' };
+  }
+  let smaller = present[0];
+  let best = Number.POSITIVE_INFINITY;
+  for (const r of present) {
+    const est = s.bindings[r].rowEstimate ?? Number.MAX_SAFE_INTEGER;
+    if (est < best) {
+      best = est;
+      smaller = r;
+    }
+  }
+  return { groups, smaller };
+}
+
+/**
+ * Project a `source-groups` SQL source onto the single-FROM wells→SQL compiler
+ * for ONE script visual: pick the live-vs-cache relation per the table's storage
+ * mode and return the bindable `SqlSource` + the Synapse target to run it on. A
+ * cross-group visual returns a `limited` gate (no silent partial); a single group
+ * that still spans >1 model table returns the existing honest `multi-table` gate
+ * (the single-FROM compiler can't join them without relationship keys). Filter-
+ * free — script visuals have no Filters-pane channel.
+ */
+function projectSourceGroups(
+  tables: FieldTable[],
+  sg: SourceGroupSqlSource,
+  visual: DaxVisual,
+): ToSqlSourceResult {
+  const refs = Array.from(new Set(referencedTables(visual).filter((t) => sg.bindings[t])));
+  const grouped = groupVisualBindings(sg, refs);
+
+  // Cross-group → limited relationship via the materialized smaller side.
+  if ('groups' in grouped) {
+    const b = sg.bindings[grouped.smaller];
+    return {
+      kind: 'limited',
+      smaller: grouped.smaller,
+      cacheReady: !!(b && b.cacheReady),
+      groups: grouped.groups,
+    };
+  }
+
+  // Single group but >1 distinct model table → the single-FROM compiler can't
+  // join them here (no relationship keys surfaced); honest multi-table gate.
+  if (refs.length > 1) return { kind: 'multi-table', tables: refs };
+
+  const key = grouped.single || refs[0] || Object.keys(sg.bindings)[0] || '';
+  const b = sg.bindings[key];
+  if (!b) return { kind: 'no-columns' };
+
+  const rel = pickRelation(b, isAggregateVisual(visual));
+  // Import / Dual without a built cache fall back to live; Direct Lake's "cache"
+  // is its own-Delta OPENROWSET. Guard a missing relation either way.
+  const chosen = rel === 'cache' ? (b.cache ?? b.live) : (b.live ?? b.cache);
+  if (!chosen) return { kind: 'no-columns' };
+
+  const columns = whitelist(tables.find((t) => t.name === key) || tables[0]);
+  if (!columns.length) return { kind: 'no-columns' };
+
+  return {
+    kind: 'ok',
+    source: { from: chosen.from, columns, measures: [] },
+    target: chosen.target,
+  };
+}
 
 /** Project the resolved model onto the single-FROM SQL compiler (one model table
  *  or the derived SELECT). Surfaces an honest multi-table gate rather than
@@ -167,6 +347,21 @@ function toSqlSource(
   sqlSource: ReportSqlSource,
   visual: DaxVisual,
 ): ToSqlSourceResult {
+  // Wave 2 — per-table storage modes. When the resolver emits a `source-groups`
+  // arm (only when the report has per-table storage configured), pick the live-
+  // vs-cache relation per visual and run it on that relation's own target — the
+  // SAME pick the …/query route makes for chart visuals. Detected structurally so
+  // this stays type-safe regardless of whether the resolver's `ReportSqlSource`
+  // union has grown to carry the arm at this module's compile time.
+  const sg = asSourceGroups(sqlSource);
+  if (sg) return projectSourceGroups(tables, sg, visual);
+
+  // Past here only the original single-source modes are reachable; narrow the
+  // (possibly-grown) union so the table-map access below stays type-safe.
+  if (sqlSource.mode !== 'derived' && sqlSource.mode !== 'table-map') {
+    return { kind: 'no-columns' };
+  }
+
   if (sqlSource.mode === 'derived') {
     const columns = whitelist(tables.find((t) => t.name === sqlSource.tableName) || tables[0]);
     if (!columns.length) return { kind: 'no-columns' };
@@ -414,6 +609,36 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           { status: 400 },
         );
       }
+      // Wave-2 cross-storage-group "limited relationship": the script visual binds
+      // fields from tables in different storage-mode groups. Power BI serves these
+      // only via the materialized smaller side, so the renderer requires that side's
+      // Import cache. Return an honest 412 naming the exact table to materialize —
+      // never a silent partial / cross join (no-vaporware.md). Azure-native
+      // throughout; no Power BI / Fabric workspace required.
+      if (projected.kind === 'limited') {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: 'limited-relationship',
+            error: projected.cacheReady
+              ? `This script visual combines tables that live in different storage-mode groups ` +
+                `(${projected.groups.join(', ')}). Cross-group ("limited relationship") joins need ` +
+                `relationship keys defined in the model; the Loom-native (Synapse) renderer builds ` +
+                `each visual's dataset from a single relation and won't cross-join "${projected.smaller}" ` +
+                `with the other group's source. Model these fields in one semantic-model table (or a ` +
+                `direct-query SELECT that already joins them), or bind an Azure Analysis Services model ` +
+                `where the relationships are defined. No Power BI / Fabric workspace required either way.`
+              : `This script visual combines tables across storage-mode groups via the smaller side ` +
+                `"${projected.smaller}", but that table has no materialized Import cache yet. Set ` +
+                `"${projected.smaller}" to Import (or Dual) in Storage mode and run Refresh to ` +
+                `materialize its Delta cache, then re-run — the cross-group ("limited relationship") ` +
+                `dataset reads the materialized smaller side. This is Azure-native (serverless ` +
+                `OPENROWSET over Delta); no Power BI / Fabric workspace is required.`,
+            missing: projected.smaller,
+          },
+          { status: 412 },
+        );
+      }
       if (projected.kind === 'no-columns') {
         return NextResponse.json(
           { ok: false, error: 'The report’s data source has no bindable columns for these fields.' },
@@ -428,14 +653,44 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         );
       }
       try {
+        // Wave-2 source-group visuals run on THEIR chosen relation's target —
+        // serverless for an Import / Dual / Direct-Lake Delta cache, the pinned
+        // pool for a live (DirectQuery / Dual-live) relation. Single-source reports
+        // set no override and keep the resolver-pinned target, byte-for-byte.
+        const runTarget = projected.target ?? resolved.sqlSource.target;
         const result = await executeQuery(
-          resolved.sqlSource.target,
+          runTarget,
           compiled.sql,
           30_000,
           compiled.parameters,
         );
         orderedNames = result.columns;
         objRows = objectRows(result.columns, result.rows);
+      } catch (e: any) {
+        return NextResponse.json(
+          { ok: false, error: e?.message || String(e), status: 502 },
+          { status: 502 },
+        );
+      }
+    } else if (resolved.backend === 'connection') {
+      // ── Get Data (connection) source — the SAME dispatch the …/query route's
+      // Path 4 makes (executor.runVisual). Without this arm a Get-Data CONNECTION
+      // report fell through to the AAS branch below and called executeAasQuery with
+      // an undefined binding (resolved.binding doesn't exist on the 'connection'
+      // arm) — a runtime crash that next.config's typescript.ignoreBuildErrors was
+      // masking. The resolver already wired a REAL Azure data-plane
+      // ConnectionExecutor (azure-sql / synapse / databricks / postgres / cosmos /
+      // serverless OPENROWSET), or returned the honest 412 gate handled above. Run
+      // a raw table projection of the Values-well fields (PBI "Don't summarize" —
+      // no aggregation, exactly like the loom-native script path above) and take
+      // the executor's object rows as the dataset. Script visuals carry no
+      // Filters-pane channel (PBI applies report/page filters upstream), so no
+      // filters are pushed. Azure-native end to end — no Power BI / Fabric
+      // (no-fabric-dependency.md), no mock (no-vaporware.md).
+      const connVisual: DaxVisual = { type: 'table', wells: { values: fields } };
+      try {
+        const { rows } = await resolved.executor.runVisual(connVisual, undefined);
+        objRows = rows;
       } catch (e: any) {
         return NextResponse.json(
           { ok: false, error: e?.message || String(e), status: 502 },

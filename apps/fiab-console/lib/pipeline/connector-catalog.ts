@@ -104,6 +104,29 @@ export interface ConnectorDef {
   datasetTypes: { type: string; name: string; locationFields: ConfigField[] }[];
   supportsSource: boolean;
   supportsSink: boolean;
+  /**
+   * Whether this connector exposes a live (DirectQuery) execution path for the
+   * report storage-mode picker — i.e. a relational / analytics engine the
+   * report-model resolver can issue live SQL or KQL against (SQL-family, Azure
+   * Data Explorer, Databricks Delta Lake). When falsey (File / NoSQL /
+   * generic-protocol / SaaS connectors) the picker offers Import-only — plus
+   * Direct Lake when the selected object is Delta-backed — matching the Power BI
+   * convention. Additive + optional: existing linked-service / Get-data
+   * consumers ignore it.
+   *
+   * This flag encodes the SAME "can it serve a live query?" signal the report
+   * storage-mode picker enforces — but the picker does NOT read this flag.
+   * `lib/editors/report/storage-mode-pane.tsx` is a `'use client'` module, so it
+   * derives `directQueryCapable` client-side (in `sourceCapability`) from the
+   * report's `ReportConnType` ('azure-sql', 'synapse-dedicated', 'adx', …) via
+   * its own `DIRECT_QUERY_CONN_TYPES` set, then feeds that boolean to
+   * `allowedStorageModes`. That is a different id space than this catalog's ADF
+   * connector `type` ('AzureSqlDatabase', …). `connectorDirectQueryCapable()`
+   * below is the server-side reading of THIS flag over the ADF connector-type id
+   * space, for callers that already hold an ADF `type` (the linked-service /
+   * Get-data path); the pane is not one of those callers.
+   */
+  directQueryCapable?: boolean;
 }
 
 // =============================================================================
@@ -481,6 +504,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'AzureSqlDatabase',
     name: 'Azure SQL Database',
+    directQueryCapable: true,
     category: 'azure',
     icon: 'DatabaseRegular',
     description: 'Azure SQL Database (recommended-version connector: server/database/authenticationType).',
@@ -509,6 +533,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'AzureSqlMI',
     name: 'Azure SQL Managed Instance',
+    directQueryCapable: true,
     category: 'azure',
     icon: 'DatabaseRegular',
     description: 'Azure SQL Managed Instance (recommended version). Public endpoint uses port 3342.',
@@ -537,6 +562,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'AzureSqlDW',
     name: 'Azure Synapse Analytics (dedicated SQL pool)',
+    directQueryCapable: true,
     category: 'azure',
     icon: 'DataWarehouseRegular',
     description: 'Synapse dedicated SQL pool (formerly SQL Data Warehouse). The Loom Azure-native warehouse backend.',
@@ -554,6 +580,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'AzureDataExplorer',
     name: 'Azure Data Explorer (Kusto)',
+    directQueryCapable: true,
     category: 'azure',
     icon: 'DataTrendingRegular',
     description: 'Azure Data Explorer cluster. The Loom Azure-native eventhouse / KQL backend.',
@@ -602,6 +629,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'AzurePostgreSql',
     name: 'Azure Database for PostgreSQL',
+    directQueryCapable: true,
     category: 'azure',
     icon: 'DatabaseRegular',
     description: 'Azure Database for PostgreSQL (flexible server). v2.0 adds TLS 1.3 + SSL modes + MI / service principal.',
@@ -679,6 +707,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'AzureMySql',
     name: 'Azure Database for MySQL',
+    directQueryCapable: true,
     category: 'azure',
     icon: 'DatabaseRegular',
     description: 'Azure Database for MySQL via an ADO.NET connection string.',
@@ -714,6 +743,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'AzureDatabricksDeltaLake',
     name: 'Azure Databricks Delta Lake',
+    directQueryCapable: true,
     category: 'azure',
     icon: 'DatabaseLightningRegular',
     description: 'Read/write Delta tables through an interactive Databricks cluster.',
@@ -860,6 +890,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'SqlServer',
     name: 'SQL Server',
+    directQueryCapable: true,
     category: 'database',
     icon: 'DatabaseRegular',
     description: 'On-premises / IaaS SQL Server (recommended version). Often runs through a self-hosted IR.',
@@ -905,6 +936,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'Oracle',
     name: 'Oracle',
+    directQueryCapable: true,
     category: 'database',
     icon: 'DatabaseRegular',
     description: 'Oracle Database. v1.0 uses a connection string; v2.0 uses server + basic auth (TLS 1.3).',
@@ -950,6 +982,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'Snowflake',
     name: 'Snowflake',
+    directQueryCapable: true,
     category: 'database',
     icon: 'SnowflakeRegular',
     description: 'Snowflake V2 connector (type SnowflakeV2): account identifier + warehouse + database with basic or key-pair auth.',
@@ -995,6 +1028,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'AmazonRedshift',
     name: 'Amazon Redshift',
+    directQueryCapable: true,
     category: 'database',
     icon: 'DataWarehouseRegular',
     description: 'Amazon Redshift cluster. Copy source only (use UNLOAD-to-S3 for large extracts).',
@@ -1029,6 +1063,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'PostgreSql',
     name: 'PostgreSQL (generic)',
+    directQueryCapable: true,
     category: 'database',
     icon: 'DatabaseRegular',
     description: 'Generic PostgreSQL via an ODBC/Npgsql connection string. Copy source only.',
@@ -1058,6 +1093,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'MySql',
     name: 'MySQL (generic)',
+    directQueryCapable: true,
     category: 'database',
     icon: 'DatabaseRegular',
     description: 'Generic MySQL / MariaDB via a connection string. Copy source only.',
@@ -1086,6 +1122,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'Teradata',
     name: 'Teradata',
+    directQueryCapable: true,
     category: 'database',
     icon: 'DatabaseRegular',
     description: 'Teradata Vantage. Copy source only. Basic / Windows auth, usually through a self-hosted IR.',
@@ -1125,6 +1162,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'SapHana',
     name: 'SAP HANA',
+    directQueryCapable: true,
     category: 'database',
     icon: 'DatabaseRegular',
     description: 'SAP HANA database. Copy source only, through a self-hosted IR.',
@@ -1164,6 +1202,7 @@ export const CONNECTORS: ConnectorDef[] = [
   {
     type: 'GoogleBigQueryV2',
     name: 'Google BigQuery',
+    directQueryCapable: true,
     category: 'database',
     icon: 'DataTrendingRegular',
     description: 'Google BigQuery V2 connector. User (OAuth refresh token) or service-account (key file) auth.',
@@ -1728,6 +1767,28 @@ export const CONNECTORS: ConnectorDef[] = [
 /** Look up a connector definition by its ADF linkedService `type`. */
 export function connectorByType(type: string): ConnectorDef | undefined {
   return CONNECTORS.find((c) => c.type === type);
+}
+
+/**
+ * Whether a connector type supports a live DirectQuery execution path in the
+ * report storage-mode picker. Backed by `ConnectorDef.directQueryCapable` (the
+ * single source of truth set on each connector — no divergent list to keep in
+ * sync). SQL-family / Azure Data Explorer / Databricks Delta Lake → `true`
+ * (DirectQuery + Import + Dual, and Direct Lake when the object is Delta-backed);
+ * File / Blob / Cosmos / generic-protocol / SaaS → `false` (Import-only, plus
+ * Direct Lake for Delta objects). Unknown / unregistered types → `false`.
+ *
+ * Keyed on the ADF connector `type` ('AzureSqlDatabase', …). NOTE: the report
+ * storage-mode pane does NOT call this — `lib/editors/report/storage-mode-pane.tsx`
+ * is a `'use client'` module that derives the same `directQueryCapable` signal
+ * from the report's `ReportConnType` ('azure-sql', 'synapse-dedicated', 'adx', …)
+ * via its own `DIRECT_QUERY_CONN_TYPES` set, a different id space than this ADF
+ * `type`. This function is the server-side reading of the flag for callers that
+ * already hold an ADF connector `type` (the linked-service / Get-data path);
+ * both paths ultimately feed `allowedStorageModes` the same capability boolean.
+ */
+export function connectorDirectQueryCapable(type: string): boolean {
+  return connectorByType(type)?.directQueryCapable === true;
 }
 
 /** All connectors in a category (for the catalog's category groupings). */

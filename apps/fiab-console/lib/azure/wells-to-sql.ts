@@ -28,7 +28,7 @@
  */
 
 import type { DaxVisual, DaxWellField } from './aas-dax';
-import type { SynapseQueryParam } from './synapse-sql-client';
+import type { SynapseQueryParam, SynapseTarget } from './synapse-sql-client';
 
 // ── SQL source (resolver-supplied; the FROM relation + identifier whitelist) ───
 
@@ -830,4 +830,195 @@ export function wrapDaxWithFilters(dax: string, filters: ReportFilterInput[] | u
   const body = m[1].trim();
   if (!body) return dax;
   return `EVALUATE CALCULATETABLE(${body}, ${preds})`;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// WAVE 2 — per-table storage modes + source-group cache-vs-live selection
+// ════════════════════════════════════════════════════════════════════════════
+//
+// Power BI storage modes (DirectQuery / Import / Dual / Direct Lake) mapped 1:1
+// to Azure-native execution (no-fabric-dependency.md): a model table is read
+// either LIVE (DirectQuery — today's Synapse/connector SQL, byte-identical) or
+// from a materialized Delta CACHE (Import / Dual-cache — a `materialized-lake-
+// view-engine` managed Delta queried serverlessly via `OPENROWSET(FORMAT=
+// 'DELTA')`), with Dual picking per-query and Direct Lake reading the table's
+// OWN Delta. NONE of this requires Power BI / a Fabric workspace.
+//
+// This module owns the PURE selection helpers the route layer calls — the
+// cache-vs-live decision and the source-group grouping. `buildSqlFromVisual`
+// above is UNCHANGED: it still compiles exactly one already-resolved
+// `SqlSource.from`, so every existing caller stays byte-identical. The new
+// helpers only DECIDE which relation (live vs cache) and which Synapse target a
+// `'source-groups'` visual compiles against; the route then hands the chosen
+// `from`/`target` to `buildSqlFromVisual` unchanged. The module stays pure +
+// credential-free (type-only `SynapseTarget` import; local `SqlSourceFrom`).
+
+/**
+ * Local string-validated MIRROR of the `StorageMode` union whose source of
+ * truth is `lib/editors/report/storage-mode-pane.tsx` (the W2 shared contract).
+ * Declared here — not imported — because that pane is a `'use client'` module
+ * and a server module can't import it (exactly as W1 mirrors `ReportConnType`
+ * across `report-data-source.ts` ↔ `report-model-resolver.ts`). The pane, the
+ * resolver, and this module carry the same four literals; by contract they are
+ * ONE shared union.
+ *
+ *  - `DirectQuery` — live Synapse / connector SQL (today's default; byte-identical).
+ *  - `Import`      — materialized Delta cache (Spark batch via the MLV engine,
+ *                    read by serverless `OPENROWSET(FORMAT='DELTA')`).
+ *  - `Dual`        — both; per-query pick (cache for aggregations when ready,
+ *                    live otherwise — always with a live fallback).
+ *  - `DirectLake`  — serverless `OPENROWSET` over the table's own Delta (no
+ *                    materialization).
+ */
+export type StorageMode = 'DirectQuery' | 'Import' | 'Dual' | 'DirectLake';
+
+/**
+ * One model table's per-table source-group binding: which storage mode it uses
+ * and the concrete LIVE / CACHE relations the compiler can run it on. Emitted by
+ * `report-model-resolver.ts` (the cache relation's `from`/`deltaUrl` come from
+ * the SAME `reportTableMlvSpec` the refresh route materializes, so the Delta the
+ * resolver reads == the Delta the Spark batch writes) and consumed by the route
+ * `toSqlSource` `'source-groups'` branch via `pickRelation` below.
+ */
+export interface TableSourceBinding {
+  /** Source-group id; `'primary'` for single-source / back-compat reports. */
+  group: string;
+  /** This table's storage mode (mirror of the owned union, string-validated). */
+  storageMode: StorageMode;
+  /**
+   * LIVE relation (DirectQuery / Dual-live) + the Synapse pool it runs on.
+   * `kind` selects dedicated-warehouse vs serverless-lakehouse execution.
+   */
+  live?: { from: SqlSourceFrom; target: SynapseTarget; kind: 'warehouse' | 'lakehouse' };
+  /**
+   * CACHE relation (Import / Dual-cache / Direct Lake): a serverless
+   * `OPENROWSET(FORMAT='DELTA')` over the materialized (or own) Delta, run on
+   * the serverless pool. `deltaUrl` is the ADLS path the MLV engine wrote.
+   */
+  cache?: { from: SqlSourceFrom; target: SynapseTarget; deltaUrl: string };
+  /**
+   * True once an Import/Dual cache exists (the report's `state.lastRefresh[table]`
+   * is present, i.e. Refresh-now has materialized the Delta — or, for Direct
+   * Lake, the table's own Delta is present). When false, a cache-preferring mode
+   * falls back to the live relation with a "Run Refresh to materialize" badge —
+   * never a blank / mock (no-vaporware.md).
+   */
+  cacheReady: boolean;
+  /** Optional row estimate; drives smaller-side detection for cross-group joins. */
+  rowEstimate?: number;
+}
+
+/**
+ * Generalized SQL-source arm: each model table → its per-table source-group
+ * binding. Emitted by the resolver ONLY when `state.tableStorage` has entries or
+ * more than one source group exists; otherwise the resolver keeps emitting the
+ * existing `TableMapSqlSource` (zero behavioural change — single-source reports
+ * compile byte-identical SQL on the same Synapse target). `target`/`kind` are the
+ * PRIMARY group's (the back-compat default relation). Mirrors the resolver's
+ * `SourceGroupSqlSource` (which `extends` its unexported `SqlSourceCommon`); the
+ * two fields are inlined here so this server module stays import-free of the
+ * resolver and the route can pass either structurally-identical shape.
+ */
+export interface SourceGroupSqlSource {
+  mode: 'source-groups';
+  /** Synapse pool of the PRIMARY group (the live default relation). */
+  target: SynapseTarget;
+  /** PRIMARY group execution kind: dedicated warehouse vs serverless lakehouse. */
+  kind: 'warehouse' | 'lakehouse';
+  /** model-table name → its per-table source-group binding. */
+  bindings: Record<string, TableSourceBinding>;
+}
+
+/**
+ * True when a visual AGGREGATES its rows (card / chart / matrix) rather than
+ * listing them (table / slicer). Mirrors `buildSqlFromVisual`'s branch split:
+ * `table` projects raw rows and `slicer` lists DISTINCT category values (both
+ * detail surfaces that want the LIVE relation), while everything else folds its
+ * `values` wells into SQL aggregates (and so benefits from a pre-materialized
+ * cache). An empty / unknown type defaults to aggregate, matching the compiler's
+ * chart/matrix fall-through. Drives the `Dual` cache-vs-live pick below.
+ */
+export function isAggregateVisual(visual: DaxVisual): boolean {
+  const type = (visual?.type || '').toLowerCase();
+  return type !== 'table' && type !== 'slicer';
+}
+
+/**
+ * The per-table relation pick — which of a binding's two relations a visual
+ * compiles against:
+ *
+ *   - `Import` / `DirectLake` → `'cache'` when the cache is ready, else `'live'`
+ *     (the honest "Run Refresh to materialize" fallback — never a blank/mock).
+ *   - `Dual`                  → `'cache'` only when the cache is ready AND the
+ *     visual aggregates (cache pays off for aggregations); otherwise `'live'`,
+ *     so Dual ALWAYS has a live fallback.
+ *   - `DirectQuery`           → always `'live'`.
+ *
+ * `cacheReady` is the single gate (the resolver guarantees `cacheReady ⟹ cache`
+ * is populated), so the caller's `pick === 'cache' ? b.cache!.from : b.live!.from`
+ * is safe. Pure: no I/O, no SQL synthesis — just the decision.
+ */
+export function pickRelation(b: TableSourceBinding, isAggregate: boolean): 'live' | 'cache' {
+  switch (b.storageMode) {
+    case 'Import':
+    case 'DirectLake':
+      return b.cacheReady ? 'cache' : 'live';
+    case 'Dual':
+      return b.cacheReady && isAggregate ? 'cache' : 'live';
+    case 'DirectQuery':
+    default:
+      return 'live';
+  }
+}
+
+/**
+ * Group a visual's referenced model tables by their binding's source group, to
+ * decide between a SINGLE-group compile (every referenced table runs on one
+ * group's chosen relations) and a CROSS-group "limited relationship via the
+ * materialized smaller side" (Power BI's source-group / island join rule):
+ *
+ *   - `{ single: <group> }` — all references resolve to one source group (the
+ *     common case; single-source reports → `'primary'`). The route picks each
+ *     table's relation via `pickRelation` and runs them on one target.
+ *   - `{ groups, smaller }` — references span ≥2 groups. A limited relationship
+ *     requires one side to be materialized; `smaller` is the referenced model
+ *     table cheapest to materialize (lowest `rowEstimate`; tables with a known
+ *     estimate are preferred over unknown ones, tie-broken by reference order).
+ *     The route then REQUIRES that table's group cache to be ready, else returns
+ *     the honest 'limited-gate' naming it (no silent partial result).
+ *
+ * Pure: only inspects `s.bindings`; unresolvable refs are ignored (defense in
+ * depth — they can't widen the group set).
+ */
+export function groupVisualBindings(
+  s: SourceGroupSqlSource,
+  refs: string[],
+): { single: string } | { groups: string[]; smaller: string } {
+  const resolved: { table: string; binding: TableSourceBinding }[] = [];
+  for (const ref of refs || []) {
+    const b = s.bindings[ref];
+    if (b) resolved.push({ table: ref, binding: b });
+  }
+  const groups = Array.from(new Set(resolved.map((r) => r.binding.group)));
+
+  // Single group (or no resolvable refs) → one-group compile. Default to
+  // 'primary' so an empty/legacy report maps to the back-compat single group.
+  if (groups.length <= 1) {
+    return { single: groups[0] ?? 'primary' };
+  }
+
+  // Cross-group → materialize the smaller side. Pick the referenced table with
+  // the lowest row estimate (unknown estimates treated as +∞ so a known-small
+  // table is preferred); deterministic tie-break by reference order. `resolved`
+  // is guaranteed non-empty here (≥2 distinct groups ⇒ ≥2 resolved refs).
+  let smaller = resolved[0].table;
+  let best = Number.POSITIVE_INFINITY;
+  for (const r of resolved) {
+    const est = typeof r.binding.rowEstimate === 'number' ? r.binding.rowEstimate : Number.POSITIVE_INFINITY;
+    if (est < best) {
+      best = est;
+      smaller = r.table;
+    }
+  }
+  return { groups, smaller };
 }

@@ -16,6 +16,12 @@
  * report returns `{ ok:true, dataSource:null }` so the designer shows its
  * honest "pick a data source" gate rather than an empty render.
  *
+ * Also returns (W2, additive) `tableStorage` — the persisted per-table
+ * StorageMode map (`state.tableStorage`, `{}` when unset) — and `lastRefresh` —
+ * the refresh route's read-only last-materialization receipts
+ * (`state.lastRefresh`, `{}` when unset) — so StorageModePane / RefreshPane seed
+ * from real state. Reports saved before W2 get `{}`/`{}` and behave identically.
+ *
  * ── PUT ────────────────────────────────────────────────────────────────────
  * Validate the `ReportDataSource` union and persist it to `state.dataSource`
  * via `updateOwnedItem` (additive — the legacy `aasServer/aasDatabase` keys and
@@ -37,6 +43,15 @@
  *   • file-upload    → (Get Data) `containerPath` (the path returned by the
  *     existing /api/lakehouse/upload route) + a supported `format`.
  *   • adls-file      → (Get Data) `container` + `path` + a supported `format`.
+ *
+ * The body may ALSO carry an optional `tableStorage` map (W2, additive):
+ * `{ [table]: { mode: StorageMode, group? } }`. Each entry's key is trimmed,
+ * its `mode` validated against `STORAGE_MODES` (unknown/invalid entries are
+ * ignored), and the map is persisted to `state.tableStorage` alongside
+ * `state.dataSource`. A body carrying ONLY `tableStorage` (the per-table mode
+ * picker's save) persists the map without re-binding the source; an explicit
+ * `{}` clears all per-table overrides (every table back to DirectQuery). When
+ * `tableStorage` is absent the existing single-source PUT behaviour is unchanged.
  *
  * Session-gated; owner-checked against the parent workspace's tenant. The
  * report id may be a plain Cosmos id OR a `loom:<cosmosId>` content-backed id
@@ -97,6 +112,65 @@ type ObjectRefResult =
  * buildDeltaOpenRowsetSql, parquet/csv/json via generic OPENROWSET).
  */
 const FILE_FORMATS = new Set(['csv', 'parquet', 'json', 'delta']);
+
+/* ============================================================================
+ * W2 — per-table STORAGE MODE (additive, back-compat).
+ *
+ * `state.tableStorage[table]` rides ALONGSIDE the existing `state.dataSource`;
+ * when it is absent every model table is DirectQuery in one 'primary' group —
+ * byte-identical to today's single-source behaviour. The StorageModePane PUTs
+ * `{ tableStorage }` here (no `dataSource`), and the pane + RefreshPane seed
+ * from this route's GET (`tableStorage` + read-only `lastRefresh`).
+ *
+ * `StorageMode` / `TableStorage` are OWNED by the `'use client'` module
+ * `lib/editors/report/storage-mode-pane.tsx` (the W2 shared contract). A server
+ * route cannot import that client module, so — exactly as the resolver +
+ * wells-to-sql do for the same union — we carry a small string-validated LOCAL
+ * MIRROR here. Keep `STORAGE_MODES` in sync with the owner.
+ * ========================================================================== */
+
+/** Local mirror of the StorageMode union (owner: storage-mode-pane.tsx). */
+const STORAGE_MODES = ['DirectQuery', 'Import', 'Dual', 'DirectLake'] as const;
+type StorageMode = (typeof STORAGE_MODES)[number];
+function isStorageMode(v: unknown): v is StorageMode {
+  return typeof v === 'string' && (STORAGE_MODES as readonly string[]).includes(v);
+}
+
+/** Per-table storage selection persisted on `state.tableStorage[table]`. */
+interface TableStorage {
+  mode: StorageMode;
+  /** Source-group id; default 'primary'. Cross-group = a limited relationship. */
+  group?: string;
+}
+type TableStorageMap = Record<string, TableStorage>;
+
+/**
+ * Validate + normalize a client-supplied `tableStorage` bag into a canonical
+ * `TableStorageMap`. Keys are trimmed (empties dropped); each entry's `mode`
+ * must be a known StorageMode (unknown / invalid entries are ignored, never
+ * persisted as a dead mode); `group` is preserved when a non-empty string.
+ * Symmetric with the pane's `parseTableStorageMap`, so what is persisted reads
+ * back identically.
+ *
+ * Returns `null` when the input is absent / not an object — the caller then
+ * leaves `state.tableStorage` untouched (full back-compat). An explicit `{}`
+ * returns an empty map (clears all per-table overrides → every table
+ * DirectQuery again).
+ */
+function validateTableStorage(raw: unknown): TableStorageMap | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const out: TableStorageMap = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    const table = key.trim();
+    if (!table) continue;
+    if (!value || typeof value !== 'object') continue;
+    const rv = value as Record<string, unknown>;
+    if (!isStorageMode(rv.mode)) continue;
+    const group = typeof rv.group === 'string' && rv.group.trim() ? rv.group.trim() : undefined;
+    out[table] = { mode: rv.mode, ...(group ? { group } : {}) };
+  }
+  return out;
+}
 
 /**
  * Validate + normalize a connection's `ReportObjectRef`, discriminated by `mode`.
@@ -341,8 +415,17 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
   // Persisted dataSource wins; else legacy aasServer/aasDatabase synthesizes an
   // AAS source; else null (drives the designer's "pick a data source" gate).
-  const dataSource = fromLegacyState((item.state || {}) as Record<string, unknown>);
-  return NextResponse.json({ ok: true, dataSource });
+  const state = (item.state || {}) as Record<string, unknown>;
+  const dataSource = fromLegacyState(state);
+  // W2 (additive): surface the persisted per-table storage map + the refresh
+  // route's last-materialization receipts so StorageModePane / RefreshPane seed
+  // from real state. Both default to `{}` for reports saved before W2.
+  const tableStorage = validateTableStorage(state.tableStorage) ?? {};
+  const lastRefresh =
+    state.lastRefresh && typeof state.lastRefresh === 'object'
+      ? (state.lastRefresh as Record<string, unknown>)
+      : {};
+  return NextResponse.json({ ok: true, dataSource, tableStorage, lastRefresh });
 }
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -355,19 +438,25 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   let body: unknown = {};
   try { body = await req.json(); } catch {}
 
+  const bodyObj = body && typeof body === 'object' ? (body as Record<string, unknown>) : {};
+
+  // W2 (additive): an optional per-table storage map. `null` ⇒ not present in
+  // this PUT → `state.tableStorage` is left untouched (back-compat). The
+  // StorageModePane PUTs `{ tableStorage }` with NO `dataSource`, so a body
+  // carrying only a valid map must persist without requiring a source re-bind.
+  const tableStorage = 'tableStorage' in bodyObj ? validateTableStorage(bodyObj.tableStorage) : null;
+
   // Accept either the bare union or `{ dataSource: <union> }`.
-  const candidate =
-    body && typeof body === 'object' && 'dataSource' in (body as Record<string, unknown>)
-      ? (body as Record<string, unknown>).dataSource
-      : body;
+  const candidate = 'dataSource' in bodyObj ? bodyObj.dataSource : body;
   const parsed = parseDataSource(candidate);
-  if (!parsed) {
+  if (!parsed && tableStorage === null) {
     return NextResponse.json(
       {
         ok: false,
         error:
           'Provide a data source with kind "semantic-model" (default, Azure-native), ' +
-          '"direct-query", "aas", or a Get Data source ("connection", "file-upload", "adls-file").',
+          '"direct-query", "aas", or a Get Data source ("connection", "file-upload", "adls-file") ' +
+          '— or a tableStorage map of per-table storage modes.',
       },
       { status: 400 },
     );
@@ -379,17 +468,37 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ ok: false, error: 'report item not found or not owned by you' }, { status: 404 });
   }
 
-  const validated = await validateDataSource(parsed, session.claims.oid);
-  if (!validated.ok) {
-    return NextResponse.json({ ok: false, error: validated.error }, { status: validated.status });
+  // Validate the data source only when one was supplied (a tableStorage-only
+  // PUT leaves the bound source — `state.dataSource` — exactly as it is).
+  let validatedDataSource: ReportDataSource | undefined;
+  if (parsed) {
+    const validated = await validateDataSource(parsed, session.claims.oid);
+    if (!validated.ok) {
+      return NextResponse.json({ ok: false, error: validated.error }, { status: validated.status });
+    }
+    validatedDataSource = validated.dataSource;
   }
 
-  // Persist additively onto state.dataSource (legacy keys + content untouched).
-  const newState = { ...((item.state || {}) as Record<string, unknown>), dataSource: validated.dataSource };
+  // Persist additively (legacy keys + state.content untouched): set
+  // `state.dataSource` only when a source was (re)bound, and `state.tableStorage`
+  // only when a map was supplied in this request.
+  const prevState = (item.state || {}) as Record<string, unknown>;
+  const newState: Record<string, unknown> = {
+    ...prevState,
+    ...(validatedDataSource ? { dataSource: validatedDataSource } : {}),
+    ...(tableStorage !== null ? { tableStorage } : {}),
+  };
   const updated = await updateOwnedItem(cosmosId, 'report', session.claims.oid, { state: newState });
   if (!updated) {
     return NextResponse.json({ ok: false, error: 'failed to persist data source' }, { status: 502 });
   }
 
-  return NextResponse.json({ ok: true, dataSource: validated.dataSource });
+  // Echo the effective bound source (the newly validated one, else the existing
+  // persisted/legacy source) plus the persisted map when this PUT set it.
+  const responseDataSource = validatedDataSource ?? fromLegacyState(prevState);
+  return NextResponse.json({
+    ok: true,
+    dataSource: responseDataSource,
+    ...(tableStorage !== null ? { tableStorage } : {}),
+  });
 }
