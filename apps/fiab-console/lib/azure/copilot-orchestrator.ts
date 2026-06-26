@@ -1281,7 +1281,10 @@ async function aoaiCompleteText(
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(
-        withTemperature ? { messages, temperature: 0.2, max_tokens: 2048 } : { messages, max_tokens: 2048 },
+        // Newer AOAI models (o-series / gpt-5 / reasoning) reject `max_tokens` and
+        // require `max_completion_tokens`; it is also accepted by gpt-4o/4o-mini on
+        // current api-versions, so it is the forward-compatible cap for all deployments.
+        withTemperature ? { messages, temperature: 0.2, max_completion_tokens: 2048 } : { messages, max_completion_tokens: 2048 },
       ),
     }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
@@ -1326,9 +1329,11 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(
+        // max_completion_tokens (not max_tokens) — required by newer AOAI models,
+        // accepted by gpt-4o/4o-mini on current api-versions (forward-compatible).
         withTemperature
-          ? { messages, temperature: 0.1, max_tokens: maxTokens, response_format: { type: 'json_object' } }
-          : { messages, max_tokens: maxTokens, response_format: { type: 'json_object' } },
+          ? { messages, temperature: 0.1, max_completion_tokens: maxTokens, response_format: { type: 'json_object' } }
+          : { messages, max_completion_tokens: maxTokens, response_format: { type: 'json_object' } },
       ),
     }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);

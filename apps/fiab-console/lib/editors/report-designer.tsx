@@ -46,10 +46,9 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, Delete20Regular, Save20Regular, ArrowSync20Regular, Edit20Regular,
-  DataBarVerticalRegular, DataBarHorizontalRegular, DataLineRegular, DataAreaRegular,
-  DataPieRegular, DataScatterRegular, Table20Regular, GridRegular, NumberSymbol20Regular,
-  Filter20Regular, Dismiss16Regular, ChevronUp20Regular, ChevronDown20Regular, Sparkle20Regular,
-  Database20Regular, CloudArrowUp20Regular, ColorRegular, ReOrderDotsVertical20Regular,
+  DataBarVerticalRegular, Table20Regular, NumberSymbol20Regular,
+  Filter20Regular, Dismiss16Regular, Sparkle20Regular,
+  Database20Regular, CloudArrowUp20Regular, ColorRegular,
   Copy20Regular, Options20Regular, DataTrending20Regular, Eye16Regular, EyeOff16Regular,
   Info16Regular,
   // ── wave-2 additions ─────────────────────────────────────────────────────────
@@ -62,6 +61,18 @@ import {
   Eye20Regular, EyeOff20Regular, Checkmark20Regular, ArrowExit20Regular,
   // ── wave-3 additions (AI-visual gallery + View tab) ──────────────────────────
   Question20Regular, DataTreemap20Regular,
+  // ── wave-4 additions (free-form canvas + redesigned visual gallery) ──────────
+  // Per-visual-type gallery glyphs (PBI Visualizations pane parity) + canvas zoom +
+  // align/distribute + snap/grid toggles. Each is a distinct, dark-legible Fluent
+  // glyph so every visual type reads at a glance like the real PBI picker.
+  TextNumberFormat20Regular, TextBulletListSquare20Regular, Gauge20Regular,
+  DataBarVertical20Regular, DataBarHorizontal20Regular, DataLine20Regular, DataArea20Regular,
+  DataPie20Regular, DataScatter20Regular, DataWaterfall20Regular, DataFunnel20Regular,
+  DataHistogram20Regular, DataUsage20Regular, ChartMultiple20Regular, RibbonStar20Regular,
+  AlignLeft20Regular, AlignCenterHorizontal20Regular, AlignRight20Regular,
+  AlignTop20Regular, AlignCenterVertical20Regular, AlignBottom20Regular,
+  AlignSpaceEvenlyHorizontal20Regular, AlignSpaceEvenlyVertical20Regular,
+  Grid20Regular, GridDots20Regular,
 } from '@fluentui/react-icons';
 import type { CSSProperties, ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -100,7 +111,16 @@ import {
 import {
   type ReportDataSource, isBound, describeSource, fromLegacyState, parseDataSource,
 } from './report/report-data-source';
-import { useCanvasLayout } from './report/use-canvas-layout';
+// Wave-4 ABSOLUTE free-form canvas (Power BI Desktop parity): the page is a
+// fixed-aspect sheet and every visual owns a px rect {x,y,w,h,z}. FreeFormCanvas
+// is the drag/resize/snap/guide/marquee engine; the pure absolute math (migrate
+// from the legacy 12-col flow, align, distribute, z-order) lives in the same
+// use-canvas-layout module the wave-0..2 grid used.
+import { FreeFormCanvas } from './report/free-form-canvas';
+import {
+  type AbsRect, type AlignEdge, type DistributeAxis,
+  migrateFlowToAbsolute, absAlign, absDistribute, reorderZ as absReorderZ,
+} from './report/use-canvas-layout';
 // Wave-2 right-rail panes (extracted, self-contained, PBI-parity). These are the
 // canonical Bookmarks + Selection panes — report-designer MOUNTS them (the model
 // matches the /definition route's bookmark sanitizer). The previously-inline
@@ -209,14 +229,36 @@ interface Wells {
 /** PBI canvas page type (16:9 / 4:3 / Letter / Tooltip / Custom). */
 type CanvasType = '16:9' | '4:3' | 'letter' | 'tooltip' | 'custom';
 
+/** Canvas page px dimensions per PBI page type (default 16:9 1280×720 — the real
+ *  Power BI Desktop default report-page size). The free-form canvas letter-boxes
+ *  + scales this sheet to fit; visuals live at absolute px inside it. */
+const PAGE_DIMS: Record<CanvasType, { width: number; height: number }> = {
+  '16:9': { width: 1280, height: 720 },
+  '4:3': { width: 960, height: 720 },
+  letter: { width: 1056, height: 816 },
+  tooltip: { width: 320, height: 240 },
+  custom: { width: 1280, height: 720 },
+};
+/** Resolve a page's canvas px size from its type / explicit custom size. */
+function pageDims(p?: { canvasType?: CanvasType; size?: { width?: number; height?: number } }): { width: number; height: number } {
+  if (p?.size?.width && p?.size?.height) return { width: p.size.width, height: p.size.height };
+  return PAGE_DIMS[p?.canvasType || '16:9'] || PAGE_DIMS['16:9'];
+}
+
 interface DVisual {
   id: string;
   type: VisualType;
   title: string;
   wells: Wells;
-  /** column span on a 12-col canvas grid + a row-height hint */
+  /** column span on a 12-col canvas grid + a row-height hint (LEGACY flow layout —
+   *  kept for back-compat reads + the Size S/M/L buttons; the free-form canvas
+   *  positions by `layout` below, migrated from these on first load). */
   w: number;
   h: number;
+  /** ABSOLUTE free-form rect {x,y,w,h,z} in page px (Power BI Desktop canvas).
+   *  The single source of truth for position/size on the wave-4 canvas; migrated
+   *  from the legacy grid `w/h` on load and persisted to config.layout (unit:px). */
+  layout?: AbsRect;
   /** Structured visual formatting (FormatPane → visual.config.format). */
   format?: ReportVisualFormat;
   /** Structured analytics reference lines (AnalyticsPane → visual.config.analytics). */
@@ -283,30 +325,30 @@ interface VisualState { rows: Array<Record<string, unknown>>; loading: boolean; 
 
 const VISUALS: { type: VisualType; label: string; icon: ReactElement; group?: 'ai' }[] = [
   { type: 'table',        label: 'Table',          icon: <Table20Regular /> },
-  { type: 'matrix',       label: 'Matrix',         icon: <GridRegular /> },
-  { type: 'card',         label: 'Card',           icon: <NumberSymbol20Regular /> },
-  { type: 'multiRowCard', label: 'Multi-row card', icon: <Table20Regular /> },
+  { type: 'matrix',       label: 'Matrix',         icon: <Grid20Regular /> },
+  { type: 'card',         label: 'Card',           icon: <TextNumberFormat20Regular /> },
+  { type: 'multiRowCard', label: 'Multi-row card', icon: <TextBulletListSquare20Regular /> },
   { type: 'kpi',          label: 'KPI',            icon: <DataTrending20Regular /> },
-  { type: 'gauge',        label: 'Gauge',          icon: <DataTrending20Regular /> },
-  { type: 'column',       label: 'Column chart',   icon: <DataBarVerticalRegular /> },
-  { type: 'bar',          label: 'Bar chart',      icon: <DataBarHorizontalRegular /> },
-  { type: 'line',         label: 'Line chart',     icon: <DataLineRegular /> },
-  { type: 'area',         label: 'Area chart',     icon: <DataAreaRegular /> },
-  { type: 'combo',        label: 'Line + column',  icon: <DataLineRegular /> },
-  { type: 'ribbon',       label: 'Ribbon chart',   icon: <DataBarVerticalRegular /> },
-  { type: 'waterfall',    label: 'Waterfall',      icon: <DataBarVerticalRegular /> },
-  { type: 'funnel',       label: 'Funnel',         icon: <DataBarHorizontalRegular /> },
-  { type: 'pie',          label: 'Pie chart',      icon: <DataPieRegular /> },
-  { type: 'donut',        label: 'Donut chart',    icon: <DataPieRegular /> },
-  { type: 'treemap',      label: 'Treemap',        icon: <GridRegular /> },
-  { type: 'scatter',      label: 'Scatter',        icon: <DataScatterRegular /> },
+  { type: 'gauge',        label: 'Gauge',          icon: <Gauge20Regular /> },
+  { type: 'column',       label: 'Column chart',   icon: <DataBarVertical20Regular /> },
+  { type: 'bar',          label: 'Bar chart',      icon: <DataBarHorizontal20Regular /> },
+  { type: 'line',         label: 'Line chart',     icon: <DataLine20Regular /> },
+  { type: 'area',         label: 'Area chart',     icon: <DataArea20Regular /> },
+  { type: 'combo',        label: 'Line + column',  icon: <ChartMultiple20Regular /> },
+  { type: 'ribbon',       label: 'Ribbon chart',   icon: <RibbonStar20Regular /> },
+  { type: 'waterfall',    label: 'Waterfall',      icon: <DataWaterfall20Regular /> },
+  { type: 'funnel',       label: 'Funnel',         icon: <DataFunnel20Regular /> },
+  { type: 'pie',          label: 'Pie chart',      icon: <DataPie20Regular /> },
+  { type: 'donut',        label: 'Donut chart',    icon: <DataUsage20Regular /> },
+  { type: 'treemap',      label: 'Treemap',        icon: <DataTreemap20Regular /> },
+  { type: 'scatter',      label: 'Scatter',        icon: <DataScatter20Regular /> },
   { type: 'map',          label: 'Map',            icon: <Map20Regular /> },
   { type: 'slicer',       label: 'Slicer',         icon: <Filter20Regular /> },
   // ── AI visuals (real backends) ───────────────────────────────────────────────
-  { type: 'smartNarrative',    label: 'Smart narrative',   icon: <Sparkle20Regular />,      group: 'ai' },
-  { type: 'qna',               label: 'Q&A',               icon: <Question20Regular />,     group: 'ai' },
-  { type: 'decompositionTree', label: 'Decomposition tree', icon: <DataTreemap20Regular />, group: 'ai' },
-  { type: 'keyInfluencers',    label: 'Key influencers',   icon: <DataTrending20Regular />, group: 'ai' },
+  { type: 'smartNarrative',    label: 'Smart narrative',    icon: <Sparkle20Regular />,       group: 'ai' },
+  { type: 'qna',               label: 'Q&A',                icon: <Question20Regular />,      group: 'ai' },
+  { type: 'decompositionTree', label: 'Decomposition tree', icon: <DataHistogram20Regular />, group: 'ai' },
+  { type: 'keyInfluencers',    label: 'Key influencers',    icon: <DataTrending20Regular />,  group: 'ai' },
 ];
 
 /**
@@ -643,15 +685,54 @@ const useStyles = makeStyles({
   vcardBody: { flex: 1, minWidth: 0, overflow: 'auto' },
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
-  gallery: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: tokens.spacingHorizontalXS },
-  galleryBtn: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXXS,
-    padding: tokens.spacingVerticalS, minWidth: 0,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer',
-    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
+  // ── Visualizations gallery (PBI Visualizations pane parity) ──────────────────
+  // A tidy responsive grid of visual-type tiles. Each glyph sits in a contrast
+  // chip that is legible in BOTH light and dark (colorNeutralForeground1 on
+  // colorNeutralBackground3); hover + selected lift to the brand accent. No
+  // hard-coded colors — every value is a Loom/Fluent token (web3-ui.md).
+  gallery: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(74px, 1fr))',
+    gap: tokens.spacingHorizontalXS,
   },
-  galleryBtnActive: { border: `1px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
+  galleryBtn: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'flex-start',
+    gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS, minWidth: 0,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1, cursor: 'pointer',
+    transitionProperty: 'background-color, border-color, box-shadow',
+    transitionDuration: tokens.durationFaster,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+      border: `1px solid ${tokens.colorBrandStroke1}`, boxShadow: tokens.shadow4,
+    },
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
+  },
+  galleryIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '40px', height: '40px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3,
+    color: tokens.colorNeutralForeground1,
+    fontSize: '22px',
+  },
+  galleryLabel: {
+    textAlign: 'center', lineHeight: tokens.lineHeightBase200,
+    color: tokens.colorNeutralForeground2,
+    overflow: 'hidden', textOverflow: 'ellipsis',
+    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+  },
+  galleryBtnActive: {
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    backgroundColor: tokens.colorBrandBackground2,
+    boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
+  },
+  galleryIconActive: {
+    backgroundColor: tokens.colorBrandBackground,
+    color: tokens.colorNeutralForegroundOnBrand,
+  },
   well: {
     border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     padding: tokens.spacingVerticalXS, minHeight: '44px', display: 'flex', flexDirection: 'column',
@@ -1330,6 +1411,10 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
    * `selectedVisual` (the one whose Build/Format pane shows) is preserved.
    */
   const [selectedVisualIds, setSelectedVisualIds] = useState<Set<string>>(new Set());
+  // ── wave-4 free-form canvas view options (PBI "View" menu) ───────────────────
+  // Snap-to-grid + gridlines are independent toggles (PBI parity); snap defaults ON.
+  const [snapGrid, setSnapGrid] = useState(true);
+  const [showGrid, setShowGrid] = useState(false);
   /**
    * Active cross-filter / cross-highlight selection (Visual interactions). A
    * slicer pick or a clicked table row sets it; every other visual on the page
@@ -1518,6 +1603,12 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               wells = { category: [], values: [], legend: [] };
               if (parsed) wells[into] = [parsed.measure ? parsed : { ...parsed, aggregation: undefined }];
             }
+            const lay = v.config?.layout;
+            // Absolute px layout is authoritative when the saved record marks it
+            // (unit:'px') or carries values that can't be a 12-col grid span
+            // (w>12 / h>24). Anything else is a LEGACY flow record → migrated to
+            // absolute below (per-page, in reading order).
+            const isAbs = lay && (lay.unit === 'px' || Number(lay.w) > 12 || Number(lay.h) > 24);
             return {
               id: uid('v'),
               type: (v.type as VisualType) || 'table',
@@ -1525,6 +1616,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               wells,
               w: Math.min(12, Math.max(1, Number(v.config?.layout?.w) || 6)),
               h: Math.max(1, Number(v.config?.layout?.h) || 4),
+              layout: isAbs
+                ? {
+                    x: Math.max(0, Number(lay.x) || 0), y: Math.max(0, Number(lay.y) || 0),
+                    w: Math.max(1, Number(lay.w) || 200), h: Math.max(1, Number(lay.h) || 160),
+                    z: Number.isFinite(Number(lay.z)) ? Number(lay.z) : undefined,
+                  }
+                : undefined,
               format: (v.config?.format as ReportVisualFormat | undefined) || undefined,
               analytics: parseAnalytics(v.config?.analytics),
               filters: reFilters(v.config?.filters),
@@ -1539,7 +1637,23 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           }),
         };
       });
-      setPages(dpages.length ? dpages : [{ id: uid('p'), name: 'Page 1', visuals: [] }]);
+      // Back-compat migration: any page whose visuals still lack an absolute
+      // `layout` (legacy 12-col flow records) is shelf-packed into px rects on the
+      // page sheet — so an old report opens as a sensible free-form layout and
+      // nothing renders at 0×0. Already-absolute pages pass through untouched.
+      const migrated = dpages.map((p) => {
+        if (!p.visuals.length || p.visuals.every((v) => v.layout)) return p;
+        const dims = pageDims(p);
+        const need = p.visuals.filter((v) => !v.layout);
+        const haveBottom = p.visuals.filter((v) => v.layout)
+          .reduce((m, v) => Math.max(m, (v.layout!.y + v.layout!.h)), 0);
+        const offset = haveBottom ? haveBottom + 16 : 0;
+        const placed = new Map(
+          migrateFlowToAbsolute(need, dims).map((v) => [v.id, { ...v.layout, y: v.layout.y + offset }]),
+        );
+        return { ...p, visuals: p.visuals.map((v) => (v.layout ? v : { ...v, layout: placed.get(v.id) })) };
+      });
+      setPages(migrated.length ? migrated : [{ id: uid('p'), name: 'Page 1', visuals: [] }]);
       setActivePage(0);
       setDirty(false);
     } catch (e: any) { setLoadErr(e?.message || String(e)); }
@@ -1699,41 +1813,32 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   }, [mutatePage]);
 
   const addVisual = useCallback((type: VisualType) => {
-    const v: DVisual = { id: uid('v'), type, title: VISUALS.find((x) => x.type === type)?.label || type, wells: { category: [], values: [], legend: [] }, w: KPI_TYPES.has(type) ? 3 : 6, h: KPI_TYPES.has(type) ? 3 : 4 };
-    mutatePage((p) => ({ ...p, visuals: [...p.visuals, v] }));
-    setSelectedVisual(v.id);
+    const isKpi = KPI_TYPES.has(type);
+    mutatePage((p) => {
+      const dims = pageDims(p);
+      // Default size (px) ~ the PBI default-drop footprint; KPI/card visuals are
+      // smaller. Cascade each new visual down-right so they don't stack exactly.
+      const w = isKpi ? 280 : 480;
+      const h = isKpi ? 200 : 320;
+      const n = p.visuals.length;
+      const x = Math.min(dims.width - w, 40 + (n % 6) * 28);
+      const y = Math.min(dims.height - h, 40 + (n % 6) * 28);
+      const z = p.visuals.reduce((m, vv) => Math.max(m, (vv.layout?.z ?? -1)), -1) + 1;
+      const v: DVisual = {
+        id: uid('v'), type, title: VISUALS.find((x) => x.type === type)?.label || type,
+        wells: { category: [], values: [], legend: [] },
+        w: isKpi ? 3 : 6, h: isKpi ? 3 : 4,
+        layout: { x: Math.max(0, x), y: Math.max(0, y), w, h, z },
+      };
+      setSelectedVisual(v.id);
+      return { ...p, visuals: [...p.visuals, v] };
+    });
   }, [mutatePage]);
 
   const removeVisual = useCallback((vid: string) => {
     mutatePage((p) => ({ ...p, visuals: p.visuals.filter((v) => v.id !== vid) }));
     if (selectedVisual === vid) setSelectedVisual(null);
   }, [mutatePage, selectedVisual]);
-
-  const moveVisual = useCallback((vid: string, dir: -1 | 1) => {
-    mutatePage((p) => {
-      const idx = p.visuals.findIndex((v) => v.id === vid);
-      const to = idx + dir;
-      if (idx < 0 || to < 0 || to >= p.visuals.length) return p;
-      const next = [...p.visuals];
-      const [moved] = next.splice(idx, 1);
-      next.splice(to, 0, moved);
-      return { ...p, visuals: next };
-    });
-  }, [mutatePage]);
-
-  // Direct-manipulation canvas (useCanvasLayout): drag the header grip to
-  // REPOSITION a visual (HTML5 reorder + grid repack) and drag the corner grip
-  // to RESIZE its column span / row-height (the grip is an ARIA slider with
-  // arrow-key resize). w/h (+ additive x/y on reorder) already round-trip
-  // through /definition `layout`, so this is wiring, not new persistence.
-  // Move-left/right + S/M/L/XL stay as keyboard fallbacks. rowUnitPx:40 matches
-  // the card render's `v.h * 40` so the vertical drag feels 1:1 with layout.
-  const canvas = useCanvasLayout<DVisual, DPage>({
-    visuals: page?.visuals ?? [],
-    mutateVisual,
-    mutatePage,
-    rowUnitPx: 40,
-  });
 
   const addToWell = useCallback((vid: string, well: WellName, f: WellField) => {
     mutateVisual(vid, (v) => {
@@ -1814,29 +1919,87 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, ...patch } : v)) }));
   }, [mutatePage]);
 
-  /** Match the column span (or row height) of every targeted visual to the first. */
+  /** Match the px width (or height) of every targeted visual to the first
+   *  (PBI "same size"). Operates on the absolute `layout` the free-form canvas
+   *  renders; legacy grid w/h is matched too so a no-layout fallback stays sane. */
   const matchSize = useCallback((ids: string[], dim: 'w' | 'h') => {
     if (ids.length < 2) return;
     mutatePage((p) => {
       const first = p.visuals.find((v) => v.id === ids[0]);
       if (!first) return p;
-      const val = first[dim];
       const set = new Set(ids);
-      return { ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, [dim]: val } : v)) };
+      return { ...p, visuals: p.visuals.map((v) => {
+        if (!set.has(v.id)) return v;
+        const layout = v.layout && first.layout ? { ...v.layout, [dim]: first.layout[dim] } : v.layout;
+        return { ...v, [dim]: first[dim], layout };
+      }) };
     });
   }, [mutatePage]);
 
-  /** Bring targeted visuals to front (end of list) or send to back (start). */
+  /** Bring targeted visuals to front / send to back via absolute layout.z (PBI
+   *  z-order). Re-numbers z so overlapping visuals layer correctly; preserves the
+   *  array order so the Selection pane + list stay stable. */
   const reorderZ = useCallback((ids: string[], dir: 'front' | 'back') => {
     if (!ids.length) return;
     const set = new Set(ids);
     mutatePage((p) => {
-      const picked = p.visuals.filter((v) => set.has(v.id));
-      const rest = p.visuals.filter((v) => !set.has(v.id));
-      const next = dir === 'front' ? [...rest, ...picked] : [...picked, ...rest];
-      return { ...p, visuals: next.map((v, i) => ({ ...v, z: i })) };
+      // Only visuals carrying an absolute layout participate in z math.
+      const withLayout = p.visuals.filter((v) => v.layout) as Array<DVisual & { layout: AbsRect }>;
+      if (!withLayout.length) return p;
+      const next = absReorderZ(withLayout, set, dir);
+      const byId = new Map(next.map((v) => [v.id, v.layout]));
+      return { ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: byId.get(v.id) } : v)) };
     });
   }, [mutatePage]);
+
+  /** Align selected visuals' edges/centers on the absolute canvas (PBI Format →
+   *  Align). Distribute equalizes gaps. Both mutate the persisted `layout`. */
+  const alignSelection = useCallback((ids: string[], edge: AlignEdge) => {
+    if (ids.length < 2) return;
+    const set = new Set(ids);
+    mutatePage((p) => {
+      const withLayout = p.visuals.filter((v) => v.layout) as Array<DVisual & { layout: AbsRect }>;
+      const aligned = absAlign(withLayout, set, edge);
+      const byId = new Map(aligned.map((v) => [v.id, v.layout]));
+      return { ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: byId.get(v.id) } : v)) };
+    });
+  }, [mutatePage]);
+  const distributeSelection = useCallback((ids: string[], axis: DistributeAxis) => {
+    if (ids.length < 3) return;
+    const set = new Set(ids);
+    mutatePage((p) => {
+      const withLayout = p.visuals.filter((v) => v.layout) as Array<DVisual & { layout: AbsRect }>;
+      const dist = absDistribute(withLayout, set, axis);
+      const byId = new Map(dist.map((v) => [v.id, v.layout]));
+      return { ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: byId.get(v.id) } : v)) };
+    });
+  }, [mutatePage]);
+
+  // ── wave-4 free-form canvas handlers ─────────────────────────────────────────
+  /** Commit a batch of drag/resize moves as ONE mutation → one undo entry. */
+  const applyLayoutMoves = useCallback((moves: Array<{ id: string; layout: AbsRect }>) => {
+    if (!moves.length) return;
+    const byId = new Map(moves.map((m) => [m.id, m.layout]));
+    mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: { ...v.layout, ...byId.get(v.id)! } } : v)) }));
+  }, [mutatePage]);
+
+  /** Canvas selection: additive (ctrl/shift) toggles the multi-set; plain click
+   *  selects one (clearing the multi-set); null clears everything. */
+  const onCanvasSelect = useCallback((vid: string | null, additive: boolean) => {
+    if (vid == null) { setSelectedVisual(null); setSelectedVisualIds(new Set()); return; }
+    if (additive) { toggleMultiSelect(vid); return; }
+    setSelectedVisual(vid); setSelectedVisualIds(new Set());
+  }, [toggleMultiSelect]);
+
+  /** Marquee result → multi-set (merged when additive). */
+  const onCanvasMarquee = useCallback((ids: string[], additive: boolean) => {
+    setSelectedVisualIds((prev) => {
+      const next = additive ? new Set(prev) : new Set<string>();
+      for (const x of ids) next.add(x);
+      return next;
+    });
+    if (ids[0]) setSelectedVisual(ids[0]);
+  }, []);
 
   /** Group targeted visuals under one new groupId; ungroup clears it. */
   const groupVisuals = useCallback((ids: string[]) => {
@@ -2043,8 +2206,19 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       w: spec.w && spec.w >= 2 ? Math.min(12, spec.w) : (spec.type === 'card' ? 3 : 6),
       h: spec.h && spec.h >= 1 ? spec.h : 4,
     };
-    mutatePage((p) => ({ ...p, visuals: [...p.visuals, v] }));
-    setSelectedVisual(v.id);
+    mutatePage((p) => {
+      const dims = pageDims(p);
+      const isKpi = KPI_TYPES.has(spec.type);
+      const w = isKpi ? 280 : 480; const h = isKpi ? 200 : 320;
+      const n = p.visuals.length;
+      const z = p.visuals.reduce((m, vv) => Math.max(m, (vv.layout?.z ?? -1)), -1) + 1;
+      const vv: DVisual = { ...v, layout: {
+        x: Math.max(0, Math.min(dims.width - w, 40 + (n % 6) * 28)),
+        y: Math.max(0, Math.min(dims.height - h, 40 + (n % 6) * 28)), w, h, z,
+      } };
+      setSelectedVisual(vv.id);
+      return { ...p, visuals: [...p.visuals, vv] };
+    });
   }, [mutatePage]);
 
   const addCopilotPage = useCallback((name?: string) => {
@@ -2084,9 +2258,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         // Persist the FULL authoring wells (base + additive); queryVisual folds
         // them for the /query call — they round-trip here for faithful reload.
         wells: wireWells(v.wells),
-        // layout carries the wave-2 z-order (list index) additively; x/y/w/h are
-        // the existing keys the sanitizer reads.
-        layout: { x: 0, y: 0, w: v.w, h: v.h, z: v.z ?? vi },
+        // ABSOLUTE free-form layout (px). `unit:'px'` is the marker the loader
+        // reads to treat x/y/w/h as canvas pixels (not 12-col grid spans) — so a
+        // round-trip is lossless and never re-migrates. z = paint order. A visual
+        // that somehow lacks `layout` falls back to its legacy grid w/h.
+        layout: v.layout
+          ? { x: Math.round(v.layout.x), y: Math.round(v.layout.y), w: Math.round(v.layout.w), h: Math.round(v.layout.h), z: v.layout.z ?? vi, unit: 'px' }
+          : { x: 0, y: 0, w: v.w, h: v.h, z: v.z ?? vi },
         format: v.format,
         analytics: v.analytics,
         filters: wireFilters(v.filters || []),
@@ -2346,6 +2524,21 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       { label: 'Theme', actions: [
         { label: 'Themes', icon: <ColorRegular />, onClick: () => setThemesOpen(true), title: 'Restyle every visual — palette, font, background (Loom + custom themes)' },
       ]},
+      // PBI "View" page-layout toggles — independent (snap-to-grid + gridlines).
+      { label: 'Page layout', actions: [
+        {
+          label: 'Snap to grid', icon: <GridDots20Regular />,
+          onClick: () => setSnapGrid((s) => !s),
+          appearance: snapGrid ? 'primary' : undefined,
+          title: 'Snap visuals to the grid when moving or resizing (Power BI "Snap objects to grid")',
+        },
+        {
+          label: 'Gridlines', icon: <Grid20Regular />,
+          onClick: () => setShowGrid((s) => !s),
+          appearance: showGrid ? 'primary' : undefined,
+          title: 'Show alignment gridlines on the canvas',
+        },
+      ]},
       { label: 'Reading', actions: [
         {
           label: personalize.active ? 'Personalizing' : 'Personalize',
@@ -2356,7 +2549,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         },
       ]},
     ]},
-  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew, undo, redo, canUndo, canRedo, personalize.active, personalize.toggleActive]);
+  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew, undo, redo, canUndo, canRedo, personalize.active, personalize.toggleActive, snapGrid, showGrid]);
 
   // ── left: pages ──────────────────────────────────────────────────────────────
   const leftPanel = (
@@ -2397,6 +2590,118 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       {pages.length === 0 && <Caption1 className={styles.muted}>No pages.</Caption1>}
     </div>
   );
+
+  // ── free-form canvas render-props ─────────────────────────────────────────────
+  // The wave-4 FreeFormCanvas owns positioning (absolute drag/resize/snap/guides);
+  // the host supplies each visual's HEADER chrome + live BODY as render-props so
+  // the existing VisualBody (/query render — UNCHANGED) and the card controls
+  // (lock / hide / remove / drill / personalize) ride straight in. Every
+  // interactive control carries data-ff-nodrag so clicking it never starts a move.
+  const pageDimsActive = pageDims(page);
+  const ffVisuals: Array<DVisual & { layout: AbsRect }> = effectiveVisuals.map((v, i) => ({
+    ...v,
+    layout: v.layout ?? { x: 24 + (i % 6) * 24, y: 24 + (i % 6) * 24, w: 480, h: 320, z: i },
+  }));
+  const canvasBg: CSSProperties = {
+    ...(themeVars || {}),
+    ...(page?.background?.color
+      ? { backgroundColor: applyAlpha(page.background.color, page.background.transparency) }
+      : {}),
+  };
+
+  const renderVisualChrome = (v: DVisual): ReactElement => {
+    const fmt = v.format;
+    const showTitle = fmt?.showTitle !== false;
+    const titleText = (fmt?.titleText && fmt.titleText.trim()) || v.title || '(untitled)';
+    const locked = !!v.locked;
+    const drillTargets = (selection && selection.sourceId === v.id)
+      ? pages.map((tp, ti) => ({ tp, ti, seed: drillSeedFor(tp, selection) }))
+          .filter((x) => x.ti !== activePage && x.seed && x.seed.length)
+      : [];
+    return (
+      <>
+        <Badge appearance="tint" size="small" data-ff-nodrag>{VISUALS.find((x) => x.type === v.type)?.label || v.type}</Badge>
+        {v.groupId && (
+          <Tooltip content="Select group" relationship="label">
+            <Badge appearance="outline" size="small" color="brand" data-ff-nodrag style={{ cursor: 'pointer' }}
+              onClick={(e) => { e.stopPropagation(); selectGroup(v.groupId as string); }}>Group</Badge>
+          </Tooltip>
+        )}
+        {v.hidden && <Badge appearance="tint" size="small" color="warning" data-ff-nodrag>Hidden</Badge>}
+        {showTitle
+          ? <Text className={styles.vcardTitle} weight="semibold">{titleText}</Text>
+          : <div className={styles.spacer} />}
+        {drillTargets.length > 0 && (
+          <span data-ff-nodrag>
+            <Menu>
+              <MenuTrigger disableButtonEnhancement>
+                <Tooltip content="Drill through" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<ArrowExpand20Regular />} aria-label="drill through" onClick={(e) => e.stopPropagation()} />
+                </Tooltip>
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>
+                  <MenuGroupHeader>Drill through to</MenuGroupHeader>
+                  {drillTargets.map(({ tp, ti, seed }) => (
+                    <MenuItem key={tp.id} onClick={(e) => { e.stopPropagation(); navigateDrillthrough(ti, seed as ReportFilter[], tp.name); }}>{tp.name}</MenuItem>
+                  ))}
+                </MenuList>
+              </MenuPopover>
+            </Menu>
+          </span>
+        )}
+        {personalize.active ? (
+          <span data-ff-nodrag>
+            <PersonalizePopover
+              visual={v as unknown as PersonalizeVisual}
+              override={personalize.overrideFor(v.id)}
+              fields={fieldOptions(tables)}
+              onChangeType={(t) => personalize.setOverride(v.id, { type: t })}
+              onSwapField={(well, fields) => personalize.setOverride(v.id, { wells: { [well]: fields } })}
+              onReset={() => personalize.resetVisual(v.id)}
+            />
+          </span>
+        ) : (
+          <span data-ff-nodrag style={{ display: 'inline-flex', gap: tokens.spacingHorizontalXXS }}>
+            <Tooltip content={locked ? 'Unlock' : 'Lock'} relationship="label">
+              <Button size="small" appearance="subtle" icon={locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
+                onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { locked: !locked }); }} />
+            </Tooltip>
+            <Tooltip content={v.hidden ? 'Show' : 'Hide'} relationship="label">
+              <Button size="small" appearance="subtle" icon={v.hidden ? <EyeOff20Regular /> : <Eye20Regular />}
+                onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { hidden: !v.hidden }); }} />
+            </Tooltip>
+            <Tooltip content="Bring to front" relationship="label">
+              <Button size="small" appearance="subtle" icon={<PositionToFront20Regular />}
+                onClick={(e) => { e.stopPropagation(); reorderZ([v.id], 'front'); }} />
+            </Tooltip>
+            <Tooltip content="Send to back" relationship="label">
+              <Button size="small" appearance="subtle" icon={<PositionToBack20Regular />}
+                onClick={(e) => { e.stopPropagation(); reorderZ([v.id], 'back'); }} />
+            </Tooltip>
+            <Tooltip content="Remove visual" relationship="label">
+              <Button size="small" appearance="subtle" icon={<Delete20Regular />}
+                onClick={(e) => { e.stopPropagation(); removeVisual(v.id); }} />
+            </Tooltip>
+          </span>
+        )}
+      </>
+    );
+  };
+
+  const renderVisualBody = (v: DVisual): ReactElement => {
+    const drillFilters = drill && drill.toPage === activePage ? drill.filters : [];
+    const merged = [...reportFilters, ...drillFilters, ...(page?.filters || []), ...(v.filters || [])];
+    const interactionMode: InteractionMode = selection && selection.sourceId !== v.id && page
+      ? resolveInteraction({ visuals: page.visuals, interactions: page.interactions }, selection.sourceId, v.id)
+      : 'none';
+    return (
+      <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged}
+        selection={selection} interactionMode={interactionMode}
+        themeChart={themeChart} ai={aiWiring}
+        onSelect={(sel) => setSelection(sel)} />
+    );
+  };
 
   // ── center: canvas ───────────────────────────────────────────────────────────
   const main = (
@@ -2468,6 +2773,8 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           onHide={(hide) => setVisualFlag(arrangeTargets(), { hidden: hide })}
           onMatch={(dim) => matchSize(arrangeTargets(), dim)}
           onZ={(dir) => reorderZ(arrangeTargets(), dir)}
+          onAlign={(edge) => alignSelection(arrangeTargets(), edge)}
+          onDistribute={(axis) => distributeSelection(arrangeTargets(), axis)}
           onGroup={() => groupVisuals(arrangeTargets())}
           onUngroup={() => ungroupVisuals(arrangeTargets())}
           onClear={() => setSelectedVisualIds(new Set())}
@@ -2483,150 +2790,47 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       )}
 
       {!loading && page && page.visuals.length > 0 && (
-        <div className={styles.canvasGrid} ref={gridRef}
-          style={{
-            // Report theme repaints the whole canvas (palette lead + foreground +
-            // background + font) via CSS-var overrides; a per-page background wins.
-            ...(themeVars || {}),
-            ...(page.background?.color
-              ? { backgroundColor: applyAlpha(page.background.color, page.background.transparency), padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }
-              : {}),
-          }}>
-          {effectiveVisuals.map((v, i) => {
-            const fmt = v.format;
-            const showTitle = fmt?.showTitle !== false;
-            const titleText = (fmt?.titleText && fmt.titleText.trim()) || v.title || '(untitled)';
-            const drillFilters = drill && drill.toPage === activePage ? drill.filters : [];
-            const merged = [...reportFilters, ...drillFilters, ...(page.filters || []), ...(v.filters || [])];
-            // Visual-interaction mode for this visual vs the active selection's source.
-            const interactionMode: InteractionMode = selection && selection.sourceId !== v.id
-              ? resolveInteraction({ visuals: page.visuals, interactions: page.interactions }, selection.sourceId, v.id)
-              : 'none';
-            const multi = selectedVisualIds.has(v.id);
-            const locked = !!v.locked;
-            // Drillthrough targets reachable from THIS visual's active selection:
-            // other pages whose drillthrough fields the selection satisfies.
-            const drillTargets = (selection && selection.sourceId === v.id)
-              ? pages.map((tp, ti) => ({ tp, ti, seed: drillSeedFor(tp, selection) }))
-                  .filter((x) => x.ti !== activePage && x.seed && x.seed.length)
-              : [];
-            // Format chrome (background / border / shadow) over the card. The theme
-            // CSS-vars ride on each card too (per the wave-3 spec) so a per-visual
-            // chart wrapper inherits the theme palette/foreground context.
-            const cardStyle: CSSProperties = {
-              ...(themeVars || {}),
-              gridColumn: `span ${Math.min(12, Math.max(2, v.w))}`,
-              minHeight: `${Math.max(180, v.h * 40)}px`,
-            };
-            if (fmt?.background?.color) cardStyle.backgroundColor = applyAlpha(fmt.background.color, fmt.background.transparency);
-            if (fmt?.border?.show) {
-              cardStyle.border = `1px solid ${fmt.border.color || tokens.colorNeutralStroke1}`;
-              if (fmt.border.radius != null) cardStyle.borderRadius = fmt.border.radius;
-            }
-            if (fmt?.shadow?.show) cardStyle.boxShadow = tokens.shadow16;
-            return (
-            <div key={v.id}
-              className={mergeClasses(
-                styles.vcard,
-                selectedVisual === v.id && styles.vcardSel,
-                multi && styles.vcardMulti,
-                v.hidden && styles.vcardHidden,
-                locked && styles.vcardLocked,
-                canvas.draggingId === v.id && styles.vcardDragging,
-                canvas.dropIndicator?.id === v.id && canvas.dropIndicator.side === 'before' && styles.vcardDropBefore,
-                canvas.dropIndicator?.id === v.id && canvas.dropIndicator.side === 'after' && styles.vcardDropAfter,
-              )}
-              style={cardStyle}
-              onClick={(e) => {
-                // Ctrl/Shift-click → toggle in the Arrange multi-set; plain click → single select.
-                if (e.ctrlKey || e.metaKey || e.shiftKey) { e.preventDefault(); toggleMultiSelect(v.id); }
-                else { setSelectedVisual(v.id); setSelectedVisualIds(new Set()); }
-              }}
-              {...canvas.getDropTargetProps(v)}>
-              <div className={styles.vcardHead}>
-                {/* Drag-to-reposition grip is disabled on a locked visual. */}
-                {locked
-                  ? <span className={styles.vcardDragHandle} style={{ cursor: 'not-allowed', opacity: 0.5 }} title="Locked"><LockClosed20Regular /></span>
-                  : <span className={styles.vcardDragHandle} title="Drag to reposition" {...canvas.getDragHandleProps(v)}><ReOrderDotsVertical20Regular /></span>}
-                <Badge appearance="tint" size="small">{VISUALS.find((x) => x.type === v.type)?.label || v.type}</Badge>
-                {v.groupId && (
-                  <Tooltip content="Select group" relationship="label">
-                    <Badge appearance="outline" size="small" color="brand"
-                      style={{ cursor: 'pointer' }}
-                      onClick={(e) => { e.stopPropagation(); selectGroup(v.groupId as string); }}>Group</Badge>
-                  </Tooltip>
-                )}
-                {v.hidden && <Badge appearance="tint" size="small" color="warning">Hidden</Badge>}
-                {showTitle
-                  ? <Text className={styles.vcardTitle} weight="semibold">{titleText}</Text>
-                  : <div className={styles.spacer} />}
-                {drillTargets.length > 0 && (
-                  <Menu>
-                    <MenuTrigger disableButtonEnhancement>
-                      <Tooltip content="Drill through" relationship="label">
-                        <Button size="small" appearance="subtle" icon={<ArrowExpand20Regular />} aria-label="drill through" onClick={(e) => e.stopPropagation()} />
-                      </Tooltip>
-                    </MenuTrigger>
-                    <MenuPopover>
-                      <MenuList>
-                        <MenuGroupHeader>Drill through to</MenuGroupHeader>
-                        {drillTargets.map(({ tp, ti, seed }) => (
-                          <MenuItem key={tp.id} onClick={(e) => { e.stopPropagation(); navigateDrillthrough(ti, seed as ReportFilter[], tp.name); }}>{tp.name}</MenuItem>
-                        ))}
-                      </MenuList>
-                    </MenuPopover>
-                  </Menu>
-                )}
-                {/* Personalize (reading mode): per-visual override popover. The
-                    editing affordances are hidden — the shared definition is
-                    read-only — so neither is a dead control. */}
-                {personalize.active ? (
-                  <PersonalizePopover
-                    visual={v as unknown as PersonalizeVisual}
-                    override={personalize.overrideFor(v.id)}
-                    fields={fieldOptions(tables)}
-                    onChangeType={(t) => personalize.setOverride(v.id, { type: t })}
-                    onSwapField={(well, fields) => personalize.setOverride(v.id, { wells: { [well]: fields } })}
-                    onReset={() => personalize.resetVisual(v.id)}
-                  />
-                ) : (
-                  <>
-                    <Tooltip content={locked ? 'Unlock' : 'Lock'} relationship="label">
-                      <Button size="small" appearance="subtle" icon={locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
-                        onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { locked: !locked }); }} />
-                    </Tooltip>
-                    <Tooltip content={v.hidden ? 'Show' : 'Hide'} relationship="label">
-                      <Button size="small" appearance="subtle" icon={v.hidden ? <EyeOff20Regular /> : <Eye20Regular />}
-                        onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { hidden: !v.hidden }); }} />
-                    </Tooltip>
-                    <Tooltip content="Move left" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronUp20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, -1); }} disabled={i === 0} /></Tooltip>
-                    <Tooltip content="Move right" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronDown20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, 1); }} disabled={i === page.visuals.length - 1} /></Tooltip>
-                    <Tooltip content="Remove visual" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); removeVisual(v.id); }} /></Tooltip>
-                  </>
-                )}
-              </div>
-              <div className={styles.vcardBody}>
-                <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged}
-                  selection={selection} interactionMode={interactionMode}
-                  themeChart={themeChart} ai={aiWiring}
-                  onSelect={(sel) => setSelection(sel)} />
-              </div>
-              {/* Resize grip is disabled on a locked visual / in personalize mode (no dead control: it's gone). */}
-              {!locked && !personalize.active && (
-                <div className={styles.resizeHandle} title="Drag to resize, or focus and use arrow keys"
-                  {...canvas.getResizeHandleProps(v)} />
-              )}
-            </div>
-            );
-          })}
+        <div ref={gridRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          <FreeFormCanvas<DVisual & { layout: AbsRect }>
+            visuals={ffVisuals}
+            page={{ width: pageDimsActive.width, height: pageDimsActive.height, background: canvasBg }}
+            selectedId={selectedVisual}
+            selectedIds={selectedVisualIds}
+            snapToGrid={snapGrid}
+            showGrid={showGrid}
+            readOnly={personalize.active}
+            onSelect={onCanvasSelect}
+            onMarquee={onCanvasMarquee}
+            onLayout={applyLayoutMoves}
+            onDelete={(ids) => ids.forEach((vid) => removeVisual(vid))}
+            renderChrome={(v) => renderVisualChrome(v)}
+            renderVisual={(v) => renderVisualBody(v)}
+            frameStyle={(v) => {
+              // Wave-3 Format-pane chrome over the frame: per-visual background,
+              // border, and shadow (the same fmt the old card applied — no regress).
+              const fmt = v.format;
+              const s: CSSProperties = {};
+              if (fmt?.background?.color) s.backgroundColor = applyAlpha(fmt.background.color, fmt.background.transparency);
+              if (fmt?.border?.show) {
+                s.border = `1px solid ${fmt.border.color || tokens.colorNeutralStroke1}`;
+                if (fmt.border.radius != null) s.borderRadius = fmt.border.radius;
+              }
+              if (fmt?.shadow?.show) s.boxShadow = tokens.shadow16;
+              return s;
+            }}
+          />
         </div>
       )}
     </div>
   );
 
   // ── right: visualizations + fields ──────────────────────────────────────────
-  const sizes: { label: string; w: number }[] = [
-    { label: 'S', w: 3 }, { label: 'M', w: 6 }, { label: 'L', w: 9 }, { label: 'XL', w: 12 },
+  // Size presets — fractions of the page sheet (the free-form canvas is absolute,
+  // so S/M/L/XL set the visual's px width to ¼ / ½ / ¾ / full page width with a
+  // proportional height, the keyboard-accessible alternative to dragging a grip).
+  const sizes: { label: string; frac: number; w: number }[] = [
+    { label: 'S', frac: 0.25, w: 3 }, { label: 'M', frac: 0.5, w: 6 },
+    { label: 'L', frac: 0.75, w: 9 }, { label: 'XL', frac: 1, w: 12 },
   ];
   const rightPanel = (
     <div className={styles.pane}>
@@ -2652,13 +2856,17 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       )}
       {rightTab === 'selection' && (
         <SelectionPane
-          visuals={page?.visuals || []}
+          visuals={(page?.visuals || []).map((v) => ({ ...v, z: v.layout?.z ?? v.z }))}
           selectedId={selectedVisual}
           onSelect={(vid) => { setSelectedVisual(vid); setSelectedVisualIds(new Set()); }}
           onToggleVisible={(vid, hidden) => setVisualFlag([vid], { hidden })}
           onReorderZ={(zById) => mutatePage((p) => ({
             ...p,
-            visuals: p.visuals.map((v) => (zById[v.id] !== undefined ? { ...v, z: zById[v.id] } : v)),
+            // Mirror the new paint order into BOTH the legacy `z` and the absolute
+            // `layout.z` the free-form canvas layers visuals by — kept in sync.
+            visuals: p.visuals.map((v) => (zById[v.id] !== undefined
+              ? { ...v, z: zById[v.id], layout: v.layout ? { ...v.layout, z: zById[v.id] } : v.layout }
+              : v)),
           }))}
           onGroup={(ids) => groupVisuals(ids)}
           onUngroup={(gid) => {
@@ -2738,13 +2946,16 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       <Title3>Visualizations</Title3>
       <div className={styles.gallery}>
         {VISUALS.filter((vt) => vt.group !== 'ai').map((vt) => (
-          <button key={vt.type} type="button"
-            className={mergeClasses(styles.galleryBtn, selected?.type === vt.type && styles.galleryBtnActive)}
-            onClick={() => (selected ? mutateVisual(selected.id, (v) => ({ ...v, type: vt.type })) : addVisual(vt.type))}
-            title={selected ? `change to ${vt.label}` : `add a ${vt.label}`}>
-            {vt.icon}
-            <Caption1>{vt.label}</Caption1>
-          </button>
+          <Tooltip key={vt.type} content={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`} relationship="label">
+            <button type="button"
+              aria-label={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`}
+              aria-pressed={selected?.type === vt.type}
+              className={mergeClasses(styles.galleryBtn, selected?.type === vt.type && styles.galleryBtnActive)}
+              onClick={() => (selected ? mutateVisual(selected.id, (v) => ({ ...v, type: vt.type })) : addVisual(vt.type))}>
+              <span className={mergeClasses(styles.galleryIcon, selected?.type === vt.type && styles.galleryIconActive)} aria-hidden>{vt.icon}</span>
+              <Caption1 className={styles.galleryLabel}>{vt.label}</Caption1>
+            </button>
+          </Tooltip>
         ))}
       </div>
 
@@ -2756,13 +2967,16 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       </div>
       <div className={styles.gallery}>
         {VISUALS.filter((vt) => vt.group === 'ai').map((vt) => (
-          <button key={vt.type} type="button"
-            className={mergeClasses(styles.galleryBtn, selected?.type === vt.type && styles.galleryBtnActive)}
-            onClick={() => (selected ? mutateVisual(selected.id, (v) => ({ ...v, type: vt.type })) : addVisual(vt.type))}
-            title={selected ? `change to ${vt.label}` : `add a ${vt.label}`}>
-            {vt.icon}
-            <Caption1>{vt.label}</Caption1>
-          </button>
+          <Tooltip key={vt.type} content={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`} relationship="label">
+            <button type="button"
+              aria-label={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`}
+              aria-pressed={selected?.type === vt.type}
+              className={mergeClasses(styles.galleryBtn, selected?.type === vt.type && styles.galleryBtnActive)}
+              onClick={() => (selected ? mutateVisual(selected.id, (v) => ({ ...v, type: vt.type })) : addVisual(vt.type))}>
+              <span className={mergeClasses(styles.galleryIcon, selected?.type === vt.type && styles.galleryIconActive)} aria-hidden>{vt.icon}</span>
+              <Caption1 className={styles.galleryLabel}>{vt.label}</Caption1>
+            </button>
+          </Tooltip>
         ))}
       </div>
 
@@ -2780,10 +2994,22 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           <div className={styles.section}>
             <Caption1><strong>Size</strong></Caption1>
             <div className={styles.toolbar}>
-              {sizes.map((s) => (
-                <Button key={s.label} size="small" appearance={selected.w === s.w ? 'primary' : 'outline'}
-                  onClick={() => mutateVisual(selected.id, (v) => ({ ...v, w: s.w }))}>{s.label}</Button>
-              ))}
+              {sizes.map((s) => {
+                const dims = pageDims(page);
+                const targetW = Math.round(dims.width * s.frac) - (s.frac < 1 ? 24 : 0);
+                const active = selected.layout ? Math.abs(selected.layout.w - targetW) <= 4 : selected.w === s.w;
+                return (
+                  <Button key={s.label} size="small" appearance={active ? 'primary' : 'outline'}
+                    onClick={() => mutateVisual(selected.id, (v) => {
+                      const w = Math.max(80, targetW);
+                      const h = Math.round(w * 0.66);
+                      const base = v.layout ?? { x: 24, y: 24, w, h, z: 0 };
+                      const x = Math.min(base.x, Math.max(0, dims.width - w));
+                      const y = Math.min(base.y, Math.max(0, dims.height - h));
+                      return { ...v, w: s.w, layout: { ...base, x, y, w, h } };
+                    })}>{s.label}</Button>
+                );
+              })}
             </div>
           </div>
 
@@ -3171,10 +3397,11 @@ function PageFormatPanel({ styles, page, fieldOpts, onChange }: {
  * z-order (front/back), group/ungroup. Every control mutates the persisted layout
  * — no dead buttons (ui-parity.md / no-vaporware.md).
  */
-function ArrangeBar({ styles, targets, visuals, onLock, onHide, onMatch, onZ, onGroup, onUngroup, onClear }: {
+function ArrangeBar({ styles, targets, visuals, onLock, onHide, onMatch, onZ, onAlign, onDistribute, onGroup, onUngroup, onClear }: {
   styles: Styles; targets: string[]; visuals: DVisual[];
   onLock: (lock: boolean) => void; onHide: (hide: boolean) => void;
   onMatch: (dim: 'w' | 'h') => void; onZ: (dir: 'front' | 'back') => void;
+  onAlign: (edge: AlignEdge) => void; onDistribute: (axis: DistributeAxis) => void;
   onGroup: () => void; onUngroup: () => void; onClear: () => void;
 }) {
   const set = new Set(targets);
@@ -3183,6 +3410,7 @@ function ArrangeBar({ styles, targets, visuals, onLock, onHide, onMatch, onZ, on
   const allHidden = picked.length > 0 && picked.every((v) => v.hidden);
   const anyGrouped = picked.some((v) => v.groupId);
   const multi = targets.length >= 2;
+  const canDistribute = targets.length >= 3;
   return (
     <div className={styles.arrangeBar} role="toolbar" aria-label="Arrange selected visuals">
       <Badge appearance="tint" color="brand">{targets.length} selected</Badge>
@@ -3194,6 +3422,29 @@ function ArrangeBar({ styles, targets, visuals, onLock, onHide, onMatch, onZ, on
         <Button size="small" appearance="subtle" icon={allHidden ? <EyeOff20Regular /> : <Eye20Regular />}
           onClick={() => onHide(!allHidden)}>{allHidden ? 'Show' : 'Hide'}</Button>
       </Tooltip>
+      {/* Align — PBI Format ▸ Align (left/center/right/top/middle/bottom). Acts on
+          the absolute canvas rects; needs ≥2 selected. */}
+      <Menu>
+        <MenuTrigger disableButtonEnhancement>
+          <Button size="small" appearance="subtle" icon={<AlignLeft20Regular />} disabled={!multi}>Align</Button>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuGroupHeader>Align</MenuGroupHeader>
+            <MenuItem icon={<AlignLeft20Regular />} onClick={() => onAlign('left')}>Align left</MenuItem>
+            <MenuItem icon={<AlignCenterHorizontal20Regular />} onClick={() => onAlign('center')}>Align center</MenuItem>
+            <MenuItem icon={<AlignRight20Regular />} onClick={() => onAlign('right')}>Align right</MenuItem>
+            <MenuDivider />
+            <MenuItem icon={<AlignTop20Regular />} onClick={() => onAlign('top')}>Align top</MenuItem>
+            <MenuItem icon={<AlignCenterVertical20Regular />} onClick={() => onAlign('middle')}>Align middle</MenuItem>
+            <MenuItem icon={<AlignBottom20Regular />} onClick={() => onAlign('bottom')}>Align bottom</MenuItem>
+            <MenuDivider />
+            <MenuGroupHeader>Distribute</MenuGroupHeader>
+            <MenuItem icon={<AlignSpaceEvenlyHorizontal20Regular />} disabled={!canDistribute} onClick={() => onDistribute('horizontal')}>Distribute horizontally</MenuItem>
+            <MenuItem icon={<AlignSpaceEvenlyVertical20Regular />} disabled={!canDistribute} onClick={() => onDistribute('vertical')}>Distribute vertically</MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
       <Tooltip content="Match width" relationship="label">
         <Button size="small" appearance="subtle" icon={<ArrowExpand20Regular />} disabled={!multi} onClick={() => onMatch('w')}>Match width</Button>
       </Tooltip>

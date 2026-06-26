@@ -436,7 +436,7 @@ interface VisualIn {
   type?: unknown;
   title?: unknown;
   wells?: Record<string, unknown>;
-  layout?: { x?: unknown; y?: unknown; w?: unknown; h?: unknown; z?: unknown };
+  layout?: { x?: unknown; y?: unknown; w?: unknown; h?: unknown; z?: unknown; unit?: unknown };
   format?: unknown;
   analytics?: unknown;
   filters?: unknown;
@@ -1275,6 +1275,10 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         y: num(v.layout?.y, 0),
         w: Math.max(1, num(v.layout?.w, 6)),
         h: Math.max(1, num(v.layout?.h, 4)),
+        // Persist the coordinate-space marker so the free-form canvas reloads
+        // absolute px layouts exactly (legacy flow-grid records have no unit and
+        // are migrated to absolute on load). Only 'px'/'grid' are accepted.
+        ...(v.layout?.unit === 'px' || v.layout?.unit === 'grid' ? { unit: v.layout.unit } : {}),
       };
       // v2 additive extras — structured + whitelisted; omitted when empty so the
       // persisted `config` stays minimal and the legacy viewer is unaffected.

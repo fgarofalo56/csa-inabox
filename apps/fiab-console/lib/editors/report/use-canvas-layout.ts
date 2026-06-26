@@ -797,3 +797,233 @@ export function useCanvasLayout<
     ungroup: ungroupSelection,
   };
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// ABSOLUTE FREE-FORM LAYOUT (Power BI Desktop parity) — pure, React-free math
+// ════════════════════════════════════════════════════════════════════════════
+// The wave-4 canvas (./free-form-canvas.tsx) abandons the 12-column document flow
+// for an ABSOLUTE page, where each visual owns a pixel rect `{ x, y, w, h, z }` on
+// a fixed-aspect sheet (default 1280×720, the PBI 16:9 page). These helpers are
+// the Loom-native equivalents of PBI's move / resize / snap-to-grid / smart-guide
+// / align / distribute / z-order math — kept as pure transforms (like
+// packGridPositions/reorderVisuals above) so the canvas component stays thin and
+// the math is unit-testable without React. They persist nothing themselves; the
+// designer commits the resulting rects into `visual.config.layout` via /definition.
+
+/** An absolute page rect in canvas px. `z` is the paint order (Selection pane). */
+export interface AbsRect { x: number; y: number; w: number; h: number; z?: number }
+/** Page dimensions in canvas px. */
+export interface PageDims { width: number; height: number }
+/** The 8 resize-handle ids (4 corners + 4 edges). */
+export type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+
+/** Minimum visual size (px) — a visual never resizes below this (PBI clamps too). */
+export const MIN_W = 80;
+export const MIN_H = 60;
+
+const r1 = (n: number): number => Math.round(Number.isFinite(n) ? n : 0);
+
+/** Clamp a rect to ≥ min size and inside `[0..page]` (keeps a visual on the sheet,
+ *  but never shrinks it below the min just to fit — a too-big rect is pinned to 0). */
+export function clampRect(rect: AbsRect, page: PageDims): AbsRect {
+  const w = Math.max(MIN_W, Math.min(page.width, r1(rect.w)));
+  const h = Math.max(MIN_H, Math.min(page.height, r1(rect.h)));
+  const x = Math.max(0, Math.min(page.width - w, r1(rect.x)));
+  const y = Math.max(0, Math.min(page.height - h, r1(rect.y)));
+  return { x, y, w, h, z: rect.z };
+}
+
+/** Snap every coordinate of a rect to the nearest `cell` multiple. */
+export function snapRect(rect: AbsRect, cell: number): AbsRect {
+  const c = Math.max(1, r1(cell));
+  const s = (n: number) => Math.round(n / c) * c;
+  return { x: s(rect.x), y: s(rect.y), w: Math.max(MIN_W, s(rect.w)), h: Math.max(MIN_H, s(rect.h)), z: rect.z };
+}
+
+/** Apply a pointer delta to a rect for the given resize handle, enforcing the
+ *  min size by pinning the moving edge (so a corner drag past the min anchors the
+ *  opposite edge — exactly like dragging a PBI frame grip). */
+export function resizeRect(origin: AbsRect, handle: ResizeHandle, dx: number, dy: number): AbsRect {
+  let { x, y, w, h } = origin;
+  const right = origin.x + origin.w;
+  const bottom = origin.y + origin.h;
+  if (handle.includes('e')) w = origin.w + dx;
+  if (handle.includes('s')) h = origin.h + dy;
+  if (handle.includes('w')) { x = origin.x + dx; w = origin.w - dx; }
+  if (handle.includes('n')) { y = origin.y + dy; h = origin.h - dy; }
+  // enforce min by clamping the moving edge against the fixed one
+  if (w < MIN_W) { if (handle.includes('w')) x = right - MIN_W; w = MIN_W; }
+  if (h < MIN_H) { if (handle.includes('n')) y = bottom - MIN_H; h = MIN_H; }
+  return { x: r1(x), y: r1(y), w: r1(w), h: r1(h), z: origin.z };
+}
+
+/**
+ * Smart-guide snapping (PBI "smart guides"): align the moving rect's edges/centers
+ * to nearby visuals + the page, within `threshold` px. For a MOVE (no `handle`)
+ * the whole rect shifts onto the best vertical + horizontal guide. For a RESIZE
+ * (`handle` set) only the moving edge(s) snap (the opposite edge is anchored).
+ * Returns the snapped rect plus the guide-line coordinates to draw.
+ */
+export function computeGuides(
+  rect: AbsRect,
+  others: AbsRect[],
+  page: PageDims,
+  threshold = 6,
+  handle?: ResizeHandle,
+): { snapped: AbsRect; vLines: number[]; hLines: number[] } {
+  // candidate vertical lines (x) + horizontal lines (y) from peers + page frame
+  const xs: number[] = [0, page.width / 2, page.width];
+  const ys: number[] = [0, page.height / 2, page.height];
+  for (const o of others) {
+    xs.push(o.x, o.x + o.w / 2, o.x + o.w);
+    ys.push(o.y, o.y + o.h / 2, o.y + o.h);
+  }
+  const nearest = (anchors: number[], cands: number[]): { delta: number; line: number } | null => {
+    let best: { delta: number; line: number } | null = null;
+    for (const a of anchors) for (const c of cands) {
+      const d = c - a;
+      if (Math.abs(d) <= threshold && (!best || Math.abs(d) < Math.abs(best.delta))) best = { delta: d, line: c };
+    }
+    return best;
+  };
+  let { x, y, w, h } = rect;
+  const vLines: number[] = [];
+  const hLines: number[] = [];
+
+  if (!handle) {
+    const vx = nearest([x, x + w / 2, x + w], xs);
+    if (vx) { x += vx.delta; vLines.push(vx.line); }
+    const hy = nearest([y, y + h / 2, y + h], ys);
+    if (hy) { y += hy.delta; hLines.push(hy.line); }
+  } else {
+    const right = x + w; const bottom = y + h;
+    if (handle.includes('w')) { const s = nearest([x], xs); if (s) { x += s.delta; w -= s.delta; vLines.push(s.line); } }
+    if (handle.includes('e')) { const s = nearest([right], xs); if (s) { w += s.delta; vLines.push(s.line); } }
+    if (handle.includes('n')) { const s = nearest([y], ys); if (s) { y += s.delta; h -= s.delta; hLines.push(s.line); } }
+    if (handle.includes('s')) { const s = nearest([bottom], ys); if (s) { h += s.delta; hLines.push(s.line); } }
+  }
+  return { snapped: { x: r1(x), y: r1(y), w: Math.max(MIN_W, r1(w)), h: Math.max(MIN_H, r1(h)), z: rect.z }, vLines, hLines };
+}
+
+/** Visuals whose rect INTERSECTS the marquee rect (PBI rubber-band select). */
+export function marqueeHits(
+  marquee: AbsRect,
+  visuals: Array<{ id: string; layout: AbsRect }>,
+): string[] {
+  const mx2 = marquee.x + marquee.w;
+  const my2 = marquee.y + marquee.h;
+  return visuals
+    .filter((v) => {
+      const r = v.layout;
+      return r.x < mx2 && r.x + r.w > marquee.x && r.y < my2 && r.y + r.h > marquee.y;
+    })
+    .map((v) => v.id);
+}
+
+/**
+ * Back-compat: migrate legacy FLOW-grid visuals (12-col `w` span + `h` row units)
+ * to absolute `layout` rects via a left-to-right shelf-pack in reading order — so
+ * a report authored on the old grid opens as a sensible, non-overlapping free-form
+ * page. `cols` columns of width `page.width/cols`; a visual's px height derives
+ * from the old `minHeight: max(180, h*40)` card rule; shelves wrap when a row is
+ * full and stack at the running max bottom. Idempotent for already-absolute input
+ * (callers gate on a `unit:'px'` marker before invoking this).
+ */
+export function migrateFlowToAbsolute<T extends { w?: number; h?: number }>(
+  visuals: T[],
+  page: PageDims,
+  cols = 12,
+  gap = 12,
+): Array<T & { layout: AbsRect }> {
+  const colW = page.width / cols;
+  let cursorCol = 0;
+  let shelfTop = gap;
+  let shelfH = 0;
+  return visuals.map((v, i) => {
+    const span = Math.min(cols, Math.max(1, Math.round(Number(v.w) || 6)));
+    const hUnits = Math.max(1, Math.round(Number(v.h) || 4));
+    const pw = Math.round(span * colW - gap);
+    const ph = Math.max(MIN_H, Math.max(180, hUnits * 40));
+    if (cursorCol + span > cols) { cursorCol = 0; shelfTop += shelfH + gap; shelfH = 0; }
+    const x = Math.round(cursorCol * colW + gap / 2);
+    const y = Math.round(shelfTop);
+    cursorCol += span;
+    shelfH = Math.max(shelfH, ph);
+    return { ...v, layout: { x, y, w: Math.max(MIN_W, pw), h: ph, z: i } };
+  });
+}
+
+/** Align selected absolute rects to the selection's bounding box on one edge
+ *  (PBI Format → Align). ≥2 selected; non-selected returned untouched. */
+export function absAlign<V extends { id: string; layout: AbsRect }>(
+  visuals: V[], ids: Set<string>, edge: AlignEdge,
+): V[] {
+  const sel = visuals.filter((v) => ids.has(v.id));
+  if (sel.length < 2) return visuals;
+  const minL = Math.min(...sel.map((v) => v.layout.x));
+  const maxR = Math.max(...sel.map((v) => v.layout.x + v.layout.w));
+  const minT = Math.min(...sel.map((v) => v.layout.y));
+  const maxB = Math.max(...sel.map((v) => v.layout.y + v.layout.h));
+  const cx = (minL + maxR) / 2; const cy = (minT + maxB) / 2;
+  return visuals.map((v) => {
+    if (!ids.has(v.id)) return v;
+    const L = v.layout; let nx = L.x; let ny = L.y;
+    switch (edge) {
+      case 'left': nx = minL; break;
+      case 'right': nx = maxR - L.w; break;
+      case 'center': nx = Math.round(cx - L.w / 2); break;
+      case 'top': ny = minT; break;
+      case 'bottom': ny = maxB - L.h; break;
+      case 'middle': ny = Math.round(cy - L.h / 2); break;
+    }
+    return (nx === L.x && ny === L.y) ? v : { ...v, layout: { ...L, x: nx, y: ny } };
+  });
+}
+
+/** Distribute selected absolute rects so inter-visual gaps are equal along the
+ *  axis (PBI Distribute horizontally/vertically). ≥3 selected. */
+export function absDistribute<V extends { id: string; layout: AbsRect }>(
+  visuals: V[], ids: Set<string>, axis: DistributeAxis,
+): V[] {
+  const sel = visuals.filter((v) => ids.has(v.id));
+  if (sel.length < 3) return visuals;
+  const horiz = axis === 'horizontal';
+  const start = (v: V) => (horiz ? v.layout.x : v.layout.y);
+  const size = (v: V) => (horiz ? v.layout.w : v.layout.h);
+  const sorted = sel.slice().sort((a, b) => start(a) - start(b));
+  const first = sorted[0]; const last = sorted[sorted.length - 1];
+  const span = (start(last) + size(last)) - start(first);
+  const sumSizes = sorted.reduce((acc, v) => acc + size(v), 0);
+  const gap = (span - sumSizes) / (sorted.length - 1);
+  const placed = new Map<string, number>();
+  let cursor = start(first);
+  for (const v of sorted) { placed.set(v.id, Math.round(cursor)); cursor += size(v) + gap; }
+  return visuals.map((v) => {
+    if (!ids.has(v.id)) return v;
+    const s = placed.get(v.id);
+    if (s == null) return v;
+    const L = v.layout;
+    return horiz
+      ? (s === L.x ? v : { ...v, layout: { ...L, x: s } })
+      : (s === L.y ? v : { ...v, layout: { ...L, y: s } });
+  });
+}
+
+/** Re-number `layout.z` so the selected ids paint in front (front) or behind
+ *  (back) every other visual, preserving relative order otherwise. */
+export function reorderZ<V extends { id: string; layout: AbsRect }>(
+  visuals: V[], ids: Set<string>, dir: 'front' | 'back',
+): V[] {
+  const ordered = visuals
+    .map((v, i) => ({ v, i, z: Number.isFinite(Number(v.layout.z)) ? Number(v.layout.z) : i }))
+    .sort((a, b) => (a.z - b.z) || (a.i - b.i));
+  const picked = ordered.filter((o) => ids.has(o.v.id));
+  const rest = ordered.filter((o) => !ids.has(o.v.id));
+  const seq = dir === 'front' ? [...rest, ...picked] : [...picked, ...rest];
+  const zById = new Map<string, number>();
+  seq.forEach((o, i) => zById.set(o.v.id, i));
+  return visuals.map((v) => {
+    const nz = zById.get(v.id);
+    return nz != null && nz !== v.layout.z ? { ...v, layout: { ...v.layout, z: nz } } : v;
+  });
+}
