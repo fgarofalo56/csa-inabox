@@ -41,6 +41,7 @@ import {
   Spinner, Subtitle2, Text, Title3, Tooltip,
   Tree, TreeItem, TreeItemLayout, TabList, Tab,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
+  Slider, Checkbox,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
@@ -51,13 +52,24 @@ import {
   Database20Regular, CloudArrowUp20Regular, ColorRegular, ReOrderDotsVertical20Regular,
   Copy20Regular, Options20Regular, DataTrending20Regular, Eye16Regular, EyeOff16Regular,
   Info16Regular,
+  // ── wave-2 additions ─────────────────────────────────────────────────────────
+  Map20Regular, Play20Regular, Pause20Regular,
+  Layer20Regular, LockClosed20Regular, LockOpen20Regular,
+  Group20Regular, GroupDismiss20Regular,
+  PositionToFront20Regular, PositionToBack20Regular,
+  ArrowUndo20Regular, ArrowRedo20Regular, ArrowExpand20Regular,
+  Bookmark20Regular, BookmarkAdd20Regular, BookmarkMultiple20Regular,
+  Eye20Regular, EyeOff20Regular, Checkmark20Regular, ArrowExit20Regular,
 } from '@fluentui/react-icons';
 import type { CSSProperties, ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
-import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
+import {
+  LoomChart, type LoomChartType,
+  type ChartErrorBar, type ChartForecast, type ChartSymmetry,
+} from '@/lib/components/charts/loom-chart';
 import { ReportPowerBiCopilot, type CopilotVisualSpec } from '@/lib/components/report/report-powerbi-copilot';
 import { DataSourcePicker } from './report/data-source-picker';
 import { FormatPane, type ReportVisualFormat, formatValue, LOOM_DATA_PALETTE } from './report/format-pane';
@@ -68,10 +80,12 @@ import { FormatPane, type ReportVisualFormat, formatValue, LOOM_DATA_PALETTE } f
 // MOUNTS these — the canonical implementations live in ./report/*.
 import {
   FiltersPane, fieldOptions, reFilters, wireFilters, applyFilters,
-  type ReportFilter,
+  parseFilterPaneFormat, wireFilterPaneFormat,
+  type ReportFilter, type FieldOpt, type FilterPaneFormat,
 } from './report/filters-pane';
 import {
-  AnalyticsPane, computeReferenceLines, seriesNamesFromRows, parseAnalytics,
+  AnalyticsPane, computeReferenceLines, computeErrorBars, computeForecast, computeSymmetry,
+  seriesNamesFromRows, parseAnalytics,
   CARTESIAN_VISUAL_TYPES,
   type ReportAnalytics,
 } from './report/analytics-pane';
@@ -85,6 +99,17 @@ import {
   type ReportDataSource, isBound, describeSource, fromLegacyState, parseDataSource,
 } from './report/report-data-source';
 import { useCanvasLayout } from './report/use-canvas-layout';
+// Wave-2 right-rail panes (extracted, self-contained, PBI-parity). These are the
+// canonical Bookmarks + Selection panes — report-designer MOUNTS them (the model
+// matches the /definition route's bookmark sanitizer). The previously-inline
+// duplicate panes + flat bookmark model were removed; everything below consumes
+// these imports (capture / apply are the pure helpers; the panes own their UI).
+import {
+  BookmarksPane, parseBookmarks, wireBookmarks,
+  captureBookmark as captureBookmarkState, applyBookmark as bookmarkToPatch, newBookmark,
+  type ReportBookmark, type BookmarkScope, type BookmarkApply, type BookmarkCaptureSource,
+} from './report/bookmarks-pane';
+import { SelectionPane } from './report/selection-pane';
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
@@ -101,7 +126,9 @@ import { useCanvasLayout } from './report/use-canvas-layout';
  */
 type VisualType =
   | 'table' | 'matrix' | 'card' | 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'scatter' | 'slicer'
-  | 'combo' | 'waterfall' | 'funnel' | 'gauge' | 'kpi' | 'treemap' | 'multiRowCard' | 'ribbon';
+  | 'combo' | 'waterfall' | 'funnel' | 'gauge' | 'kpi' | 'treemap' | 'multiRowCard' | 'ribbon'
+  // ── wave-2 gallery addition ──────────────────────────────────────────────────
+  | 'map';
 
 type Agg = 'Sum' | 'Avg' | 'Count' | 'Min' | 'Max';
 const AGGS: Agg[] = ['Sum', 'Avg', 'Count', 'Min', 'Max'];
@@ -114,7 +141,12 @@ const AGGS: Agg[] = ['Sum', 'Avg', 'Count', 'Min', 'Max'];
  */
 type WellName =
   | 'category' | 'values' | 'legend'
-  | 'secondaryValues' | 'target' | 'minimum' | 'maximum' | 'smallMultiples' | 'tooltips' | 'details';
+  | 'secondaryValues' | 'target' | 'minimum' | 'maximum' | 'smallMultiples' | 'tooltips' | 'details'
+  // ── wave-2 additive wells ────────────────────────────────────────────────────
+  // size      → scatter→bubble radius (3rd plotted measure) / map bubble size
+  // playAxis  → scatter Play-axis frame dimension (an extra grouped category)
+  // latitude/longitude → map location wells (grouped category; render is gated)
+  | 'size' | 'playAxis' | 'latitude' | 'longitude';
 
 interface WellField {
   uid: string;
@@ -135,6 +167,11 @@ interface Wells {
   smallMultiples?: WellField[];  // charts: trellis group (persisted; NOT plotted yet — Wave 2)
   tooltips?: WellField[];        // charts: hover-only measures (persisted; NEVER plotted — Wave 2 hover)
   details?: WellField[];         // treemap: detail sub-group (persisted; NOT plotted yet — Wave 2)
+  // ── wave-2 additive wells (all optional) ─────────────────────────────────────
+  size?: WellField[];            // scatter→bubble radius / map size (folded into plotted values)
+  playAxis?: WellField[];        // scatter Play-axis frame field (folded as an extra category)
+  latitude?: WellField[];        // map latitude (folded as a category; render gated)
+  longitude?: WellField[];       // map longitude (folded as a category; render gated)
 }
 
 /** PBI canvas page type (16:9 / 4:3 / Letter / Tooltip / Custom). */
@@ -154,7 +191,20 @@ interface DVisual {
   analytics?: ReportAnalytics;
   /** Filters scoped to this visual only. */
   filters?: ReportFilter[];
+  // ── wave-2 canvas/object state (Selection pane + Arrange toolbar) ─────────────
+  /** Hidden from the report (Selection pane eye-toggle). Faded + skipped in render. */
+  hidden?: boolean;
+  /** Locked: drag/resize disabled on the canvas (Arrange → Lock). */
+  locked?: boolean;
+  /** Z-order index (Arrange → bring to front / send to back). Mirrors list order. */
+  z?: number;
+  /** Group id (Arrange → Group). Members select + arrange together. */
+  groupId?: string;
 }
+
+/** A bare field reference (no aggregation / client uid) — drillthrough + tooltip wells. */
+interface WellFieldRef { table?: string; column?: string; measure?: string }
+
 interface DPage {
   id: string;
   name: string;
@@ -168,7 +218,21 @@ interface DPage {
   canvasType?: CanvasType;
   background?: { color?: string; transparency?: number };
   size?: { width?: number; height?: number };
+  // ── wave-2 page options (persisted under page.config — additive) ─────────────
+  /** Drillthrough TARGET fields: this page is a drillthrough destination for any
+   *  source visual containing one of these fields (PBI "Drillthrough filters"). */
+  drillthrough?: { fields: WellFieldRef[] };
+  /** Tooltip-page binding: when enabled this page renders as a hover tooltip
+   *  bound to `boundField` (PBI report-page tooltips). canvasType 'tooltip' pairs. */
+  tooltipPage?: { enabled: boolean; boundField?: WellFieldRef };
 }
+
+// A saved bookmark (PBI Bookmarks pane) is the rich `ReportBookmark` imported from
+// ./report/bookmarks-pane (scope + Data/Display/Current-page apply toggles + a
+// captured `state`: active page, report/page/visual filters, slicer/selection,
+// per-visual visibility + z-order). The host captures/applies it through the pure
+// helpers (captureBookmarkState / bookmarkToPatch / newBookmark) and persists it
+// via /definition (state.content.bookmarks — the same shape that route sanitizes).
 
 // ── filters ───────────────────────────────────────────────────────────────────
 // The structured 3-scope Filters pane, its model (`ReportFilter`, incl. the
@@ -204,6 +268,7 @@ const VISUALS: { type: VisualType; label: string; icon: ReactElement }[] = [
   { type: 'donut',        label: 'Donut chart',    icon: <DataPieRegular /> },
   { type: 'treemap',      label: 'Treemap',        icon: <GridRegular /> },
   { type: 'scatter',      label: 'Scatter',        icon: <DataScatterRegular /> },
+  { type: 'map',          label: 'Map',            icon: <Map20Regular /> },
   { type: 'slicer',       label: 'Slicer',         icon: <Filter20Regular /> },
 ];
 
@@ -316,10 +381,32 @@ function wellsFor(type: VisualType): { name: WellName; label: string }[] {
         { name: 'values', label: 'Values' },
         { name: 'legend', label: 'Legend' },
       ];
-    default:
-      // bar / column / line / area / pie / donut / scatter
+    case 'scatter':
+      // Scatter exposes the wave-2 Size (→ bubble radius, the 3rd plotted
+      // measure) and Play axis (an animated frame dimension) wells in addition
+      // to Details/Values/Legend. Both DRIVE the render (no dead controls).
       return [
-        { name: 'category', label: type === 'scatter' ? 'Details' : 'Axis' },
+        { name: 'category', label: 'Details' },
+        { name: 'values', label: 'X / Y values' },
+        { name: 'size', label: 'Size' },
+        { name: 'playAxis', label: 'Play axis' },
+        { name: 'legend', label: 'Legend' },
+      ];
+    case 'map':
+      // Azure-Maps map: Location (lat/long) + Size. Render is an honest
+      // Azure-Maps gate over the REAL aggregated rows (see VisualBody) — every
+      // well still produces a real grouped/aggregated query column.
+      return [
+        { name: 'latitude', label: 'Latitude' },
+        { name: 'longitude', label: 'Longitude' },
+        { name: 'category', label: 'Location' },
+        { name: 'size', label: 'Size' },
+        { name: 'legend', label: 'Legend' },
+      ];
+    default:
+      // bar / column / line / area / pie / donut
+      return [
+        { name: 'category', label: 'Axis' },
         { name: 'values', label: 'Values' },
         { name: 'legend', label: 'Legend' },
       ];
@@ -379,11 +466,18 @@ function queryVisual(v: DVisual) {
   const w = v.wells;
   // Primary group only — small-multiples / details are excluded (Wave 2, above):
   // folding them would change the aggregation granularity without tiling a panel.
-  const cat = stripWell([...(w.category || [])]);
+  // Wave-2 grouped wells (playAxis frame dim + map latitude/longitude) DO fold in:
+  // each is a real GROUP BY column the route returns, sliced/located client-side.
+  const cat = stripWell([
+    ...(w.category || []), ...(w.playAxis || []), ...(w.latitude || []), ...(w.longitude || []),
+  ]);
   // Plotted series — tooltips are excluded (hover-only; never a plotted series).
+  // The wave-2 Size well folds in LAST so it lands as the final numeric column
+  // (the bubble radius / map size measure) the renderer reads off the result.
   const vals = stripWell([
     ...(w.values || []), ...(w.secondaryValues || []),
     ...(w.target || []), ...(w.minimum || []), ...(w.maximum || []),
+    ...(w.size || []),
   ]);
   const leg = stripWell(w.legend || []);
   const first = vals[0] || cat[0];
@@ -417,6 +511,10 @@ function wireWells(w: Wells) {
     smallMultiples: stripWell(w.smallMultiples),
     tooltips: stripWell(w.tooltips),
     details: stripWell(w.details),
+    size: stripWell(w.size),
+    playAxis: stripWell(w.playAxis),
+    latitude: stripWell(w.latitude),
+    longitude: stripWell(w.longitude),
   };
 }
 
@@ -426,6 +524,7 @@ function hasBinding(v: DVisual): boolean {
   return [
     w.category, w.values, w.legend,
     w.secondaryValues, w.target, w.minimum, w.maximum, w.smallMultiples, w.tooltips, w.details,
+    w.size, w.playAxis, w.latitude, w.longitude,
   ].reduce((n, a) => n + (a?.length || 0), 0) > 0;
 }
 
@@ -438,6 +537,11 @@ function applyAlpha(color?: string, transparency?: number): string | undefined {
   const t = Math.min(100, Math.max(0, transparency || 0));
   return t ? `color-mix(in srgb, ${color} ${100 - t}%, transparent)` : color;
 }
+
+// Persisted bookmarks (report state.content.bookmarks) are hydrated by the
+// imported `parseBookmarks` from ./report/bookmarks-pane — the same sanitizer the
+// pane + /definition route share (drops malformed entries, normalizes filter
+// scopes, clamps names/count). No local copy.
 
 // ── styles ────────────────────────────────────────────────────────────────────
 
@@ -564,6 +668,37 @@ const useStyles = makeStyles({
       borderBottom: `2px solid ${tokens.colorBrandStroke1}`,
     },
   },
+  // ── wave-2 canvas chrome ─────────────────────────────────────────────────────
+  /** Multi-selected card (Ctrl/Shift-click) — distinct from the single-selected ring. */
+  vcardMulti: { border: `1px solid ${tokens.colorBrandStroke2}`, boxShadow: tokens.shadow8, outline: `2px solid ${tokens.colorBrandStroke2}`, outlineOffset: '-1px' },
+  /** Hidden visual (Selection pane) — faded but still authorable in edit mode. */
+  vcardHidden: { opacity: 0.4 },
+  /** Locked visual — drag/resize disabled (dashed border cue). */
+  vcardLocked: { border: `1px dashed ${tokens.colorNeutralStroke1}` },
+  /** Arrange / Edit canvas toolbar group. */
+  arrangeBar: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, flexWrap: 'wrap',
+    padding: tokens.spacingVerticalXXS, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  /** Drillthrough "Back" bar shown on a drillthrough target page. */
+  backBar: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorBrandStroke2}`,
+    boxShadow: tokens.shadow2,
+  },
+  // ── Play-axis (scatter animation) ────────────────────────────────────────────
+  playRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
+  playSlider: { flex: 1, minWidth: 0 },
+  // ── Selection / Bookmarks panes (right rail) ────────────────────────────────
+  listRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+  },
+  listRowActive: { border: `1px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
+  listRowName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
 });
 type Styles = ReturnType<typeof useStyles>;
 
@@ -652,6 +787,25 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
     );
   }
 
+  // Map → honest Azure-Maps gate over the REAL aggregated rows (full surface
+  // still renders: the gate names the exact remediation and the rows show below).
+  if (visual.type === 'map') {
+    return <MapVisualBody rows={rows} cols={cols} nf={nf} styles={styles} />;
+  }
+
+  // Scatter with a Size and/or Play-axis well → bubble + animated frames, drawn
+  // locally over the REAL aggregated rows (LoomChart's scatter draws no radius /
+  // frames). Plain scatter (no size/play) keeps the existing LoomChart path.
+  if (visual.type === 'scatter' && (((visual.wells.size?.length ?? 0) > 0) || ((visual.wells.playAxis?.length ?? 0) > 0))) {
+    return (
+      <BubblePlayBody
+        rows={rows} cols={cols} fmt={fmt} styles={styles}
+        hasSize={(visual.wells.size?.length ?? 0) > 0}
+        hasPlay={(visual.wells.playAxis?.length ?? 0) > 0}
+      />
+    );
+  }
+
   if (CHART_TYPES.has(visual.type)) {
     const hasNumeric = visual.type === 'scatter'
       || rows.some((r) => Object.values(r).some((v) => v != null && v !== '' && !Number.isNaN(Number(v))));
@@ -667,9 +821,36 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
       // a compact legend strip below for quick scanning. Each is data-derived,
       // never a dead control.
       const refLines = CARTESIAN_TYPES.has(visual.type) ? computeReferenceLines(rows, visual.analytics) : [];
+      // Analytics ERROR BARS / FORECAST / SYMMETRY — computed from these SAME rows
+      // and overlaid by LoomChart (it fully supports all three). Authoring any of
+      // them in the Analytics pane now visibly changes the canvas; none is a dead
+      // control. Error bars map each computed point's row index to the category
+      // label LoomChart's xFor keys on (chartCategories mirrors parseRows' label
+      // column). Forecast is line/area-only; symmetry is scatter-only — exactly the
+      // visual families LoomChart draws each overlay for.
+      const ebCats = chartCategories(rows);
+      const errorBars: ChartErrorBar[] = CARTESIAN_TYPES.has(visual.type)
+        ? computeErrorBars(rows, visual.analytics).flatMap((eb) =>
+            eb.points.map((p) => ({ x: ebCats[p.index] ?? String(p.index), low: p.low, high: p.high, color: eb.color })))
+        : [];
+      let forecast: ChartForecast | undefined;
+      if ((visual.type === 'line' || visual.type === 'area') && visual.analytics?.forecast?.length) {
+        const cf = computeForecast(rows, visual.analytics.forecast[0]);
+        if (cf) forecast = {
+          projected: cf.points.map((p) => p.y),
+          band: { low: cf.points.map((p) => p.lower), high: cf.points.map((p) => p.upper) },
+          color: tokens.colorBrandForeground2,
+        };
+      }
+      let symmetry: ChartSymmetry | undefined;
+      if (visual.type === 'scatter') {
+        const cs = computeSymmetry(rows, visual.analytics);
+        if (cs) symmetry = { color: cs.color };
+      }
       return (
         <div style={wrapStyle}>
-          <LoomChart type={CHART_RENDER[visual.type] || 'column'} rows={rows} height={200} refLines={refLines} format={fmt} />
+          <LoomChart type={CHART_RENDER[visual.type] || 'column'} rows={rows} height={200}
+            refLines={refLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry} format={fmt} />
           {refLines.length > 0 && (
             <div className={styles.refLineRow}>
               {refLines.map((rl) => (
@@ -746,11 +927,183 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
   );
 }
 
+// ── wave-2 render helpers: numeric detection (shared with bubble / map) ───────
+
+/** True when a cell coerces to a finite number (mirrors LoomChart's isNumeric). */
+function cellIsNumeric(v: unknown): boolean {
+  if (v == null || v === '') return false;
+  return !Number.isNaN(Number(v));
+}
+/** Split result columns into non-numeric (label/category) and numeric, by scanning rows. */
+function splitCols(rows: Array<Record<string, unknown>>, cols: string[]): { cats: string[]; nums: string[] } {
+  const nums = cols.filter((c) => rows.some((r) => cellIsNumeric(r[c])));
+  const cats = cols.filter((c) => !nums.includes(c));
+  return { cats, nums };
+}
+
+/**
+ * The chart's category-axis labels, aligned with row order — the SAME label
+ * column LoomChart's parseRows (and analytics-pane's numericSeriesFromRows) pick:
+ * the first non-numeric column, or the first column when it is numeric. Used to
+ * map a computed error bar's row INDEX to the category label LoomChart's `xFor`
+ * keys whiskers on (so an error bar lands on the right bar/point).
+ */
+function chartCategories(rows: Array<Record<string, unknown>>): string[] {
+  if (!rows.length) return [];
+  const cols = Object.keys(rows[0]);
+  if (!cols.length) return [];
+  const firstNumericIdx = cols.findIndex((c) => rows.some((r) => cellIsNumeric(r[c])));
+  const labelCol = firstNumericIdx === 0
+    ? cols[0]
+    : (cols.find((c) => rows.some((r) => !cellIsNumeric(r[c]) && r[c] != null)) ?? cols[0]);
+  return rows.map((r) => (r[labelCol] == null ? '—' : String(r[labelCol])));
+}
+
+/**
+ * Bubble + Play-axis scatter, drawn locally over the REAL aggregated `/query`
+ * rows. LoomChart's scatter draws no radius or animation, so this is the honest
+ * Loom-native bubble renderer (ui-parity.md): X = 1st numeric, Y = 2nd numeric,
+ * bubble RADIUS = the last numeric (the folded Size measure). With a Play axis,
+ * the LAST non-numeric column is the frame dimension — Play/Pause + a slider
+ * step through its distinct values, re-slicing the rows per frame. No dead
+ * controls: every well drives the picture; an honest caption names the encoding.
+ */
+function BubblePlayBody({ rows, cols, fmt, styles, hasSize, hasPlay }: {
+  rows: Array<Record<string, unknown>>; cols: string[]; fmt?: ReportVisualFormat;
+  styles: Styles; hasSize: boolean; hasPlay: boolean;
+}) {
+  const { cats, nums } = splitCols(rows, cols);
+  // Frame dimension: the LAST non-numeric column (playAxis folds in after the
+  // Details category). Falls back to no animation when there isn't a 2nd category.
+  const playCol = hasPlay && cats.length >= 2 ? cats[cats.length - 1] : null;
+  const frames = useMemo(() => {
+    if (!playCol) return [] as string[];
+    const seen: string[] = [];
+    for (const r of rows) { const v = String(r[playCol] ?? '—'); if (!seen.includes(v)) seen.push(v); }
+    return seen;
+  }, [rows, playCol]);
+  const [frame, setFrame] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const safeFrame = frames.length ? Math.min(frame, frames.length - 1) : 0;
+  useEffect(() => {
+    if (!playing || frames.length < 2) return;
+    const t = setInterval(() => setFrame((f) => (f + 1) % frames.length), 1100);
+    return () => clearInterval(t);
+  }, [playing, frames.length]);
+  useEffect(() => { if (frame > Math.max(0, frames.length - 1)) setFrame(0); }, [frames.length, frame]);
+
+  const frameRows = playCol ? rows.filter((r) => String(r[playCol] ?? '—') === (frames[safeFrame] ?? '')) : rows;
+
+  // X / Y / R columns (R is the folded Size measure when present → last numeric).
+  const xKey = nums[0];
+  const yKey = nums[1] ?? nums[0];
+  const rKey = hasSize ? nums[nums.length - 1] : undefined;
+  const labelKey = cats.find((c) => c !== playCol) ?? cats[0];
+
+  if (!xKey) {
+    return <Caption1 className={styles.muted}>Add an X and a Y measure to the Values well to plot a bubble chart.</Caption1>;
+  }
+
+  // Geometry (Loom tokens for color; raw px for SVG math, per LoomChart).
+  const W = 520, H = 220, padL = 48, padR = 14, padT = 12, padB = 30;
+  const pts = frameRows.map((r) => ({
+    x: cellIsNumeric(r[xKey]) ? Number(r[xKey]) : 0,
+    y: cellIsNumeric(r[yKey]) ? Number(r[yKey]) : 0,
+    r: rKey && cellIsNumeric(r[rKey]) ? Number(r[rKey]) : 0,
+    label: labelKey ? String(r[labelKey] ?? '—') : '—',
+  }));
+  const xs = pts.map((p) => p.x), ys = pts.map((p) => p.y), rs = pts.map((p) => p.r);
+  const xMin = Math.min(...xs, 0), xMax = Math.max(...xs, 1);
+  const yMin = Math.min(...ys, 0), yMax = Math.max(...ys, 1);
+  const rMax = Math.max(...rs, 1);
+  const xSpan = (xMax - xMin) || 1, ySpan = (yMax - yMin) || 1;
+  const xPix = (v: number) => padL + ((v - xMin) / xSpan) * (W - padL - padR);
+  const yPix = (v: number) => padT + (H - padT - padB) - ((v - yMin) / ySpan) * (H - padT - padB);
+  const rPix = (v: number) => 4 + (rKey ? (Math.sqrt(Math.max(v, 0)) / Math.sqrt(rMax)) * 18 : 0);
+  const lead = fmt?.dataColors?.[0] || tokens.colorBrandForeground1;
+
+  return (
+    <div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img"
+        aria-label={`bubble chart${rKey ? ' with size encoding' : ''}`}
+        style={{ display: 'block', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground1, overflow: 'visible' }}>
+        <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
+        <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
+        <text x={padL - 4} y={padT + 6} fontSize={9} textAnchor="end" fill={tokens.colorNeutralForeground3}>{yKey}</text>
+        <text x={W - padR} y={H - padB + 14} fontSize={9} textAnchor="end" fill={tokens.colorNeutralForeground3}>{xKey}</text>
+        {pts.map((p, i) => (
+          <circle key={i} cx={xPix(p.x)} cy={yPix(p.y)} r={rPix(p.r)}
+            fill={lead} opacity={0.55} stroke={tokens.colorNeutralBackground1} strokeWidth={0.8}>
+            <title>{`${p.label}\n${xKey}: ${p.x.toLocaleString()}, ${yKey}: ${p.y.toLocaleString()}${rKey ? `, ${rKey}: ${p.r.toLocaleString()}` : ''}`}</title>
+          </circle>
+        ))}
+      </svg>
+      <div className={styles.approxNote}>
+        <Info16Regular aria-hidden />
+        <Caption1>
+          X = {xKey}, Y = {yKey}{rKey ? `, bubble size = ${rKey}` : ''}
+          {playCol ? ` · animated by ${playCol}` : ''}.
+        </Caption1>
+      </div>
+      {playCol && frames.length > 1 && (
+        <div className={styles.playRow}>
+          <Button size="small" appearance="subtle" aria-label={playing ? 'Pause' : 'Play'}
+            icon={playing ? <Pause20Regular /> : <Play20Regular />} onClick={() => setPlaying((p) => !p)} />
+          <Slider className={styles.playSlider} min={0} max={frames.length - 1} value={safeFrame}
+            aria-label={`Play axis frame: ${playCol}`}
+            onChange={(_e, d) => { setPlaying(false); setFrame(d.value); }} />
+          <Badge appearance="tint" color="brand">{frames[safeFrame]}</Badge>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Env var the Azure-Maps backend reads (named in the honest gate below). */
+const LOOM_MAPS_ENV = 'LOOM_MAPS_BACKEND';
+
+/**
+ * Map visual — honest Azure-native gate (no-vaporware.md / no-fabric-dependency.md).
+ * A geographic map needs an Azure Maps account + subscription key, which isn't a
+ * default deployment dependency; rather than ship a dead control, the FULL surface
+ * renders: a Fluent warning MessageBar naming the exact env var (LOOM_MAPS_BACKEND
+ * + the Azure Maps key) and the bicep module that provisions it, with the REAL
+ * aggregated location rows shown beneath as a table so the data is never hidden.
+ */
+function MapVisualBody({ rows, cols, nf, styles }: {
+  rows: Array<Record<string, unknown>>; cols: string[];
+  nf?: ReportVisualFormat['numberFormat']; styles: Styles;
+}) {
+  return (
+    <div className={styles.section}>
+      <MessageBar intent="warning">
+        <MessageBarBody>
+          <MessageBarTitle>Azure Maps not configured</MessageBarTitle>
+          Map rendering uses an Azure-native <strong>Azure Maps</strong> account. Set{' '}
+          <code>{LOOM_MAPS_ENV}=azure-maps</code> and the Azure Maps subscription-key env var
+          (<code>LOOM_AZURE_MAPS_KEY</code>), provisioned by{' '}
+          <code>platform/fiab/bicep/modules/admin-plane/main.bicep</code>. No Power BI / Fabric
+          map is required. The aggregated location rows your wells produce are shown below.
+        </MessageBarBody>
+      </MessageBar>
+      <Table size="small">
+        <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+        <TableBody>
+          {rows.slice(0, 60).map((row, ri) => (
+            <TableRow key={ri}>
+              {cols.map((c) => <TableCell key={c}>{formatValue(row[c], nf)}</TableCell>)}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
 // ── well editor (right pane) ────────────────────────────────────────────────
 
 function WellEditor({
-  visual, well, label, tables, styles, onAdd, onRemove, onAgg, onDrop,
-}: {
+  visual, well, label, tables, styles, onAdd, onRemove, onAgg, onDrop,}: {
   visual: DVisual; well: WellName; label: string; tables: FieldTable[]; styles: Styles;
   onAdd: (well: WellName, f: WellField) => void;
   onRemove: (well: WellName, uid: string) => void;
@@ -829,6 +1182,9 @@ function WellEditor({
 
 // ── main ────────────────────────────────────────────────────────────────────
 
+/** Right-rail tab identifiers (wave-2 adds Bookmarks + Selection). */
+type RightTab = 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'bookmarks' | 'selection' | 'copilot';
+
 export function ReportDesigner({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
   const router = useRouter();
@@ -839,13 +1195,27 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const [activePage, setActivePage] = useState(0);
   const [selectedVisual, setSelectedVisual] = useState<string | null>(null);
   /**
+   * Multi-selection (Ctrl/Shift-click a card) for the Arrange toolbar — group /
+   * ungroup / lock / z-order / match-size act on this set. The single-selected
+   * `selectedVisual` (the one whose Build/Format pane shows) is preserved.
+   */
+  const [selectedVisualIds, setSelectedVisualIds] = useState<Set<string>>(new Set());
+  /**
    * Active cross-filter / cross-highlight selection (Visual interactions). A
    * slicer pick or a clicked table row sets it; every other visual on the page
    * reacts per the page's interaction matrix. Cleared on page change.
    */
   const [selection, setSelection] = useState<VisualSelection | null>(null);
-  /** Right rail mode: Build, Format, Analytics, Filters, Interactions, or the Power BI Copilot. */
-  const [rightTab, setRightTab] = useState<'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'copilot'>('build');
+  /**
+   * Drillthrough context: when a source visual's selected data point is drilled
+   * to a target page, the seed filters + the originating page are held here so
+   * the target renders filtered and shows a Back button (PBI drillthrough).
+   */
+  const [drill, setDrill] = useState<{ fromPage: number; toPage: number; filters: ReportFilter[]; label: string } | null>(null);
+  /** Saved bookmarks (PBI Bookmarks pane). Captured/applied in-memory; persisted additively. */
+  const [bookmarks, setBookmarks] = useState<ReportBookmark[]>([]);
+  /** Right rail mode: Build, Format, Analytics, Filters, Interactions, Bookmarks, Selection, or the Power BI Copilot. */
+  const [rightTab, setRightTab] = useState<RightTab>('build');
   const [reportName, setReportName] = useState('');
 
   // Report DATA SOURCE (semantic-model default · direct-query · AAS). Replaces the
@@ -857,6 +1227,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
   // Report-scope filters (page-scope live on the page; visual-scope on the visual).
   const [reportFilters, setReportFilters] = useState<ReportFilter[]>([]);
+  // Filters-pane FORMAT (pane colors — Loom swatch tokens, never typed CSS).
+  // Persisted at state.content.filterPaneFormat; round-trips via /definition.
+  const [filterPaneFormat, setFilterPaneFormat] = useState<FilterPaneFormat | null>(null);
 
   // Publish (Azure-native Org gallery default · Power BI opt-in).
   const [publishOpen, setPublishOpen] = useState(false);
@@ -891,6 +1264,17 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const [visualRows, setVisualRows] = useState<Record<string, VisualState>>({});
   const gridRef = useRef<HTMLDivElement | null>(null);
 
+  // ── undo / redo history (in-memory, bounded) ─────────────────────────────────
+  // Auto-records a snapshot of { pages, reportFilters, bookmarks } whenever any of
+  // those state references changes (every mutatePage / filter / bookmark edit). It
+  // never snapshots w/h/x/y/visibility into the query signature, so undo/redo
+  // restore layout/selection state WITHOUT re-querying the model. Capped at 50.
+  type HistSnap = { pages: DPage[]; reportFilters: ReportFilter[]; bookmarks: ReportBookmark[] };
+  const historyRef = useRef<{ past: HistSnap[]; future: HistSnap[] }>({ past: [], future: [] });
+  const prevSnapRef = useRef<HistSnap | null>(null);
+  const restoringRef = useRef(false);
+  const [, setHistTick] = useState(0); // forces ribbon enable/disable refresh
+
   const pbiPublishEnabled = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
   const bound = isBound(dataSource);
 
@@ -902,6 +1286,8 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     if (id === 'new') {
       setPages([{ id: uid('p'), name: 'Page 1', visuals: [] }]);
       setActivePage(0); setReportName(''); setDataSource(null); setReportFilters([]);
+      setBookmarks([]); setDrill(null); setSelectedVisualIds(new Set()); setFilterPaneFormat(null);
+      historyRef.current = { past: [], future: [] }; prevSnapRef.current = null; restoringRef.current = false;
       setDirty(false); setLoadErr(null); setLoading(false);
       return;
     }
@@ -923,6 +1309,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       if (!ds) ds = fromLegacyState({ aasServer: j.aasServer ?? undefined, aasDatabase: j.aasDatabase ?? undefined });
       setDataSource(ds);
       setReportFilters(reFilters(j.reportFilters));
+      setBookmarks(parseBookmarks(j.bookmarks));
+      // Filters-pane format round-trips via reportDetailFromContent → j.filterPaneFormat.
+      { const fpf = parseFilterPaneFormat(j.filterPaneFormat); setFilterPaneFormat(Object.keys(fpf).length ? fpf : null); }
+      setDrill(null); setSelectedVisualIds(new Set());
+      historyRef.current = { past: [], future: [] }; prevSnapRef.current = null; restoringRef.current = false;
 
       const dpages: DPage[] = (j.pages || []).map((p: any, pi: number): DPage => {
         const pc = p.config || {};
@@ -937,6 +1328,15 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           canvasType: typeof pc.type === 'string' ? (pc.type as CanvasType) : undefined,
           background: pc.background && typeof pc.background === 'object' ? pc.background : undefined,
           size: pc.size && typeof pc.size === 'object' ? pc.size : undefined,
+          // wave-2 page options (drillthrough target fields + tooltip-page binding).
+          // Read defensively — they round-trip once the /definition sanitizer
+          // whitelists them; a no-op until then (works in-session regardless).
+          drillthrough: pc.drillthrough && Array.isArray(pc.drillthrough.fields)
+            ? { fields: (pc.drillthrough.fields as any[]).map((f) => ({ table: f?.table, column: f?.column, measure: f?.measure })).filter((f) => f.column || f.measure) }
+            : undefined,
+          tooltipPage: pc.tooltipPage && typeof pc.tooltipPage === 'object'
+            ? { enabled: !!pc.tooltipPage.enabled, boundField: pc.tooltipPage.boundField || undefined }
+            : undefined,
           visuals: (p.visuals || []).map((v: any): DVisual => {
             const cfgWells = v.config?.wells;
             const reUid = (a: any): WellField[] => (Array.isArray(a) ? a : []).map((f: any) => ({ uid: uid('f'), ...f }));
@@ -950,6 +1350,8 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                 minimum: reUid(cfgWells.minimum), maximum: reUid(cfgWells.maximum),
                 smallMultiples: reUid(cfgWells.smallMultiples), tooltips: reUid(cfgWells.tooltips),
                 details: reUid(cfgWells.details),
+                size: reUid(cfgWells.size), playAxis: reUid(cfgWells.playAxis),
+                latitude: reUid(cfgWells.latitude), longitude: reUid(cfgWells.longitude),
               };
             } else {
               // Back-compat: seed a single well from the legacy `field` string.
@@ -968,6 +1370,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               format: (v.config?.format as ReportVisualFormat | undefined) || undefined,
               analytics: parseAnalytics(v.config?.analytics),
               filters: reFilters(v.config?.filters),
+              // wave-2 object state (Selection pane + Arrange). Read defensively —
+              // round-trips once the /definition sanitizer whitelists them; works
+              // in-session regardless. `z` defaults to list order below if absent.
+              hidden: v.config?.hidden === true || v.config?.layout?.hidden === true,
+              locked: v.config?.locked === true || v.config?.layout?.locked === true,
+              z: Number.isFinite(Number(v.config?.layout?.z)) ? Number(v.config.layout.z) : undefined,
+              groupId: typeof v.config?.groupId === 'string' ? v.config.groupId : undefined,
             };
           }),
         };
@@ -1009,6 +1418,60 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   // A cross-filter selection is page-scoped — clear it when the active page changes.
   useEffect(() => { setSelection(null); }, [activePage]);
 
+  // Record an undo snapshot whenever pages / report filters / bookmarks change.
+  // Stores the PREVIOUS references (immutable — mutators always produce new
+  // arrays), so it's cheap. Skipped on the initial load + on undo/redo restores.
+  useEffect(() => {
+    const snap: HistSnap = { pages, reportFilters, bookmarks };
+    if (prevSnapRef.current === null) { prevSnapRef.current = snap; return; }
+    if (restoringRef.current) { restoringRef.current = false; prevSnapRef.current = snap; return; }
+    const h = historyRef.current;
+    h.past.push(prevSnapRef.current);
+    if (h.past.length > 50) h.past.shift();
+    h.future = [];
+    prevSnapRef.current = snap;
+    setHistTick((t) => t + 1);
+  }, [pages, reportFilters, bookmarks]);
+
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    if (!h.past.length) return;
+    h.future.push({ pages, reportFilters, bookmarks });
+    const prev = h.past.pop() as HistSnap;
+    restoringRef.current = true;
+    setPages(prev.pages); setReportFilters(prev.reportFilters); setBookmarks(prev.bookmarks);
+    setDirty(true); setSelection(null); setHistTick((t) => t + 1);
+  }, [pages, reportFilters, bookmarks]);
+
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    if (!h.future.length) return;
+    h.past.push({ pages, reportFilters, bookmarks });
+    const next = h.future.pop() as HistSnap;
+    restoringRef.current = true;
+    setPages(next.pages); setReportFilters(next.reportFilters); setBookmarks(next.bookmarks);
+    setDirty(true); setSelection(null); setHistTick((t) => t + 1);
+  }, [pages, reportFilters, bookmarks]);
+
+  const canUndo = historyRef.current.past.length > 0;
+  const canRedo = historyRef.current.future.length > 0;
+
+  // Keyboard: Ctrl/Cmd+Z = undo, Ctrl/Cmd+Y or Ctrl/Cmd+Shift+Z = redo. Ignored
+  // while typing in an input/textarea so field edits aren't hijacked.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const tgt = e.target as HTMLElement | null;
+      const tag = tgt?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tgt?.isContentEditable) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); }
+      else if (k === 'y' || (k === 'z' && e.shiftKey)) { e.preventDefault(); redo(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo]);
+
   // ── live render: query each visual on the active page ─────────────────────────
   // `scopeFilters` = report + page filters; the visual's own filters are merged in
   // here. The merged set is sent to the route (forward-compatible WHERE/FILTER) AND
@@ -1034,10 +1497,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const bindingSig = (v: DVisual) => `${v.type}|${JSON.stringify(queryVisual(v).wells)}|${JSON.stringify(v.filters || [])}`;
   useEffect(() => {
     if (!bound || !page) return;
-    const scope = [...reportFilters, ...(page.filters || [])];
+    const drillScope = drill && drill.toPage === activePage ? drill.filters : [];
+    const scope = [...reportFilters, ...drillScope, ...(page.filters || [])];
     page.visuals.forEach((v) => { if (hasBinding(v)) runVisual(v, scope); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bound, activePage, page?.visuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || [])]);
+  }, [bound, activePage, page?.visuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || []), JSON.stringify(drill?.toPage === activePage ? drill?.filters : [])]);
 
   // ── mutation helpers ─────────────────────────────────────────────────────────
   const mutatePage = useCallback((fn: (p: DPage) => DPage) => {
@@ -1107,6 +1571,181 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     mutateVisual(vid, (v) => ({ ...v, wells: { ...v.wells, [well]: (v.wells[well] || []).map((x) => (x.uid === fuid ? { ...x, aggregation: agg } : x)) } }));
   }, [mutateVisual]);
 
+  // ── wave-2: multi-select + Arrange (group / lock / z-order / match-size) ──────
+  // Ctrl/Shift-click a card toggles it in the Arrange set; a plain click selects
+  // one (handled in the card). The set drives the Arrange toolbar below.
+  const toggleMultiSelect = useCallback((vid: string) => {
+    setSelectedVisualIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(vid)) next.delete(vid); else next.add(vid);
+      return next;
+    });
+    setSelectedVisual(vid);
+  }, []);
+
+  /** Visuals currently targeted by the Arrange toolbar (the multi-set, else the single selection). */
+  const arrangeTargets = useCallback((): string[] => {
+    if (selectedVisualIds.size > 0) return [...selectedVisualIds];
+    return selectedVisual ? [selectedVisual] : [];
+  }, [selectedVisualIds, selectedVisual]);
+
+  /** Set hidden / locked on every targeted visual (Selection pane + Arrange). */
+  const setVisualFlag = useCallback((ids: string[], patch: Partial<Pick<DVisual, 'hidden' | 'locked'>>) => {
+    const set = new Set(ids);
+    mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, ...patch } : v)) }));
+  }, [mutatePage]);
+
+  /** Match the column span (or row height) of every targeted visual to the first. */
+  const matchSize = useCallback((ids: string[], dim: 'w' | 'h') => {
+    if (ids.length < 2) return;
+    mutatePage((p) => {
+      const first = p.visuals.find((v) => v.id === ids[0]);
+      if (!first) return p;
+      const val = first[dim];
+      const set = new Set(ids);
+      return { ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, [dim]: val } : v)) };
+    });
+  }, [mutatePage]);
+
+  /** Bring targeted visuals to front (end of list) or send to back (start). */
+  const reorderZ = useCallback((ids: string[], dir: 'front' | 'back') => {
+    if (!ids.length) return;
+    const set = new Set(ids);
+    mutatePage((p) => {
+      const picked = p.visuals.filter((v) => set.has(v.id));
+      const rest = p.visuals.filter((v) => !set.has(v.id));
+      const next = dir === 'front' ? [...rest, ...picked] : [...picked, ...rest];
+      return { ...p, visuals: next.map((v, i) => ({ ...v, z: i })) };
+    });
+  }, [mutatePage]);
+
+  /** Group targeted visuals under one new groupId; ungroup clears it. */
+  const groupVisuals = useCallback((ids: string[]) => {
+    if (ids.length < 2) return;
+    const gid = uid('grp');
+    const set = new Set(ids);
+    mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, groupId: gid } : v)) }));
+  }, [mutatePage]);
+  const ungroupVisuals = useCallback((ids: string[]) => {
+    const set = new Set(ids);
+    mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, groupId: undefined } : v)) }));
+  }, [mutatePage]);
+
+  /** Select every member of a visual's group (click a group badge / Selection pane). */
+  const selectGroup = useCallback((gid: string) => {
+    const members = (pages[activePage]?.visuals || []).filter((v) => v.groupId === gid).map((v) => v.id);
+    setSelectedVisualIds(new Set(members));
+    if (members[0]) setSelectedVisual(members[0]);
+  }, [pages, activePage]);
+
+  // ── wave-2: drillthrough (navigate to a target page seeded from a selection) ──
+  // A page is a drillthrough TARGET when it declares drillthrough.fields. From a
+  // source visual with an active selection (a clicked table row / slicer pick),
+  // the right-click menu offers each target whose fields the selection satisfies;
+  // choosing one opens it filtered to the selected value(s) with a Back button.
+  const drillSeedFor = useCallback((target: DPage, sel: VisualSelection | null): ReportFilter[] | null => {
+    const fields = target.drillthrough?.fields || [];
+    if (!fields.length || !sel) return null;
+    const out: ReportFilter[] = [];
+    for (const f of fields) {
+      const want = (f.column || f.measure || '').toLowerCase();
+      if (!want) continue;
+      const con = sel.constraints.find((c) => {
+        const k = c.field.toLowerCase();
+        return k === want || k.endsWith(`[${want}]`) || k.endsWith(`.${want}`);
+      });
+      const val = con?.values?.[0];
+      if (val == null) continue;
+      out.push({ id: uid('flt'), table: f.table, column: f.column, measure: f.measure, op: 'eq', value: String(val) });
+    }
+    return out.length ? out : null;
+  }, []);
+
+  const navigateDrillthrough = useCallback((targetIndex: number, seed: ReportFilter[], label: string) => {
+    setDrill({ fromPage: activePage, toPage: targetIndex, filters: seed, label });
+    setActivePage(targetIndex);
+    setSelectedVisual(null); setSelectedVisualIds(new Set());
+  }, [activePage]);
+
+  const exitDrillthrough = useCallback(() => {
+    setDrill((d) => { if (d) setActivePage(d.fromPage); return null; });
+  }, []);
+
+  // ── wave-2: bookmarks (rich model — ./report/bookmarks-pane) ─────────────────
+  // Build the host's CURRENT state into a capture source the pure
+  // `captureBookmarkState` snapshots. Pages/visuals are keyed by their (session-
+  // stable) ids — apply resolves ids back to live pages/visuals and skips any that
+  // no longer exist, matching the bookmarks-pane contract.
+  const buildCaptureSource = useCallback((scope: BookmarkScope): BookmarkCaptureSource => ({
+    activePageId: pages[activePage]?.id || '',
+    reportFilters,
+    pages: pages.map((p) => ({
+      id: p.id,
+      filters: p.filters || [],
+      visuals: (p.visuals || []).map((v) => ({ id: v.id, hidden: v.hidden, z: v.z, filters: v.filters || [] })),
+    })),
+    selection,
+    scope,
+    selectedVisualIds: scope === 'selectedVisuals' ? [...selectedVisualIds] : undefined,
+  }), [pages, activePage, reportFilters, selection, selectedVisualIds]);
+
+  // Add (replaceId omitted → append a NEW bookmark) or Update (replaceId set →
+  // re-capture into the existing bookmark, preserving its id/name). Drives the
+  // Bookmarks pane's Add popover + each card's Update action.
+  const captureBookmark = useCallback((opts: { name?: string; scope: BookmarkScope; apply: BookmarkApply; replaceId?: string }) => {
+    const state = captureBookmarkState(buildCaptureSource(opts.scope));
+    setBookmarks((prev) => {
+      if (opts.replaceId) {
+        return prev.map((b) => (b.id === opts.replaceId
+          ? { ...b, scope: opts.scope, apply: opts.apply, state, createdAt: new Date().toISOString() }
+          : b));
+      }
+      return [...prev, newBookmark({ name: opts.name || `Bookmark ${prev.length + 1}`, scope: opts.scope, apply: opts.apply }, state)];
+    });
+    setDirty(true);
+  }, [buildCaptureSource]);
+
+  // Apply a bookmark — turn it into a structured patch (honoring its Data/Display/
+  // Current-page toggles + scope) and restore the live model: active page, report/
+  // page/visual filters, slicer selection, per-visual visibility + z-order. Ids
+  // that no longer resolve are skipped (no throw).
+  const applyBookmark = useCallback((bm: ReportBookmark) => {
+    const patch = bookmarkToPatch(bm);
+    if (patch.activePageId) {
+      const idx = pages.findIndex((p) => p.id === patch.activePageId);
+      if (idx >= 0) setActivePage(idx);
+    }
+    if (patch.reportFilters) setReportFilters(patch.reportFilters);
+    const touchesPages = patch.pageFilters || patch.visualFilters || patch.visibility || patch.zOrder;
+    if (touchesPages) {
+      setPages((prev) => prev.map((p) => {
+        let np = p;
+        if (patch.pageFilters && patch.pageFilters[p.id]) np = { ...np, filters: patch.pageFilters![p.id] };
+        if (patch.visualFilters || patch.visibility || patch.zOrder) {
+          np = {
+            ...np,
+            visuals: np.visuals.map((v) => {
+              let nv = v;
+              if (patch.visibility && patch.visibility[v.id] !== undefined) nv = { ...nv, hidden: !patch.visibility![v.id] };
+              if (patch.zOrder && patch.zOrder[v.id] !== undefined) nv = { ...nv, z: patch.zOrder![v.id] };
+              if (patch.visualFilters && patch.visualFilters[v.id]) nv = { ...nv, filters: patch.visualFilters![v.id] };
+              return nv;
+            }),
+          };
+        }
+        return np;
+      }));
+    }
+    if (patch.selection !== undefined) setSelection(patch.selection);
+    setDirty(true);
+  }, [pages]);
+
+  // List-only mutations (reorder / rename / delete) the Bookmarks pane emits.
+  const changeBookmarks = useCallback((next: ReportBookmark[]) => {
+    setBookmarks(next);
+    setDirty(true);
+  }, []);
+
   // ── pages ──────────────────────────────────────────────────────────────────
   const addPage = () => {
     setPages((prev) => {
@@ -1142,6 +1781,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           secondaryValues: c(w.secondaryValues), target: c(w.target),
           minimum: c(w.minimum), maximum: c(w.maximum),
           smallMultiples: c(w.smallMultiples), tooltips: c(w.tooltips), details: c(w.details),
+          size: c(w.size), playAxis: c(w.playAxis), latitude: c(w.latitude), longitude: c(w.longitude),
         };
       };
       const dup: DPage = {
@@ -1207,29 +1847,49 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       filters: wireFilters(p.filters || []),
       // Page config (canvas type/size/background, hidden, interaction matrix). The
       // route's sanitizePageConfig drops empty fields, so a plain page persists
-      // nothing extra. wireInteractions strips empty buckets.
+      // nothing extra. wireInteractions strips empty buckets. The wave-2
+      // drillthrough / tooltipPage keys are ADDITIVE — today's sanitizer ignores
+      // them (harmless), and they round-trip once it whitelists them.
       config: {
         ...(p.canvasType ? { type: p.canvasType } : {}),
         ...(p.size ? { size: p.size } : {}),
         ...(p.background ? { background: p.background } : {}),
         ...(p.hidden ? { hidden: true } : {}),
         ...(wireInteractions(p.interactions) ? { interactions: wireInteractions(p.interactions) } : {}),
+        ...(p.drillthrough && p.drillthrough.fields.length ? { drillthrough: { fields: p.drillthrough.fields } } : {}),
+        ...(p.tooltipPage && p.tooltipPage.enabled ? { tooltipPage: p.tooltipPage } : {}),
       },
-      visuals: p.visuals.map((v) => ({
+      visuals: p.visuals.map((v, vi) => ({
         visualType: v.type,
         title: v.title,
         // Persist the FULL authoring wells (base + additive); queryVisual folds
         // them for the /query call — they round-trip here for faithful reload.
         wells: wireWells(v.wells),
-        layout: { x: 0, y: 0, w: v.w, h: v.h },
+        // layout carries the wave-2 z-order (list index) additively; x/y/w/h are
+        // the existing keys the sanitizer reads.
+        layout: { x: 0, y: 0, w: v.w, h: v.h, z: v.z ?? vi },
         format: v.format,
         analytics: v.analytics,
         filters: wireFilters(v.filters || []),
+        // Wave-2 object state — ADDITIVE (today's sanitizer drops unknown visual
+        // keys; persists once it whitelists them). In-session use is unaffected.
+        ...(v.hidden ? { hidden: true } : {}),
+        ...(v.locked ? { locked: true } : {}),
+        ...(v.groupId ? { groupId: v.groupId } : {}),
       })),
     })),
     reportFilters: wireFilters(reportFilters),
+    // Top-level bookmarks (PBI Bookmarks pane). The rich `wireBookmarks` shape —
+    // { name, scope, apply{data,display,currentPage}, state{activePageId,
+    // pageFilters, reportFilters, visibility, zOrder, …} } — is exactly what the
+    // /definition route's sanitizeBookmark whitelists into state.content.bookmarks
+    // (additive; viewer + PBIR provisioner ignore it).
+    bookmarks: wireBookmarks(bookmarks) ?? [],
+    // Filters-pane format (pane colors) — additive, sanitizer-whitelisted; omitted
+    // when nothing is set (wireFilterPaneFormat returns undefined → route drops it).
+    filterPaneFormat: wireFilterPaneFormat(filterPaneFormat),
     dataSource,
-  }), [pages, reportFilters, dataSource]);
+  }), [pages, reportFilters, bookmarks, filterPaneFormat, dataSource]);
 
   const save = useCallback(async () => {
     // Brand-new report: route Save to the create-then-redirect flow (the
@@ -1375,6 +2035,10 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         { label: isNew ? 'Create report' : (saveBusy ? 'Saving…' : 'Save'), icon: <Save20Regular />, onClick: save, disabled: saveBusy || (!isNew && !dirty), title: isNew ? 'Name and create this report' : 'persist the whole report definition' },
         { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: () => { loadDetail(); loadFields(); }, title: 'reload definition + model fields' },
       ]},
+      { label: 'Edit', actions: [
+        { label: 'Undo', icon: <ArrowUndo20Regular />, onClick: undo, disabled: !canUndo, title: 'Undo (Ctrl+Z)' },
+        { label: 'Redo', icon: <ArrowRedo20Regular />, onClick: redo, disabled: !canRedo, title: 'Redo (Ctrl+Y)' },
+      ]},
       { label: 'Data', actions: [
         { label: 'Data source', icon: <Database20Regular />, onClick: () => setDsOpen(true), title: `Bind data — ${describeSource(dataSource)}` },
         { label: 'Publish', icon: <CloudArrowUp20Regular />, onClick: () => { setPublishMsg(null); setPublishOpen(true); }, disabled: isNew, title: isNew ? 'Save the report before publishing' : 'Publish to the Organization gallery' },
@@ -1383,7 +2047,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         { label: 'New page', icon: <Add20Regular />, onClick: addPage, title: 'add a report page' },
       ]},
     ]},
-  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew]);
+  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew, undo, redo, canUndo, canRedo]);
 
   // ── left: pages ──────────────────────────────────────────────────────────────
   const leftPanel = (
@@ -1457,6 +2121,31 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
       {loading && <Spinner label="Loading report…" />}
 
+      {/* Drillthrough: on a target page, a Back bar returns to the source page. */}
+      {drill && drill.toPage === activePage && (
+        <div className={styles.backBar}>
+          <Button size="small" appearance="primary" icon={<ArrowExit20Regular />} onClick={exitDrillthrough}>Back</Button>
+          <Caption1>Drilled through{drill.label ? ` to ${drill.label}` : ''} — this page is filtered to the selected value.</Caption1>
+        </div>
+      )}
+
+      {/* Arrange toolbar — acts on the multi-selection (Ctrl/Shift-click) or the
+          single selection. Every control mutates the real, persisted layout. */}
+      {!loading && page && page.visuals.length > 0 && arrangeTargets().length > 0 && (
+        <ArrangeBar
+          styles={styles}
+          targets={arrangeTargets()}
+          visuals={page.visuals}
+          onLock={(lock) => setVisualFlag(arrangeTargets(), { locked: lock })}
+          onHide={(hide) => setVisualFlag(arrangeTargets(), { hidden: hide })}
+          onMatch={(dim) => matchSize(arrangeTargets(), dim)}
+          onZ={(dir) => reorderZ(arrangeTargets(), dir)}
+          onGroup={() => groupVisuals(arrangeTargets())}
+          onUngroup={() => ungroupVisuals(arrangeTargets())}
+          onClear={() => setSelectedVisualIds(new Set())}
+        />
+      )}
+
       {!loading && page && page.visuals.length === 0 && (
         <EmptyState
           icon={<DataBarVerticalRegular />}
@@ -1472,11 +2161,20 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
             const fmt = v.format;
             const showTitle = fmt?.showTitle !== false;
             const titleText = (fmt?.titleText && fmt.titleText.trim()) || v.title || '(untitled)';
-            const merged = [...reportFilters, ...(page.filters || []), ...(v.filters || [])];
+            const drillFilters = drill && drill.toPage === activePage ? drill.filters : [];
+            const merged = [...reportFilters, ...drillFilters, ...(page.filters || []), ...(v.filters || [])];
             // Visual-interaction mode for this visual vs the active selection's source.
             const interactionMode: InteractionMode = selection && selection.sourceId !== v.id
               ? resolveInteraction({ visuals: page.visuals, interactions: page.interactions }, selection.sourceId, v.id)
               : 'none';
+            const multi = selectedVisualIds.has(v.id);
+            const locked = !!v.locked;
+            // Drillthrough targets reachable from THIS visual's active selection:
+            // other pages whose drillthrough fields the selection satisfies.
+            const drillTargets = (selection && selection.sourceId === v.id)
+              ? pages.map((tp, ti) => ({ tp, ti, seed: drillSeedFor(tp, selection) }))
+                  .filter((x) => x.ti !== activePage && x.seed && x.seed.length)
+              : [];
             // Format chrome (background / border / shadow) over the card.
             const cardStyle: CSSProperties = {
               gridColumn: `span ${Math.min(12, Math.max(2, v.w))}`,
@@ -1493,21 +2191,62 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               className={mergeClasses(
                 styles.vcard,
                 selectedVisual === v.id && styles.vcardSel,
+                multi && styles.vcardMulti,
+                v.hidden && styles.vcardHidden,
+                locked && styles.vcardLocked,
                 canvas.draggingId === v.id && styles.vcardDragging,
                 canvas.dropIndicator?.id === v.id && canvas.dropIndicator.side === 'before' && styles.vcardDropBefore,
                 canvas.dropIndicator?.id === v.id && canvas.dropIndicator.side === 'after' && styles.vcardDropAfter,
               )}
               style={cardStyle}
-              onClick={() => setSelectedVisual(v.id)}
+              onClick={(e) => {
+                // Ctrl/Shift-click → toggle in the Arrange multi-set; plain click → single select.
+                if (e.ctrlKey || e.metaKey || e.shiftKey) { e.preventDefault(); toggleMultiSelect(v.id); }
+                else { setSelectedVisual(v.id); setSelectedVisualIds(new Set()); }
+              }}
               {...canvas.getDropTargetProps(v)}>
               <div className={styles.vcardHead}>
-                <span className={styles.vcardDragHandle} title="Drag to reposition" {...canvas.getDragHandleProps(v)}>
-                  <ReOrderDotsVertical20Regular />
-                </span>
+                {/* Drag-to-reposition grip is disabled on a locked visual. */}
+                {locked
+                  ? <span className={styles.vcardDragHandle} style={{ cursor: 'not-allowed', opacity: 0.5 }} title="Locked"><LockClosed20Regular /></span>
+                  : <span className={styles.vcardDragHandle} title="Drag to reposition" {...canvas.getDragHandleProps(v)}><ReOrderDotsVertical20Regular /></span>}
                 <Badge appearance="tint" size="small">{VISUALS.find((x) => x.type === v.type)?.label || v.type}</Badge>
+                {v.groupId && (
+                  <Tooltip content="Select group" relationship="label">
+                    <Badge appearance="outline" size="small" color="brand"
+                      style={{ cursor: 'pointer' }}
+                      onClick={(e) => { e.stopPropagation(); selectGroup(v.groupId as string); }}>Group</Badge>
+                  </Tooltip>
+                )}
+                {v.hidden && <Badge appearance="tint" size="small" color="warning">Hidden</Badge>}
                 {showTitle
                   ? <Text className={styles.vcardTitle} weight="semibold">{titleText}</Text>
                   : <div className={styles.spacer} />}
+                {drillTargets.length > 0 && (
+                  <Menu>
+                    <MenuTrigger disableButtonEnhancement>
+                      <Tooltip content="Drill through" relationship="label">
+                        <Button size="small" appearance="subtle" icon={<ArrowExpand20Regular />} aria-label="drill through" onClick={(e) => e.stopPropagation()} />
+                      </Tooltip>
+                    </MenuTrigger>
+                    <MenuPopover>
+                      <MenuList>
+                        <MenuGroupHeader>Drill through to</MenuGroupHeader>
+                        {drillTargets.map(({ tp, ti, seed }) => (
+                          <MenuItem key={tp.id} onClick={(e) => { e.stopPropagation(); navigateDrillthrough(ti, seed as ReportFilter[], tp.name); }}>{tp.name}</MenuItem>
+                        ))}
+                      </MenuList>
+                    </MenuPopover>
+                  </Menu>
+                )}
+                <Tooltip content={locked ? 'Unlock' : 'Lock'} relationship="label">
+                  <Button size="small" appearance="subtle" icon={locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
+                    onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { locked: !locked }); }} />
+                </Tooltip>
+                <Tooltip content={v.hidden ? 'Show' : 'Hide'} relationship="label">
+                  <Button size="small" appearance="subtle" icon={v.hidden ? <EyeOff20Regular /> : <Eye20Regular />}
+                    onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { hidden: !v.hidden }); }} />
+                </Tooltip>
                 <Tooltip content="Move left" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronUp20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, -1); }} disabled={i === 0} /></Tooltip>
                 <Tooltip content="Move right" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronDown20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, 1); }} disabled={i === page.visuals.length - 1} /></Tooltip>
                 <Tooltip content="Remove visual" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); removeVisual(v.id); }} /></Tooltip>
@@ -1517,8 +2256,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                   selection={selection} interactionMode={interactionMode}
                   onSelect={(sel) => setSelection(sel)} />
               </div>
-              <div className={styles.resizeHandle} title="Drag to resize, or focus and use arrow keys"
-                {...canvas.getResizeHandleProps(v)} />
+              {/* Resize grip is disabled on a locked visual (no dead control: it's gone). */}
+              {!locked && (
+                <div className={styles.resizeHandle} title="Drag to resize, or focus and use arrow keys"
+                  {...canvas.getResizeHandleProps(v)} />
+              )}
             </div>
             );
           })}
@@ -1534,14 +2276,42 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const rightPanel = (
     <div className={styles.pane}>
       <TabList selectedValue={rightTab}
-        onTabSelect={(_e, d) => setRightTab(d.value as 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'copilot')} size="small">
+        onTabSelect={(_e, d) => setRightTab(d.value as RightTab)} size="small">
         <Tab value="build" icon={<DataBarVerticalRegular />}>Build</Tab>
         <Tab value="format" icon={<ColorRegular />}>Format</Tab>
         <Tab value="analytics" icon={<DataTrending20Regular />}>Analytics</Tab>
         <Tab value="filters" icon={<Filter20Regular />}>Filters</Tab>
         <Tab value="interactions" icon={<Options20Regular />}>Interactions</Tab>
+        <Tab value="bookmarks" icon={<BookmarkMultiple20Regular />}>Bookmarks</Tab>
+        <Tab value="selection" icon={<Layer20Regular />}>Selection</Tab>
         <Tab value="copilot" icon={<Sparkle20Regular />}>Power BI Copilot</Tab>
       </TabList>
+      {rightTab === 'bookmarks' && (
+        <BookmarksPane
+          bookmarks={bookmarks}
+          onChange={changeBookmarks}
+          onCapture={captureBookmark}
+          onApply={applyBookmark}
+          currentName={page?.name ? `${page.name} view` : undefined}
+        />
+      )}
+      {rightTab === 'selection' && (
+        <SelectionPane
+          visuals={page?.visuals || []}
+          selectedId={selectedVisual}
+          onSelect={(vid) => { setSelectedVisual(vid); setSelectedVisualIds(new Set()); }}
+          onToggleVisible={(vid, hidden) => setVisualFlag([vid], { hidden })}
+          onReorderZ={(zById) => mutatePage((p) => ({
+            ...p,
+            visuals: p.visuals.map((v) => (zById[v.id] !== undefined ? { ...v, z: zById[v.id] } : v)),
+          }))}
+          onGroup={(ids) => groupVisuals(ids)}
+          onUngroup={(gid) => {
+            const ids = (pages[activePage]?.visuals || []).filter((v) => v.groupId === gid).map((v) => v.id);
+            ungroupVisuals(ids);
+          }}
+        />
+      )}
       {rightTab === 'copilot' && (
         <ReportPowerBiCopilot
           reportId={id}
@@ -1566,6 +2336,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           <PageFormatPanel
             styles={styles}
             page={page}
+            fieldOpts={fieldOptions(tables)}
             onChange={(patch) => mutatePage((p) => ({ ...p, ...patch }))}
           />
         )
@@ -1588,6 +2359,15 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           onReport={(next) => { setReportFilters(next); setDirty(true); }}
           onPage={(next) => mutatePage((p) => ({ ...p, filters: next }))}
           onVisual={(next) => { if (selected) mutateVisual(selected.id, (v) => ({ ...v, filters: next })); }}
+          // Format the filter pane (Loom swatch colors) — supplying onFilterPaneFormat
+          // un-hides the "Format filter pane" section (it gates on the callback).
+          filterPaneFormat={filterPaneFormat}
+          onFilterPaneFormat={(next) => { setFilterPaneFormat(next); setDirty(true); }}
+          // Drillthrough scope: when this page is an active drillthrough target, the
+          // carried seed filters show as a read-mostly scope card; clearing one
+          // broadens the drilled view (re-queries via the drill effect).
+          drillthroughFilters={drill && drill.toPage === activePage ? drill.filters : null}
+          onClearDrillthrough={(fid) => setDrill((d) => (d && d.toPage === activePage ? { ...d, filters: d.filters.filter((f) => f.id !== fid) } : d))}
         />
       )}
       {rightTab === 'interactions' && (
@@ -1837,9 +2617,13 @@ const CANVAS_TYPE_OPTS: { id: CanvasType; label: string }[] = [
  * The Format pane's no-selection surface: format the PAGE (canvas type +
  * background), matching Power BI. Every control is structured (a Dropdown / swatch
  * radiogroup / numeric Input) and persists on the page's config via /definition.
+ *
+ * Wave-2 adds the page's Drillthrough TARGET fields and the Tooltip-page binding
+ * (both structured field pickers, never typed config) — the authoring home for
+ * the drillthrough + report-page-tooltip features.
  */
-function PageFormatPanel({ styles, page, onChange }: {
-  styles: Styles; page?: DPage; onChange: (patch: Partial<DPage>) => void;
+function PageFormatPanel({ styles, page, fieldOpts, onChange }: {
+  styles: Styles; page?: DPage; fieldOpts: FieldOpt[]; onChange: (patch: Partial<DPage>) => void;
 }) {
   if (!page) {
     return <EmptyState icon={<ColorRegular />} title="No page" body="Add a page to format its canvas type and background." />;
@@ -1847,6 +2631,18 @@ function PageFormatPanel({ styles, page, onChange }: {
   const bg = page.background || {};
   const setBg = (p: Partial<NonNullable<DPage['background']>>) => onChange({ background: { ...(page.background || {}), ...p } });
   const ct = page.canvasType || '16:9';
+  const dtFields = page.drillthrough?.fields || [];
+  const optKey = (o: WellFieldRef) => o.measure ? `m:${o.measure}` : `c:${o.table}.${o.column}`;
+  const addDrillField = (key: string) => {
+    const o = fieldOpts.find((f) => f.key === key);
+    if (!o) return;
+    const ref: WellFieldRef = { table: o.table, column: o.column, measure: o.measure };
+    if (dtFields.some((f) => optKey(f) === optKey(ref))) return;
+    onChange({ drillthrough: { fields: [...dtFields, ref] } });
+  };
+  const removeDrillField = (key: string) => {
+    onChange({ drillthrough: { fields: dtFields.filter((f) => optKey(f) !== key) } });
+  };
   return (
     <div className={styles.pane} style={{ padding: 0 }}>
       <Caption1 className={styles.muted}>
@@ -1882,9 +2678,161 @@ function PageFormatPanel({ styles, page, onChange }: {
           </>
         )}
       </div>
+
+      <Divider />
+
+      {/* Drillthrough: declare this page a drillthrough TARGET by adding fields.
+          Any source visual whose selected data point carries one of these fields
+          then offers "Drill through → <this page>", opening it filtered. */}
+      <div className={styles.section}>
+        <Caption1><strong>Drillthrough fields</strong></Caption1>
+        <Caption1 className={styles.muted}>
+          Make this page a drillthrough target. A source visual containing one of these fields gets a
+          right-click <strong>Drill through</strong> to this page, opening it filtered to the value.
+        </Caption1>
+        <Menu>
+          <MenuTrigger disableButtonEnhancement>
+            <Button size="small" appearance="outline" icon={<Add20Regular />}>Add drillthrough field</Button>
+          </MenuTrigger>
+          <MenuPopover>
+            <MenuList>
+              {fieldOpts.length === 0 && <MenuItem disabled>No model fields loaded</MenuItem>}
+              {fieldOpts.map((o) => (
+                <MenuItem key={o.key} onClick={() => addDrillField(o.key)}>{o.label}</MenuItem>
+              ))}
+            </MenuList>
+          </MenuPopover>
+        </Menu>
+        {dtFields.map((f) => (
+          <div key={optKey(f)} className={styles.token}>
+            <span className={styles.tokenName}>{f.measure || `${f.table ? `${f.table}.` : ''}${f.column}`}</span>
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />}
+              aria-label="remove drillthrough field" onClick={() => removeDrillField(optKey(f))} />
+          </div>
+        ))}
+        {dtFields.length === 0 && <Caption1 className={styles.muted}>Not a drillthrough target.</Caption1>}
+      </div>
+
+      <Divider />
+
+      {/* Report-page tooltip: designate THIS page as a hover tooltip bound to a
+          field (PBI Format page → Page information → Tooltip). Structured pickers
+          only (no typed config); persists on page.config.tooltipPage via /definition.
+          The hover-consume render that shows this page over a matching mark is a
+          follow-on wave — disclosed honestly below (no silent dead control). */}
+      <div className={styles.section}>
+        <Caption1><strong>Tooltip page</strong></Caption1>
+        <Caption1 className={styles.muted}>
+          Use this page as a hover tooltip. Set <strong>Canvas type</strong> to <strong>Tooltip</strong>, turn this on,
+          and bind the field whose mark shows it.
+        </Caption1>
+        <Checkbox label="Use as a report-page tooltip"
+          checked={!!page.tooltipPage?.enabled}
+          onChange={(_e, d) => onChange({ tooltipPage: { enabled: !!d.checked, boundField: page.tooltipPage?.boundField } })} />
+        {page.tooltipPage?.enabled && (
+          <>
+            <Menu>
+              <MenuTrigger disableButtonEnhancement>
+                <Button size="small" appearance="outline" icon={<Add20Regular />}>
+                  {page.tooltipPage?.boundField ? 'Change bound field' : 'Bind a field'}
+                </Button>
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>
+                  {fieldOpts.length === 0 && <MenuItem disabled>No model fields loaded</MenuItem>}
+                  {fieldOpts.map((o) => (
+                    <MenuItem key={o.key}
+                      onClick={() => onChange({ tooltipPage: { enabled: true, boundField: { table: o.table, column: o.column, measure: o.measure } } })}>
+                      {o.label}
+                    </MenuItem>
+                  ))}
+                </MenuList>
+              </MenuPopover>
+            </Menu>
+            {page.tooltipPage?.boundField && (
+              <div className={styles.token}>
+                <span className={styles.tokenName}>
+                  {page.tooltipPage.boundField.measure || `${page.tooltipPage.boundField.table ? `${page.tooltipPage.boundField.table}.` : ''}${page.tooltipPage.boundField.column}`}
+                </span>
+                <Button size="small" appearance="subtle" icon={<Dismiss16Regular />}
+                  aria-label="clear bound field"
+                  onClick={() => onChange({ tooltipPage: { enabled: true, boundField: undefined } })} />
+              </div>
+            )}
+            <Caption1 className={styles.muted}>
+              The binding saves with the page. The hover popover that mini-renders this page over a matching mark
+              ships in a follow-on wave (see the parity doc).
+            </Caption1>
+          </>
+        )}
+      </div>
+
       <Caption1 className={styles.muted}>Canvas type + background persist with the page. Use the page menu to duplicate or hide a page.</Caption1>
     </div>
   );
 }
+
+// ── wave-2 right-rail panes + Arrange toolbar (local components) ──────────────
+
+/**
+ * Arrange toolbar (PBI Format → Arrange). Acts on the multi-selection (Ctrl/Shift-
+ * click) or the single selection: lock/unlock, hide/show, match width/height,
+ * z-order (front/back), group/ungroup. Every control mutates the persisted layout
+ * — no dead buttons (ui-parity.md / no-vaporware.md).
+ */
+function ArrangeBar({ styles, targets, visuals, onLock, onHide, onMatch, onZ, onGroup, onUngroup, onClear }: {
+  styles: Styles; targets: string[]; visuals: DVisual[];
+  onLock: (lock: boolean) => void; onHide: (hide: boolean) => void;
+  onMatch: (dim: 'w' | 'h') => void; onZ: (dir: 'front' | 'back') => void;
+  onGroup: () => void; onUngroup: () => void; onClear: () => void;
+}) {
+  const set = new Set(targets);
+  const picked = visuals.filter((v) => set.has(v.id));
+  const allLocked = picked.length > 0 && picked.every((v) => v.locked);
+  const allHidden = picked.length > 0 && picked.every((v) => v.hidden);
+  const anyGrouped = picked.some((v) => v.groupId);
+  const multi = targets.length >= 2;
+  return (
+    <div className={styles.arrangeBar} role="toolbar" aria-label="Arrange selected visuals">
+      <Badge appearance="tint" color="brand">{targets.length} selected</Badge>
+      <Tooltip content={allLocked ? 'Unlock' : 'Lock'} relationship="label">
+        <Button size="small" appearance="subtle" icon={allLocked ? <LockClosed20Regular /> : <LockOpen20Regular />}
+          onClick={() => onLock(!allLocked)}>{allLocked ? 'Unlock' : 'Lock'}</Button>
+      </Tooltip>
+      <Tooltip content={allHidden ? 'Show' : 'Hide'} relationship="label">
+        <Button size="small" appearance="subtle" icon={allHidden ? <EyeOff20Regular /> : <Eye20Regular />}
+          onClick={() => onHide(!allHidden)}>{allHidden ? 'Show' : 'Hide'}</Button>
+      </Tooltip>
+      <Tooltip content="Match width" relationship="label">
+        <Button size="small" appearance="subtle" icon={<ArrowExpand20Regular />} disabled={!multi} onClick={() => onMatch('w')}>Match width</Button>
+      </Tooltip>
+      <Tooltip content="Match height" relationship="label">
+        <Button size="small" appearance="subtle" disabled={!multi} onClick={() => onMatch('h')}>Match height</Button>
+      </Tooltip>
+      <Tooltip content="Bring to front" relationship="label">
+        <Button size="small" appearance="subtle" icon={<PositionToFront20Regular />} onClick={() => onZ('front')} />
+      </Tooltip>
+      <Tooltip content="Send to back" relationship="label">
+        <Button size="small" appearance="subtle" icon={<PositionToBack20Regular />} onClick={() => onZ('back')} />
+      </Tooltip>
+      <Tooltip content="Group" relationship="label">
+        <Button size="small" appearance="subtle" icon={<Group20Regular />} disabled={!multi} onClick={onGroup}>Group</Button>
+      </Tooltip>
+      <Tooltip content="Ungroup" relationship="label">
+        <Button size="small" appearance="subtle" icon={<GroupDismiss20Regular />} disabled={!anyGrouped} onClick={onUngroup}>Ungroup</Button>
+      </Tooltip>
+      <div className={styles.spacer} />
+      <Button size="small" appearance="subtle" onClick={onClear}>Clear</Button>
+    </div>
+  );
+}
+
+// The Selection pane (PBI Selection pane) and Bookmarks pane (PBI Bookmarks pane)
+// are the canonical components imported from ./report/selection-pane and
+// ./report/bookmarks-pane and MOUNTED in the right rail above. The previously-
+// inline duplicates (with a flat bookmark model the /definition route dropped on
+// save) were removed in favor of the richer panes (drag z-order + grouping +
+// scope + Data/Display/Current-page apply toggles + visibility/z capture) whose
+// model the route sanitizer already mirrors.
 
 export default ReportDesigner;

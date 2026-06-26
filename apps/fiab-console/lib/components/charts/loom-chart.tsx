@@ -27,6 +27,14 @@
  * so it is intentionally NOT a member here. When `format` is omitted every
  * default reproduces the prior rendering 1:1, so the legacy `LoomVisual` caller
  * is unaffected.
+ *
+ * Wave-2 analytics overlays (all optional, all default-off so existing callers
+ * render byte-identically): BUBBLE radii from a Size measure, ERROR BARS, a
+ * FORECAST projection + confidence band (line/area), and scatter SYMMETRY
+ * shading. Each is pure SVG drawn over the existing scales — refLines geometry
+ * is untouched. PLAY AXIS stays host-driven: the report designer slices `rows`
+ * by the active play-axis value and re-renders LoomChart, so no animation state
+ * lives here and the component stays pure.
  */
 
 import { useMemo } from 'react';
@@ -85,6 +93,44 @@ export interface ChartReferenceLine {
   label?: string;
 }
 
+/**
+ * A single analytics error bar (whisker) drawn at a category / x position,
+ * spanning [low..high] in VALUE (data) space with short end caps. `x` is the
+ * category label (column / bar / line) or the x-value (scatter) the whisker sits
+ * at; `low`/`high` are data-space value-axis positions. Structurally produced by
+ * the Analytics pane's error-bar entry — the designer passes them straight in.
+ */
+export interface ChartErrorBar {
+  x: number | string;
+  low: number;
+  high: number;
+  color: string;
+}
+
+/**
+ * Analytics forecast overlay for a line / area chart: a dashed projection of the
+ * PRIMARY series past its last real point, plus an optional shaded confidence
+ * band. `projected[k]` is the value at future step k (k = 0 ⇒ the first period
+ * after the last real point); `band.low[k]` / `band.high[k]` bound that step.
+ * The chart widens its x-domain to fit the projection and its y-domain to fit
+ * the band, so nothing clips. Ignored by every non-line/area type.
+ */
+export interface ChartForecast {
+  projected: number[];
+  band?: { low: number[]; high: number[] };
+  color: string;
+}
+
+/**
+ * Scatter symmetry shading: the y = x reference diagonal (in DATA space) clipped
+ * to the plot, plus the two half-plane triangles (points where y > x vs y < x)
+ * filled at low opacity. Uses the scatter's own data bounds + scales so it lines
+ * up exactly with the plotted points. Ignored by every non-scatter type.
+ */
+export interface ChartSymmetry {
+  color: string;
+}
+
 // ── Format model (structural subset of ReportVisualFormat that LoomChart paints).
 // Member names + literal unions are kept in LOCK-STEP with
 // lib/editors/report/format-pane.tsx so the host can pass `visual.format`
@@ -141,6 +187,41 @@ export interface LoomChartProps {
    * which reproduce the prior output exactly. See {@link LoomChartFormat}.
    */
   format?: LoomChartFormat | null;
+  // ─── Wave-2 analytics overlays (all optional, all default to prior output) ──
+  /**
+   * Bubble variant of the scatter chart: scale each dot's radius by a 3rd (Size)
+   * measure, area-proportional (radius ∝ √value) into a bounded range — Power BI
+   * accurate. Only affects `type='scatter'`; ignored otherwise. Default false.
+   */
+  bubble?: boolean;
+  /**
+   * Explicit Size-well column name used for bubble radii. When omitted, the 3rd
+   * numeric column is used as the size source. Only consumed when `bubble`.
+   */
+  sizeColumn?: string;
+  /**
+   * Analytics error bars (whiskers) drawn at each category / x position over the
+   * value axis (column / bar / line / area / scatter). The value domain widens to
+   * fit the extremes so caps never clip. Default: none. See {@link ChartErrorBar}.
+   */
+  errorBars?: ChartErrorBar[];
+  /**
+   * Analytics forecast for a line / area chart: a dashed projection of the
+   * primary series past its last point + an optional confidence band. Default:
+   * none. See {@link ChartForecast}.
+   */
+  forecast?: ChartForecast;
+  /**
+   * Scatter symmetry shading (y = x diagonal + shaded half-planes). Default:
+   * none. Ignored by non-scatter types. See {@link ChartSymmetry}.
+   */
+  symmetry?: ChartSymmetry;
+  /*
+   * PLAY AXIS is intentionally NOT a prop here. To keep LoomChart pure (no timer
+   * / animation state), the host (report designer) slices `rows` by the active
+   * play-axis value and re-renders LoomChart per frame. Passing the per-frame
+   * rows keeps the visual-query signature stable (w/h/x/y/frame aren't queried).
+   */
 }
 
 // ─── Style presets → concrete render variables ─────────────────────────────
@@ -219,8 +300,8 @@ interface ParsedSeries {
 interface ParsedData {
   categories: string[];
   series: ParsedSeries[];
-  /** For scatter: first two numeric columns as x/y pairs */
-  scatter?: { x: number; y: number; label: string }[];
+  /** For scatter: first two numeric columns as x/y pairs; optional Size measure. */
+  scatter?: { x: number; y: number; size?: number; label: string }[];
   xLabel: string;
   yLabel: string;
 }
@@ -231,7 +312,7 @@ function isNumeric(v: unknown): v is number {
 }
 
 /** Parse rows into categories + one-or-more numeric series. */
-function parseRows(rows: Array<Record<string, unknown>>): ParsedData | null {
+function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string): ParsedData | null {
   if (rows.length === 0) return null;
   const cols = Object.keys(rows[0]);
   if (cols.length === 0) return null;
@@ -257,19 +338,22 @@ function parseRows(rows: Array<Record<string, unknown>>): ParsedData | null {
     }),
   }));
 
-  // Scatter: use first two numeric cols as x,y
-  const scatter =
-    numericCols.length >= 2
-      ? rows.map((r) => ({
-          x: isNumeric(r[numericCols[0]]) ? Number(r[numericCols[0]]) : 0,
-          y: isNumeric(r[numericCols[1]]) ? Number(r[numericCols[1]]) : 0,
-          label: r[labelCol] == null ? '—' : String(r[labelCol]),
-        }))
-      : rows.map((r) => ({
-          x: isNumeric(r[numericCols[0]]) ? Number(r[numericCols[0]]) : 0,
-          y: isNumeric(r[numericCols[0]]) ? Number(r[numericCols[0]]) : 0,
-          label: r[labelCol] == null ? '—' : String(r[labelCol]),
-        }));
+  // Scatter / bubble: x,y from the first two numeric columns. An optional Size
+  // well — the explicit `sizeColumn` when given, else the 3rd numeric column —
+  // is carried on each point as `size` and feeds bubble radii. When no size
+  // source applies, `size` is undefined and rendering is unchanged (the plain
+  // scatter path ignores it), so existing callers are byte-identical.
+  const sizeCol = sizeColumn && numericCols.includes(sizeColumn) ? sizeColumn : undefined;
+  const xyCols = sizeCol ? numericCols.filter((c) => c !== sizeCol) : numericCols;
+  const sizeSource = sizeCol ?? (numericCols.length >= 3 ? numericCols[2] : undefined);
+  const sx = xyCols[0] ?? numericCols[0];
+  const sy = xyCols[1] ?? sx;
+  const scatter = rows.map((r) => ({
+    x: isNumeric(r[sx]) ? Number(r[sx]) : 0,
+    y: isNumeric(r[sy]) ? Number(r[sy]) : 0,
+    size: sizeSource && isNumeric(r[sizeSource]) ? Number(r[sizeSource]) : undefined,
+    label: r[labelCol] == null ? '—' : String(r[labelCol]),
+  }));
 
   return {
     categories,
@@ -362,6 +446,109 @@ function RefLinesX({ refLines, xPix, yTop, yBottom }: {
   );
 }
 
+// ─── Analytics error-bar overlays ─────────────────────────────────────────
+// A whisker at a category / x position spanning [low..high] in VALUE space with
+// short end caps. Vertical for charts whose value axis is vertical (column /
+// line / area / scatter); horizontal for the bar chart. `xFor` / `yFor` map a
+// category label (or x-value) to its pixel center and may return null to skip a
+// whisker whose category isn't on this chart.
+
+function ErrorBarsV({ bars, xFor, yPix, cap = 4 }: {
+  bars: ChartErrorBar[]; xFor: (x: number | string) => number | null; yPix: (v: number) => number; cap?: number;
+}) {
+  if (bars.length === 0) return null;
+  return (
+    <g pointerEvents="none">
+      {bars.map((b, i) => {
+        const cx = xFor(b.x);
+        if (cx == null || !Number.isFinite(cx)) return null;
+        const yH = yPix(b.high), yL = yPix(b.low);
+        return (
+          <g key={`ebv${i}`}>
+            <line x1={cx} y1={yH} x2={cx} y2={yL} stroke={b.color} strokeWidth={1.4} opacity={0.95} />
+            <line x1={cx - cap} y1={yH} x2={cx + cap} y2={yH} stroke={b.color} strokeWidth={1.4} />
+            <line x1={cx - cap} y1={yL} x2={cx + cap} y2={yL} stroke={b.color} strokeWidth={1.4} />
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function ErrorBarsH({ bars, yFor, xPix, cap = 4 }: {
+  bars: ChartErrorBar[]; yFor: (x: number | string) => number | null; xPix: (v: number) => number; cap?: number;
+}) {
+  if (bars.length === 0) return null;
+  return (
+    <g pointerEvents="none">
+      {bars.map((b, i) => {
+        const cy = yFor(b.x);
+        if (cy == null || !Number.isFinite(cy)) return null;
+        const xH = xPix(b.high), xL = xPix(b.low);
+        return (
+          <g key={`ebh${i}`}>
+            <line x1={xL} y1={cy} x2={xH} y2={cy} stroke={b.color} strokeWidth={1.4} opacity={0.95} />
+            <line x1={xL} y1={cy - cap} x2={xL} y2={cy + cap} stroke={b.color} strokeWidth={1.4} />
+            <line x1={xH} y1={cy - cap} x2={xH} y2={cy + cap} stroke={b.color} strokeWidth={1.4} />
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+// ─── Scatter symmetry shading ──────────────────────────────────────────────
+// Draws the y = x diagonal (in DATA space) clipped to the plot, plus the two
+// half-plane triangles (points where y > x vs y < x) as low-opacity fills. The
+// rectangle of the data domain is clipped to each half-plane (dy - dx ≥ 0 / ≤ 0)
+// with a single Sutherland–Hodgman pass, then mapped through the scatter's own
+// xPix/yPix so the shading lines up exactly with the plotted points.
+
+function SymmetryShading({ color, bounds, xPix, yPix }: {
+  color: string;
+  bounds: { x0: number; x1: number; y0: number; y1: number };
+  xPix: (v: number) => number;
+  yPix: (v: number) => number;
+}) {
+  const { x0, x1, y0, y1 } = bounds;
+  const rect: Array<[number, number]> = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+  const clip = (keepAbove: boolean): Array<[number, number]> => {
+    const inside = (p: [number, number]) => (keepAbove ? p[1] - p[0] >= 0 : p[1] - p[0] <= 0);
+    const cross = (a: [number, number], b: [number, number]): [number, number] => {
+      const fa = a[1] - a[0], fb = b[1] - b[0];
+      const t = fa / (fa - fb);
+      return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+    };
+    const out: Array<[number, number]> = [];
+    for (let i = 0; i < rect.length; i++) {
+      const cur = rect[i];
+      const prev = rect[(i + rect.length - 1) % rect.length];
+      const ci = inside(cur), pi = inside(prev);
+      if (ci) { if (!pi) out.push(cross(prev, cur)); out.push(cur); }
+      else if (pi) out.push(cross(prev, cur));
+    }
+    return out;
+  };
+  const toPath = (poly: Array<[number, number]>) =>
+    poly.length < 3
+      ? null
+      : poly.map((p, i) => `${i === 0 ? 'M' : 'L'}${xPix(p[0]).toFixed(1)},${yPix(p[1]).toFixed(1)}`).join(' ') + ' Z';
+  const above = toPath(clip(true));
+  const below = toPath(clip(false));
+  // The diagonal y = x stays inside the rect for t in [max(x0,y0), min(x1,y1)].
+  const tA = Math.max(x0, y0), tB = Math.min(x1, y1);
+  return (
+    <g pointerEvents="none">
+      {above && <path d={above} fill={color} opacity={0.12} />}
+      {below && <path d={below} fill={color} opacity={0.05} />}
+      {tB > tA && (
+        <line x1={xPix(tA)} y1={yPix(tA)} x2={xPix(tB)} y2={yPix(tB)}
+          stroke={color} strokeWidth={1.4} strokeDasharray="5 4" opacity={0.7} />
+      )}
+    </g>
+  );
+}
+
 // ─── SVG layout constants ─────────────────────────────────────────────────
 
 const W = 520; // viewBox width — scales to container via width="100%"
@@ -372,7 +559,7 @@ const INSIDE_LABEL = '#ffffff';
 // ─── Sub-chart renderers ──────────────────────────────────────────────────
 
 // Column chart (vertical bars)
-function ColumnChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; opts: RenderOpts }) {
+function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; opts: RenderOpts }) {
   const { style } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 40;
   const plotW = W - padL - padR;
@@ -382,11 +569,13 @@ function ColumnChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H
   const n = categories.length;
   if (n === 0 || series.length === 0) return null;
 
-  // Reference-line values widen the value domain so an overlaid line never clips.
+  // Reference-line + error-bar extremes widen the value domain so neither an
+  // overlaid line nor a whisker cap ever clips.
   const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
+  const errVals = errorBars.flatMap((e) => [e.low, e.high]);
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, ...refVals, 0);
-  const rawMin = Math.min(...allVals, ...refVals, 0);
+  const rawMax = Math.max(...allVals, ...refVals, ...errVals, 0);
+  const rawMin = Math.min(...allVals, ...refVals, ...errVals, 0);
   const span = rawMax - rawMin || 1;
   const yMax = rawMax + span * 0.08; // 8% head room
   const yMin = rawMin < 0 ? rawMin - span * 0.04 : 0;
@@ -487,6 +676,10 @@ function ColumnChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H
       {/* Analytics reference lines, overlaid at the value-axis position */}
       <RefLinesY refLines={refLines} yPix={yPix} xLeft={padL} xRight={W - padR} />
 
+      {/* Analytics error bars (whiskers) per category, vertical (value axis) */}
+      <ErrorBarsV bars={errorBars} yPix={yPix}
+        xFor={(x) => { const ci = categories.indexOf(String(x)); return ci < 0 ? null : padL + ci * groupW + groupW / 2; }} />
+
       {/* X category labels */}
       {opts.showXAxis && categories.map((cat, ci) => {
         const cx = padL + ci * groupW + groupW / 2;
@@ -502,7 +695,7 @@ function ColumnChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H
 }
 
 // Bar chart (horizontal)
-function BarChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; opts: RenderOpts }) {
+function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; opts: RenderOpts }) {
   const { style } = opts;
   const padL = 90, padR = 36, padT = 10, padB = 20;
   const plotW = W - padL - padR;
@@ -512,11 +705,13 @@ function BarChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: n
   const n = categories.length;
   if (n === 0 || series.length === 0) return null;
 
-  // Reference-line values widen the value domain so an overlaid line never clips.
+  // Reference-line + error-bar extremes widen the value domain so neither an
+  // overlaid line nor a whisker cap ever clips.
   const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
+  const errVals = errorBars.flatMap((e) => [e.low, e.high]);
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, ...refVals, 0);
-  const rawMin = Math.min(...allVals, ...refVals, 0);
+  const rawMax = Math.max(...allVals, ...refVals, ...errVals, 0);
+  const rawMin = Math.min(...allVals, ...refVals, ...errVals, 0);
   const span = rawMax - rawMin || 1;
   const xMax = rawMax + span * 0.08;
   const xMin = rawMin < 0 ? rawMin - span * 0.04 : 0;
@@ -616,6 +811,10 @@ function BarChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: n
       {/* Analytics reference lines, overlaid at the value-axis position */}
       <RefLinesX refLines={refLines} xPix={xPix} yTop={padT} yBottom={padT + plotH} />
 
+      {/* Analytics error bars (whiskers) per category, horizontal (value axis) */}
+      <ErrorBarsH bars={errorBars} xPix={xPix}
+        yFor={(x) => { const ci = categories.indexOf(String(x)); return ci < 0 ? null : padT + ci * groupH + groupH / 2; }} />
+
       {/* Y category labels */}
       {opts.showYAxis && categories.map((cat, ci) => {
         const cy = padT + ci * groupH + groupH / 2 + 3;
@@ -631,7 +830,7 @@ function BarChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: n
 }
 
 // Line / Area chart (shared, areaFill flag)
-function LineAreaChart({ parsed, H, areaFill, refLines = [], opts }: { parsed: ParsedData; H: number; areaFill: boolean; refLines?: ChartReferenceLine[]; opts: RenderOpts }) {
+function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], forecast, opts }: { parsed: ParsedData; H: number; areaFill: boolean; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; forecast?: ChartForecast; opts: RenderOpts }) {
   const { style } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 32;
   const plotW = W - padL - padR;
@@ -641,18 +840,28 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], opts }: { parsed: P
   const n = categories.length;
   if (n === 0 || series.length === 0) return null;
 
-  // Reference-line values widen the value domain so an overlaid line never clips.
+  // Reference-line + error-bar + forecast extremes widen the value domain so no
+  // overlaid line, whisker cap, or projection/band ever clips.
   const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
+  const errVals = errorBars.flatMap((e) => [e.low, e.high]);
+  const forecastVals = forecast
+    ? [...forecast.projected, ...(forecast.band?.low ?? []), ...(forecast.band?.high ?? [])]
+    : [];
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, ...refVals, 0);
-  const rawMin = Math.min(...allVals, ...refVals, 0);
+  const rawMax = Math.max(...allVals, ...refVals, ...errVals, ...forecastVals, 0);
+  const rawMin = Math.min(...allVals, ...refVals, ...errVals, ...forecastVals, 0);
   const span = rawMax - rawMin || 1;
   const yMax = rawMax + span * 0.1;
   const yMin = rawMin < 0 ? rawMin - span * 0.05 : 0;
   const ySpan = yMax - yMin;
 
-  const xStep = n > 1 ? plotW / (n - 1) : 0;
-  const xPix = (i: number) => padL + (n === 1 ? plotW / 2 : i * xStep);
+  // Forecast extends the x-domain: projected points occupy indices n..n+nProj-1,
+  // so the real series compresses left to make room (Power BI parity). With no
+  // forecast, nTotal === n and the scale is byte-identical to before.
+  const nProj = forecast?.projected.length ?? 0;
+  const nTotal = n + nProj;
+  const xStep = nTotal > 1 ? plotW / (nTotal - 1) : 0;
+  const xPix = (i: number) => padL + (nTotal === 1 ? plotW / 2 : i * xStep);
   const yPix = (v: number) => padT + plotH - ((v - yMin) / ySpan) * plotH;
   const zeroY = yPix(0);
 
@@ -725,6 +934,35 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], opts }: { parsed: P
         );
       })}
 
+      {/* Analytics forecast: dashed projection of the primary series past its
+          last real point + an optional low-opacity confidence band. */}
+      {forecast && forecast.projected.length > 0 && series.length > 0 && (() => {
+        const base = series[0];
+        const anchorX = xPix(n - 1);
+        const anchorY = yPix(base.data[n - 1] ?? 0);
+        const projPts = forecast.projected.map((v, k) => ({ x: xPix(n + k), y: yPix(v) }));
+        const line = `M${anchorX.toFixed(1)},${anchorY.toFixed(1)} ` +
+          projPts.map((p) => `L${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+        let band: string | null = null;
+        const bnd = forecast.band;
+        if (bnd && bnd.high.length > 0 && bnd.low.length > 0) {
+          const top = bnd.high.map((v, k) => `L${xPix(n + k).toFixed(1)},${yPix(v).toFixed(1)}`).join(' ');
+          const bot = bnd.low.map((v, k) => ({ k, v })).reverse()
+            .map(({ k, v }) => `L${xPix(n + k).toFixed(1)},${yPix(v).toFixed(1)}`).join(' ');
+          band = `M${anchorX.toFixed(1)},${anchorY.toFixed(1)} ${top} ${bot} Z`;
+        }
+        return (
+          <g pointerEvents="none">
+            {band && <path d={band} fill={forecast.color} opacity={0.12} />}
+            <path d={line} fill="none" stroke={forecast.color} strokeWidth={style.lineStroke}
+              strokeDasharray="6 4" strokeLinejoin="round" opacity={0.9} />
+            {projPts.length <= 40 && projPts.map((p, k) => (
+              <circle key={`fc${k}`} cx={p.x} cy={p.y} r={style.dotR} fill={forecast.color} opacity={0.9} />
+            ))}
+          </g>
+        );
+      })()}
+
       {/* Per-point data labels */}
       {showLabels && series.map((sr, si) => sr.data.map((v, i) => (
         <text key={`dl${si}-${i}`} x={xPix(i)} y={labelBelow ? yPix(v) + style.fontSize + 3 : yPix(v) - 5}
@@ -748,6 +986,10 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], opts }: { parsed: P
 
       {/* Analytics reference lines, overlaid at the value-axis position */}
       <RefLinesY refLines={refLines} yPix={yPix} xLeft={padL} xRight={W - padR} />
+
+      {/* Analytics error bars (whiskers) at each category point, vertical */}
+      <ErrorBarsV bars={errorBars} yPix={yPix}
+        xFor={(x) => { const ci = categories.indexOf(String(x)); return ci < 0 ? null : xPix(ci); }} />
 
       {/* X labels */}
       {opts.showXAxis && gridXFractions.map((f, i) => {
@@ -850,7 +1092,7 @@ function PieDonutChart({ parsed, H, donut, opts }: { parsed: ParsedData; H: numb
 }
 
 // Scatter chart
-function ScatterChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; opts: RenderOpts }) {
+function ScatterChart({ parsed, H, refLines = [], errorBars = [], bubble = false, symmetry, opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; bubble?: boolean; symmetry?: ChartSymmetry; opts: RenderOpts }) {
   const { style } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 32;
   const plotW = W - padL - padR;
@@ -865,8 +1107,11 @@ function ScatterChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; 
   // scatter's X column (numericSeriesFromRows order == parseRows order), so they
   // overlay as VERTICAL lines on the X axis — widen the X domain to fit them.
   const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
+  // Error bars are drawn vertically (Y whiskers) at each point — widen the Y
+  // domain so a cap never clips.
+  const errYVals = errorBars.flatMap((e) => [e.low, e.high]);
   const xMin = Math.min(...xs, ...refVals), xMax = Math.max(...xs, ...refVals);
-  const yMin = Math.min(...ys), yMax = Math.max(...ys);
+  const yMin = Math.min(...ys, ...errYVals), yMax = Math.max(...ys, ...errYVals);
   const xSpan = xMax - xMin || 1;
   const ySpan = yMax - yMin || 1;
 
@@ -882,6 +1127,22 @@ function ScatterChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; 
   const gridFractions = [0, 0.25, 0.5, 0.75, 1];
   const color = series[0]?.color ?? PALETTE[0];
   const showLabels = opts.dataLabels && scatter.length <= 30;
+
+  // Bubble sizing: area-proportional (radius ∝ √value, Power BI accurate) into a
+  // bounded [MIN_R..MAX_R] range. Falls back to the fixed scatter dot when the
+  // bubble flag is off or no positive Size value is present.
+  const positiveSizes = scatter
+    .map((p) => p.size)
+    .filter((s): s is number => typeof s === 'number' && s > 0);
+  const hasSize = bubble && positiveSizes.length > 0;
+  const sqMin = hasSize ? Math.sqrt(Math.min(...positiveSizes)) : 0;
+  const sqMax = hasSize ? Math.sqrt(Math.max(...positiveSizes)) : 0;
+  const MIN_R = 3, MAX_R = 20;
+  const radiusFor = (size: number | undefined): number => {
+    if (!hasSize || typeof size !== 'number' || size <= 0) return style.dotR + 1;
+    if (sqMax <= sqMin) return (MIN_R + MAX_R) / 2;
+    return MIN_R + ((Math.sqrt(size) - sqMin) / (sqMax - sqMin)) * (MAX_R - MIN_R);
+  };
 
   return (
     <>
@@ -917,10 +1178,17 @@ function ScatterChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; 
         <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
       )}
 
+      {/* Symmetry shading (y = x diagonal + half-plane fills), drawn under the
+          points so the marks stay legible. */}
+      {symmetry && (
+        <SymmetryShading color={symmetry.color}
+          bounds={{ x0, x1, y0, y1 }} xPix={xPix} yPix={yPix} />
+      )}
+
       {scatter.map((pt, i) => (
-        <circle key={i} cx={xPix(pt.x)} cy={yPix(pt.y)} r={style.dotR + 1}
-          fill={color} opacity={style.fillOpacity} stroke={tokens.colorNeutralBackground1} strokeWidth={0.8}>
-          <title>{`${pt.label}\nx: ${pt.x.toLocaleString()}, y: ${pt.y.toLocaleString()}`}</title>
+        <circle key={i} cx={xPix(pt.x)} cy={yPix(pt.y)} r={radiusFor(pt.size)}
+          fill={color} opacity={hasSize ? 0.55 : style.fillOpacity} stroke={tokens.colorNeutralBackground1} strokeWidth={0.8}>
+          <title>{`${pt.label}\nx: ${pt.x.toLocaleString()}, y: ${pt.y.toLocaleString()}${typeof pt.size === 'number' ? `\nsize: ${pt.size.toLocaleString()}` : ''}`}</title>
         </circle>
       ))}
 
@@ -934,6 +1202,9 @@ function ScatterChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; 
 
       {/* Analytics reference lines, overlaid at the value-axis (X) position */}
       <RefLinesX refLines={refLines} xPix={xPix} yTop={padT} yBottom={padT + plotH} />
+
+      {/* Analytics error bars (vertical Y whiskers) at each point's x position */}
+      <ErrorBarsV bars={errorBars} yPix={yPix} xFor={(x) => xPix(Number(x))} />
     </>
   );
 }
@@ -1001,8 +1272,8 @@ function PieLegend({ parsed, orientation = 'horizontal' }: { parsed: ParsedData;
  * preset) — see {@link LoomChartFormat} — and `refLines` overlays analytics
  * reference lines on the value axis.
  */
-export function LoomChart({ type, rows, title, height = 280, refLines = [], format }: LoomChartProps) {
-  const parsed = useMemo(() => parseRows(rows), [rows]);
+export function LoomChart({ type, rows, title, height = 280, refLines = [], format, bubble = false, sizeColumn, errorBars = [], forecast, symmetry }: LoomChartProps) {
+  const parsed = useMemo(() => parseRows(rows, sizeColumn), [rows, sizeColumn]);
   const opts = useMemo(() => optsFromFormat(format), [format]);
 
   // Empty data state
@@ -1023,13 +1294,13 @@ export function LoomChart({ type, rows, title, height = 280, refLines = [], form
 
   const renderChart = () => {
     switch (type) {
-      case 'column': return <ColumnChart parsed={parsed} H={svgH} refLines={refLines} opts={opts} />;
-      case 'bar':    return <BarChart parsed={parsed} H={svgH} refLines={refLines} opts={opts} />;
-      case 'line':   return <LineAreaChart parsed={parsed} H={svgH} areaFill={false} refLines={refLines} opts={opts} />;
-      case 'area':   return <LineAreaChart parsed={parsed} H={svgH} areaFill refLines={refLines} opts={opts} />;
+      case 'column': return <ColumnChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} opts={opts} />;
+      case 'bar':    return <BarChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} opts={opts} />;
+      case 'line':   return <LineAreaChart parsed={parsed} H={svgH} areaFill={false} refLines={refLines} errorBars={errorBars} forecast={forecast} opts={opts} />;
+      case 'area':   return <LineAreaChart parsed={parsed} H={svgH} areaFill refLines={refLines} errorBars={errorBars} forecast={forecast} opts={opts} />;
       case 'donut':  return <PieDonutChart parsed={parsed} H={svgH} donut opts={opts} />;
       case 'pie':    return <PieDonutChart parsed={parsed} H={svgH} donut={false} opts={opts} />;
-      case 'scatter':return <ScatterChart parsed={parsed} H={svgH} refLines={refLines} opts={opts} />;
+      case 'scatter':return <ScatterChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} bubble={bubble} symmetry={symmetry} opts={opts} />;
       default:       return null;
     }
   };

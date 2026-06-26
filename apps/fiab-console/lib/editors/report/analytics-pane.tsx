@@ -9,9 +9,14 @@
  * Min, Max, Average, Median, and Percentile lines — each with its own color,
  * line style, and an optional data label. This pane reproduces that surface
  * one-for-one with the Loom theme: pick a line type, +Add, then name / color /
- * style / series. (Error bars, Forecast, Anomalies, and Symmetry shading are
- * tracked as honest follow-on rows in docs/fiab/parity/report-designer.md —
- * not stubbed here.)
+ * style / series. Wave 2 extends this SAME surface with three more PBI
+ * Analytics families, each COMPUTED from the visual's real result rows and
+ * drawn by LoomChart — no dead controls:
+ *   • Error bars   — field / percent / value whiskers per category
+ *   • Forecast     — linear or additive-seasonal projection + a confidence band
+ *   • Symmetry     — the y=x diagonal split (scatter only)
+ * (Anomaly detection and the heavier ADX series_decompose_forecast remain
+ * honest wave-3 rows in docs/fiab/parity/report-designer.md — not stubbed.)
  *
  * no-freeform-config.md: every control is structured — a Dropdown of line
  * kinds, a numeric Input for the constant value / percentile (a VALUE, never a
@@ -51,7 +56,8 @@ import {
 } from '@fluentui/react-components';
 import {
   DataTrending20Regular, Add20Regular, Delete20Regular, ColorRegular,
-  LineHorizontal120Regular,
+  LineHorizontal120Regular, ArrowBidirectionalUpDown20Regular,
+  ArrowTrendingLines20Regular, ArrowSplit20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LOOM_DATA_PALETTE } from './format-pane';
@@ -94,9 +100,86 @@ export interface AnalyticsLine {
   showLabel: boolean;
 }
 
-/** The Analytics model attached to a visual: an ordered list of reference lines. */
+/** Error-bar derivation mode (PBI: By field / Percentage / Value). */
+export type ErrorBarMode = 'field' | 'percent' | 'value';
+
+/**
+ * One error-bar definition (PBI Analytics → Error bars). The whisker around
+ * each category is derived structurally — NEVER a typed expression:
+ *  - 'field':   `upperField`/`lowerField` are picked numeric-series names whose
+ *               value at each category IS the upper / lower bound.
+ *  - 'percent': ± `percent`% of each value.
+ *  - 'value':   ± a fixed `value`.
+ */
+export interface AnalyticsErrorBar {
+  /** Stable client id. */
+  id: string;
+  /** Numeric series the whiskers attach to (a result-column header); primary when absent. */
+  measure?: string;
+  /** How the bounds are derived. */
+  mode: ErrorBarMode;
+  /** field mode: picked upper-bound series (absolute value per category). */
+  upperField?: string;
+  /** field mode: picked lower-bound series (absolute value per category). */
+  lowerField?: string;
+  /** percent mode: ± this percent of each value (0–100). */
+  percent?: number;
+  /** value mode: ± this absolute amount. */
+  value?: number;
+  /** Whisker color — a Loom brand-palette swatch token. */
+  color: string;
+  /** Show the bound value labels. Default true. */
+  showLabel: boolean;
+}
+
+/**
+ * One forecast definition (PBI Analytics → Forecast). Pure client-side math
+ * over the visual's result rows: a least-squares linear trend extended forward
+ * `periods` points (seasonality 0), or an additive seasonal-naive projection
+ * (seasonality = season length) — with a ± `confidence`% band. The heavier ADX
+ * `series_decompose_forecast` stays the wave-3 plan (parity doc).
+ */
+export interface AnalyticsForecast {
+  /** Stable client id. */
+  id: string;
+  /** Numeric series to forecast (a result-column header); primary when absent. */
+  measure?: string;
+  /** Points to project forward (1–60). */
+  periods: number;
+  /** 0 ⇒ linear trend; >0 ⇒ additive seasonal-naive with this season length. */
+  seasonality?: number;
+  /** Confidence band, 0–99 (default 95). */
+  confidence?: number;
+}
+
+/**
+ * Symmetry shading (PBI Analytics → Symmetry shading, SCATTER only). Shades the
+ * upper / lower triangles split by the y=x diagonal so an author can spot which
+ * points sit above / below parity.
+ */
+export interface AnalyticsSymmetry {
+  /** Stable client id. */
+  id: string;
+  /** Whether the shading is drawn. */
+  enabled: boolean;
+  /** Diagonal / shading color — a Loom brand-palette swatch token. */
+  color: string;
+}
+
+/**
+ * The Analytics model attached to a visual. `lines` are the wave-1 reference
+ * lines; `errorBars` / `forecast` / `symmetry` are the additive wave-2 families
+ * (all OPTIONAL + sanitized — the read-only viewer + PBIR provisioner ignore
+ * unknown keys, so persistence stays backward-compatible).
+ */
 export interface ReportAnalytics {
   lines: AnalyticsLine[];
+  /** Error-bar overlays (PBI Analytics → Error bars). */
+  errorBars?: AnalyticsErrorBar[];
+  /** Forecast projections (PBI Analytics → Forecast). */
+  forecast?: AnalyticsForecast[];
+  /** Symmetry shading (scatter only — PBI Analytics → Symmetry shading). */
+  symmetry?: AnalyticsSymmetry;
 }
 
 // ── Line-kind catalogue (PBI Analytics pane rows) ────────────────────────────
@@ -226,6 +309,48 @@ function trendEndpoints(v: number[]): { yStart: number; yEnd: number } {
   return { yStart: intercept, yEnd: intercept + slope * (n - 1) };
 }
 
+/** Least-squares slope/intercept over (i, v[i]); pairs with {@link trendEndpoints}. */
+function linearFit(v: number[]): { slope: number; intercept: number } {
+  const n = v.length;
+  if (n < 2) return { slope: 0, intercept: n ? v[0] : 0 };
+  const ends = trendEndpoints(v);
+  const slope = (ends.yEnd - ends.yStart) / (n - 1);
+  return { slope, intercept: ends.yStart };
+}
+
+/**
+ * Standard-normal quantile (probit) — Acklam's rational approximation. Used to
+ * turn a forecast confidence % into the ±k·stderr band multiplier; |error| <
+ * 1.15e-9 over the full range, which is far tighter than we need to shade a band.
+ */
+function normInv(p: number): number {
+  if (p <= 0) return -6; if (p >= 1) return 6;
+  const a = [-3.969683028665376e+1, 2.209460984245205e+2, -2.759285104469687e+2, 1.383577518672690e+2, -3.066479806614716e+1, 2.506628277459239e+0];
+  const b = [-5.447609879822406e+1, 1.615858368580409e+2, -1.556989798598866e+2, 6.680131188771972e+1, -1.328068155288572e+1];
+  const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838e+0, -2.549732539343734e+0, 4.374664141464968e+0, 2.938163982698783e+0];
+  const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996e+0, 3.754408661907416e+0];
+  const plow = 0.02425, phigh = 1 - plow;
+  if (p < plow) {
+    const q = Math.sqrt(-2 * Math.log(p));
+    return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+      ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+  }
+  if (p <= phigh) {
+    const q = p - 0.5; const r = q * q;
+    return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
+      (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
+  }
+  const q = Math.sqrt(-2 * Math.log(1 - p));
+  return -(((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
+    ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
+}
+
+/** Two-sided z multiplier for a confidence % (0–99); 95 ⇒ ≈1.96. */
+function zForConfidence(confidence: number): number {
+  const c = Math.min(99, Math.max(0, confidence)) / 100;
+  return normInv((1 + c) / 2);
+}
+
 // ── Computed overlay lines (consumed by LoomChart) ───────────────────────────
 
 /**
@@ -321,6 +446,172 @@ export function computeReferenceLines(
   return out;
 }
 
+// ── Computed error bars / forecast / symmetry (consumed by LoomChart) ────────
+
+/**
+ * A resolved error-bar overlay: one whisker per category in DATA space (the
+ * chart maps `low`/`high` through its value-axis scale and draws the whisker at
+ * the category's `index` on the x-axis). Never carries a bogus point — only
+ * categories whose center value is finite are included.
+ */
+export interface ComputedErrorBar {
+  id: string;
+  color: string;
+  showLabel: boolean;
+  points: Array<{ index: number; center: number; low: number; high: number }>;
+}
+
+/**
+ * Resolve a visual's {@link ReportAnalytics.errorBars} into drawable whiskers
+ * from its real result `rows`. Field mode reads picked bound series (absolute
+ * per category, falling back to the center value when a bound series is unset —
+ * a one-sided whisker, never a dead control); percent / value are derived from
+ * each center value. Definitions that can't resolve a series are dropped.
+ */
+export function computeErrorBars(
+  rows: Array<Record<string, unknown>>,
+  analytics?: ReportAnalytics | null,
+): ComputedErrorBar[] {
+  const defs = analytics?.errorBars;
+  if (!defs || defs.length === 0) return [];
+  const all = numericSeriesFromRows(rows);
+  if (all.length === 0) return [];
+
+  const out: ComputedErrorBar[] = [];
+  for (const eb of defs) {
+    const base = eb.measure ? (all.find((s) => s.name === eb.measure) ?? all[0]) : all[0];
+    if (!base || base.values.length === 0) continue;
+    const upper = eb.upperField ? all.find((s) => s.name === eb.upperField) : undefined;
+    const lower = eb.lowerField ? all.find((s) => s.name === eb.lowerField) : undefined;
+
+    const points: ComputedErrorBar['points'] = [];
+    for (let i = 0; i < base.values.length; i++) {
+      const center = base.values[i];
+      if (!Number.isFinite(center)) continue;
+      let low: number; let high: number;
+      if (eb.mode === 'field') {
+        high = upper && Number.isFinite(upper.values[i]) ? upper.values[i] : center;
+        low = lower && Number.isFinite(lower.values[i]) ? lower.values[i] : center;
+      } else if (eb.mode === 'percent') {
+        const d = Math.abs(center) * ((eb.percent ?? 0) / 100);
+        low = center - d; high = center + d;
+      } else {
+        const d = Math.abs(eb.value ?? 0);
+        low = center - d; high = center + d;
+      }
+      if (low > high) { const t = low; low = high; high = t; }
+      points.push({ index: i, center, low, high });
+    }
+    if (points.length === 0) continue;
+    out.push({ id: eb.id, color: eb.color, showLabel: eb.showLabel, points });
+  }
+  return out;
+}
+
+/**
+ * A resolved forecast: the projected points BEYOND history (indices continue
+ * past `historyEndIndex`) with a confidence band for the chart to draw as a
+ * dashed continuation + shaded ribbon.
+ */
+export interface ComputedForecast {
+  id: string;
+  /** Index of the last historical point; forecast indices continue past this. */
+  historyEndIndex: number;
+  points: Array<{ index: number; y: number; lower: number; upper: number }>;
+}
+
+/**
+ * Project a single {@link AnalyticsForecast} forward from the visual's real
+ * result `rows`. seasonality 0 ⇒ a least-squares linear trend (reusing
+ * {@link linearFit}); seasonality L ⇒ that trend plus the average per-season
+ * residual (additive seasonal-naive). The band is ±z·stderr·√h where z comes
+ * from the confidence % and stderr is the residual standard error — so it
+ * widens with the forecast horizon, like PBI. Returns null when there isn't
+ * enough history (< 2 points) to fit.
+ */
+export function computeForecast(
+  rows: Array<Record<string, unknown>>,
+  fc: AnalyticsForecast,
+): ComputedForecast | null {
+  const all = numericSeriesFromRows(rows);
+  if (all.length === 0) return null;
+  const series = fc.measure ? (all.find((s) => s.name === fc.measure) ?? all[0]) : all[0];
+  const v = series?.values ?? [];
+  const n = v.length;
+  if (n < 2) return null;
+
+  const { slope, intercept } = linearFit(v);
+  const periods = Math.min(60, Math.max(1, Math.round(fc.periods)));
+  const L = fc.seasonality && fc.seasonality > 0 ? Math.max(2, Math.floor(fc.seasonality)) : 0;
+
+  // Per-season residual averages (additive seasonal component).
+  let seasonal: number[] = [];
+  if (L > 1 && n >= L) {
+    const sum = new Array<number>(L).fill(0);
+    const cnt = new Array<number>(L).fill(0);
+    for (let i = 0; i < n; i++) {
+      const resid = v[i] - (intercept + slope * i);
+      sum[i % L] += resid; cnt[i % L] += 1;
+    }
+    seasonal = sum.map((s, idx) => (cnt[idx] ? s / cnt[idx] : 0));
+  }
+
+  // Residual standard error about the fitted (trend + seasonal) series.
+  let ss = 0;
+  for (let i = 0; i < n; i++) {
+    const fitted = intercept + slope * i + (L > 1 ? (seasonal[i % L] ?? 0) : 0);
+    ss += (v[i] - fitted) ** 2;
+  }
+  const stderr = Math.sqrt(ss / Math.max(1, n - 2));
+  const z = zForConfidence(fc.confidence ?? 95);
+
+  const points: ComputedForecast['points'] = [];
+  for (let j = 1; j <= periods; j++) {
+    const k = (n - 1) + j;
+    const y = intercept + slope * k + (L > 1 ? (seasonal[k % L] ?? 0) : 0);
+    const band = z * stderr * Math.sqrt(j);
+    points.push({ index: k, y, lower: y - band, upper: y + band });
+  }
+  return { id: fc.id, historyEndIndex: n - 1, points };
+}
+
+/**
+ * A resolved symmetry-shading overlay: the y=x diagonal endpoints span the
+ * combined x/y data range so the chart can shade the upper / lower triangles.
+ */
+export interface ComputedSymmetry {
+  id: string;
+  color: string;
+  min: number;
+  max: number;
+}
+
+/**
+ * Resolve {@link ReportAnalytics.symmetry} from the visual's real result rows.
+ * Returns the y=x diagonal extent (min/max of the combined numeric range) when
+ * shading is enabled and there's a non-degenerate range; otherwise null (no
+ * ghost overlay).
+ */
+export function computeSymmetry(
+  rows: Array<Record<string, unknown>>,
+  analytics?: ReportAnalytics | null,
+): ComputedSymmetry | null {
+  const sym = analytics?.symmetry;
+  if (!sym || !sym.enabled) return null;
+  const all = numericSeriesFromRows(rows);
+  if (all.length === 0) return null;
+  let min = Number.POSITIVE_INFINITY; let max = Number.NEGATIVE_INFINITY;
+  for (const s of all) {
+    for (const x of s.values) {
+      if (!Number.isFinite(x)) continue;
+      if (x < min) min = x;
+      if (x > max) max = x;
+    }
+  }
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return null;
+  return { id: sym.id, color: sym.color, min, max };
+}
+
 // ── Model helpers (parse / construct) ────────────────────────────────────────
 
 /** An empty analytics model (no reference lines). */
@@ -328,9 +619,13 @@ export function emptyAnalytics(): ReportAnalytics {
   return { lines: [] };
 }
 
-/** True when a model has at least one reference line. */
+/** True when a model has at least one reference line, error bar, forecast, or active symmetry shading. */
 export function hasAnalytics(a?: ReportAnalytics | null): boolean {
-  return !!a && Array.isArray(a.lines) && a.lines.length > 0;
+  if (!a) return false;
+  return (Array.isArray(a.lines) && a.lines.length > 0)
+    || (Array.isArray(a.errorBars) && a.errorBars.length > 0)
+    || (Array.isArray(a.forecast) && a.forecast.length > 0)
+    || (!!a.symmetry && a.symmetry.enabled === true);
 }
 
 function uid(): string {
@@ -341,18 +636,85 @@ function uid(): string {
 
 const KIND_SET = new Set<AnalyticsLineKind>(ANALYTICS_LINE_KINDS.map((k) => k.kind));
 const STYLE_SET = new Set<AnalyticsLineStyle>(['solid', 'dashed', 'dotted']);
+const ERRORBAR_MODE_SET = new Set<ErrorBarMode>(['field', 'percent', 'value']);
+
+/** Coerce a wire value to a finite number, optionally clamped; undefined otherwise. */
+function numOrUndef(x: unknown, lo?: number, hi?: number): number | undefined {
+  if (typeof x !== 'number' || !Number.isFinite(x)) return undefined;
+  let v = x;
+  if (lo != null) v = Math.max(lo, v);
+  if (hi != null) v = Math.min(hi, v);
+  return v;
+}
+
+/** Defensively hydrate persisted error-bar definitions (unknown shapes dropped). */
+function parseErrorBars(value: unknown): AnalyticsErrorBar[] {
+  if (!Array.isArray(value)) return [];
+  const out: AnalyticsErrorBar[] = [];
+  for (const r of value) {
+    const o = (r || {}) as Record<string, unknown>;
+    const mode = o.mode as ErrorBarMode;
+    if (!ERRORBAR_MODE_SET.has(mode)) continue;
+    out.push({
+      id: typeof o.id === 'string' && o.id ? o.id : uid(),
+      measure: typeof o.measure === 'string' && o.measure ? o.measure : undefined,
+      mode,
+      upperField: typeof o.upperField === 'string' && o.upperField ? o.upperField : undefined,
+      lowerField: typeof o.lowerField === 'string' && o.lowerField ? o.lowerField : undefined,
+      percent: numOrUndef(o.percent, 0, 100),
+      value: numOrUndef(o.value),
+      color: typeof o.color === 'string' && o.color ? o.color : LOOM_DATA_PALETTE[0].token,
+      showLabel: o.showLabel !== false,
+    });
+  }
+  return out;
+}
+
+/** Defensively hydrate persisted forecast definitions (unknown shapes dropped). */
+function parseForecasts(value: unknown): AnalyticsForecast[] {
+  if (!Array.isArray(value)) return [];
+  const out: AnalyticsForecast[] = [];
+  for (const r of value) {
+    const o = (r || {}) as Record<string, unknown>;
+    out.push({
+      id: typeof o.id === 'string' && o.id ? o.id : uid(),
+      measure: typeof o.measure === 'string' && o.measure ? o.measure : undefined,
+      periods: numOrUndef(o.periods, 1, 60) ?? 10,
+      seasonality: numOrUndef(o.seasonality, 0),
+      confidence: numOrUndef(o.confidence, 0, 99),
+    });
+  }
+  return out;
+}
+
+/** Defensively hydrate persisted symmetry shading (fully-default/disabled → undefined). */
+function parseSymmetry(value: unknown): AnalyticsSymmetry | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const o = value as Record<string, unknown>;
+  const enabled = o.enabled === true;
+  const hasColor = typeof o.color === 'string' && !!o.color;
+  if (!enabled && !hasColor) return undefined;
+  return {
+    id: typeof o.id === 'string' && o.id ? o.id : uid(),
+    enabled,
+    color: hasColor ? (o.color as string) : LOOM_DATA_PALETTE[2].token,
+  };
+}
 
 /**
  * Defensively parse a persisted/wire value into {@link ReportAnalytics} (it
  * arrives from Cosmos `visual.config.analytics` or a PUT body). Unknown shapes
  * yield an empty model so the pane degrades gracefully rather than throwing.
+ * Wave-2 families (errorBars / forecast / symmetry) hydrate alongside `lines`;
+ * each is optional and parsed independently, so a model with only error bars
+ * (and no reference lines) round-trips intact.
  */
 export function parseAnalytics(value: unknown): ReportAnalytics {
   if (!value || typeof value !== 'object') return emptyAnalytics();
-  const raw = (value as Record<string, unknown>).lines;
-  if (!Array.isArray(raw)) return emptyAnalytics();
+  const obj = value as Record<string, unknown>;
+  const raw = obj.lines;
   const lines: AnalyticsLine[] = [];
-  for (const r of raw) {
+  for (const r of (Array.isArray(raw) ? raw : [])) {
     const o = (r || {}) as Record<string, unknown>;
     const kind = o.kind as AnalyticsLineKind;
     if (!KIND_SET.has(kind)) continue;
@@ -371,7 +733,14 @@ export function parseAnalytics(value: unknown): ReportAnalytics {
       showLabel: o.showLabel !== false,
     });
   }
-  return { lines };
+  const model: ReportAnalytics = { lines };
+  const errorBars = parseErrorBars(obj.errorBars);
+  if (errorBars.length) model.errorBars = errorBars;
+  const forecast = parseForecasts(obj.forecast);
+  if (forecast.length) model.forecast = forecast;
+  const symmetry = parseSymmetry(obj.symmetry);
+  if (symmetry) model.symmetry = symmetry;
+  return model;
 }
 
 /** Construct a new reference line with sensible per-kind defaults. */
@@ -385,6 +754,36 @@ function newLine(kind: AnalyticsLineKind, index: number): AnalyticsLine {
     ...(kind === 'constant' ? { value: 0 } : {}),
     ...(kind === 'percentile' ? { percentile: 50 } : {}),
   };
+}
+
+/** Construct a new error-bar definition (defaults: ±10% of each value). */
+function newErrorBar(index: number): AnalyticsErrorBar {
+  return {
+    id: uid(),
+    mode: 'percent',
+    percent: 10,
+    color: LOOM_DATA_PALETTE[(index + 4) % LOOM_DATA_PALETTE.length].token,
+    showLabel: true,
+  };
+}
+
+/** Construct a new forecast definition (defaults: 10 linear periods, 95% band). */
+function newForecast(): AnalyticsForecast {
+  return { id: uid(), periods: 10, seasonality: 0, confidence: 95 };
+}
+
+/** Construct an enabled symmetry-shading definition. */
+function newSymmetry(): AnalyticsSymmetry {
+  return { id: uid(), enabled: true, color: LOOM_DATA_PALETTE[2].token };
+}
+
+/** Prune a model to its sparse persisted shape (drop empty families). */
+function pruneModel(m: ReportAnalytics): ReportAnalytics {
+  const out: ReportAnalytics = { lines: m.lines ?? [] };
+  if (m.errorBars && m.errorBars.length) out.errorBars = m.errorBars;
+  if (m.forecast && m.forecast.length) out.forecast = m.forecast;
+  if (m.symmetry) out.symmetry = m.symmetry;
+  return out;
 }
 
 // ── styles (Fluent v9 + Loom tokens; matches format-pane.tsx) ────────────────
@@ -602,6 +1001,363 @@ function LineCard({
   );
 }
 
+// ── Shared structured pickers (color swatches + series dropdown) ─────────────
+
+/** Brand-palette swatch picker (lock-step with LoomChart), reused by all cards. */
+function ColorSwatches({ value, styles, onPick, label = 'Color' }: {
+  value: string;
+  styles: ReturnType<typeof useStyles>;
+  onPick: (token: string) => void;
+  label?: string;
+}): ReactElement {
+  return (
+    <div className={styles.fieldCol}>
+      <Caption1 className={styles.muted}>{label}</Caption1>
+      <div className={styles.swatchGrid} role="radiogroup" aria-label={label}>
+        {LOOM_DATA_PALETTE.map((sw) => {
+          const active = value === sw.token;
+          return (
+            <button
+              key={sw.token}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              aria-label={sw.label}
+              title={sw.label}
+              className={mergeClasses(styles.swatchBtn, active && styles.swatchBtnActive)}
+              onClick={() => onPick(sw.token)}
+            >
+              <span className={styles.swatchDot} style={{ backgroundColor: sw.token }} aria-hidden />
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const NONE_SERIES = '__none__';
+
+/**
+ * A structured numeric-series picker. `includePrimary` offers a "Primary series"
+ * sentinel (→ undefined measure); `noneLabel` offers an explicit unset sentinel
+ * (→ undefined) so a bound field can truthfully read "not set" — never a typed
+ * column name.
+ */
+function SeriesPicker({
+  label, value, seriesNames, styles, onChange,
+  includePrimary = false, primaryLabel = 'Primary series', noneLabel,
+}: {
+  label: string;
+  value?: string;
+  seriesNames: string[];
+  styles: ReturnType<typeof useStyles>;
+  onChange: (name: string | undefined) => void;
+  includePrimary?: boolean;
+  primaryLabel?: string;
+  noneLabel?: string;
+}): ReactElement {
+  const hasValue = !!value && seriesNames.includes(value);
+  const fallback = includePrimary ? PRIMARY_SERIES : (noneLabel ? NONE_SERIES : (seriesNames[0] ?? ''));
+  const selected = hasValue ? (value as string) : fallback;
+  const shown = selected === PRIMARY_SERIES ? primaryLabel : (selected === NONE_SERIES ? (noneLabel as string) : selected);
+  return (
+    <div className={styles.fieldCol}>
+      <Caption1 className={styles.muted}>{label}</Caption1>
+      <Dropdown
+        size="small"
+        aria-label={label}
+        value={shown}
+        selectedOptions={[selected]}
+        onOptionSelect={(_e, d) =>
+          onChange(d.optionValue === PRIMARY_SERIES || d.optionValue === NONE_SERIES ? undefined : (d.optionValue || undefined))
+        }
+      >
+        {includePrimary && <Option value={PRIMARY_SERIES} text={primaryLabel}>{primaryLabel}</Option>}
+        {noneLabel && <Option value={NONE_SERIES} text={noneLabel}>{noneLabel}</Option>}
+        {seriesNames.map((s) => (
+          <Option key={s} value={s} text={s}>{s}</Option>
+        ))}
+      </Dropdown>
+    </div>
+  );
+}
+
+// ── Error-bar card (PBI Analytics → Error bars) ──────────────────────────────
+
+const ERRORBAR_MODES: { id: ErrorBarMode; label: string }[] = [
+  { id: 'percent', label: 'Percentage' },
+  { id: 'value',   label: 'Value' },
+  { id: 'field',   label: 'By field' },
+];
+
+function ErrorBarCard({
+  bar, seriesNames, styles, onChange, onRemove,
+}: {
+  bar: AnalyticsErrorBar;
+  seriesNames: string[];
+  styles: ReturnType<typeof useStyles>;
+  onChange: (patch: Partial<AnalyticsErrorBar>) => void;
+  onRemove: () => void;
+}): ReactElement {
+  const modeLabel = ERRORBAR_MODES.find((m) => m.id === bar.mode)?.label ?? 'Percentage';
+  return (
+    <div className={styles.card}>
+      <div className={styles.cardHead}>
+        <span className={styles.cardKind}>
+          <ArrowBidirectionalUpDown20Regular />
+          <Caption1><strong>Error bars</strong></Caption1>
+        </span>
+        <span style={{ flex: 1 }} />
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<Delete20Regular />}
+          aria-label="Remove error bars"
+          title="Remove error bars"
+          onClick={onRemove}
+        />
+      </div>
+
+      {seriesNames.length > 1 && (
+        <SeriesPicker
+          label="Apply to"
+          value={bar.measure}
+          seriesNames={seriesNames}
+          styles={styles}
+          includePrimary
+          onChange={(name) => onChange({ measure: name })}
+        />
+      )}
+
+      <div className={styles.fieldCol}>
+        <Caption1 className={styles.muted}>Type</Caption1>
+        <Dropdown
+          size="small"
+          aria-label="Error bar type"
+          value={modeLabel}
+          selectedOptions={[bar.mode]}
+          onOptionSelect={(_e, d) => onChange({ mode: (d.optionValue as ErrorBarMode) || 'percent' })}
+        >
+          {ERRORBAR_MODES.map((m) => (
+            <Option key={m.id} value={m.id} text={m.label}>{m.label}</Option>
+          ))}
+        </Dropdown>
+      </div>
+
+      {bar.mode === 'percent' && (
+        <div className={styles.fieldCol}>
+          <Caption1 className={styles.muted}>± Percentage (0–100)</Caption1>
+          <Input
+            size="small"
+            type="number"
+            min={0}
+            max={100}
+            aria-label="Error bar percentage"
+            value={bar.percent == null ? '' : String(bar.percent)}
+            onChange={(_e, d) => {
+              const n = Number(d.value);
+              onChange({ percent: d.value === '' || Number.isNaN(n) ? undefined : Math.min(100, Math.max(0, n)) });
+            }}
+          />
+        </div>
+      )}
+
+      {bar.mode === 'value' && (
+        <div className={styles.fieldCol}>
+          <Caption1 className={styles.muted}>± Value</Caption1>
+          <Input
+            size="small"
+            type="number"
+            aria-label="Error bar value"
+            value={bar.value == null ? '' : String(bar.value)}
+            onChange={(_e, d) => {
+              const n = Number(d.value);
+              onChange({ value: d.value === '' || Number.isNaN(n) ? undefined : n });
+            }}
+          />
+        </div>
+      )}
+
+      {bar.mode === 'field' && (
+        seriesNames.length === 0 ? (
+          <Caption1 className={styles.muted}>
+            No additional numeric series to use as bounds — switch to Percentage or Value.
+          </Caption1>
+        ) : (
+          <>
+            <SeriesPicker
+              label="Upper bound field"
+              value={bar.upperField}
+              seriesNames={seriesNames}
+              styles={styles}
+              noneLabel="Center (no upper)"
+              onChange={(name) => onChange({ upperField: name })}
+            />
+            <SeriesPicker
+              label="Lower bound field"
+              value={bar.lowerField}
+              seriesNames={seriesNames}
+              styles={styles}
+              noneLabel="Center (no lower)"
+              onChange={(name) => onChange({ lowerField: name })}
+            />
+          </>
+        )
+      )}
+
+      <ColorSwatches value={bar.color} styles={styles} onPick={(t) => onChange({ color: t })} />
+
+      <Switch
+        label="Show labels"
+        checked={bar.showLabel}
+        onChange={(_e, d) => onChange({ showLabel: d.checked })}
+      />
+    </div>
+  );
+}
+
+// ── Forecast card (PBI Analytics → Forecast) ─────────────────────────────────
+
+function ForecastCard({
+  fc, seriesNames, styles, onChange, onRemove,
+}: {
+  fc: AnalyticsForecast;
+  seriesNames: string[];
+  styles: ReturnType<typeof useStyles>;
+  onChange: (patch: Partial<AnalyticsForecast>) => void;
+  onRemove: () => void;
+}): ReactElement {
+  return (
+    <div className={styles.card}>
+      <div className={styles.cardHead}>
+        <span className={styles.cardKind}>
+          <ArrowTrendingLines20Regular />
+          <Caption1><strong>Forecast</strong></Caption1>
+        </span>
+        <span style={{ flex: 1 }} />
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<Delete20Regular />}
+          aria-label="Remove forecast"
+          title="Remove forecast"
+          onClick={onRemove}
+        />
+      </div>
+
+      {seriesNames.length > 1 && (
+        <SeriesPicker
+          label="Series"
+          value={fc.measure}
+          seriesNames={seriesNames}
+          styles={styles}
+          includePrimary
+          onChange={(name) => onChange({ measure: name })}
+        />
+      )}
+
+      <div className={styles.fieldRow}>
+        <div className={styles.fieldCol}>
+          <Caption1 className={styles.muted}>Forecast length (1–60)</Caption1>
+          <Input
+            size="small"
+            type="number"
+            min={1}
+            max={60}
+            aria-label="Forecast length"
+            value={String(fc.periods)}
+            onChange={(_e, d) => {
+              const n = Number(d.value);
+              if (d.value !== '' && Number.isFinite(n)) onChange({ periods: Math.min(60, Math.max(1, Math.round(n))) });
+            }}
+          />
+        </div>
+        <div className={styles.fieldCol}>
+          <Caption1 className={styles.muted}>Seasonality (0 = none)</Caption1>
+          <Input
+            size="small"
+            type="number"
+            min={0}
+            aria-label="Seasonality (season length)"
+            value={fc.seasonality == null ? '' : String(fc.seasonality)}
+            onChange={(_e, d) => {
+              const n = Number(d.value);
+              onChange({ seasonality: d.value === '' || Number.isNaN(n) ? undefined : Math.max(0, Math.floor(n)) });
+            }}
+          />
+        </div>
+      </div>
+
+      <div className={styles.fieldCol}>
+        <Caption1 className={styles.muted}>Confidence band (0–99)</Caption1>
+        <Input
+          size="small"
+          type="number"
+          min={0}
+          max={99}
+          aria-label="Confidence band"
+          value={fc.confidence == null ? '' : String(fc.confidence)}
+          onChange={(_e, d) => {
+            const n = Number(d.value);
+            onChange({ confidence: d.value === '' || Number.isNaN(n) ? undefined : Math.min(99, Math.max(0, n)) });
+          }}
+        />
+      </div>
+
+      <Caption1 className={styles.hint}>
+        Least-squares linear trend when seasonality is 0; additive-seasonal projection otherwise.
+        The confidence percentage sets the shaded band, which widens with the horizon.
+      </Caption1>
+    </div>
+  );
+}
+
+// ── Symmetry-shading card (PBI Analytics → Symmetry shading, scatter only) ────
+
+function SymmetryCard({
+  symmetry, isScatter, styles, onChange,
+}: {
+  symmetry?: AnalyticsSymmetry;
+  isScatter: boolean;
+  styles: ReturnType<typeof useStyles>;
+  onChange: (patch: Partial<AnalyticsSymmetry>) => void;
+}): ReactElement {
+  if (!isScatter) {
+    // Honest informational note (NOT a dead control) — PBI shows symmetry only on scatter.
+    return (
+      <Caption1 className={styles.muted}>
+        Symmetry shading is available for scatter charts. Switch the selected visual to a scatter
+        chart to shade the upper / lower triangles split by the y=x diagonal.
+      </Caption1>
+    );
+  }
+  const enabled = symmetry?.enabled ?? false;
+  const color = symmetry?.color ?? LOOM_DATA_PALETTE[2].token;
+  return (
+    <div className={styles.card}>
+      <div className={styles.cardHead}>
+        <span className={styles.cardKind}>
+          <ArrowSplit20Regular />
+          <Caption1><strong>Symmetry shading</strong></Caption1>
+        </span>
+        <span style={{ flex: 1 }} />
+        <Switch
+          checked={enabled}
+          aria-label="Enable symmetry shading"
+          onChange={(_e, d) => onChange({ enabled: d.checked })}
+        />
+      </div>
+      <Caption1 className={styles.muted}>
+        Shade the upper / lower triangles split by the y=x diagonal to spot points above / below parity.
+      </Caption1>
+      {enabled && (
+        <ColorSwatches value={color} styles={styles} onPick={(t) => onChange({ color: t })} />
+      )}
+    </div>
+  );
+}
+
 // ── AnalyticsPane ─────────────────────────────────────────────────────────────
 
 export interface AnalyticsPaneProps {
@@ -653,13 +1409,34 @@ export function AnalyticsPane({ visualType, analytics, seriesNames, onChange }: 
   }
 
   const lines = analytics?.lines ?? [];
+  const errorBars = analytics?.errorBars ?? [];
+  const forecasts = analytics?.forecast ?? [];
+  const symmetry = analytics?.symmetry;
   const names = seriesNames ?? [];
+  const isScatter = visualType === 'scatter';
 
-  const commit = (next: AnalyticsLine[]) => onChange({ lines: next });
-  const addLine = () => commit([...lines, newLine(pendingKind, lines.length)]);
+  // All families round-trip through one onChange — pruneModel keeps the stored
+  // shape sparse, and {@link parseAnalytics} hydrates each independently.
+  const baseModel: ReportAnalytics = { lines, errorBars, forecast: forecasts, symmetry };
+  const emit = (patch: Partial<ReportAnalytics>) => onChange(pruneModel({ ...baseModel, ...patch }));
+
+  const addLine = () => emit({ lines: [...lines, newLine(pendingKind, lines.length)] });
   const patchLine = (id: string, patch: Partial<AnalyticsLine>) =>
-    commit(lines.map((l) => (l.id === id ? { ...l, ...patch } : l)));
-  const removeLine = (id: string) => commit(lines.filter((l) => l.id !== id));
+    emit({ lines: lines.map((l) => (l.id === id ? { ...l, ...patch } : l)) });
+  const removeLine = (id: string) => emit({ lines: lines.filter((l) => l.id !== id) });
+
+  const addErrorBar = () => emit({ errorBars: [...errorBars, newErrorBar(errorBars.length)] });
+  const patchErrorBar = (id: string, patch: Partial<AnalyticsErrorBar>) =>
+    emit({ errorBars: errorBars.map((b) => (b.id === id ? { ...b, ...patch } : b)) });
+  const removeErrorBar = (id: string) => emit({ errorBars: errorBars.filter((b) => b.id !== id) });
+
+  const addForecast = () => emit({ forecast: [...forecasts, newForecast()] });
+  const patchForecast = (id: string, patch: Partial<AnalyticsForecast>) =>
+    emit({ forecast: forecasts.map((f) => (f.id === id ? { ...f, ...patch } : f)) });
+  const removeForecast = (id: string) => emit({ forecast: forecasts.filter((f) => f.id !== id) });
+
+  const setSymmetry = (patch: Partial<AnalyticsSymmetry>) =>
+    emit({ symmetry: { ...(symmetry ?? newSymmetry()), ...patch } });
 
   const pendingLabel = ANALYTICS_LINE_KINDS.find((k) => k.kind === pendingKind)?.label ?? 'Average line';
 
@@ -717,6 +1494,69 @@ export function AnalyticsPane({ visualType, analytics, seriesNames, onChange }: 
           ))}
         </div>
       )}
+
+      {/* ── Error bars ──────────────────────────────────────────────────────── */}
+      <Divider />
+      <div>
+        <SectionHead icon={<ArrowBidirectionalUpDown20Regular />} label="Error bars" styles={styles} />
+        <Caption1 className={styles.muted}>
+          Whiskers around each value — by percentage, a fixed amount, or upper / lower bound fields.
+        </Caption1>
+      </div>
+      <div className={styles.addRow}>
+        <Button appearance="secondary" size="small" icon={<Add20Regular />} onClick={addErrorBar}>
+          Add error bars
+        </Button>
+      </div>
+      {errorBars.length > 0 && (
+        <div className={styles.list}>
+          {errorBars.map((bar) => (
+            <ErrorBarCard
+              key={bar.id}
+              bar={bar}
+              seriesNames={names}
+              styles={styles}
+              onChange={(patch) => patchErrorBar(bar.id, patch)}
+              onRemove={() => removeErrorBar(bar.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Forecast ────────────────────────────────────────────────────────── */}
+      <Divider />
+      <div>
+        <SectionHead icon={<ArrowTrendingLines20Regular />} label="Forecast" styles={styles} />
+        <Caption1 className={styles.muted}>
+          Project the series forward — a linear or seasonal trend with a confidence band.
+        </Caption1>
+      </div>
+      <div className={styles.addRow}>
+        <Button appearance="secondary" size="small" icon={<Add20Regular />} onClick={addForecast}>
+          Add forecast
+        </Button>
+      </div>
+      {forecasts.length > 0 && (
+        <div className={styles.list}>
+          {forecasts.map((fc) => (
+            <ForecastCard
+              key={fc.id}
+              fc={fc}
+              seriesNames={names}
+              styles={styles}
+              onChange={(patch) => patchForecast(fc.id, patch)}
+              onRemove={() => removeForecast(fc.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Symmetry shading (scatter only) ─────────────────────────────────── */}
+      <Divider />
+      <div>
+        <SectionHead icon={<ArrowSplit20Regular />} label="Symmetry shading" styles={styles} />
+      </div>
+      <SymmetryCard symmetry={symmetry} isScatter={isScatter} styles={styles} onChange={setSymmetry} />
     </div>
   );
 }

@@ -18,9 +18,16 @@
  * at three levels — Report (every page), This page, and the Selected visual —
  * each card offering a field, a filter TYPE (basic / advanced / Top N /
  * relative date), and lock / hide. This pane reproduces that one-for-one with
- * the Loom theme. (Drillthrough scope and "format the filter pane" are tracked
- * as honest follow-on rows in docs/fiab/parity/report-designer.md — not stubbed
- * here.)
+ * the Loom theme. Wave 2 EXTENDS this pane with three more PBI Filters-pane
+ * capabilities (all additive, all real — no stubs): a "Format filter pane"
+ * section (background / border / title / header / input colors + a show-title
+ * toggle, applied to the pane for real and persisted at
+ * state.content.filterPaneFormat); a read-mostly "Drillthrough" scope card that
+ * lists the constraints carried in from a drillthrough navigation as locked
+ * chips (clearable to broaden the view); and a deferred "Apply" mode that
+ * buffers edits locally and commits them on click. Every wave-2 prop is OPTIONAL
+ * — absent ⇒ the pane behaves exactly as wave 1, so the existing host mount
+ * keeps compiling and instant-apply stays the default.
  *
  * no-freeform-config.md: every control is structured — a field Dropdown, an
  * operator Dropdown, value Inputs, a by-measure picker, a direction / unit
@@ -61,15 +68,19 @@
  * is removed there.
  */
 
-import { useMemo } from 'react';
+import { useMemo, useState, useEffect, type CSSProperties } from 'react';
 import {
-  Button, Caption1, Dropdown, Input, Option, Tooltip,
+  Badge, Button, Caption1, Dropdown, Input, Option, Switch, Tooltip,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
-  Add20Regular, Dismiss16Regular,
+  Add20Regular, Dismiss16Regular, Color20Regular,
+  ChevronDown16Regular, ChevronRight16Regular,
   LockClosed16Regular, LockOpen16Regular, Eye16Regular, EyeOff16Regular,
 } from '@fluentui/react-icons';
+// Reuse the SAME swatch palette the charts / FormatPane paint with (web3-ui:
+// tokens only). No cycle: format-pane.tsx never imports filters-pane.tsx.
+import { LOOM_DATA_PALETTE } from './format-pane';
 
 // ── model: structured filters (no typed DAX/JSON — PBI Filters-pane parity) ───
 
@@ -158,6 +169,61 @@ const REL_UNITS: { v: RelUnit; label: string }[] = [
   { v: 'months', label: 'months' },
   { v: 'years', label: 'years' },
 ];
+
+// ── model: filter-pane formatting (wave-2, PBI "Format the filter pane") ───────
+
+/**
+ * Persisted pane-format tokens. Each color is a Loom-palette swatch token (the
+ * SAME {@link LOOM_DATA_PALETTE} the charts paint with) — never a typed hex /
+ * CSS string. Stored at `state.content.filterPaneFormat` and round-tripped via
+ * /definition (additive — the read-only viewer + PBIR provisioner ignore it).
+ */
+export interface FilterPaneFormat {
+  /** Pane container background. */
+  background?: string;
+  /** Scope-card border color. */
+  border?: string;
+  /** Pane title color + visibility. */
+  title?: { color?: string; show?: boolean };
+  /** Scope-card header ("Report" / "This page" / …) color. */
+  headerColor?: string;
+  /** Filter-row (input area) background tint. */
+  inputColor?: string;
+}
+
+/**
+ * Defensive color clamp: accept a non-empty string of bounded length (token
+ * strings are short `var(--…)` references), else drop it. Prevents a
+ * hand-edited /definition from injecting an unbounded value into a style attr.
+ */
+function clampColor(v: unknown): string | undefined {
+  return typeof v === 'string' && v.trim().length > 0 && v.length <= 64 ? v.trim() : undefined;
+}
+
+/** Re-hydrate a persisted pane-format shape, clamping every color string. */
+export function parseFilterPaneFormat(raw: unknown): FilterPaneFormat {
+  const o = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const t = (o.title && typeof o.title === 'object' ? o.title : {}) as Record<string, unknown>;
+  const fmt: FilterPaneFormat = {};
+  const bg = clampColor(o.background); if (bg) fmt.background = bg;
+  const bd = clampColor(o.border); if (bd) fmt.border = bd;
+  const hc = clampColor(o.headerColor); if (hc) fmt.headerColor = hc;
+  const ic = clampColor(o.inputColor); if (ic) fmt.inputColor = ic;
+  const tc = clampColor(t.color);
+  const showSet = typeof t.show === 'boolean';
+  if (tc || showSet) fmt.title = { ...(tc ? { color: tc } : {}), ...(showSet ? { show: t.show as boolean } : {}) };
+  return fmt;
+}
+
+/**
+ * Strip empties + clamp before persisting; returns undefined when nothing is set
+ * so the /definition sanitizer drops the key entirely (no empty objects).
+ */
+export function wireFilterPaneFormat(fmt?: FilterPaneFormat | null): FilterPaneFormat | undefined {
+  if (!fmt) return undefined;
+  const clean = parseFilterPaneFormat(fmt);
+  return Object.keys(clean).length ? clean : undefined;
+}
 
 // ── model schema (structurally identical to the designer's field tree types) ──
 
@@ -406,6 +472,66 @@ const useStyles = makeStyles({
   filterValues: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' },
   iconActive: { color: tokens.colorBrandForeground1 },
   hiddenNote: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+
+  // ── wave-2: pane header / deferred-apply bar ────────────────────────────────
+  paneHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  applyBar: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap',
+    padding: tokens.spacingVerticalXS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+  },
+  // ── wave-2: "Format filter pane" collapsible section ────────────────────────
+  fmtSection: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalXS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow2,
+  },
+  fmtHeader: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: tokens.spacingVerticalXXS, cursor: 'pointer', width: '100%', textAlign: 'left',
+    backgroundColor: 'transparent', border: 'none', color: tokens.colorNeutralForeground1,
+  },
+  fmtBody: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalL,
+  },
+  fmtRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  fmtLabel: { minWidth: '92px', color: tokens.colorNeutralForeground2 },
+  // swatch radiogroup (mirrors FormatPane's compact swatch row)
+  swatchRow: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  swatchDot: {
+    width: '20px', height: '20px', padding: 0, cursor: 'pointer',
+    borderRadius: tokens.borderRadiusCircular,
+    border: `1px solid ${tokens.colorNeutralStroke1}`,
+    transitionProperty: 'transform, box-shadow', transitionDuration: tokens.durationFaster,
+    ':hover': { transform: 'scale(1.12)' },
+  },
+  swatchDotActive: { border: `2px solid ${tokens.colorNeutralForeground1}`, boxShadow: tokens.shadow4 },
+  noneBtn: {
+    width: '20px', height: '20px', cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    borderRadius: tokens.borderRadiusCircular,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200, lineHeight: 1,
+  },
+  noneBtnActive: { border: `2px solid ${tokens.colorNeutralForeground1}` },
+  // ── wave-2: drillthrough scope chips ────────────────────────────────────────
+  dtChips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
+  dtChip: {
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
+    paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalXS, paddingRight: tokens.spacingHorizontalXXS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorNeutralForeground2,
+  },
+  dtChipName: { color: tokens.colorNeutralForeground1 },
 });
 type FilterStyles = ReturnType<typeof useStyles>;
 
@@ -417,10 +543,12 @@ type FilterStyles = ReturnType<typeof useStyles>;
  * relative date), and the per-card lock / hide toggles.
  */
 export function FilterScope({
-  styles, title, hint, opts, filters, onChange,
+  styles, title, hint, opts, filters, onChange, cardStyle, headStyle, rowStyle,
 }: {
   styles: FilterStyles; title: string; hint: string; opts: FieldOpt[];
   filters: ReportFilter[]; onChange: (next: ReportFilter[]) => void;
+  /** Optional pane-format overlays (wave-2). Undefined ⇒ theme defaults (wave-1). */
+  cardStyle?: CSSProperties; headStyle?: CSSProperties; rowStyle?: CSSProperties;
 }) {
   const add = () => onChange([...filters, { id: uid('flt'), op: 'eq' }]);
   const patch = (fid: string, p: Partial<ReportFilter>) =>
@@ -442,9 +570,9 @@ export function FilterScope({
   };
 
   return (
-    <div className={styles.filterScope}>
+    <div className={styles.filterScope} style={cardStyle}>
       <div className={styles.toolbar}>
-        <Caption1><strong>{title}</strong></Caption1>
+        <Caption1 style={headStyle}><strong>{title}</strong></Caption1>
         <div className={styles.spacer} />
         <Tooltip content={`Add filter to ${title}`} relationship="label">
           <Button size="small" appearance="subtle" icon={<Add20Regular />} aria-label={`add filter to ${title}`}
@@ -454,7 +582,7 @@ export function FilterScope({
       {opts.length === 0 && <Caption1 className={styles.muted}>Bind a data source to filter by its fields.</Caption1>}
       {opts.length > 0 && filters.length === 0 && <Caption1 className={styles.muted}>No filters. {hint}</Caption1>}
       {filters.map((f) => (
-        <div key={f.id} className={mergeClasses(styles.filterRow, f.hidden && styles.filterRowHidden)}>
+        <div key={f.id} className={mergeClasses(styles.filterRow, f.hidden && styles.filterRowHidden)} style={rowStyle}>
           <div className={styles.rowHead}>
             <Dropdown size="small" style={{ minWidth: '120px', flex: 1 }} placeholder="Field"
               aria-label="filter field" value={filterFieldLabel(f)} selectedOptions={[filterFieldKey(f)]}
@@ -552,6 +680,56 @@ export function FilterScope({
 
 // ── filters pane (right rail "Filters" tab) ───────────────────────────────────
 
+/** Apply timing: emit on every edit ('instant') or buffer until Apply ('onApply'). */
+export type FilterApplyMode = 'instant' | 'onApply';
+
+/** A swatch radiogroup row for the "Format filter pane" section (wave-2). */
+function FmtSwatchRow({ label, value, onChange, styles }: {
+  label: string; value?: string; onChange: (color?: string) => void; styles: FilterStyles;
+}) {
+  return (
+    <div className={styles.fmtRow}>
+      <Caption1 className={styles.fmtLabel}>{label}</Caption1>
+      <div className={styles.swatchRow} role="radiogroup" aria-label={label}>
+        <button
+          type="button" role="radio" aria-checked={!value} aria-label="Theme default" title="Theme default"
+          className={mergeClasses(styles.noneBtn, !value && styles.noneBtnActive)}
+          onClick={() => onChange(undefined)}
+        >
+          ∅
+        </button>
+        {LOOM_DATA_PALETTE.map((sw) => {
+          const active = value === sw.token;
+          return (
+            <button
+              key={sw.token}
+              type="button" role="radio" aria-checked={active} aria-label={sw.label} title={sw.label}
+              className={mergeClasses(styles.swatchDot, active && styles.swatchDotActive)}
+              style={{ backgroundColor: sw.token }}
+              onClick={() => onChange(sw.token)}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Human-readable `field op value` label for a carried drillthrough constraint. */
+function dtChipText(f: ReportFilter): string {
+  const lhs = filterFieldLabel(f);
+  if (f.op === 'in') {
+    const set = (f.values && f.values.length ? f.values : (f.value || '').split(','))
+      .map((s) => s.trim()).filter(Boolean);
+    return `${lhs} in ${set.join(', ') || '…'}`;
+  }
+  if (f.op === 'between') return `${lhs}: ${f.value ?? ''}–${f.value2 ?? ''}`;
+  const sym: Partial<Record<FilterOp, string>> = {
+    eq: '=', ne: '≠', gt: '>', ge: '≥', lt: '<', le: '≤', contains: '⊃',
+  };
+  return `${lhs} ${sym[f.op] || '='} ${f.value ?? ''}`;
+}
+
 export interface FiltersPaneProps {
   tables: FieldTable[];
   reportFilters: ReportFilter[];
@@ -562,38 +740,190 @@ export interface FiltersPaneProps {
   onReport: (next: ReportFilter[]) => void;
   onPage: (next: ReportFilter[]) => void;
   onVisual: (next: ReportFilter[]) => void;
+
+  // ── wave-2 (all OPTIONAL — host wires them additively; absent ⇒ wave-1) ──────
+  /** Persisted pane formatting (state.content.filterPaneFormat). Painted for real
+   *  on the pane + scope cards. The "Format filter pane" section only renders when
+   *  the companion onFilterPaneFormat callback is supplied (no dead controls). */
+  filterPaneFormat?: FilterPaneFormat | null;
+  onFilterPaneFormat?: (next: FilterPaneFormat) => void;
+  /** Constraints carried in from a drillthrough navigation. Non-empty ⇒ a
+   *  read-mostly "Drillthrough" scope card lists them as locked chips. */
+  drillthroughFilters?: ReportFilter[] | null;
+  /** Clear one carried constraint (broadens the drilled view). The clear button
+   *  only renders when this is supplied. */
+  onClearDrillthrough?: (id: string) => void;
+  /** 'instant' (default) emits on every edit; 'onApply' buffers until Apply.
+   *  A header Switch also toggles this at runtime. */
+  applyMode?: FilterApplyMode;
 }
 
 /**
- * The three-scope PBI Filters pane: Report → every page, This page → the active
- * page, Selected visual → the chosen visual. Self-contained (owns its Loom-token
- * styles) so the host designer mounts it as `<FiltersPane … />` with no styles
- * prop.
+ * The PBI Filters pane: Report → every page, This page → the active page,
+ * Selected visual → the chosen visual, plus (wave-2) a read-mostly Drillthrough
+ * scope, a "Format filter pane" section, and a deferred Apply mode. Self-contained
+ * (owns its Loom-token styles) so the host mounts `<FiltersPane … />` with no
+ * styles prop. Every wave-2 surface is real — colors paint, Apply defers + commits,
+ * drillthrough chips reflect the carried filters — never a stub.
  */
 export function FiltersPane({
   tables, reportFilters, pageFilters, visualFilters, selectedTitle, onReport, onPage, onVisual,
+  filterPaneFormat, onFilterPaneFormat, drillthroughFilters, onClearDrillthrough, applyMode,
 }: FiltersPaneProps) {
   const styles = useStyles();
   const opts = useMemo(() => fieldOptions(tables), [tables]);
+
+  // ── deferred-apply buffering (wave-2) ───────────────────────────────────────
+  const [mode, setMode] = useState<FilterApplyMode>(applyMode || 'instant');
+  const [draftReport, setDraftReport] = useState<ReportFilter[] | null>(null);
+  const [draftPage, setDraftPage] = useState<ReportFilter[] | null>(null);
+  const [draftVisual, setDraftVisual] = useState<ReportFilter[] | null>(null);
+  // Discard an unsaved visual draft when the selected visual changes, so a draft
+  // for one visual never leaks onto the next.
+  useEffect(() => { setDraftVisual(null); }, [selectedTitle]);
+
+  const deferred = mode === 'onApply';
+  const dirty = draftReport !== null || draftPage !== null || draftVisual !== null;
+  const reportView = deferred && draftReport !== null ? draftReport : reportFilters;
+  const pageView = deferred && draftPage !== null ? draftPage : pageFilters;
+  const visualView = deferred && draftVisual !== null ? draftVisual : visualFilters;
+
+  const handleReport = (next: ReportFilter[]) => { if (deferred) setDraftReport(next); else onReport(next); };
+  const handlePage = (next: ReportFilter[]) => { if (deferred) setDraftPage(next); else onPage(next); };
+  const handleVisual = (next: ReportFilter[]) => { if (deferred) setDraftVisual(next); else onVisual(next); };
+
+  const commit = () => {
+    if (draftReport !== null) onReport(draftReport);
+    if (draftPage !== null) onPage(draftPage);
+    if (draftVisual !== null && visualFilters !== null) onVisual(draftVisual);
+    setDraftReport(null); setDraftPage(null); setDraftVisual(null);
+  };
+  const discard = () => { setDraftReport(null); setDraftPage(null); setDraftVisual(null); };
+  const setDeferred = (on: boolean) => {
+    if (!on) commit();                       // leaving deferred commits pending edits (never lost)
+    setMode(on ? 'onApply' : 'instant');
+  };
+
+  // ── pane formatting (wave-2) ────────────────────────────────────────────────
+  const fmt = filterPaneFormat || undefined;
+  const titleShow = fmt?.title?.show !== false;
+  const canFormat = typeof onFilterPaneFormat === 'function';
+  const [fmtOpen, setFmtOpen] = useState(false);
+  const patchFmt = (p: Partial<FilterPaneFormat>) =>
+    onFilterPaneFormat?.({ ...(filterPaneFormat || {}), ...p });
+  const patchTitle = (p: Partial<NonNullable<FilterPaneFormat['title']>>) =>
+    patchFmt({ title: { ...(filterPaneFormat?.title || {}), ...p } });
+
+  const paneStyle: CSSProperties | undefined = fmt?.background ? { backgroundColor: fmt.background } : undefined;
+  const titleStyle: CSSProperties | undefined = fmt?.title?.color ? { color: fmt.title.color } : undefined;
+  const scopeCardStyle: CSSProperties | undefined = fmt?.border ? { borderColor: fmt.border } : undefined;
+  const scopeHeadStyle: CSSProperties | undefined = fmt?.headerColor ? { color: fmt.headerColor } : undefined;
+  const scopeRowStyle: CSSProperties | undefined = fmt?.inputColor ? { backgroundColor: fmt.inputColor } : undefined;
+
+  const dtList = drillthroughFilters || [];
+
   return (
-    <div className={styles.pane}>
+    <div className={styles.pane} style={paneStyle}>
+      {/* header: pane title + instant/deferred toggle */}
+      <div className={styles.paneHeader}>
+        {titleShow && <Caption1 style={titleStyle}><strong>Filters</strong></Caption1>}
+        <div className={styles.spacer} />
+        <Switch checked={deferred} label="Defer apply"
+          onChange={(_e, d) => setDeferred(d.checked)} />
+      </div>
+
+      {deferred && (
+        <div className={styles.applyBar}>
+          {dirty
+            ? <Badge appearance="tint" color="warning" size="small">Unsaved changes</Badge>
+            : <Caption1 className={styles.muted}>Edits apply when you click Apply.</Caption1>}
+          <div className={styles.spacer} />
+          <Button size="small" appearance="subtle" disabled={!dirty} onClick={discard}>Discard</Button>
+          <Button size="small" appearance="primary" disabled={!dirty} onClick={commit}>Apply</Button>
+        </div>
+      )}
+
+      {/* Format the filter pane — only when the host persists it (no dead controls) */}
+      {canFormat && (
+        <div className={styles.fmtSection}>
+          <button type="button" className={styles.fmtHeader} aria-expanded={fmtOpen}
+            onClick={() => setFmtOpen((o) => !o)}>
+            {fmtOpen ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+            <Color20Regular />
+            <Caption1><strong>Format filter pane</strong></Caption1>
+          </button>
+          {fmtOpen && (
+            <div className={styles.fmtBody}>
+              <div className={styles.fmtRow}>
+                <Caption1 className={styles.fmtLabel}>Pane title</Caption1>
+                <Switch checked={titleShow} label={titleShow ? 'Shown' : 'Hidden'}
+                  onChange={(_e, d) => patchTitle({ show: d.checked })} />
+              </div>
+              <FmtSwatchRow label="Title color" value={fmt?.title?.color} styles={styles}
+                onChange={(c) => patchTitle({ color: c })} />
+              <FmtSwatchRow label="Background" value={fmt?.background} styles={styles}
+                onChange={(c) => patchFmt({ background: c })} />
+              <FmtSwatchRow label="Border" value={fmt?.border} styles={styles}
+                onChange={(c) => patchFmt({ border: c })} />
+              <FmtSwatchRow label="Header" value={fmt?.headerColor} styles={styles}
+                onChange={(c) => patchFmt({ headerColor: c })} />
+              <FmtSwatchRow label="Inputs" value={fmt?.inputColor} styles={styles}
+                onChange={(c) => patchFmt({ inputColor: c })} />
+            </div>
+          )}
+        </div>
+      )}
+
       <Caption1 className={styles.muted}>
         Structured filters apply on top of the model — never typed DAX/JSON. Pick a field and a type (compare, in,
         between, Top N, or relative date); lock a card so viewers can&apos;t change it, or hide it from them. Report
         filters apply to every page; page filters to this page; visual filters to the selected visual.
       </Caption1>
+
+      {/* Drillthrough scope (read-mostly) — constraints carried from a drillthrough nav */}
+      {dtList.length > 0 && (
+        <div className={styles.filterScope} style={scopeCardStyle}>
+          <div className={styles.toolbar}>
+            <Caption1 style={scopeHeadStyle}><strong>Drillthrough</strong></Caption1>
+            <div className={styles.spacer} />
+            <LockClosed16Regular className={styles.iconActive} aria-label="locked drillthrough scope" />
+          </div>
+          <Caption1 className={styles.muted}>
+            Carried from a drillthrough into this page. Clear a constraint to broaden the view.
+          </Caption1>
+          <div className={styles.dtChips}>
+            {dtList.map((f) => (
+              <div key={f.id} className={styles.dtChip}>
+                <LockClosed16Regular />
+                <Caption1 className={styles.dtChipName}>{dtChipText(f)}</Caption1>
+                {onClearDrillthrough && (
+                  <Tooltip content="Clear this drillthrough constraint" relationship="label">
+                    <Button size="small" appearance="subtle" icon={<Dismiss16Regular />}
+                      aria-label={`clear drillthrough ${filterFieldLabel(f)}`}
+                      onClick={() => onClearDrillthrough(f.id)} />
+                  </Tooltip>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <FilterScope styles={styles} title="Report" hint="Applies to every visual on every page." opts={opts}
-        filters={reportFilters} onChange={onReport} />
+        filters={reportView} onChange={handleReport}
+        cardStyle={scopeCardStyle} headStyle={scopeHeadStyle} rowStyle={scopeRowStyle} />
       <FilterScope styles={styles} title="This page" hint="Applies to every visual on the active page." opts={opts}
-        filters={pageFilters} onChange={onPage} />
+        filters={pageView} onChange={handlePage}
+        cardStyle={scopeCardStyle} headStyle={scopeHeadStyle} rowStyle={scopeRowStyle} />
       {visualFilters === null ? (
-        <div className={styles.filterScope}>
-          <Caption1><strong>Selected visual</strong></Caption1>
+        <div className={styles.filterScope} style={scopeCardStyle}>
+          <Caption1 style={scopeHeadStyle}><strong>Selected visual</strong></Caption1>
           <Caption1 className={styles.muted}>Select a visual on the canvas to add filters that affect only it.</Caption1>
         </div>
       ) : (
         <FilterScope styles={styles} title={selectedTitle ? `Visual · ${selectedTitle}` : 'Selected visual'}
-          hint="Applies to the selected visual only." opts={opts} filters={visualFilters} onChange={onVisual} />
+          hint="Applies to the selected visual only." opts={opts} filters={visualView || []} onChange={handleVisual}
+          cardStyle={scopeCardStyle} headStyle={scopeHeadStyle} rowStyle={scopeRowStyle} />
       )}
     </div>
   );

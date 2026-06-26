@@ -42,18 +42,40 @@
  * DPage's `visuals` array and an optional `interactions` map). The pure helpers
  * (resolve / apply / parse / wire) carry no React or fetch and may be imported by
  * any client surface.
+ *
+ * ── Wave 2 (additive): drillthrough + report-page tooltips ───────────────────
+ * Alongside the per-page Edit-interactions matrix (UNTOUCHED above), this module
+ * also authors the page's PBI **Drillthrough TARGET fields** and the **report-page
+ * tooltip** binding — the two page-level options that ride on `page.config`:
+ *   - {@link DrillthroughEditor} is the structured authoring surface (a field
+ *     Dropdown + Add/Remove chips for the drillthrough well, and a Switch +
+ *     bound-field Dropdown for the tooltip page) the host mounts in the same tab,
+ *     below the matrix. Every control writes real `page.config.drillthrough` /
+ *     `page.config.tooltipPage` (additive keys the read-only viewer / PBIR
+ *     provisioner ignore) — no dead controls, no typed config.
+ *   - {@link drillthroughTargetsFor} (which pages a clicked row can drill to) and
+ *     {@link seedDrillthroughFilters} (the {@link ReportFilter}[] that seeds the
+ *     target page from the clicked row) are the pure resolvers the canvas's
+ *     right-click menu calls. The actual filtering is done by the SHIPPED
+ *     `applyFilters` engine — drillthrough is "navigate to page + seed its
+ *     filters", reusing the cross-filter selection shape (no new backend).
+ * Mirrors PBI: a target page declares a drillthrough well; any source visual
+ * carrying that field exposes a right-click "Drillthrough → <page>", and the
+ * target opens filtered with an auto Back button (per Microsoft Learn).
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import {
-  Badge, Button, Caption1, Divider, Dropdown, Option, Text, ToggleButton, Tooltip,
+  Badge, Button, Caption1, Divider, Dropdown, Option, Switch, Text, ToggleButton, Tooltip,
   makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Filter20Regular, ColorRegular, Dismiss16Regular, Options20Regular, ArrowSync20Regular,
+  ArrowExportLtr20Regular, Comment20Regular, Info16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import type { ReportFilter, FieldOpt } from './filters-pane';
 
 // ── Model (persisted on page.config.interactions) ────────────────────────────
 
@@ -333,6 +355,187 @@ export function selectionFromRow(
   return { sourceId, constraints };
 }
 
+// ── Wave 2 model: drillthrough TARGET fields + report-page tooltip (page config) ─
+
+/**
+ * A bare field reference (table+column OR measure) — the unit of a drillthrough
+ * well or a tooltip-page binding. Structurally identical to the designer's
+ * private `WellFieldRef`, but declared here so this module stays free of the
+ * DVisual/DPage imports (mirrors {@link InteractionVisualRef}).
+ */
+export interface DrillField {
+  table?: string;
+  column?: string;
+  measure?: string;
+}
+
+/**
+ * A page's Drillthrough TARGET configuration (persisted on `page.config.drillthrough`).
+ * When a page declares ≥1 field here it becomes a drillthrough destination: any
+ * source visual whose clicked row carries those fields offers "Drillthrough →
+ * <page>", opening it filtered to the value(s) with an auto Back button (PBI).
+ */
+export interface DrillthroughConfig {
+  fields: DrillField[];
+}
+
+/**
+ * A page's report-page-tooltip binding (persisted on `page.config.tooltipPage`,
+ * paired with `canvasType: 'tooltip'`). When enabled and bound to a field,
+ * hovering a mark whose category equals `boundField` shows this page mini-rendered
+ * in a popover (PBI report-page tooltips).
+ */
+export interface TooltipPageConfig {
+  enabled: boolean;
+  boundField?: DrillField;
+}
+
+/** The display/match name of a drill field (measure wins, else column). */
+function drillFieldName(f: DrillField | null | undefined): string {
+  return (f?.measure || f?.column || '').trim();
+}
+
+/** Stable picker key for a drill field — matches {@link FieldOpt.key} encoding. */
+export function drillFieldKey(f: DrillField | null | undefined): string {
+  if (!f) return '';
+  if (f.measure) return `m:${f.measure}`;
+  if (f.column) return `c:${f.table || ''}.${f.column}`;
+  return '';
+}
+
+/** Human label for a drill field (mirrors the model field option labels). */
+export function drillFieldLabel(f: DrillField | null | undefined): string {
+  if (!f) return '';
+  if (f.measure) return f.measure;
+  if (f.column) return f.table ? `${f.table} · ${f.column}` : f.column;
+  return '';
+}
+
+function dtUid(prefix = 'dt'): string {
+  const r = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID().slice(0, 8)
+    : Math.random().toString(16).slice(2, 10);
+  return `${prefix}_${r}`;
+}
+
+// ── Parse / wire (defensive hydration — mirror parseInteractions) ─────────────
+
+/** A fresh, empty drillthrough config (the page is not a drillthrough target). */
+export function emptyDrillthrough(): DrillthroughConfig {
+  return { fields: [] };
+}
+
+/**
+ * Defensively hydrate a persisted/wire value into {@link DrillthroughConfig}.
+ * Unknown shapes and field entries without a column/measure are dropped rather
+ * than thrown — matching `parseInteractions` / `reFilters`.
+ */
+export function parseDrillthrough(value: unknown): DrillthroughConfig {
+  const fields: DrillField[] = [];
+  const raw = (value as { fields?: unknown } | null | undefined)?.fields;
+  if (Array.isArray(raw)) {
+    for (const r of raw) {
+      const o = (r || {}) as Record<string, unknown>;
+      const table = typeof o.table === 'string' ? o.table : undefined;
+      const column = typeof o.column === 'string' ? o.column : undefined;
+      const measure = typeof o.measure === 'string' ? o.measure : undefined;
+      if (column || measure) fields.push({ table, column, measure });
+    }
+  }
+  return { fields };
+}
+
+/** Strip a drillthrough config for persistence; undefined when no field is set. */
+export function wireDrillthrough(cfg: DrillthroughConfig | null | undefined): { fields: DrillField[] } | undefined {
+  const fields = (cfg?.fields || [])
+    .filter((f) => f && (f.column || f.measure))
+    .map((f) => ({ table: f.table, column: f.column, measure: f.measure }));
+  return fields.length > 0 ? { fields } : undefined;
+}
+
+/** A fresh, empty tooltip-page config (the page is not a tooltip page). */
+export function emptyTooltipPage(): TooltipPageConfig {
+  return { enabled: false };
+}
+
+/** Defensively hydrate a persisted/wire value into {@link TooltipPageConfig}. */
+export function parseTooltipPage(value: unknown): TooltipPageConfig {
+  const o = (value || {}) as Record<string, unknown>;
+  const enabled = !!o.enabled;
+  let boundField: DrillField | undefined;
+  const bf = o.boundField as Record<string, unknown> | null | undefined;
+  if (bf && typeof bf === 'object') {
+    const table = typeof bf.table === 'string' ? bf.table : undefined;
+    const column = typeof bf.column === 'string' ? bf.column : undefined;
+    const measure = typeof bf.measure === 'string' ? bf.measure : undefined;
+    if (column || measure) boundField = { table, column, measure };
+  }
+  return { enabled, boundField };
+}
+
+/**
+ * Strip a tooltip-page config for persistence; undefined when the page is not a
+ * tooltip page (so the additive key is omitted entirely, like the matrix wire).
+ */
+export function wireTooltipPage(cfg: TooltipPageConfig | null | undefined): TooltipPageConfig | undefined {
+  if (!cfg || !cfg.enabled) return undefined;
+  const bf = cfg.boundField && (cfg.boundField.column || cfg.boundField.measure)
+    ? { table: cfg.boundField.table, column: cfg.boundField.column, measure: cfg.boundField.measure }
+    : undefined;
+  return bf ? { enabled: true, boundField: bf } : { enabled: true };
+}
+
+// ── Drillthrough resolvers (pure — the canvas context menu calls these) ───────
+
+/** Minimal structural page shape for {@link drillthroughTargetsFor}. */
+export interface DrillthroughPageLike {
+  drillthrough?: DrillthroughConfig | null;
+}
+
+/**
+ * The pages a clicked row can DRILL THROUGH to: those declaring ≥1 drillthrough
+ * field whose every field is present in `rowColumns` (the clicked row's result
+ * keys, matched tolerantly against `Table[Column]` / `[Measure]` / bare aliases).
+ * Generic over the page type so the host can map the result straight back to its
+ * own `DPage[]` and indices. Pure — no React/fetch.
+ */
+export function drillthroughTargetsFor<P extends DrillthroughPageLike>(
+  pages: P[],
+  rowColumns: string[],
+): P[] {
+  const keys = rowColumns || [];
+  if (keys.length === 0) return [];
+  return (pages || []).filter((p) => {
+    const fields = p?.drillthrough?.fields || [];
+    if (fields.length === 0) return false;
+    return fields.every((f) => matchColumnKey(keys, drillFieldName(f)) != null);
+  });
+}
+
+/**
+ * Seed a drillthrough TARGET page from a clicked source `row`: one structured
+ * `op:'eq'` {@link ReportFilter} per drill field whose value the row carries.
+ * The host hands the result to the SHIPPED `applyFilters` engine (and persists it
+ * as the target page's drill scope) — so the target really opens filtered to the
+ * selected value(s). Reuses the cross-filter selection shape; no new backend.
+ */
+export function seedDrillthroughFilters(
+  fields: DrillField[] | null | undefined,
+  row: Record<string, unknown> | null | undefined,
+): ReportFilter[] {
+  const out: ReportFilter[] = [];
+  const keys = Object.keys(row || {});
+  if (keys.length === 0) return out;
+  for (const f of (fields || [])) {
+    const key = matchColumnKey(keys, drillFieldName(f));
+    if (!key) continue;
+    const val = (row as Record<string, unknown>)[key];
+    if (val == null) continue;
+    out.push({ id: dtUid('dt'), table: f.table, column: f.column, measure: f.measure, op: 'eq', value: String(val) });
+  }
+  return out;
+}
+
 // ── styles (Fluent v9 + Loom tokens; matches the sibling panes) ──────────────
 
 const useStyles = makeStyles({
@@ -533,6 +736,213 @@ export function InteractionsEditor({
         })}
         {targets.length === 0 && (
           <Caption1 className={styles.hint}>This is the only other visual&apos;s source — pick a different source visual above.</Caption1>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── DrillthroughEditor (page-level: drillthrough wells + report-page tooltip) ──
+
+const useDtStyles = makeStyles({
+  pane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0 },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  head: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground2 },
+  hint: { color: tokens.colorNeutralForeground3 },
+  info: {
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalXS,
+    padding: tokens.spacingVerticalS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    color: tokens.colorNeutralForeground2,
+  },
+  infoIcon: { flexShrink: 0, marginTop: '2px', color: tokens.colorBrandForeground1 },
+  chips: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  chip: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    border: `1px solid ${tokens.colorBrandStroke2}`,
+  },
+  chipName: {
+    flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+    color: tokens.colorBrandForeground2,
+  },
+  switchRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+});
+
+type DtStyles = ReturnType<typeof useDtStyles>;
+
+export interface DrillthroughEditorProps {
+  /** This page's drillthrough TARGET config (`page.config.drillthrough`). */
+  drillthrough?: DrillthroughConfig | null;
+  /** This page's tooltip-page config (`page.config.tooltipPage`). */
+  tooltipPage?: TooltipPageConfig | null;
+  /**
+   * True when the page's `canvasType` is already 'tooltip' — keeps the Switch in
+   * sync even if only the canvas type was set. Reflected, never authoritative.
+   */
+  isTooltipCanvas?: boolean;
+  /** Model field options — pass the designer's `fieldOptions(tables)` result. */
+  fieldOptions: FieldOpt[];
+  /** Emit the next drillthrough config; the host wires this to `mutatePage`. */
+  onDrillthroughChange: (next: DrillthroughConfig) => void;
+  /**
+   * Emit the next tooltip-page config. The host MUST also flip the page's
+   * `canvasType` to 'tooltip' when `next.enabled` is true (and restore it to a
+   * normal canvas type otherwise) so the page mini-renders as a tooltip — that
+   * canvas sync is the one line the host owns (PBI couples the two).
+   */
+  onTooltipPageChange: (next: TooltipPageConfig) => void;
+}
+
+/** One drillthrough-well chip with a remove button. */
+function DrillFieldChip({ styles, field, onRemove }: {
+  styles: DtStyles; field: DrillField; onRemove: () => void;
+}): ReactElement {
+  const label = drillFieldLabel(field);
+  return (
+    <div className={styles.chip}>
+      <Text className={styles.chipName} weight="semibold">{label}</Text>
+      <Tooltip content="Remove field" relationship="label" withArrow>
+        <Button
+          size="small" appearance="subtle" icon={<Dismiss16Regular />}
+          aria-label={`Remove drillthrough field ${label}`} onClick={onRemove}
+        />
+      </Tooltip>
+    </div>
+  );
+}
+
+/**
+ * The page-level Drillthrough + Report-page-tooltip authoring surface. Rendered
+ * by the host in the Interactions tab, BELOW the {@link InteractionsEditor}
+ * matrix. Fully structured (no typed config): the drillthrough well is an Add
+ * Dropdown + removable chips; the tooltip page is a Switch + a bound-field
+ * Dropdown. Every control writes real `page.config` and drives a real behavior
+ * (the right-click Drillthrough actually filters the target page via the shipped
+ * applyFilters engine; the tooltip binding actually drives the hover popover) —
+ * no dead buttons (ui-parity.md / no-vaporware.md), Loom tokens (web3-ui.md).
+ */
+export function DrillthroughEditor({
+  drillthrough, tooltipPage, isTooltipCanvas, fieldOptions: opts,
+  onDrillthroughChange, onTooltipPageChange,
+}: DrillthroughEditorProps): ReactElement {
+  const styles = useDtStyles();
+  const fields = drillthrough?.fields || [];
+  const ttEnabled = tooltipPage?.enabled ?? !!isTooltipCanvas;
+  const bound = tooltipPage?.boundField;
+
+  // Fields not already in the drillthrough well (so Add never offers a dupe).
+  const usedKeys = useMemo(() => new Set(fields.map((f) => drillFieldKey(f))), [fields]);
+  const addable = useMemo(() => (opts || []).filter((o) => !usedKeys.has(o.key)), [opts, usedKeys]);
+
+  const addField = (key: string) => {
+    const o = (opts || []).find((x) => x.key === key);
+    if (!o) return;
+    if (usedKeys.has(key)) return;
+    const ref: DrillField = { table: o.table, column: o.column, measure: o.measure };
+    if (!ref.column && !ref.measure) return;
+    onDrillthroughChange({ fields: [...fields, ref] });
+  };
+  const removeField = (key: string) =>
+    onDrillthroughChange({ fields: fields.filter((f) => drillFieldKey(f) !== key) });
+
+  const toggleTooltip = (enabled: boolean) =>
+    onTooltipPageChange({ enabled, boundField: bound });
+  const setBound = (key: string) => {
+    const o = (opts || []).find((x) => x.key === key);
+    const boundField: DrillField | undefined = o ? { table: o.table, column: o.column, measure: o.measure } : undefined;
+    onTooltipPageChange({ enabled: true, boundField });
+  };
+
+  const boundKey = drillFieldKey(bound);
+  const boundLabel = bound ? drillFieldLabel(bound) : '';
+
+  return (
+    <div className={styles.pane}>
+      <Divider />
+
+      {/* ── Drillthrough fields (declare this page a drillthrough TARGET) ── */}
+      <div className={styles.section}>
+        <div className={styles.head}>
+          <ArrowExportLtr20Regular />
+          <Caption1><strong>Drillthrough fields</strong></Caption1>
+        </div>
+        <Caption1 className={styles.hint}>
+          Make this page a drillthrough target. Add the field(s) a source visual must contain to drill here.
+        </Caption1>
+
+        <Dropdown
+          size="small" aria-label="Add a drillthrough field" placeholder="Add a field…"
+          value="" selectedOptions={[]}
+          onOptionSelect={(_e, d) => { const k = String(d.optionValue || ''); if (k) addField(k); }}
+        >
+          {addable.length === 0 && <Option key="__none" value="" disabled text="No more fields">No more fields</Option>}
+          {addable.map((o) => (
+            <Option key={o.key} value={o.key} text={o.label}>{o.label}</Option>
+          ))}
+        </Dropdown>
+
+        {fields.length > 0 ? (
+          <>
+            <div className={styles.chips}>
+              {fields.map((f) => (
+                <DrillFieldChip key={drillFieldKey(f)} styles={styles} field={f} onRemove={() => removeField(drillFieldKey(f))} />
+              ))}
+            </div>
+            <div className={styles.info}>
+              <Info16Regular className={styles.infoIcon} />
+              <Caption1>
+                Any visual containing {fields.length === 1 ? 'this field' : 'these fields'} now gets a right-click
+                {' '}<strong>Drillthrough → this page</strong>, opening it filtered to the selected value. A
+                {' '}<strong>Back</strong> button is added automatically.
+              </Caption1>
+            </div>
+          </>
+        ) : (
+          <Caption1 className={styles.hint}>Not a drillthrough target yet.</Caption1>
+        )}
+      </div>
+
+      <Divider />
+
+      {/* ── Report-page tooltip (use this page as a hover tooltip) ── */}
+      <div className={styles.section}>
+        <div className={styles.head}>
+          <Comment20Regular />
+          <Caption1><strong>Report-page tooltip</strong></Caption1>
+        </div>
+        <div className={styles.switchRow}>
+          <Switch
+            checked={ttEnabled}
+            onChange={(_e, d) => toggleTooltip(!!d.checked)}
+            label="Use this page as a tooltip"
+          />
+        </div>
+        <Caption1 className={styles.hint}>
+          Turns this page into a tooltip canvas. Bind it to a field, then hovering a mark with that value shows this page in a popover.
+        </Caption1>
+
+        {ttEnabled && (
+          <div className={styles.section}>
+            <Caption1 className={styles.hint}>Bound field</Caption1>
+            <Dropdown
+              size="small" aria-label="Tooltip bound field" placeholder="Pick a field…"
+              value={boundLabel} selectedOptions={boundKey ? [boundKey] : []}
+              onOptionSelect={(_e, d) => setBound(String(d.optionValue || ''))}
+            >
+              {(opts || []).length === 0 && <Option key="__none" value="" disabled text="No model fields">No model fields</Option>}
+              {(opts || []).map((o) => (
+                <Option key={o.key} value={o.key} text={o.label}>{o.label}</Option>
+              ))}
+            </Dropdown>
+            {!bound && (
+              <Caption1 className={styles.hint}>Pick the field whose value triggers this tooltip on hover.</Caption1>
+            )}
+          </div>
         )}
       </div>
     </div>

@@ -187,6 +187,26 @@ export function semanticModelDetailFromContent(item: WorkspaceItem) {
 
 // ── Report ──────────────────────────────────────────────────────────────
 
+/**
+ * Read-side view of the persisted report content. ADDITIVE over
+ * {@link ReportContent} with the wave-2 members the definition route writes
+ * (`ReportContentV2` in `.../report/[id]/definition/route.ts`) but the base
+ * bundle type doesn't declare: per-page canvas `config` (type/size/background/
+ * hidden + the visual-interactions matrix + drillthrough/tooltip target),
+ * report-level `bookmarks`, and the Filters-pane `filterPaneFormat`. Loosely
+ * typed — every value is already STRUCTURED + server-sanitized at PUT time
+ * (no-freeform-config.md), and the designer reparses each defensively on load
+ * (reFilters / parseBookmarks / parseInteractions), so this read path only has
+ * to pass the stored shape back through unchanged. `reportFilters` and the
+ * page-level `filters` are already declared on ReportContent and need no widen.
+ */
+type ReportPageRead = ReportContent['pages'][number] & { config?: unknown };
+interface ReportContentRead extends Omit<ReportContent, 'pages'> {
+  pages: ReportPageRead[];
+  bookmarks?: unknown[];
+  filterPaneFormat?: unknown;
+}
+
 export function reportListEntry(item: WorkspaceItem) {
   return {
     id: `${LOOM_ID_PREFIX}${item.id}`,
@@ -196,8 +216,21 @@ export function reportListEntry(item: WorkspaceItem) {
   };
 }
 
+/**
+ * Build the report DETAIL payload from a bundle-installed item's ReportContent.
+ * Beyond the base `{ report }` identity, this surfaces the wave-2 REPORT-LEVEL
+ * state the report designer persists through `.../report/[id]/definition`:
+ *   • `reportFilters`     — report-scope structured filters (apply across pages)
+ *   • `bookmarks`         — captured page/filter/selection/visibility snapshots
+ *   • `filterPaneFormat`  — Filters-pane styling + the deferred-Apply toggle
+ * Without these the designer's `loadDetail` reads `j.reportFilters` /
+ * `j.bookmarks` as undefined and every report-scope filter, bookmark, and pane
+ * format RESETS on reload. Each is emitted only when actually persisted (the PUT
+ * route omits empties), so legacy report bundles + the read-only viewer + the
+ * PBIR provisioner are unaffected (they ignore the extra keys).
+ */
 export function reportDetailFromContent(item: WorkspaceItem) {
-  const content = contentOf<ReportContent>(item, 'report');
+  const content = contentOf<ReportContentRead>(item, 'report');
   if (!content) return null;
   return {
     report: {
@@ -205,6 +238,13 @@ export function reportDetailFromContent(item: WorkspaceItem) {
       name: item.displayName,
       reportType: 'PowerBIReport' as const,
     },
+    ...(Array.isArray(content.reportFilters) && content.reportFilters.length
+      ? { reportFilters: content.reportFilters }
+      : {}),
+    ...(Array.isArray(content.bookmarks) && content.bookmarks.length
+      ? { bookmarks: content.bookmarks }
+      : {}),
+    ...(content.filterPaneFormat ? { filterPaneFormat: content.filterPaneFormat } : {}),
   };
 }
 
@@ -213,14 +253,27 @@ export function reportDetailFromContent(item: WorkspaceItem) {
  * a page entry; the visuals are surfaced via `displayName` enrichment so the
  * editor's Pages panel shows the page name and a visual count. The editor reads
  * `pages[].name` / `pages[].displayName`.
+ *
+ * Each page also surfaces its wave-2 PAGE-SCOPED state the designer persists via
+ * `.../report/[id]/definition`:
+ *   • `filters` — page-scope structured filters (apply to every visual on it)
+ *   • `config`  — canvas config: type/size/background/hidden + the visual-
+ *                 interactions matrix + the drillthrough/tooltip TARGET binding
+ * Without these the designer's `loadDetail` reads `p.filters` / `p.config` as
+ * undefined and the page background, canvas type, hidden flag, interactions
+ * matrix, and drillthrough/tooltip targets all RESET on reload. Both are emitted
+ * only when persisted (the PUT route omits empties); the read-only viewer and
+ * the PBIR provisioner ignore the extra keys, so legacy bundles are unaffected.
  */
 export function reportPagesFromContent(item: WorkspaceItem) {
-  const content = contentOf<ReportContent>(item, 'report');
+  const content = contentOf<ReportContentRead>(item, 'report');
   if (!content) return null;
   return (content.pages || []).map((p, i) => ({
     name: `loom-page-${i + 1}`,
     displayName: p.name,
     order: i,
+    ...(Array.isArray(p.filters) && p.filters.length ? { filters: p.filters } : {}),
+    ...(p.config ? { config: p.config } : {}),
     visuals: (p.visuals || []).map((v) => ({
       type: v.type,
       title: v.title,

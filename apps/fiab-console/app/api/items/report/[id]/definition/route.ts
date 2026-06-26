@@ -78,6 +78,11 @@ const VISUAL_TYPES = new Set([
   'table', 'matrix', 'card', 'bar', 'column', 'line', 'area', 'pie', 'donut', 'scatter', 'slicer',
   // ── wave-1 visual gallery additions ────────────────────────────────────────
   'combo', 'ribbon', 'waterfall', 'funnel', 'gauge', 'kpi', 'treemap', 'multiRowCard',
+  // ── wave-2 visual gallery additions ────────────────────────────────────────
+  // `bubble` is scatter + a third (size) measure; `map` renders an HONEST
+  // Azure-Maps gate client-side (no dead control) — both still round-trip here
+  // and fold their plotted wells into the existing /query category/values arrays.
+  'map', 'bubble',
 ]);
 const AGGS = new Set(['Sum', 'Avg', 'Count', 'Min', 'Max', 'None']);
 
@@ -90,6 +95,12 @@ const AGGS = new Set(['Sum', 'Avg', 'Count', 'Min', 'Max', 'None']);
  */
 const EXTRA_WELL_NAMES = [
   'secondaryValues', 'target', 'minimum', 'maximum', 'smallMultiples', 'tooltips', 'details',
+  // ── wave-2 additive wells ──────────────────────────────────────────────────
+  // `size` → bubble radius (scatter 3rd measure); `playAxis` → animation frame
+  // category; `latitude`/`longitude` → map location. Each is persisted only when
+  // non-empty; queryVisual() folds the PLOTTED ones (size/lat/long as value or
+  // category aggregates) so the SQL/DAX compilers still need no change.
+  'size', 'playAxis', 'latitude', 'longitude',
 ] as const;
 
 // ── structured-extras whitelists (no-freeform-config.md) ──────────────────────
@@ -142,11 +153,24 @@ const ANALYTICS_KINDS = new Set<AnalyticsLineKind>([
 ]);
 const ANALYTICS_STYLES = new Set<AnalyticsLineStyle>(['solid', 'dashed', 'dotted']);
 
+/**
+ * Wave-2 analytics enums — mirror analytics-pane.tsx. Error-bar `mode` selects
+ * how the +/- bounds are sourced: from explicit upper/lower FIELDS, a PERCENT of
+ * the measure, or a constant VALUE. Forecast + symmetry-shading carry no enum of
+ * their own (numeric/boolean only).
+ */
+type ErrorBarMode = 'field' | 'percent' | 'value';
+const ERROR_BAR_MODES = new Set<ErrorBarMode>(['field', 'percent', 'value']);
+
 /** Page canvas type / interaction mode enums — mirror the page-options + interactions panes. */
 type CanvasType = '16:9' | '4:3' | 'letter' | 'tooltip' | 'custom';
 type InteractionMode = 'filter' | 'highlight' | 'none';
 const CANVAS_TYPES = new Set<CanvasType>(['16:9', '4:3', 'letter', 'tooltip', 'custom']);
 const INTERACTION_MODES = new Set<InteractionMode>(['filter', 'highlight', 'none']);
+
+/** Bookmark capture scope — mirror bookmarks-pane.tsx. */
+type BookmarkScope = 'allPages' | 'selectedVisuals';
+const BOOKMARK_SCOPES = new Set<BookmarkScope>(['allPages', 'selectedVisuals']);
 
 // Light clamps so a hostile/oversized payload can't bloat the Cosmos item.
 const MAX_STR = 2000;          // filter value / title text
@@ -160,6 +184,12 @@ const MAX_COND_THRESH = 64;    // thresholds per rules-mode rule
 const MAX_ANALYTICS_LINES = 64; // reference lines per visual
 const MAX_INTERACTION_KEYS = 500; // source / target entries in the matrix
 const MAX_KEY_STR = 200;       // visual-id key length in the matrix
+// ── wave-2 clamps ─────────────────────────────────────────────────────────────
+const MAX_DRILLTHROUGH_FIELDS = 16;  // fields in a page's drillthrough well
+const MAX_BOOKMARKS = 64;            // bookmarks per report
+const MAX_BOOKMARK_PAGES = 200;      // pageId-keyed filter buckets in a bookmark
+const MAX_OBJECT_KEYS = 1000;        // selection / visibility / z-order map size
+const MAX_GROUP_STR = 200;           // groupId length (Selection-pane group)
 
 /** A single structured filter, post-`wireFilters` (no client-only id). */
 interface PersistedFilter {
@@ -238,7 +268,41 @@ interface PersistedAnalyticsLine {
   label?: string;
   showLabel?: boolean;
 }
-interface PersistedAnalytics { lines: PersistedAnalyticsLine[] }
+/**
+ * Wave-2 analytics members. Error bars draw +/- bounds per plotted point; the
+ * client computes them over the SAME `/query` result series (field → from two
+ * extra value wells, percent → ±n% of the measure, value → a constant ±). A
+ * forecast extends the series with Loom-native exponential smoothing (no model
+ * round-trip). Symmetry shading tints above/below the y=x line on a scatter.
+ */
+interface PersistedErrorBar {
+  id?: string;
+  mode: ErrorBarMode;
+  measure?: string;
+  upperField?: string;
+  lowerField?: string;
+  percent?: number;
+  value?: number;
+  color?: string;
+}
+interface PersistedForecast {
+  periods?: number;
+  seasonality?: number;
+  confidence?: number;
+}
+interface PersistedSymmetry {
+  enabled: boolean;
+  color?: string;
+}
+interface PersistedAnalytics {
+  lines: PersistedAnalyticsLine[];
+  errorBars?: PersistedErrorBar[];
+  forecast?: PersistedForecast;
+  symmetry?: PersistedSymmetry;
+}
+
+/** A bare field reference (column or measure) — drillthrough / tooltip binding. */
+interface PersistedFieldRef { table?: string; column?: string; measure?: string }
 
 /** Per-page canvas config (mirror of the page-options + interactions panes). */
 interface PersistedPageConfig {
@@ -247,6 +311,42 @@ interface PersistedPageConfig {
   background?: { color?: string; transparency?: number };
   hidden?: boolean;
   interactions?: Record<string, Record<string, InteractionMode>>;
+  // ── wave-2 (additive) ──
+  // A page declaring `drillthrough.fields` is a drillthrough TARGET: any visual
+  // elsewhere carrying one of those fields exposes a right-click → Drillthrough
+  // to it, opening this page filtered to the clicked value (+ an auto Back btn).
+  drillthrough?: { fields: PersistedFieldRef[] };
+  // A `tooltipPage.enabled` page (with canvasType 'tooltip') is shown in a
+  // popover when hovering a mark whose category == `boundField`.
+  tooltipPage?: { enabled: boolean; boundField?: PersistedFieldRef };
+}
+
+/** One captured bookmark (mirror of bookmarks-pane.tsx ReportBookmark). */
+interface PersistedBookmark {
+  id?: string;
+  name: string;
+  scope: BookmarkScope;
+  apply: { data: boolean; display: boolean; currentPage: boolean };
+  state: {
+    activePageId?: string;
+    pageFilters?: Record<string, PersistedFilter[]>;
+    reportFilters?: PersistedFilter[];
+    selection?: string[];
+    visibility?: Record<string, boolean>;
+    zOrder?: Record<string, number>;
+  };
+}
+
+/** Report-level Filters-pane format — a faithful MIRROR of filters-pane.tsx's
+ *  `FilterPaneFormat` (Loom swatch color tokens + the pane-title color/show), so
+ *  the pane styling the designer authors round-trips through /definition intact
+ *  (the read path re-hydrates it with the same `parseFilterPaneFormat`). */
+interface PersistedFilterPaneFormat {
+  background?: string;
+  border?: string;
+  title?: { color?: string; show?: boolean };
+  headerColor?: string;
+  inputColor?: string;
 }
 
 /**
@@ -269,6 +369,9 @@ interface PersistedPage {
 interface ReportContentV2 extends Omit<ReportContent, 'pages' | 'reportFilters'> {
   pages: PersistedPage[];
   reportFilters?: PersistedFilter[];
+  // ── wave-2 report-level state (additive; viewer + PBIR provisioner ignore) ──
+  bookmarks?: PersistedBookmark[];
+  filterPaneFormat?: PersistedFilterPaneFormat;
 }
 
 interface WellFieldIn {
@@ -282,10 +385,14 @@ interface VisualIn {
   type?: unknown;
   title?: unknown;
   wells?: Record<string, unknown>;
-  layout?: { x?: unknown; y?: unknown; w?: unknown; h?: unknown };
+  layout?: { x?: unknown; y?: unknown; w?: unknown; h?: unknown; z?: unknown };
   format?: unknown;
   analytics?: unknown;
   filters?: unknown;
+  // ── wave-2 Selection-pane / canvas flags (additive) ──
+  hidden?: unknown;
+  locked?: unknown;
+  groupId?: unknown;
 }
 interface PageIn {
   name?: unknown;
@@ -606,37 +713,169 @@ function sanitizeFormat(raw: unknown): PersistedFormat | undefined {
 }
 
 /**
- * Sanitize the per-visual ANALYTICS reference lines (kind/style enums whitelisted,
- * value/percentile clamped, color clamped). Mirrors analytics-pane.tsx's
- * `parseAnalytics`. Returns undefined when no valid line survives.
+ * Sanitize the per-visual ANALYTICS members. Reference LINES (kind/style enums
+ * whitelisted, value/percentile clamped) mirror analytics-pane.tsx's
+ * `parseAnalytics`; wave-2 adds ERROR BARS (mode enum, measure/fields + percent/
+ * value clamped), a FORECAST (periods 1..60, seasonality 0..366, confidence %),
+ * and SYMMETRY shading ({enabled,color}). Returns undefined only when nothing
+ * valid survives across ALL members (so forecast-only / error-bar-only is kept).
  */
 function sanitizeAnalytics(raw: unknown): PersistedAnalytics | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
-  const rawLines = (raw as Record<string, unknown>).lines;
-  if (!Array.isArray(rawLines)) return undefined;
+  const root = raw as Record<string, unknown>;
   const lines: PersistedAnalyticsLine[] = [];
-  for (const r of rawLines.slice(0, MAX_ANALYTICS_LINES)) {
-    const o = (r || {}) as Record<string, unknown>;
-    if (typeof o.kind !== 'string' || !ANALYTICS_KINDS.has(o.kind as AnalyticsLineKind)) continue;
-    const line: PersistedAnalyticsLine = { kind: o.kind as AnalyticsLineKind };
-    const id = clampStr(o.id, 64);
-    if (id) line.id = id;
-    const measure = typeof o.measure === 'string' && o.measure.trim() ? o.measure.trim() : undefined;
-    if (measure) line.measure = measure;
-    if (typeof o.value === 'number' && Number.isFinite(o.value)) line.value = o.value;
-    const pct = clampPct(o.percentile);
-    if (pct !== undefined) line.percentile = pct;
-    const color = clampColor(o.color);
-    if (color) line.color = color;
-    if (typeof o.style === 'string' && ANALYTICS_STYLES.has(o.style as AnalyticsLineStyle)) {
-      line.style = o.style as AnalyticsLineStyle;
+  if (Array.isArray(root.lines)) {
+    for (const r of root.lines.slice(0, MAX_ANALYTICS_LINES)) {
+      const o = (r || {}) as Record<string, unknown>;
+      if (typeof o.kind !== 'string' || !ANALYTICS_KINDS.has(o.kind as AnalyticsLineKind)) continue;
+      const line: PersistedAnalyticsLine = { kind: o.kind as AnalyticsLineKind };
+      const id = clampStr(o.id, 64);
+      if (id) line.id = id;
+      const measure = typeof o.measure === 'string' && o.measure.trim() ? o.measure.trim() : undefined;
+      if (measure) line.measure = measure;
+      if (typeof o.value === 'number' && Number.isFinite(o.value)) line.value = o.value;
+      const pct = clampPct(o.percentile);
+      if (pct !== undefined) line.percentile = pct;
+      const color = clampColor(o.color);
+      if (color) line.color = color;
+      if (typeof o.style === 'string' && ANALYTICS_STYLES.has(o.style as AnalyticsLineStyle)) {
+        line.style = o.style as AnalyticsLineStyle;
+      }
+      const label = clampStr(o.label, 200);
+      if (label !== undefined) line.label = label;
+      if (typeof o.showLabel === 'boolean') line.showLabel = o.showLabel;
+      lines.push(line);
     }
-    const label = clampStr(o.label, 200);
-    if (label !== undefined) line.label = label;
-    if (typeof o.showLabel === 'boolean') line.showLabel = o.showLabel;
-    lines.push(line);
   }
-  return lines.length ? { lines } : undefined;
+
+  const errorBars = sanitizeErrorBars(root.errorBars);
+  const forecast = sanitizeForecast(root.forecast);
+  const symmetry = sanitizeSymmetry(root.symmetry);
+
+  if (!lines.length && !errorBars && !forecast && !symmetry) return undefined;
+  return {
+    lines,
+    ...(errorBars ? { errorBars } : {}),
+    ...(forecast ? { forecast } : {}),
+    ...(symmetry ? { symmetry } : {}),
+  };
+}
+
+/** Sanitize wave-2 error bars (mode whitelisted; measure/fields + bounds clamped). */
+function sanitizeErrorBars(raw: unknown): PersistedErrorBar[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: PersistedErrorBar[] = [];
+  for (const r of raw.slice(0, MAX_ANALYTICS_LINES)) {
+    const o = (r || {}) as Record<string, unknown>;
+    if (typeof o.mode !== 'string' || !ERROR_BAR_MODES.has(o.mode as ErrorBarMode)) continue;
+    const bar: PersistedErrorBar = { mode: o.mode as ErrorBarMode };
+    const id = clampStr(o.id, 64);
+    if (id) bar.id = id;
+    const measure = typeof o.measure === 'string' && o.measure.trim() ? o.measure.trim().slice(0, MAX_STR) : undefined;
+    if (measure) bar.measure = measure;
+    const upper = typeof o.upperField === 'string' && o.upperField.trim() ? o.upperField.trim().slice(0, MAX_STR) : undefined;
+    if (upper) bar.upperField = upper;
+    const lower = typeof o.lowerField === 'string' && o.lowerField.trim() ? o.lowerField.trim().slice(0, MAX_STR) : undefined;
+    if (lower) bar.lowerField = lower;
+    const percent = clampNum(o.percent, 0, 1_000_000);
+    if (percent !== undefined) bar.percent = percent;
+    const value = clampNum(o.value, -1_000_000_000, 1_000_000_000);
+    if (value !== undefined) bar.value = value;
+    const color = clampColor(o.color);
+    if (color) bar.color = color;
+    out.push(bar);
+  }
+  return out.length ? out : undefined;
+}
+
+/** Sanitize a wave-2 forecast block (periods 1..60, seasonality 0..366, conf %). */
+function sanitizeForecast(raw: unknown): PersistedForecast | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: PersistedForecast = {};
+  const periods = clampPosInt(o.periods, 60);
+  if (periods !== undefined) out.periods = periods;
+  const seasonality = clampNum(o.seasonality, 0, 366);
+  if (seasonality !== undefined) out.seasonality = Math.round(seasonality);
+  const confidence = clampPct(o.confidence);
+  if (confidence !== undefined) out.confidence = confidence;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Sanitize a wave-2 symmetry-shading block ({enabled,color}). */
+function sanitizeSymmetry(raw: unknown): PersistedSymmetry | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.enabled !== 'boolean') return undefined;
+  const out: PersistedSymmetry = { enabled: o.enabled };
+  const color = clampColor(o.color);
+  if (color) out.color = color;
+  return out;
+}
+
+/**
+ * Sanitize a bare field reference (drillthrough field / tooltip binding). Drops
+ * it unless it references a column or measure — never a free-form/fieldless ref.
+ */
+function sanitizeFieldRef(raw: unknown): PersistedFieldRef | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const table = typeof o.table === 'string' ? o.table.trim() : undefined;
+  const column = typeof o.column === 'string' ? o.column.trim() : undefined;
+  const measure = typeof o.measure === 'string' ? o.measure.trim() : undefined;
+  if (!column && !measure) return null;
+  return {
+    ...(table ? { table: table.slice(0, MAX_STR) } : {}),
+    ...(column ? { column: column.slice(0, MAX_STR) } : {}),
+    ...(measure ? { measure: measure.slice(0, MAX_STR) } : {}),
+  };
+}
+
+/**
+ * Sanitize the per-visual Selection-pane / canvas FLAGS (wave-2): `hidden` (eye
+ * toggle), `locked` (lock), `groupId` (group/ungroup membership), and the
+ * z-order index. Returned for folding into `config` (hidden/locked/groupId) and
+ * `config.layout.z`. All structured + clamped; legacy visuals emit none.
+ */
+function sanitizeVisualFlags(v: VisualIn): { hidden?: boolean; locked?: boolean; groupId?: string; z?: number } {
+  const out: { hidden?: boolean; locked?: boolean; groupId?: string; z?: number } = {};
+  if (v.hidden === true) out.hidden = true;
+  if (v.locked === true) out.locked = true;
+  const groupId = clampStr(v.groupId, MAX_GROUP_STR);
+  if (groupId) out.groupId = groupId;
+  const z = clampNum(v.layout?.z, 0, 100_000);
+  if (z !== undefined) out.z = Math.round(z);
+  return out;
+}
+
+/** Sanitize a Record<string,boolean> (Selection-pane visibility), keys/size bounded. */
+function sanitizeBoolMap(raw: unknown, cap = MAX_OBJECT_KEYS): Record<string, boolean> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Record<string, boolean> = {};
+  let n = 0;
+  for (const [k, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (n >= cap) break;
+    if (!k || typeof val !== 'boolean') continue;
+    out[k.slice(0, MAX_KEY_STR)] = val;
+    n += 1;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Sanitize a Record<string,number> (z-order), values clamped + keys/size bounded. */
+function sanitizeNumMap(raw: unknown, min: number, max: number, cap = MAX_OBJECT_KEYS): Record<string, number> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Record<string, number> = {};
+  let n = 0;
+  for (const [k, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (n >= cap) break;
+    if (!k) continue;
+    const c = clampNum(val, min, max);
+    if (c === undefined) continue;
+    out[k.slice(0, MAX_KEY_STR)] = Math.round(c);
+    n += 1;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**
@@ -696,6 +935,134 @@ function sanitizePageConfig(raw: unknown): PersistedPageConfig | undefined {
   if (typeof o.hidden === 'boolean') out.hidden = o.hidden;
   const interactions = sanitizeInteractions(o.interactions);
   if (interactions) out.interactions = interactions;
+
+  // ── wave-2: drillthrough TARGET well (each field must reference a col/measure) ──
+  if (o.drillthrough && typeof o.drillthrough === 'object') {
+    const rawFields = (o.drillthrough as Record<string, unknown>).fields;
+    if (Array.isArray(rawFields)) {
+      const fields = rawFields
+        .map(sanitizeFieldRef)
+        .filter((x): x is PersistedFieldRef => !!x)
+        .slice(0, MAX_DRILLTHROUGH_FIELDS);
+      if (fields.length) out.drillthrough = { fields };
+    }
+  }
+  // ── wave-2: tooltip-page binding (only persisted when explicitly toggled) ──
+  if (o.tooltipPage && typeof o.tooltipPage === 'object') {
+    const tp = o.tooltipPage as Record<string, unknown>;
+    if (typeof tp.enabled === 'boolean') {
+      const boundField = sanitizeFieldRef(tp.boundField);
+      out.tooltipPage = { enabled: tp.enabled, ...(boundField ? { boundField } : {}) };
+    }
+  }
+
+  return Object.keys(out).length ? out : undefined;
+}
+
+/**
+ * Sanitize ONE bookmark (mirror of bookmarks-pane.tsx). A bookmark MUST be
+ * named; scope/apply flags are whitelisted/defaulted; the captured `state`
+ * (active page, per-page + report structured filters, selected visuals, per-
+ * object visibility + z-order) is sanitized through the SAME filter/bool/num
+ * clamps so a bookmark can never smuggle a free-form value past the wave-0/1
+ * gates. Returns null when unnamed.
+ */
+function sanitizeBookmark(raw: unknown): PersistedBookmark | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const name = clampStr(o.name, 200);
+  if (name === undefined || !name.trim()) return null; // a bookmark must be named
+  const scope: BookmarkScope =
+    typeof o.scope === 'string' && BOOKMARK_SCOPES.has(o.scope as BookmarkScope)
+      ? (o.scope as BookmarkScope)
+      : 'allPages';
+  const applyIn = (o.apply || {}) as Record<string, unknown>;
+  // Power BI defaults: Data + Display ON, Current-page OFF.
+  const apply = {
+    data: applyIn.data !== false,
+    display: applyIn.display !== false,
+    currentPage: applyIn.currentPage === true,
+  };
+
+  const stIn = (o.state || {}) as Record<string, unknown>;
+  const state: PersistedBookmark['state'] = {};
+  const activePageId = clampStr(stIn.activePageId, MAX_KEY_STR);
+  if (activePageId) state.activePageId = activePageId;
+
+  if (stIn.pageFilters && typeof stIn.pageFilters === 'object') {
+    const buckets: Record<string, PersistedFilter[]> = {};
+    let n = 0;
+    for (const [pid, fl] of Object.entries(stIn.pageFilters as Record<string, unknown>)) {
+      if (n >= MAX_BOOKMARK_PAGES) break;
+      if (!pid) continue;
+      const filters = sanitizeFilterList(fl);
+      if (filters.length) {
+        buckets[pid.slice(0, MAX_KEY_STR)] = filters;
+        n += 1;
+      }
+    }
+    if (Object.keys(buckets).length) state.pageFilters = buckets;
+  }
+
+  const reportFilters = sanitizeFilterList(stIn.reportFilters);
+  if (reportFilters.length) state.reportFilters = reportFilters;
+
+  if (Array.isArray(stIn.selection)) {
+    const sel = stIn.selection
+      .filter((s): s is string => typeof s === 'string' && !!s)
+      .map((s) => s.slice(0, MAX_KEY_STR))
+      .slice(0, MAX_OBJECT_KEYS);
+    if (sel.length) state.selection = sel;
+  }
+
+  const visibility = sanitizeBoolMap(stIn.visibility);
+  if (visibility) state.visibility = visibility;
+  const zOrder = sanitizeNumMap(stIn.zOrder, 0, 100_000);
+  if (zOrder) state.zOrder = zOrder;
+
+  const id = clampStr(o.id, 64);
+  return {
+    ...(id ? { id } : {}),
+    name,
+    scope,
+    apply,
+    state,
+  };
+}
+
+function sanitizeBookmarks(raw: unknown): PersistedBookmark[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(sanitizeBookmark)
+    .filter((x): x is PersistedBookmark => !!x)
+    .slice(0, MAX_BOOKMARKS);
+}
+
+/**
+ * Sanitize the report-level Filters-pane FORMAT (mirror of filters-pane.tsx).
+ * `show` / `border` / `showSearch` are booleans; the color tokens are clamped
+ * via clampColor; transparency is a 0–100 %. Returns undefined when empty.
+ */
+function sanitizeFilterPaneFormat(raw: unknown): PersistedFilterPaneFormat | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: PersistedFilterPaneFormat = {};
+  const bg = clampColor(o.background);
+  if (bg) out.background = bg;
+  const bd = clampColor(o.border);
+  if (bd) out.border = bd;
+  const hc = clampColor(o.headerColor);
+  if (hc) out.headerColor = hc;
+  const ic = clampColor(o.inputColor);
+  if (ic) out.inputColor = ic;
+  if (o.title && typeof o.title === 'object') {
+    const t = o.title as Record<string, unknown>;
+    const titleOut: { color?: string; show?: boolean } = {};
+    const tc = clampColor(t.color);
+    if (tc) titleOut.color = tc;
+    if (typeof t.show === 'boolean') titleOut.show = t.show;
+    if (Object.keys(titleOut).length) out.title = titleOut;
+  }
   return Object.keys(out).length ? out : undefined;
 }
 
@@ -719,7 +1086,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const rawId = (await ctx.params).id;
   const cosmosId = isLoomContentId(rawId) ? cosmosIdFromLoomId(rawId) : rawId;
 
-  let body: { pages?: unknown; reportFilters?: unknown } = {};
+  let body: { pages?: unknown; reportFilters?: unknown; bookmarks?: unknown; filterPaneFormat?: unknown } = {};
   try { body = await req.json(); } catch {}
   if (!Array.isArray(body.pages)) {
     return NextResponse.json({ ok: false, error: 'body.pages[] is required' }, { status: 400 });
@@ -762,6 +1129,10 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       const format = sanitizeFormat(v.format);
       const analytics = sanitizeAnalytics(v.analytics);
       const visualFilters = sanitizeFilterList(v.filters);
+      // wave-2 Selection-pane / canvas flags (hidden/locked/groupId) + z-order.
+      // z folds into layout (not in the visual query signature → undo/redo safe);
+      // hidden/locked/groupId fold into config additively. All omitted when unset.
+      const flags = sanitizeVisualFlags(v);
       visualCount += 1;
       return {
         type,
@@ -769,10 +1140,13 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         field: deriveField(values, category),
         config: {
           wells: { category, values, legend, ...extraWells },
-          layout,
+          layout: { ...layout, ...(flags.z !== undefined ? { z: flags.z } : {}) },
           ...(format ? { format } : {}),
           ...(analytics ? { analytics } : {}),
           ...(visualFilters.length ? { filters: visualFilters } : {}),
+          ...(flags.hidden ? { hidden: true } : {}),
+          ...(flags.locked ? { locked: true } : {}),
+          ...(flags.groupId ? { groupId: flags.groupId } : {}),
         },
       };
     });
@@ -787,6 +1161,10 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   });
 
   const reportFilters = sanitizeFilterList(body.reportFilters);
+  // wave-2 report-level state: bookmarks (page/filter/selection/visibility/z-order
+  // capture) + the Filters-pane format. Both additive + fully sanitized.
+  const bookmarks = sanitizeBookmarks(body.bookmarks);
+  const filterPaneFormat = sanitizeFilterPaneFormat(body.filterPaneFormat);
 
   const state = (item.state || {}) as Record<string, unknown>;
   // ADDITIVE persist: keep every other state key (incl. `state.dataSource`,
@@ -795,6 +1173,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     kind: 'report',
     pages,
     ...(reportFilters.length ? { reportFilters } : {}),
+    ...(bookmarks.length ? { bookmarks } : {}),
+    ...(filterPaneFormat ? { filterPaneFormat } : {}),
   };
   const newState = { ...state, content };
 
@@ -809,5 +1189,6 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     pageCount: pages.length,
     visualCount,
     reportFilterCount: reportFilters.length,
+    bookmarkCount: bookmarks.length,
   });
 }
