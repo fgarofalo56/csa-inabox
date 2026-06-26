@@ -1169,7 +1169,9 @@ export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
   try {
     // metastore_summary is readable by any workspace user and returns the
     // assigned metastore + its delta-sharing scope + owner in one call.
-    summary = await ucFetch<any>(host, '/api/2.1/unity-catalog/metastore-summary');
+    // (Databricks UC endpoint uses an underscore — `metastore_summary` — not a
+    // hyphen; the hyphen path 404s as "No API found", failing the audit probe.)
+    summary = await ucFetch<any>(host, '/api/2.1/unity-catalog/metastore_summary');
   } catch (e: any) {
     return { ...base, configured: true, host, reason: 'unreachable', message: `Could not read the Unity Catalog metastore summary: ${e?.message || e}. Confirm the Console UAMI is SCIM-provisioned into the workspace and the workspace is network-reachable.` };
   }
