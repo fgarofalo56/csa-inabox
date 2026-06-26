@@ -76,6 +76,7 @@ import { DqSourcePanel } from '@/lib/components/powerbi/dq-source-panel';
 import { BulkDescribeAction } from '@/lib/components/catalog/bulk-describe-action';
 import { UpstreamSensitivityField } from '@/lib/components/governance/upstream-sensitivity-field';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { ReportDesigner } from './report-designer';
 import { NotConfiguredBar, type NotConfiguredHint } from '@/lib/components/admin-security/not-configured-bar';
 import { EmptyState } from '@/lib/components/empty-state';
 import type {
@@ -15155,6 +15156,16 @@ function LoomVisualDefinition({ visual }: { visual: LoomVisualDef }) {
 }
 
 function LoomNativeReportEditor({ item, id }: { item: FabricItemType; id: string }) {
+  // The Loom-native report editor IS a designer (create/author, not just view):
+  // pages + a visual canvas + a Visualizations/Fields pane that drag-binds the
+  // bound AAS tabular model into field wells and live-renders real DAX rows.
+  // Extracted to its own file to keep this module small.
+  return <ReportDesigner item={item} id={id} />;
+}
+
+// Legacy read-only viewer pieces (LoomVisual / LoomVisualDefinition) are retained
+// above for reference + reuse; the active editor is ReportDesigner.
+function _LoomNativeReportViewer_legacy({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [detail, setDetail] = useState<LoomReportDetail | null>(null);
   const [detailErr, setDetailErr] = useState<string | null>(null);

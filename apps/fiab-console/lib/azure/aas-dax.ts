@@ -42,15 +42,126 @@ export function resolveAasBinding(
 }
 
 /**
- * Synthesize a safe DAX EVALUATE expression from a visual's `field` definition.
- * Every branch returns a real, executable DAX string (no vaporware):
+ * A single field assignment in a visual's well (Axis/Category, Values, Legend).
+ * Either a model column (`table` + `column`, optionally aggregated) or a model
+ * measure (`measure`). Mirrors the Power BI field-well model 1:1 so the Loom
+ * report designer can author multi-field visuals without typed DAX
+ * (no-freeform-config.md).
+ */
+export interface DaxWellField {
+  table?: string;
+  column?: string;
+  measure?: string;
+  /** Aggregation applied to a column in the Values well. Ignored for measures. */
+  aggregation?: 'Sum' | 'Avg' | 'Count' | 'Min' | 'Max' | 'None';
+}
+
+/** A visual definition the DAX synthesizer understands — single-field (legacy)
+ *  or rich field wells (designer). */
+export interface DaxVisual {
+  type: string;
+  field?: string;
+  wells?: {
+    category?: DaxWellField[];
+    values?: DaxWellField[];
+    legend?: DaxWellField[];
+  };
+}
+
+/** Map a Loom aggregation choice to its DAX function. "Count" uses COUNTA so it
+ *  works on text columns too (matches Power BI's default "Count"). */
+const DAX_AGG_FN: Record<string, string> = {
+  Sum: 'SUM',
+  Avg: 'AVERAGE',
+  Count: 'COUNTA',
+  Min: 'MIN',
+  Max: 'MAX',
+};
+
+/** Single-quote a table name (always safe; escapes embedded quotes). */
+function daxTable(t: string): string {
+  return `'${t.replace(/'/g, "''")}'`;
+}
+/** Build a `'Table'[Column]` reference (bracket-escaped). */
+function daxColumnRef(w: DaxWellField): string | null {
+  if (!w.column) return null;
+  const tbl = w.table ? daxTable(w.table) : '';
+  return `${tbl}[${w.column.replace(/\]/g, ']]')}]`;
+}
+/** Build a `[Measure]` reference (measures are model-global). */
+function daxMeasureRef(w: DaxWellField): string | null {
+  if (!w.measure) return null;
+  return `[${w.measure.replace(/\]/g, ']]')}]`;
+}
+/** Quote a string literal for a SUMMARIZECOLUMNS / ROW alias. */
+function daxAlias(name: string): string {
+  return `"${name.replace(/"/g, '""')}"`;
+}
+
+/** Build an aggregated value expression + its result-column alias from a well
+ *  field. Measures pass through; columns get wrapped in their aggregation
+ *  (defaulting to SUM when none chosen). Returns null when the field is empty. */
+function daxValueExpr(w: DaxWellField): { alias: string; expr: string } | null {
+  const m = daxMeasureRef(w);
+  if (m && w.measure) return { alias: w.measure, expr: m };
+  const c = daxColumnRef(w);
+  if (c && w.column) {
+    const useAgg = w.aggregation && w.aggregation !== 'None';
+    const fn = useAgg ? DAX_AGG_FN[w.aggregation as string] || 'SUM' : 'SUM';
+    const label = useAgg ? `${w.aggregation} of ${w.column}` : `Sum of ${w.column}`;
+    return { alias: label, expr: `${fn}(${c})` };
+  }
+  return null;
+}
+
+/**
+ * Build a DAX EVALUATE from a visual's rich field wells. Returns null when the
+ * visual has no usable wells (caller falls back to the single-`field` path).
+ *
+ *   category/legend + values → EVALUATE TOPN(1000, SUMMARIZECOLUMNS(<grp>, <"alias",expr>…))
+ *   values only (card/KPI)   → EVALUATE ROW(<"alias", expr>…)
+ *   category only (slicer)   → EVALUATE TOPN(1000, SUMMARIZECOLUMNS(<grp>))
+ */
+export function buildDaxFromWells(visual: DaxVisual): string | null {
+  const wells = visual.wells;
+  if (!wells) return null;
+  const group = [...(wells.category || []), ...(wells.legend || [])]
+    .map(daxColumnRef)
+    .filter((x): x is string => !!x);
+  const values = (wells.values || [])
+    .map(daxValueExpr)
+    .filter((x): x is { alias: string; expr: string } => !!x);
+  if (group.length === 0 && values.length === 0) return null;
+
+  const valueParts = values.map((v) => `${daxAlias(v.alias)}, ${v.expr}`);
+  if (group.length === 0) {
+    // No grouping → a single-row card / KPI.
+    return `EVALUATE ROW(${valueParts.join(', ')})`;
+  }
+  if (values.length === 0) {
+    // Categories only (slicer / distinct-value table).
+    return `EVALUATE TOPN(1000, SUMMARIZECOLUMNS(${group.join(', ')}))`;
+  }
+  return `EVALUATE TOPN(1000, SUMMARIZECOLUMNS(${group.join(', ')}, ${valueParts.join(', ')}))`;
+}
+
+/**
+ * Synthesize a safe DAX EVALUATE expression for a visual. Prefers the rich
+ * field-well model (designer); falls back to the single-`field` shape so the
+ * legacy read-only viewer + Copilot-applied visuals keep working. Every branch
+ * returns a real, executable DAX string (no vaporware):
+ *   - rich wells (category/values/legend)     → SUMMARIZECOLUMNS / ROW (see above)
  *   - already an EVALUATE expression          → pass through
  *   - measure/column ([..]) + card type       → EVALUATE ROW("Value", <field>)
  *   - measure/column ([..]) + other type      → EVALUATE TOPN(100, ROW("Value", <field>))
  *   - bare table name (no brackets / parens)  → EVALUATE TOPN(100, <table>)
  *   - empty field                             → null (caller skips the visual)
  */
-export function buildDaxFromVisual(visual: { type: string; field?: string }): string | null {
+export function buildDaxFromVisual(visual: DaxVisual): string | null {
+  // Rich field wells take precedence (back-compatible: absent wells → fall through).
+  const fromWells = buildDaxFromWells(visual);
+  if (fromWells) return fromWells;
+
   const field = (visual.field || '').trim();
   if (!field) return null;
   if (/^EVALUATE\b/i.test(field)) return field;

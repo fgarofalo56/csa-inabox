@@ -340,8 +340,11 @@ import {
   type AasRow,
   type AasTable,
   type AasQueryResult,
+  type DaxVisual,
+  type DaxWellField,
   resolveAasBinding,
   buildDaxFromVisual,
+  buildDaxFromWells,
   flattenAasRows,
 } from './aas-dax';
 
@@ -351,9 +354,10 @@ import {
 export {
   resolveAasBinding,
   buildDaxFromVisual,
+  buildDaxFromWells,
   flattenAasRows,
 };
-export type { AasRow, AasTable, AasQueryResult };
+export type { AasRow, AasTable, AasQueryResult, DaxVisual, DaxWellField };
 
 // FABRIC_BASE / FABRIC_SCOPE / AAS_SCOPE / uamiClientId / credential are
 // declared once at the top of this module (Model view section) and are shared

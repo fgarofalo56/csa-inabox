@@ -47,6 +47,7 @@ import {
   flattenAasRows,
   resolveAasBinding,
   AasError,
+  type DaxVisual,
 } from '@/lib/azure/aas-client';
 import { loadModelItem } from '@/lib/azure/model-binding';
 import {
@@ -64,9 +65,9 @@ interface QueryRequest {
   workspaceId?: string;
   datasetId?: string;
   dax?: string;
-  // AAS path (legacy / loom-native default)
+  // AAS path (legacy single-field + rich field wells from the designer)
   query?: string;
-  visual?: { type: string; field?: string } & Record<string, unknown>;
+  visual?: DaxVisual & Record<string, unknown>;
 }
 
 function stateBinding(item: WorkspaceItem): { server?: string; database?: string } {
@@ -152,7 +153,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   let daxQuery = rawQuery;
   if (!daxQuery && body?.visual) {
-    daxQuery = buildDaxFromVisual(body.visual as { type: string; field?: string }) ?? '';
+    daxQuery = buildDaxFromVisual(body.visual) ?? '';
   }
   if (!daxQuery) {
     return NextResponse.json(
