@@ -214,7 +214,7 @@ copilot-evals = [
 copilot = [
     # CSA Copilot (CSA-0008) Phases 0-1 — corpus indexer + grounded Q&A.
     # Agent framework (approved via AQ-0003).
-    "pydantic-ai>=1.0.0,<2.0.0",
+    "pydantic-ai>=1.0.0,<3.0.0",
     # Settings + model typing (already on the platform extra but listed
     # here so `pip install -e .[copilot]` is self-contained).
     "pydantic>=2.7.0,<3.0.0",
