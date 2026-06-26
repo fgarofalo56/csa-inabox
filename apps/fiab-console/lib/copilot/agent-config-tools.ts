@@ -268,7 +268,7 @@ export async function generateSuggestions(src: DataAgentSource, schemaText: stri
     { role: 'system', content: AGENT_CONFIG_COPILOT.systemPrompt },
     { role: 'user', content: buildUserMessage(src, schemaText) },
   ];
-  const base: Record<string, unknown> = { messages, max_tokens: 1500 };
+  const base: Record<string, unknown> = { messages, max_completion_tokens: 1500 };
   const send = (withTemp: boolean) =>
     fetch(url, {
       method: 'POST',

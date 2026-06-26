@@ -394,7 +394,7 @@ export async function POST(req: NextRequest) {
               messages,
               stream: true,
               ...(temp !== undefined ? { temperature: temp } : {}),
-              max_tokens: 4096,
+              max_completion_tokens: 4096,
             }),
           });
 

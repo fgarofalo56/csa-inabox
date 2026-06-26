@@ -159,7 +159,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           messages,
           ...(temp !== undefined ? { temperature: temp } : {}),
-          max_tokens: 256,
+          max_completion_tokens: 256,
           // Stop at a blank line so ghost text stays a focused completion.
           stop: ['\n\n', '```'],
         }),

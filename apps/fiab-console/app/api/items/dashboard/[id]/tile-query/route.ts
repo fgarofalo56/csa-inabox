@@ -83,7 +83,7 @@ async function generateDax(nlPrompt: string, datasetSchema: string): Promise<str
     fetch(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ messages, ...(temp !== undefined ? { temperature: temp } : {}), max_tokens: 1200 }),
+      body: JSON.stringify({ messages, ...(temp !== undefined ? { temperature: temp } : {}), max_completion_tokens: 1200 }),
     });
   let res = await callWithTemp(0.1);
   if (res.status === 400) {

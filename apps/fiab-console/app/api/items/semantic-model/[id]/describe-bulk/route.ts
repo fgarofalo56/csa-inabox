@@ -81,7 +81,7 @@ async function aoaiChatJson(tenantId: string, system: string, user: string, maxT
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    max_tokens: maxTokens,
+    max_completion_tokens: maxTokens,
     response_format: { type: 'json_object' },
   };
   const res = await fetch(url, {

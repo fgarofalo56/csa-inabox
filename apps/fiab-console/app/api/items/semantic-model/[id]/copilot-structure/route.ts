@@ -84,7 +84,7 @@ async function aoaiPlan(userOid: string, system: string, user: string): Promise<
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const payload: Record<string, unknown> = {
     messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-    max_tokens: 900,
+    max_completion_tokens: 900,
     temperature: 0.1,
     response_format: { type: 'json_object' },
   };

@@ -565,7 +565,7 @@ export async function chatCompletion(
   const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/chat/completions?api-version=${AOAI_DATA_API}`;
   const body: any = { messages };
   if (params.temperature !== undefined) body.temperature = params.temperature;
-  if (params.maxTokens !== undefined) body.max_tokens = params.maxTokens;
+  if (params.maxTokens !== undefined) body.max_completion_tokens = params.maxTokens;
   if (params.topP !== undefined) body.top_p = params.topP;
   if (params.stop && params.stop.length) body.stop = params.stop;
   const res = await fetchWithTimeout(url, {

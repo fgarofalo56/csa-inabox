@@ -132,7 +132,7 @@ describe('callAiFn behavior', () => {
   it('honors options.maxTokens', async () => {
     mockFetchOnce('ok');
     await callAiFn('summarize', 'x', { maxTokens: 123 });
-    expect(lastBody.max_tokens).toBe(123);
+    expect(lastBody.max_completion_tokens).toBe(123);
   });
 
   it('retries without temperature on a reasoning-model 400', async () => {

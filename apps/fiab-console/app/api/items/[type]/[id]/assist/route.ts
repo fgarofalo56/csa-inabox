@@ -447,7 +447,7 @@ export async function POST(
         body: JSON.stringify({
           messages,
           ...(temp !== undefined ? { temperature: temp } : {}),
-          max_tokens: 2048,
+          max_completion_tokens: 2048,
         }),
       });
 

@@ -174,7 +174,7 @@ export async function POST(req: NextRequest) {
         body: JSON.stringify({
           messages,
           ...(temp !== undefined ? { temperature: temp } : {}),
-          max_tokens: 2048,
+          max_completion_tokens: 2048,
         }),
       });
 

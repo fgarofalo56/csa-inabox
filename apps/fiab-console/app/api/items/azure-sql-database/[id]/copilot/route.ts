@@ -260,7 +260,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
               messages,
               stream: true,
               ...(temp !== undefined ? { temperature: temp } : {}),
-              max_tokens: 4096,
+              max_completion_tokens: 4096,
             }),
           });
 

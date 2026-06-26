@@ -91,7 +91,7 @@ async function aoaiChat(
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    max_tokens: opts.maxTokens ?? 400,
+    max_completion_tokens: opts.maxTokens ?? 400,
   };
   if (opts.temperature !== undefined) payload.temperature = opts.temperature;
   if (opts.jsonObject) payload.response_format = { type: 'json_object' };

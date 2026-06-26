@@ -147,7 +147,7 @@ async function chat(target: AoaiTarget, messages: ChatMessage[], jsonObject: boo
     target.deployment,
   )}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
-  const base: Record<string, unknown> = { messages, max_tokens: 2048 };
+  const base: Record<string, unknown> = { messages, max_completion_tokens: 2048 };
   if (jsonObject) base.response_format = { type: 'json_object' };
 
   const send = (withTemperature: boolean, withJson: boolean) =>

@@ -216,7 +216,7 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
 
   // One AOAI round-trip with the reasoning-model temperature fallback.
   const runChat = async (messages: Array<{ role: string; content: string }>): Promise<{ content: string; usage: any }> => {
-    const base: Record<string, unknown> = { messages, max_tokens: 1200 };
+    const base: Record<string, unknown> = { messages, max_completion_tokens: 1200 };
     const send = async (withTemp: boolean) => fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },

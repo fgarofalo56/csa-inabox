@@ -91,7 +91,7 @@ export async function POST(req: NextRequest) {
       { role: 'system', content: system },
       { role: 'user', content: question },
     ],
-    max_tokens: 800,
+    max_completion_tokens: 800,
     temperature: 0.2,
     stream: true,
   };

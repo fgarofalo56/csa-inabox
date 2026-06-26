@@ -155,7 +155,7 @@ export async function callAiFn(
     { role: 'system', content: systemPromptFor(fn, options) },
     { role: 'user', content: input },
   ];
-  const base: Record<string, unknown> = { messages, max_tokens: options.maxTokens ?? 800 };
+  const base: Record<string, unknown> = { messages, max_completion_tokens: options.maxTokens ?? 800 };
 
   // Single round-trip with the reasoning-model temperature fallback copied
   // verbatim from data-agent-client.ts::runChat.

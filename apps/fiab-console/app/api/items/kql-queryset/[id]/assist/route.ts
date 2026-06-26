@@ -206,7 +206,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         body: JSON.stringify({
           messages,
           ...(temp !== undefined ? { temperature: temp } : {}),
-          max_tokens: 2048,
+          max_completion_tokens: 2048,
         }),
       });
 
