@@ -5,20 +5,36 @@
  * this report so the Loom-native report DESIGNER can populate its Fields pane
  * and let the author drag columns/measures into a visual's field wells.
  *
- * Azure-native default (no-fabric-dependency.md): the schema is read from the
- * report's bound Azure Analysis Services tabular model via the real TMSCHEMA
- * Discover rowsets (`readModel()` — same XMLA transport the model/column editor
- * uses). NO Power BI / Fabric workspace required. No mock data — when the model
- * can't be reached the route returns an honest 412 gate naming the exact env
- * var / item-state binding to set.
+ * ── Data-source model (report-designer v2) ─────────────────────────────────
+ * The report binds to a DATA SOURCE persisted on `state.dataSource` (the
+ * discriminated union in `lib/editors/report/report-data-source.ts`). This
+ * route resolves that source and dispatches on its backend — it is no longer
+ * AAS-only:
  *
- * Binding resolution mirrors the /query route: per-item `state.aasServer` /
- * `state.aasDatabase` first, then the platform `LOOM_AAS_SERVER` /
- * `LOOM_AAS_DATABASE` defaults. `readModel()` additionally needs an XMLA
- * endpoint (`LOOM_AAS_SERVER_URL`, asazure://…) — surfaced in the gate when
- * absent.
+ *   • semantic-model  (DEFAULT, Azure-native) → the referenced Loom
+ *     `semantic-model` item is read from Cosmos. If that model is itself
+ *     Loom-native (`state.content` = SemanticModelContent over a
+ *     warehouse/lakehouse via SQL), its tables/columns/measures are returned
+ *     directly — NO AAS, NO Fabric, NO Power BI workspace. If the model item
+ *     declares its own AAS binding, we fall through to the XMLA path.
+ *   • direct-query    (Azure-native) → the author's guarded `SELECT` is
+ *     introspected over Synapse (`SELECT TOP 0` derived-table probe via
+ *     `executeQuery`) to surface its real column names. No mock schema.
+ *   • aas             (advanced / back-compat) → the existing TMSCHEMA Discover
+ *     over XMLA (`readModel()`), unchanged. Reports saved before
+ *     `state.dataSource` existed synthesize `{kind:'aas'}` from the legacy
+ *     `state.aasServer/aasDatabase` (via `fromLegacyState`) so they keep
+ *     working.
  *
- * 200 OK → { ok: true, aasServer, aasDatabase, database, tables: FieldTable[] }
+ * Rules compliance: no-fabric-dependency (the DEFAULT path is a Loom semantic
+ * model over Synapse/lakehouse — never gates on a Fabric/Power BI workspace),
+ * no-vaporware (real model content / real `executeQuery` introspection / real
+ * XMLA Discover — every unconfigured branch is an honest 412 gate naming the
+ * exact env var / item binding to set, never mock data), no-freeform-config
+ * (the source is a picker choice; only the advanced AAS URI + the guarded SQL
+ * escape hatch are free text).
+ *
+ * 200 OK → { ok: true, backend, aasServer, aasDatabase, database, tables }
  * 412    → { ok: false, code: 'unbound', error } (honest, actionable)
  * 4xx/5xx→ { ok: false, error, status? }
  */
@@ -27,6 +43,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { readModel, resolveAasBinding, AasError } from '@/lib/azure/aas-client';
 import { loadModelItem } from '@/lib/azure/model-binding';
+import { extractContent } from '@/lib/azure/tabular-model';
+import { executeQuery, dedicatedTarget, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { readOnlySelect } from '@/lib/thread/sql-guard';
+import { fromLegacyState } from '@/lib/editors/report/report-data-source';
+import type { DirectQueryTarget } from '@/lib/editors/report/report-data-source';
 import {
   isLoomContentId,
   cosmosIdFromLoomId,
@@ -57,12 +78,206 @@ export interface FieldTable {
   measures: FieldMeasure[];
 }
 
-function stateBinding(item: WorkspaceItem): { server?: string; database?: string } {
+// ── Resolver ──────────────────────────────────────────────────────────────
+//
+// The report's data source resolves to one of three backends. The /fields and
+// /query routes share this dispatch shape; the loom-native paths return real
+// schema with no AAS/Fabric dependency.
+
+type ResolvedReportModel =
+  /** XMLA Discover over the bound AAS tabular model (existing path). */
+  | { backend: 'aas'; database: string; server?: string }
+  /** Loom-native schema (semantic-model content or direct-query introspection). */
+  | { backend: 'loom-native'; tables: FieldTable[] }
+  /** Genuinely unbound — drives an honest 412 gate naming the remediation. */
+  | { backend: 'unbound'; gate: string };
+
+/** Default Fields-pane summarization hint inferred from a column's data type. */
+function summarizeByForType(dataType: string): string | undefined {
+  const t = (dataType || '').toLowerCase();
+  if (/(int|long|double|decimal|number|float|money|real|numeric|bigint|smallint|tinyint|currency)/.test(t)) {
+    return 'Sum';
+  }
+  return 'None';
+}
+
+/**
+ * Build the Fields tree from a Loom-native semantic-model item's persisted
+ * content (`extractContent` reads `state.content` = SemanticModelContent —
+ * real columns + measures, no mock). Measures are grouped under their owning
+ * table; model-level measures fall into a synthetic "Measures" table (Power BI
+ * parity).
+ */
+function loomNativeTables(model: WorkspaceItem): FieldTable[] {
+  const { tables, measures } = extractContent(model);
+
+  const tableNames = new Set(tables.map((t) => t.name));
+  const byTable = new Map<string, FieldMeasure[]>();
+  const leftover: FieldMeasure[] = [];
+  for (const m of measures) {
+    const fm: FieldMeasure = { name: m.name, isHidden: false };
+    if (m.table && tableNames.has(m.table)) {
+      const arr = byTable.get(m.table) || [];
+      arr.push(fm);
+      byTable.set(m.table, arr);
+    } else {
+      leftover.push(fm);
+    }
+  }
+
+  const out: FieldTable[] = tables.map((t) => ({
+    name: t.name,
+    columns: t.columns.map((c) => ({
+      name: c.name,
+      dataType: c.dataType,
+      summarizeBy: summarizeByForType(c.dataType),
+      isHidden: false,
+    })),
+    measures: byTable.get(t.name) || [],
+  }));
+  if (leftover.length) out.push({ name: 'Measures', columns: [], measures: leftover });
+
+  // Drop tables that have nothing the author can bind.
+  return out.filter((t) => t.columns.length > 0 || t.measures.length > 0);
+}
+
+/**
+ * Introspect a direct-query `SELECT`'s output columns WITHOUT scanning data:
+ * wrap it as a derived table and run `SELECT TOP 0 *` over Synapse so the
+ * recordset metadata yields the real column names. Dedicated pool for a
+ * warehouse target, serverless for a lakehouse target.
+ */
+async function directQueryTables(target: DirectQueryTarget, sql: string): Promise<FieldTable[]> {
+  const tgt = target === 'lakehouse' ? serverlessTarget() : dedicatedTarget();
+  const probe = `SELECT TOP 0 * FROM (\n${sql}\n) AS _loom_probe`;
+  const res = await executeQuery(tgt, probe, 30_000);
+  const columns: FieldColumn[] = res.columns.map((name) => ({
+    name,
+    dataType: 'string',
+    summarizeBy: undefined,
+    isHidden: false,
+  }));
+  return columns.length ? [{ name: 'Query', columns, measures: [] }] : [];
+}
+
+/**
+ * Resolve a loaded `semantic-model` item to a backend. AAS only when the model
+ * ITEM ITSELF declares a binding (`state.aasServer` + `state.aasDatabase`) — we
+ * deliberately do NOT use the env-fallback form here so a global
+ * `LOOM_AAS_SERVER` cannot hijack a Loom-native model. Otherwise the model is
+ * Loom-native: read its content schema.
+ */
+function resolveLoadedModel(model: WorkspaceItem): ResolvedReportModel {
+  const mState = (model.state || {}) as Record<string, unknown>;
+  const mServer = typeof mState.aasServer === 'string' ? mState.aasServer.trim() : '';
+  const mDatabase = typeof mState.aasDatabase === 'string' ? mState.aasDatabase.trim() : '';
+  if (mServer && mDatabase) {
+    return { backend: 'aas', database: mDatabase, server: mServer };
+  }
+
+  const tables = loomNativeTables(model);
+  if (!tables.length) {
+    const nm = (model as { name?: string; displayName?: string }).name
+      || (model as { name?: string; displayName?: string }).displayName
+      || 'The bound semantic model';
+    return {
+      backend: 'unbound',
+      gate:
+        `${nm} has no tables yet. Open the semantic model and define its tables/columns ` +
+        '(or bind it to a warehouse/lakehouse), then re-open this report.',
+    };
+  }
+  return { backend: 'loom-native', tables };
+}
+
+/**
+ * Resolve the report item's data source to a backend descriptor. Mirrors the
+ * shared `report-model-resolver` design but is self-contained for this route.
+ */
+async function resolveReportModel(item: WorkspaceItem, oid: string): Promise<ResolvedReportModel> {
   const state = (item.state || {}) as Record<string, unknown>;
-  return {
-    server: typeof state.aasServer === 'string' ? state.aasServer : undefined,
-    database: typeof state.aasDatabase === 'string' ? state.aasDatabase : undefined,
-  };
+  const ds = fromLegacyState(state);
+
+  if (!ds) {
+    return {
+      backend: 'unbound',
+      gate:
+        'This report has no data source. Open the designer and choose a data source — a Loom ' +
+        'semantic model (default, Azure-native over Synapse/lakehouse), a direct SQL query, or ' +
+        '(advanced) an Azure Analysis Services model. No Power BI / Fabric workspace is required.',
+    };
+  }
+
+  // Advanced / back-compat: explicit AAS source (env fallback preserved).
+  if (ds.kind === 'aas') {
+    const binding = resolveAasBinding(ds.server, ds.database);
+    if (!binding) {
+      return {
+        backend: 'unbound',
+        gate:
+          'The Analysis Services data source is not fully bound. Set the AAS server (XMLA URI, ' +
+          'e.g. asazure://eastus2.asazure.windows.net/my-server) + database on the source, or ' +
+          'configure LOOM_AAS_SERVER + LOOM_AAS_DATABASE (admin-plane/main.bicep). The Console ' +
+          'UAMI must be a server admin on the AAS instance.',
+      };
+    }
+    return { backend: 'aas', database: binding.database, server: ds.server };
+  }
+
+  // DEFAULT, Azure-native: a Loom semantic-model item.
+  if (ds.kind === 'semantic-model') {
+    const itemId = (ds.itemId || '').trim();
+    if (!itemId) {
+      return {
+        backend: 'unbound',
+        gate: 'Pick a semantic model for this report in the designer’s Data source panel.',
+      };
+    }
+    const model = await loadModelItem(itemId, 'semantic-model', oid);
+    if (!model) {
+      return {
+        backend: 'unbound',
+        gate:
+          `The bound semantic-model item (${itemId}) was not found in your workspace. ` +
+          'Re-pick a data source in the designer.',
+      };
+    }
+    return resolveLoadedModel(model);
+  }
+
+  // Azure-native: a direct SQL query. Prefer the governed model once scaffolded.
+  const modelItemId = (ds.modelItemId || '').trim();
+  if (modelItemId) {
+    const model = await loadModelItem(modelItemId, 'semantic-model', oid);
+    if (model) return resolveLoadedModel(model);
+  }
+  const guard = readOnlySelect(ds.sql);
+  if (!guard.ok) {
+    return { backend: 'unbound', gate: `Direct-query data source: ${guard.error}` };
+  }
+  try {
+    const tables = await directQueryTables(ds.target, guard.sql);
+    if (!tables.length) {
+      return {
+        backend: 'unbound',
+        gate: 'The direct query returned no columns to bind. Adjust the SELECT and try again.',
+      };
+    }
+    return { backend: 'loom-native', tables };
+  } catch (e: any) {
+    const msg = e?.message || String(e);
+    if (/Missing env var/i.test(msg)) {
+      return {
+        backend: 'unbound',
+        gate:
+          'Direct-query reports run over Synapse. Set LOOM_SYNAPSE_WORKSPACE + ' +
+          'LOOM_SYNAPSE_DEDICATED_POOL (warehouse target) or LOOM_SYNAPSE_WORKSPACE ' +
+          '(serverless/lakehouse target) so the designer can introspect the query schema. The ' +
+          'Console UAMI must have db_datareader on the target.',
+      };
+    }
+    throw e; // a genuine SQL error — surfaced as 502 with the real message
+  }
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -81,26 +296,37 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (!item) return NextResponse.json({ ok: false, error: 'report item not found' }, { status: 404 });
   }
 
-  const { server, database } = stateBinding(item);
-  const binding = resolveAasBinding(server, database);
-  if (!binding) {
-    return NextResponse.json(
-      {
-        ok: false,
-        code: 'unbound',
-        error:
-          'This report item has no Azure Analysis Services binding. Set state.aasServer ' +
-          '(XMLA URI, e.g. asazure://eastus2.asazure.windows.net/my-server) + state.aasDatabase ' +
-          'on the item, or configure LOOM_AAS_SERVER + LOOM_AAS_DATABASE environment variables ' +
-          '(admin-plane/main.bicep). The Console UAMI must be a server admin on the AAS instance.',
-      },
-      { status: 412 },
-    );
+  // Resolve the report's data source → backend descriptor (Azure-native default).
+  let resolved: ResolvedReportModel;
+  try {
+    resolved = await resolveReportModel(item, session.claims.oid);
+  } catch (e: any) {
+    const status = e instanceof AasError ? e.status : 502;
+    return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
   }
 
+  // Honest gate — name the exact remediation (now "choose a data source", not
+  // merely LOOM_AAS_SERVER_URL).
+  if (resolved.backend === 'unbound') {
+    return NextResponse.json({ ok: false, code: 'unbound', error: resolved.gate }, { status: 412 });
+  }
+
+  // Loom-native: schema came straight from the semantic-model content or the
+  // direct-query introspection — no XMLA, no Fabric, no Power BI workspace.
+  if (resolved.backend === 'loom-native') {
+    return NextResponse.json({
+      ok: true,
+      backend: 'loom-native',
+      aasServer: null,
+      aasDatabase: null,
+      database: null,
+      tables: resolved.tables,
+    });
+  }
+
+  // AAS backend: real TMSCHEMA Discover against the bound model — no mock.
   try {
-    // Real TMSCHEMA Discover against the bound model — no mock.
-    const tables = await readModel(binding.database);
+    const tables = await readModel(resolved.database);
     const out: FieldTable[] = tables.map((t) => ({
       name: t.name,
       columns: (t.columns || [])
@@ -121,9 +347,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     return NextResponse.json({
       ok: true,
-      aasServer: server || process.env.LOOM_AAS_SERVER || null,
-      aasDatabase: binding.database,
-      database: binding.database,
+      backend: 'aas',
+      aasServer: resolved.server || process.env.LOOM_AAS_SERVER || null,
+      aasDatabase: resolved.database,
+      database: resolved.database,
       tables: out,
     });
   } catch (e: any) {

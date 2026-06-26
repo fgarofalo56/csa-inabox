@@ -157,9 +157,107 @@ export interface SemanticModelContent {
   }[];
 }
 
+/**
+ * Report Designer v2 structured-filter operator. Picked from a dropdown in the
+ * Filters pane — the user never types DAX/SQL (no-freeform-config.md). Mirror of
+ * `FilterOp` in `app/api/items/report/[id]/definition/route.ts` and the report
+ * designer; the server compiler (`lib/azure/wells-to-sql.ts`) maps each to a SQL
+ * predicate (loom-native) or a DAX `FILTER(...)` (AAS).
+ */
+export type ReportFilterOperator =
+  | 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le' | 'in' | 'contains' | 'between';
+
+/**
+ * One structured report/page/visual filter, in the SHAPE PERSISTED on the
+ * report item (post-`wireFilters`, no client-only id). A field reference is a
+ * `column` or a `measure` (optionally qualified by `table`); the operand is
+ * `value` (scalar / `between` lower bound), `value2` (`between` upper bound), or
+ * `values` (the `in` set). Mirror of `PersistedFilter` in the definition route
+ * so the route's `ReportContentV2` narrows to it cleanly. All operands are
+ * bracket-quoted by the compiler — never string-injected.
+ */
+export interface ReportFilter {
+  /** Source table the field belongs to (optional for an unqualified ref). */
+  table?: string;
+  /** Column the filter targets. */
+  column?: string;
+  /** Measure the filter targets (when filtering on an aggregate). */
+  measure?: string;
+  /** Structured comparison operator (dropdown-selected). */
+  op: ReportFilterOperator;
+  /** Scalar operand for =,≠,>,≥,<,≤ / lower bound for `between`. */
+  value?: string;
+  /** Upper bound for `between`. */
+  value2?: string;
+  /** Operand set for `in`. */
+  values?: string[];
+}
+
+/** Legend placement for the Format pane. Mirror of `LegendPosition`. */
+export type ReportLegendPosition = 'top' | 'bottom' | 'left' | 'right';
+
+/** Value number-format preset for the Format pane. Mirror of `NumberFormatPreset`. */
+export type ReportNumberFormat =
+  | 'general' | 'whole' | 'decimal' | 'percent' | 'currency' | 'thousands';
+
+/**
+ * Report Designer v2 Format-pane settings, persisted SPARSE on a visual's
+ * `config.format` (only keys the author touched survive; defaults stay implicit
+ * via `normalizeFormat`). Every control is structured (no free text beyond the
+ * title) — Power BI Format-pane parity. Mirror of `PersistedFormat` in the
+ * definition route and `ReportVisualFormat` in `lib/editors/report/format-pane`.
+ */
+export interface ReportVisualFormat {
+  /** Overrides the visual's display title. Empty → fall back to `visual.title`. */
+  titleText?: string;
+  /** Show the title bar. Default true. */
+  showTitle?: boolean;
+  /** Ordered data-color palette (lead/series-1 color first). */
+  dataColors?: string[];
+  /** Cartesian X-axis visibility. Default true. */
+  showXAxis?: boolean;
+  /** Cartesian Y-axis visibility. Default true. */
+  showYAxis?: boolean;
+  /** Legend visibility. Default true. */
+  showLegend?: boolean;
+  /** Legend placement. Default 'bottom'. */
+  legendPosition?: ReportLegendPosition;
+  /** Value number-format preset. Default 'general'. */
+  numberFormat?: ReportNumberFormat;
+}
+
 export interface ReportContent {
   kind: 'report';
-  pages: { name: string; visuals: { type: string; title: string; field?: string; config?: any }[] }[];
+  pages: {
+    name: string;
+    visuals: {
+      type: string;
+      title: string;
+      field?: string;
+      /**
+       * Loosely-typed per-visual config bag (kept `any` for back-compat with the
+       * read-only viewer + the PBIR provisioner, which ignore unknown keys). Holds
+       * the rendering grounding (`wells` / `layout` / `sql` / `position`) and, in
+       * Report Designer v2, two STRUCTURED optional members:
+       *   - `format?: ReportVisualFormat` — Format-pane settings for this visual
+       *   - `filters?: ReportFilter[]`    — visual-scoped structured filters
+       * Both are additive and persisted by `.../report/[id]/definition`.
+       */
+      config?: any;
+    }[];
+    /**
+     * v2 (additive): page-scoped structured filters that apply to every visual on
+     * the page. Optional so existing bundles + the viewer + the PBIR provisioner
+     * compile unchanged.
+     */
+    filters?: ReportFilter[];
+  }[];
+  /**
+   * v2 (additive): report-scoped structured filters that apply across all pages.
+   * Persisted under this key by the definition route (`ReportContentV2`) and read
+   * back by the designer. Optional — legacy report bundles omit it entirely.
+   */
+  reportFilters?: ReportFilter[];
 }
 
 export interface ActivatorContent {

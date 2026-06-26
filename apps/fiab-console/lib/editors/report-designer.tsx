@@ -31,11 +31,14 @@
  * is untouched; this is strictly the Azure-native default.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
-  Badge, Button, Caption1, Dropdown, Option, Divider, Input,
+  Badge, Button, Caption1, Dropdown, Option, Divider, Input, Field, Radio, RadioGroup,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuGroup, MenuGroupHeader, MenuDivider,
-  MessageBar, MessageBarBody, MessageBarTitle, Spinner, Subtitle2, Text, Title3, Tooltip,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
+  Spinner, Subtitle2, Text, Title3, Tooltip,
   Tree, TreeItem, TreeItemLayout, TabList, Tab,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   makeStyles, tokens, mergeClasses,
@@ -45,14 +48,21 @@ import {
   DataBarVerticalRegular, DataBarHorizontalRegular, DataLineRegular, DataAreaRegular,
   DataPieRegular, DataScatterRegular, Table20Regular, GridRegular, NumberSymbol20Regular,
   Filter20Regular, Dismiss16Regular, ChevronUp20Regular, ChevronDown20Regular, Sparkle20Regular,
+  Database20Regular, CloudArrowUp20Regular, ColorRegular, ReOrderDotsVertical20Regular,
 } from '@fluentui/react-icons';
-import type { ReactElement } from 'react';
+import type { CSSProperties, ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { ReportPowerBiCopilot, type CopilotVisualSpec } from '@/lib/components/report/report-powerbi-copilot';
+import { DataSourcePicker } from './report/data-source-picker';
+import { FormatPane, type ReportVisualFormat, formatValue } from './report/format-pane';
+import {
+  type ReportDataSource, isBound, describeSource, fromLegacyState, parseDataSource,
+} from './report/report-data-source';
+import { useCanvasLayout } from './report/use-canvas-layout';
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
@@ -80,8 +90,152 @@ interface DVisual {
   /** column span on a 12-col canvas grid + a row-height hint */
   w: number;
   h: number;
+  /** Structured visual formatting (FormatPane → visual.config.format). */
+  format?: ReportVisualFormat;
+  /** Filters scoped to this visual only. */
+  filters?: ReportFilter[];
 }
-interface DPage { id: string; name: string; visuals: DVisual[] }
+interface DPage { id: string; name: string; visuals: DVisual[]; filters?: ReportFilter[] }
+
+// ── filters (structured — no typed DAX/JSON, ui-parity with the PBI Filters pane) ──
+
+type FilterOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le' | 'in' | 'contains' | 'between';
+
+/** A single structured filter. Field is a model column (table+column) or measure. */
+interface ReportFilter {
+  id: string;
+  table?: string;
+  column?: string;
+  measure?: string;
+  op: FilterOp;
+  /** Single value (eq/ne/gt/ge/lt/le/contains) or the lower bound (between). */
+  value?: string;
+  /** Upper bound for `between`. */
+  value2?: string;
+  /** Allowed set for `in` (also editable as a comma list). */
+  values?: string[];
+}
+
+const FILTER_OPS: { op: FilterOp; label: string }[] = [
+  { op: 'eq', label: '= equals' },
+  { op: 'ne', label: '≠ not equals' },
+  { op: 'gt', label: '> greater than' },
+  { op: 'ge', label: '≥ at least' },
+  { op: 'lt', label: '< less than' },
+  { op: 'le', label: '≤ at most' },
+  { op: 'in', label: 'in (any of)' },
+  { op: 'contains', label: 'contains' },
+  { op: 'between', label: 'between' },
+];
+
+/** Encode a filter's field as a stable picker key. */
+function filterFieldKey(f: ReportFilter): string {
+  return f.measure ? `m:${f.measure}` : f.table || f.column ? `c:${f.table || ''}.${f.column || ''}` : '';
+}
+function filterFieldLabel(f: ReportFilter): string {
+  if (f.measure) return f.measure;
+  if (f.column) return f.table ? `${f.table} · ${f.column}` : f.column;
+  return '(pick a field)';
+}
+
+/** Re-hydrate persisted filter shapes into in-memory filters with fresh ids. */
+function reFilters(raw: unknown): ReportFilter[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map((r): ReportFilter | null => {
+      const o = (r || {}) as Record<string, unknown>;
+      const op = (typeof o.op === 'string' ? o.op : 'eq') as FilterOp;
+      if (!FILTER_OPS.some((x) => x.op === op)) return null;
+      return {
+        id: uid('flt'),
+        table: typeof o.table === 'string' ? o.table : undefined,
+        column: typeof o.column === 'string' ? o.column : undefined,
+        measure: typeof o.measure === 'string' ? o.measure : undefined,
+        op,
+        value: typeof o.value === 'string' ? o.value : undefined,
+        value2: typeof o.value2 === 'string' ? o.value2 : undefined,
+        values: Array.isArray(o.values) ? o.values.map(String) : undefined,
+      };
+    })
+    .filter((x): x is ReportFilter => !!x);
+}
+
+/** Strip client-only ids before sending filters to the server / query route. */
+function wireFilters(list: ReportFilter[]): Array<Omit<ReportFilter, 'id'>> {
+  return list
+    .filter((f) => (f.column || f.measure))
+    .map(({ id: _id, ...rest }) => rest);
+}
+
+/** True when the filter is complete enough to apply. */
+function filterReady(f: ReportFilter): boolean {
+  if (!f.column && !f.measure) return false;
+  if (f.op === 'between') return !!(f.value && f.value2);
+  if (f.op === 'in') return !!((f.values && f.values.length) || (f.value && f.value.trim()));
+  return f.value != null && f.value !== '';
+}
+
+/**
+ * Find the result-row key that corresponds to a filter's field. DAX/serverless
+ * result columns surface as `Table[Column]`, `[Measure]`, or a bare alias — so we
+ * match tolerantly. Returns null when the visual's result doesn't carry the
+ * filtered column (then client-side filtering is skipped and the server WHERE is
+ * authoritative — never blanks the visual).
+ */
+function matchFilterKey(keys: string[], f: ReportFilter): string | null {
+  const name = (f.measure || f.column || '').trim();
+  if (!name) return null;
+  const lower = name.toLowerCase();
+  for (const k of keys) {
+    const kl = k.toLowerCase();
+    if (kl === lower) return k;
+    if (kl.endsWith(`[${lower}]`)) return k;
+    if (f.table && kl === `${f.table.toLowerCase()}[${lower}]`) return k;
+  }
+  return null;
+}
+
+function passesFilter(cell: unknown, f: ReportFilter): boolean {
+  const s = cell == null ? '' : String(cell);
+  const n = Number(cell);
+  const fn = Number(f.value);
+  switch (f.op) {
+    case 'eq': return s === (f.value ?? '') || (!Number.isNaN(n) && !Number.isNaN(fn) && n === fn);
+    case 'ne': return !(s === (f.value ?? '') || (!Number.isNaN(n) && !Number.isNaN(fn) && n === fn));
+    case 'gt': return !Number.isNaN(n) && !Number.isNaN(fn) && n > fn;
+    case 'ge': return !Number.isNaN(n) && !Number.isNaN(fn) && n >= fn;
+    case 'lt': return !Number.isNaN(n) && !Number.isNaN(fn) && n < fn;
+    case 'le': return !Number.isNaN(n) && !Number.isNaN(fn) && n <= fn;
+    case 'contains': return s.toLowerCase().includes((f.value ?? '').toLowerCase());
+    case 'in': {
+      const set = (f.values && f.values.length ? f.values : (f.value ?? '').split(',')).map((v) => v.trim()).filter(Boolean);
+      return set.includes(s);
+    }
+    case 'between': {
+      const lo = Number(f.value); const hi = Number(f.value2);
+      return !Number.isNaN(n) && !Number.isNaN(lo) && !Number.isNaN(hi) && n >= lo && n <= hi;
+    }
+    default: return true;
+  }
+}
+
+/**
+ * Apply the merged filters client-side to a visual's result rows so a filter
+ * takes effect IMMEDIATELY (visible), even before the server compiles the WHERE.
+ * Idempotent with a server-side filter (same predicate). Filters whose column
+ * isn't present in the result are skipped (left to the server) rather than
+ * blanking the visual.
+ */
+function applyFilters(rows: Array<Record<string, unknown>>, filters: ReportFilter[]): Array<Record<string, unknown>> {
+  const active = filters.filter(filterReady);
+  if (active.length === 0 || rows.length === 0) return rows;
+  const keys = Object.keys(rows[0]);
+  const applicable = active
+    .map((f) => ({ f, key: matchFilterKey(keys, f) }))
+    .filter((x): x is { f: ReportFilter; key: string } => !!x.key);
+  if (applicable.length === 0) return rows;
+  return rows.filter((row) => applicable.every(({ f, key }) => passesFilter(row[key], f)));
+}
 
 interface FieldColumn { name: string; dataType: string; summarizeBy?: string; isHidden: boolean }
 interface FieldMeasure { name: string; isHidden: boolean }
@@ -186,6 +340,7 @@ const useStyles = makeStyles({
   canvasGrid: { display: 'grid', gridTemplateColumns: 'repeat(12, minmax(0, 1fr))', gap: tokens.spacingHorizontalM },
   vcard: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    position: 'relative',
     padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
@@ -196,6 +351,14 @@ const useStyles = makeStyles({
     ':hover': { boxShadow: tokens.shadow16 },
   },
   vcardSel: { border: `1px solid ${tokens.colorBrandStroke1}`, boxShadow: tokens.shadow16 },
+  vcardDragHandle: {
+    display: 'inline-flex', alignItems: 'center', cursor: 'grab',
+    color: tokens.colorNeutralForeground3, borderRadius: tokens.borderRadiusSmall,
+    ':hover': { color: tokens.colorBrandForeground1, backgroundColor: tokens.colorNeutralBackground1Hover },
+  },
+  vcardDragging: { opacity: 0.55 },
+  vcardDropBefore: { boxShadow: `inset 3px 0 0 0 ${tokens.colorBrandStroke1}, ${tokens.shadow16}` },
+  vcardDropAfter: { boxShadow: `inset -3px 0 0 0 ${tokens.colorBrandStroke1}, ${tokens.shadow16}` },
   vcardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   vcardTitle: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   vcardBody: { flex: 1, minWidth: 0, overflow: 'auto' },
@@ -233,24 +396,53 @@ const useStyles = makeStyles({
   section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   kpi: { fontSize: tokens.fontSizeHero800, fontWeight: tokens.fontWeightSemibold, lineHeight: tokens.lineHeightHero800 },
   muted: { color: tokens.colorNeutralForeground3 },
+  filterScope: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow2,
+  },
+  filterRow: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    padding: tokens.spacingVerticalXS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  filterValues: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' },
+  resizeHandle: {
+    position: 'absolute', right: '2px', bottom: '2px', width: '14px', height: '14px',
+    cursor: 'nwse-resize', borderRight: `2px solid ${tokens.colorNeutralStroke1}`,
+    borderBottom: `2px solid ${tokens.colorNeutralStroke1}`, borderBottomRightRadius: tokens.borderRadiusSmall,
+    opacity: 0.5,
+    ':hover': {
+      opacity: 1,
+      borderRight: `2px solid ${tokens.colorBrandStroke1}`,
+      borderBottom: `2px solid ${tokens.colorBrandStroke1}`,
+    },
+  },
 });
 type Styles = ReturnType<typeof useStyles>;
 
 // ── visual render ─────────────────────────────────────────────────────────────
 
-function VisualBody({ visual, state, styles }: { visual: DVisual; state?: VisualState; styles: Styles }) {
+function VisualBody({ visual, state, styles, filters }: { visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[] }) {
   if (!hasBinding(visual)) {
     return <Caption1 className={styles.muted}>Add a field from the Fields pane to render this {visual.type}.</Caption1>;
   }
   if (!state || state.loading) return <Spinner size="tiny" label="Querying model…" />;
   if (state.err) return <MessageBar intent="error"><MessageBarBody>{state.err}</MessageBarBody></MessageBar>;
-  const rows = state.rows;
-  if (rows.length === 0) return <Caption1 className={styles.muted}>No rows returned.</Caption1>;
+  const fmt = visual.format;
+  const nf = fmt?.numberFormat;
+  // Apply the merged report/page/visual filters client-side so they take effect
+  // immediately (visible) — idempotent with the server-side WHERE/FILTER.
+  const rows = applyFilters(state.rows, filters || []);
+  if (state.rows.length === 0) return <Caption1 className={styles.muted}>No rows returned.</Caption1>;
+  if (rows.length === 0) return <Caption1 className={styles.muted}>No rows match the current filters.</Caption1>;
   const cols = Object.keys(rows[0]);
 
   if (visual.type === 'card') {
     const val = Object.values(rows[0])[0];
-    return <div className={styles.kpi}>{val == null ? '—' : String(val)}</div>;
+    return <div className={styles.kpi}>{formatValue(val, nf)}</div>;
   }
 
   if (visual.type === 'slicer') {
@@ -264,14 +456,22 @@ function VisualBody({ visual, state, styles }: { visual: DVisual; state?: Visual
     );
   }
 
-  if (CHART_TYPES.has(visual.type) && visual.type !== 'scatter') {
-    const hasNumeric = rows.some((r) => Object.values(r).some((v) => v != null && v !== '' && !Number.isNaN(Number(v))));
+  if (CHART_TYPES.has(visual.type)) {
+    const hasNumeric = visual.type === 'scatter'
+      || rows.some((r) => Object.values(r).some((v) => v != null && v !== '' && !Number.isNaN(Number(v))));
     if (hasNumeric) {
-      return <LoomChart type={visual.type as LoomChartType} rows={rows} height={200} />;
+      // The Format pane's lead data color (a Loom brand-palette token) is applied
+      // by overriding the Fluent brand CSS variable LoomChart's series-1 reads
+      // (tokens.colorBrandForeground1 === var(--colorBrandForeground1)). What you
+      // pick in Format → Data colors is what the chart paints.
+      const lead = fmt?.dataColors?.[0];
+      const wrapStyle = lead ? ({ '--colorBrandForeground1': lead } as unknown as CSSProperties) : undefined;
+      return (
+        <div style={wrapStyle}>
+          <LoomChart type={visual.type as LoomChartType} rows={rows} height={200} />
+        </div>
+      );
     }
-  }
-  if (visual.type === 'scatter') {
-    return <LoomChart type="scatter" rows={rows} height={200} />;
   }
 
   // table / matrix / non-numeric fallback
@@ -280,7 +480,7 @@ function VisualBody({ visual, state, styles }: { visual: DVisual; state?: Visual
       <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
       <TableBody>
         {rows.slice(0, 100).map((row, ri) => (
-          <TableRow key={ri}>{cols.map((c) => <TableCell key={c}>{row[c] == null ? '—' : String(row[c])}</TableCell>)}</TableRow>
+          <TableRow key={ri}>{cols.map((c) => <TableCell key={c}>{formatValue(row[c], nf)}</TableCell>)}</TableRow>
         ))}
       </TableBody>
     </Table>
@@ -362,19 +562,144 @@ function WellEditor({
   );
 }
 
+// ── filters pane (right rail tab) ────────────────────────────────────────────
+
+interface FieldOpt { key: string; label: string; table?: string; column?: string; measure?: string }
+
+function fieldOptions(tables: FieldTable[]): FieldOpt[] {
+  const out: FieldOpt[] = [];
+  for (const t of tables) {
+    for (const m of t.measures) out.push({ key: `m:${m.name}`, label: m.name, measure: m.name });
+    for (const c of t.columns) out.push({ key: `c:${t.name}.${c.name}`, label: `${t.name} · ${c.name}`, table: t.name, column: c.name });
+  }
+  return out;
+}
+
+/** One filter scope (Report / This page / Selected visual). */
+function FilterScope({
+  styles, title, hint, opts, filters, onChange,
+}: {
+  styles: Styles; title: string; hint: string; opts: FieldOpt[];
+  filters: ReportFilter[]; onChange: (next: ReportFilter[]) => void;
+}) {
+  const add = () => onChange([...filters, { id: uid('flt'), op: 'eq' }]);
+  const patch = (fid: string, p: Partial<ReportFilter>) =>
+    onChange(filters.map((f) => (f.id === fid ? { ...f, ...p } : f)));
+  const remove = (fid: string) => onChange(filters.filter((f) => f.id !== fid));
+  const pickField = (fid: string, key: string) => {
+    const o = opts.find((x) => x.key === key);
+    patch(fid, { table: o?.table, column: o?.column, measure: o?.measure });
+  };
+  return (
+    <div className={styles.filterScope}>
+      <div className={styles.toolbar}>
+        <Caption1><strong>{title}</strong></Caption1>
+        <div className={styles.spacer} />
+        <Button size="small" appearance="subtle" icon={<Add20Regular />} aria-label={`add filter to ${title}`}
+          disabled={opts.length === 0} onClick={add} />
+      </div>
+      {opts.length === 0 && <Caption1 className={styles.muted}>Bind a data source to filter by its fields.</Caption1>}
+      {opts.length > 0 && filters.length === 0 && <Caption1 className={styles.muted}>No filters. {hint}</Caption1>}
+      {filters.map((f) => (
+        <div key={f.id} className={styles.filterRow}>
+          <div className={styles.toolbar}>
+            <Dropdown size="small" style={{ minWidth: '120px', flex: 1 }} placeholder="Field"
+              aria-label="filter field" value={filterFieldLabel(f)} selectedOptions={[filterFieldKey(f)]}
+              onOptionSelect={(_e, d) => pickField(f.id, String(d.optionValue || ''))}>
+              {opts.map((o) => <Option key={o.key} value={o.key} text={o.label}>{o.label}</Option>)}
+            </Dropdown>
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="remove filter" onClick={() => remove(f.id)} />
+          </div>
+          <div className={styles.filterValues}>
+            <Dropdown size="small" style={{ minWidth: '130px' }} aria-label="operator"
+              value={FILTER_OPS.find((x) => x.op === f.op)?.label || 'equals'} selectedOptions={[f.op]}
+              onOptionSelect={(_e, d) => patch(f.id, { op: (d.optionValue as FilterOp) || 'eq' })}>
+              {FILTER_OPS.map((o) => <Option key={o.op} value={o.op} text={o.label}>{o.label}</Option>)}
+            </Dropdown>
+            {f.op === 'between' ? (
+              <>
+                <Input size="small" style={{ width: '84px' }} placeholder="min" value={f.value ?? ''} aria-label="min"
+                  onChange={(_e, d) => patch(f.id, { value: d.value })} />
+                <Input size="small" style={{ width: '84px' }} placeholder="max" value={f.value2 ?? ''} aria-label="max"
+                  onChange={(_e, d) => patch(f.id, { value2: d.value })} />
+              </>
+            ) : (
+              <Input size="small" style={{ flex: 1, minWidth: '120px' }}
+                placeholder={f.op === 'in' ? 'value1, value2, …' : 'value'}
+                value={f.value ?? ''} aria-label="filter value"
+                onChange={(_e, d) => patch(f.id, { value: d.value, ...(f.op === 'in' ? { values: d.value.split(',').map((s) => s.trim()).filter(Boolean) } : {}) })} />
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FiltersPane({
+  styles, tables, reportFilters, pageFilters, visualFilters, selectedTitle, onReport, onPage, onVisual,
+}: {
+  styles: Styles; tables: FieldTable[];
+  reportFilters: ReportFilter[]; pageFilters: ReportFilter[]; visualFilters: ReportFilter[] | null;
+  selectedTitle: string | null;
+  onReport: (next: ReportFilter[]) => void;
+  onPage: (next: ReportFilter[]) => void;
+  onVisual: (next: ReportFilter[]) => void;
+}) {
+  const opts = useMemo(() => fieldOptions(tables), [tables]);
+  return (
+    <div className={styles.pane} style={{ padding: 0 }}>
+      <Caption1 className={styles.muted}>
+        Structured filters apply on top of the model — never typed DAX/JSON. Report filters apply to every page;
+        page filters to this page; visual filters to the selected visual.
+      </Caption1>
+      <FilterScope styles={styles} title="Report" hint="Applies to every visual on every page." opts={opts}
+        filters={reportFilters} onChange={onReport} />
+      <FilterScope styles={styles} title="This page" hint="Applies to every visual on the active page." opts={opts}
+        filters={pageFilters} onChange={onPage} />
+      {visualFilters === null ? (
+        <div className={styles.filterScope}>
+          <Caption1><strong>Selected visual</strong></Caption1>
+          <Caption1 className={styles.muted}>Select a visual on the canvas to add filters that affect only it.</Caption1>
+        </div>
+      ) : (
+        <FilterScope styles={styles} title={selectedTitle ? `Visual · ${selectedTitle}` : 'Selected visual'}
+          hint="Applies to the selected visual only." opts={opts} filters={visualFilters} onChange={onVisual} />
+      )}
+    </div>
+  );
+}
+
 // ── main ────────────────────────────────────────────────────────────────────
 
 export function ReportDesigner({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
+  const router = useRouter();
+
+  const isNew = id === 'new';
 
   const [pages, setPages] = useState<DPage[]>([]);
   const [activePage, setActivePage] = useState(0);
   const [selectedVisual, setSelectedVisual] = useState<string | null>(null);
-  /** Right rail mode: the Build pane (visualizations + fields) or the Power BI Copilot. */
-  const [rightTab, setRightTab] = useState<'build' | 'copilot'>('build');
+  /** Right rail mode: Build (visualizations + fields), Format, Filters, or the Power BI Copilot. */
+  const [rightTab, setRightTab] = useState<'build' | 'format' | 'filters' | 'copilot'>('build');
   const [reportName, setReportName] = useState('');
-  const [aasServer, setAasServer] = useState<string | null>(null);
-  const [aasDatabase, setAasDatabase] = useState<string | null>(null);
+
+  // Report DATA SOURCE (semantic-model default · direct-query · AAS). Replaces the
+  // old AAS-only binding; back-compat falls through to {kind:'aas'} from item state.
+  const [dataSource, setDataSource] = useState<ReportDataSource | null>(null);
+  const [dsOpen, setDsOpen] = useState(false);
+  const [dsSaving, setDsSaving] = useState(false);
+  const [dsNote, setDsNote] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Report-scope filters (page-scope live on the page; visual-scope on the visual).
+  const [reportFilters, setReportFilters] = useState<ReportFilter[]>([]);
+
+  // Publish (Azure-native Org gallery default · Power BI opt-in).
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishBusy, setPublishBusy] = useState(false);
+  const [publishTarget, setPublishTarget] = useState<'org' | 'powerbi'>('org');
+  const [publishMsg, setPublishMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const [tables, setTables] = useState<FieldTable[]>([]);
   const [fieldsErr, setFieldsErr] = useState<string | null>(null);
@@ -385,18 +710,35 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const [dirty, setDirty] = useState(false);
   const [saveBusy, setSaveBusy] = useState(false);
   const [saveMsg, setSaveMsg] = useState<{ ok: boolean; text: string } | null>(null);
-  const [visualRows, setVisualRows] = useState<Record<string, VisualState>>({});
 
-  const bound = !!(aasServer && aasDatabase);
+  // First-save "Create report" (id === 'new'): a brand-new report has no Cosmos
+  // record, so PUT …/report/new/definition 404s (loadContentBackedItem('new')
+  // returns null — there is no create path on that route). On the first Save we
+  // mint the real item via the generic create route, persist the in-memory
+  // pages/visuals + chosen data source against the new id, then open the live
+  // editor. Mirrors the NewItemCreateGate flow (workspace + name → real Cosmos
+  // write → /items/report/<id>), kept Azure-native (no Power BI/Fabric).
+  const [createOpen, setCreateOpen] = useState(false);
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createErr, setCreateErr] = useState<string | null>(null);
+  const [createName, setCreateName] = useState('');
+  const [createWsId, setCreateWsId] = useState('');
+  const [workspaces, setWorkspaces] = useState<{ id: string; name: string }[] | null>(null);
+  const [wsErr, setWsErr] = useState<string | null>(null);
+  const [visualRows, setVisualRows] = useState<Record<string, VisualState>>({});
+  const gridRef = useRef<HTMLDivElement | null>(null);
+
+  const pbiPublishEnabled = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  const bound = isBound(dataSource);
 
   // ── load definition ────────────────────────────────────────────────────────
   const loadDetail = useCallback(async () => {
     // Brand-new report has no persisted Cosmos item yet (id === 'new'): don't
     // fetch /api/items/report/new (404). Start with one empty page — the user
-    // lays out pages/visuals and Save creates the real item.
+    // picks a data source, lays out pages/visuals, and Save creates the real item.
     if (id === 'new') {
       setPages([{ id: uid('p'), name: 'Page 1', visuals: [] }]);
-      setActivePage(0); setReportName(''); setAasServer(null); setAasDatabase(null);
+      setActivePage(0); setReportName(''); setDataSource(null); setReportFilters([]);
       setDirty(false); setLoadErr(null); setLoading(false);
       return;
     }
@@ -406,11 +748,23 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       const j = await r.json();
       if (!j.ok) { setLoadErr(j.error || `HTTP ${r.status}`); return; }
       setReportName(j.report?.name || '');
-      setAasServer(j.aasServer ?? null);
-      setAasDatabase(j.aasDatabase ?? null);
+
+      // Resolve the data source: an explicit state.dataSource (read via the v2
+      // /data-source route when present) wins; otherwise fall back to the legacy
+      // AAS binding so already-saved reports keep working unchanged.
+      let ds: ReportDataSource | null = null;
+      try {
+        const dr = await fetch(`/api/items/report/${encodeURIComponent(id)}/data-source`);
+        if (dr.ok) { const dj = await dr.json(); if (dj?.ok) ds = parseDataSource(dj.dataSource); }
+      } catch { /* route may not be present yet — fall through to legacy below */ }
+      if (!ds) ds = fromLegacyState({ aasServer: j.aasServer ?? undefined, aasDatabase: j.aasDatabase ?? undefined });
+      setDataSource(ds);
+      setReportFilters(reFilters(j.reportFilters));
+
       const dpages: DPage[] = (j.pages || []).map((p: any, pi: number): DPage => ({
         id: uid('p'),
         name: p.displayName || p.name || `Page ${pi + 1}`,
+        filters: reFilters(p.filters),
         visuals: (p.visuals || []).map((v: any): DVisual => {
           const cfgWells = v.config?.wells;
           const reUid = (a: any[]): WellField[] => (Array.isArray(a) ? a : []).map((f) => ({ uid: uid('f'), ...f }));
@@ -431,6 +785,8 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
             wells,
             w: Math.min(12, Math.max(1, Number(v.config?.layout?.w) || 6)),
             h: Math.max(1, Number(v.config?.layout?.h) || 4),
+            format: (v.config?.format as ReportVisualFormat | undefined) || undefined,
+            filters: reFilters(v.config?.filters),
           };
         }),
       }));
@@ -469,13 +825,17 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   );
 
   // ── live render: query each visual on the active page ─────────────────────────
-  const runVisual = useCallback(async (v: DVisual) => {
+  // `scopeFilters` = report + page filters; the visual's own filters are merged in
+  // here. The merged set is sent to the route (forward-compatible WHERE/FILTER) AND
+  // re-applied client-side in VisualBody so a filter is visible immediately.
+  const runVisual = useCallback(async (v: DVisual, scopeFilters: ReportFilter[] = []) => {
     if (!hasBinding(v)) return;
+    const applicable = [...scopeFilters, ...(v.filters || [])];
     setVisualRows((p) => ({ ...p, [v.id]: { rows: p[v.id]?.rows || [], loading: true, err: null } }));
     try {
       const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ visual: queryVisual(v) }),
+        body: JSON.stringify({ visual: queryVisual(v), filters: wireFilters(applicable), dataSource }),
       });
       const j = await r.json();
       if (j.ok) setVisualRows((p) => ({ ...p, [v.id]: { rows: j.rows || [], loading: false, err: null } }));
@@ -483,15 +843,16 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     } catch (e: any) {
       setVisualRows((p) => ({ ...p, [v.id]: { rows: [], loading: false, err: e?.message || String(e) } }));
     }
-  }, [id]);
+  }, [id, dataSource]);
 
-  // Re-query a visual whenever its binding signature changes (and on page load).
-  const bindingSig = (v: DVisual) => `${v.type}|${JSON.stringify(queryVisual(v).wells)}`;
+  // Re-query a visual whenever its binding signature or applicable filters change.
+  const bindingSig = (v: DVisual) => `${v.type}|${JSON.stringify(queryVisual(v).wells)}|${JSON.stringify(v.filters || [])}`;
   useEffect(() => {
     if (!bound || !page) return;
-    page.visuals.forEach((v) => { if (hasBinding(v)) runVisual(v); });
+    const scope = [...reportFilters, ...(page.filters || [])];
+    page.visuals.forEach((v) => { if (hasBinding(v)) runVisual(v, scope); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bound, activePage, page?.visuals.map(bindingSig).join('~')]);
+  }, [bound, activePage, page?.visuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || [])]);
 
   // ── mutation helpers ─────────────────────────────────────────────────────────
   const mutatePage = useCallback((fn: (p: DPage) => DPage) => {
@@ -525,6 +886,20 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       return { ...p, visuals: next };
     });
   }, [mutatePage]);
+
+  // Direct-manipulation canvas (useCanvasLayout): drag the header grip to
+  // REPOSITION a visual (HTML5 reorder + grid repack) and drag the corner grip
+  // to RESIZE its column span / row-height (the grip is an ARIA slider with
+  // arrow-key resize). w/h (+ additive x/y on reorder) already round-trip
+  // through /definition `layout`, so this is wiring, not new persistence.
+  // Move-left/right + S/M/L/XL stay as keyboard fallbacks. rowUnitPx:40 matches
+  // the card render's `v.h * 40` so the vertical drag feels 1:1 with layout.
+  const canvas = useCanvasLayout<DVisual, DPage>({
+    visuals: page?.visuals ?? [],
+    mutateVisual,
+    mutatePage,
+    rowUnitPx: 40,
+  });
 
   const addToWell = useCallback((vid: string, well: WellName, f: WellField) => {
     mutateVisual(vid, (v) => {
@@ -598,42 +973,179 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   }, []);
 
   // ── save ─────────────────────────────────────────────────────────────────────
+  // Build the wire `/definition` body from the in-memory designer model (shared
+  // by the existing-item Save and the first-save create flow). dataSource is
+  // ignored by …/definition (owned by …/data-source) but kept for completeness.
+  const buildDefinitionBody = useCallback(() => ({
+    pages: pages.map((p) => ({
+      name: p.name,
+      filters: wireFilters(p.filters || []),
+      visuals: p.visuals.map((v) => ({
+        visualType: v.type,
+        title: v.title,
+        wells: queryVisual(v).wells,
+        layout: { x: 0, y: 0, w: v.w, h: v.h },
+        format: v.format,
+        filters: wireFilters(v.filters || []),
+      })),
+    })),
+    reportFilters: wireFilters(reportFilters),
+    dataSource,
+  }), [pages, reportFilters, dataSource]);
+
   const save = useCallback(async () => {
+    // Brand-new report: route Save to the create-then-redirect flow (the
+    // /definition route has no create path for id === 'new').
+    if (isNew) {
+      setCreateErr(null);
+      setCreateName((prev) => prev || reportName.trim() || 'Untitled report');
+      setCreateOpen(true);
+      return;
+    }
     setSaveBusy(true); setSaveMsg(null);
     try {
-      const body = {
-        pages: pages.map((p) => ({
-          name: p.name,
-          visuals: p.visuals.map((v) => ({
-            visualType: v.type,
-            title: v.title,
-            wells: queryVisual(v).wells,
-            layout: { x: 0, y: 0, w: v.w, h: v.h },
-          })),
-        })),
-      };
       const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/definition`, {
-        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(buildDefinitionBody()),
       });
       const j = await r.json();
       if (j.ok) { setDirty(false); setSaveMsg({ ok: true, text: `Saved ${j.pageCount} page(s), ${j.visualCount} visual(s).` }); }
       else setSaveMsg({ ok: false, text: j.error || `HTTP ${r.status}` });
     } catch (e: any) { setSaveMsg({ ok: false, text: e?.message || String(e) }); }
     finally { setSaveBusy(false); }
-  }, [id, pages]);
+  }, [isNew, id, reportName, buildDefinitionBody]);
+
+  // ── first-save create: mint the real item, persist layout + data source, open it ──
+  // Lazily load the caller's workspaces when the create dialog opens (the report
+  // needs a home workspace, just like every other focused editor's /new gate).
+  useEffect(() => {
+    if (!createOpen || workspaces !== null) return;
+    (async () => {
+      try {
+        const r = await fetch('/api/loom/workspaces');
+        const j = await r.json();
+        if (j.ok) {
+          const list = (j.workspaces || []) as { id: string; name: string }[];
+          setWorkspaces(list);
+          setCreateWsId((prev) => prev || list[0]?.id || '');
+        } else { setWorkspaces([]); setWsErr(j.error || `HTTP ${r.status}`); }
+      } catch (e: any) { setWorkspaces([]); setWsErr(e?.message || String(e)); }
+    })();
+  }, [createOpen, workspaces]);
+
+  const createNewReport = useCallback(async () => {
+    const name = createName.trim() || reportName.trim() || 'Untitled report';
+    if (!createWsId) { setCreateErr('Select a workspace for the new report.'); return; }
+    setCreateBusy(true); setCreateErr(null);
+    try {
+      // 1. Mint the real Cosmos `report` item (generic create route).
+      const cr = await fetch('/api/cosmos-items/report', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ workspaceId: createWsId, displayName: name }),
+      });
+      const cj = await cr.json().catch(() => ({} as any));
+      if (!cr.ok || !cj?.ok || !cj.item?.id) throw new Error(cj?.error || `Could not create the report (HTTP ${cr.status}).`);
+      const newId: string = cj.item.id;
+
+      // 2. Persist the designed pages/visuals/filters against the new id.
+      const dr = await fetch(`/api/items/report/${encodeURIComponent(newId)}/definition`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(buildDefinitionBody()),
+      });
+      const dj = await dr.json().catch(() => ({} as any));
+      if (!dr.ok || !dj?.ok) throw new Error(dj?.error || `Saving the report layout failed (HTTP ${dr.status}).`);
+
+      // 3. Persist the chosen data source if one was bound in-session. Non-fatal:
+      //    a validation reject shouldn't strand the created report — the live
+      //    editor will show its honest "pick a data source" gate.
+      if (isBound(dataSource) && dataSource) {
+        await fetch(`/api/items/report/${encodeURIComponent(newId)}/data-source`, {
+          method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataSource }),
+        }).catch(() => { /* swallow — re-pickable in the live editor */ });
+      }
+
+      // 4. Open the live editor (full Save / Publish / fields now wired to a real id).
+      setDirty(false);
+      router.push(`/items/report/${encodeURIComponent(newId)}`);
+      // intentionally leave createBusy=true while we navigate away
+    } catch (e: any) {
+      setCreateErr(e?.message || String(e)); setCreateBusy(false);
+    }
+  }, [createName, reportName, createWsId, buildDefinitionBody, dataSource, router]);
+
+
+  // ── data source: persist the chosen source (PUT …/data-source) ────────────────
+  // The picker hands us the chosen ReportDataSource; we persist it on the report
+  // item's state.dataSource. For a not-yet-saved report (id === 'new') the source
+  // is held in session and committed on first Save. If the v2 data-source route
+  // isn't present we keep the selection active for the session and say so (honest
+  // gate, no silent no-op) — the default AAS source already drives /fields + /query.
+  const applyDataSource = useCallback(async (ds: ReportDataSource) => {
+    if (id === 'new') {
+      setDataSource(ds); setDsOpen(false); setDirty(true);
+      setDsNote({ ok: true, text: `Data source set (${describeSource(ds)}). Save the report to persist it.` });
+      return;
+    }
+    setDsSaving(true); setDsNote(null);
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/data-source`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ dataSource: ds }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j?.ok) {
+        setDataSource(parseDataSource(j.dataSource) ?? ds);
+        setDsNote({ ok: true, text: `Data source saved (${describeSource(ds)}).` });
+      } else {
+        setDataSource(ds);
+        setDsNote({ ok: false, text: j?.error || `Selection active for this session (data-source route returned HTTP ${r.status}).` });
+      }
+    } catch (e: any) {
+      setDataSource(ds);
+      setDsNote({ ok: false, text: `Selection active for this session (${e?.message || String(e)}).` });
+    } finally {
+      setDsSaving(false); setDsOpen(false); loadFields();
+    }
+  }, [id, loadFields]);
+
+  // ── publish ───────────────────────────────────────────────────────────────────
+  // Default target is the Azure-native Organization gallery (Cosmos snapshot);
+  // Power BI is opt-in (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi + a workspace). Either
+  // way we POST to the canonical publish route and surface its real response or an
+  // honest gate naming the missing target — never a silent success.
+  const doPublish = useCallback(async () => {
+    setPublishBusy(true); setPublishMsg(null);
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/publish`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ target: publishTarget }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j?.ok) {
+        setPublishMsg({ ok: true, text: j.message || (publishTarget === 'powerbi'
+          ? 'Published to the Power BI workspace.'
+          : 'Published to the Organization gallery (/org-reports).') });
+      } else {
+        setPublishMsg({ ok: false, text: j?.error || `Publishing requires the report publish route / target to be configured (HTTP ${r.status}).` });
+      }
+    } catch (e: any) { setPublishMsg({ ok: false, text: e?.message || String(e) }); }
+    finally { setPublishBusy(false); }
+  }, [id, publishTarget]);
 
   // ── ribbon ───────────────────────────────────────────────────────────────────
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Report', actions: [
-        { label: saveBusy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: save, disabled: saveBusy || !dirty, title: 'persist the whole report definition' },
+        { label: isNew ? 'Create report' : (saveBusy ? 'Saving…' : 'Save'), icon: <Save20Regular />, onClick: save, disabled: saveBusy || (!isNew && !dirty), title: isNew ? 'Name and create this report' : 'persist the whole report definition' },
         { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: () => { loadDetail(); loadFields(); }, title: 'reload definition + model fields' },
+      ]},
+      { label: 'Data', actions: [
+        { label: 'Data source', icon: <Database20Regular />, onClick: () => setDsOpen(true), title: `Bind data — ${describeSource(dataSource)}` },
+        { label: 'Publish', icon: <CloudArrowUp20Regular />, onClick: () => { setPublishMsg(null); setPublishOpen(true); }, disabled: isNew, title: isNew ? 'Save the report before publishing' : 'Publish to the Organization gallery' },
       ]},
       { label: 'Insert', actions: [
         { label: 'New page', icon: <Add20Regular />, onClick: addPage, title: 'add a report page' },
       ]},
     ]},
-  ], [save, saveBusy, dirty, loadDetail, loadFields]);
+  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew]);
 
   // ── left: pages ──────────────────────────────────────────────────────────────
   const leftPanel = (
@@ -670,27 +1182,29 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const main = (
     <div className={styles.canvasWrap}>
       <div className={styles.toolbar}>
-        <Badge appearance="filled" color="brand">Report · Loom-native (Azure Analysis Services)</Badge>
+        <Badge appearance="filled" color="brand">Report · Loom-native · {describeSource(dataSource)}</Badge>
         {reportName && <Subtitle2>{reportName}{page ? ` — ${page.name}` : ''}</Subtitle2>}
         <div className={styles.spacer} />
         {dirty && <Badge appearance="tint" color="warning">Unsaved</Badge>}
-        <Button appearance="primary" icon={<Save20Regular />} disabled={saveBusy || !dirty} onClick={save}>
-          {saveBusy ? 'Saving…' : 'Save'}
+        <Button appearance="primary" icon={<Save20Regular />} disabled={saveBusy || (!isNew && !dirty)} onClick={save}>
+          {isNew ? 'Create report' : (saveBusy ? 'Saving…' : 'Save')}
         </Button>
       </div>
 
       {loadErr && <MessageBar intent="error"><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
       {saveMsg && <MessageBar intent={saveMsg.ok ? 'success' : 'error'}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
+      {dsNote && <MessageBar intent={dsNote.ok ? 'success' : 'warning'}><MessageBarBody>{dsNote.text}</MessageBarBody></MessageBar>}
       {!bound && !loading && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>Bind an Azure Analysis Services model</MessageBarTitle>
-            Visuals render by querying a bound AAS tabular model with DAX — no Power BI workspace required.
-            Set <strong>state.aasServer</strong> (XMLA URI, e.g. <code>asazure://eastus2.asazure.windows.net/my-server</code>)
-            and <strong>state.aasDatabase</strong> on this item, or configure <strong>LOOM_AAS_SERVER</strong> + <strong>LOOM_AAS_DATABASE</strong>
-            {' '}(admin-plane/main.bicep). The Console UAMI must be a server admin on the AAS instance. You can still lay out pages and visuals now;
-            they will render once the model is bound.
+            <MessageBarTitle>Choose a data source</MessageBarTitle>
+            This report isn&apos;t bound to data yet. Click <strong>Data source</strong> to bind a Loom <strong>semantic model</strong>
+            {' '}(Azure-native — Synapse / lakehouse, no Power BI or Fabric required), build one from a SQL query, or bind an
+            {' '}Azure Analysis Services tabular model. You can lay out pages and visuals now; they render once a source is bound.
           </MessageBarBody>
+          <MessageBarActions>
+            <Button size="small" appearance="primary" icon={<Database20Regular />} onClick={() => setDsOpen(true)}>Data source</Button>
+          </MessageBarActions>
         </MessageBar>
       )}
 
@@ -700,28 +1214,49 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         <EmptyState
           icon={<DataBarVerticalRegular />}
           title="Design your first visual"
-          body="Pick a visualization from the Visualizations pane on the right, then drag model fields into its wells. Every visual renders live against the bound tabular model."
+          body="Pick a visualization from the Visualizations pane on the right, then drag model fields into its wells. Every visual renders live against the bound data source."
         />
       )}
 
       {!loading && page && page.visuals.length > 0 && (
-        <div className={styles.canvasGrid}>
-          {page.visuals.map((v, i) => (
-            <div key={v.id} className={mergeClasses(styles.vcard, selectedVisual === v.id && styles.vcardSel)}
-              style={{ gridColumn: `span ${Math.min(12, Math.max(2, v.w))}` }}
-              onClick={() => setSelectedVisual(v.id)}>
+        <div className={styles.canvasGrid} ref={gridRef}>
+          {page.visuals.map((v, i) => {
+            const fmt = v.format;
+            const showTitle = fmt?.showTitle !== false;
+            const titleText = (fmt?.titleText && fmt.titleText.trim()) || v.title || '(untitled)';
+            const merged = [...reportFilters, ...(page.filters || []), ...(v.filters || [])];
+            return (
+            <div key={v.id}
+              className={mergeClasses(
+                styles.vcard,
+                selectedVisual === v.id && styles.vcardSel,
+                canvas.draggingId === v.id && styles.vcardDragging,
+                canvas.dropIndicator?.id === v.id && canvas.dropIndicator.side === 'before' && styles.vcardDropBefore,
+                canvas.dropIndicator?.id === v.id && canvas.dropIndicator.side === 'after' && styles.vcardDropAfter,
+              )}
+              style={{ gridColumn: `span ${Math.min(12, Math.max(2, v.w))}`, minHeight: `${Math.max(180, v.h * 40)}px` }}
+              onClick={() => setSelectedVisual(v.id)}
+              {...canvas.getDropTargetProps(v)}>
               <div className={styles.vcardHead}>
+                <span className={styles.vcardDragHandle} title="Drag to reposition" {...canvas.getDragHandleProps(v)}>
+                  <ReOrderDotsVertical20Regular />
+                </span>
                 <Badge appearance="tint" size="small">{VISUALS.find((x) => x.type === v.type)?.label || v.type}</Badge>
-                <Text className={styles.vcardTitle} weight="semibold">{v.title || '(untitled)'}</Text>
+                {showTitle
+                  ? <Text className={styles.vcardTitle} weight="semibold">{titleText}</Text>
+                  : <div className={styles.spacer} />}
                 <Tooltip content="Move left" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronUp20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, -1); }} disabled={i === 0} /></Tooltip>
                 <Tooltip content="Move right" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronDown20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, 1); }} disabled={i === page.visuals.length - 1} /></Tooltip>
                 <Tooltip content="Remove visual" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); removeVisual(v.id); }} /></Tooltip>
               </div>
               <div className={styles.vcardBody}>
-                <VisualBody visual={v} state={visualRows[v.id]} styles={styles} />
+                <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged} />
               </div>
+              <div className={styles.resizeHandle} title="Drag to resize, or focus and use arrow keys"
+                {...canvas.getResizeHandleProps(v)} />
             </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -733,11 +1268,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   ];
   const rightPanel = (
     <div className={styles.pane}>
-      <TabList selectedValue={rightTab} onTabSelect={(_e, d) => setRightTab(d.value as 'build' | 'copilot')} size="small">
+      <TabList selectedValue={rightTab} onTabSelect={(_e, d) => setRightTab(d.value as 'build' | 'format' | 'filters' | 'copilot')} size="small">
         <Tab value="build" icon={<DataBarVerticalRegular />}>Build</Tab>
+        <Tab value="format" icon={<ColorRegular />}>Format</Tab>
+        <Tab value="filters" icon={<Filter20Regular />}>Filters</Tab>
         <Tab value="copilot" icon={<Sparkle20Regular />}>Power BI Copilot</Tab>
       </TabList>
-      {rightTab === 'copilot' ? (
+      {rightTab === 'copilot' && (
         <ReportPowerBiCopilot
           reportId={id}
           tables={tables}
@@ -747,7 +1284,28 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           onApplyVisual={applyCopilotVisual}
           onAddPage={addCopilotPage}
         />
-      ) : (
+      )}
+      {rightTab === 'format' && (
+        <FormatPane
+          visualType={selected?.type ?? null}
+          format={selected?.format}
+          onChange={(f) => { if (selected) mutateVisual(selected.id, (v) => ({ ...v, format: f })); }}
+        />
+      )}
+      {rightTab === 'filters' && (
+        <FiltersPane
+          styles={styles}
+          tables={tables}
+          reportFilters={reportFilters}
+          pageFilters={page?.filters || []}
+          visualFilters={selected ? (selected.filters || []) : null}
+          selectedTitle={selected?.title || null}
+          onReport={(next) => { setReportFilters(next); setDirty(true); }}
+          onPage={(next) => mutatePage((p) => ({ ...p, filters: next }))}
+          onVisual={(next) => { if (selected) mutateVisual(selected.id, (v) => ({ ...v, filters: next })); }}
+        />
+      )}
+      {rightTab === 'build' && (
       <>
       <Title3>Visualizations</Title3>
       <div className={styles.gallery}>
@@ -838,7 +1396,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         </Tree>
       )}
       {!fieldsLoading && tables.length === 0 && !fieldsErr && (
-        <Caption1 className={styles.muted}>No model fields. Bind an AAS model to populate the Fields tree.</Caption1>
+        <Caption1 className={styles.muted}>No model fields. Bind a data source (ribbon → Data source) to populate the Fields tree.</Caption1>
       )}
       </>
       )}
@@ -846,8 +1404,112 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   );
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
-      leftPanel={leftPanel} main={main} rightPanel={rightPanel} rightPanelLabel="Build" />
+    <>
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+        leftPanel={leftPanel} main={main} rightPanel={rightPanel} rightPanelLabel="Build" />
+
+      {/* Data source picker (semantic-model default · direct-query · AAS) */}
+      <DataSourcePicker
+        open={dsOpen}
+        reportId={id}
+        value={dataSource}
+        onChange={applyDataSource}
+        onDismiss={() => setDsOpen(false)}
+        saving={dsSaving}
+      />
+
+      {/* First-save: name + workspace → mint the real item, then open it (id==='new') */}
+      <Dialog open={createOpen} onOpenChange={(_e, d) => { if (!createBusy) setCreateOpen(d.open); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Create report</DialogTitle>
+            <DialogContent>
+              <div className={styles.section}>
+                <Caption1 className={styles.muted}>
+                  Saves this report to a workspace so its full Save / Publish / data-source actions run against a
+                  real item. Your current pages, visuals, filters{isBound(dataSource) ? ', and data source' : ''} are
+                  carried over.
+                </Caption1>
+                {wsErr && (
+                  <MessageBar intent="warning"><MessageBarBody>
+                    <MessageBarTitle>Workspaces not reachable</MessageBarTitle>{wsErr}
+                  </MessageBarBody></MessageBar>
+                )}
+                {workspaces !== null && workspaces.length === 0 && !wsErr && (
+                  <MessageBar intent="warning"><MessageBarBody>
+                    <MessageBarTitle>No workspaces yet</MessageBarTitle>
+                    Create a workspace first (Home → New workspace), then return to create this report.
+                  </MessageBarBody></MessageBar>
+                )}
+                <Field label="Name">
+                  <Input value={createName} placeholder="Untitled report"
+                    onChange={(_e, d) => setCreateName(d.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && createWsId && !createBusy) createNewReport(); }} />
+                </Field>
+                <Field label="Workspace">
+                  <Dropdown
+                    placeholder={workspaces === null ? 'Loading workspaces…' : (workspaces.length ? 'Select a workspace' : 'No workspaces available')}
+                    disabled={workspaces === null || workspaces.length === 0}
+                    value={(workspaces || []).find((w) => w.id === createWsId)?.name || ''}
+                    selectedOptions={createWsId ? [createWsId] : []}
+                    onOptionSelect={(_e, d) => setCreateWsId(d.optionValue || '')}>
+                    {(workspaces || []).map((w) => <Option key={w.id} value={w.id}>{w.name}</Option>)}
+                  </Dropdown>
+                </Field>
+                {createErr && (
+                  <MessageBar intent="error"><MessageBarBody>
+                    <MessageBarTitle>Create failed</MessageBarTitle>{createErr}
+                  </MessageBarBody></MessageBar>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" disabled={createBusy} onClick={() => setCreateOpen(false)}>Cancel</Button>
+              <Button appearance="primary" icon={createBusy ? <Spinner size="tiny" /> : <Save20Regular />}
+                disabled={createBusy || !createWsId} onClick={createNewReport}>
+                {createBusy ? 'Creating…' : 'Create report'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Publish — Azure-native Org gallery default · Power BI opt-in */}
+      <Dialog open={publishOpen} onOpenChange={(_e, d) => setPublishOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Publish report</DialogTitle>
+            <DialogContent>
+              <div className={styles.section}>
+                <Caption1 className={styles.muted}>
+                  Publish a snapshot so colleagues can view it. The default is the Azure-native
+                  Organization gallery (<code>/org-reports</code>) — no Power BI or Fabric required.
+                </Caption1>
+                <Field label="Target">
+                  <RadioGroup value={publishTarget} onChange={(_e, d) => setPublishTarget(d.value as 'org' | 'powerbi')}>
+                    <Radio value="org" label="Organization gallery (Azure-native, default)" />
+                    <Radio value="powerbi" disabled={!pbiPublishEnabled}
+                      label={pbiPublishEnabled ? 'Power BI workspace (opt-in)' : 'Power BI workspace — set NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi to enable'} />
+                  </RadioGroup>
+                </Field>
+                {publishMsg && (
+                  <MessageBar intent={publishMsg.ok ? 'success' : 'warning'}>
+                    <MessageBarBody>{publishMsg.text}</MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setPublishOpen(false)}>Close</Button>
+              <Button appearance="primary" icon={publishBusy ? <Spinner size="tiny" /> : <CloudArrowUp20Regular />}
+                disabled={publishBusy} onClick={doPublish}>
+                {publishBusy ? 'Publishing…' : 'Publish'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </>
   );
 }
 

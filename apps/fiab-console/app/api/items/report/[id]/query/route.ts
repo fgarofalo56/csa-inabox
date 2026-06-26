@@ -1,41 +1,61 @@
 /**
  * POST /api/items/report/[id]/query
  *
- * Executes a DAX query against the semantic-model that backs this report and
+ * Executes a report visual against the data source that backs this report and
  * returns the result rows. Used by the Loom-native report renderer and the
  * Visual Designer in ReportLikeEditor / ReportEditor to populate every visual
  * — no Fabric capacity required (no-fabric-dependency.md).
  *
- * Two execution backends are dispatched based on the request body:
+ * THREE execution backends are dispatched. Paths 1 + 2 are unchanged; Path 3 is
+ * the report-designer-v2 Azure-native default that needs no Analysis Services:
  *
  *   1. Power BI executeQueries (opt-in)
  *      Body: { workspaceId, datasetId, dax }
  *      Path: `executeDatasetQueries` against the Power BI REST `executeQueries`
- *      JSON endpoint. Works against ANY Power BI dataset regardless of its
- *      `loomSemanticBackend` (loom-native / powerbi / analysis-services) —
- *      dataset id is the only required reference. No Premium/Fabric capacity
- *      requirement. The Visual Designer surface only renders when a Power BI
- *      workspace + dataset are bound (an honest opt-in gate), so this route is
- *      never reached on the no-Fabric default path.
+ *      JSON endpoint. Reached ONLY when a Power BI workspace + dataset are bound
+ *      (`NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi`), so it is never on the default
+ *      no-Fabric path. Dataset id is the only required reference.
  *
- *   2. Azure Analysis Services (Azure-native default)
- *      Body: { query } | { visual: { type, field } }
- *      Path: `executeAasQuery` against the item's bound AAS server/database
- *      (state.aasServer / state.aasDatabase or LOOM_AAS_SERVER /
- *      LOOM_AAS_DATABASE). The Console UAMI must be a server admin on the AAS
- *      instance. When no binding exists the route returns 412 with the exact
- *      remediation env vars.
+ *   2. Azure Analysis Services (advanced / back-compat)
+ *      Body: { query } | { visual } | { filters }
+ *      Path: `resolveReportModel` → `{ backend:'aas', binding }` →
+ *      `executeAasQuery` over XMLA. The DAX comes from `body.query` (raw) or
+ *      `buildDaxFromVisual(body.visual)` (never hand-typed), and `body.filters`
+ *      (the structured Filters pane) are appended via `wrapDaxWithFilters`
+ *      (CALCULATETABLE) — so the user never types DAX (no-freeform-config.md).
  *
- * Both backends generate a DAX EVALUATE statement (`buildDaxFromVisual` for
- * AAS, `dax-visual-compiler.ts` for the Visual Designer) — never hand-typed,
- * keeping the no-freeform-config promise of the editor.
+ *   3. Loom-native SQL over Synapse (Azure-native DEFAULT — report-designer v2)
+ *      Body: { visual, filters }
+ *      Path: `resolveReportModel` → `{ backend:'loom-native', tables, sqlSource }`
+ *      where `sqlSource` is a Loom semantic-model (warehouse/lakehouse via SQL)
+ *      or a direct-query derived SELECT. `buildSqlFromVisual(visual, filters,…)`
+ *      compiles the field wells into a parameterized `SELECT … GROUP BY` and the
+ *      structured filters into a `WHERE`/`HAVING`; the query runs through
+ *      `synapse-sql-client.executeQuery` (dedicated pool for a warehouse source,
+ *      serverless for a lakehouse source — the resolver already pinned the
+ *      target). REAL aggregated rows, NO AAS / Power BI / Fabric, no mock
+ *      (no-vaporware.md). Identifiers are whitelisted from the resolved model and
+ *      bracket-quoted; values bind as TDS parameters (injection-safe).
  *
- * 200 OK → { ok: true, rows, dax | daxQuery }
+ *      SINGLE-TABLE LIMITATION (Power BI parity gap, honest): the wells→SQL
+ *      compiler runs ONE FROM relation, so a loom-native visual binds from a
+ *      SINGLE model table. This covers the default scaffold-from-query/table
+ *      model. A visual whose wells/filters span >1 model table is NOT silently
+ *      served from one table (which would drop the other table's fields) — it
+ *      returns an honest 400 `code:'multi-table'` naming the remediation. A real
+ *      cross-table JOIN needs relationship/foreign-key metadata that the resolver
+ *      does not yet surface to this route (TableMapSqlSource carries only a
+ *      table→relation map, no join keys); building it is a resolver change, not a
+ *      route change. AAS-backed models, whose relationships are defined in the
+ *      tabular model, answer cross-table visuals via Path 2.
+ *
+ * When no data source is configured the resolver returns an honest 412 gate
+ * naming the exact remediation ("pick a data source", or the precise AAS /
+ * Synapse env var) — never a silent empty result.
+ *
+ * 200 OK → { ok: true, rows, sql | daxQuery }
+ * 412    → { ok: false, code: 'unbound', error } (honest, actionable)
  * 4xx/5xx → { ok: false, error, status? }
- *
- * Limits: executeQueries JSON caps at 100,000 rows / 1,000,000 values per
- * request. Visual queries are SUMMARIZECOLUMNS-aggregated; raw table visuals
- * are TOPN-capped by the compiler.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -45,11 +65,24 @@ import {
   executeAasQuery,
   buildDaxFromVisual,
   flattenAasRows,
-  resolveAasBinding,
   AasError,
   type DaxVisual,
 } from '@/lib/azure/aas-client';
 import { loadModelItem } from '@/lib/azure/model-binding';
+import { executeQuery } from '@/lib/azure/synapse-sql-client';
+import {
+  resolveReportModel,
+  type FieldTable,
+  type ReportSqlSource,
+  type ResolvedReportModel,
+} from '@/lib/azure/report-model-resolver';
+import {
+  buildSqlFromVisual,
+  wrapDaxWithFilters,
+  type SqlSource,
+  type SqlSourceColumn,
+  type ReportFilterInput,
+} from '@/lib/azure/wells-to-sql';
 import {
   isLoomContentId,
   cosmosIdFromLoomId,
@@ -61,21 +94,152 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 interface QueryRequest {
-  // Power BI Visual Designer path
+  // Path 1 — Power BI Visual Designer path (opt-in)
   workspaceId?: string;
   datasetId?: string;
   dax?: string;
-  // AAS path (legacy single-field + rich field wells from the designer)
+  // Path 2 — AAS (legacy single-field + rich field wells from the designer)
   query?: string;
   visual?: DaxVisual & Record<string, unknown>;
+  // Paths 2 + 3 — structured Filters-pane predicates (report/page/visual scope,
+  // already merged by the designer). Compiled to a DAX CALCULATETABLE (AAS) or a
+  // SQL WHERE/HAVING (loom-native) server-side — the user never types DAX/SQL.
+  filters?: ReportFilterInput[];
 }
 
-function stateBinding(item: WorkspaceItem): { server?: string; database?: string } {
-  const state = (item.state || {}) as Record<string, unknown>;
+// ── loom-native bridge ────────────────────────────────────────────────────────
+//
+// The resolver hands `/query` a `ReportSqlSource` (a model-table→base-relation
+// map, or a direct-query derived SELECT) plus the Fields-pane `tables`. The
+// wells→SQL compiler runs over a SINGLE FROM relation with a flat column
+// whitelist, so we project the resolved model onto that shape: for a derived
+// source the single synthetic table; for a table-map source the ONE model table
+// the visual references (the common scaffold-from-query case is single-table).
+// Identifiers come only from the resolved model — never from the request.
+//
+// Multi-table honesty (no-vaporware): when a visual's wells/filters reference
+// MORE THAN ONE mapped model table, the single-FROM projection would silently
+// drop every field of the non-chosen table (a `resolveColumn` whitelist miss),
+// returning a partial-but-real-looking result. Instead, `toSqlSource` detects
+// that case and the route returns an honest 400 (`code:'multi-table'`) naming
+// the limitation + remediation. A genuine cross-table JOIN is intentionally NOT
+// faked here: no relationship metadata reaches this route to author one safely.
+
+/** Collect the model-table names a visual + its filters reference. */
+function referencedTables(visual: DaxVisual, filters: ReportFilterInput[] | undefined): string[] {
+  const out = new Set<string>();
+  const wells = visual.wells || {};
+  for (const arr of [wells.category, wells.values, wells.legend]) {
+    for (const w of arr || []) if (w?.table) out.add(w.table);
+  }
+  for (const f of filters || []) if (f?.table) out.add(f.table);
+  return [...out];
+}
+
+/** Map resolved Fields columns of one table to the compiler's column whitelist. */
+function whitelist(table: FieldTable | undefined): SqlSourceColumn[] {
+  return (table?.columns || []).map((c) => ({
+    table: table?.name,
+    name: c.name,
+    dataType: c.dataType,
+  }));
+}
+
+/**
+ * Outcome of projecting the resolved model onto the single-FROM SQL compiler:
+ *   • `ok`          — a bindable `SqlSource` (one model table or the derived SELECT)
+ *   • `no-columns`  — nothing bindable resolved (caller → generic 400)
+ *   • `multi-table` — the visual binds across >1 model table; the single-FROM
+ *                     compiler can't join them, so the caller returns an honest
+ *                     400 naming the tables + remediation (never a silent drop).
+ */
+type ToSqlSourceResult =
+  | { kind: 'ok'; source: SqlSource }
+  | { kind: 'no-columns' }
+  | { kind: 'multi-table'; tables: string[] };
+
+/**
+ * Build the wells→SQL `SqlSource` (FROM relation + identifier whitelist) for a
+ * loom-native report from the resolver's `ReportSqlSource` + Fields `tables`.
+ *
+ * Returns `{ kind:'no-columns' }` when nothing bindable resolves, and
+ * `{ kind:'multi-table' }` when the visual/filters span more than one mapped
+ * model table — the single-FROM compiler can only serve a single table, so the
+ * caller surfaces an honest gate rather than silently dropping the other table's
+ * fields (Power BI parity gap; see the file header + bridge comment).
+ */
+function toSqlSource(
+  tables: FieldTable[],
+  sqlSource: ReportSqlSource,
+  visual: DaxVisual,
+  filters: ReportFilterInput[] | undefined,
+): ToSqlSourceResult {
+  // direct-query: the resolver already validated the SELECT (and flattened any
+  // model into a single derived relation); expose the introspected table's
+  // columns as the whitelist.
+  if (sqlSource.mode === 'derived') {
+    const columns = whitelist(tables.find((t) => t.name === sqlSource.tableName) || tables[0]);
+    if (!columns.length) return { kind: 'no-columns' };
+    return {
+      kind: 'ok',
+      source: { from: { kind: 'derived', sql: sqlSource.sql }, columns, measures: [] },
+    };
+  }
+
+  // table-map: the wells→SQL compiler runs over ONE FROM relation, so this route
+  // can only serve a visual whose fields all come from a SINGLE model table.
+  const map = sqlSource.tableMap;
+  const mapped = Object.keys(map);
+  if (!mapped.length) return { kind: 'no-columns' };
+
+  // Honest multi-table gate (no-vaporware): a visual (or its column filters)
+  // that binds across >1 mapped model table can't be answered by a single-table
+  // SELECT, and no relationship metadata is surfaced here to author a JOIN.
+  // Rather than picking one table and silently dropping the other's fields,
+  // report the spanned tables so the caller can name the exact remediation.
+  const referenced = Array.from(
+    new Set(referencedTables(visual, filters).filter((t) => map[t])),
+  );
+  if (referenced.length > 1) {
+    return { kind: 'multi-table', tables: referenced };
+  }
+
+  // ≤1 referenced table → bind it; else the only mapped table, else the first
+  // mapped table with bindable columns (the single-table scaffold default).
+  const chosen: string =
+    referenced[0] ||
+    (mapped.length === 1 ? mapped[0] : '') ||
+    tables.map((t) => t.name).find((n) => map[n]) ||
+    mapped[0];
+
+  const relation = map[chosen];
+  if (!relation) return { kind: 'no-columns' };
+  const columns = whitelist(tables.find((t) => t.name === chosen));
+  if (!columns.length) return { kind: 'no-columns' };
   return {
-    server: typeof state.aasServer === 'string' ? state.aasServer : undefined,
-    database: typeof state.aasDatabase === 'string' ? state.aasDatabase : undefined,
+    kind: 'ok',
+    source: {
+      from: { kind: 'table', schema: relation.schema, table: relation.table },
+      columns,
+      // Loom-native measures are name-only in the Fields tree (no SQL expression
+      // is resolved for them here); value wells aggregate their bound COLUMN via
+      // the compiler's default agg, so column-backed visuals render real rows.
+      measures: [],
+    },
   };
+}
+
+/** Zip executeQuery's columnar result into object rows keyed by column alias —
+ *  the same row shape the AAS (flattenAasRows) and Power BI paths return, so the
+ *  client renders every backend identically. */
+function objectRows(columns: string[], rows: unknown[][]): Record<string, unknown>[] {
+  return rows.map((r) => {
+    const o: Record<string, unknown> = {};
+    columns.forEach((c, i) => {
+      o[c] = r[i];
+    });
+    return o;
+  });
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -83,9 +247,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   const body = (await req.json().catch(() => ({}))) as QueryRequest;
+  const filters = Array.isArray(body.filters) ? body.filters : undefined;
 
   // ------------------------------------------------------------------
-  // Path 1 — Power BI executeQueries (Visual Designer)
+  // Path 1 — Power BI executeQueries (opt-in Visual Designer path)
   // ------------------------------------------------------------------
   const workspaceId = body.workspaceId?.trim();
   const datasetId = body.datasetId?.trim();
@@ -102,10 +267,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         { status: 400 },
       );
     }
+    // Filters are applied via CALCULATETABLE when the dax is a wrappable EVALUATE.
+    const wrapped = wrapDaxWithFilters(dax, filters);
     try {
-      const result = await executeDatasetQueries(workspaceId, datasetId, dax);
+      const result = await executeDatasetQueries(workspaceId, datasetId, wrapped);
       const table = result?.results?.[0]?.tables?.[0];
-      return NextResponse.json({ ok: true, rows: table?.rows || [], dax });
+      return NextResponse.json({ ok: true, rows: table?.rows || [], dax: wrapped });
     } catch (e: any) {
       const status = e instanceof PowerBiError ? e.status : 502;
       return NextResponse.json(
@@ -116,7 +283,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   // ------------------------------------------------------------------
-  // Path 2 — Azure Analysis Services (Azure-native default)
+  // Load the report item (loom: content id OR plain Cosmos id), owner-checked.
   // ------------------------------------------------------------------
   const id = (await ctx.params).id;
   const rawQuery: string = (body?.query || '').toString().trim();
@@ -134,23 +301,99 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
   }
 
-  const { server, database } = stateBinding(item);
-  const binding = resolveAasBinding(server, database);
-  if (!binding) {
+  // ------------------------------------------------------------------
+  // Resolve the report's DATA SOURCE → backend (Azure-native default). This is
+  // the one place the new sourcing logic lives; the route just dispatches.
+  // ------------------------------------------------------------------
+  let resolved: ResolvedReportModel;
+  try {
+    resolved = await resolveReportModel(item, session.claims.oid);
+  } catch (e: any) {
+    const status = e instanceof AasError ? e.status : 502;
+    return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
+  }
+
+  // Honest gate — name the exact remediation ("pick a data source", or the
+  // precise AAS / Synapse env var), never a silent empty result.
+  if (resolved.backend === 'unbound') {
     return NextResponse.json(
-      {
-        ok: false,
-        code: 'unbound',
-        error:
-          'This report item has no Azure Analysis Services binding. Set state.aasServer ' +
-          '(XMLA URI, e.g. asazure://eastus2.asazure.windows.net/my-server) + state.aasDatabase ' +
-          'on the item, or configure LOOM_AAS_SERVER + LOOM_AAS_DATABASE environment variables. ' +
-          'Or pass workspaceId+datasetId+dax to use the Power BI executeQueries path.',
-      },
+      { ok: false, code: 'unbound', error: resolved.gate.error },
       { status: 412 },
     );
   }
 
+  // ------------------------------------------------------------------
+  // Path 3 — Loom-native SQL over Synapse (Azure-native DEFAULT)
+  // ------------------------------------------------------------------
+  if (resolved.backend === 'loom-native') {
+    if (!body?.visual) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'This report uses a Loom-native (Synapse) data source — pass a visual with field ' +
+            'wells so the query can be compiled. Raw DAX (query) only applies to an Azure ' +
+            'Analysis Services source.',
+        },
+        { status: 400 },
+      );
+    }
+    const projected = toSqlSource(resolved.tables, resolved.sqlSource, body.visual, filters);
+    // Honest parity gate: the visual binds across >1 model table and the
+    // single-FROM compiler can't join them. Name the spanned tables + the exact
+    // remediation instead of returning a silently partial result.
+    if (projected.kind === 'multi-table') {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'multi-table',
+          error:
+            `This visual binds fields from more than one table of the semantic model ` +
+            `(${projected.tables.join(', ')}). The Loom-native (Synapse) report renderer runs ` +
+            `each visual over a single model table, so cross-table visuals aren’t supported on ` +
+            `this Azure-native path yet. Use a semantic model — or a direct-query SELECT — whose ` +
+            `single table already joins these fields, or bind the report to an Azure Analysis ` +
+            `Services model where the table relationships are defined.`,
+        },
+        { status: 400 },
+      );
+    }
+    if (projected.kind === 'no-columns') {
+      return NextResponse.json(
+        { ok: false, error: 'The report’s data source has no bindable columns for this visual.' },
+        { status: 400 },
+      );
+    }
+    const sqlSource = projected.source;
+    const compiled = buildSqlFromVisual(body.visual, filters, sqlSource);
+    if (!compiled) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'The visual has no fields yet — add a category/value field to generate a runnable query.',
+        },
+        { status: 400 },
+      );
+    }
+    try {
+      const result = await executeQuery(resolved.sqlSource.target, compiled.sql, 30_000, compiled.parameters);
+      return NextResponse.json({
+        ok: true,
+        rows: objectRows(result.columns, result.rows),
+        sql: compiled.sql,
+      });
+    } catch (e: any) {
+      return NextResponse.json(
+        { ok: false, error: e?.message || String(e), status: 502 },
+        { status: 502 },
+      );
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Path 2 — Azure Analysis Services (advanced / back-compat)
+  // ------------------------------------------------------------------
   let daxQuery = rawQuery;
   if (!daxQuery && body?.visual) {
     daxQuery = buildDaxFromVisual(body.visual) ?? '';
@@ -161,9 +404,17 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       { status: 400 },
     );
   }
+  // Append the structured Filters pane as a CALCULATETABLE wrapper (no-op when
+  // there are no applicable filters or the DAX isn't a wrappable EVALUATE).
+  daxQuery = wrapDaxWithFilters(daxQuery, filters);
 
   try {
-    const result = await executeAasQuery(binding.region, binding.serverName, binding.database, daxQuery);
+    const result = await executeAasQuery(
+      resolved.binding.region,
+      resolved.binding.serverName,
+      resolved.binding.database,
+      daxQuery,
+    );
     const rows = flattenAasRows(result);
     return NextResponse.json({ ok: true, rows, daxQuery });
   } catch (e: any) {
