@@ -44,13 +44,14 @@ async function getAdfName(id: string, workspaceId: string): Promise<string | nul
   return (resource.state as any)?.adfPipelineName || null;
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
   try {
-    const adfName = await getAdfName(ctx.params.id, workspaceId);
+    const adfName = await getAdfName(id, workspaceId);
     if (!adfName) return NextResponse.json({ ok: true, triggers: [], paramSources: paramSourceAvailability() });
     const all = await listTriggers();
     const mine = all.filter((t) =>
@@ -72,9 +73,10 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
   const body = await req.json().catch(() => null) as {
@@ -84,7 +86,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   } | null;
   if (!body?.name || !body?.properties) return err('body must be { name, properties }', 400);
   try {
-    const adfName = await getAdfName(ctx.params.id, workspaceId);
+    const adfName = await getAdfName(id, workspaceId);
     if (!adfName) return err('Pipeline has no ADF backing — save first', 409);
     const type = body.properties.type || 'ScheduleTrigger';
     const pipelineRef = { referenceName: adfName, type: 'PipelineReference' as const };
@@ -121,9 +123,10 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const triggerName = req.nextUrl.searchParams.get('triggerName');
   const action = req.nextUrl.searchParams.get('action');
@@ -131,7 +134,7 @@ export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
   if (!triggerName) return err('triggerName required', 400);
   if (action !== 'start' && action !== 'stop') return err('action must be start|stop', 400);
   try {
-    const adfName = await getAdfName(ctx.params.id, workspaceId);
+    const adfName = await getAdfName(id, workspaceId);
     if (!adfName) return err('Pipeline has no ADF backing', 409);
     if (action === 'start') await startTrigger(triggerName);
     else await stopTrigger(triggerName);
@@ -141,15 +144,16 @@ export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
   }
 }
 
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const triggerName = req.nextUrl.searchParams.get('triggerName');
   if (!workspaceId) return err('workspaceId required', 400);
   if (!triggerName) return err('triggerName required', 400);
   try {
-    const adfName = await getAdfName(ctx.params.id, workspaceId);
+    const adfName = await getAdfName(id, workspaceId);
     if (!adfName) return err('Pipeline has no ADF backing', 409);
     await deleteTrigger(triggerName);
     return NextResponse.json({ ok: true });

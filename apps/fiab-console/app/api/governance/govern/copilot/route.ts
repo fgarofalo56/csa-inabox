@@ -18,6 +18,7 @@ import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { cogScope } from '@/lib/azure/cloud-endpoints';
 
 export const runtime = 'nodejs';
@@ -41,7 +42,8 @@ export async function POST(req: NextRequest) {
 
   let target;
   try {
-    target = await resolveAoaiTarget();
+    const tenantConfig = await loadTenantCopilotConfig(s.claims.oid).catch(() => null);
+    target = await resolveAoaiTarget(tenantConfig);
   } catch (e) {
     if (e instanceof NoAoaiDeploymentError) {
       return NextResponse.json(

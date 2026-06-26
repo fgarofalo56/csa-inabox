@@ -25,6 +25,14 @@
  *     `state.dataSource` existed synthesize `{kind:'aas'}` from the legacy
  *     `state.aasServer/aasDatabase` (via `fromLegacyState`) so they keep
  *     working.
+ *   • connection / file-upload / adls-file  (Get Data, WAVE 1, Azure-native) →
+ *     a reusable KV-backed Loom Connection, an uploaded file, or an existing
+ *     ADLS path. `buildConnectionExecutor` (the shared resolver) loads the
+ *     connection, enforces the per-engine env gate, resolves the KV secret, and
+ *     returns a real `ConnectionExecutor`; this route calls `introspectFields()`
+ *     to surface its real schema (INFORMATION_SCHEMA for SQL engines, sampled
+ *     document keys for Cosmos, serverless OPENROWSET `SELECT TOP 0` / delta-log
+ *     for ADLS files). No XMLA, no Fabric, no Power BI workspace.
  *
  * Rules compliance: no-fabric-dependency (the DEFAULT path is a Loom semantic
  * model over Synapse/lakehouse — never gates on a Fabric/Power BI workspace),
@@ -48,6 +56,8 @@ import { executeQuery, dedicatedTarget, serverlessTarget } from '@/lib/azure/syn
 import { readOnlySelect } from '@/lib/thread/sql-guard';
 import { fromLegacyState } from '@/lib/editors/report/report-data-source';
 import type { DirectQueryTarget } from '@/lib/editors/report/report-data-source';
+import { buildConnectionExecutor } from '@/lib/azure/report-model-resolver';
+import type { ConnectionExecutor, ReportConnType } from '@/lib/azure/report-model-resolver';
 import {
   isLoomContentId,
   cosmosIdFromLoomId,
@@ -89,6 +99,13 @@ type ResolvedReportModel =
   | { backend: 'aas'; database: string; server?: string }
   /** Loom-native schema (semantic-model content or direct-query introspection). */
   | { backend: 'loom-native'; tables: FieldTable[] }
+  /**
+   * Get Data (WAVE 1): a reusable, KV-backed Loom Connection, an uploaded file,
+   * or an existing ADLS path — resolved by the shared resolver to a real Azure
+   * data-plane `ConnectionExecutor` (introspect/query/preview). Azure-native:
+   * never a Fabric / Power BI dependency.
+   */
+  | { backend: 'connection'; connType: ReportConnType; executor: ConnectionExecutor }
   /** Genuinely unbound — drives an honest 412 gate naming the remediation. */
   | { backend: 'unbound'; gate: string };
 
@@ -245,6 +262,22 @@ async function resolveReportModel(item: WorkspaceItem, oid: string): Promise<Res
     return resolveLoadedModel(model);
   }
 
+  // Get Data (WAVE 1), Azure-native: a reusable, KV-backed Loom Connection, a
+  // user-uploaded file (staged to ADLS landing), or an existing ADLS Gen2 path.
+  // The shared resolver owns ALL backend knowledge — it loads the LoomConnection,
+  // checks the per-engine env gate, resolves the KV secret when authNeedsSecret,
+  // and returns a real `ConnectionExecutor` wired to an Azure data-plane client
+  // (azure-sql / synapse / databricks / postgres / cosmos / serverless OPENROWSET)
+  // — or an honest 'unbound' gate naming the exact connection / role / env. No
+  // new credential code, no mock data, no Fabric/Power BI on this path.
+  if (ds.kind === 'connection' || ds.kind === 'file-upload' || ds.kind === 'adls-file') {
+    const built = await buildConnectionExecutor(ds, oid);
+    if (built.backend === 'unbound') {
+      return { backend: 'unbound', gate: built.gate.error };
+    }
+    return { backend: 'connection', connType: built.connType, executor: built.executor };
+  }
+
   // Azure-native: a direct SQL query. Prefer the governed model once scaffolded.
   const modelItemId = (ds.modelItemId || '').trim();
   if (modelItemId) {
@@ -322,6 +355,31 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       database: null,
       tables: resolved.tables,
     });
+  }
+
+  // Get Data (WAVE 1): real schema via the connection's executor —
+  // INFORMATION_SCHEMA.COLUMNS (azure-sql / synapse / generic-sql / postgres /
+  // databricks), sampled-document key union (Cosmos), or a serverless OPENROWSET
+  // `SELECT TOP 0` / delta-log read (ADLS/Blob files). The per-engine env gates
+  // (postgresQueryGate / databricksConfigGate / LOOM_SYNAPSE_WORKSPACE / a bound
+  // connection) were already enforced by buildConnectionExecutor → 412 above; an
+  // introspection throw here is a genuine backend error (502). No mock, no XMLA.
+  if (resolved.backend === 'connection') {
+    try {
+      const tables = await resolved.executor.introspectFields();
+      return NextResponse.json({
+        ok: true,
+        backend: 'connection',
+        connType: resolved.connType,
+        aasServer: null,
+        aasDatabase: null,
+        database: null,
+        tables,
+      });
+    } catch (e: any) {
+      const status = e instanceof AasError ? e.status : 502;
+      return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
+    }
   }
 
   // AAS backend: real TMSCHEMA Discover against the bound model — no mock.

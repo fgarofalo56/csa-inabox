@@ -25,6 +25,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from './copilot-orchestrator';
+import type { TenantCopilotConfig } from '@/lib/types/copilot-config';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -61,6 +62,15 @@ export interface AiFnOptions {
   fields?: string[];
   /** Target language for `translate` (e.g. "Spanish", "fr-FR"). */
   targetLang?: string;
+  /**
+   * Admin-picked tenant Copilot config (Admin → Tenant settings → Copilot &
+   * Agents). When supplied it is forwarded to `resolveAoaiTarget` so an
+   * admin-selected Foundry account + chat deployment is honored even when the
+   * `LOOM_AOAI_*` env vars are unset. Threaded by the BFF callers, which load
+   * it via `loadTenantCopilotConfig(session.claims.oid)`. The library client has
+   * no session of its own, so it relies on the caller to populate this.
+   */
+  tenantConfig?: TenantCopilotConfig | null;
 }
 
 export interface AiFnUsage {
@@ -137,7 +147,7 @@ export async function callAiFn(
   input: string,
   options: AiFnOptions = {},
 ): Promise<AiFnResult> {
-  const target = await resolveAoaiTarget();
+  const target = await resolveAoaiTarget(options.tenantConfig ?? false);
   const token = await aoaiToken();
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
 

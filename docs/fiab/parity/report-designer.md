@@ -77,6 +77,14 @@ claimed live that is not.
   **Selection** right-rail panes. Every new shape persists through the existing
   PUT /definition as an **additive, sanitizer-whitelisted** key — the read-only
   viewer and the PBIR provisioner ignore unknowns, so waves 0-1 do not regress.
+- **OK Wave 4** — the committed Wave-4 build: the R / Python **script visuals**,
+  backed by a REAL Azure-native sandboxed executor (the `loom-script-runner` ACA
+  app) reached through the program's **first new BFF route** (`/script-visual`).
+  Unlike waves 1-2 (zero new routes), the script visual needs a real script
+  runtime no fold can provide, so this wave adds exactly one route + one ACA
+  executor behind an honest `LOOM_SCRIPT_RUNNER_URL` gate, while still reusing
+  /query Path-3 verbatim for its data. See **Follow-on Wave 4** for the executor,
+  the sandbox threat model, the bicep sync, and the least-privilege-UAMI caveat.
 - **GATE** — honest infra-gate: the full UI renders and the query still runs, but
   a styled Fluent MessageBar intent="warning" names the exact env var / resource
   to provision (per no-vaporware.md).
@@ -176,8 +184,8 @@ as dependency-free SVG.
 | Table | OK shipped | — | raw projection SELECT TOP N; Fluent table |
 | Matrix | OK shipped | — | rows+columns group-by; flat grid (client pivots) |
 | Slicer | OK shipped | — | SELECT DISTINCT of the field; value list |
-| R visual | MISSING Wave 4 | 4 | needs a container script runtime (no R engine in the console) — see Follow-on |
-| Python visual | MISSING Wave 4 | 4 | same container-runtime dependency |
+| R visual | OK Wave 4 | 4 | REAL sandboxed executor: the Values fields become a `dataset` DataFrame (Python) / data.frame (R); the script plots to the default device; the ACTIVE figure is captured as a PNG. POST /api/items/report/[id]/script-visual resolves rows via the existing Path-3 wells->SQL (resolveReportModel + buildSqlFromVisual + Synapse executeQuery, group+deduped) then forwards to the loom-script-runner ACA app /run. Honest GATE when LOOM_SCRIPT_RUNNER_URL unset (503 naming the env var + script-runner-app.bicep) — full UI still renders |
+| Python visual | OK Wave 4 | 4 | REAL sandboxed executor: the Values fields become a `dataset` DataFrame (Python) / data.frame (R); the script plots to the default device; the ACTIVE figure is captured as a PNG. POST /api/items/report/[id]/script-visual resolves rows via the existing Path-3 wells->SQL (resolveReportModel + buildSqlFromVisual + Synapse executeQuery, group+deduped) then forwards to the loom-script-runner ACA app /run. Honest GATE when LOOM_SCRIPT_RUNNER_URL unset (503 naming the env var + script-runner-app.bicep) — full UI still renders |
 | Decomposition tree | MISSING Wave 3 | 3 | AI visual — ADX/AOAI plan in Follow-on |
 | Key influencers | MISSING Wave 3 | 3 | AI visual — ADX/AOAI plan |
 | Q and A | MISSING Wave 3 | 3 | NL-to-query — reuses the Power BI Copilot wiring; ADX/AOAI plan |
@@ -204,6 +212,7 @@ values, legend; aggregation picker Sum/Avg/Count/Min/Max (AGGS).
 | Play axis (animation) | scatter / bubble | OK Wave 2 | 2 | a distinct category/time field drives a **client frame loop** — LoomChart steps the play-axis values (play / pause / scrub), re-projecting the already-fetched rows per frame (no per-frame re-query) |
 | Size | scatter / bubble | OK Wave 2 | 2 | folds into values[] as a real 3rd aggregate; drives the bubble `sqrt`-area radius (see Bubble) |
 | Latitude / Longitude / Size | map | GATE | 2 | the lat/long/size wells run a **real location+size aggregate** that renders; the basemap draw is the honest Azure-Maps gate (`LOOM_MAPS_BACKEND` + Azure Maps key + bicep link) — full wells UI present, gate renders |
+| Values (R / Python script visual) | R / Python visual | OK Wave 4 | 4 | scriptVisual exposes **Values only**, non-aggregated, **group + deduped** (PBI parity — duplicate rows collapse to one, default "Don't summarize"). The well field names become the `dataset` DataFrame / data.frame column names verbatim (no rename). Language toggle (R / Python) + the code editor are structured/PBI-1:1 (the editor is exempt from no-freeform-config.md exactly like the ADF expression builder) |
 
 ## (3) Format pane
 
@@ -336,7 +345,7 @@ Source: desktop-bookmarks, desktop-report-themes, end-user-export-to-pdf. The
 
 ## Backend per control (matrix)
 
-Every built (OK) control resolves to exactly one of four mechanisms — no mock
+Every built (OK) control resolves to exactly one of five mechanisms — no mock
 arrays, no dead handlers (no-vaporware.md):
 
 | Mechanism | Controls | Where |
@@ -345,6 +354,7 @@ arrays, no dead handlers (no-vaporware.md):
 | **/query to DAX** (AAS mirror) | the same wells + filters when the report is bound to an AAS tabular model | aas-dax.ts (buildDaxFromVisual) + wrapDaxWithFilters run by executeAasQuery |
 | **Client-side LoomChart** | the shipped chart shapes (bar/column/line/area/pie/donut/scatter), the multiRowCard card list, the numeric KPI tile (card/kpi/gauge), the Wave-2 **bubble `sqrt`-area radius** + **play-axis frame loop**, Format (colors/labels/axes/legend/background/border/shadow/styles), conditional formatting, Analytics reference lines + the Wave-2 **error bars / forecast band / symmetry shading**, interactions (cross-filter/highlight + the Wave-2 drillthrough navigate + report-page-tooltip popover). The distinctive geometry for combo/waterfall/funnel/gauge/KPI/treemap/ribbon/stacking remains **Wave 2** (rendered as the closest shape today with an APPROX_GEOMETRY disclosure) | loom-chart.tsx, format-pane.tsx, conditional-format, analytics-pane.tsx, interactions |
 | **/definition persistence** | pages (add/rename/duplicate/hide/size/type/background + Wave-2 drillthrough/tooltipPage config), every visual wells/format/filters/position + the Wave-2 hidden/z/locked/groupId, plus `state.content.bookmarks` (Bookmarks pane), the Selection-pane visibility/z-order, and `state.content.filterPaneFormat` (filter-pane format + Apply button) | definition/route.ts to Cosmos state.content (additive config.* + bookmarks + filterPaneFormat, all sanitizer-whitelisted) |
+| **/script-visual → loom-script-runner ACA** (Wave 4 — the **FIRST new BFF route the program adds**; waves 0-3 added **zero**) | the R / Python script visuals only: the route resolves the scriptVisual's Values rows through Path-3 (resolveReportModel + buildSqlFromVisual + Synapse executeQuery, group+deduped), writes them to `dataset.csv`, and forwards `{ language, script, dataset }` to the loom-script-runner ACA app `/run`, which executes the script in a resource-limited subprocess and returns a PNG of the active figure. Honest 503 GATE when `LOOM_SCRIPT_RUNNER_URL` is unset (names the env var + script-runner-app.bicep); the full editor still renders | app/api/items/report/[id]/script-visual/route.ts → the loom-script-runner ACA app (Dockerfile + app.py); env `LOOM_SCRIPT_RUNNER_URL` wired in platform/fiab/bicep |
 
 The Wave-1 **and Wave-2** builds add **zero** new BFF routes: the rendered
 additive wells fold into the existing category/values/legend arrays the /query
@@ -355,6 +365,15 @@ lock / z-order / undo-redo, filter-pane format) is client render or
 small-multiples / details) and the distinctive chart geometry remain deferred to
 the **Wave-2 follow-on** (below) — disclosed honestly today, not silently
 mis-rendered.
+
+**Honest disclosure (Wave 4):** the R / Python script visual is the **first new
+BFF route the whole report-designer program has added** — waves 0-3 added
+**zero**, deliberately folding into /query + /definition. The script visual needs
+a real script runtime, which no fold can provide, so Wave 4 adds exactly one new
+route (`/script-visual`) plus one Azure-native ACA executor (loom-script-runner)
+behind an honest `LOOM_SCRIPT_RUNNER_URL` gate. The route still **reuses Path-3
+verbatim** for its data (resolveReportModel + buildSqlFromVisual + Synapse
+executeQuery) — it only adds the runner hop on top.
 
 ## Follow-on waves (exact files)
 
@@ -389,24 +408,93 @@ still no new route):
   **snap-to-grid** ribbon toggle bound to the hook's `snapEnabled`; and add
   per-visual **copy / paste / duplicate** (clone wells/format/filters).
 
-**Wave 4** (runtime-dependent / third-party):
-- R / Python visuals: script-runtime container (ACA job or AML compute); honest-gated on the runtime env. Files: new lib/editors/report/script-visual.tsx + a runner route.
-- ArcGIS maps: third-party (Esri); not Azure-native — remains MISSING by design, surfaced as an explicit non-goal.
+**Wave 4 — R / Python script visuals DELIVERED** (Azure-native ACA executor +
+the program's first new BFF route; ArcGIS stays a MISSING-by-design non-goal):
+
+- **R / Python visuals — DELIVERED.** A new `map`-style DVisual (`scriptVisual`)
+  carries an absolute layout rect and is positioned by **FreeFormCanvas like any
+  other visual** (the render-prop `renderVisual`/`renderChrome` contract is
+  unchanged — the script visual is just another DVisual). The editor surface:
+  a **language toggle (R / Python)**, a **Values-only field well** (non-aggregated,
+  group + deduped), and a **code editor** — which is **PBI 1:1 parity** (Power
+  BI's R/Python visual *is* a code editor) and therefore **exempt from
+  no-freeform-config.md exactly like the ADF expression builder**; the wells and
+  the language toggle remain structured. The **Run** button POSTs to the new
+  route and renders the returned PNG on the canvas.
+  - **New BFF route** `app/api/items/report/[id]/script-visual/route.ts` — the
+    **first new route the report program adds** (waves 0-3 added zero, disclosed
+    above). It resolves the Values rows through **Path-3 verbatim**
+    (resolveReportModel + buildSqlFromVisual + Synapse `executeQuery`, **group +
+    deduped**), serializes them to `dataset.csv`, and forwards
+    `{ language, script, dataset }` to the runner. Honest **503 gate** when
+    `LOOM_SCRIPT_RUNNER_URL` is unset — the MessageBar names the env var **and**
+    `platform/fiab/bicep/modules/.../script-runner-app.bicep`; the full editor
+    still renders (no dead control).
+  - **The executor is REAL** — a dedicated Azure-native **ACA app**
+    (`loom-script-runner`), not a stub:
+    - **Container** (Dockerfile, pinned base + pinned R/Python + pinned
+      matplotlib/ggplot2 versions): a **FastAPI `/run`** endpoint running as a
+      **non-root `runner` user**, exposed via **internal ACA ingress only**
+      (`external: false`, never public).
+    - **`app.py` runs the user script in a resource-limited subprocess** and
+      returns a real PNG. The **threat model is documented honestly** (in
+      `app.py` + README): the **container is the sandbox boundary — exactly like
+      Power BI's locked container, arbitrary user code DOES run inside it**.
+      Isolation layers: (1) non-root `runner`; (2) internal-ingress-only;
+      (3) per-request **ephemeral `mkdtemp` under /tmp** (`chmod 700`,
+      `shutil.rmtree` in `finally`); (4) **scrubbed minimal env** — a fresh dict
+      (`PATH` / `HOME=tempdir` / `MPLBACKEND=Agg` / `LANG`), **NO `os.environ`,
+      NO inherited secrets**; (5) **POSIX rlimits via `preexec_fn`** —
+      `RLIMIT_CPU` ~25s, `RLIMIT_AS` ~1.5 GB, `RLIMIT_FSIZE` ~50 MB,
+      `RLIMIT_NPROC`; (6) **`start_new_session=True` + a wall-clock timeout
+      (~30s)** that `os.killpg(SIGKILL)`s the whole process group;
+      (7) **script-size cap (200 KB)**, row/cell caps, and a PNG size cap.
+  - **PBI contract mirrored** (learn.microsoft.com/power-bi/connect-data/desktop-python-visuals):
+    the Values fields become a variable named **`dataset`** — a pandas DataFrame
+    (Python) / `data.frame` (R) whose **column names are the field names** (no
+    rename); rows are **grouped + deduped** (default "Don't summarize"); the
+    script plots to the **default device** and the runner captures the **active
+    figure** as a static, non-interactive PNG (`out.png`, **96 dpi**). Caps
+    mirror PBI: ~150k rows, wall-clock timeout, fixed DPI.
+  - **bicep-sync** (no-vaporware.md): new
+    `platform/fiab/bicep/modules/.../script-runner-app.bicep` (ACA app, modeled
+    on mcp-catalog-app.bicep; `appImageTags` + a `scriptRunnerActive` var like
+    the dbt-runner pattern; sibling-module instantiation beside
+    setupOrchestrator / dbtRunner) **and** `LOOM_SCRIPT_RUNNER_URL` added to the
+    console env array in `admin-plane/main.bicep` (beside `LOOM_DBT_RUNNER_URL`).
+  - **Least-privilege-UAMI hardening caveat (carried into bicep + README,
+    honest, never silent):** the ACA app exposes its assigned UAMI to in-container
+    code via **IMDS**, so the runner MUST use a **dedicated least-privilege
+    identity — `uami-loom-script-runner` with AcrPull only and ZERO data-plane
+    roles**. Reusing the broadly-permissioned **Console UAMI is a real sandbox
+    hole**; the design flags the dedicated UAMI as the correct wiring, and any
+    interim Console-UAMI reuse is documented as a **known weakness to tighten**,
+    not hidden.
+- **ArcGIS maps: MISSING by design (non-goal).** Third-party (Esri); not
+  Azure-native — remains the **only** Wave-4 row left MISSING, surfaced as an
+  explicit non-goal, never on the default path.
 
 ## A-grade gate
 
-A-grade only when every inventory row is OK (shipped or Wave-1 / Wave-2
+A-grade only when every inventory row is OK (shipped or Wave-1 / Wave-2 / Wave-4
 committed) or a GATE (honest infra-gate), with **zero MISSING that lacks a wave +
 plan** and **zero disabled "coming soon"** controls. Every MISSING above names its
 wave and the exact file/plan; every GATE names the env var / resource to provision
 and still renders its full UI surface. Constraints honored: real backend per
-ui-parity.md (/query + /definition + wells-to-sql); no dead controls per
-no-vaporware.md (the map row is an honest Azure-Maps gate, not a disabled button);
-all-structured per no-freeform-config.md (conditional rules, analytics-line +
-error-bar + forecast config, filter types, drillthrough fields,
-and bookmark/selection toggles are pickers — never typed DAX/JSON; align /
-distribute, when wired in Wave 3, will be structured pickers too);
-Azure-native default + Power BI embed opt-in per no-fabric-dependency.md; Fluent
+ui-parity.md (/query + /definition + wells-to-sql, plus the Wave-4 /script-visual →
+loom-script-runner ACA executor that really runs the script and returns a real
+PNG); no dead controls per no-vaporware.md (the map row is an honest Azure-Maps
+gate, not a disabled button; the script visual's full editor renders behind an
+honest LOOM_SCRIPT_RUNNER_URL 503 gate); all-structured per no-freeform-config.md
+(conditional rules, analytics-line + error-bar + forecast config, filter types,
+drillthrough fields, and bookmark/selection toggles are pickers — never typed
+DAX/JSON; align / distribute, when wired in Wave 3, will be structured pickers too;
+**the only typed surface is the R/Python script visual's code editor, which is PBI
+1:1 parity — PBI's R/Python visual IS a code editor — and is therefore exempt
+exactly like the ADF expression builder**, while its wells + language toggle stay
+structured); Azure-native default + Power BI embed opt-in per
+no-fabric-dependency.md (the script runner is Azure-native ACA + the existing
+Synapse /query Path-3 — no Power BI / Fabric service); Fluent
 v9 + Loom tokens + PBI pane layout (right-rail Bookmarks/Selection tabs match the
 PBI panes) per web3-ui.md.
 
@@ -445,6 +533,19 @@ PBI panes) per web3-ui.md.
     selection / visibility / sort; the Selection pane eye-toggles visibility
     (`config.hidden`) and reorders z-order (`config.z`); both persist to
     state.content via /definition.
+- **Wave-4 script-visual receipt (no Fabric):** with
+  LOOM_DEFAULT_FABRIC_WORKSPACE UNSET and a Loom semantic-model source, a Python
+  `dataset.plot()` and an R `ggplot(dataset, ...)` each render a **real PNG on the
+  canvas** — the route resolves the Values rows via Path-3 (group + deduped),
+  POSTs `dataset.csv` to the loom-script-runner ACA `/run`, and the subprocess
+  returns the active figure as a 96-dpi PNG. With **`LOOM_SCRIPT_RUNNER_URL`
+  UNSET** the honest **503 MessageBar** shows (naming the env var +
+  script-runner-app.bicep) while the full editor — language toggle, Values well,
+  code editor — still renders. The **code editor is PBI-parity-exempt** from
+  no-freeform-config.md (PBI's R/Python visual is itself a code editor, like the
+  ADF expression builder); the wells + language toggle stay structured. The
+  script visual is just another DVisual positioned by **FreeFormCanvas** — waves
+  0-3, the data E2E, and the Copilot are extended, not regressed.
 - **No-regression:** the shipped 11-type gallery, Format / Filters / Analytics /
   Interactions / Copilot tabs, the cross-filter engine, /query + wells-to-sql,
   and the read-only viewer / PBIR provisioner ignore every additive Wave-2 key

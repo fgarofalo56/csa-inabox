@@ -91,6 +91,12 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 // `SynapsePipelineEditor` is PipelineEditorCore-backed — the same core this file
 // delegates to. 'fabric' keeps this file's existing body.
 import { AdfPipelineEditor, SynapsePipelineEditor } from './azure-services-editors';
+// A12 — dock the Pipeline Copilot in the flagship editor's right rail (same pane
+// the alias editors mount via pipeline-editor-core.tsx:755). It POSTs the real
+// SSE orchestrator at /api/items/data-pipeline/{id}/copilot (Azure-native ADF
+// backend per no-fabric-dependency.md) and applies the generated spec to THIS
+// file's canvas via onApplySpec.
+import { PipelineCopilotPane } from './pipeline-editor';
 
 const useStyles = makeStyles({
   shell: {
@@ -1184,6 +1190,37 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      rightPanelLabel="Copilot"
+      rightPanel={
+        // A12 — docked Pipeline Copilot. ItemEditorChrome renders this in a
+        // collapsible right rail (Fluent v9 CollapseToggle / CollapsedRail,
+        // per-surface persisted, dark-legible) exactly like the alias editors
+        // (pipeline-editor-core.tsx:755), so the palette|canvas|properties
+        // designer below is untouched. The pane streams real SSE from
+        // /api/items/data-pipeline/{id}/copilot and applies the generated spec
+        // to THIS file's canvas (setSpec is the spec source-of-truth at :311);
+        // mirrors applyGeneratedSpec at pipeline-editor-core.tsx:594.
+        //
+        // A12 id-mismatch fix: the canvas and EVERY real action (Save/Run/
+        // Debug/Triggers) operate on `pipelineId` — the selected pipeline,
+        // which defaults to the first in the workspace (loadList :506), NOT the
+        // route `id`. Anchoring the Copilot to the route `id` let it generate /
+        // run against a DIFFERENT pipeline than the one on the canvas. Bind the
+        // pane to the SAME `pipelineId` (falling back to the route `id` only
+        // while unbound, when `bound` is null and no request fires anyway) so
+        // Copilot always targets the pipeline the user sees.
+        <PipelineCopilotPane
+          apiBase={`/api/items/data-pipeline/${encodeURIComponent(pipelineId || id)}`}
+          bound={pipelineId || null}
+          onApplySpec={(genSpec) => {
+            setSpec(genSpec);
+            setDirty(true);
+            setSelectedActivity(null);
+            setTopTab('pipeline');
+            setTimeout(() => canvasRef.current?.fitToScreen(), 150);
+          }}
+        />
+      }
       leftPanel={
         <div className={s.treePad}>
           <div className={s.sectionHead} style={{ marginBottom: tokens.spacingVerticalS }}>

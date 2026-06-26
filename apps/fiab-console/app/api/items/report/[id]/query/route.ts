@@ -442,6 +442,57 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   // ------------------------------------------------------------------
+  // Path 4 — Get Data (WAVE 1): a connection / file-backed report source
+  // (Azure-native, opt-in NEVER required). A NEW, PARALLEL dispatch arm next to
+  // Path 2 (AAS) and Path 3 (loom-native Synapse) — the existing paths above are
+  // untouched. The resolver already loaded the LoomConnection (or resolved the
+  // ADLS/upload file path), resolved any KV secret, checked the per-engine env
+  // gate, and handed back a `ConnectionExecutor` wired to a REAL Azure data-plane
+  // client (azure-sql / synapse / databricks / postgres / cosmos / serverless
+  // OPENROWSET). Unbindable/unconfigured sources are already a 412 honest gate
+  // (handled above), so this arm is the bound, runnable case only.
+  //
+  // The route stays a thin dispatcher (same contract as the loom-native arm):
+  // require a `visual` (the user never types SQL/KQL — wells compile server-side,
+  // no-freeform-config), call `executor.runVisual`, and return the REAL object
+  // rows the executor produced plus the emitted query text under `sql` (sql /
+  // nosql engines) or `kql` (ADX). No mock data (no-vaporware), no Fabric
+  // (no-fabric-dependency). A backend execution failure is surfaced verbatim as
+  // an honest 502.
+  // ------------------------------------------------------------------
+  if (resolved.backend === 'connection') {
+    if (!body?.visual) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            'This report uses a Get Data (connection) source — pass a visual with field ' +
+            'wells so the query can be compiled. Raw DAX (query) only applies to an Azure ' +
+            'Analysis Services source.',
+        },
+        { status: 400 },
+      );
+    }
+    try {
+      const { rows, query, lang } = await resolved.executor.runVisual(body.visual, filters);
+      // Rows are already object-shaped (Record<string, unknown>[]) — identical to
+      // the AAS / Power BI / loom-native paths — so the client renders every
+      // backend the same way. The emitted query text rides under `kql` for ADX,
+      // `sql` for every SQL/NoSQL engine (per the /query response contract).
+      return NextResponse.json({
+        ok: true,
+        rows,
+        ...(lang === 'kql' ? { kql: query } : { sql: query }),
+      });
+    } catch (e: any) {
+      return NextResponse.json(
+        { ok: false, error: e?.message || String(e), status: 502 },
+        { status: 502 },
+      );
+    }
+  }
+
+  // ------------------------------------------------------------------
   // Path 2 — Azure Analysis Services (advanced / back-compat)
   // ------------------------------------------------------------------
   let daxQuery = rawQuery;

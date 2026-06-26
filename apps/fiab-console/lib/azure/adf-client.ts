@@ -665,6 +665,196 @@ export async function deleteDataFlow(name: string): Promise<void> {
 }
 
 // ============================================================
+// Data flow debug sessions — the Azure-native backend for the Mapping Data
+// Flow designer's live "Data preview" (the ADF Studio debug toggle). A debug
+// session spins up a short-lived Spark cluster on a Managed IR, accepts an
+// in-memory data-flow package (the flow + its referenced datasets / linked
+// services), and runs preview queries against any stream — the SAME thing
+// Fabric's data-flow preview does, but on plain ADF (no Fabric).
+//
+// Real ARM REST (Microsoft.DataFactory/factories, api-version 2018-06-01),
+// grounded in @azure/arm-datafactory DataFlowDebugSessions + the Az.DataFactory
+// Start/Add/Invoke/Stop cmdlet sequence:
+//   1. createDataFlowDebugSession  → long-running (202) → { sessionId }
+//   2. addDataFlowToDebugSession   → { jobVersion }
+//   3. executeDataFlowDebugCommand → long-running (202) → { status, data }
+//        where `data` is a JSON string { schema, data:[[...]] }
+//   4. deleteDataFlowDebugSession  (stop / release the cluster)
+//
+// createDataFlowDebugSession and executeDataFlowDebugCommand are async ARM
+// operations: the initial POST returns 202 with a Location (or
+// Azure-AsyncOperation) header that we poll via `pollAdfLro` until the
+// operation reaches a terminal state and the final result body is available.
+//
+// No mocks (per no-vaporware.md): preview rows come straight from the live
+// debug session. When the factory env vars are missing the route honest-gates
+// via `dataFlowDebugConfigGate()` instead of fabricating rows.
+// ============================================================
+
+/**
+ * Honest config gate for the data-flow debug path. The debug session lives
+ * under the same env-pinned factory as every other ADF op, so it needs exactly
+ * the same three env vars — reuse {@link adfConfigGate}. Returns the missing
+ * var or null when fully configured.
+ */
+export function dataFlowDebugConfigGate(): { missing: string } | null {
+  return adfConfigGate();
+}
+
+/**
+ * Follow an ADF long-running 202 response via its Location (or
+ * Azure-AsyncOperation) header, polling with GET until the operation reaches a
+ * terminal state, then return the final Response carrying the result body.
+ * Non-202 responses pass straight through (synchronous completions). Bounded by
+ * a max attempt count so a stuck operation surfaces as an honest failure rather
+ * than hanging forever. Uses `callRaw` (raw UAMI ARM token, no self-heal — the
+ * polling URL ARM hands back is already authoritative).
+ */
+async function pollAdfLro(res: Response): Promise<Response> {
+  let current = res;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (current.status !== 202) return current;
+    const pollUrl =
+      current.headers.get('location') || current.headers.get('azure-asyncoperation');
+    if (!pollUrl) return current;
+    const retryAfter = Number(current.headers.get('retry-after'));
+    const waitSec = Math.min(
+      Math.max(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2, 1),
+      15,
+    );
+    await new Promise((r) => setTimeout(r, waitSec * 1000));
+    current = await callRaw(pollUrl, { method: 'GET' });
+  }
+  return current;
+}
+
+/**
+ * (1) Start a data-flow debug session — provisions the short-lived Spark
+ * cluster. Long-running: POSTs `createDataFlowDebugSession`, follows the 202 to
+ * completion, and returns the assigned `sessionId` (used by every later call).
+ * Defaults mirror ADF Studio: General compute, 8 cores, 60-minute TTL.
+ */
+export async function createDataFlowDebugSession(opts?: {
+  timeToLiveMinutes?: number;
+  coreCount?: number;
+  computeType?: string;
+}): Promise<{ sessionId: string }> {
+  const res = await call(`${base()}/createDataFlowDebugSession?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      computeType: opts?.computeType || 'General',
+      coreCount: opts?.coreCount ?? 8,
+      timeToLive: opts?.timeToLiveMinutes ?? 60,
+    }),
+  });
+  const final = await pollAdfLro(res);
+  const out = await jsonOrThrow<{ status?: string; sessionId?: string }>(
+    final,
+    'createDataFlowDebugSession',
+  );
+  if (!out.sessionId) {
+    throw new Error(
+      `createDataFlowDebugSession returned no sessionId (status=${out.status ?? 'unknown'}).`,
+    );
+  }
+  return { sessionId: out.sessionId };
+}
+
+/**
+ * (2) Add the data-flow package to a running debug session — the in-memory
+ * flow definition plus every dataset / linked service it references and
+ * optional `debugSettings` (source row limits, parameters). Returns the
+ * `jobVersion` the session assigns to this package revision.
+ */
+export async function addDataFlowToDebugSession(req: {
+  sessionId: string;
+  dataFlow: AdfDataFlow;
+  datasets?: AdfDataset[];
+  linkedServices?: AdfLinkedService[];
+  debugSettings?: unknown;
+}): Promise<{ jobVersion?: string }> {
+  const body: Record<string, unknown> = {
+    sessionId: req.sessionId,
+    dataFlow: req.dataFlow,
+  };
+  if (req.datasets) body.datasets = req.datasets;
+  if (req.linkedServices) body.linkedServices = req.linkedServices;
+  if (req.debugSettings !== undefined) body.debugSettings = req.debugSettings;
+  const res = await call(`${base()}/addDataFlowToDebugSession?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const final = await pollAdfLro(res);
+  return jsonOrThrow<{ jobVersion?: string }>(final, 'addDataFlowToDebugSession');
+}
+
+/**
+ * (3) Execute a debug command against an added package — defaults to
+ * `executePreviewQuery`, which returns a data preview for `streamName` (a
+ * transform/source/sink name in the flow) capped at `rowLimits` (default 100,
+ * ADF Studio's preview cap). Long-running: follows the 202, then JSON-parses
+ * the command result's `data` string into `{ schema, data:[[...]] }` and maps
+ * it to `{ schema, rows }`. Real preview rows from the live session — never a
+ * mock. Some api-versions nest the payload under an `output` key; both shapes
+ * are normalized.
+ */
+export async function executeDataFlowDebugCommand(req: {
+  sessionId: string;
+  command?: string;
+  streamName: string;
+  rowLimits?: number;
+}): Promise<{ schema?: string; rows: unknown[][] }> {
+  const res = await call(`${base()}/executeDataFlowDebugCommand?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId: req.sessionId,
+      command: req.command || 'executePreviewQuery',
+      commandPayload: {
+        streamName: req.streamName,
+        rowLimits: req.rowLimits ?? 100,
+      },
+    }),
+  });
+  const final = await pollAdfLro(res);
+  const out = await jsonOrThrow<{ status?: string; data?: string }>(
+    final,
+    'executeDataFlowDebugCommand',
+  );
+  let schema: string | undefined;
+  let rows: unknown[][] = [];
+  if (out.data) {
+    try {
+      let parsed = JSON.parse(out.data) as { output?: unknown; schema?: unknown; data?: unknown };
+      // Az.DataFactory's cmdlet output nests the payload under `output`; the raw
+      // REST shape carries { schema, data } at the top level. Unwrap when present.
+      if (parsed && typeof parsed === 'object' && parsed.output && typeof parsed.output === 'object') {
+        parsed = parsed.output as typeof parsed;
+      }
+      schema = typeof parsed.schema === 'string' ? parsed.schema : undefined;
+      rows = Array.isArray(parsed.data) ? (parsed.data as unknown[][]) : [];
+    } catch {
+      // Non-JSON `data` payload — return no rows rather than fabricate any.
+      rows = [];
+    }
+  }
+  return { schema, rows };
+}
+
+/**
+ * (4) Stop a data-flow debug session — releases the Spark cluster. Idempotent /
+ * best-effort: a 200/202/204 (or an already-gone session) is success.
+ */
+export async function deleteDataFlowDebugSession(sessionId: string): Promise<void> {
+  const r = await call(`${base()}/deleteDataFlowDebugSession?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId }),
+  });
+  if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
+    throw new Error(`deleteDataFlowDebugSession failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
 // Power Query (Wrangling) Data Flows — the Azure-native backend for
 // Dataflow Gen2 (Power Query Online). The Fabric "RefreshDataflow"
 // activity does not exist in ADF's ARM schema; ADF instead models a

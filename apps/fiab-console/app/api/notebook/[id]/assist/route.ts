@@ -32,6 +32,7 @@ import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { cogScope } from '@/lib/azure/cloud-endpoints';
@@ -163,9 +164,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   // Resolve AOAI target — same resolution order as the cross-item Copilot.
+  // Honor the admin-picked tenant Copilot deployment (Admin → Tenant settings →
+  // Copilot & Agents) so the in-cell Copilot works in tenant-config-only
+  // deployments where LOOM_AOAI_ENDPOINT is unset.
   let target;
   try {
-    target = await resolveAoaiTarget();
+    const tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
+    target = await resolveAoaiTarget(tenantConfig);
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError

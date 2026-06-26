@@ -11,22 +11,42 @@
  * the server resolver (`lib/azure/report-model-resolver.ts`) mirrors. It is
  * PURE types + helpers — no React, no fetch, no Node APIs — so it can be
  * imported by the designer, the data-source picker, the report routes, and the
- * Weave "Build report" actions without dragging in client/server deps.
+ * Weave "Build report" actions without dragging in client/server deps. (The one
+ * import below is `CONN_TYPE_LABEL` from `connectable-types`, itself a pure
+ * mapping module whose only dependency on `connections-store` is `import type`,
+ * so nothing here drags in the Azure SDK / Cosmos / Node `crypto`.)
+ *
+ * ── Get Data (WAVE 1) ──────────────────────────────────────────────────────
+ * Beyond the original `semantic-model | direct-query | aas` arms, three NEW
+ * Azure-native arms let a report source from the Power BI-style "Get Data"
+ * experience — all flowing through the SAME resolver → /fields → /query →
+ * /connector-preview pipeline as the existing kinds:
+ *   • `connection`  — a reusable, KV-backed Loom Connection (Azure SQL, Synapse,
+ *                     Databricks SQL, PostgreSQL, Cosmos, ADLS/Blob files, …),
+ *                     reading a table / custom query / file / KQL inside it.
+ *   • `file-upload` — a user-uploaded file staged to ADLS landing (the existing
+ *                     POST /api/lakehouse/upload route), read via serverless
+ *                     OPENROWSET.
+ *   • `adls-file`   — an existing ADLS Gen2 path (Console MI via adls-client).
  *
  * Rules compliance:
  *  - no-fabric-dependency: the DEFAULT kind is `semantic-model` (a Loom-native
- *    model over Synapse/lakehouse via SQL, or AAS tabular). `aas` is the
- *    advanced XMLA binding; Power BI is reached only via the opt-in publish
- *    path, never from this union. Nothing here references a Fabric workspace.
- *  - no-freeform-config: the union encodes picker choices (kind, target,
- *    item ids); the only free text is the advanced AAS XMLA URI + the
- *    direct-query SQL escape hatch (guarded server-side by `sql-guard`).
+ *    model over Synapse/lakehouse via SQL, or AAS tabular). Every new arm is
+ *    Azure-native (Azure SQL / Synapse / Databricks / PostgreSQL / Cosmos / ADLS
+ *    via real data-plane clients). OneLake / Fabric / Power BI are reached only
+ *    via the opt-in publish path, never from this union.
+ *  - no-freeform-config: the union encodes picker choices (kind, connection id,
+ *    connType, mode-discriminated object ref). The only free text is the
+ *    advanced AAS XMLA URI, the direct-query SQL, and the connection's custom
+ *    `mode:'query'` / `mode:'kql'` escape hatch — all guarded server-side.
  *  - no-vaporware: `isBound()` is honest — a source is only "bound" when it is
- *    fully specified; an unbound source drives the designer's Fluent gate
- *    ("pick a data source") rather than a silent empty render.
+ *    fully specified (connection id + a complete object ref, or a file path +
+ *    format); an unbound source drives the designer's Fluent gate rather than a
+ *    silent empty render. No mock arrays live here.
  *  - back-compat: `fromLegacyState()` synthesizes `{kind:'aas'}` for reports
  *    saved before `state.dataSource` existed, so they keep working unchanged.
  */
+import { CONN_TYPE_LABEL } from '@/lib/azure/connectable-types';
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 
@@ -34,7 +54,63 @@
 export type DirectQueryTarget = 'warehouse' | 'lakehouse';
 
 /** The kinds of data source a report can bind to. */
-export type ReportDataSourceKind = 'semantic-model' | 'direct-query' | 'aas';
+export type ReportDataSourceKind =
+  | 'semantic-model' | 'direct-query' | 'aas'        // existing — UNCHANGED
+  | 'connection' | 'file-upload' | 'adls-file';      // NEW (Get Data, WAVE 1)
+
+/**
+ * Loom `ConnectionType` + forward-compat report keys. Kept a plain string in the
+ * persisted union for resilience (parse coerces unknown values), but validated
+ * against this set on read. `adx` / `mysql` are honest-gate / forward-compat —
+ * there is no bindable LoomConnection for them in Wave 1, so the resolver
+ * returns an honest gate; they exist here so the gallery + dispatch can name
+ * them without a string literal escaping the type system.
+ */
+export type ReportConnType =
+  | 'azure-sql' | 'synapse-dedicated' | 'synapse-serverless' | 'generic-sql'
+  | 'databricks-sql' | 'postgres' | 'cosmos' | 'storage-adls'
+  | 'adx' | 'mysql';
+
+/** Every valid `ReportConnType`, in dispatch order (drives `isReportConnType`). */
+export const REPORT_CONN_TYPES: readonly ReportConnType[] = [
+  'azure-sql', 'synapse-dedicated', 'synapse-serverless', 'generic-sql',
+  'databricks-sql', 'postgres', 'cosmos', 'storage-adls', 'adx', 'mysql',
+];
+
+/**
+ * Human label per `ReportConnType`. Reuses `CONN_TYPE_LABEL` (the shared
+ * connection labelling map) for every queryable type, and adds the two
+ * forward-compat keys it does not carry (`adx` / `mysql`).
+ */
+export const REPORT_CONN_TYPE_LABEL: Record<ReportConnType, string> = {
+  'azure-sql': CONN_TYPE_LABEL['azure-sql'],
+  'synapse-dedicated': CONN_TYPE_LABEL['synapse-dedicated'],
+  'synapse-serverless': CONN_TYPE_LABEL['synapse-serverless'],
+  'generic-sql': CONN_TYPE_LABEL['generic-sql'],
+  'databricks-sql': CONN_TYPE_LABEL['databricks-sql'],
+  'postgres': CONN_TYPE_LABEL['postgres'],
+  'cosmos': CONN_TYPE_LABEL['cosmos'],
+  'storage-adls': CONN_TYPE_LABEL['storage-adls'],
+  'adx': 'Azure Data Explorer',
+  'mysql': 'MySQL',
+};
+
+/**
+ * What to read inside a bound connection. Discriminated by `mode` (NOT
+ * all-optional structural arms — consumers MUST switch on `mode`). Maps the
+ * task's {schema?;table?} | {sql} | {containerPath;format} | {kql} onto explicit
+ * arms:
+ *   • `table` — SQL-family (schema + table); Cosmos (table = collection, db from
+ *               conn); ADX (table, db from conn).
+ *   • `query` — SQL-family custom SELECT (sql-guard'd upstream).
+ *   • `file`  — storage-adls connection: format is 'delta'|'parquet'|'csv'|'json'.
+ *   • `kql`   — ADX raw KQL (advanced).
+ */
+export type ReportObjectRef =
+  | { mode: 'table'; schema?: string; table: string }
+  | { mode: 'query'; sql: string }
+  | { mode: 'file'; containerPath: string; format: string }
+  | { mode: 'kql'; kql: string };
 
 /**
  * DEFAULT, Azure-native. Points at a Loom `semantic-model` item. That item is
@@ -75,11 +151,60 @@ export interface AasDataSource {
   database: string;
 }
 
+/**
+ * NEW (Get Data). A report sourced from a reusable, KV-backed Loom Connection.
+ * The resolver loads the connection (`loadConnection`), resolves its KV secret
+ * when `authNeedsSecret`, and runs a real introspect/query/preview against the
+ * mapped Azure data-plane client. No new credential code lives here — only the
+ * non-secret coordinates needed to pick which connection + object to read.
+ */
+export interface ConnectionDataSource {
+  kind: 'connection';
+  /** LoomConnection.id (GET /api/connections). '' until bound → isBound()=false. */
+  connectionId: string;
+  /** Mirror of the bound LoomConnection.type for fast client labelling/dispatch. */
+  connType: ReportConnType;
+  /** Object inside the connection to read. */
+  objectRef: ReportObjectRef;
+}
+
+/**
+ * NEW (Get Data). A user-uploaded file staged to ADLS landing via
+ * POST /api/lakehouse/upload, read tabularly through Synapse serverless
+ * OPENROWSET (Console MI).
+ */
+export interface FileUploadDataSource {
+  kind: 'file-upload';
+  /** Display name of the uploaded file. */
+  fileName: string;
+  /** 'csv'|'parquet'|'json'|'delta'. */
+  format: string;
+  /** Full https/abfss path of the staged file/folder returned by the upload route. */
+  containerPath: string;
+}
+
+/**
+ * NEW (Get Data). An existing ADLS Gen2 path (no connection needed; Console MI
+ * via adls-client), read tabularly through Synapse serverless OPENROWSET.
+ */
+export interface AdlsFileDataSource {
+  kind: 'adls-file';
+  /** Container (e.g. 'bronze'|'silver'|'gold'|'landing'). */
+  container: string;
+  /** Path within the container. */
+  path: string;
+  /** 'delta'|'parquet'|'csv'|'json'. */
+  format: string;
+}
+
 /** Discriminated union persisted on report `state.dataSource`. */
 export type ReportDataSource =
   | SemanticModelDataSource
   | DirectQueryDataSource
-  | AasDataSource;
+  | AasDataSource
+  | ConnectionDataSource   // NEW
+  | FileUploadDataSource   // NEW
+  | AdlsFileDataSource;    // NEW
 
 /** A source that may not be set yet (brand-new / never-bound report). */
 export type MaybeReportDataSource = ReportDataSource | null | undefined;
@@ -88,6 +213,21 @@ export type MaybeReportDataSource = ReportDataSource | null | undefined;
 export const DIRECT_QUERY_TARGETS: readonly DirectQueryTarget[] = ['warehouse', 'lakehouse'];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/** Narrow string coercion for defensive parsing of persisted/wire values. */
+function asStr(v: unknown): string {
+  return typeof v === 'string' ? v : '';
+}
+
+/** True when `v` is one of the recognized `ReportConnType` literals. */
+export function isReportConnType(v: unknown): v is ReportConnType {
+  return typeof v === 'string' && (REPORT_CONN_TYPES as readonly string[]).includes(v);
+}
+
+/** Coerce an arbitrary persisted value to a valid `ReportConnType` (default azure-sql). */
+function coerceReportConnType(v: unknown): ReportConnType {
+  return isReportConnType(v) ? v : 'azure-sql';
+}
 
 /**
  * The Azure-native default selection used to seed the data-source picker for a
@@ -98,6 +238,36 @@ export const DIRECT_QUERY_TARGETS: readonly DirectQueryTarget[] = ['warehouse', 
  */
 export function defaultDataSource(): SemanticModelDataSource {
   return { kind: 'semantic-model', itemId: '' };
+}
+
+/** Type guard: a Get-Data connection source. */
+export function isConnectionSource(ds: MaybeReportDataSource): ds is ConnectionDataSource {
+  return !!ds && ds.kind === 'connection';
+}
+
+/** Type guard: a file-backed source (uploaded file OR an existing ADLS path). */
+export function isFileSource(ds: MaybeReportDataSource): ds is FileUploadDataSource | AdlsFileDataSource {
+  return !!ds && (ds.kind === 'file-upload' || ds.kind === 'adls-file');
+}
+
+/**
+ * Is a connection's object reference fully specified for its `mode`? Mirrors the
+ * task's "table|sql|containerPath|kql non-empty" rule. The `!!ref.x` guards
+ * tolerate malformed persisted state that bypassed `parseDataSource`.
+ */
+function objectRefComplete(ref: ReportObjectRef): boolean {
+  switch (ref.mode) {
+    case 'table':
+      return !!ref.table && ref.table.trim().length > 0;
+    case 'query':
+      return !!ref.sql && ref.sql.trim().length > 0;
+    case 'file':
+      return !!ref.containerPath && ref.containerPath.trim().length > 0;
+    case 'kql':
+      return !!ref.kql && ref.kql.trim().length > 0;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -121,8 +291,40 @@ export function isBound(ds: MaybeReportDataSource): ds is ReportDataSource {
         typeof ds.server === 'string' && ds.server.trim().length > 0 &&
         typeof ds.database === 'string' && ds.database.trim().length > 0
       );
+    case 'connection':
+      return (
+        typeof ds.connectionId === 'string' && ds.connectionId.trim().length > 0 &&
+        !!ds.objectRef && objectRefComplete(ds.objectRef)
+      );
+    case 'file-upload':
+      return (
+        typeof ds.containerPath === 'string' && ds.containerPath.trim().length > 0 &&
+        typeof ds.format === 'string' && ds.format.trim().length > 0
+      );
+    case 'adls-file':
+      return (
+        typeof ds.container === 'string' && ds.container.trim().length > 0 &&
+        typeof ds.path === 'string' && ds.path.trim().length > 0 &&
+        typeof ds.format === 'string' && ds.format.trim().length > 0
+      );
     default:
       return false;
+  }
+}
+
+/** Short description of what a bound connection reads (the `· <…>` suffix). */
+function describeObjectRef(ref: ReportObjectRef): string {
+  switch (ref.mode) {
+    case 'table':
+      return ref.schema ? `${ref.schema}.${ref.table}` : ref.table;
+    case 'query':
+      return 'Custom query';
+    case 'file':
+      return ref.containerPath.split('/').filter(Boolean).pop() || ref.containerPath;
+    case 'kql':
+      return 'KQL query';
+    default:
+      return '';
   }
 }
 
@@ -132,6 +334,9 @@ export function isBound(ds: MaybeReportDataSource): ds is ReportDataSource {
  *   • semantic-model (bound)   → "Semantic model"
  *   • direct-query             → "Direct query · Warehouse" | "… · Lakehouse"
  *   • aas                      → "Analysis Services · <database>"
+ *   • connection               → "<ConnType label> · <table|file|query|kql>"
+ *   • file-upload              → "File · <fileName>"
+ *   • adls-file                → "ADLS · <container>/<path>"
  */
 export function describeSource(ds: MaybeReportDataSource): string {
   if (!isBound(ds)) return 'No data source';
@@ -142,8 +347,37 @@ export function describeSource(ds: MaybeReportDataSource): string {
       return `Direct query · ${ds.target === 'warehouse' ? 'Warehouse' : 'Lakehouse'}`;
     case 'aas':
       return ds.database ? `Analysis Services · ${ds.database}` : 'Analysis Services';
+    case 'connection': {
+      const label = REPORT_CONN_TYPE_LABEL[ds.connType] ?? 'Connection';
+      return `${label} · ${describeObjectRef(ds.objectRef)}`;
+    }
+    case 'file-upload':
+      return ds.fileName ? `File · ${ds.fileName}` : 'Uploaded file';
+    case 'adls-file':
+      return `ADLS · ${ds.container}${ds.path ? `/${ds.path}` : ''}`;
     default:
       return 'No data source';
+  }
+}
+
+/**
+ * Normalize an arbitrary persisted/wire value into a `ReportObjectRef`,
+ * discriminated by `mode` (defaults to `table` for unrecognized/legacy shapes).
+ */
+function parseObjectRef(value: unknown): ReportObjectRef {
+  const v = value && typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  switch (v.mode) {
+    case 'query':
+      return { mode: 'query', sql: asStr(v.sql) };
+    case 'file':
+      return { mode: 'file', containerPath: asStr(v.containerPath), format: asStr(v.format) };
+    case 'kql':
+      return { mode: 'kql', kql: asStr(v.kql) };
+    case 'table':
+    default: {
+      const schema = asStr(v.schema);
+      return { mode: 'table', table: asStr(v.table), ...(schema ? { schema } : {}) };
+    }
   }
 }
 
@@ -173,6 +407,27 @@ export function parseDataSource(value: unknown): ReportDataSource | null {
         kind: 'aas',
         server: typeof v.server === 'string' ? v.server : '',
         database: typeof v.database === 'string' ? v.database : '',
+      };
+    case 'connection':
+      return {
+        kind: 'connection',
+        connectionId: asStr(v.connectionId),
+        connType: coerceReportConnType(v.connType),
+        objectRef: parseObjectRef(v.objectRef),
+      };
+    case 'file-upload':
+      return {
+        kind: 'file-upload',
+        fileName: asStr(v.fileName),
+        format: asStr(v.format),
+        containerPath: asStr(v.containerPath),
+      };
+    case 'adls-file':
+      return {
+        kind: 'adls-file',
+        container: asStr(v.container),
+        path: asStr(v.path),
+        format: asStr(v.format),
       };
     default:
       return null;

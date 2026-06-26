@@ -73,6 +73,10 @@ import {
   AlignTop20Regular, AlignCenterVertical20Regular, AlignBottom20Regular,
   AlignSpaceEvenlyHorizontal20Regular, AlignSpaceEvenlyVertical20Regular,
   Grid20Regular, GridDots20Regular,
+  // ── wave-4 additions (R/Python script visuals) ───────────────────────────────
+  // PBI ships SEPARATE Python + R visual glyphs in the Visualizations pane; mirror
+  // that with two distinct dark-legible Fluent glyphs (Code = Python, Braces = R).
+  Code20Regular, BracesVariable20Regular,
 } from '@fluentui/react-icons';
 import type { CSSProperties, ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -158,6 +162,14 @@ import { SmartNarrative, type SmartNarrativeVisualRows } from './report/ai-visua
 import { ReportQA } from './report/ai-visuals/qa';
 import { DecompositionTree } from './report/ai-visuals/decomposition-tree';
 import { KeyInfluencers } from './report/ai-visuals/key-influencers';
+// Wave-4 R/Python SCRIPT VISUAL (Power BI parity). The editor is a code editor +
+// language toggle (PBI's R/Python visual IS a code editor — EXEMPT from
+// no-freeform-config exactly like the ADF expression builder); Run posts the real
+// /query rows + the script to a sandboxed Azure Container Apps executor (app.py)
+// and renders the returned PNG. The component owns its own surface; report-designer
+// just mounts it as one more DVisual (absolute layout, positioned by FreeFormCanvas
+// like any visual). Azure-native (ACA + the existing Synapse /query) — no Fabric.
+import { ScriptVisual } from './report/script-visual';
 import type { ReportFilterInput } from '@/lib/azure/wells-to-sql';
 
 // ── Model ───────────────────────────────────────────────────────────────────
@@ -180,7 +192,9 @@ type VisualType =
   | 'map'
   // ── wave-3 AI visuals (each REAL — AOAI smart-narrative/Q&A, real /query SQL
   //    decomposition-tree/key-influencers; rendered by ./report/ai-visuals/*) ────
-  | 'decompositionTree' | 'keyInfluencers' | 'smartNarrative' | 'qna';
+  | 'decompositionTree' | 'keyInfluencers' | 'smartNarrative' | 'qna'
+  // ── wave-4 R/Python script visual (REAL sandboxed ACA executor; ./report/script-visual) ──
+  | 'scriptVisual';
 
 type Agg = 'Sum' | 'Avg' | 'Count' | 'Min' | 'Max';
 const AGGS: Agg[] = ['Sum', 'Avg', 'Count', 'Min', 'Max'];
@@ -274,6 +288,12 @@ interface DVisual {
   z?: number;
   /** Group id (Arrange → Group). Members select + arrange together. */
   groupId?: string;
+  // ── wave-4 R/Python script visual state ──────────────────────────────────────
+  /** Script-visual config: the chosen language + the user's script text. Persisted
+   *  ADDITIVELY under config.{language,script} (like the wave-2 hidden/locked keys)
+   *  so a reload reconstructs the editor; the executor reads them at Run time. Only
+   *  set for type 'scriptVisual'. */
+  config?: { language?: 'python' | 'r'; script?: string };
 }
 
 /** A bare field reference (no aggregation / client uid) — drillthrough + tooltip wells. */
@@ -323,7 +343,7 @@ interface VisualState { rows: Array<Record<string, unknown>>; loading: boolean; 
 
 // ── Visual catalogue (gallery) ───────────────────────────────────────────────
 
-const VISUALS: { type: VisualType; label: string; icon: ReactElement; group?: 'ai' }[] = [
+const VISUALS: { type: VisualType; label: string; icon: ReactElement; group?: 'ai'; seed?: { language: 'python' | 'r' } }[] = [
   { type: 'table',        label: 'Table',          icon: <Table20Regular /> },
   { type: 'matrix',       label: 'Matrix',         icon: <Grid20Regular /> },
   { type: 'card',         label: 'Card',           icon: <TextNumberFormat20Regular /> },
@@ -344,6 +364,10 @@ const VISUALS: { type: VisualType; label: string; icon: ReactElement; group?: 'a
   { type: 'scatter',      label: 'Scatter',        icon: <DataScatter20Regular /> },
   { type: 'map',          label: 'Map',            icon: <Map20Regular /> },
   { type: 'slicer',       label: 'Slicer',         icon: <Filter20Regular /> },
+  // ── wave-4 R/Python script visuals (PBI ships separate Python + R tiles; both
+  //    produce type 'scriptVisual', distinguished by the `seed` language) ────────
+  { type: 'scriptVisual', label: 'Python visual',  icon: <Code20Regular />,          seed: { language: 'python' } },
+  { type: 'scriptVisual', label: 'R visual',       icon: <BracesVariable20Regular />, seed: { language: 'r' } },
   // ── AI visuals (real backends) ───────────────────────────────────────────────
   { type: 'smartNarrative',    label: 'Smart narrative',    icon: <Sparkle20Regular />,       group: 'ai' },
   { type: 'qna',               label: 'Q&A',                icon: <Question20Regular />,      group: 'ai' },
@@ -361,6 +385,16 @@ const VISUALS: { type: VisualType; label: string; icon: ReactElement; group?: 'a
 const AI_TYPES = new Set<VisualType>(['decompositionTree', 'keyInfluencers', 'smartNarrative', 'qna']);
 /** AI visuals that issue their OWN /query calls — excluded from the host runVisual effect. */
 const AI_SELF_QUERY = AI_TYPES;
+
+/**
+ * Wave-4 R/Python script visuals. NOT folded into CHART_TYPES / KPI_TYPES — each
+ * renders its own ./report/script-visual surface (VisualBody dispatch). Unlike the
+ * AI self-query visuals, a script visual DOES use the host's per-visual `state.rows`
+ * (the Values well's REAL non-aggregated /query rows become the executor's
+ * `dataset`), so it is deliberately NOT added to AI_SELF_QUERY — runVisual fetches
+ * its rows like any bound visual.
+ */
+const SCRIPT_TYPES = new Set<VisualType>(['scriptVisual']);
 
 /**
  * Map each chart-family visual to the SVG shape LoomChart draws today. The
@@ -421,6 +455,12 @@ const APPROX_GEOMETRY: Partial<Record<VisualType, string>> = {
  */
 function wellsFor(type: VisualType): { name: WellName; label: string }[] {
   switch (type) {
+    // ── wave-4 R/Python script visual ────────────────────────────────────────
+    case 'scriptVisual':
+      // Power BI parity: EVERY field goes to a single Values well (no aggregation).
+      // The rows are grouped + deduped and handed to the script as `dataset` whose
+      // column names are the field names — so one structured Values well is correct.
+      return [{ name: 'values', label: 'Values' }];
     // ── wave-3 AI visuals ────────────────────────────────────────────────────
     case 'smartNarrative':
     case 'qna':
@@ -568,6 +608,21 @@ function stripWell(a?: WellField[]): Array<Omit<WellField, 'uid'>> {
  */
 function queryVisual(v: DVisual) {
   const w = v.wells;
+  // Wave-4 script visual → a NON-aggregated, row-level projection (PBI hands the
+  // script a `dataset` of grouped + deduped raw rows whose column names are the
+  // field names). Emitting the wire type as 'table' makes buildSqlFromVisual take
+  // its raw-projection branch (deduped columns, no GROUP BY / no aggregation) over
+  // ONLY the Values well — exactly the PBI contract, with zero new route work.
+  if (SCRIPT_TYPES.has(v.type)) {
+    const vals = stripWell(w.values || []).map((f) => ({ ...f, aggregation: undefined }));
+    const first = vals[0];
+    const field = first?.measure
+      ? `[${first.measure}]`
+      : first?.column
+        ? `${first.table ? `'${first.table.replace(/'/g, "''")}'` : ''}[${first.column}]`
+        : undefined;
+    return { type: 'table' as VisualType, field, wells: { category: [], values: vals, legend: [] } };
+  }
   // Primary group only — small-multiples / details are excluded (Wave 2, above):
   // folding them would change the aggregation granularity without tiling a panel.
   // Wave-2 grouped wells (playAxis frame dim + map latitude/longitude) DO fold in:
@@ -862,11 +917,16 @@ interface AiVisualWiring {
   pageRows: SmartNarrativeVisualRows[];
 }
 
-function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, themeChart, ai }: {
+function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, themeChart, ai, script, reportId }: {
   visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[];
   selection?: VisualSelection | null; interactionMode?: InteractionMode;
   onSelect?: (sel: VisualSelection | null) => void;
   themeChart?: ThemeChartProps; ai?: AiVisualWiring;
+  // Wave-4 script-visual host wiring (mirrors `ai`): patches the visual's
+  // config.{script,language} and marks the report dirty (same persist path the
+  // Format/wells edits use). `reportId` is the executor target for the Run call.
+  script?: { onChange: (id: string, patch: { script?: string; language?: 'python' | 'r' }) => void };
+  reportId?: string;
 }) {
   // Wave-3 AI visuals render their OWN surface (real AOAI / real /query SQL).
   // Branched BEFORE the hasBinding/state guards: smart narrative + Q&A carry no
@@ -894,6 +954,25 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
       return <DecompositionTree wells={aiWells} queryAdHoc={ai.queryAdHoc} />;
     }
     return <KeyInfluencers wells={aiWells} queryAdHoc={ai.queryAdHoc} />;
+  }
+  // Wave-4 R/Python script visual — its own surface (code editor + language toggle
+  // + Run against the real sandboxed ACA executor, rendering the returned PNG).
+  // Branched BEFORE the hasBinding/state guards so the FULL editor renders even
+  // with no fields yet; it consumes the host's REAL non-aggregated `state.rows`
+  // (the Values well) as the executor's `dataset`. The component owns its own
+  // empty / loading / honest-503 gate (when LOOM_SCRIPT_RUNNER_URL is unset).
+  if (SCRIPT_TYPES.has(visual.type)) {
+    const onScriptChange = script?.onChange;
+    return (
+      <ScriptVisual
+        reportId={ai?.reportId ?? reportId ?? ''}
+        language={(visual.config?.language as 'python' | 'r') || 'python'}
+        script={visual.config?.script || ''}
+        rows={state?.rows || []}
+        valueFields={visual.wells.values || []}
+        onChange={onScriptChange ? (p) => onScriptChange(visual.id, p) : () => {}}
+      />
+    );
   }
   if (!hasBinding(visual)) {
     return <Caption1 className={styles.muted}>Add a field from the Fields pane to render this {visual.type}.</Caption1>;
@@ -1633,6 +1712,15 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               locked: v.config?.locked === true || v.config?.layout?.locked === true,
               z: Number.isFinite(Number(v.config?.layout?.z)) ? Number(v.config.layout.z) : undefined,
               groupId: typeof v.config?.groupId === 'string' ? v.config.groupId : undefined,
+              // wave-4 script-visual config — read defensively from the persisted
+              // (additively-whitelisted) config.language / config.script. Only
+              // materializes for a script visual; a no-op for every other type.
+              config: ((v.type as VisualType) === 'scriptVisual')
+                ? {
+                    language: v.config?.language === 'r' ? 'r' : 'python',
+                    script: typeof v.config?.script === 'string' ? v.config.script : '',
+                  }
+                : undefined,
             };
           }),
         };
@@ -1812,7 +1900,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (v.id === vid ? fn(v) : v)) }));
   }, [mutatePage]);
 
-  const addVisual = useCallback((type: VisualType) => {
+  const addVisual = useCallback((type: VisualType, seed?: { language: 'python' | 'r' }) => {
     const isKpi = KPI_TYPES.has(type);
     mutatePage((p) => {
       const dims = pageDims(p);
@@ -1824,11 +1912,16 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       const x = Math.min(dims.width - w, 40 + (n % 6) * 28);
       const y = Math.min(dims.height - h, 40 + (n % 6) * 28);
       const z = p.visuals.reduce((m, vv) => Math.max(m, (vv.layout?.z ?? -1)), -1) + 1;
+      // A seeded script visual carries its chosen language label + an empty script.
+      const title = seed
+        ? (seed.language === 'r' ? 'R visual' : 'Python visual')
+        : (VISUALS.find((x) => x.type === type)?.label || type);
       const v: DVisual = {
-        id: uid('v'), type, title: VISUALS.find((x) => x.type === type)?.label || type,
+        id: uid('v'), type, title,
         wells: { category: [], values: [], legend: [] },
         w: isKpi ? 3 : 6, h: isKpi ? 3 : 4,
         layout: { x: Math.max(0, x), y: Math.max(0, y), w, h, z },
+        ...(seed ? { config: { language: seed.language, script: '' } } : {}),
       };
       setSelectedVisual(v.id);
       return { ...p, visuals: [...p.visuals, v] };
@@ -2273,6 +2366,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         ...(v.hidden ? { hidden: true } : {}),
         ...(v.locked ? { locked: true } : {}),
         ...(v.groupId ? { groupId: v.groupId } : {}),
+        // Wave-4 script-visual config — ADDITIVE, same as the wave-2 keys above.
+        // language round-trips back to config.language; the script text to
+        // config.script. Omitted for every non-script visual (config is undefined).
+        ...(v.config?.language ? { language: v.config.language } : {}),
+        ...(v.config?.script ? { script: v.config.script } : {}),
       })),
     })),
     reportFilters: wireFilters(reportFilters),
@@ -2500,6 +2598,16 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     reportId: id, tables, queryAdHoc, onApplyVisual: applyCopilotVisual, pageRows: narrativePageRows,
   }), [id, tables, queryAdHoc, applyCopilotVisual, narrativePageRows]);
 
+  // ── wave-4: script-visual host wiring (mirrors aiWiring) ──────────────────────
+  // The script visual's editor edits live here: a language toggle / code change
+  // patches the visual's config.{language,script}. mutateVisual marks the report
+  // dirty (same persist path Format + wells use), so the edit rides the existing
+  // Save (PUT …/definition) — additive config keys, no new persistence work here.
+  const scriptWiring = useMemo(() => ({
+    onChange: (vid: string, patch: { script?: string; language?: 'python' | 'r' }) =>
+      mutateVisual(vid, (v) => ({ ...v, config: { ...(v.config || {}), ...patch } })),
+  }), [mutateVisual]);
+
   // ── ribbon ───────────────────────────────────────────────────────────────────
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -2698,7 +2806,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     return (
       <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged}
         selection={selection} interactionMode={interactionMode}
-        themeChart={themeChart} ai={aiWiring}
+        themeChart={themeChart} ai={aiWiring} script={scriptWiring} reportId={id}
         onSelect={(sel) => setSelection(sel)} />
     );
   };
@@ -2945,18 +3053,31 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       <>
       <Title3>Visualizations</Title3>
       <div className={styles.gallery}>
-        {VISUALS.filter((vt) => vt.group !== 'ai').map((vt) => (
-          <Tooltip key={vt.type} content={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`} relationship="label">
-            <button type="button"
-              aria-label={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`}
-              aria-pressed={selected?.type === vt.type}
-              className={mergeClasses(styles.galleryBtn, selected?.type === vt.type && styles.galleryBtnActive)}
-              onClick={() => (selected ? mutateVisual(selected.id, (v) => ({ ...v, type: vt.type })) : addVisual(vt.type))}>
-              <span className={mergeClasses(styles.galleryIcon, selected?.type === vt.type && styles.galleryIconActive)} aria-hidden>{vt.icon}</span>
-              <Caption1 className={styles.galleryLabel}>{vt.label}</Caption1>
-            </button>
-          </Tooltip>
-        ))}
+        {VISUALS.filter((vt) => vt.group !== 'ai').map((vt) => {
+          // Two tiles share type 'scriptVisual' (Python / R) — distinguish them by
+          // the seed language for the React key AND the active state, and carry the
+          // seed into add / type-change so the right language is applied.
+          const active = selected?.type === vt.type
+            && (!vt.seed || ((selected?.config?.language as 'python' | 'r') || 'python') === vt.seed.language);
+          const key = vt.seed ? `${vt.type}:${vt.seed.language}` : vt.type;
+          return (
+            <Tooltip key={key} content={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`} relationship="label">
+              <button type="button"
+                aria-label={selected ? `Change to ${vt.label}` : `Add a ${vt.label}`}
+                aria-pressed={active}
+                className={mergeClasses(styles.galleryBtn, active && styles.galleryBtnActive)}
+                onClick={() => (selected
+                  ? mutateVisual(selected.id, (v) => ({
+                      ...v, type: vt.type,
+                      ...(vt.seed ? { config: { ...(v.config || {}), language: vt.seed.language, script: v.config?.script ?? '' } } : {}),
+                    }))
+                  : addVisual(vt.type, vt.seed))}>
+                <span className={mergeClasses(styles.galleryIcon, active && styles.galleryIconActive)} aria-hidden>{vt.icon}</span>
+                <Caption1 className={styles.galleryLabel}>{vt.label}</Caption1>
+              </button>
+            </Tooltip>
+          );
+        })}
       </div>
 
       {/* AI visuals (real backends) — smart narrative + Q&A over Azure OpenAI;

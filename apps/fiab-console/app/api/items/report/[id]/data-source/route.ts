@@ -28,6 +28,15 @@
  *     no DML/DDL — the only free-text escape hatch, per no-freeform-config);
  *     `target` is the warehouse|lakehouse Synapse path.
  *   • aas            → both `server` (XMLA URI) + `database` are required.
+ *   • connection     → (Get Data) `connectionId` must resolve to an owned, KV-
+ *     backed Loom Connection (`loadConnection`, tenant-scoped); `connType` is
+ *     normalized off the LOADED connection.type (non-queryable types — event-hub
+ *     / service-bus / key-vault — are rejected, never persisted as a dead ref);
+ *     `objectRef` is validated by `mode` (table|file|kql structural, query via
+ *     the same `readOnlySelect` guard).
+ *   • file-upload    → (Get Data) `containerPath` (the path returned by the
+ *     existing /api/lakehouse/upload route) + a supported `format`.
+ *   • adls-file      → (Get Data) `container` + `path` + a supported `format`.
  *
  * Session-gated; owner-checked against the parent workspace's tenant. The
  * report id may be a plain Cosmos id OR a `loom:<cosmosId>` content-backed id
@@ -55,8 +64,12 @@ import { readOnlySelect } from '@/lib/thread/sql-guard';
 import {
   parseDataSource,
   fromLegacyState,
+  isReportConnType,
   type ReportDataSource,
+  type ReportConnType,
+  type ReportObjectRef,
 } from '@/lib/editors/report/report-data-source';
+import { loadConnection } from '@/lib/azure/connections-store';
 import {
   isLoomContentId,
   cosmosIdFromLoomId,
@@ -71,6 +84,72 @@ export const dynamic = 'force-dynamic';
 type ValidationResult =
   | { ok: true; dataSource: ReportDataSource }
   | { ok: false; status: number; error: string };
+
+/** A validated connection object-ref ready to persist, or a structured rejection. */
+type ObjectRefResult =
+  | { ok: true; ref: ReportObjectRef }
+  | { ok: false; status: number; error: string };
+
+/**
+ * Tabular file formats the serverless-OPENROWSET / ADLS read path supports.
+ * Shared by the file-upload, adls-file, and connection `mode:'file'` branches —
+ * keep in sync with the resolver's OPENROWSET dispatch (delta via
+ * buildDeltaOpenRowsetSql, parquet/csv/json via generic OPENROWSET).
+ */
+const FILE_FORMATS = new Set(['csv', 'parquet', 'json', 'delta']);
+
+/**
+ * Validate + normalize a connection's `ReportObjectRef`, discriminated by `mode`.
+ * Pure structural checks except `mode:'query'`, which is run through the same
+ * `readOnlySelect` guard as `direct-query` (the single free-text escape hatch,
+ * per no-freeform-config). Returns the canonical ref to persist.
+ */
+function validateObjectRef(ref: ReportObjectRef | undefined): ObjectRefResult {
+  if (!ref || typeof ref !== 'object') {
+    return { ok: false, status: 400, error: 'Pick an object (table, file, or query) inside the connection.' };
+  }
+  switch (ref.mode) {
+    case 'table': {
+      const table = (ref.table || '').trim();
+      if (!table) {
+        return { ok: false, status: 400, error: 'Pick a table (or collection) for this connection source.' };
+      }
+      const schema = (ref.schema || '').trim();
+      return { ok: true, ref: { mode: 'table', table, ...(schema ? { schema } : {}) } };
+    }
+    case 'query': {
+      const guard = readOnlySelect(ref.sql);
+      if (!guard.ok) {
+        return { ok: false, status: 400, error: `Connection custom query: ${guard.error}` };
+      }
+      return { ok: true, ref: { mode: 'query', sql: guard.sql } };
+    }
+    case 'file': {
+      const containerPath = (ref.containerPath || '').trim();
+      const format = (ref.format || '').trim().toLowerCase();
+      if (!containerPath) {
+        return { ok: false, status: 400, error: 'The file object requires a container path inside the connection.' };
+      }
+      if (!FILE_FORMATS.has(format)) {
+        return {
+          ok: false,
+          status: 400,
+          error: `Unsupported file format "${ref.format}". Supported: ${[...FILE_FORMATS].join(', ')}.`,
+        };
+      }
+      return { ok: true, ref: { mode: 'file', containerPath, format } };
+    }
+    case 'kql': {
+      const kql = (ref.kql || '').trim();
+      if (!kql) {
+        return { ok: false, status: 400, error: 'The KQL object requires a query.' };
+      }
+      return { ok: true, ref: { mode: 'kql', kql } };
+    }
+    default:
+      return { ok: false, status: 400, error: 'Unrecognized connection object reference.' };
+  }
+}
 
 /**
  * Validate + normalize a parsed `ReportDataSource` against the caller's tenant.
@@ -144,6 +223,105 @@ async function validateDataSource(
       return { ok: true, dataSource: { kind: 'aas', server, database } };
     }
 
+    case 'connection': {
+      // Get Data — a report sourced from a reusable, KV-backed Loom Connection.
+      // The binding is real: the connection must exist + be owned by the caller
+      // (loadConnection is tenant-scoped). The connType is normalized off the
+      // LOADED connection (never trusted from the client), and non-queryable
+      // connection types (event-hub / service-bus / key-vault) are rejected
+      // here with an honest error rather than persisted as a dead source.
+      const connectionId = (ds.connectionId || '').trim();
+      if (!connectionId) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Pick a connection for this report in the Get data panel, or add one with the connection wizard.',
+        };
+      }
+      const conn = await loadConnection(tenantId, connectionId);
+      if (!conn) {
+        return {
+          ok: false,
+          status: 404,
+          error:
+            `The selected connection (${connectionId}) was not found in your workspace. Pick an existing ` +
+            'connection in the Get data panel, or add one with the connection wizard.',
+        };
+      }
+      // Normalize connType from the real connection.type. Types outside the
+      // report-queryable set (event-hub / service-bus / key-vault) are not
+      // valid report sources.
+      const loadedType = conn.type;
+      if (!isReportConnType(loadedType)) {
+        return {
+          ok: false,
+          status: 400,
+          error:
+            `Connections of type "${conn.type}" cannot be used as a report source. Supported: Azure SQL, ` +
+            'Synapse, Databricks SQL, PostgreSQL, Cosmos DB, ADLS/Blob files.',
+        };
+      }
+      const connType: ReportConnType = loadedType;
+      const refResult = validateObjectRef(ds.objectRef);
+      if (!refResult.ok) {
+        return { ok: false, status: refResult.status, error: refResult.error };
+      }
+      return {
+        ok: true,
+        dataSource: { kind: 'connection', connectionId, connType, objectRef: refResult.ref },
+      };
+    }
+
+    case 'file-upload': {
+      // A user-uploaded file already staged to ADLS landing by the existing
+      // POST /api/lakehouse/upload route — we persist only the returned path +
+      // format (read tabularly via serverless OPENROWSET in the resolver).
+      const containerPath = (ds.containerPath || '').trim();
+      const format = (ds.format || '').trim().toLowerCase();
+      const fileName = (ds.fileName || '').trim();
+      if (!containerPath) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'The uploaded-file source requires a staged file path. Upload a file in the Get data panel first.',
+        };
+      }
+      if (!FILE_FORMATS.has(format)) {
+        return {
+          ok: false,
+          status: 400,
+          error: `Unsupported file format "${ds.format}". Supported: ${[...FILE_FORMATS].join(', ')}.`,
+        };
+      }
+      return { ok: true, dataSource: { kind: 'file-upload', fileName, format, containerPath } };
+    }
+
+    case 'adls-file': {
+      // An existing ADLS Gen2 path (Console MI via adls-client; no connection
+      // needed) — read tabularly via serverless OPENROWSET in the resolver.
+      const container = (ds.container || '').trim();
+      const path = (ds.path || '').trim();
+      const format = (ds.format || '').trim().toLowerCase();
+      if (!container) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'The ADLS file source requires a container (e.g. bronze, silver, gold, landing).',
+        };
+      }
+      if (!path) {
+        return { ok: false, status: 400, error: 'The ADLS file source requires a path within the container.' };
+      }
+      if (!FILE_FORMATS.has(format)) {
+        return {
+          ok: false,
+          status: 400,
+          error: `Unsupported file format "${ds.format}". Supported: ${[...FILE_FORMATS].join(', ')}.`,
+        };
+      }
+      return { ok: true, dataSource: { kind: 'adls-file', container, path, format } };
+    }
+
     default:
       return { ok: false, status: 400, error: 'Unrecognized data source.' };
   }
@@ -189,7 +367,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         ok: false,
         error:
           'Provide a data source with kind "semantic-model" (default, Azure-native), ' +
-          '"direct-query", or "aas".',
+          '"direct-query", "aas", or a Get Data source ("connection", "file-upload", "adls-file").',
       },
       { status: 400 },
     );

@@ -234,7 +234,7 @@ param frontDoorEnabled bool = false
 
 // ---------- Container image tags + Loom Console env-var wiring ----------
 
-@description('Container image tag per app (loom-console, loom-mcp, loom-mcp-bridge, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim, loom-copilot-maf). Default v0.1; override per release.')
+@description('Container image tag per app (loom-console, loom-mcp, loom-mcp-bridge, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim, loom-copilot-maf, loom-setup-orchestrator, loom-script-runner). Default v0.1; override per release.')
 param appImageTags object = {
   console: 'v0.1'
   mcp: 'v0.1'
@@ -245,6 +245,11 @@ param appImageTags object = {
   directLake: 'v0.1'
   maf: 'v0.1'
   setupOrchestrator: 'v0.1'
+  // loom-script-runner — sandboxed R/Python script-visual executor (wave-4) for
+  // the report-designer. Real ACA app (script-runner-app.bicep) that runs the
+  // user's Power BI-parity R/Python visual code in a resource-limited subprocess
+  // and returns a static PNG. Pinned image version.
+  scriptRunner: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -305,6 +310,24 @@ var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary 
 
 // dbt-runner Container App is only meaningful on Container Apps + when apps deploy.
 var dbtRunnerActive = dbtRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// ── Script-visual executor (wave-4) — deploy toggle ───────────────────────────
+// scriptRunnerEnabled (var, default true): deploys the loom-script-runner ACA app
+// (script-runner-app.bicep) that backs the report-designer's Power BI-parity
+// R/Python script visual. Container Apps only; an honest no-op on AKS boundaries
+// (GCC-High / IL5), where the workload would deploy via the cluster GitOps path
+// instead. Implemented as a `var` rather than a `param` for the SAME reason as
+// loomConsoleTelemetryEnabled above: admin-plane/main.bicep is at the hard ARM
+// 256-parameter cap (a real deploy blocker), so a new top-level toggle param
+// would push the template to 257 params and fail `az bicep build` / deployment.
+// A per-deploy opt-out param returns once the program-level param-object
+// consolidation frees admin-plane budget.
+var scriptRunnerEnabled = true
+
+// The script-runner ACA app only deploys on the Container Apps boundaries
+// (Commercial / GCC) when explicitly enabled + apps deploy (it needs the
+// loom-script-runner image in ACR). On AKS boundaries it is a no-op here.
+var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')
 param loomVersion string = '0.45.0'
@@ -2686,6 +2709,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Container App. Empty → the editor surfaces an honest gate naming
             // this var; the Databricks target still works.
             { name: 'LOOM_DBT_RUNNER_URL', value: dbtRunnerActive ? dbtRunner!.outputs.dbtRunnerInternalEndpoint : '' }
+            // Report-designer R/Python script visual (wave-4) — the sandboxed
+            // executor the /api/report/script-visual BFF route POSTs the user's
+            // R/Python code + dataset.csv to, getting back a static PNG (Power BI
+            // R/Python-visual parity; the executor mirrors PBI's grouped/deduped
+            // `dataset`, active-figure capture, row/script/time caps). Backed by
+            // the internal-ingress loom-script-runner ACA app (script-runner-app
+            // .bicep). Empty → the /script-visual BFF returns an honest 503 naming
+            // THIS var + that bicep module; the rest of the report designer
+            // (free-form canvas, native visuals, /query data E2E, Copilot) is
+            // unaffected. Azure-native (ACA + the existing Synapse /query path);
+            // no Fabric / Power BI service is required.
+            { name: 'LOOM_SCRIPT_RUNNER_URL', value: scriptRunnerActive ? 'https://${scriptRunner!.outputs.fqdn}' : '' }
             // Governance → Data quality (run/results/monitors) and Master data
             // management (match/merge → golden records) REUSE the Databricks /
             // Synapse / Kusto bindings above (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,
@@ -3870,6 +3905,91 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// Script-visual executor (wave-4) — loom-script-runner Container App.
+// Backs the report-designer's Power BI-parity R/Python script visual.
+// The Console's /api/report/script-visual BFF route POSTs the user's
+// R/Python code + the visual's grouped/deduped dataset (as dataset.csv)
+// here; the runner executes the script in a REAL resource-limited
+// subprocess (PBI parity: `dataset` DataFrame/data.frame, active-figure
+// capture → static PNG, row/script-size/wall-clock caps) and returns the
+// PNG. Internal ingress only (external:false — NEVER public), scales to
+// zero between runs. Azure-native (Container Apps); no Fabric/Power BI.
+//
+// SANDBOX THREAT MODEL (honest, mirrors PBI's locked container): the
+// CONTAINER is the boundary — arbitrary user code DOES run inside it.
+// Isolation is enforced by script-runner-app.bicep + app.py: non-root
+// `runner` user, internal ingress, per-request ephemeral mkdtemp (700,
+// rmtree in finally), a SCRUBBED minimal env (no inherited secrets),
+// POSIX rlimits (CPU/AS/FSIZE/NPROC), start_new_session + wall-clock
+// timeout that SIGKILLs the process group, and script/row/PNG caps.
+//
+// ⚠ IDENTITY HARDENING — RESOLVED (sandbox hole closed). An ACA app exposes
+// its assigned UAMI to in-container code via the IMDS endpoint, so arbitrary
+// user script code can mint that identity's tokens. `scriptRunnerUamiId` MUST
+// therefore be a LEAST-PRIVILEGE identity — AcrPull only, ZERO data-plane roles.
+// We provision a DEDICATED `uami-loom-script-runner` below (NOT the broadly-
+// permissioned Console UAMI): it is created with no role assignments other than
+// a single AcrPull grant on the admin-plane ACR, so the worst a sandbox escape
+// can mint via IMDS is an image-pull token — it can reach neither Storage,
+// Cosmos, nor ARM. This closes the hole called out in script-runner-app.bicep +
+// app.py's threat model. (The container is still the security boundary —
+// arbitrary code runs inside it, exactly like Power BI's locked R/Python
+// container — but the blast radius of its assigned identity is now nil.)
+// =====================================================================
+
+// Dedicated least-privilege identity for the script-visual executor. Kept OUT
+// of identity.bicep (which holds the app UAMIs) precisely so NO data-plane role
+// is ever attached to it. Always created when the runner is active; only the
+// AcrPull grant below is gated on !skipRoleGrants (reconcile-pass convention).
+resource scriptRunnerUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (scriptRunnerActive) {
+  name: 'uami-loom-script-runner-${location}'
+  location: location
+  tags: complianceTags
+}
+
+// AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) on the admin-plane ACR — the
+// runner identity's ONE and ONLY role. The existing-ref recomputes the registry
+// module's deterministic name (take('acrloom${uniqueString(resourceGroup().id)}',
+// 50)) rather than reading registry.outputs.acrName, because a roleAssignment's
+// scope/name must be calculable at deployment START (a module output is a runtime
+// value → BCP120). dependsOn the registry module keeps ordering correct.
+// guid()-named ⇒ idempotent; gated on !skipRoleGrants so reconcile redeploys
+// (or deployers lacking User Access Administrator) are a no-op.
+resource acrForScriptRunner 'Microsoft.ContainerRegistry/registries@2025-04-01' existing = {
+  name: take('acrloom${uniqueString(resourceGroup().id)}', 50)
+}
+
+resource scriptRunnerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (scriptRunnerActive && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  name: guid(acrForScriptRunner.id, scriptRunnerUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: scriptRunnerUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+module scriptRunner 'script-runner-app.bicep' = if (scriptRunnerActive) {
+  name: 'script-runner'
+  params: {
+    name: 'loom-script-runner'
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    // Dedicated AcrPull-only identity (zero data-plane roles) provisioned just
+    // above. This is the UAMI exposed to user script code via IMDS, so the only
+    // token it can ever mint is an ACR image-pull token.
+    scriptRunnerUamiId: scriptRunnerUami.id
+    acrLoginServer: registry.outputs.acrLoginServer
+    image: '${registry.outputs.acrLoginServer}/loom-script-runner:${appImageTags.scriptRunner}'
+    targetPort: 8080
     complianceTags: complianceTags
   }
 }

@@ -97,6 +97,16 @@ const VISUAL_TYPES = new Set([
   // and PBIR provisioner ignore unknown types, and the loom-native renderer
   // already falls back to a table for any type it doesn't recognize.
   'smartNarrative', 'qna', 'decompositionTree', 'keyInfluencers',
+  // ── wave-4 script visual ────────────────────────────────────────────────────
+  // The R / Python script visual. Like the wave-3 AI types above, it MUST be
+  // whitelisted here or `buildDefinitionBody`'s `visualType: 'scriptVisual'` is
+  // coerced to 'table' (line below) — and the designer's read path keys the
+  // saved script config on `v.type === 'scriptVisual'`, so a coerced type would
+  // SILENTLY drop the persisted language + script on reload (no-vaporware:
+  // persistence must be real). Round-tripping the type is SAFE for the other
+  // readers: the read-only viewer + PBIR provisioner ignore unknown types, and
+  // the loom-native renderer falls back to a table for any type it doesn't know.
+  'scriptVisual',
 ]);
 const AGGS = new Set(['Sum', 'Avg', 'Count', 'Min', 'Max', 'None']);
 
@@ -204,6 +214,8 @@ const MAX_BOOKMARKS = 64;            // bookmarks per report
 const MAX_BOOKMARK_PAGES = 200;      // pageId-keyed filter buckets in a bookmark
 const MAX_OBJECT_KEYS = 1000;        // selection / visibility / z-order map size
 const MAX_GROUP_STR = 200;           // groupId length (Selection-pane group)
+// ── wave-4 clamp ──────────────────────────────────────────────────────────────
+const MAX_SCRIPT = 200_000;          // script-visual code body (mirrors the runner's 200 KB cap)
 
 /** A single structured filter, post-`wireFilters` (no client-only id). */
 interface PersistedFilter {
@@ -444,6 +456,9 @@ interface VisualIn {
   hidden?: unknown;
   locked?: unknown;
   groupId?: unknown;
+  // ── wave-4 script-visual config (additive; only set for type 'scriptVisual') ──
+  language?: unknown;
+  script?: unknown;
 }
 interface PageIn {
   name?: unknown;
@@ -1289,6 +1304,17 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       // z folds into layout (not in the visual query signature → undo/redo safe);
       // hidden/locked/groupId fold into config additively. All omitted when unset.
       const flags = sanitizeVisualFlags(v);
+      // wave-4 script-visual config (R / Python). The code editor IS the script
+      // visual's surface — PBI's R/Python visual is itself a code box — so it is
+      // EXEMPT from no-freeform-config.md exactly like the ADF expression builder;
+      // the language toggle + the Values wells stay structured. Both keys are
+      // ADDITIVE + whitelisted (language → 'python'|'r' enum, script → string
+      // clamped to MAX_SCRIPT) and persisted ONLY when present, so legacy /
+      // non-script visuals are unaffected. They carry the runner's two inputs and
+      // the designer reads config.{language,script} back only for type
+      // 'scriptVisual', so a saved script survives a reload (no-vaporware).
+      const scriptLanguage = v.language === 'python' || v.language === 'r' ? v.language : undefined;
+      const scriptText = typeof v.script === 'string' ? v.script.slice(0, MAX_SCRIPT) : undefined;
       visualCount += 1;
       return {
         type,
@@ -1303,6 +1329,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
           ...(flags.hidden ? { hidden: true } : {}),
           ...(flags.locked ? { locked: true } : {}),
           ...(flags.groupId ? { groupId: flags.groupId } : {}),
+          ...(scriptLanguage ? { language: scriptLanguage } : {}),
+          ...(scriptText !== undefined ? { script: scriptText } : {}),
         },
       };
     });

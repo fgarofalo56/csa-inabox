@@ -32,6 +32,19 @@ import type { SynapseQueryParam } from './synapse-sql-client';
 
 // ── SQL source (resolver-supplied; the FROM relation + identifier whitelist) ───
 
+/**
+ * Target SQL dialect for identifier quoting and row capping. The compiler's
+ * DEFAULT — `undefined`, treated as `'tsql'`/`'synapse'` — emits exactly the
+ * T-SQL it always has (byte-for-byte), so the existing Synapse `/query` callers
+ * (who pass none) are never regressed. The Wave-1 Get-Data executors pass the
+ * bound engine's dialect so the SAME wells→SQL pass also targets Azure SQL /
+ * Synapse / generic SQL Server (bracket-quoted, `TOP n`), PostgreSQL (`"id"`,
+ * `LIMIT n`), and MySQL / Databricks SQL (`` `id` ``, `LIMIT n`). Only identifier
+ * quoting + the row-cap form differ across dialects — never the structured
+ * wells/filters logic. See `quoteIdent` / `rowCap`.
+ */
+export type SqlDialect = 'tsql' | 'synapse' | 'generic-sql' | 'postgres' | 'mysql' | 'databricks-sql';
+
 /** A base table the FROM clause can target (`[schema].[table]`). */
 export interface SqlSourceTable {
   kind: 'table';
@@ -89,6 +102,14 @@ export interface SqlSource {
   columns: SqlSourceColumn[];
   /** Whitelist of measure → SQL aggregate expressions. */
   measures?: SqlSourceMeasure[];
+  /**
+   * Target SQL dialect (default `undefined` === `'tsql'`/`'synapse'`). Undefined
+   * and the T-SQL-family values emit byte-identical T-SQL, so the existing
+   * Synapse callers — who pass none — are unchanged. Other engines
+   * (`generic-sql`/`postgres`/`mysql`/`databricks-sql`) only change identifier
+   * quoting and the row-cap form (`TOP n` → `LIMIT n`); see `quoteIdent`/`rowCap`.
+   */
+  dialect?: SqlDialect;
 }
 
 // ── Structured filter input (mirror of the designer's wired filter shape) ──────
@@ -247,19 +268,68 @@ export function bracket(ident: string): string {
   return `[${ident.replace(/]/g, ']]')}]`;
 }
 
-/** A `[src].[Column]` reference for a whitelisted column. */
-function colRef(name: string): string {
-  return `[src].${bracket(name)}`;
+/**
+ * Dialect-aware identifier quote. The bracket dialects (T-SQL / Synapse / generic
+ * SQL Server) reuse `bracket` verbatim, so output is byte-identical to the
+ * pre-dialect compiler; PostgreSQL double-quotes (`"` → `""`); MySQL and
+ * Databricks SQL back-tick (`` ` `` → ``` `` ```). Identifiers are still ONLY
+ * ever resolver-whitelisted names — never client text — so dialect choice never
+ * widens the injection surface.
+ */
+export function quoteIdent(name: string, dialect?: SqlDialect): string {
+  switch (dialect) {
+    case 'postgres':
+      return `"${name.replace(/"/g, '""')}"`;
+    case 'mysql':
+    case 'databricks-sql':
+      return '`' + name.replace(/`/g, '``') + '`';
+    default:
+      // tsql | synapse | generic-sql | undefined → bracket-quote (identical to bracket()).
+      return bracket(name);
+  }
+}
+
+/** A row cap rendered as a SELECT-list prefix and/or a trailing clause. */
+export interface RowCap {
+  /** Goes right after `SELECT [DISTINCT] ` — `'TOP n '` for the T-SQL family, else `''`. */
+  prefix: string;
+  /** Goes after ORDER BY — `'LIMIT n'` for PostgreSQL/MySQL/Databricks, else `''`. */
+  suffix: string;
+}
+
+/**
+ * Dialect-aware row cap. The T-SQL family (tsql/synapse/generic-sql — the
+ * default) caps with a leading `TOP n` and no suffix, byte-identical to the
+ * pre-dialect compiler. PostgreSQL / MySQL / Databricks SQL have no `TOP`, so
+ * they cap with a trailing `LIMIT n` instead. `n` is always a validated integer
+ * (ROW_CAP or a clamped Top-N), so it is injection-safe to inline.
+ */
+export function rowCap(dialect: SqlDialect | undefined, n: number): RowCap {
+  switch (dialect) {
+    case 'postgres':
+    case 'mysql':
+    case 'databricks-sql':
+      return { prefix: '', suffix: `LIMIT ${n}` };
+    default:
+      return { prefix: `TOP ${n} `, suffix: '' };
+  }
+}
+
+/** A `[src].[Column]` reference for a whitelisted column (dialect-quoted). */
+function colRef(name: string, dialect?: SqlDialect): string {
+  return `${quoteIdent('src', dialect)}.${quoteIdent(name, dialect)}`;
 }
 
 /** Render the FROM relation, aliased `[src]`. */
 function renderFrom(src: SqlSource): string {
+  const d = src.dialect;
+  const alias = quoteIdent('src', d);
   if (src.from.kind === 'table') {
-    const schema = src.from.schema ? `${bracket(src.from.schema)}.` : '';
-    return `${schema}${bracket(src.from.table)} AS [src]`;
+    const schema = src.from.schema ? `${quoteIdent(src.from.schema, d)}.` : '';
+    return `${schema}${quoteIdent(src.from.table, d)} AS ${alias}`;
   }
   // Derived: resolver-supplied, sql-guard-validated read-only SELECT.
-  return `(${src.from.sql.trim().replace(/;+\s*$/, '')}) AS [src]`;
+  return `(${src.from.sql.trim().replace(/;+\s*$/, '')}) AS ${alias}`;
 }
 
 /**
@@ -334,7 +404,7 @@ function aggProjection(src: SqlSource, w: DaxWellField): Projection | null {
     const useAgg = w.aggregation && w.aggregation !== 'None';
     const fn = useAgg ? SQL_AGG_FN[w.aggregation as string] || 'SUM' : 'SUM';
     const alias = useAgg ? `${w.aggregation} of ${w.column}` : `Sum of ${w.column}`;
-    return { expr: `${fn}(${colRef(name)})`, alias, column: name };
+    return { expr: `${fn}(${colRef(name, src.dialect)})`, alias, column: name };
   }
   return null;
 }
@@ -343,7 +413,7 @@ function aggProjection(src: SqlSource, w: DaxWellField): Projection | null {
 function groupColumn(src: SqlSource, w: DaxWellField): { ref: string; alias: string } | null {
   const name = resolveColumn(src, w.table, w.column);
   if (!name) return null;
-  return { ref: colRef(name), alias: name };
+  return { ref: colRef(name, src.dialect), alias: name };
 }
 
 // ── WHERE / HAVING from structured filters ─────────────────────────────────────
@@ -376,7 +446,7 @@ function compileFilters(
     // Column filter → WHERE.
     const name = resolveColumn(src, f.table, f.column);
     if (!name) continue;
-    const pred = scalarPredicate(colRef(name), f, pb);
+    const pred = scalarPredicate(colRef(name, src.dialect), f, pb);
     if (pred) where.push(pred);
   }
   return { where, having };
@@ -445,12 +515,17 @@ function assemble(
   groupBy: string[],
   having: string[],
   orderBy: string | null,
+  limit?: string | null,
 ): string {
   let sql = `${select}\nFROM ${from}`;
   if (where.length) sql += `\nWHERE ${where.join(' AND ')}`;
   if (groupBy.length) sql += `\nGROUP BY ${groupBy.join(', ')}`;
   if (having.length) sql += `\nHAVING ${having.join(' AND ')}`;
   if (orderBy) sql += `\nORDER BY ${orderBy}`;
+  // Trailing row cap for LIMIT dialects (postgres/mysql/databricks). The T-SQL
+  // family caps with a leading `TOP n` instead and passes no limit, so this is a
+  // no-op for them → emitted SQL is byte-identical to the pre-dialect compiler.
+  if (limit) sql += `\n${limit}`;
   return sql;
 }
 
@@ -511,17 +586,17 @@ function topNOrderExpr(
     const a = aggs.find(
       (x) => (x.measure || '').toLowerCase() === want || x.alias.toLowerCase() === want,
     );
-    if (a) return bracket(a.alias);
+    if (a) return quoteIdent(a.alias, src.dialect);
   }
   if (topN?.byColumn) {
     const name = resolveColumn(src, topN.byTable, topN.byColumn);
     if (name) {
       const lc = name.toLowerCase();
       const a = aggs.find((x) => (x.column || '').toLowerCase() === lc);
-      if (a) return bracket(a.alias);
+      if (a) return quoteIdent(a.alias, src.dialect);
     }
   }
-  return bracket(aggs[0].alias);
+  return quoteIdent(aggs[0].alias, src.dialect);
 }
 
 // ── Public: visual wells → SQL ─────────────────────────────────────────────────
@@ -545,6 +620,7 @@ export function buildSqlFromVisual(
   filters: ReportFilterInput[] | undefined,
   sqlSource: SqlSource,
 ): CompiledSql | null {
+  const d = sqlSource.dialect;
   const from = renderFrom(sqlSource);
   const wells = visual.wells || {};
   const category = wells.category || [];
@@ -561,8 +637,12 @@ export function buildSqlFromVisual(
     if (!uniq.length) return null;
     const pb = paramBag();
     const { where } = compileFilters(sqlSource, filters, pb, false);
-    const select = `SELECT TOP ${ROW_CAP} ${uniq.map((n) => `${colRef(n)} AS ${bracket(n)}`).join(', ')}`;
-    return { sql: assemble(select, from, where, [], [], bracket(uniq[0])), parameters: pb.parameters };
+    const cap = rowCap(d, ROW_CAP);
+    const select = `SELECT ${cap.prefix}${uniq.map((n) => `${colRef(n, d)} AS ${quoteIdent(n, d)}`).join(', ')}`;
+    return {
+      sql: assemble(select, from, where, [], [], quoteIdent(uniq[0], d), cap.suffix || null),
+      parameters: pb.parameters,
+    };
   }
 
   // ── slicer → distinct category values ───────────────────────────────────────
@@ -571,8 +651,12 @@ export function buildSqlFromVisual(
     if (!g.length) return null;
     const pb = paramBag();
     const { where } = compileFilters(sqlSource, filters, pb, false);
-    const select = `SELECT DISTINCT TOP ${ROW_CAP} ${g.map((c) => `${c.ref} AS ${bracket(c.alias)}`).join(', ')}`;
-    return { sql: assemble(select, from, where, [], [], bracket(g[0].alias)), parameters: pb.parameters };
+    const cap = rowCap(d, ROW_CAP);
+    const select = `SELECT DISTINCT ${cap.prefix}${g.map((c) => `${c.ref} AS ${quoteIdent(c.alias, d)}`).join(', ')}`;
+    return {
+      sql: assemble(select, from, where, [], [], quoteIdent(g[0].alias, d), cap.suffix || null),
+      parameters: pb.parameters,
+    };
   }
 
   // ── card / chart / matrix → aggregate (optionally grouped) ──────────────────
@@ -607,24 +691,30 @@ export function buildSqlFromVisual(
   // No values → distinct grouping (acts like a slicer/category table).
   if (aggs.length === 0) {
     const { where } = compileFilters(sqlSource, filters, pb, false);
-    const select = `SELECT DISTINCT TOP ${ROW_CAP} ${group.map((c) => `${c.ref} AS ${bracket(c.alias)}`).join(', ')}`;
-    return { sql: assemble(select, from, where, [], [], bracket(group[0].alias)), parameters: pb.parameters };
+    const cap = rowCap(d, ROW_CAP);
+    const select = `SELECT DISTINCT ${cap.prefix}${group.map((c) => `${c.ref} AS ${quoteIdent(c.alias, d)}`).join(', ')}`;
+    return {
+      sql: assemble(select, from, where, [], [], quoteIdent(group[0].alias, d), cap.suffix || null),
+      parameters: pb.parameters,
+    };
   }
 
   // Aggregated query (card = no group; chart/matrix = grouped).
   const { where, having } = compileFilters(sqlSource, filters, pb, true);
   const selectCols = [
-    ...group.map((c) => `${c.ref} AS ${bracket(c.alias)}`),
-    ...aggs.map((a) => `${a.expr} AS ${bracket(a.alias)}`),
+    ...group.map((c) => `${c.ref} AS ${quoteIdent(c.alias, d)}`),
+    ...aggs.map((a) => `${a.expr} AS ${quoteIdent(a.alias, d)}`),
   ];
   // Power BI "Top N" filter (op:'topN'): cap the grouped result at N rows and
   // rank by the chosen by-measure DESC. N is a validated integer (clamped to
   // ROW_CAP), so it is injection-safe to inline — exactly like ROW_CAP. With no
   // Top-N filter this falls back to ROW_CAP + first-aggregate ordering, leaving
-  // the previously-shipped query shape byte-for-byte unchanged.
+  // the previously-shipped query shape byte-for-byte unchanged (for the default /
+  // T-SQL dialect the cap is `TOP n`; LIMIT dialects move it to a trailing clause).
   const topN = group.length ? extractTopN(filters) : null;
-  const cap = group.length ? `TOP ${topN ? topN.n : ROW_CAP} ` : '';
-  const select = `SELECT ${cap}${selectCols.join(', ')}`;
+  const capN = topN ? topN.n : ROW_CAP;
+  const cap = group.length ? rowCap(d, capN) : { prefix: '', suffix: '' };
+  const select = `SELECT ${cap.prefix}${selectCols.join(', ')}`;
   const groupBy = group.map((c) => c.ref);
   // Order grouped results so the TOP cap keeps the most significant rows: rank by
   // the authored Top-N rank target (by-measure / by-column), DESC for "top" and
@@ -632,7 +722,10 @@ export function buildSqlFromVisual(
   // (no group) needs no ordering.
   const dir = topN?.dir === 'bottom' ? 'ASC' : 'DESC';
   const orderBy = group.length ? `${topNOrderExpr(sqlSource, topN, aggs)} ${dir}` : null;
-  return { sql: assemble(select, from, where, groupBy, having, orderBy), parameters: pb.parameters };
+  return {
+    sql: assemble(select, from, where, groupBy, having, orderBy, cap.suffix || null),
+    parameters: pb.parameters,
+  };
 }
 
 // ── Public: structured filters → DAX (AAS path) ────────────────────────────────

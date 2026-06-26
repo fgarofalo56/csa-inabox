@@ -263,3 +263,85 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }
+
+/**
+ * PUT /api/items/activator/[id]/rules?workspaceId=&ruleId=<id>
+ *   body { name?, condition?, action?, query?, sourceTable?, severity?, evaluationFrequency?, windowSize?, existingActionGroupId? }
+ *
+ * Update an existing rule (the editor's structured Edit-rule flow re-opens the
+ * same wizard pre-filled and PUTs the full body — never a freeform JSON box).
+ * Azure-native (DEFAULT): re-run createMonitorActivatorRule, which UPSERTS the
+ * backing scheduledQueryRule by name, with the new body (omitted fields fall
+ * back to the existing record so a partial edit never silently resets config).
+ * If a rename changed the azureRuleName, the orphaned ARM rule left under the
+ * old name is deleted (best-effort). A paused ('Disabled') rule keeps its state
+ * — editing must not surprise-re-enable it. The replaced record is persisted to
+ * the Cosmos item's state.rules via the SAME itemsContainer replace path
+ * POST/PATCH/DELETE use, so the editor/pane/Start all see the edit on reload.
+ * Fabric opt-in: editing a Reflex rule's body is an opt-in follow-up; use
+ * enable/disable/delete on that path, or the Azure-native default.
+ */
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  const { id } = await ctx.params;
+  const ruleId = req.nextUrl.searchParams.get('ruleId');
+  if (!ruleId) return NextResponse.json({ ok: false, error: 'ruleId required' }, { status: 400 });
+
+  // ── Fabric Reflex (opt-in) ── editing a trigger body is an opt-in follow-up.
+  if (useFabric()) {
+    return NextResponse.json({
+      ok: false,
+      error: 'Editing a Fabric Reflex rule body is not supported on the opt-in Fabric backend yet — use enable/disable/delete, or the Azure-native default.',
+    }, { status: 501 });
+  }
+
+  // ── Azure Monitor (DEFAULT) ──
+  const body = await req.json().catch(() => ({}));
+  const item = await loadContentBackedItem(id, 'activator', session.claims.oid);
+  if (!item) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+  const rules: MonitorRuleRecord[] = Array.isArray((item.state as any)?.rules) ? (item.state as any).rules : [];
+  const old = rules.find((r) => r.id === ruleId || r.name === ruleId || r.azureRuleName === ruleId);
+  if (!old) return NextResponse.json({ ok: false, error: `rule '${ruleId}' not found` }, { status: 404 });
+
+  try {
+    // Upsert the backing scheduledQueryRule by name. Omitted body fields fall
+    // back to the existing record so a partial PUT doesn't reset live config.
+    const rec = await createMonitorActivatorRule(item.displayName, {
+      name: typeof body?.name === 'string' && body.name.trim() ? body.name.trim() : old.name,
+      condition: body?.condition ?? old.condition ?? undefined,
+      action: body?.action ?? old.action ?? undefined,
+      // A new verbatim query wins; else a new structured condition rebuilds it;
+      // else keep the rule's existing query (don't lose a verbatim KQL rule).
+      query: typeof body?.query === 'string' && body.query.trim()
+        ? body.query
+        : (body?.condition ? undefined : old.query),
+      sourceTable: typeof body?.sourceTable === 'string' ? body.sourceTable : undefined,
+      severity: typeof body?.severity === 'number' ? body.severity : old.severity,
+      evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : old.evaluationFrequency,
+      windowSize: typeof body?.windowSize === 'string' ? body.windowSize : old.windowSize,
+      existingActionGroupId: typeof body?.existingActionGroupId === 'string' ? body.existingActionGroupId : undefined,
+    });
+    // Rename → drop the orphan ARM rule left behind under the old name.
+    if (rec.azureRuleName !== old.azureRuleName) {
+      try { await deleteMonitorActivatorRule(old.azureRuleName); } catch { /* best-effort */ }
+    }
+    // Preserve a paused rule's state — an edit must not surprise-re-enable it.
+    if (old.state === 'Disabled') {
+      try { await disableMonitorRule(rec.azureRuleName); } catch { /* best-effort */ }
+      rec.state = 'Disabled';
+    }
+    // Keep the original creation time; stamp the edit.
+    rec.createdAt = old.createdAt || rec.createdAt;
+    rec.updatedAt = new Date().toISOString();
+    const nextRules = rules.map((r) => (r.id === old.id ? rec : r));
+    const items = await itemsContainer();
+    const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules: nextRules }, updatedAt: new Date().toISOString() };
+    await items.item(item.id, item.workspaceId).replace(next);
+    return NextResponse.json({ ok: true, rule: rec, backend: 'azure-monitor' });
+  } catch (e: any) {
+    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+  }
+}

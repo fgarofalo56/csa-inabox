@@ -50,7 +50,7 @@ import {
   ArrowImport20Regular,
   Eye20Regular, Form20Regular,
   ArrowMaximize20Regular, Pin20Regular, Flash20Regular, Sparkle20Regular,
-  ArrowDownload20Regular, Copy20Regular,
+  ArrowDownload20Regular, Copy20Regular, Edit20Regular,
 } from '@fluentui/react-icons';
 import { AdxDatabaseTree } from '@/lib/components/adx/adx-database-tree';
 import { AdxRbacPanel } from '@/lib/components/adx/adx-rbac-panel';
@@ -8880,6 +8880,12 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const [agMsg, setAgMsg] = useState<string | null>(null);
   const [ruleBusy, setRuleBusy] = useState(false);
   const [ruleErr, setRuleErr] = useState<string | null>(null);
+  // Per-row rule controls (enable/disable/delete) + edit-mode for the wizard.
+  // busyRuleId disables a row's actions while its ARM round-trip is in flight;
+  // editingRuleId (when set) flips the New-rule wizard into Edit mode so addRule
+  // PUTs to the existing rule instead of POSTing a new one.
+  const [busyRuleId, setBusyRuleId] = useState<string>('');
+  const [editingRuleId, setEditingRuleId] = useState<string>('');
   // ── Azure Monitor scheduled-query wizard (DEFAULT backend) ──
   // Data source: a raw KQL query (Log Analytics) OR an Event Hub whose data is
   // ingested into LA (the alert query then targets the hub's table).
@@ -9004,16 +9010,23 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       body.sourceTable = sourceTable.trim();
     }
     try {
-      const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
-        method: 'POST',
+      // Edit mode (editingRuleId set) PUTs the full structured body to the
+      // existing rule (the route upserts the backing scheduledQueryRule by name
+      // and preserves a paused rule's Disabled state); otherwise POST a new one.
+      const editing = !!editingRuleId;
+      const url = editing
+        ? `/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&ruleId=${encodeURIComponent(editingRuleId)}`
+        : `/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`;
+      const r = await fetch(url, {
+        method: editing ? 'PUT' : 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
       const j = await r.json();
-      if (!j.ok) { setRuleErr(j.error || j.gate?.remediation || 'add rule failed'); }
-      else { setRuleOpen(false); setRuleName(''); setKqlQuery(''); loadRules(workspaceId, selectedId); }
+      if (!j.ok) { setRuleErr(j.error || j.gate?.remediation || (editing ? 'update rule failed' : 'add rule failed')); }
+      else { setRuleOpen(false); setRuleName(''); setKqlQuery(''); setEditingRuleId(''); loadRules(workspaceId, selectedId); }
     } finally { setRuleBusy(false); }
-  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, actCountryCode, actPhone, actLogicAppResourceId, actLogicAppCallbackUrl, sourceType, kqlQuery, sourceTable, selectedHub, severity, evalFreq, winSize, useExistingAg, existingAgId, workspaceId, selectedId, loadRules]);
+  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, actCountryCode, actPhone, actLogicAppResourceId, actLogicAppCallbackUrl, sourceType, kqlQuery, sourceTable, selectedHub, severity, evalFreq, winSize, useExistingAg, existingAgId, editingRuleId, workspaceId, selectedId, loadRules]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     if (!workspaceId || !selectedId) return;
@@ -9025,6 +9038,80 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     setTriggerResult({ ruleId, fired: !!j.fired, count: typeof j.count === 'number' ? j.count : (Array.isArray(j.rows) ? j.rows.length : 0) });
     loadRules(workspaceId, selectedId);
   }, [workspaceId, selectedId, loadRules]);
+
+  // ── per-rule enable/disable + delete (round-trip to Azure Monitor; mirrors the
+  //    workspace ActivatorPane). Each keys off the persisted state.rules record,
+  //    so on a deployed reflex (provisioner now persists MonitorRuleRecord[]) the
+  //    backing scheduledQueryRule is the real ARM target. On success re-load the
+  //    rule list so every other action sees the new state. ──
+  const toggleRule = useCallback(async (r: RuleLite) => {
+    if (!workspaceId || !selectedId) return;
+    setBusyRuleId(r.id); setRulesErr(null);
+    const next = r.state !== 'Active'; // Active → disable; anything else → enable
+    try {
+      const res = await fetch(
+        `/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&ruleId=${encodeURIComponent(r.id)}&enabled=${next}`,
+        { method: 'PATCH' },
+      );
+      const j = await res.json();
+      if (!j.ok) { setRulesErr(j.error || j.gate?.remediation || 'toggle failed'); return; }
+      await loadRules(workspaceId, selectedId);
+    } catch (e: any) {
+      setRulesErr(e?.message || String(e));
+    } finally { setBusyRuleId(''); }
+  }, [workspaceId, selectedId, loadRules]);
+
+  const deleteRule = useCallback(async (r: RuleLite) => {
+    if (!workspaceId || !selectedId) return;
+    if (typeof window !== 'undefined' && !window.confirm(`Delete rule "${r.name}"? This removes its Azure Monitor scheduled-query rule.`)) return;
+    setBusyRuleId(r.id); setRulesErr(null);
+    try {
+      const res = await fetch(
+        `/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&ruleId=${encodeURIComponent(r.id)}`,
+        { method: 'DELETE' },
+      );
+      const j = await res.json();
+      if (!j.ok) { setRulesErr(j.error || j.gate?.remediation || 'delete failed'); return; }
+      await loadRules(workspaceId, selectedId);
+    } catch (e: any) {
+      setRulesErr(e?.message || String(e));
+    } finally { setBusyRuleId(''); }
+  }, [workspaceId, selectedId, loadRules]);
+
+  // Edit re-opens the SAME structured rule wizard pre-filled from the record (no
+  // JSON box — loom_no_freeform_config); with editingRuleId set, addRule PUTs.
+  const openEditRule = useCallback((r: RuleLite) => {
+    setEditingRuleId(r.id);
+    setRuleName(r.name || '');
+    const cond: any = r.condition || {};
+    const hasStructured = !!(cond.property || cond.field || r.propertyName);
+    setCondProperty(String(cond.property ?? cond.field ?? r.propertyName ?? ''));
+    setCondOperator(String(cond.operator ?? 'GreaterThan'));
+    setCondValue(cond.value === undefined || cond.value === null ? '' : String(cond.value));
+    const act: any = r.action || {};
+    const kind = String(act.kind || 'TeamsMessage');
+    setActKind((['TeamsMessage', 'Email', 'Webhook', 'SMS', 'LogicApp', 'AdfPipelineRun', 'NotebookRun', 'PowerAutomateFlow'].includes(kind) ? kind : 'TeamsMessage') as any);
+    const cfg: any = act.config || {};
+    setActTarget(String(cfg.webhookUrl || cfg.to || cfg.url || cfg.pipeline || cfg.notebookId || cfg.triggerUrl || ''));
+    setActMessage(String(cfg.message || cfg.subject || ''));
+    setActCountryCode(String(cfg.countryCode || '1'));
+    setActPhone(String(cfg.phoneNumber || cfg.phone || ''));
+    setActLogicAppResourceId(String(cfg.logicAppResourceId || ''));
+    setActLogicAppCallbackUrl(String(cfg.callbackUrl || ''));
+    // Prefer the structured condition builder when the record carries one;
+    // otherwise fall back to editing the verbatim KQL the rule runs.
+    setSourceType('kql');
+    setSourceTable(r.objectName ? String(r.objectName) : '');
+    setSelectedHub('');
+    if (!hasStructured && typeof r.query === 'string' && r.query.trim()) setKqlQuery(r.query);
+    else setKqlQuery('');
+    setSeverity(typeof r.severity === 'number' ? r.severity : 2);
+    setEvalFreq(r.evaluationFrequency || 'PT5M');
+    setWinSize(r.windowSize || 'PT5M');
+    setUseExistingAg(false); setExistingAgId('');
+    setRuleErr(null);
+    setRuleOpen(true);
+  }, []);
 
   // Run history — fired/resolved Azure Monitor alert instances for this reflex.
   const loadHistory = useCallback(async () => {
@@ -9136,12 +9223,23 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       PowerAutomate: { k: 'PowerAutomateFlow' as const, t: 'https://prod-xx.logic.azure.com/workflows/.../triggers/...', m: '' },
     };
     const sel = map[kind];
+    setEditingRuleId(''); // action templates always start a NEW rule
     setRuleName(`alert-${kind.toLowerCase()}-${Date.now().toString(36)}`);
     setActKind(sel.k); setActTarget(sel.t); setActMessage(sel.m);
     setRuleOpen(true);
   }, []);
 
-  // Activator Copilot — open the Copilot pane bound to the 'activator' persona,
+  // Reset every wizard field to defaults so a NEW rule never inherits a prior
+  // edit's values; openNewRule clears edit-mode then opens the wizard fresh.
+  const resetRuleForm = useCallback(() => {
+    setRuleName(''); setCondProperty(''); setCondOperator('GreaterThan'); setCondValue('20');
+    setActKind('TeamsMessage'); setActTarget(''); setActMessage('Loom alert: {{eventValue}}');
+    setActCountryCode('1'); setActPhone(''); setActLogicAppResourceId(''); setActLogicAppCallbackUrl('');
+    setSourceType('kql'); setKqlQuery(''); setSourceTable(''); setSelectedHub('');
+    setEvalFreq('PT5M'); setWinSize('PT5M'); setSeverity(2);
+    setUseExistingAg(false); setExistingAgId(''); setRuleErr(null);
+  }, []);
+  const openNewRule = useCallback(() => { setEditingRuleId(''); resetRuleForm(); setRuleOpen(true); }, [resetRuleForm]);
   // pre-loaded with this reflex's context (id, workspace, existing rule names)
   // so the model can author a real Azure Monitor scheduled-query alert rule from
   // plain English, suggest a threshold from real history, and create it.
@@ -9162,7 +9260,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Rules', actions: [
-        { label: 'New rule', onClick: canNewRule ? () => setRuleOpen(true) : undefined, disabled: !canNewRule, title: !canNewRule ? 'select a workspace and reflex first' : undefined },
+        { label: 'New rule', onClick: canNewRule ? openNewRule : undefined, disabled: !canNewRule, title: !canNewRule ? 'select a workspace and reflex first' : undefined },
         { label: reflexBusy === 'start' ? 'Starting…' : 'Start', onClick: canNewRule && !reflexBusy ? () => startStop('start') : undefined, disabled: !canNewRule || !!reflexBusy },
         { label: reflexBusy === 'stop' ? 'Stopping…' : 'Stop', onClick: canNewRule && !reflexBusy ? () => startStop('stop') : undefined, disabled: !canNewRule || !!reflexBusy },
       ]},
@@ -9180,7 +9278,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Power Automate', onClick: canNewRule ? () => openTemplate('PowerAutomate') : undefined, disabled: !canNewRule },
       ]},
     ]},
-  ], [canNewRule, reflexBusy, startStop, openTemplate, openActivatorCopilot]);
+  ], [canNewRule, reflexBusy, startStop, openTemplate, openActivatorCopilot, openNewRule]);
 
   // On /new there is no reflex selected yet, so every rule/action button is
   // gated. Mirror the PR #438 NewItemGate pattern: show an ENABLED create
@@ -9250,13 +9348,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
               <>
               <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
                 <Subtitle2>Rules</Subtitle2>
-                <Dialog open={ruleOpen} onOpenChange={(_: unknown, d: any) => setRuleOpen(d.open)}>
+                <Dialog open={ruleOpen} onOpenChange={(_: unknown, d: any) => { setRuleOpen(d.open); if (!d.open) setEditingRuleId(''); }}>
                   <DialogTrigger disableButtonEnhancement>
-                    <Button size="small" appearance="outline" icon={<Add20Regular />}>New rule</Button>
+                    <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={openNewRule}>New rule</Button>
                   </DialogTrigger>
                   <DialogSurface style={{ maxWidth: 760 }}>
                     <DialogBody>
-                      <DialogTitle>Add rule</DialogTitle>
+                      <DialogTitle>{editingRuleId ? 'Edit rule' : 'Add rule'}</DialogTitle>
                       <DialogContent>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
                           <Field label="Rule name" required>
@@ -9431,8 +9529,8 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                         </div>
                       </DialogContent>
                       <DialogActions>
-                        <Button appearance="secondary" onClick={() => setRuleOpen(false)}>Cancel</Button>
-                        <Button appearance="primary" disabled={ruleBusy || !ruleName.trim()} onClick={addRule}>{ruleBusy ? 'Adding…' : 'Add'}</Button>
+                        <Button appearance="secondary" onClick={() => { setRuleOpen(false); setEditingRuleId(''); }}>Cancel</Button>
+                        <Button appearance="primary" disabled={ruleBusy || !ruleName.trim()} onClick={addRule}>{ruleBusy ? (editingRuleId ? 'Saving…' : 'Adding…') : (editingRuleId ? 'Save' : 'Add')}</Button>
                       </DialogActions>
                     </DialogBody>
                   </DialogSurface>
@@ -9480,7 +9578,50 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           </TableCell>
                           <TableCell>{r.state || '—'}</TableCell>
                           <TableCell>
-                            <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => triggerNow(r.id)}>Trigger</Button>
+                            <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' }}>
+                              <Button
+                                size="small"
+                                appearance={r.state === 'Active' ? 'subtle' : 'primary'}
+                                icon={r.state === 'Active' ? <Stop20Regular /> : <Flash20Regular />}
+                                disabled={busyRuleId === r.id}
+                                onClick={() => toggleRule(r)}
+                                title={r.state === 'Active' ? 'Disable — pause Azure Monitor evaluation' : 'Enable — resume Azure Monitor evaluation'}
+                                aria-label={r.state === 'Active' ? `Disable rule ${r.name}` : `Enable rule ${r.name}`}
+                              >
+                                {r.state === 'Active' ? 'Disable' : 'Enable'}
+                              </Button>
+                              <Button
+                                size="small"
+                                appearance="subtle"
+                                icon={<Play20Regular />}
+                                disabled={busyRuleId === r.id}
+                                onClick={() => triggerNow(r.id)}
+                                title="Trigger now — run this rule's KQL against Log Analytics"
+                                aria-label={`Trigger rule ${r.name}`}
+                              >
+                                Trigger
+                              </Button>
+                              <Tooltip content="Edit rule" relationship="label">
+                                <Button
+                                  size="small"
+                                  appearance="subtle"
+                                  icon={<Edit20Regular />}
+                                  disabled={busyRuleId === r.id}
+                                  onClick={() => openEditRule(r)}
+                                  aria-label={`Edit rule ${r.name}`}
+                                />
+                              </Tooltip>
+                              <Tooltip content="Delete rule" relationship="label">
+                                <Button
+                                  size="small"
+                                  appearance="subtle"
+                                  icon={<Delete20Regular />}
+                                  disabled={busyRuleId === r.id}
+                                  onClick={() => deleteRule(r)}
+                                  aria-label={`Delete rule ${r.name}`}
+                                />
+                              </Tooltip>
+                            </div>
                           </TableCell>
                         </TableRow>
                       ))}

@@ -4,11 +4,16 @@
  * DataSourcePicker — choose the DATA SOURCE that backs a Loom report.
  *
  * Report Designer v2 (no-fabric-dependency.md): a report is no longer wired to
- * Azure Analysis Services only. This drawer lets the author pick one of three
- * source kinds, persisted on the report item's `state.dataSource` as a
- * discriminated union (the parent PUTs the chosen value to
- * `/api/items/report/[id]/data-source`):
+ * Azure Analysis Services only. This drawer lets the author pick a source kind,
+ * persisted on the report item's `state.dataSource` as a discriminated union
+ * (the parent PUTs the chosen value to `/api/items/report/[id]/data-source`):
  *
+ *   (★) Get data       — PRIMARY. Opens the connector gallery (<GetDataGallery/>)
+ *       over the 32-connector catalog. The author binds a reusable KV-backed Loom
+ *       Connection (Azure SQL / Synapse / Databricks SQL / PostgreSQL / Cosmos /
+ *       ADLS), uploads a file, or points at an ADLS path. Yields one of three NEW
+ *       union kinds — `connection` | `file-upload` | `adls-file` — that flow
+ *       through the SAME resolver→/fields→/query pipeline as the kinds below.
  *   (a) Semantic model  — DEFAULT, Azure-native. A Loom `semantic-model` item
  *       (itself Loom-native SQL over a warehouse/lakehouse, or AAS-bound). The
  *       dropdown is populated from GET /api/items/by-type?types=semantic-model.
@@ -20,8 +25,9 @@
  *   (c) Advanced — Azure Analysis Services: the existing XMLA binding
  *       (server URI + database). Strictly advanced; AAS stays one source kind.
  *
- * Power BI is NOT a source kind here — it remains strictly opt-in
- * (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi + a bound workspace) and is unaffected.
+ * Power BI / Fabric semantic models are NOT a default source kind here — they
+ * remain strictly opt-in (surfaced inside the gallery's clearly-labelled opt-in
+ * group, never required on the default path) per no-fabric-dependency.md.
  *
  * Rules: no-vaporware (every control hits a real route; unconfigured branches
  * surface the verbatim backend error / honest gate — never a mock schema),
@@ -44,20 +50,47 @@ import {
 import {
   Dismiss20Regular, Database20Regular, DocumentTable20Regular,
   Server20Regular, ArrowSync16Regular, Checkmark16Regular, TableSearch20Regular,
+  DatabaseSearch20Regular, DatabasePlugConnected20Regular, CloudArrowUp20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { readOnlySelect } from '@/lib/thread/sql-guard';
+// Get Data connector gallery (Wave 1, sibling file in this chunk). Browses the
+// 32-connector catalog and returns a connection/file/ADLS-backed ReportDataSource
+// via onChosen — the picker mounts it as an overlay drawer and persists the result.
+import { GetDataGallery } from './get-data-gallery';
 
-// ── data-source model (mirrored server-side in lib/azure/report-model-resolver.ts) ──
+// ── data-source model (single source of truth) ───────────────────────────────
+// The discriminated union + helpers come from the SHARED CONTRACT,
+// lib/editors/report/report-data-source.ts — the module this file's header
+// designates as the source of truth (the Get Data gallery already imports from
+// it). Wave 1's connection-/file-backed kinds (`connection` | `file-upload` |
+// `adls-file`), the connType/objectRef types, and the `isBound` / `describeSource`
+// helpers all live there and flow through the SAME resolver→/fields→/query
+// pipeline. We IMPORT them rather than re-declare a local copy — a duplicate
+// silently diverges from the SoT on any future edit (it only compiled before
+// because the two declarations happened to be structurally identical).
+import {
+  type ReportDataSource,
+  type ReportDataSourceKind,
+  type ConnectionDataSource,
+  type FileUploadDataSource,
+  type AdlsFileDataSource,
+  type DirectQueryTarget,
+  isBound,
+  describeSource,
+} from './report-data-source';
 
-/** Discriminated union persisted on report `state.dataSource`. */
-export type ReportDataSource =
-  | { kind: 'semantic-model'; itemId: string }
-  | { kind: 'direct-query'; target: DirectTarget; sql: string; modelItemId?: string }
-  | { kind: 'aas'; server: string; database: string };
+/** Local alias so existing call sites keep reading `DirectTarget`
+ *  (= the SoT's `DirectQueryTarget`); the target dropdown binds to this. */
+type DirectTarget = DirectQueryTarget;
 
-export type ReportDataSourceKind = ReportDataSource['kind'];
-export type DirectTarget = 'warehouse' | 'lakehouse';
+/** The Get Data kinds (connection-/file-backed). */
+type GetDataSource = ConnectionDataSource | FileUploadDataSource | AdlsFileDataSource;
+const GET_DATA_KINDS: ReadonlySet<ReportDataSourceKind> = new Set(['connection', 'file-upload', 'adls-file']);
+function isGetDataKind(k: ReportDataSourceKind): boolean { return GET_DATA_KINDS.has(k); }
+function isGetDataSource(ds: ReportDataSource | null | undefined): ds is GetDataSource {
+  return !!ds && (ds.kind === 'connection' || ds.kind === 'file-upload' || ds.kind === 'adls-file');
+}
 
 /** A semantic-model item as returned by /api/items/by-type. */
 interface ModelItem {
@@ -96,6 +129,24 @@ const useStyles = makeStyles({
     border: `${tokens.strokeWidthThick} solid ${tokens.colorBrandStroke1}`,
     boxShadow: tokens.shadow16,
     backgroundColor: tokens.colorBrandBackground2,
+  },
+  // PRIMARY "Get data" entry — a brand-accented card-button above the kind list.
+  getDataRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalM,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorBrandBackground2,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, border-color',
+    transitionDuration: tokens.durationFaster,
+    cursor: 'pointer',
+    width: '100%', textAlign: 'left',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  getDataRowActive: {
+    border: `${tokens.strokeWidthThick} solid ${tokens.colorBrandStroke1}`,
+    boxShadow: tokens.shadow16,
   },
   optionIcon: {
     flexShrink: 0,
@@ -150,7 +201,7 @@ export interface DataSourcePickerProps {
   saving?: boolean;
 }
 
-export function DataSourcePicker({ open, value, onChange, onDismiss, saving }: DataSourcePickerProps) {
+export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, saving }: DataSourcePickerProps) {
   const styles = useStyles();
 
   const [kind, setKind] = useState<ReportDataSourceKind>(value?.kind ?? 'semantic-model');
@@ -172,15 +223,21 @@ export function DataSourcePicker({ open, value, onChange, onDismiss, saving }: D
   const [aasServer, setAasServer] = useState<string>(value?.kind === 'aas' ? value.server : '');
   const [aasDatabase, setAasDatabase] = useState<string>(value?.kind === 'aas' ? value.database : '');
 
+  // (d) Get data — connection / file-upload / adls-file (chosen in the gallery)
+  const [getData, setGetData] = useState<GetDataSource | null>(isGetDataSource(value) ? value : null);
+  const [galleryOpen, setGalleryOpen] = useState(false);
+
   // Re-seed the form whenever the drawer (re)opens against a (possibly new) value.
   useEffect(() => {
-    if (!open) return;
+    if (!open) { setGalleryOpen(false); return; }
     setKind(value?.kind ?? 'semantic-model');
     setModelId(value?.kind === 'semantic-model' ? value.itemId : '');
     setTarget(value?.kind === 'direct-query' ? value.target : 'warehouse');
     setSql(value?.kind === 'direct-query' ? value.sql : '');
     setAasServer(value?.kind === 'aas' ? value.server : '');
     setAasDatabase(value?.kind === 'aas' ? value.database : '');
+    setGetData(isGetDataSource(value) ? value : null);
+    setGalleryOpen(false);
     setPreviewCols(null); setPreviewErr(null);
   }, [open, value]);
 
@@ -236,13 +293,27 @@ export function DataSourcePicker({ open, value, onChange, onDismiss, saving }: D
       const s = aasServer.trim(); const d = aasDatabase.trim();
       return s && d ? { kind, server: s, database: d } : null;
     }
+    // Get data kinds: the gallery already produced a complete source; surface it
+    // as the draft only when it is locally bound (honest completeness).
+    if (isGetDataKind(kind)) return getData && isBound(getData) ? getData : null;
     return null;
-  }, [kind, modelId, sqlGuard, target, aasServer, aasDatabase]);
+  }, [kind, modelId, sqlGuard, target, aasServer, aasDatabase, getData]);
 
   const confirm = useCallback(() => { if (draft) onChange(draft); }, [draft, onChange]);
 
+  // ── Get data gallery: the chosen connection/file source persists immediately ──
+  // (parent PUTs to /data-source) and re-seeds the picker so the confirm summary
+  // reflects it. The gallery owns its own "choose" affordance, so onChosen IS the
+  // commit — identical to the existing confirm() contract, just driven by the card.
+  const onGalleryChosen = useCallback((ds: ReportDataSource) => {
+    if (isGetDataSource(ds)) { setGetData(ds); setKind(ds.kind); }
+    setGalleryOpen(false);
+    onChange(ds);
+  }, [onChange]);
+
   // ── render ─────────────────────────────────────────────────────────────────
   return (
+    <>
     <OverlayDrawer open={open} onOpenChange={(_e, d) => { if (!d.open) onDismiss(); }} position="end" size="medium">
       <DrawerHeader>
         <DrawerHeaderTitle
@@ -259,7 +330,32 @@ export function DataSourcePicker({ open, value, onChange, onDismiss, saving }: D
             no Power BI or Fabric workspace required.
           </Caption1>
 
-          <RadioGroup value={kind} onChange={(_e, d) => setKind(d.value as ReportDataSourceKind)} aria-label="Data source kind">
+          {/* PRIMARY — Get data: browse the connector catalog and bind a reusable
+              Loom Connection / uploaded file / ADLS path (real Azure backend). */}
+          <button
+            type="button"
+            className={mergeClasses(styles.getDataRow, isGetDataKind(kind) && styles.getDataRowActive)}
+            onClick={() => setGalleryOpen(true)}
+            aria-label="Get data — browse the connector gallery"
+          >
+            <span className={styles.optionIcon} aria-hidden><DatabaseSearch20Regular /></span>
+            <span className={styles.optionText}>
+              <Subtitle2>Get data</Subtitle2>
+              <Caption1 className={styles.muted}>
+                Browse the connector gallery — bind a reusable connection, upload a file, or read an ADLS path.
+                Real Azure backend, no Fabric required.
+              </Caption1>
+            </span>
+            <Badge appearance="filled" color="brand" size="small">Connectors</Badge>
+          </button>
+
+          <Caption1 className={styles.muted}>Or build from an existing Loom model, a query, or Analysis Services:</Caption1>
+
+          <RadioGroup
+            value={isGetDataKind(kind) ? '' : kind}
+            onChange={(_e, d) => setKind(d.value as ReportDataSourceKind)}
+            aria-label="Data source kind"
+          >
             <div className={styles.options}>
               {KIND_META.map((k) => (
                 <label
@@ -279,6 +375,40 @@ export function DataSourcePicker({ open, value, onChange, onDismiss, saving }: D
           </RadioGroup>
 
           <Divider />
+
+          {/* (d) Get data — connection / file-upload / adls-file ───────────── */}
+          {isGetDataKind(kind) && (
+            <div className={styles.panel}>
+              <div className={styles.toolbar}>
+                <Subtitle2>Get data source</Subtitle2>
+                <Badge appearance="tint" color="brand" size="small">Connection-backed</Badge>
+                <div className={styles.spacer} />
+                <Button size="small" appearance="subtle" icon={<DatabaseSearch20Regular />} onClick={() => setGalleryOpen(true)}>
+                  Change source
+                </Button>
+              </div>
+              {getData && isBound(getData) ? (
+                <MessageBar intent="success">
+                  <MessageBarBody>
+                    <MessageBarTitle>
+                      {getData.kind === 'connection'
+                        ? <><DatabasePlugConnected20Regular /> {describeSource(getData)}</>
+                        : <><CloudArrowUp20Regular /> {describeSource(getData)}</>}
+                    </MessageBarTitle>
+                    Reads through the Loom resolver against a real Azure backend — introspect, query, and preview all
+                    run server-side. No Power BI / Fabric workspace.
+                  </MessageBarBody>
+                </MessageBar>
+              ) : (
+                <EmptyState
+                  icon={<DatabaseSearch20Regular />}
+                  title="No source chosen yet"
+                  body="Browse the connector gallery to bind a reusable connection, upload a file, or point at an ADLS Gen2 path."
+                  primaryAction={{ label: 'Open Get data', onClick: () => setGalleryOpen(true) }}
+                />
+              )}
+            </div>
+          )}
 
           {/* (a) Semantic model ───────────────────────────────────────────── */}
           {kind === 'semantic-model' && (
@@ -457,7 +587,18 @@ export function DataSourcePicker({ open, value, onChange, onDismiss, saving }: D
           </Button>
         </div>
       </DrawerFooter>
-    </OverlayDrawer>
+      </OverlayDrawer>
+
+      {/* Get Data connector gallery — overlay drawer over the 32-connector catalog.
+          onChosen returns a connection/file/ADLS-backed ReportDataSource which we
+          persist immediately (parent PUT) and reflect in the summary panel above. */}
+      <GetDataGallery
+        open={galleryOpen}
+        reportId={reportId}
+        onChosen={onGalleryChosen}
+        onDismiss={() => setGalleryOpen(false)}
+      />
+    </>
   );
 }
 
