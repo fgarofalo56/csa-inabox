@@ -47,6 +47,7 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { CatalogItemActions } from '@/lib/components/catalog/catalog-item-actions';
 
 interface FederatedHit {
   source: 'purview' | 'unity-catalog' | 'onelake';
@@ -56,6 +57,9 @@ interface FederatedHit {
   description?: string;
   owner?: string;
   workspace_name?: string;
+  // Loom (onelake-source) hits carry their owning Loom workspace id so the
+  // detail tile's actions can register/open/build against the right item.
+  workspace_id?: string;
   domain?: string;
   classifications?: string[];
   qualified_name?: string;
@@ -598,7 +602,15 @@ function CatalogDetailTile({ hit, onClose }: { hit: FederatedHit | null; onClose
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Close</Button>
-            <Button appearance="primary" as="a" href={hit.detail_path} icon={<Open16Regular />}>Open in catalog</Button>
+            {hit.source === 'onelake' ? (
+              // Loom item: resolve/open/build Azure-native (no Fabric catalog 401).
+              // CatalogItemActions renders "Open in workspace" (→ /items/<type>/<id>)
+              // + "Build report in Loom" for data-source types.
+              <CatalogItemActions hit={hit} />
+            ) : (
+              // Purview / Unity Catalog hit: keep the catalog detail deep-link.
+              <Button appearance="primary" as="a" href={hit.detail_path} icon={<Open16Regular />}>Open in catalog</Button>
+            )}
           </DialogActions>
         </DialogBody>
       </DialogSurface>

@@ -35,6 +35,8 @@ export interface FederatedHit {
   description?: string;
   owner?: string;
   workspace_name?: string;
+  /** Loom/Fabric workspace id — passed to register, open-in-workspace, build-report. */
+  workspace_id?: string;
   domain?: string;
   classifications?: string[];
   qualified_name?: string;
@@ -133,7 +135,8 @@ export async function GET(req: NextRequest) {
         for (const r of rows) {
           hits.push({
             source: 'onelake', id: r.item_id, display_name: r.display_name, type: r.type,
-            description: r.description, workspace_name: r.workspace_name, updated_at: r.updated_at,
+            description: r.description, workspace_name: r.workspace_name, workspace_id: r.workspace_id,
+            updated_at: r.updated_at,
             detail_path: `/catalog/onelake/${encodeURIComponent(r.item_id)}?workspace=${encodeURIComponent(r.workspace_id)}`,
           });
         }
@@ -150,6 +153,7 @@ export async function GET(req: NextRequest) {
           hits.push({
             source: 'onelake', id: it.id, display_name: it.displayName, type: it.itemType,
             description: it.description, workspace_name: wsName.get(it.workspaceId) || it.workspaceId,
+            workspace_id: it.workspaceId,
             updated_at: it.updatedAt, detail_path: `/items/${encodeURIComponent(it.itemType)}/${encodeURIComponent(it.id)}`,
           });
         }
