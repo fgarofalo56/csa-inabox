@@ -73,11 +73,23 @@ function emptyReport(): ReportContent {
   return { kind: 'report', pages: [{ name: 'Page 1', visuals: [] }] };
 }
 
-/** Which Synapse backend a `from` item (or a notebook's attached source) runs against. */
-function sqlKindFor(fromType: string, attachedSource: string): 'warehouse' | 'lakehouse' {
+/**
+ * Which Synapse backend a `from` item (or a notebook's attached source) runs
+ * against. Returns `null` for an UNRECOGNIZED source type so the caller emits an
+ * honest "unsupported report source type" reject — a wrong/new item type must
+ * never silently fall through to the dedicated pool and execute against the
+ * wrong backend.
+ */
+function sqlKindFor(fromType: string, attachedSource: string): 'warehouse' | 'lakehouse' | null {
   if (fromType === 'notebook') return attachedSource === 'lakehouse' ? 'lakehouse' : 'warehouse';
   if (LAKEHOUSE_TYPES.has(fromType)) return 'lakehouse';
-  return 'warehouse';
+  if (WAREHOUSE_TYPES.has(fromType)) return 'warehouse';
+  // Query-path sources (e.g. kql-database / sql-database) carry an explicit
+  // attached-source hint from the catalog Build-report action; honor it rather
+  // than guessing. 'lakehouse' → serverless, 'warehouse' → dedicated.
+  if (attachedSource === 'lakehouse') return 'lakehouse';
+  if (attachedSource === 'warehouse') return 'warehouse';
+  return null;
 }
 
 /** Resolve the Synapse target, turning a missing-env throw into an honest gate. */
@@ -165,6 +177,15 @@ export async function POST(req: NextRequest) {
 
   // ── table / query / notebook modes ── all run over the Azure-native Synapse backend ──
   const kind = sqlKindFor(from.type, attachedSource);
+  if (!kind) {
+    // Never silently assume the dedicated pool for an unrecognized type — reject so a
+    // wrong/new source type cannot quietly run against the wrong backend.
+    return bad(
+      `Unsupported report source type "${from.type}". Build a report from a semantic-model, ` +
+      `warehouse, lakehouse, kql-database, sql-database, or a notebook with an attached source.`,
+      400,
+    );
+  }
   const resolved = resolveTarget(kind);
   if ('gate' in resolved) return resolved.gate;
   const target = resolved.target;
