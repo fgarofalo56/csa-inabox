@@ -93,12 +93,37 @@ export interface SqlSource {
 
 // ── Structured filter input (mirror of the designer's wired filter shape) ──────
 
-/** Filter operators surfaced by the Filters pane (no typed predicates). */
-export type ReportFilterOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le' | 'in' | 'contains' | 'between';
+/**
+ * Filter operators surfaced by the Filters pane (no typed predicates).
+ *
+ * The scalar/set ops (`eq`…`in`) compile to a parameterized WHERE/HAVING
+ * predicate. Two Wave-1 additions mirror the Power BI "Filter type" dropdown
+ * 1:1 (no-freeform-config: both are structured picker output, never typed):
+ *  - `relativeDate` — a rolling date window (last/next N days|months|years)
+ *    relative to the server clock. Compiles to a parameterized `DATEADD` /
+ *    `GETDATE()` range WHERE (and a `TODAY()` / `EDATE()` range on the DAX
+ *    mirror), so the same Filters pane drives both backends.
+ *  - `topN` — Power BI "Top N": keep the N rows with the largest by-measure.
+ *    It is NOT a row predicate; it shapes the grouped query (ORDER BY the
+ *    by-measure DESC + a `TOP <N>` cap) and is consumed in `buildSqlFromVisual`
+ *    (DAX mirror: a `TOPN(...)` wrapper — see `daxPredicate`). It therefore
+ *    emits no WHERE/HAVING and is skipped by `scalarPredicate`.
+ */
+export type ReportFilterOp =
+  | 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le' | 'in' | 'contains' | 'between'
+  | 'relativeDate' | 'topN';
+
+/** Granularity for a `relativeDate` window (matches PBI's day/month/year unit). */
+export type RelativeDateUnit = 'days' | 'months' | 'years';
+
+/** Direction of a `relativeDate` window relative to the server clock (now). */
+export type RelativeDateDirection = 'last' | 'next' | 'this';
 
 /**
  * A single structured filter as sent by the designer (`wireFilters` strips the
  * client-only `id`). Field is a model column (`table`+`column`) or a `measure`.
+ * Every input is structured picker output — the user never types SQL/DAX
+ * (no-freeform-config.md).
  */
 export interface ReportFilterInput {
   table?: string;
@@ -111,6 +136,32 @@ export interface ReportFilterInput {
   value2?: string;
   /** Allowed set for `in` (also editable as a comma list). */
   values?: string[];
+  /**
+   * `relativeDate`: window size (N units). Clamped to a safe integer range.
+   * The Filters pane (`wireFilters`) and the /definition route emit `relN`; the
+   * verbose `relativeN` is accepted as an alias for any older caller.
+   */
+  relN?: number;
+  relativeN?: number;
+  /** `relativeDate`: window granularity (day/month/year). Wire: `relUnit`. Defaults to `days`. */
+  relUnit?: RelativeDateUnit;
+  relativeUnit?: RelativeDateUnit;
+  /** `relativeDate`: window direction. Wire: `relDir`. Defaults to `last`. */
+  relDir?: RelativeDateDirection;
+  relativeDirection?: RelativeDateDirection;
+  /** `topN`: rows to keep. Clamped to ROW_CAP. */
+  topN?: number;
+  /** `topN`: keep the largest (`top`, default) or smallest (`bottom`) N. Wire: `topNType`. */
+  topNType?: 'top' | 'bottom';
+  /**
+   * `topN` RANK TARGET — the measure/column the Top-N ranks by. The Filters pane
+   * authors this SEPARATELY from the filter's own field (which is the CATEGORY
+   * column being limited), so it is read from `byMeasure` / `byColumn` (+`byTable`),
+   * NOT from `measure`. Mirrors `applyFilters`, which ranks rows by this same field.
+   */
+  byMeasure?: string;
+  byTable?: string;
+  byColumn?: string;
 }
 
 // ── Compiled output ────────────────────────────────────────────────────────────
@@ -144,6 +195,50 @@ const SQL_SCALAR_OP: Partial<Record<ReportFilterOp, string>> = {
 
 /** Row cap for grouped / projection queries (executeQuery further caps at 5k). */
 const ROW_CAP = 1000;
+
+/** `relativeDate` granularity → T-SQL `DATEADD` datepart keyword. Whitelisted
+ *  (never client text), so it is safe to inline into the `DATEADD` call while
+ *  the numeric offset still binds as a parameter. */
+const SQL_DATE_PART: Record<RelativeDateUnit, string> = {
+  days: 'DAY',
+  months: 'MONTH',
+  years: 'YEAR',
+};
+
+/**
+ * Clamp a client-supplied count to a positive integer in `[1, max]`. Returns
+ * null when it is not a finite number ≥ 1. The result is a validated integer,
+ * so it is injection-safe to inline (the same contract under which `ROW_CAP` is
+ * inlined into `TOP`); relative-date offsets still bind as `@p<n>` parameters.
+ */
+function clampCount(n: number | undefined, max: number): number | null {
+  if (n == null || !Number.isFinite(n)) return null;
+  const i = Math.floor(n);
+  if (i < 1) return null;
+  return Math.min(i, max);
+}
+
+// ── relative-date field accessors (field-name alignment with the Filters pane) ─
+//
+// The designer's `wireFilters` and the /definition route emit `relN` / `relUnit`
+// / `relDir`. Earlier versions of this module read `relativeN` / `relativeUnit` /
+// `relativeDirection`, so the documented date-range WHERE/DAX never compiled
+// (the value was always undefined). These read the wire field first and fall
+// back to the verbose alias, so BOTH backends (SQL `scalarPredicate` and the DAX
+// `daxRelativeDate`) honor the same Filters-pane window.
+
+/** Relative-date window size (N units). Wire `relN`, alias `relativeN`. */
+function relDateN(f: ReportFilterInput): number | undefined {
+  return f.relN ?? f.relativeN;
+}
+/** Relative-date unit. Wire `relUnit`, alias `relativeUnit`; defaults to `days`. */
+function relDateUnit(f: ReportFilterInput): RelativeDateUnit {
+  return f.relUnit ?? f.relativeUnit ?? 'days';
+}
+/** Relative-date direction. Wire `relDir`, alias `relativeDirection`; default `last`. */
+function relDateDir(f: ReportFilterInput): RelativeDateDirection {
+  return f.relDir ?? f.relativeDirection ?? 'last';
+}
 
 // ── Identifier helpers (injection-safe) ────────────────────────────────────────
 
@@ -219,7 +314,7 @@ function likePattern(v: string): string {
 
 // ── Value-well → aggregate projection ──────────────────────────────────────────
 
-interface Projection { expr: string; alias: string }
+interface Projection { expr: string; alias: string; column?: string; measure?: string }
 
 /**
  * Build the aggregate expression + result alias for a value-well field. Measures
@@ -227,17 +322,19 @@ interface Projection { expr: string; alias: string }
  * (defaulting to SUM, matching the DAX path). Alias mirrors aas-dax's labels
  * (`<Agg> of <Column>` / `Sum of <Column>` / `<Measure>`) so SQL and DAX results
  * carry the same column names and the client renders/filters them identically.
+ * `column`/`measure` carry the SOURCE field identity so a Top-N rank target can
+ * be matched back to the aggregate it ranks by (see `topNOrderExpr`).
  */
 function aggProjection(src: SqlSource, w: DaxWellField): Projection | null {
   const mExpr = resolveMeasure(src, w.measure);
-  if (mExpr && w.measure) return { expr: mExpr, alias: w.measure };
+  if (mExpr && w.measure) return { expr: mExpr, alias: w.measure, measure: w.measure };
 
   const name = resolveColumn(src, w.table, w.column);
   if (name && w.column) {
     const useAgg = w.aggregation && w.aggregation !== 'None';
     const fn = useAgg ? SQL_AGG_FN[w.aggregation as string] || 'SUM' : 'SUM';
     const alias = useAgg ? `${w.aggregation} of ${w.column}` : `Sum of ${w.column}`;
-    return { expr: `${fn}(${colRef(name)})`, alias };
+    return { expr: `${fn}(${colRef(name)})`, alias, column: name };
   }
   return null;
 }
@@ -312,6 +409,29 @@ function scalarPredicate(ref: string, f: ReportFilterInput, pb: ReturnType<typeo
       if (!set.length) return null;
       return `${ref} IN (${set.map((v) => pb.add(v)).join(', ')})`;
     }
+    case 'relativeDate': {
+      // Power BI "relative date": a rolling window vs the server clock. The
+      // (signed) offset binds as a parameter; the DATEADD datepart is a
+      // whitelisted keyword, so this stays injection-safe.
+      //   last N  → ref >= DATEADD(unit, -N, today) AND ref < DATEADD(DAY, 1, today)
+      //   next N  → ref >= today           AND ref < DATEADD(unit,  N, DATEADD(DAY, 1, today))
+      //   this    → treated as `last` (window ending today, inclusive).
+      const n = clampCount(relDateN(f), 100_000);
+      if (n == null) return null;
+      const part = SQL_DATE_PART[relDateUnit(f)];
+      if (!part) return null;
+      const today = 'CAST(GETDATE() AS date)';
+      if (relDateDir(f) === 'next') {
+        const pos = pb.add(String(n));
+        return `${ref} >= ${today} AND ${ref} < DATEADD(${part}, ${pos}, DATEADD(DAY, 1, ${today}))`;
+      }
+      const neg = pb.add(String(-n)); // signed offset bound directly (no unary-minus on a param)
+      return `${ref} >= DATEADD(${part}, ${neg}, ${today}) AND ${ref} < DATEADD(DAY, 1, ${today})`;
+    }
+    case 'topN':
+      // Top-N is a query-shape directive (ORDER BY + TOP), consumed in
+      // buildSqlFromVisual via extractTopN — it emits no row predicate here.
+      return null;
     default:
       return null;
   }
@@ -332,6 +452,76 @@ function assemble(
   if (having.length) sql += `\nHAVING ${having.join(' AND ')}`;
   if (orderBy) sql += `\nORDER BY ${orderBy}`;
   return sql;
+}
+
+// ── Top-N (query-shape directive, not a predicate) ─────────────────────────────
+
+/**
+ * Pull the active Power BI "Top N" directive (the first `op:'topN'` filter) out
+ * of the Filters pane. `topN` (or, as a fallback, a numeric `value`) is the row
+ * count. The RANK TARGET is authored SEPARATELY from the filter's own field —
+ * the pane sets the field to the CATEGORY column being limited and the rank
+ * target in `byMeasure` / `byColumn` (+`byTable`), exactly the fields the wire
+ * payload and the /definition route carry — so we read those (with the legacy
+ * `measure` accepted as a fallback). `dir` is the top/bottom choice (`topNType`).
+ * Returns null when there is no Top-N filter or N is not a positive integer.
+ * Top-N is NOT a row predicate — `compileFilters`/`scalarPredicate` skip it — it
+ * shapes the grouped query in `buildSqlFromVisual` (ORDER BY rank-target +
+ * `TOP <N>`, DESC for top / ASC for bottom).
+ */
+function extractTopN(
+  filters: ReportFilterInput[] | undefined,
+): { n: number; byMeasure?: string; byColumn?: string; byTable?: string; dir: 'top' | 'bottom' } | null {
+  for (const f of filters || []) {
+    if (f.op !== 'topN') continue;
+    const raw = f.topN != null ? f.topN : Number(f.value);
+    const n = clampCount(raw, ROW_CAP);
+    if (n == null) continue;
+    return {
+      n,
+      byMeasure: f.byMeasure ?? f.measure,
+      byColumn: f.byColumn,
+      byTable: f.byTable,
+      dir: f.topNType === 'bottom' ? 'bottom' : 'top',
+    };
+  }
+  return null;
+}
+
+/**
+ * ORDER BY expression for a grouped/aggregated query: the Top-N rank target when
+ * it resolves to (1) a real SQL measure expression, (2) a value-well aggregate
+ * backed by the same measure/alias, or (3) a value-well aggregate over the same
+ * source column — i.e. the displayed aggregate the user chose to rank by (which
+ * is exactly what `applyFilters` ranks the result rows by, so the two paths now
+ * agree). Falls back to the first value-well aggregate alias when the rank target
+ * doesn't resolve, so a Top-N with an unresolved by-field — and every non-Top-N
+ * query — keeps the pre-existing default ordering. Caller guarantees `aggs` is
+ * non-empty.
+ */
+function topNOrderExpr(
+  src: SqlSource,
+  topN: { byMeasure?: string; byColumn?: string; byTable?: string } | null,
+  aggs: Projection[],
+): string {
+  if (topN?.byMeasure) {
+    const mExpr = resolveMeasure(src, topN.byMeasure);
+    if (mExpr) return mExpr;
+    const want = topN.byMeasure.trim().toLowerCase();
+    const a = aggs.find(
+      (x) => (x.measure || '').toLowerCase() === want || x.alias.toLowerCase() === want,
+    );
+    if (a) return bracket(a.alias);
+  }
+  if (topN?.byColumn) {
+    const name = resolveColumn(src, topN.byTable, topN.byColumn);
+    if (name) {
+      const lc = name.toLowerCase();
+      const a = aggs.find((x) => (x.column || '').toLowerCase() === lc);
+      if (a) return bracket(a.alias);
+    }
+  }
+  return bracket(aggs[0].alias);
 }
 
 // ── Public: visual wells → SQL ─────────────────────────────────────────────────
@@ -393,6 +583,19 @@ export function buildSqlFromVisual(
   const seen = new Set<string>();
   const group = groups.filter((g) => (seen.has(g.alias) ? false : (seen.add(g.alias), true)));
 
+  // Wave-1 multi-value contract: the new visual types fold every extra
+  // measure-like input into `wells.values`, so they need NO new compile logic
+  // here — each becomes one more aggregate projection automatically:
+  //   • combo charts      → secondary-value (line) series are extra `values`
+  //   • gauge / KPI       → Target / Min / Max are extra `values`
+  //   • treemap / scatter → Details / size measures are extra `values`
+  //   • tooltips          → tooltip measures are extra `values`
+  // Small multiples fold into `category`/`legend` as one more group column. Each
+  // therefore returns REAL aggregated SQL rows; LoomChart reads the extra
+  // columns to draw the new chart shape. (DAX path keeps the SAME contract via
+  // aas-dax.buildDaxFromWells, which maps every `values` field through
+  // daxValueExpr.) So this single `values → aggProjection` pass already powers
+  // the expanded Wave-1 gallery with zero per-visual branching.
   const aggs = values
     .map((w) => aggProjection(sqlSource, w))
     .filter((x): x is Projection => !!x);
@@ -414,12 +617,21 @@ export function buildSqlFromVisual(
     ...group.map((c) => `${c.ref} AS ${bracket(c.alias)}`),
     ...aggs.map((a) => `${a.expr} AS ${bracket(a.alias)}`),
   ];
-  const cap = group.length ? `TOP ${ROW_CAP} ` : '';
+  // Power BI "Top N" filter (op:'topN'): cap the grouped result at N rows and
+  // rank by the chosen by-measure DESC. N is a validated integer (clamped to
+  // ROW_CAP), so it is injection-safe to inline — exactly like ROW_CAP. With no
+  // Top-N filter this falls back to ROW_CAP + first-aggregate ordering, leaving
+  // the previously-shipped query shape byte-for-byte unchanged.
+  const topN = group.length ? extractTopN(filters) : null;
+  const cap = group.length ? `TOP ${topN ? topN.n : ROW_CAP} ` : '';
   const select = `SELECT ${cap}${selectCols.join(', ')}`;
   const groupBy = group.map((c) => c.ref);
-  // Order grouped results by the first aggregate DESC so a TOP N keeps the most
-  // significant rows; a card (no group) needs no ordering.
-  const orderBy = group.length ? `${bracket(aggs[0].alias)} DESC` : null;
+  // Order grouped results so the TOP cap keeps the most significant rows: rank by
+  // the authored Top-N rank target (by-measure / by-column), DESC for "top" and
+  // ASC for "bottom" — the same ordering `applyFilters` uses client-side. A card
+  // (no group) needs no ordering.
+  const dir = topN?.dir === 'bottom' ? 'ASC' : 'DESC';
+  const orderBy = group.length ? `${topNOrderExpr(sqlSource, topN, aggs)} ${dir}` : null;
   return { sql: assemble(select, from, where, groupBy, having, orderBy), parameters: pb.parameters };
 }
 
@@ -434,6 +646,30 @@ function daxQualifiedColumn(table: string, column: string): string {
 /** Emit a DAX literal: numeric when value looks numeric, else a quoted string. */
 function daxLiteral(v: string): string {
   return /^-?\d+(\.\d+)?$/.test(v.trim()) ? v.trim() : `"${v.replace(/"/g, '""')}"`;
+}
+
+/**
+ * DAX mirror of the SQL `relativeDate` window, expressed with `TODAY()` /
+ * `EDATE()` so no typed DAX is required (no-freeform-config). N is a validated
+ * integer inlined as a numeric literal; the window matches the SQL side:
+ *   days   → TODAY() ± N
+ *   months → EDATE(TODAY(), ±N)
+ *   years  → EDATE(TODAY(), ±12N)
+ * `last`/`this` window backward from today (inclusive); `next` forward.
+ */
+function daxRelativeDate(ref: string, f: ReportFilterInput): string | null {
+  const n = clampCount(relDateN(f), 100_000);
+  if (n == null) return null;
+  const unit = relDateUnit(f);
+  const moved = (sign: 1 | -1): string => {
+    if (unit === 'days') return `TODAY() ${sign < 0 ? '-' : '+'} ${n}`;
+    const months = unit === 'years' ? 12 * n : n;
+    return `EDATE(TODAY(), ${sign < 0 ? -months : months})`;
+  };
+  if (relDateDir(f) === 'next') {
+    return `${ref} >= TODAY() && ${ref} <= ${moved(1)}`;
+  }
+  return `${ref} >= ${moved(-1)} && ${ref} <= TODAY()`;
 }
 
 /** Build one DAX boolean predicate for a column filter (null → skip). */
@@ -460,6 +696,14 @@ function daxPredicate(f: ReportFilterInput): string | null {
         .filter((v) => v.length > 0);
       return set.length ? `${ref} IN {${set.map(daxLiteral).join(', ')}}` : null;
     }
+    case 'relativeDate':
+      return daxRelativeDate(ref, f);
+    case 'topN':
+      // Top-N is a table-expression shape (a `TOPN(<N>, <table>, <measure>, DESC)`
+      // wrapper around the EVALUATE), not a CALCULATETABLE boolean predicate — so
+      // it is applied where the DAX visual is assembled (the SQL mirror applies
+      // it in buildSqlFromVisual). Emit no filter predicate here.
+      return null;
     default:
       return null;
   }

@@ -49,6 +49,8 @@ import {
   DataPieRegular, DataScatterRegular, Table20Regular, GridRegular, NumberSymbol20Regular,
   Filter20Regular, Dismiss16Regular, ChevronUp20Regular, ChevronDown20Regular, Sparkle20Regular,
   Database20Regular, CloudArrowUp20Regular, ColorRegular, ReOrderDotsVertical20Regular,
+  Copy20Regular, Options20Regular, DataTrending20Regular, Eye16Regular, EyeOff16Regular,
+  Info16Regular,
 } from '@fluentui/react-icons';
 import type { CSSProperties, ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -58,7 +60,27 @@ import { EmptyState } from '@/lib/components/empty-state';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { ReportPowerBiCopilot, type CopilotVisualSpec } from '@/lib/components/report/report-powerbi-copilot';
 import { DataSourcePicker } from './report/data-source-picker';
-import { FormatPane, type ReportVisualFormat, formatValue } from './report/format-pane';
+import { FormatPane, type ReportVisualFormat, formatValue, LOOM_DATA_PALETTE } from './report/format-pane';
+// Wave-1 parity panels (extracted, self-contained): the Filters pane (3-scope
+// structured filters + Top N / relative date / lock-hide), the Analytics pane
+// (structured reference lines), the Conditional-formatting painters, and the
+// Visual-interactions editor + cross-filter/highlight engine. report-designer
+// MOUNTS these — the canonical implementations live in ./report/*.
+import {
+  FiltersPane, fieldOptions, reFilters, wireFilters, applyFilters,
+  type ReportFilter,
+} from './report/filters-pane';
+import {
+  AnalyticsPane, computeReferenceLines, seriesNamesFromRows, parseAnalytics,
+  CARTESIAN_VISUAL_TYPES,
+  type ReportAnalytics,
+} from './report/analytics-pane';
+import { applyConditionalFormat } from './report/conditional-format';
+import {
+  InteractionsEditor, resolveInteraction, applySelection, selectionFromRow,
+  parseInteractions, wireInteractions,
+  type PageInteractions, type InteractionMode, type VisualSelection,
+} from './report/interactions';
 import {
   type ReportDataSource, isBound, describeSource, fromLegacyState, parseDataSource,
 } from './report/report-data-source';
@@ -66,13 +88,33 @@ import { useCanvasLayout } from './report/use-canvas-layout';
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
+/**
+ * Visual types. The first 11 are the shipped vocabulary; the 8 gallery additions
+ * (combo / waterfall / funnel / gauge / kpi / treemap / multiRowCard / ribbon)
+ * are Power BI-parity entries. Each renders REAL aggregated rows through the same
+ * /query + wells-to-sql path (no new backend route). multiRowCard draws its own
+ * card-list surface; gauge / kpi draw a numeric KPI tile; the rest render today
+ * through the closest LoomChart shape with an honest APPROX_GEOMETRY disclosure —
+ * their distinctive PBI geometry (dual-axis line, rank ribbons, running-total
+ * steps, funnel / squarified-treemap, radial gauge) is a Wave-2 LoomChart build
+ * tracked in docs/fiab/parity/report-designer.md. No silent wrong-geometry.
+ */
 type VisualType =
-  | 'table' | 'matrix' | 'card' | 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'scatter' | 'slicer';
+  | 'table' | 'matrix' | 'card' | 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'scatter' | 'slicer'
+  | 'combo' | 'waterfall' | 'funnel' | 'gauge' | 'kpi' | 'treemap' | 'multiRowCard' | 'ribbon';
 
 type Agg = 'Sum' | 'Avg' | 'Count' | 'Min' | 'Max';
 const AGGS: Agg[] = ['Sum', 'Avg', 'Count', 'Min', 'Max'];
 
-type WellName = 'category' | 'values' | 'legend';
+/**
+ * Field-well names. category/values/legend are the base wells the /query route
+ * compiles directly; the rest are the wave-1 additive wells (their persisted
+ * names match the /definition route's EXTRA_WELL_NAMES exactly). queryVisual()
+ * FOLDS the additive wells into the base three before each query.
+ */
+type WellName =
+  | 'category' | 'values' | 'legend'
+  | 'secondaryValues' | 'target' | 'minimum' | 'maximum' | 'smallMultiples' | 'tooltips' | 'details';
 
 interface WellField {
   uid: string;
@@ -81,7 +123,23 @@ interface WellField {
   measure?: string;
   aggregation?: Agg;
 }
-interface Wells { category: WellField[]; values: WellField[]; legend: WellField[] }
+interface Wells {
+  category: WellField[];
+  values: WellField[];
+  legend: WellField[];
+  // ── additive wells (all optional) ───────────────────────────────────────────
+  secondaryValues?: WellField[]; // combo: the line series (plotted)
+  target?: WellField[];          // gauge / kpi (plotted as a caption)
+  minimum?: WellField[];         // gauge / kpi (plotted as a caption)
+  maximum?: WellField[];         // gauge / kpi (plotted as a caption)
+  smallMultiples?: WellField[];  // charts: trellis group (persisted; NOT plotted yet — Wave 2)
+  tooltips?: WellField[];        // charts: hover-only measures (persisted; NEVER plotted — Wave 2 hover)
+  details?: WellField[];         // treemap: detail sub-group (persisted; NOT plotted yet — Wave 2)
+}
+
+/** PBI canvas page type (16:9 / 4:3 / Letter / Tooltip / Custom). */
+type CanvasType = '16:9' | '4:3' | 'letter' | 'tooltip' | 'custom';
+
 interface DVisual {
   id: string;
   type: VisualType;
@@ -92,150 +150,32 @@ interface DVisual {
   h: number;
   /** Structured visual formatting (FormatPane → visual.config.format). */
   format?: ReportVisualFormat;
+  /** Structured analytics reference lines (AnalyticsPane → visual.config.analytics). */
+  analytics?: ReportAnalytics;
   /** Filters scoped to this visual only. */
   filters?: ReportFilter[];
 }
-interface DPage { id: string; name: string; visuals: DVisual[]; filters?: ReportFilter[] }
-
-// ── filters (structured — no typed DAX/JSON, ui-parity with the PBI Filters pane) ──
-
-type FilterOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le' | 'in' | 'contains' | 'between';
-
-/** A single structured filter. Field is a model column (table+column) or measure. */
-interface ReportFilter {
+interface DPage {
   id: string;
-  table?: string;
-  column?: string;
-  measure?: string;
-  op: FilterOp;
-  /** Single value (eq/ne/gt/ge/lt/le/contains) or the lower bound (between). */
-  value?: string;
-  /** Upper bound for `between`. */
-  value2?: string;
-  /** Allowed set for `in` (also editable as a comma list). */
-  values?: string[];
+  name: string;
+  visuals: DVisual[];
+  filters?: ReportFilter[];
+  // ── wave-1 page options (persisted under page.config) ────────────────────────
+  hidden?: boolean;
+  /** Source→target visual-interaction matrix (Edit interactions). */
+  interactions?: PageInteractions;
+  /** Canvas page type + background (Format-page surface). */
+  canvasType?: CanvasType;
+  background?: { color?: string; transparency?: number };
+  size?: { width?: number; height?: number };
 }
 
-const FILTER_OPS: { op: FilterOp; label: string }[] = [
-  { op: 'eq', label: '= equals' },
-  { op: 'ne', label: '≠ not equals' },
-  { op: 'gt', label: '> greater than' },
-  { op: 'ge', label: '≥ at least' },
-  { op: 'lt', label: '< less than' },
-  { op: 'le', label: '≤ at most' },
-  { op: 'in', label: 'in (any of)' },
-  { op: 'contains', label: 'contains' },
-  { op: 'between', label: 'between' },
-];
-
-/** Encode a filter's field as a stable picker key. */
-function filterFieldKey(f: ReportFilter): string {
-  return f.measure ? `m:${f.measure}` : f.table || f.column ? `c:${f.table || ''}.${f.column || ''}` : '';
-}
-function filterFieldLabel(f: ReportFilter): string {
-  if (f.measure) return f.measure;
-  if (f.column) return f.table ? `${f.table} · ${f.column}` : f.column;
-  return '(pick a field)';
-}
-
-/** Re-hydrate persisted filter shapes into in-memory filters with fresh ids. */
-function reFilters(raw: unknown): ReportFilter[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((r): ReportFilter | null => {
-      const o = (r || {}) as Record<string, unknown>;
-      const op = (typeof o.op === 'string' ? o.op : 'eq') as FilterOp;
-      if (!FILTER_OPS.some((x) => x.op === op)) return null;
-      return {
-        id: uid('flt'),
-        table: typeof o.table === 'string' ? o.table : undefined,
-        column: typeof o.column === 'string' ? o.column : undefined,
-        measure: typeof o.measure === 'string' ? o.measure : undefined,
-        op,
-        value: typeof o.value === 'string' ? o.value : undefined,
-        value2: typeof o.value2 === 'string' ? o.value2 : undefined,
-        values: Array.isArray(o.values) ? o.values.map(String) : undefined,
-      };
-    })
-    .filter((x): x is ReportFilter => !!x);
-}
-
-/** Strip client-only ids before sending filters to the server / query route. */
-function wireFilters(list: ReportFilter[]): Array<Omit<ReportFilter, 'id'>> {
-  return list
-    .filter((f) => (f.column || f.measure))
-    .map(({ id: _id, ...rest }) => rest);
-}
-
-/** True when the filter is complete enough to apply. */
-function filterReady(f: ReportFilter): boolean {
-  if (!f.column && !f.measure) return false;
-  if (f.op === 'between') return !!(f.value && f.value2);
-  if (f.op === 'in') return !!((f.values && f.values.length) || (f.value && f.value.trim()));
-  return f.value != null && f.value !== '';
-}
-
-/**
- * Find the result-row key that corresponds to a filter's field. DAX/serverless
- * result columns surface as `Table[Column]`, `[Measure]`, or a bare alias — so we
- * match tolerantly. Returns null when the visual's result doesn't carry the
- * filtered column (then client-side filtering is skipped and the server WHERE is
- * authoritative — never blanks the visual).
- */
-function matchFilterKey(keys: string[], f: ReportFilter): string | null {
-  const name = (f.measure || f.column || '').trim();
-  if (!name) return null;
-  const lower = name.toLowerCase();
-  for (const k of keys) {
-    const kl = k.toLowerCase();
-    if (kl === lower) return k;
-    if (kl.endsWith(`[${lower}]`)) return k;
-    if (f.table && kl === `${f.table.toLowerCase()}[${lower}]`) return k;
-  }
-  return null;
-}
-
-function passesFilter(cell: unknown, f: ReportFilter): boolean {
-  const s = cell == null ? '' : String(cell);
-  const n = Number(cell);
-  const fn = Number(f.value);
-  switch (f.op) {
-    case 'eq': return s === (f.value ?? '') || (!Number.isNaN(n) && !Number.isNaN(fn) && n === fn);
-    case 'ne': return !(s === (f.value ?? '') || (!Number.isNaN(n) && !Number.isNaN(fn) && n === fn));
-    case 'gt': return !Number.isNaN(n) && !Number.isNaN(fn) && n > fn;
-    case 'ge': return !Number.isNaN(n) && !Number.isNaN(fn) && n >= fn;
-    case 'lt': return !Number.isNaN(n) && !Number.isNaN(fn) && n < fn;
-    case 'le': return !Number.isNaN(n) && !Number.isNaN(fn) && n <= fn;
-    case 'contains': return s.toLowerCase().includes((f.value ?? '').toLowerCase());
-    case 'in': {
-      const set = (f.values && f.values.length ? f.values : (f.value ?? '').split(',')).map((v) => v.trim()).filter(Boolean);
-      return set.includes(s);
-    }
-    case 'between': {
-      const lo = Number(f.value); const hi = Number(f.value2);
-      return !Number.isNaN(n) && !Number.isNaN(lo) && !Number.isNaN(hi) && n >= lo && n <= hi;
-    }
-    default: return true;
-  }
-}
-
-/**
- * Apply the merged filters client-side to a visual's result rows so a filter
- * takes effect IMMEDIATELY (visible), even before the server compiles the WHERE.
- * Idempotent with a server-side filter (same predicate). Filters whose column
- * isn't present in the result are skipped (left to the server) rather than
- * blanking the visual.
- */
-function applyFilters(rows: Array<Record<string, unknown>>, filters: ReportFilter[]): Array<Record<string, unknown>> {
-  const active = filters.filter(filterReady);
-  if (active.length === 0 || rows.length === 0) return rows;
-  const keys = Object.keys(rows[0]);
-  const applicable = active
-    .map((f) => ({ f, key: matchFilterKey(keys, f) }))
-    .filter((x): x is { f: ReportFilter; key: string } => !!x.key);
-  if (applicable.length === 0) return rows;
-  return rows.filter((row) => applicable.every(({ f, key }) => passesFilter(row[key], f)));
-}
+// ── filters ───────────────────────────────────────────────────────────────────
+// The structured 3-scope Filters pane, its model (`ReportFilter`, incl. the
+// wave-1 Top N / relative-date / lock-hide fields), and the pure helpers
+// (`reFilters` / `wireFilters` / `applyFilters` / `fieldOptions`) are the
+// canonical implementations imported above from ./report/filters-pane. The
+// previously-inline copies were removed; everything below consumes the imports.
 
 interface FieldColumn { name: string; dataType: string; summarizeBy?: string; isHidden: boolean }
 interface FieldMeasure { name: string; isHidden: boolean }
@@ -246,36 +186,144 @@ interface VisualState { rows: Array<Record<string, unknown>>; loading: boolean; 
 // ── Visual catalogue (gallery) ───────────────────────────────────────────────
 
 const VISUALS: { type: VisualType; label: string; icon: ReactElement }[] = [
-  { type: 'table',   label: 'Table',          icon: <Table20Regular /> },
-  { type: 'matrix',  label: 'Matrix',         icon: <GridRegular /> },
-  { type: 'card',    label: 'Card / KPI',     icon: <NumberSymbol20Regular /> },
-  { type: 'column',  label: 'Column chart',   icon: <DataBarVerticalRegular /> },
-  { type: 'bar',     label: 'Bar chart',      icon: <DataBarHorizontalRegular /> },
-  { type: 'line',    label: 'Line chart',     icon: <DataLineRegular /> },
-  { type: 'area',    label: 'Area chart',     icon: <DataAreaRegular /> },
-  { type: 'pie',     label: 'Pie chart',      icon: <DataPieRegular /> },
-  { type: 'donut',   label: 'Donut chart',    icon: <DataPieRegular /> },
-  { type: 'scatter', label: 'Scatter',        icon: <DataScatterRegular /> },
-  { type: 'slicer',  label: 'Slicer',         icon: <Filter20Regular /> },
+  { type: 'table',        label: 'Table',          icon: <Table20Regular /> },
+  { type: 'matrix',       label: 'Matrix',         icon: <GridRegular /> },
+  { type: 'card',         label: 'Card',           icon: <NumberSymbol20Regular /> },
+  { type: 'multiRowCard', label: 'Multi-row card', icon: <Table20Regular /> },
+  { type: 'kpi',          label: 'KPI',            icon: <DataTrending20Regular /> },
+  { type: 'gauge',        label: 'Gauge',          icon: <DataTrending20Regular /> },
+  { type: 'column',       label: 'Column chart',   icon: <DataBarVerticalRegular /> },
+  { type: 'bar',          label: 'Bar chart',      icon: <DataBarHorizontalRegular /> },
+  { type: 'line',         label: 'Line chart',     icon: <DataLineRegular /> },
+  { type: 'area',         label: 'Area chart',     icon: <DataAreaRegular /> },
+  { type: 'combo',        label: 'Line + column',  icon: <DataLineRegular /> },
+  { type: 'ribbon',       label: 'Ribbon chart',   icon: <DataBarVerticalRegular /> },
+  { type: 'waterfall',    label: 'Waterfall',      icon: <DataBarVerticalRegular /> },
+  { type: 'funnel',       label: 'Funnel',         icon: <DataBarHorizontalRegular /> },
+  { type: 'pie',          label: 'Pie chart',      icon: <DataPieRegular /> },
+  { type: 'donut',        label: 'Donut chart',    icon: <DataPieRegular /> },
+  { type: 'treemap',      label: 'Treemap',        icon: <GridRegular /> },
+  { type: 'scatter',      label: 'Scatter',        icon: <DataScatterRegular /> },
+  { type: 'slicer',       label: 'Slicer',         icon: <Filter20Regular /> },
 ];
-const CHART_TYPES = new Set<VisualType>(['bar', 'column', 'line', 'area', 'pie', 'donut', 'scatter']);
 
-/** Which wells a given visual type exposes, with parity-correct labels. */
+/**
+ * Map each chart-family visual to the SVG shape LoomChart draws today. The
+ * shipped 7 (bar/column/line/area/pie/donut/scatter) draw their own true
+ * geometry. combo/ribbon/waterfall render through clustered columns and
+ * funnel/treemap through bars over their REAL aggregated rows — the data and
+ * multi-series are real, but the distinctive PBI geometry (dual-axis line, rank
+ * ribbons, running-total steps, funnel + squarified-treemap shapes) is a Wave-2
+ * LoomChart enhancement. Each such visual discloses the approximation honestly
+ * via {@link APPROX_GEOMETRY} (no silent wrong-geometry per no-vaporware.md) and
+ * the parity doc marks the row GATE Wave 2. multiRowCard / gauge / kpi render
+ * their own non-chart surfaces (card list / numeric KPI tile).
+ */
+const CHART_RENDER: Partial<Record<VisualType, LoomChartType>> = {
+  bar: 'bar', column: 'column', line: 'line', area: 'area', pie: 'pie', donut: 'donut', scatter: 'scatter',
+  combo: 'column', ribbon: 'column', waterfall: 'column', funnel: 'bar', treemap: 'bar',
+};
+/** Visual types rendered through LoomChart. */
+const CHART_TYPES = new Set<VisualType>(Object.keys(CHART_RENDER) as VisualType[]);
+/**
+ * Cartesian charts that can carry analytics reference lines (value axis).
+ * Imported from analytics-pane so this canvas-side set (what computeReferenceLines
+ * runs over) is the SAME set the Analytics pane lets a user author — no drift.
+ */
+const CARTESIAN_TYPES = CARTESIAN_VISUAL_TYPES;
+/** Single-big-number visuals (card + KPI + gauge). */
+const KPI_TYPES = new Set<VisualType>(['card', 'kpi', 'gauge']);
+
+/**
+ * Chart-family / KPI visuals whose true Power BI geometry is a Wave-2 LoomChart
+ * build. They render their REAL aggregated rows through the closest available
+ * shape (CHART_RENDER) — or the numeric KPI tile (gauge) — and surface this
+ * one-line honest disclosure beneath the visual so the canvas is never silently
+ * the wrong shape (no-vaporware.md). Each entry is removed once LoomChart draws
+ * the real geometry. See docs/fiab/parity/report-designer.md (Wave 2 plan).
+ */
+const APPROX_GEOMETRY: Partial<Record<VisualType, string>> = {
+  combo: 'Shown as a clustered column chart — line + column dual-axis geometry ships in Wave 2.',
+  ribbon: 'Shown as a clustered column chart — ribbon rank-connectors ship in Wave 2.',
+  waterfall: 'Shown as a column chart — running-total waterfall geometry ships in Wave 2.',
+  funnel: 'Shown as a bar chart — funnel geometry ships in Wave 2.',
+  treemap: 'Shown as a bar chart — squarified treemap geometry ships in Wave 2.',
+  gauge: 'Shown as a numeric KPI tile — radial gauge arc + target marker ship in Wave 2.',
+};
+
+/**
+ * Which wells a given visual type exposes, with parity-correct labels.
+ *
+ * Only wells whose field actually drives the rendered visual are exposed — no
+ * dead controls (no-vaporware.md). The Small multiples, Tooltips, and treemap
+ * Details wells are intentionally NOT exposed yet: LoomChart reads only the first
+ * non-numeric column as the axis and turns every numeric column into a plotted
+ * series, so a small-multiples / details group column would silently change the
+ * aggregation granularity (no trellis appears) and a tooltips measure would draw
+ * as an extra bar/line. They return in Wave 2 with real trellis tiling + detail
+ * sub-grouping + hover surfacing (see the report-designer parity doc). queryVisual()
+ * likewise stops folding them into the query.
+ */
 function wellsFor(type: VisualType): { name: WellName; label: string }[] {
-  if (type === 'card') return [{ name: 'values', label: 'Fields' }];
-  if (type === 'slicer') return [{ name: 'category', label: 'Field' }];
-  if (type === 'table') return [{ name: 'values', label: 'Columns' }];
-  if (type === 'matrix') return [
-    { name: 'category', label: 'Rows' },
-    { name: 'legend', label: 'Columns' },
-    { name: 'values', label: 'Values' },
-  ];
-  // charts
-  return [
-    { name: 'category', label: type === 'scatter' ? 'Details' : 'Axis' },
-    { name: 'values', label: 'Values' },
-    { name: 'legend', label: 'Legend' },
-  ];
+  switch (type) {
+    case 'card':
+    case 'multiRowCard':
+      return [{ name: 'values', label: 'Fields' }];
+    case 'slicer':
+      return [{ name: 'category', label: 'Field' }];
+    case 'table':
+      return [{ name: 'values', label: 'Columns' }];
+    case 'matrix':
+      return [
+        { name: 'category', label: 'Rows' },
+        { name: 'legend', label: 'Columns' },
+        { name: 'values', label: 'Values' },
+      ];
+    case 'gauge':
+    case 'kpi':
+      return [
+        { name: 'values', label: type === 'gauge' ? 'Value' : 'Indicator' },
+        { name: 'target', label: 'Target' },
+        { name: 'minimum', label: 'Minimum' },
+        { name: 'maximum', label: 'Maximum' },
+      ];
+    case 'treemap':
+      return [
+        { name: 'category', label: 'Group' },
+        { name: 'values', label: 'Values' },
+      ];
+    case 'funnel':
+      return [
+        { name: 'category', label: 'Category' },
+        { name: 'values', label: 'Values' },
+      ];
+    case 'waterfall':
+      return [
+        { name: 'category', label: 'Category' },
+        { name: 'values', label: 'Y values' },
+        { name: 'legend', label: 'Breakdown' },
+      ];
+    case 'combo':
+      return [
+        { name: 'category', label: 'Shared axis' },
+        { name: 'values', label: 'Column values' },
+        { name: 'secondaryValues', label: 'Line values' },
+        { name: 'legend', label: 'Legend' },
+      ];
+    case 'ribbon':
+      return [
+        { name: 'category', label: 'Axis' },
+        { name: 'values', label: 'Values' },
+        { name: 'legend', label: 'Legend' },
+      ];
+    default:
+      // bar / column / line / area / pie / donut / scatter
+      return [
+        { name: 'category', label: type === 'scatter' ? 'Details' : 'Axis' },
+        { name: 'values', label: 'Values' },
+        { name: 'legend', label: 'Legend' },
+      ];
+  }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -303,11 +351,41 @@ function parseFieldRef(field?: string): WellField | null {
   return null;
 }
 
-/** Build the wire `visual` payload the /query route understands (type + field + wells). */
+/** Strip a well's client-only `uid` (the wire/persist field shape). */
+function stripWell(a?: WellField[]): Array<Omit<WellField, 'uid'>> {
+  return (a || []).map(({ uid: _u, ...rest }) => rest);
+}
+
+/**
+ * Build the wire `visual` payload the /query route understands (type + field +
+ * wells). The additive wells that DRIVE the rendered visual fold into the three
+ * the route already compiles, so every visual still returns REAL aggregated SQL
+ * rows with zero new route work:
+ *   • secondary values / target / minimum / maximum → extra `values` aggregates
+ *     (combo's line series; gauge/KPI target/min/max — each one more projection).
+ * Two well families are deliberately NOT folded, because LoomChart can't yet
+ * honor them and folding them would corrupt the result (see wellsFor + the
+ * parity doc, Wave 2):
+ *   • TOOLTIPS are hover-only in Power BI and are never plotted — folding them
+ *     into `values` would draw each tooltip measure as an extra bar / line
+ *     series in LoomChart (which plots every numeric result column).
+ *   • SMALL MULTIPLES / treemap DETAILS would add a 2nd group column, but
+ *     LoomChart reads only the first non-numeric column as the axis and ignores
+ *     the rest — so the trellis never appears AND the extra GROUP BY silently
+ *     changes the aggregation granularity. They return in Wave 2 with real
+ *     trellis tiling + detail sub-grouping.
+ */
 function queryVisual(v: DVisual) {
-  const strip = (a: WellField[]) => a.map(({ uid: _u, ...rest }) => rest);
-  const cat = strip(v.wells.category);
-  const vals = strip(v.wells.values);
+  const w = v.wells;
+  // Primary group only — small-multiples / details are excluded (Wave 2, above):
+  // folding them would change the aggregation granularity without tiling a panel.
+  const cat = stripWell([...(w.category || [])]);
+  // Plotted series — tooltips are excluded (hover-only; never a plotted series).
+  const vals = stripWell([
+    ...(w.values || []), ...(w.secondaryValues || []),
+    ...(w.target || []), ...(w.minimum || []), ...(w.maximum || []),
+  ]);
+  const leg = stripWell(w.legend || []);
   const first = vals[0] || cat[0];
   const field = first?.measure
     ? `[${first.measure}]`
@@ -317,13 +395,48 @@ function queryVisual(v: DVisual) {
   return {
     type: v.type,
     field,
-    wells: { category: cat, values: vals, legend: strip(v.wells.legend) },
+    wells: { category: cat, values: vals, legend: leg },
+  };
+}
+
+/**
+ * The FULL authoring wells (base + additive, uid-stripped) persisted via
+ * /definition so a reload reconstructs the exact authoring state. Distinct from
+ * {@link queryVisual} (which folds for the query); the persisted extra wells ride
+ * along under their canonical names and the route only stores the non-empty ones.
+ */
+function wireWells(w: Wells) {
+  return {
+    category: stripWell(w.category),
+    values: stripWell(w.values),
+    legend: stripWell(w.legend),
+    secondaryValues: stripWell(w.secondaryValues),
+    target: stripWell(w.target),
+    minimum: stripWell(w.minimum),
+    maximum: stripWell(w.maximum),
+    smallMultiples: stripWell(w.smallMultiples),
+    tooltips: stripWell(w.tooltips),
+    details: stripWell(w.details),
   };
 }
 
 /** True when a visual has at least one bound field (i.e. is runnable). */
 function hasBinding(v: DVisual): boolean {
-  return v.wells.category.length + v.wells.values.length + v.wells.legend.length > 0;
+  const w = v.wells;
+  return [
+    w.category, w.values, w.legend,
+    w.secondaryValues, w.target, w.minimum, w.maximum, w.smallMultiples, w.tooltips, w.details,
+  ].reduce((n, a) => n + (a?.length || 0), 0) > 0;
+}
+
+/**
+ * Apply a 0–100 transparency to a (token) color via CSS color-mix so the result
+ * stays a Loom token (web3-ui). 0 → the color unchanged; 100 → fully transparent.
+ */
+function applyAlpha(color?: string, transparency?: number): string | undefined {
+  if (!color) return undefined;
+  const t = Math.min(100, Math.max(0, transparency || 0));
+  return t ? `color-mix(in srgb, ${color} ${100 - t}%, transparent)` : color;
 }
 
 // ── styles ────────────────────────────────────────────────────────────────────
@@ -396,6 +509,37 @@ const useStyles = makeStyles({
   section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   kpi: { fontSize: tokens.fontSizeHero800, fontWeight: tokens.fontWeightSemibold, lineHeight: tokens.lineHeightHero800 },
   muted: { color: tokens.colorNeutralForeground3 },
+  // Honest "approximate geometry" disclosure shown beneath a visual whose true
+  // PBI shape is a Wave-2 LoomChart build (no silent wrong-geometry).
+  approxNote: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
+    marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3,
+  },
+  // Multi-row card: one elevated card per result row, field:value stacked pairs.
+  cardList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  cardRow: {
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  cardField: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  // Analytics reference-line legend strip (under cartesian charts).
+  refLineRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS },
+  refLineChip: {
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
+    borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
+  refLineDot: { width: '10px', height: '10px', borderRadius: tokens.borderRadiusCircular, flexShrink: 0 },
+  // Page-format (Format-page surface) swatch row.
+  pageSwatchRow: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  pageSwatchDot: {
+    width: '20px', height: '20px', padding: 0, cursor: 'pointer',
+    borderRadius: tokens.borderRadiusCircular, border: `1px solid ${tokens.colorNeutralStroke1}`,
+  },
+  pageSwatchActive: { border: `2px solid ${tokens.colorNeutralForeground1}`, boxShadow: tokens.shadow4 },
   filterScope: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     padding: tokens.spacingVerticalS,
@@ -425,7 +569,11 @@ type Styles = ReturnType<typeof useStyles>;
 
 // ── visual render ─────────────────────────────────────────────────────────────
 
-function VisualBody({ visual, state, styles, filters }: { visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[] }) {
+function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect }: {
+  visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[];
+  selection?: VisualSelection | null; interactionMode?: InteractionMode;
+  onSelect?: (sel: VisualSelection | null) => void;
+}) {
   if (!hasBinding(visual)) {
     return <Caption1 className={styles.muted}>Add a field from the Fields pane to render this {visual.type}.</Caption1>;
   }
@@ -435,23 +583,71 @@ function VisualBody({ visual, state, styles, filters }: { visual: DVisual; state
   const nf = fmt?.numberFormat;
   // Apply the merged report/page/visual filters client-side so they take effect
   // immediately (visible) — idempotent with the server-side WHERE/FILTER.
-  const rows = applyFilters(state.rows, filters || []);
+  let rows = applyFilters(state.rows, filters || []);
+  // Visual interactions: a selection in another visual cross-filters or
+  // cross-highlights this one (real client engine over the same /query rows).
+  // Charts can't dim individual marks here, so a chart target under 'highlight'
+  // is cross-FILTERED (visible) instead; tables dim non-matching rows.
+  let dimmed: boolean[] = [];
+  if (selection && interactionMode && interactionMode !== 'none' && selection.sourceId !== visual.id) {
+    const chartLike = CHART_TYPES.has(visual.type);
+    const mode: InteractionMode = interactionMode === 'highlight' && chartLike ? 'filter' : interactionMode;
+    const res = applySelection(rows, selection, mode);
+    rows = res.rows; dimmed = res.dimmed;
+  }
   if (state.rows.length === 0) return <Caption1 className={styles.muted}>No rows returned.</Caption1>;
-  if (rows.length === 0) return <Caption1 className={styles.muted}>No rows match the current filters.</Caption1>;
+  if (rows.length === 0) return <Caption1 className={styles.muted}>No rows match the current selection.</Caption1>;
   const cols = Object.keys(rows[0]);
+  // Structured conditional formatting (rules / color scale / data bars / icons),
+  // resolved once against the real result rows; painted on table cells + KPI value.
+  const cf = applyConditionalFormat(rows, fmt?.conditionalFormat);
 
-  if (visual.type === 'card') {
-    const val = Object.values(rows[0])[0];
-    return <div className={styles.kpi}>{formatValue(val, nf)}</div>;
+  // card / KPI / gauge → single big value (+ target/min/max captions for gauge/kpi)
+  if (KPI_TYPES.has(visual.type)) {
+    const valKey = cols[0];
+    const paint = cf.active ? cf.paintFor(valKey, rows[0][valKey]) : undefined;
+    return (
+      <div className={styles.section}>
+        <div className={styles.kpi}
+          style={{
+            color: paint?.color, background: paint?.background,
+            borderRadius: paint?.background ? tokens.borderRadiusMedium : undefined,
+            paddingInline: paint?.background ? tokens.spacingHorizontalS : undefined,
+          }}>
+          {paint?.icon && (
+            <span aria-hidden style={{ color: paint.icon.color, marginInlineEnd: tokens.spacingHorizontalXS }}>{paint.icon.glyph}</span>
+          )}
+          {formatValue(rows[0][valKey], nf)}
+        </div>
+        {(visual.type === 'gauge' || visual.type === 'kpi') && cols.slice(1).map((c) => (
+          <Caption1 key={c} className={styles.muted}>{c}: {formatValue(rows[0][c], nf)}</Caption1>
+        ))}
+        {APPROX_GEOMETRY[visual.type] && (
+          <div className={styles.approxNote}>
+            <Info16Regular aria-hidden />
+            <Caption1>{APPROX_GEOMETRY[visual.type]}</Caption1>
+          </div>
+        )}
+      </div>
+    );
   }
 
   if (visual.type === 'slicer') {
     const col = cols[0];
+    const activeVal = selection?.sourceId === visual.id ? String(selection.constraints[0]?.values?.[0] ?? '') : '';
     return (
-      <Dropdown placeholder={`Filter by ${col}`} aria-label={`slicer ${col}`}>
-        {rows.slice(0, 200).map((r, i) => (
-          <Option key={i} text={String(r[col] ?? '—')}>{String(r[col] ?? '—')}</Option>
-        ))}
+      <Dropdown placeholder={`Filter by ${col}`} aria-label={`slicer ${col}`}
+        value={activeVal} selectedOptions={activeVal ? [activeVal] : []}
+        onOptionSelect={(_e, d) => {
+          if (!onSelect) return;
+          const v = String(d.optionValue ?? '');
+          onSelect(v === '__all__' || v === '' ? null : selectionFromRow(visual.id, { [col]: v }, [col]));
+        }}>
+        <Option value="__all__" text="(All)">(All)</Option>
+        {rows.slice(0, 200).map((r, i) => {
+          const txt = String(r[col] ?? '—');
+          return <Option key={i} value={txt} text={txt}>{txt}</Option>;
+        })}
       </Dropdown>
     );
   }
@@ -466,21 +662,84 @@ function VisualBody({ visual, state, styles, filters }: { visual: DVisual; state
       // pick in Format → Data colors is what the chart paints.
       const lead = fmt?.dataColors?.[0];
       const wrapStyle = lead ? ({ '--colorBrandForeground1': lead } as unknown as CSSProperties) : undefined;
+      // Analytics reference lines — computed from these same rows and OVERLAID
+      // on the chart by LoomChart (horizontal, or sloped for a trend line), with
+      // a compact legend strip below for quick scanning. Each is data-derived,
+      // never a dead control.
+      const refLines = CARTESIAN_TYPES.has(visual.type) ? computeReferenceLines(rows, visual.analytics) : [];
       return (
         <div style={wrapStyle}>
-          <LoomChart type={visual.type as LoomChartType} rows={rows} height={200} />
+          <LoomChart type={CHART_RENDER[visual.type] || 'column'} rows={rows} height={200} refLines={refLines} format={fmt} />
+          {refLines.length > 0 && (
+            <div className={styles.refLineRow}>
+              {refLines.map((rl) => (
+                <span key={rl.id} className={styles.refLineChip} title={rl.label || rl.kind}>
+                  <span className={styles.refLineDot} style={{ backgroundColor: rl.color }} aria-hidden />
+                  <Caption1>{rl.label || rl.kind}</Caption1>
+                </span>
+              ))}
+            </div>
+          )}
+          {APPROX_GEOMETRY[visual.type] && (
+            <div className={styles.approxNote}>
+              <Info16Regular aria-hidden />
+              <Caption1>{APPROX_GEOMETRY[visual.type]}</Caption1>
+            </div>
+          )}
         </div>
       );
     }
   }
 
-  // table / matrix / non-numeric fallback
+  // multi-row card → one elevated card per result row (field:value pairs). This
+  // is the real Power BI multi-row-card surface, not the table fallback.
+  if (visual.type === 'multiRowCard') {
+    return (
+      <div className={styles.cardList}>
+        {rows.slice(0, 60).map((row, ri) => (
+          <div key={ri} className={styles.cardRow}>
+            {cols.map((c) => {
+              const paint = cf.active ? cf.paintFor(c, row[c]) : undefined;
+              return (
+                <div key={c} className={styles.cardField}>
+                  <Caption1 className={styles.muted}>{c}</Caption1>
+                  <Text weight="semibold" style={{ color: paint?.color }}>
+                    {paint?.icon && (
+                      <span aria-hidden style={{ color: paint.icon.color, marginInlineEnd: tokens.spacingHorizontalXXS }}>{paint.icon.glyph}</span>
+                    )}
+                    {formatValue(row[c], nf)}
+                  </Text>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // table / matrix / non-numeric fallback — conditional paint,
+  // selection dim, and click-to-cross-filter (a clicked row becomes a selection).
   return (
     <Table size="small">
       <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
       <TableBody>
         {rows.slice(0, 100).map((row, ri) => (
-          <TableRow key={ri}>{cols.map((c) => <TableCell key={c}>{formatValue(row[c], nf)}</TableCell>)}</TableRow>
+          <TableRow key={ri}
+            style={{ opacity: dimmed[ri] ? 0.35 : undefined, cursor: onSelect ? 'pointer' : undefined }}
+            onClick={onSelect ? () => onSelect(selectionFromRow(visual.id, row, [cols[0]])) : undefined}>
+            {cols.map((c) => {
+              const paint = cf.active ? cf.paintFor(c, row[c]) : undefined;
+              return (
+                <TableCell key={c} style={{ background: paint?.background, color: paint?.color }}>
+                  {paint?.icon && (
+                    <span aria-hidden style={{ color: paint.icon.color, marginInlineEnd: tokens.spacingHorizontalXXS }}>{paint.icon.glyph}</span>
+                  )}
+                  {formatValue(row[c], nf)}
+                </TableCell>
+              );
+            })}
+          </TableRow>
         ))}
       </TableBody>
     </Table>
@@ -499,7 +758,7 @@ function WellEditor({
   onDrop: (well: WellName, payload: WellField) => void;
 }) {
   const [over, setOver] = useState(false);
-  const items = visual.wells[well];
+  const items = visual.wells[well] || [];
   return (
     <div className={styles.section}>
       <div className={styles.wellHead}>
@@ -563,112 +822,10 @@ function WellEditor({
 }
 
 // ── filters pane (right rail tab) ────────────────────────────────────────────
-
-interface FieldOpt { key: string; label: string; table?: string; column?: string; measure?: string }
-
-function fieldOptions(tables: FieldTable[]): FieldOpt[] {
-  const out: FieldOpt[] = [];
-  for (const t of tables) {
-    for (const m of t.measures) out.push({ key: `m:${m.name}`, label: m.name, measure: m.name });
-    for (const c of t.columns) out.push({ key: `c:${t.name}.${c.name}`, label: `${t.name} · ${c.name}`, table: t.name, column: c.name });
-  }
-  return out;
-}
-
-/** One filter scope (Report / This page / Selected visual). */
-function FilterScope({
-  styles, title, hint, opts, filters, onChange,
-}: {
-  styles: Styles; title: string; hint: string; opts: FieldOpt[];
-  filters: ReportFilter[]; onChange: (next: ReportFilter[]) => void;
-}) {
-  const add = () => onChange([...filters, { id: uid('flt'), op: 'eq' }]);
-  const patch = (fid: string, p: Partial<ReportFilter>) =>
-    onChange(filters.map((f) => (f.id === fid ? { ...f, ...p } : f)));
-  const remove = (fid: string) => onChange(filters.filter((f) => f.id !== fid));
-  const pickField = (fid: string, key: string) => {
-    const o = opts.find((x) => x.key === key);
-    patch(fid, { table: o?.table, column: o?.column, measure: o?.measure });
-  };
-  return (
-    <div className={styles.filterScope}>
-      <div className={styles.toolbar}>
-        <Caption1><strong>{title}</strong></Caption1>
-        <div className={styles.spacer} />
-        <Button size="small" appearance="subtle" icon={<Add20Regular />} aria-label={`add filter to ${title}`}
-          disabled={opts.length === 0} onClick={add} />
-      </div>
-      {opts.length === 0 && <Caption1 className={styles.muted}>Bind a data source to filter by its fields.</Caption1>}
-      {opts.length > 0 && filters.length === 0 && <Caption1 className={styles.muted}>No filters. {hint}</Caption1>}
-      {filters.map((f) => (
-        <div key={f.id} className={styles.filterRow}>
-          <div className={styles.toolbar}>
-            <Dropdown size="small" style={{ minWidth: '120px', flex: 1 }} placeholder="Field"
-              aria-label="filter field" value={filterFieldLabel(f)} selectedOptions={[filterFieldKey(f)]}
-              onOptionSelect={(_e, d) => pickField(f.id, String(d.optionValue || ''))}>
-              {opts.map((o) => <Option key={o.key} value={o.key} text={o.label}>{o.label}</Option>)}
-            </Dropdown>
-            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="remove filter" onClick={() => remove(f.id)} />
-          </div>
-          <div className={styles.filterValues}>
-            <Dropdown size="small" style={{ minWidth: '130px' }} aria-label="operator"
-              value={FILTER_OPS.find((x) => x.op === f.op)?.label || 'equals'} selectedOptions={[f.op]}
-              onOptionSelect={(_e, d) => patch(f.id, { op: (d.optionValue as FilterOp) || 'eq' })}>
-              {FILTER_OPS.map((o) => <Option key={o.op} value={o.op} text={o.label}>{o.label}</Option>)}
-            </Dropdown>
-            {f.op === 'between' ? (
-              <>
-                <Input size="small" style={{ width: '84px' }} placeholder="min" value={f.value ?? ''} aria-label="min"
-                  onChange={(_e, d) => patch(f.id, { value: d.value })} />
-                <Input size="small" style={{ width: '84px' }} placeholder="max" value={f.value2 ?? ''} aria-label="max"
-                  onChange={(_e, d) => patch(f.id, { value2: d.value })} />
-              </>
-            ) : (
-              <Input size="small" style={{ flex: 1, minWidth: '120px' }}
-                placeholder={f.op === 'in' ? 'value1, value2, …' : 'value'}
-                value={f.value ?? ''} aria-label="filter value"
-                onChange={(_e, d) => patch(f.id, { value: d.value, ...(f.op === 'in' ? { values: d.value.split(',').map((s) => s.trim()).filter(Boolean) } : {}) })} />
-            )}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function FiltersPane({
-  styles, tables, reportFilters, pageFilters, visualFilters, selectedTitle, onReport, onPage, onVisual,
-}: {
-  styles: Styles; tables: FieldTable[];
-  reportFilters: ReportFilter[]; pageFilters: ReportFilter[]; visualFilters: ReportFilter[] | null;
-  selectedTitle: string | null;
-  onReport: (next: ReportFilter[]) => void;
-  onPage: (next: ReportFilter[]) => void;
-  onVisual: (next: ReportFilter[]) => void;
-}) {
-  const opts = useMemo(() => fieldOptions(tables), [tables]);
-  return (
-    <div className={styles.pane} style={{ padding: 0 }}>
-      <Caption1 className={styles.muted}>
-        Structured filters apply on top of the model — never typed DAX/JSON. Report filters apply to every page;
-        page filters to this page; visual filters to the selected visual.
-      </Caption1>
-      <FilterScope styles={styles} title="Report" hint="Applies to every visual on every page." opts={opts}
-        filters={reportFilters} onChange={onReport} />
-      <FilterScope styles={styles} title="This page" hint="Applies to every visual on the active page." opts={opts}
-        filters={pageFilters} onChange={onPage} />
-      {visualFilters === null ? (
-        <div className={styles.filterScope}>
-          <Caption1><strong>Selected visual</strong></Caption1>
-          <Caption1 className={styles.muted}>Select a visual on the canvas to add filters that affect only it.</Caption1>
-        </div>
-      ) : (
-        <FilterScope styles={styles} title={selectedTitle ? `Visual · ${selectedTitle}` : 'Selected visual'}
-          hint="Applies to the selected visual only." opts={opts} filters={visualFilters} onChange={onVisual} />
-      )}
-    </div>
-  );
-}
+// `FiltersPane`, `fieldOptions`, and the `FieldOpt` shape are imported from
+// ./report/filters-pane (the canonical 3-scope structured pane with Top N /
+// relative-date / lock-hide). The previously-inline FieldOpt/fieldOptions/
+// FilterScope/FiltersPane copies were removed; the host mounts <FiltersPane …/>.
 
 // ── main ────────────────────────────────────────────────────────────────────
 
@@ -681,8 +838,14 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const [pages, setPages] = useState<DPage[]>([]);
   const [activePage, setActivePage] = useState(0);
   const [selectedVisual, setSelectedVisual] = useState<string | null>(null);
-  /** Right rail mode: Build (visualizations + fields), Format, Filters, or the Power BI Copilot. */
-  const [rightTab, setRightTab] = useState<'build' | 'format' | 'filters' | 'copilot'>('build');
+  /**
+   * Active cross-filter / cross-highlight selection (Visual interactions). A
+   * slicer pick or a clicked table row sets it; every other visual on the page
+   * reacts per the page's interaction matrix. Cleared on page change.
+   */
+  const [selection, setSelection] = useState<VisualSelection | null>(null);
+  /** Right rail mode: Build, Format, Analytics, Filters, Interactions, or the Power BI Copilot. */
+  const [rightTab, setRightTab] = useState<'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'copilot'>('build');
   const [reportName, setReportName] = useState('');
 
   // Report DATA SOURCE (semantic-model default · direct-query · AAS). Replaces the
@@ -761,35 +924,54 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       setDataSource(ds);
       setReportFilters(reFilters(j.reportFilters));
 
-      const dpages: DPage[] = (j.pages || []).map((p: any, pi: number): DPage => ({
-        id: uid('p'),
-        name: p.displayName || p.name || `Page ${pi + 1}`,
-        filters: reFilters(p.filters),
-        visuals: (p.visuals || []).map((v: any): DVisual => {
-          const cfgWells = v.config?.wells;
-          const reUid = (a: any[]): WellField[] => (Array.isArray(a) ? a : []).map((f) => ({ uid: uid('f'), ...f }));
-          let wells: Wells;
-          if (cfgWells) {
-            wells = { category: reUid(cfgWells.category), values: reUid(cfgWells.values), legend: reUid(cfgWells.legend) };
-          } else {
-            // Back-compat: seed a single well from the legacy `field` string.
-            const parsed = parseFieldRef(v.field);
-            const into: WellName = parsed?.measure ? 'values' : 'category';
-            wells = { category: [], values: [], legend: [] };
-            if (parsed) wells[into] = [parsed.measure ? parsed : { ...parsed, aggregation: undefined }];
-          }
-          return {
-            id: uid('v'),
-            type: (v.type as VisualType) || 'table',
-            title: v.title || '',
-            wells,
-            w: Math.min(12, Math.max(1, Number(v.config?.layout?.w) || 6)),
-            h: Math.max(1, Number(v.config?.layout?.h) || 4),
-            format: (v.config?.format as ReportVisualFormat | undefined) || undefined,
-            filters: reFilters(v.config?.filters),
-          };
-        }),
-      }));
+      const dpages: DPage[] = (j.pages || []).map((p: any, pi: number): DPage => {
+        const pc = p.config || {};
+        return {
+          id: uid('p'),
+          name: p.displayName || p.name || `Page ${pi + 1}`,
+          filters: reFilters(p.filters),
+          // Page options (persisted under page.config — round-trips once the GET
+          // helper surfaces it; read defensively so it's a no-op until then).
+          hidden: !!pc.hidden,
+          interactions: parseInteractions(pc.interactions),
+          canvasType: typeof pc.type === 'string' ? (pc.type as CanvasType) : undefined,
+          background: pc.background && typeof pc.background === 'object' ? pc.background : undefined,
+          size: pc.size && typeof pc.size === 'object' ? pc.size : undefined,
+          visuals: (p.visuals || []).map((v: any): DVisual => {
+            const cfgWells = v.config?.wells;
+            const reUid = (a: any): WellField[] => (Array.isArray(a) ? a : []).map((f: any) => ({ uid: uid('f'), ...f }));
+            let wells: Wells;
+            if (cfgWells) {
+              // Rehydrate the base + additive authoring wells (queryVisual folds
+              // the additive ones at query time; here we keep them distinct).
+              wells = {
+                category: reUid(cfgWells.category), values: reUid(cfgWells.values), legend: reUid(cfgWells.legend),
+                secondaryValues: reUid(cfgWells.secondaryValues), target: reUid(cfgWells.target),
+                minimum: reUid(cfgWells.minimum), maximum: reUid(cfgWells.maximum),
+                smallMultiples: reUid(cfgWells.smallMultiples), tooltips: reUid(cfgWells.tooltips),
+                details: reUid(cfgWells.details),
+              };
+            } else {
+              // Back-compat: seed a single well from the legacy `field` string.
+              const parsed = parseFieldRef(v.field);
+              const into: WellName = parsed?.measure ? 'values' : 'category';
+              wells = { category: [], values: [], legend: [] };
+              if (parsed) wells[into] = [parsed.measure ? parsed : { ...parsed, aggregation: undefined }];
+            }
+            return {
+              id: uid('v'),
+              type: (v.type as VisualType) || 'table',
+              title: v.title || '',
+              wells,
+              w: Math.min(12, Math.max(1, Number(v.config?.layout?.w) || 6)),
+              h: Math.max(1, Number(v.config?.layout?.h) || 4),
+              format: (v.config?.format as ReportVisualFormat | undefined) || undefined,
+              analytics: parseAnalytics(v.config?.analytics),
+              filters: reFilters(v.config?.filters),
+            };
+          }),
+        };
+      });
       setPages(dpages.length ? dpages : [{ id: uid('p'), name: 'Page 1', visuals: [] }]);
       setActivePage(0);
       setDirty(false);
@@ -823,6 +1005,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     () => (page?.visuals || []).find((v) => v.id === selectedVisual) || null,
     [page, selectedVisual],
   );
+
+  // A cross-filter selection is page-scoped — clear it when the active page changes.
+  useEffect(() => { setSelection(null); }, [activePage]);
 
   // ── live render: query each visual on the active page ─────────────────────────
   // `scopeFilters` = report + page filters; the visual's own filters are merged in
@@ -865,7 +1050,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   }, [mutatePage]);
 
   const addVisual = useCallback((type: VisualType) => {
-    const v: DVisual = { id: uid('v'), type, title: VISUALS.find((x) => x.type === type)?.label || type, wells: { category: [], values: [], legend: [] }, w: type === 'card' ? 3 : 6, h: 4 };
+    const v: DVisual = { id: uid('v'), type, title: VISUALS.find((x) => x.type === type)?.label || type, wells: { category: [], values: [], legend: [] }, w: KPI_TYPES.has(type) ? 3 : 6, h: KPI_TYPES.has(type) ? 3 : 4 };
     mutatePage((p) => ({ ...p, visuals: [...p.visuals, v] }));
     setSelectedVisual(v.id);
   }, [mutatePage]);
@@ -903,18 +1088,23 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
   const addToWell = useCallback((vid: string, well: WellName, f: WellField) => {
     mutateVisual(vid, (v) => {
-      if (v.wells[well].some((x) => fieldKey(x) === fieldKey(f))) return v;
-      // single-field wells (card uses many values; slicer/category single)
-      const single = well === 'category' && (v.type === 'slicer');
-      const cur = single ? [] : v.wells[well];
-      return { ...v, wells: { ...v.wells, [well]: [...cur, f] } };
+      const cur = v.wells[well] || [];
+      if (cur.some((x) => fieldKey(x) === fieldKey(f))) return v;
+      // Single-field wells: slicer field, and the gauge/kpi Value/Target/Min/Max
+      // wells (each holds exactly one field). All others accept many.
+      const single =
+        (well === 'category' && v.type === 'slicer') ||
+        well === 'target' || well === 'minimum' || well === 'maximum' ||
+        ((v.type === 'gauge' || v.type === 'kpi') && well === 'values');
+      const base = single ? [] : cur;
+      return { ...v, wells: { ...v.wells, [well]: [...base, f] } };
     });
   }, [mutateVisual]);
   const removeFromWell = useCallback((vid: string, well: WellName, fuid: string) => {
-    mutateVisual(vid, (v) => ({ ...v, wells: { ...v.wells, [well]: v.wells[well].filter((x) => x.uid !== fuid) } }));
+    mutateVisual(vid, (v) => ({ ...v, wells: { ...v.wells, [well]: (v.wells[well] || []).filter((x) => x.uid !== fuid) } }));
   }, [mutateVisual]);
   const setAgg = useCallback((vid: string, well: WellName, fuid: string, agg: Agg) => {
-    mutateVisual(vid, (v) => ({ ...v, wells: { ...v.wells, [well]: v.wells[well].map((x) => (x.uid === fuid ? { ...x, aggregation: agg } : x)) } }));
+    mutateVisual(vid, (v) => ({ ...v, wells: { ...v.wells, [well]: (v.wells[well] || []).map((x) => (x.uid === fuid ? { ...x, aggregation: agg } : x)) } }));
   }, [mutateVisual]);
 
   // ── pages ──────────────────────────────────────────────────────────────────
@@ -937,6 +1127,41 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       setActivePage((ap) => Math.max(0, Math.min(ap, safe.length - 1)));
       return safe;
     });
+    setDirty(true);
+  };
+  /** Duplicate a page (deep-clone its visuals + wells with fresh client ids). */
+  const duplicatePage = (pid: string) => {
+    setPages((prev) => {
+      const idx = prev.findIndex((p) => p.id === pid);
+      if (idx < 0) return prev;
+      const src = prev[idx];
+      const cloneWells = (w: Wells): Wells => {
+        const c = (a?: WellField[]) => (a || []).map((f) => ({ ...f, uid: uid('f') }));
+        return {
+          category: c(w.category), values: c(w.values), legend: c(w.legend),
+          secondaryValues: c(w.secondaryValues), target: c(w.target),
+          minimum: c(w.minimum), maximum: c(w.maximum),
+          smallMultiples: c(w.smallMultiples), tooltips: c(w.tooltips), details: c(w.details),
+        };
+      };
+      const dup: DPage = {
+        ...src,
+        id: uid('p'),
+        name: `${src.name} (copy)`,
+        interactions: undefined, // visual ids change → drop the old matrix
+        filters: (src.filters || []).map((f) => ({ ...f, id: uid('flt') })),
+        visuals: src.visuals.map((v) => ({ ...v, id: uid('v'), wells: cloneWells(v.wells), filters: (v.filters || []).map((f) => ({ ...f, id: uid('flt') })) })),
+      };
+      const next = [...prev.slice(0, idx + 1), dup, ...prev.slice(idx + 1)];
+      setActivePage(idx + 1);
+      return next;
+    });
+    setSelectedVisual(null);
+    setDirty(true);
+  };
+  /** Toggle a page's hidden flag (hidden pages are still authored + persisted). */
+  const toggleHidePage = (pid: string) => {
+    setPages((prev) => prev.map((p) => (p.id === pid ? { ...p, hidden: !p.hidden } : p)));
     setDirty(true);
   };
 
@@ -980,12 +1205,25 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     pages: pages.map((p) => ({
       name: p.name,
       filters: wireFilters(p.filters || []),
+      // Page config (canvas type/size/background, hidden, interaction matrix). The
+      // route's sanitizePageConfig drops empty fields, so a plain page persists
+      // nothing extra. wireInteractions strips empty buckets.
+      config: {
+        ...(p.canvasType ? { type: p.canvasType } : {}),
+        ...(p.size ? { size: p.size } : {}),
+        ...(p.background ? { background: p.background } : {}),
+        ...(p.hidden ? { hidden: true } : {}),
+        ...(wireInteractions(p.interactions) ? { interactions: wireInteractions(p.interactions) } : {}),
+      },
       visuals: p.visuals.map((v) => ({
         visualType: v.type,
         title: v.title,
-        wells: queryVisual(v).wells,
+        // Persist the FULL authoring wells (base + additive); queryVisual folds
+        // them for the /query call — they round-trip here for faithful reload.
+        wells: wireWells(v.wells),
         layout: { x: 0, y: 0, w: v.w, h: v.h },
         format: v.format,
+        analytics: v.analytics,
         filters: wireFilters(v.filters || []),
       })),
     })),
@@ -1160,7 +1398,12 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       {pages.map((p, i) => (
         <div key={p.id} className={mergeClasses(styles.pageRow, i === activePage && styles.pageRowActive)}
           onClick={() => { setActivePage(i); setSelectedVisual(null); }}>
-          <Text className={styles.pageRowName}>{p.name}</Text>
+          <Text className={mergeClasses(styles.pageRowName, p.hidden && styles.muted)}>{p.name}</Text>
+          {p.hidden && (
+            <Tooltip content="Hidden from report viewers" relationship="label">
+              <EyeOff16Regular />
+            </Tooltip>
+          )}
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Button size="small" appearance="subtle" icon={<Edit20Regular />} aria-label="page actions" onClick={(e) => e.stopPropagation()} />
@@ -1168,6 +1411,10 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
             <MenuPopover>
               <MenuList>
                 <RenamePageItem name={p.name} onRename={(n) => renamePage(p.id, n)} />
+                <MenuItem icon={<Copy20Regular />} onClick={() => duplicatePage(p.id)}>Duplicate page</MenuItem>
+                <MenuItem icon={p.hidden ? <Eye16Regular /> : <EyeOff16Regular />} onClick={() => toggleHidePage(p.id)}>
+                  {p.hidden ? 'Unhide page' : 'Hide page'}
+                </MenuItem>
                 <MenuItem icon={<Delete20Regular />} onClick={() => deletePage(p.id)}>Delete page</MenuItem>
               </MenuList>
             </MenuPopover>
@@ -1219,12 +1466,28 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       )}
 
       {!loading && page && page.visuals.length > 0 && (
-        <div className={styles.canvasGrid} ref={gridRef}>
+        <div className={styles.canvasGrid} ref={gridRef}
+          style={page.background?.color ? { backgroundColor: applyAlpha(page.background.color, page.background.transparency), padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge } : undefined}>
           {page.visuals.map((v, i) => {
             const fmt = v.format;
             const showTitle = fmt?.showTitle !== false;
             const titleText = (fmt?.titleText && fmt.titleText.trim()) || v.title || '(untitled)';
             const merged = [...reportFilters, ...(page.filters || []), ...(v.filters || [])];
+            // Visual-interaction mode for this visual vs the active selection's source.
+            const interactionMode: InteractionMode = selection && selection.sourceId !== v.id
+              ? resolveInteraction({ visuals: page.visuals, interactions: page.interactions }, selection.sourceId, v.id)
+              : 'none';
+            // Format chrome (background / border / shadow) over the card.
+            const cardStyle: CSSProperties = {
+              gridColumn: `span ${Math.min(12, Math.max(2, v.w))}`,
+              minHeight: `${Math.max(180, v.h * 40)}px`,
+            };
+            if (fmt?.background?.color) cardStyle.backgroundColor = applyAlpha(fmt.background.color, fmt.background.transparency);
+            if (fmt?.border?.show) {
+              cardStyle.border = `1px solid ${fmt.border.color || tokens.colorNeutralStroke1}`;
+              if (fmt.border.radius != null) cardStyle.borderRadius = fmt.border.radius;
+            }
+            if (fmt?.shadow?.show) cardStyle.boxShadow = tokens.shadow16;
             return (
             <div key={v.id}
               className={mergeClasses(
@@ -1234,7 +1497,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                 canvas.dropIndicator?.id === v.id && canvas.dropIndicator.side === 'before' && styles.vcardDropBefore,
                 canvas.dropIndicator?.id === v.id && canvas.dropIndicator.side === 'after' && styles.vcardDropAfter,
               )}
-              style={{ gridColumn: `span ${Math.min(12, Math.max(2, v.w))}`, minHeight: `${Math.max(180, v.h * 40)}px` }}
+              style={cardStyle}
               onClick={() => setSelectedVisual(v.id)}
               {...canvas.getDropTargetProps(v)}>
               <div className={styles.vcardHead}>
@@ -1250,7 +1513,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                 <Tooltip content="Remove visual" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); removeVisual(v.id); }} /></Tooltip>
               </div>
               <div className={styles.vcardBody}>
-                <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged} />
+                <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged}
+                  selection={selection} interactionMode={interactionMode}
+                  onSelect={(sel) => setSelection(sel)} />
               </div>
               <div className={styles.resizeHandle} title="Drag to resize, or focus and use arrow keys"
                 {...canvas.getResizeHandleProps(v)} />
@@ -1268,10 +1533,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   ];
   const rightPanel = (
     <div className={styles.pane}>
-      <TabList selectedValue={rightTab} onTabSelect={(_e, d) => setRightTab(d.value as 'build' | 'format' | 'filters' | 'copilot')} size="small">
+      <TabList selectedValue={rightTab}
+        onTabSelect={(_e, d) => setRightTab(d.value as 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'copilot')} size="small">
         <Tab value="build" icon={<DataBarVerticalRegular />}>Build</Tab>
         <Tab value="format" icon={<ColorRegular />}>Format</Tab>
+        <Tab value="analytics" icon={<DataTrending20Regular />}>Analytics</Tab>
         <Tab value="filters" icon={<Filter20Regular />}>Filters</Tab>
+        <Tab value="interactions" icon={<Options20Regular />}>Interactions</Tab>
         <Tab value="copilot" icon={<Sparkle20Regular />}>Power BI Copilot</Tab>
       </TabList>
       {rightTab === 'copilot' && (
@@ -1286,15 +1554,32 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         />
       )}
       {rightTab === 'format' && (
-        <FormatPane
+        selected ? (
+          <FormatPane
+            visualType={selected.type}
+            format={selected.format}
+            condFields={fieldOptions(tables)}
+            onChange={(f) => mutateVisual(selected.id, (v) => ({ ...v, format: f }))}
+          />
+        ) : (
+          // PBI parity: with nothing selected, the Format pane formats the PAGE.
+          <PageFormatPanel
+            styles={styles}
+            page={page}
+            onChange={(patch) => mutatePage((p) => ({ ...p, ...patch }))}
+          />
+        )
+      )}
+      {rightTab === 'analytics' && (
+        <AnalyticsPane
           visualType={selected?.type ?? null}
-          format={selected?.format}
-          onChange={(f) => { if (selected) mutateVisual(selected.id, (v) => ({ ...v, format: f })); }}
+          analytics={selected?.analytics}
+          seriesNames={selected ? seriesNamesFromRows(visualRows[selected.id]?.rows || []) : []}
+          onChange={(a) => { if (selected) mutateVisual(selected.id, (v) => ({ ...v, analytics: a })); }}
         />
       )}
       {rightTab === 'filters' && (
         <FiltersPane
-          styles={styles}
           tables={tables}
           reportFilters={reportFilters}
           pageFilters={page?.filters || []}
@@ -1303,6 +1588,14 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           onReport={(next) => { setReportFilters(next); setDirty(true); }}
           onPage={(next) => mutatePage((p) => ({ ...p, filters: next }))}
           onVisual={(next) => { if (selected) mutateVisual(selected.id, (v) => ({ ...v, filters: next })); }}
+        />
+      )}
+      {rightTab === 'interactions' && (
+        <InteractionsEditor
+          visuals={(page?.visuals || []).map((v) => ({ id: v.id, type: v.type, title: v.title }))}
+          interactions={page?.interactions}
+          selectedSourceId={selectedVisual}
+          onChange={(next) => mutatePage((p) => ({ ...p, interactions: next }))}
         />
       )}
       {rightTab === 'build' && (
@@ -1526,6 +1819,70 @@ function RenamePageItem({ name, onRename }: { name: string; onRename: (n: string
         onChange={(_e, d) => setVal(d.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { onRename(val.trim() || name); setEditing(false); } }} />
       <Button size="small" appearance="primary" onClick={() => { onRename(val.trim() || name); setEditing(false); }}>OK</Button>
+    </div>
+  );
+}
+
+// ── Page-format surface (PBI "Format your report page", shown when nothing is selected) ──
+
+const CANVAS_TYPE_OPTS: { id: CanvasType; label: string }[] = [
+  { id: '16:9', label: '16:9 (widescreen)' },
+  { id: '4:3', label: '4:3 (standard)' },
+  { id: 'letter', label: 'Letter' },
+  { id: 'tooltip', label: 'Tooltip' },
+  { id: 'custom', label: 'Custom' },
+];
+
+/**
+ * The Format pane's no-selection surface: format the PAGE (canvas type +
+ * background), matching Power BI. Every control is structured (a Dropdown / swatch
+ * radiogroup / numeric Input) and persists on the page's config via /definition.
+ */
+function PageFormatPanel({ styles, page, onChange }: {
+  styles: Styles; page?: DPage; onChange: (patch: Partial<DPage>) => void;
+}) {
+  if (!page) {
+    return <EmptyState icon={<ColorRegular />} title="No page" body="Add a page to format its canvas type and background." />;
+  }
+  const bg = page.background || {};
+  const setBg = (p: Partial<NonNullable<DPage['background']>>) => onChange({ background: { ...(page.background || {}), ...p } });
+  const ct = page.canvasType || '16:9';
+  return (
+    <div className={styles.pane} style={{ padding: 0 }}>
+      <Caption1 className={styles.muted}>
+        No visual selected — format the report <strong>page</strong> (Power BI parity). Select a visual on the canvas to format it instead.
+      </Caption1>
+      <div className={styles.section}>
+        <Caption1><strong>Canvas type</strong></Caption1>
+        <Dropdown size="small" aria-label="canvas type"
+          value={CANVAS_TYPE_OPTS.find((c) => c.id === ct)?.label || '16:9 (widescreen)'}
+          selectedOptions={[ct]}
+          onOptionSelect={(_e, d) => onChange({ canvasType: (d.optionValue as CanvasType) || '16:9' })}>
+          {CANVAS_TYPE_OPTS.map((c) => <Option key={c.id} value={c.id} text={c.label}>{c.label}</Option>)}
+        </Dropdown>
+      </div>
+      <div className={styles.section}>
+        <Caption1><strong>Page background</strong></Caption1>
+        <div className={styles.pageSwatchRow} role="radiogroup" aria-label="page background color">
+          <button type="button" role="radio" aria-checked={!bg.color} aria-label="None" title="None"
+            className={mergeClasses(styles.pageSwatchDot, !bg.color && styles.pageSwatchActive)}
+            style={{ backgroundColor: tokens.colorNeutralBackground1 }} onClick={() => setBg({ color: undefined })} />
+          {LOOM_DATA_PALETTE.map((sw) => (
+            <button key={sw.token} type="button" role="radio" aria-checked={bg.color === sw.token} aria-label={sw.label} title={sw.label}
+              className={mergeClasses(styles.pageSwatchDot, bg.color === sw.token && styles.pageSwatchActive)}
+              style={{ backgroundColor: sw.token }} onClick={() => setBg({ color: sw.token })} />
+          ))}
+        </div>
+        {bg.color && (
+          <>
+            <Caption1 className={styles.muted}>Transparency (%)</Caption1>
+            <Input size="small" type="number" min={0} max={100} aria-label="page background transparency"
+              value={bg.transparency != null ? String(bg.transparency) : '0'}
+              onChange={(_e, d) => setBg({ transparency: Math.min(100, Math.max(0, Math.round(Number(d.value) || 0))) })} />
+          </>
+        )}
+      </div>
+      <Caption1 className={styles.muted}>Canvas type + background persist with the page. Use the page menu to duplicate or hide a page.</Caption1>
     </div>
   );
 }

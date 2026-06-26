@@ -49,6 +49,56 @@
  *      route change. AAS-backed models, whose relationships are defined in the
  *      tabular model, answer cross-table visuals via Path 2.
  *
+ * ── REPORT-DESIGNER PARITY · WAVE 1 — the well-fold + filter-channel contract ──
+ *
+ * Wave 1 widens the report designer toward Power BI authoring parity
+ * (docs/fiab/parity/report-designer.md) WITHOUT adding a backend route: every
+ * new capability renders REAL aggregated rows through the unchanged Path-3
+ * wells→SQL path (or the Path-2 DAX mirror), and the rest applies client-side in
+ * LoomChart. This route therefore does NOT branch per visual type, per format
+ * option, per analytics line, or per interaction — it stays a pure
+ * wells + filters → SQL/DAX compiler. Two client-side contracts keep that real:
+ *
+ *   1. WELL FOLD (expanded visual gallery). The eight new visual types — combo
+ *      (line + clustered/stacked column), waterfall, funnel, gauge, KPI,
+ *      treemap, multi-row card, ribbon — plus the bar/column stacking /
+ *      clustered / 100% toggle, introduce new Power BI wells: Secondary values
+ *      (combo), Target / Min / Max (gauge / KPI), Tooltips, Small multiples,
+ *      Details (treemap). The designer's `queryVisual()` FOLDS these into the
+ *      three wells this route already reads BEFORE the POST: Secondary-values /
+ *      Target / Min / Max / Tooltips → extra `wells.values` aggregates; Small
+ *      multiples / Details → extra `wells.category` (group) columns. The wire
+ *      payload that reaches `/query` thus still carries only `category` /
+ *      `values` / `legend` (DaxVisual.wells), so `buildSqlFromVisual` /
+ *      `buildDaxFromVisual` compile the extra fields into the same `GROUP BY` +
+ *      value aggregates and return REAL rows; LoomChart reads the extra result
+ *      columns to draw the new chart shape. Because `referencedTables()` (the
+ *      multi-table gate below) scans `category` / `values` / `legend`, it already
+ *      covers every folded field — a Small-multiples / Tooltip field pointing at
+ *      a second model table is still caught by the honest `code:'multi-table'`
+ *      gate, never silently dropped (no-vaporware.md).
+ *
+ *   2. FILTER CHANNEL (richer Filters pane). The new Filters-pane ops — Top N
+ *      (`op:'topN'`, N + by-measure) and Relative date (`op:'relativeDate'`,
+ *      last/next N day / month / year) — plus per-card lock/hide ride the
+ *      EXISTING `body.filters` channel (`ReportFilterInput[]`, whose `op` union
+ *      already includes `topN` / `relativeDate`). wells-to-sql compiles Top N to
+ *      `TOP N … ORDER BY <measure> DESC` and relative-date to a parameterized
+ *      date-range `WHERE` (with the `wrapDaxWithFilters` DAX mirror), so the route
+ *      passes `filters` straight through to both backends unchanged.
+ *
+ * Deep Format (data/total labels, background / border / shadow, plot area,
+ * position/size, styles preset, structured conditional formatting), the Analytics
+ * pane (Trend / Constant / Min / Max / Average / Median reference lines computed
+ * over the result series) and Visual interactions (filter / highlight / none
+ * cross-filtering) are pure LoomChart client concerns over THESE rows — no
+ * request to this route changes for them. Net effect on this file: documentation
+ * only; the dispatch, `resolveReportModel`, the single-table multi-table gate, and
+ * `referencedTables()` are intentionally untouched and already Wave-1-complete. AI
+ * visuals, R/Python, maps / ArcGIS / bubble, bookmarks / themes / export,
+ * drillthrough and personalize remain honest gate / MISSING follow-on waves in
+ * the parity doc.
+ *
  * When no data source is configured the resolver returns an honest 412 gate
  * naming the exact remediation ("pick a data source", or the precise AAS /
  * Synapse env var) — never a silent empty result.

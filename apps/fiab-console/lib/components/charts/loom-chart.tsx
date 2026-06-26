@@ -15,9 +15,22 @@
  * Design: Fluent v9 tokens for all colors / spacing, raw px only for SVG
  * geometry math. No external charting library, no dependencies beyond
  * @fluentui/react-components already installed.
+ *
+ * Format consumption (no-vaporware.md): LoomChart accepts an optional
+ * {@link LoomChartFormat} — the structural subset of the report Format pane's
+ * `ReportVisualFormat` that actually changes how a chart paints. Every member
+ * here is RENDERED, not just stored: axis show/hide, an internal legend that
+ * honors show + position, per-point data labels (show + position), per-category
+ * total labels, plot-area transparency, and the named style presets. The Format
+ * pane's swatch lead-color is applied upstream by `VisualBody` (it overrides the
+ * `--colorBrandForeground1` CSS variable the series-1 token resolves through),
+ * so it is intentionally NOT a member here. When `format` is omitted every
+ * default reproduces the prior rendering 1:1, so the legacy `LoomVisual` caller
+ * is unaffected.
  */
 
 import { useMemo } from 'react';
+import type { CSSProperties } from 'react';
 import { Caption1, tokens } from '@fluentui/react-components';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
@@ -49,6 +62,65 @@ export type LoomChartType =
   | 'pie'       // pie
   | 'scatter';  // scatter (2 numeric columns → x,y)
 
+/** Reference-line stroke style (mirrors the Analytics pane's AnalyticsLineStyle). */
+export type ChartLineStyle = 'solid' | 'dashed' | 'dotted';
+
+/**
+ * A resolved analytics reference line to overlay on a cartesian chart. `y` is a
+ * value-axis position in DATA space (e.g. the average of a series). Horizontal
+ * lines (constant / min / max / average / median / percentile) carry only `y`;
+ * a trend line also carries `y2` (the value at the right edge) so the chart
+ * draws a SLOPED segment. Structurally compatible with the Analytics pane's
+ * `ComputedReferenceLine`, so the designer passes those straight through.
+ */
+export interface ChartReferenceLine {
+  id: string;
+  /** Value-axis position (data space) for a horizontal line / the left edge. */
+  y: number;
+  /** Trend only: value-axis position at the right edge. Undefined ⇒ horizontal. */
+  y2?: number;
+  color: string;
+  style?: ChartLineStyle;
+  /** Inline data label drawn next to the line (omit to hide). */
+  label?: string;
+}
+
+// ── Format model (structural subset of ReportVisualFormat that LoomChart paints).
+// Member names + literal unions are kept in LOCK-STEP with
+// lib/editors/report/format-pane.tsx so the host can pass `visual.format`
+// straight through with zero adapters. All fields optional/sparse.
+
+/** Legend placement around the plot (mirrors format-pane `LegendPosition`). */
+export type LoomLegendPosition = 'top' | 'bottom' | 'left' | 'right';
+/** Data-label placement (mirrors format-pane `DataLabelPosition`). */
+export type LoomDataLabelPosition = 'auto' | 'inside' | 'outside' | 'above' | 'below';
+/** Named visual style preset (mirrors format-pane `StylePreset`). */
+export type LoomStylePreset = 'default' | 'minimal' | 'bold' | 'condensed' | 'accent';
+
+/**
+ * The chart-affecting slice of the report Format pane's `ReportVisualFormat`.
+ * Because every member name + type matches that interface exactly, callers can
+ * pass `visual.format` directly: `<LoomChart format={visual.format} … />`.
+ */
+export interface LoomChartFormat {
+  /** Show the X axis (category for column/line, value for bar/scatter). Default true. */
+  showXAxis?: boolean;
+  /** Show the Y axis (value for column/line, category for bar; value for scatter). Default true. */
+  showYAxis?: boolean;
+  /** Show the internal legend (multi-series + pie/donut). Default true. */
+  showLegend?: boolean;
+  /** Legend placement. Default 'bottom'. */
+  legendPosition?: LoomLegendPosition;
+  /** Per-point value labels. Default off. */
+  dataLabels?: { show?: boolean; position?: LoomDataLabelPosition };
+  /** Per-category total labels (column / bar / area). Default off. */
+  totalLabels?: { show?: boolean };
+  /** Plot-area background transparency, 0 (opaque tint) – 100 (none). */
+  plotArea?: { transparency?: number };
+  /** Named style preset applied to gridlines / fills / strokes / type. Default 'default'. */
+  stylePreset?: LoomStylePreset;
+}
+
 export interface LoomChartProps {
   type: LoomChartType;
   rows: Array<Record<string, unknown>>;
@@ -56,6 +128,84 @@ export interface LoomChartProps {
   title?: string;
   /** Chart canvas height in px (default 280) */
   height?: number;
+  /**
+   * Analytics reference lines to overlay on the value axis of a cartesian chart
+   * (column / bar / line / area / scatter). Each is drawn as a real <line>
+   * (sloped for a trend line) with an optional inline data label — NOT a chip
+   * below the chart. Ignored by pie / donut. Default: none.
+   */
+  refLines?: ChartReferenceLine[];
+  /**
+   * Optional structured formatting from the report Format pane. Omitted ⇒ the
+   * renderer's built-in defaults (axes + legend on, no labels, 'default' style),
+   * which reproduce the prior output exactly. See {@link LoomChartFormat}.
+   */
+  format?: LoomChartFormat | null;
+}
+
+// ─── Style presets → concrete render variables ─────────────────────────────
+// Each preset resolves to the geometry/typography knobs the sub-charts read.
+// 'default' reproduces the historical look 1:1 (FILL_OPACITY / stroke 1.8 /
+// font 9 / 0.7 bar fraction / gridlines on / neutral axis).
+
+interface StyleVars {
+  /** Draw value-axis gridlines. */
+  grid: boolean;
+  /** Fill opacity for bars / area / slices / scatter dots. */
+  fillOpacity: number;
+  /** Line-series stroke width. */
+  lineStroke: number;
+  /** Marker radius for line/scatter points. */
+  dotR: number;
+  /** Base font size for axis + data labels. */
+  fontSize: number;
+  /** Font weight for data/total labels. */
+  labelWeight: number;
+  /** Fraction of a category slot the bars occupy (rest is gap). */
+  barFraction: number;
+  /** Axis line color. */
+  axisStroke: string;
+}
+
+function styleVarsFor(preset?: LoomStylePreset | null): StyleVars {
+  const neutralAxis = tokens.colorNeutralStroke2;
+  switch (preset) {
+    case 'minimal':
+      return { grid: false, fillOpacity: 0.9, lineStroke: 1.4, dotR: 2,   fontSize: 8.5,  labelWeight: 400, barFraction: 0.6,  axisStroke: tokens.colorNeutralStroke3 };
+    case 'bold':
+      return { grid: true,  fillOpacity: 1,   lineStroke: 2.8, dotR: 3.2, fontSize: 10.5, labelWeight: 700, barFraction: 0.82, axisStroke: tokens.colorNeutralStroke1 };
+    case 'condensed':
+      return { grid: true,  fillOpacity: 0.85, lineStroke: 1.5, dotR: 2,  fontSize: 8,    labelWeight: 600, barFraction: 0.9,  axisStroke: neutralAxis };
+    case 'accent':
+      return { grid: true,  fillOpacity: 0.95, lineStroke: 2.2, dotR: 3,  fontSize: 9.5,  labelWeight: 700, barFraction: 0.74, axisStroke: tokens.colorBrandStroke1 };
+    case 'default':
+    default:
+      return { grid: true,  fillOpacity: FILL_OPACITY, lineStroke: 1.8, dotR: 2.5, fontSize: 9, labelWeight: 600, barFraction: 0.7, axisStroke: neutralAxis };
+  }
+}
+
+/** Per-render flags + style derived once from `format`, threaded to sub-charts. */
+interface RenderOpts {
+  showXAxis: boolean;
+  showYAxis: boolean;
+  dataLabels: boolean;
+  dataLabelPos: LoomDataLabelPosition;
+  totalLabels: boolean;
+  /** Plot-area fill transparency, or null when the author never touched it. */
+  plotTransparency: number | null;
+  style: StyleVars;
+}
+
+function optsFromFormat(format?: LoomChartFormat | null): RenderOpts {
+  return {
+    showXAxis: format?.showXAxis !== false,
+    showYAxis: format?.showYAxis !== false,
+    dataLabels: format?.dataLabels?.show === true,
+    dataLabelPos: format?.dataLabels?.position ?? 'auto',
+    totalLabels: format?.totalLabels?.show === true,
+    plotTransparency: format?.plotArea?.transparency ?? null,
+    style: styleVarsFor(format?.stylePreset),
+  };
 }
 
 // ─── Data parsing ─────────────────────────────────────────────────────────
@@ -142,14 +292,88 @@ function truncLabel(s: string, max = 12): string {
   return s.length > max ? s.slice(0, max - 1) + '…' : s;
 }
 
+// ─── Analytics reference-line overlays ─────────────────────────────────────
+// Drawn INSIDE the plot area, on top of the series, so a reference line is an
+// actual line on the chart (Power BI parity) rather than a text chip beside it.
+
+/** SVG dash pattern for a reference-line style (solid → a continuous line). */
+function refDash(style?: ChartLineStyle): string | undefined {
+  return style === 'dotted' ? '2 3' : style === 'solid' ? undefined : '6 4';
+}
+
+/**
+ * Reference-line overlays for a chart whose VALUE axis is vertical (column /
+ * line / area): each line is horizontal at `yPix(value)` and spans the plot
+ * width; a trend line slopes to `yPix(y2)` at the right edge. An inline data
+ * label is drawn at the right edge when present.
+ */
+function RefLinesY({ refLines, yPix, xLeft, xRight }: {
+  refLines: ChartReferenceLine[]; yPix: (v: number) => number; xLeft: number; xRight: number;
+}) {
+  if (refLines.length === 0) return null;
+  return (
+    <>
+      {refLines.map((rl) => {
+        const yA = yPix(rl.y);
+        const yB = rl.y2 != null ? yPix(rl.y2) : yA;
+        return (
+          <g key={rl.id}>
+            <line x1={xLeft} y1={yA} x2={xRight} y2={yB}
+              stroke={rl.color} strokeWidth={1.6} strokeDasharray={refDash(rl.style)}
+              strokeLinecap="round" opacity={0.95} />
+            {rl.label && (
+              <text x={xRight - 2} y={yB - 3} fontSize={9} textAnchor="end"
+                fill={rl.color} fontWeight="600" pointerEvents="none">{rl.label}</text>
+            )}
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * Reference-line overlays for a chart whose VALUE axis is horizontal (bar /
+ * scatter): each line is vertical at `xPix(value)` and spans the plot height; a
+ * trend line slopes to `xPix(y2)` at the top edge.
+ */
+function RefLinesX({ refLines, xPix, yTop, yBottom }: {
+  refLines: ChartReferenceLine[]; xPix: (v: number) => number; yTop: number; yBottom: number;
+}) {
+  if (refLines.length === 0) return null;
+  return (
+    <>
+      {refLines.map((rl) => {
+        const xA = xPix(rl.y);
+        const xB = rl.y2 != null ? xPix(rl.y2) : xA;
+        return (
+          <g key={rl.id}>
+            <line x1={xA} y1={yBottom} x2={xB} y2={yTop}
+              stroke={rl.color} strokeWidth={1.6} strokeDasharray={refDash(rl.style)}
+              strokeLinecap="round" opacity={0.95} />
+            {rl.label && (
+              <text x={xB} y={yTop + 9} fontSize={9} textAnchor="middle"
+                fill={rl.color} fontWeight="600" pointerEvents="none">{rl.label}</text>
+            )}
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
 // ─── SVG layout constants ─────────────────────────────────────────────────
 
 const W = 520; // viewBox width — scales to container via width="100%"
 
+// Data-label color when drawn over a filled mark (inside) vs. on the canvas.
+const INSIDE_LABEL = '#ffffff';
+
 // ─── Sub-chart renderers ──────────────────────────────────────────────────
 
 // Column chart (vertical bars)
-function ColumnChart({ parsed, H }: { parsed: ParsedData; H: number }) {
+function ColumnChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; opts: RenderOpts }) {
+  const { style } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 40;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
@@ -158,9 +382,11 @@ function ColumnChart({ parsed, H }: { parsed: ParsedData; H: number }) {
   const n = categories.length;
   if (n === 0 || series.length === 0) return null;
 
+  // Reference-line values widen the value domain so an overlaid line never clips.
+  const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, 0);
-  const rawMin = Math.min(...allVals, 0);
+  const rawMax = Math.max(...allVals, ...refVals, 0);
+  const rawMin = Math.min(...allVals, ...refVals, 0);
   const span = rawMax - rawMin || 1;
   const yMax = rawMax + span * 0.08; // 8% head room
   const yMin = rawMin < 0 ? rawMin - span * 0.04 : 0;
@@ -169,25 +395,36 @@ function ColumnChart({ parsed, H }: { parsed: ParsedData; H: number }) {
   const yPix = (v: number) => padT + plotH - ((v - yMin) / ySpan) * plotH;
   const zeroY = yPix(0);
 
-  // Group bars per category
+  // Group bars per category (bar slot fraction comes from the style preset).
   const groupW = plotW / n;
-  const barW = (groupW * 0.7) / series.length;
-  const barGap = (groupW * 0.3) / (series.length + 1);
+  const barW = (groupW * style.barFraction) / series.length;
+  const barGap = (groupW * (1 - style.barFraction)) / (series.length + 1);
+  const barX = (ci: number, si: number) => padL + ci * groupW + barGap * (si + 1) + barW * si;
 
   // 5 y-gridlines
   const gridYFractions = [0, 0.25, 0.5, 0.75, 1];
+  const showLabels = opts.dataLabels && n * series.length <= 48;
+  const insideLabel = opts.dataLabelPos === 'inside' || opts.dataLabelPos === 'below';
+  const showTotals = opts.totalLabels && n <= 30;
 
   return (
     <>
-      {/* Y gridlines + labels */}
-      {gridYFractions.map((f, i) => {
+      {/* Plot-area background tint (Format → Plot area → Transparency) */}
+      {opts.plotTransparency != null && (
+        <rect x={padL} y={padT} width={plotW} height={plotH}
+          fill={tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+      )}
+      {/* Y gridlines + value labels (value axis) */}
+      {opts.showYAxis && gridYFractions.map((f, i) => {
         const val = yMin + f * ySpan;
         const py = padT + plotH - f * plotH;
         return (
           <g key={`gy${i}`}>
-            <line x1={padL} y1={py} x2={W - padR} y2={py}
-              stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
-            <text x={padL - 4} y={py + 3.5} fontSize={9} textAnchor="end"
+            {style.grid && (
+              <line x1={padL} y1={py} x2={W - padR} y2={py}
+                stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+            )}
+            <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end"
               fill={tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
           </g>
         );
@@ -198,31 +435,63 @@ function ColumnChart({ parsed, H }: { parsed: ParsedData; H: number }) {
           stroke={tokens.colorNeutralStroke1} strokeWidth={1} />
       )}
       {/* Axes */}
-      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
+      {opts.showYAxis && (
+        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
+      )}
+      {opts.showXAxis && (
+        <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
+      )}
 
       {/* Bars */}
-      {categories.map((cat, ci) => {
-        const gx = padL + ci * groupW;
-        return series.map((sr, si) => {
-          const val = sr.data[ci];
-          const bx = gx + barGap * (si + 1) + barW * si;
-          const by = val >= 0 ? yPix(val) : zeroY;
-          const bh = Math.abs(yPix(val) - zeroY);
-          return (
-            <rect key={`${ci}-${si}`} x={bx} y={by} width={barW} height={Math.max(bh, 1)}
-              fill={sr.color} opacity={FILL_OPACITY} rx={1.5}>
-              <title>{`${sr.label} · ${cat}: ${val.toLocaleString()}`}</title>
-            </rect>
-          );
-        });
-      })}
+      {categories.map((cat, ci) => series.map((sr, si) => {
+        const val = sr.data[ci];
+        const bx = barX(ci, si);
+        const by = val >= 0 ? yPix(val) : zeroY;
+        const bh = Math.abs(yPix(val) - zeroY);
+        return (
+          <rect key={`${ci}-${si}`} x={bx} y={by} width={barW} height={Math.max(bh, 1)}
+            fill={sr.color} opacity={style.fillOpacity} rx={1.5}>
+            <title>{`${sr.label} · ${cat}: ${val.toLocaleString()}`}</title>
+          </rect>
+        );
+      }))}
 
-      {/* X category labels */}
-      {categories.map((cat, ci) => {
+      {/* Per-point data labels */}
+      {showLabels && categories.map((cat, ci) => series.map((sr, si) => {
+        const val = sr.data[ci];
+        const cx = barX(ci, si) + barW / 2;
+        const top = val >= 0 ? yPix(val) : zeroY;
+        const labelY = insideLabel ? top + style.fontSize + 1 : top - 3;
+        return (
+          <text key={`dl${ci}-${si}`} x={cx} y={labelY} fontSize={style.fontSize - 0.5}
+            textAnchor="middle" fontWeight={style.labelWeight}
+            fill={insideLabel ? INSIDE_LABEL : tokens.colorNeutralForeground1} pointerEvents="none">
+            {fmtNum(val)}
+          </text>
+        );
+      }))}
+
+      {/* Per-category total labels */}
+      {showTotals && categories.map((cat, ci) => {
+        const total = series.reduce((a, s) => a + (s.data[ci] || 0), 0);
+        const topY = Math.min(...series.map((s) => yPix(Math.max(s.data[ci], 0))));
         const cx = padL + ci * groupW + groupW / 2;
         return (
-          <text key={`xl${ci}`} x={cx} y={H - padB + 14} fontSize={9}
+          <text key={`tl${ci}`} x={cx} y={topY - (showLabels ? 13 : 3)} fontSize={style.fontSize}
+            textAnchor="middle" fontWeight={700} fill={tokens.colorNeutralForeground1} pointerEvents="none">
+            {fmtNum(total)}
+          </text>
+        );
+      })}
+
+      {/* Analytics reference lines, overlaid at the value-axis position */}
+      <RefLinesY refLines={refLines} yPix={yPix} xLeft={padL} xRight={W - padR} />
+
+      {/* X category labels */}
+      {opts.showXAxis && categories.map((cat, ci) => {
+        const cx = padL + ci * groupW + groupW / 2;
+        return (
+          <text key={`xl${ci}`} x={cx} y={H - padB + 14} fontSize={style.fontSize}
             textAnchor="middle" fill={tokens.colorNeutralForeground3}>
             {truncLabel(cat, n > 8 ? 6 : 12)}
           </text>
@@ -233,7 +502,8 @@ function ColumnChart({ parsed, H }: { parsed: ParsedData; H: number }) {
 }
 
 // Bar chart (horizontal)
-function BarChart({ parsed, H }: { parsed: ParsedData; H: number }) {
+function BarChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; opts: RenderOpts }) {
+  const { style } = opts;
   const padL = 90, padR = 36, padT = 10, padB = 20;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
@@ -242,9 +512,11 @@ function BarChart({ parsed, H }: { parsed: ParsedData; H: number }) {
   const n = categories.length;
   if (n === 0 || series.length === 0) return null;
 
+  // Reference-line values widen the value domain so an overlaid line never clips.
+  const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, 0);
-  const rawMin = Math.min(...allVals, 0);
+  const rawMax = Math.max(...allVals, ...refVals, 0);
+  const rawMin = Math.min(...allVals, ...refVals, 0);
   const span = rawMax - rawMin || 1;
   const xMax = rawMax + span * 0.08;
   const xMin = rawMin < 0 ? rawMin - span * 0.04 : 0;
@@ -254,22 +526,33 @@ function BarChart({ parsed, H }: { parsed: ParsedData; H: number }) {
   const zeroX = xPix(0);
 
   const groupH = plotH / n;
-  const barH = (groupH * 0.7) / series.length;
-  const barGap = (groupH * 0.3) / (series.length + 1);
+  const barH = (groupH * style.barFraction) / series.length;
+  const barGap = (groupH * (1 - style.barFraction)) / (series.length + 1);
+  const barY = (ci: number, si: number) => padT + ci * groupH + barGap * (si + 1) + barH * si;
 
   const gridXFractions = [0, 0.25, 0.5, 0.75, 1];
+  const showLabels = opts.dataLabels && n * series.length <= 48;
+  const insideLabel = opts.dataLabelPos === 'inside' || opts.dataLabelPos === 'below';
+  const showTotals = opts.totalLabels && n <= 30;
 
   return (
     <>
-      {/* X gridlines + labels */}
-      {gridXFractions.map((f, i) => {
+      {/* Plot-area background tint */}
+      {opts.plotTransparency != null && (
+        <rect x={padL} y={padT} width={plotW} height={plotH}
+          fill={tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+      )}
+      {/* X (value axis) gridlines + labels */}
+      {opts.showXAxis && gridXFractions.map((f, i) => {
         const val = xMin + f * xSpan;
         const px = padL + f * plotW;
         return (
           <g key={`gx${i}`}>
-            <line x1={px} y1={padT} x2={px} y2={padT + plotH}
-              stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
-            <text x={px} y={H - 6} fontSize={9} textAnchor="middle"
+            {style.grid && (
+              <line x1={px} y1={padT} x2={px} y2={padT + plotH}
+                stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+            )}
+            <text x={px} y={H - 6} fontSize={style.fontSize} textAnchor="middle"
               fill={tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
           </g>
         );
@@ -279,31 +562,65 @@ function BarChart({ parsed, H }: { parsed: ParsedData; H: number }) {
           stroke={tokens.colorNeutralStroke1} strokeWidth={1} />
       )}
       {/* Axes */}
-      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
+      {opts.showYAxis && (
+        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
+      )}
+      {opts.showXAxis && (
+        <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
+      )}
 
       {/* Bars */}
-      {categories.map((cat, ci) => {
-        const gy = padT + ci * groupH;
-        return series.map((sr, si) => {
-          const val = sr.data[ci];
-          const by_ = gy + barGap * (si + 1) + barH * si;
-          const bx = val >= 0 ? zeroX : xPix(val);
-          const bw = Math.abs(xPix(val) - zeroX);
-          return (
-            <rect key={`${ci}-${si}`} x={bx} y={by_} width={Math.max(bw, 1)} height={barH}
-              fill={sr.color} opacity={FILL_OPACITY} rx={1.5}>
-              <title>{`${sr.label} · ${cat}: ${val.toLocaleString()}`}</title>
-            </rect>
-          );
-        });
-      })}
+      {categories.map((cat, ci) => series.map((sr, si) => {
+        const val = sr.data[ci];
+        const by_ = barY(ci, si);
+        const bx = val >= 0 ? zeroX : xPix(val);
+        const bw = Math.abs(xPix(val) - zeroX);
+        return (
+          <rect key={`${ci}-${si}`} x={bx} y={by_} width={Math.max(bw, 1)} height={barH}
+            fill={sr.color} opacity={style.fillOpacity} rx={1.5}>
+            <title>{`${sr.label} · ${cat}: ${val.toLocaleString()}`}</title>
+          </rect>
+        );
+      }))}
 
-      {/* Y category labels */}
-      {categories.map((cat, ci) => {
+      {/* Per-point data labels */}
+      {showLabels && categories.map((cat, ci) => series.map((sr, si) => {
+        const val = sr.data[ci];
+        const cy = barY(ci, si) + barH / 2 + 3;
+        const end = xPix(val);
+        const outside = !insideLabel;
+        const lx = val >= 0 ? (outside ? end + 3 : end - 3) : (outside ? end - 3 : end + 3);
+        const anchor = val >= 0 ? (outside ? 'start' : 'end') : (outside ? 'end' : 'start');
+        return (
+          <text key={`dl${ci}-${si}`} x={lx} y={cy} fontSize={style.fontSize - 0.5}
+            textAnchor={anchor} fontWeight={style.labelWeight}
+            fill={outside ? tokens.colorNeutralForeground1 : INSIDE_LABEL} pointerEvents="none">
+            {fmtNum(val)}
+          </text>
+        );
+      }))}
+
+      {/* Per-category total labels (end of the longest bar in the group) */}
+      {showTotals && categories.map((cat, ci) => {
+        const total = series.reduce((a, s) => a + (s.data[ci] || 0), 0);
+        const maxEnd = Math.max(...series.map((s) => xPix(Math.max(s.data[ci], 0))));
         const cy = padT + ci * groupH + groupH / 2 + 3;
         return (
-          <text key={`yl${ci}`} x={padL - 6} y={cy} fontSize={9}
+          <text key={`tl${ci}`} x={maxEnd + 3} y={cy} fontSize={style.fontSize}
+            textAnchor="start" fontWeight={700} fill={tokens.colorNeutralForeground1} pointerEvents="none">
+            {fmtNum(total)}
+          </text>
+        );
+      })}
+
+      {/* Analytics reference lines, overlaid at the value-axis position */}
+      <RefLinesX refLines={refLines} xPix={xPix} yTop={padT} yBottom={padT + plotH} />
+
+      {/* Y category labels */}
+      {opts.showYAxis && categories.map((cat, ci) => {
+        const cy = padT + ci * groupH + groupH / 2 + 3;
+        return (
+          <text key={`yl${ci}`} x={padL - 6} y={cy} fontSize={style.fontSize}
             textAnchor="end" fill={tokens.colorNeutralForeground3}>
             {truncLabel(cat, 14)}
           </text>
@@ -314,7 +631,8 @@ function BarChart({ parsed, H }: { parsed: ParsedData; H: number }) {
 }
 
 // Line / Area chart (shared, areaFill flag)
-function LineAreaChart({ parsed, H, areaFill }: { parsed: ParsedData; H: number; areaFill: boolean }) {
+function LineAreaChart({ parsed, H, areaFill, refLines = [], opts }: { parsed: ParsedData; H: number; areaFill: boolean; refLines?: ChartReferenceLine[]; opts: RenderOpts }) {
+  const { style } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 32;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
@@ -323,9 +641,11 @@ function LineAreaChart({ parsed, H, areaFill }: { parsed: ParsedData; H: number;
   const n = categories.length;
   if (n === 0 || series.length === 0) return null;
 
+  // Reference-line values widen the value domain so an overlaid line never clips.
+  const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, 0);
-  const rawMin = Math.min(...allVals, 0);
+  const rawMax = Math.max(...allVals, ...refVals, 0);
+  const rawMin = Math.min(...allVals, ...refVals, 0);
   const span = rawMax - rawMin || 1;
   const yMax = rawMax + span * 0.1;
   const yMin = rawMin < 0 ? rawMin - span * 0.05 : 0;
@@ -344,17 +664,28 @@ function LineAreaChart({ parsed, H, areaFill }: { parsed: ParsedData; H: number;
     ? categories
     : gridXFractions.map((f) => categories[Math.round(f * (n - 1))]);
 
+  const showLabels = opts.dataLabels && n <= 30 && series.length <= 3;
+  const labelBelow = opts.dataLabelPos === 'below' || opts.dataLabelPos === 'inside';
+  const showTotals = opts.totalLabels && n <= 16;
+
   return (
     <>
-      {/* Y gridlines */}
-      {gridYFractions.map((f, i) => {
+      {/* Plot-area background tint */}
+      {opts.plotTransparency != null && (
+        <rect x={padL} y={padT} width={plotW} height={plotH}
+          fill={tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+      )}
+      {/* Y gridlines (value axis) */}
+      {opts.showYAxis && gridYFractions.map((f, i) => {
         const val = yMin + f * ySpan;
         const py = padT + plotH - f * plotH;
         return (
           <g key={`gy${i}`}>
-            <line x1={padL} y1={py} x2={W - padR} y2={py}
-              stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
-            <text x={padL - 4} y={py + 3.5} fontSize={9} textAnchor="end"
+            {style.grid && (
+              <line x1={padL} y1={py} x2={W - padR} y2={py}
+                stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+            )}
+            <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end"
               fill={tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
           </g>
         );
@@ -364,8 +695,12 @@ function LineAreaChart({ parsed, H, areaFill }: { parsed: ParsedData; H: number;
           stroke={tokens.colorNeutralStroke1} strokeWidth={1} />
       )}
       {/* Axes */}
-      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
+      {opts.showYAxis && (
+        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
+      )}
+      {opts.showXAxis && (
+        <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
+      )}
 
       {/* Series */}
       {series.map((sr) => {
@@ -379,10 +714,10 @@ function LineAreaChart({ parsed, H, areaFill }: { parsed: ParsedData; H: number;
             {areaPath && (
               <path d={areaPath} fill={sr.color} opacity={0.18} />
             )}
-            <path d={linePath} fill="none" stroke={sr.color} strokeWidth={1.8} strokeLinejoin="round" />
+            <path d={linePath} fill="none" stroke={sr.color} strokeWidth={style.lineStroke} strokeLinejoin="round" />
             {/* Dots only when ≤ 40 points to avoid clutter */}
             {pts.length <= 40 && pts.map((p, i) => (
-              <circle key={i} cx={p.x} cy={p.y} r={2.5} fill={sr.color}>
+              <circle key={i} cx={p.x} cy={p.y} r={style.dotR} fill={sr.color}>
                 <title>{`${sr.label} · ${categories[i]}: ${sr.data[i].toLocaleString()}`}</title>
               </circle>
             ))}
@@ -390,12 +725,36 @@ function LineAreaChart({ parsed, H, areaFill }: { parsed: ParsedData; H: number;
         );
       })}
 
+      {/* Per-point data labels */}
+      {showLabels && series.map((sr, si) => sr.data.map((v, i) => (
+        <text key={`dl${si}-${i}`} x={xPix(i)} y={labelBelow ? yPix(v) + style.fontSize + 3 : yPix(v) - 5}
+          fontSize={style.fontSize - 0.5} textAnchor="middle" fontWeight={style.labelWeight}
+          fill={tokens.colorNeutralForeground1} pointerEvents="none">
+          {fmtNum(v)}
+        </text>
+      )))}
+
+      {/* Per-category total labels */}
+      {showTotals && categories.map((cat, ci) => {
+        const total = series.reduce((a, s) => a + (s.data[ci] || 0), 0);
+        const topY = Math.min(...series.map((s) => yPix(s.data[ci])));
+        return (
+          <text key={`tl${ci}`} x={xPix(ci)} y={topY - (showLabels ? 14 : 5)} fontSize={style.fontSize}
+            textAnchor="middle" fontWeight={700} fill={tokens.colorNeutralForeground1} pointerEvents="none">
+            {fmtNum(total)}
+          </text>
+        );
+      })}
+
+      {/* Analytics reference lines, overlaid at the value-axis position */}
+      <RefLinesY refLines={refLines} yPix={yPix} xLeft={padL} xRight={W - padR} />
+
       {/* X labels */}
-      {gridXFractions.map((f, i) => {
+      {opts.showXAxis && gridXFractions.map((f, i) => {
         const idx = n <= 8 ? i : Math.round(f * (n - 1));
         const px = xPix(idx);
         return (
-          <text key={`xl${i}`} x={px} y={H - padB + 14} fontSize={9} textAnchor="middle"
+          <text key={`xl${i}`} x={px} y={H - padB + 14} fontSize={style.fontSize} textAnchor="middle"
             fill={tokens.colorNeutralForeground3}>
             {truncLabel(gridXLabels[i] ?? '', n > 6 ? 7 : 12)}
           </text>
@@ -406,7 +765,8 @@ function LineAreaChart({ parsed, H, areaFill }: { parsed: ParsedData; H: number;
 }
 
 // Pie / Donut (shared)
-function PieDonutChart({ parsed, H, donut }: { parsed: ParsedData; H: number; donut: boolean }) {
+function PieDonutChart({ parsed, H, donut, opts }: { parsed: ParsedData; H: number; donut: boolean; opts: RenderOpts }) {
+  const { style } = opts;
   const { categories, series } = parsed;
   if (categories.length === 0 || series.length === 0) return null;
 
@@ -447,24 +807,33 @@ function PieDonutChart({ parsed, H, donut }: { parsed: ParsedData; H: number; do
     return { d, color: PALETTE[i % PALETTE.length], label: categories[i], value: v, pct, midAngle };
   });
 
+  const labelsOn = opts.dataLabels;
+  const outsideLabels = labelsOn && opts.dataLabelPos === 'outside';
+
   // Center label (donut only): total
   return (
     <>
       {slices.map((sl, i) => (
-        <path key={i} d={sl.d} fill={sl.color} opacity={FILL_OPACITY} stroke={tokens.colorNeutralBackground1} strokeWidth={1.5}>
+        <path key={i} d={sl.d} fill={sl.color} opacity={style.fillOpacity} stroke={tokens.colorNeutralBackground1} strokeWidth={1.5}>
           <title>{`${sl.label}: ${sl.value.toLocaleString()} (${sl.pct.toFixed(1)}%)`}</title>
         </path>
       ))}
-      {/* Percentage labels for large-enough slices */}
+      {/* Slice labels: percentage by default; value + percent when data labels on */}
       {slices.map((sl, i) => {
-        if (sl.pct < 5) return null;
-        const labelR = donut ? (radius + innerR) / 2 : radius * 0.65;
+        // Hide labels on tiny slices to avoid garbage; the threshold loosens a
+        // little when explicit data labels are requested.
+        if (sl.pct < (labelsOn ? 3 : 5)) return null;
+        const labelR = outsideLabels ? radius + 12 : (donut ? (radius + innerR) / 2 : radius * 0.65);
         const lx = cx + labelR * Math.cos(sl.midAngle);
         const ly = cy + labelR * Math.sin(sl.midAngle);
+        const anchor = outsideLabels ? (Math.cos(sl.midAngle) >= 0 ? 'start' : 'end') : 'middle';
+        const txt = labelsOn ? `${fmtNum(sl.value)} (${sl.pct.toFixed(0)}%)` : `${sl.pct.toFixed(0)}%`;
         return (
           <text key={`lbl${i}`} x={lx.toFixed(1)} y={(ly + 3.5).toFixed(1)} fontSize={9.5}
-            textAnchor="middle" fill="#ffffff" fontWeight="600" pointerEvents="none">
-            {sl.pct.toFixed(0)}%
+            textAnchor={anchor}
+            fill={outsideLabels ? tokens.colorNeutralForeground1 : INSIDE_LABEL}
+            fontWeight={style.labelWeight} pointerEvents="none">
+            {txt}
           </text>
         );
       })}
@@ -481,7 +850,8 @@ function PieDonutChart({ parsed, H, donut }: { parsed: ParsedData; H: number; do
 }
 
 // Scatter chart
-function ScatterChart({ parsed, H }: { parsed: ParsedData; H: number }) {
+function ScatterChart({ parsed, H, refLines = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; opts: RenderOpts }) {
+  const { style } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 32;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
@@ -491,7 +861,11 @@ function ScatterChart({ parsed, H }: { parsed: ParsedData; H: number }) {
 
   const xs = scatter.map((p) => p.x);
   const ys = scatter.map((p) => p.y);
-  const xMin = Math.min(...xs), xMax = Math.max(...xs);
+  // Reference lines are computed over the PRIMARY numeric series, which is the
+  // scatter's X column (numericSeriesFromRows order == parseRows order), so they
+  // overlay as VERTICAL lines on the X axis — widen the X domain to fit them.
+  const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
+  const xMin = Math.min(...xs, ...refVals), xMax = Math.max(...xs, ...refVals);
   const yMin = Math.min(...ys), yMax = Math.max(...ys);
   const xSpan = xMax - xMin || 1;
   const ySpan = yMax - yMin || 1;
@@ -507,45 +881,85 @@ function ScatterChart({ parsed, H }: { parsed: ParsedData; H: number }) {
 
   const gridFractions = [0, 0.25, 0.5, 0.75, 1];
   const color = series[0]?.color ?? PALETTE[0];
+  const showLabels = opts.dataLabels && scatter.length <= 30;
 
   return (
     <>
+      {/* Plot-area background tint */}
+      {opts.plotTransparency != null && (
+        <rect x={padL} y={padT} width={plotW} height={plotH}
+          fill={tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+      )}
       {gridFractions.map((f, i) => {
         const xVal = x0 + f * xRange, yVal = y0 + f * yRange;
         const px = padL + f * plotW, py = padT + plotH - f * plotH;
         return (
           <g key={`g${i}`}>
-            <line x1={padL} y1={py} x2={W - padR} y2={py} stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
-            <line x1={px} y1={padT} x2={px} y2={padT + plotH} stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
-            <text x={padL - 4} y={py + 3.5} fontSize={9} textAnchor="end" fill={tokens.colorNeutralForeground3}>{fmtNum(yVal)}</text>
-            <text x={px} y={H - padB + 14} fontSize={9} textAnchor="middle" fill={tokens.colorNeutralForeground3}>{fmtNum(xVal)}</text>
+            {style.grid && opts.showYAxis && (
+              <line x1={padL} y1={py} x2={W - padR} y2={py} stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+            )}
+            {style.grid && opts.showXAxis && (
+              <line x1={px} y1={padT} x2={px} y2={padT + plotH} stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+            )}
+            {opts.showYAxis && (
+              <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end" fill={tokens.colorNeutralForeground3}>{fmtNum(yVal)}</text>
+            )}
+            {opts.showXAxis && (
+              <text x={px} y={H - padB + 14} fontSize={style.fontSize} textAnchor="middle" fill={tokens.colorNeutralForeground3}>{fmtNum(xVal)}</text>
+            )}
           </g>
         );
       })}
-      <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
-      <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={tokens.colorNeutralStroke2} strokeWidth={1} />
+      {opts.showYAxis && (
+        <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
+      )}
+      {opts.showXAxis && (
+        <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
+      )}
 
       {scatter.map((pt, i) => (
-        <circle key={i} cx={xPix(pt.x)} cy={yPix(pt.y)} r={3.5}
-          fill={color} opacity={FILL_OPACITY} stroke={tokens.colorNeutralBackground1} strokeWidth={0.8}>
+        <circle key={i} cx={xPix(pt.x)} cy={yPix(pt.y)} r={style.dotR + 1}
+          fill={color} opacity={style.fillOpacity} stroke={tokens.colorNeutralBackground1} strokeWidth={0.8}>
           <title>{`${pt.label}\nx: ${pt.x.toLocaleString()}, y: ${pt.y.toLocaleString()}`}</title>
         </circle>
       ))}
+
+      {/* Per-point labels */}
+      {showLabels && scatter.map((pt, i) => (
+        <text key={`dl${i}`} x={xPix(pt.x) + 5} y={yPix(pt.y) + 3} fontSize={style.fontSize - 0.5}
+          textAnchor="start" fontWeight={style.labelWeight} fill={tokens.colorNeutralForeground1} pointerEvents="none">
+          {truncLabel(pt.label, 10)}
+        </text>
+      ))}
+
+      {/* Analytics reference lines, overlaid at the value-axis (X) position */}
+      <RefLinesX refLines={refLines} xPix={xPix} yTop={padT} yBottom={padT + plotH} />
     </>
   );
 }
 
 // ─── Legend strip (shared for multi-series charts) ────────────────────────
 
-function Legend({ series }: { series: ParsedSeries[] }) {
+function legendStyle(orientation: 'horizontal' | 'vertical'): CSSProperties {
+  const vertical = orientation === 'vertical';
+  return {
+    display: 'flex',
+    flexDirection: vertical ? 'column' : 'row',
+    flexWrap: vertical ? 'nowrap' : 'wrap',
+    gap: vertical ? '4px' : '8px',
+    padding: vertical ? 0 : '4px 0',
+    marginTop: vertical ? 0 : '4px',
+    maxWidth: vertical ? '40%' : undefined,
+    minWidth: 0,
+  };
+}
+
+function Legend({ series, orientation = 'horizontal' }: { series: ParsedSeries[]; orientation?: 'horizontal' | 'vertical' }) {
   if (series.length <= 1) return null;
   return (
-    <div style={{
-      display: 'flex', flexWrap: 'wrap', gap: '8px',
-      padding: '4px 0', marginTop: '4px',
-    }}>
+    <div style={legendStyle(orientation)}>
       {series.map((sr) => (
-        <div key={sr.label} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+        <div key={sr.label} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
           <span style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: sr.color, flexShrink: 0 }} />
           <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{sr.label}</Caption1>
         </div>
@@ -555,20 +969,17 @@ function Legend({ series }: { series: ParsedSeries[] }) {
 }
 
 // Pie/Donut legend (categories)
-function PieLegend({ parsed }: { parsed: ParsedData }) {
+function PieLegend({ parsed, orientation = 'horizontal' }: { parsed: ParsedData; orientation?: 'horizontal' | 'vertical' }) {
   const { categories, series } = parsed;
   if (categories.length === 0 || series.length === 0) return null;
   const values = series[0].data.map((v) => Math.max(v, 0));
   const total = values.reduce((a, b) => a + b, 0) || 1;
   return (
-    <div style={{
-      display: 'flex', flexWrap: 'wrap', gap: '6px',
-      padding: '4px 0', marginTop: '4px',
-    }}>
+    <div style={{ ...legendStyle(orientation), gap: orientation === 'vertical' ? '4px' : '6px' }}>
       {categories.map((cat, i) => {
         const pct = (values[i] / total) * 100;
         return (
-          <div key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
+          <div key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
             <span style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: PALETTE[i % PALETTE.length], flexShrink: 0 }} />
             <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{cat} ({pct.toFixed(1)}%)</Caption1>
           </div>
@@ -585,10 +996,14 @@ function PieLegend({ parsed }: { parsed: ParsedData }) {
  *
  * `rows` is an array of plain objects (Record<string, unknown>) as returned
  * by the AAS query route; the component auto-detects category and numeric
- * columns from the row keys.
+ * columns from the row keys. The optional `format` prop applies the report
+ * Format pane's structured styling (axes / legend / labels / plot area / style
+ * preset) — see {@link LoomChartFormat} — and `refLines` overlays analytics
+ * reference lines on the value axis.
  */
-export function LoomChart({ type, rows, title, height = 280 }: LoomChartProps) {
+export function LoomChart({ type, rows, title, height = 280, refLines = [], format }: LoomChartProps) {
   const parsed = useMemo(() => parseRows(rows), [rows]);
+  const opts = useMemo(() => optsFromFormat(format), [format]);
 
   // Empty data state
   if (!parsed) {
@@ -608,26 +1023,31 @@ export function LoomChart({ type, rows, title, height = 280 }: LoomChartProps) {
 
   const renderChart = () => {
     switch (type) {
-      case 'column': return <ColumnChart parsed={parsed} H={svgH} />;
-      case 'bar':    return <BarChart parsed={parsed} H={svgH} />;
-      case 'line':   return <LineAreaChart parsed={parsed} H={svgH} areaFill={false} />;
-      case 'area':   return <LineAreaChart parsed={parsed} H={svgH} areaFill />;
-      case 'donut':  return <PieDonutChart parsed={parsed} H={svgH} donut />;
-      case 'pie':    return <PieDonutChart parsed={parsed} H={svgH} donut={false} />;
-      case 'scatter':return <ScatterChart parsed={parsed} H={svgH} />;
+      case 'column': return <ColumnChart parsed={parsed} H={svgH} refLines={refLines} opts={opts} />;
+      case 'bar':    return <BarChart parsed={parsed} H={svgH} refLines={refLines} opts={opts} />;
+      case 'line':   return <LineAreaChart parsed={parsed} H={svgH} areaFill={false} refLines={refLines} opts={opts} />;
+      case 'area':   return <LineAreaChart parsed={parsed} H={svgH} areaFill refLines={refLines} opts={opts} />;
+      case 'donut':  return <PieDonutChart parsed={parsed} H={svgH} donut opts={opts} />;
+      case 'pie':    return <PieDonutChart parsed={parsed} H={svgH} donut={false} opts={opts} />;
+      case 'scatter':return <ScatterChart parsed={parsed} H={svgH} refLines={refLines} opts={opts} />;
       default:       return null;
     }
   };
 
   const isCircular = type === 'pie' || type === 'donut';
 
-  return (
-    <div style={{ width: '100%', minWidth: 0 }}>
-      {title && (
-        <Caption1 style={{ display: 'block', marginBottom: 4, fontWeight: tokens.fontWeightSemibold }}>
-          {title}
-        </Caption1>
-      )}
+  // Legend visibility + placement come from `format` (default: shown, bottom).
+  const showLegend = format?.showLegend !== false;
+  const legendPos: LoomLegendPosition = format?.legendPosition ?? 'bottom';
+  const sideLegend = legendPos === 'left' || legendPos === 'right';
+  const legendNode = showLegend
+    ? (isCircular
+        ? <PieLegend parsed={parsed} orientation={sideLegend ? 'vertical' : 'horizontal'} />
+        : <Legend series={parsed.series} orientation={sideLegend ? 'vertical' : 'horizontal'} />)
+    : null;
+
+  const chartBlock = (
+    <div style={{ flex: '1 1 auto', minWidth: 0 }}>
       <svg
         width="100%"
         viewBox={`0 0 ${W} ${svgH}`}
@@ -643,7 +1063,38 @@ export function LoomChart({ type, rows, title, height = 280 }: LoomChartProps) {
       >
         {renderChart()}
       </svg>
-      {isCircular ? <PieLegend parsed={parsed} /> : <Legend series={parsed.series} />}
+    </div>
+  );
+
+  // Arrange chart + legend per legendPosition. Top/bottom stack vertically;
+  // left/right place the legend beside the plot (vertical list, bounded width).
+  const body =
+    !legendNode ? chartBlock
+    : legendPos === 'top' ? (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>{legendNode}{chartBlock}</div>
+      )
+    : legendPos === 'left' ? (
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: tokens.spacingHorizontalS }}>
+          {legendNode}{chartBlock}
+        </div>
+      )
+    : legendPos === 'right' ? (
+        <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: tokens.spacingHorizontalS }}>
+          {chartBlock}{legendNode}
+        </div>
+      )
+    : (
+        <div style={{ display: 'flex', flexDirection: 'column' }}>{chartBlock}{legendNode}</div>
+      );
+
+  return (
+    <div style={{ width: '100%', minWidth: 0 }}>
+      {title && (
+        <Caption1 style={{ display: 'block', marginBottom: 4, fontWeight: tokens.fontWeightSemibold }}>
+          {title}
+        </Caption1>
+      )}
+      {body}
     </div>
   );
 }
