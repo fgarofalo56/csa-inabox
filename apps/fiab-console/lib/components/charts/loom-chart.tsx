@@ -216,6 +216,29 @@ export interface LoomChartProps {
    * none. Ignored by non-scatter types. See {@link ChartSymmetry}.
    */
   symmetry?: ChartSymmetry;
+  // ─── Wave-3 report theme (all optional, all default-off ⇒ prior rendering) ──
+  /**
+   * Series / category / slice palette for a report-wide theme. When provided it
+   * overrides the module PALETTE for EVERY series, pie/donut slice, and legend
+   * swatch — the whole chart repaints, not just series-1. Omitted ⇒ the module
+   * PALETTE, so existing callers are byte-identical. Supplied by the report
+   * theme model (`lib/editors/report/themes.ts`).
+   */
+  palette?: string[];
+  /**
+   * Font family applied to every SVG label / axis text (set on the <svg>, which
+   * SVG text inherits). Omitted ⇒ inherit (no change). Drives a theme's
+   * typography flip.
+   */
+  fontFamily?: string;
+  /**
+   * Structural color overrides from a report theme: axis / gridline-label /
+   * data-label text (`foreground`), value-axis gridlines (`gridline`), and the
+   * chart canvas / plot-area + mark-separator color (`background`). Each member
+   * is independent and default-off — an omitted member keeps the original Fluent
+   * token, so the prior rendering is reproduced exactly.
+   */
+  structural?: LoomChartStructural | null;
   /*
    * PLAY AXIS is intentionally NOT a prop here. To keep LoomChart pure (no timer
    * / animation state), the host (report designer) slices `rows` by the active
@@ -275,9 +298,57 @@ interface RenderOpts {
   /** Plot-area fill transparency, or null when the author never touched it. */
   plotTransparency: number | null;
   style: StyleVars;
+  /** Resolved report theme (palette + typography + structural colors). */
+  theme: ThemeVars;
 }
 
-function optsFromFormat(format?: LoomChartFormat | null): RenderOpts {
+// ─── Report theme (wave-3) → resolved render variables ─────────────────────
+// A report-wide theme repaints the WHOLE chart — not just series-1 — so the data
+// palette, typography, and structural (axis / gridline-label / plot-area) colors
+// all flip together. Every field is OPTIONAL and default-off: an omitted theme
+// prop falls back to the module PALETTE / the original Fluent tokens, so existing
+// callers render byte-identically. The accent (series-1) swatch that `VisualBody`
+// already paints via `--colorBrandForeground1` still composes on top of this.
+
+/** Structural color overrides carried on a report theme (the subset painted here). */
+export interface LoomChartStructural {
+  /** Axis / gridline-label / data-label text color. */
+  foreground?: string;
+  /** Value-axis gridline stroke color. */
+  gridline?: string;
+  /** Chart canvas / plot-area background + mark-separator color. */
+  background?: string;
+}
+
+/** Resolved theme variables threaded onto {@link RenderOpts}. */
+interface ThemeVars {
+  /** Series / category / slice palette. Resolved to the module PALETTE when none. */
+  palette: string[];
+  /** Font family applied to all SVG text (cascades from the <svg>), or undefined. */
+  fontFamily?: string;
+  /** Axis / gridline-label / data-label text color, or undefined to keep tokens. */
+  foreground?: string;
+  /** Value-axis gridline stroke color, or undefined to keep tokens. */
+  gridline?: string;
+  /** Canvas / plot-area background + mark-separator color, or undefined for tokens. */
+  background?: string;
+}
+
+function resolveTheme(
+  palette?: string[] | null,
+  fontFamily?: string | null,
+  structural?: LoomChartStructural | null,
+): ThemeVars {
+  return {
+    palette: palette && palette.length > 0 ? palette : PALETTE,
+    fontFamily: fontFamily || undefined,
+    foreground: structural?.foreground || undefined,
+    gridline: structural?.gridline || undefined,
+    background: structural?.background || undefined,
+  };
+}
+
+function optsFromFormat(format: LoomChartFormat | null | undefined, theme: ThemeVars): RenderOpts {
   return {
     showXAxis: format?.showXAxis !== false,
     showYAxis: format?.showYAxis !== false,
@@ -286,6 +357,7 @@ function optsFromFormat(format?: LoomChartFormat | null): RenderOpts {
     totalLabels: format?.totalLabels?.show === true,
     plotTransparency: format?.plotArea?.transparency ?? null,
     style: styleVarsFor(format?.stylePreset),
+    theme,
   };
 }
 
@@ -312,7 +384,7 @@ function isNumeric(v: unknown): v is number {
 }
 
 /** Parse rows into categories + one-or-more numeric series. */
-function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string): ParsedData | null {
+function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string, palette: string[] = PALETTE): ParsedData | null {
   if (rows.length === 0) return null;
   const cols = Object.keys(rows[0]);
   if (cols.length === 0) return null;
@@ -331,7 +403,7 @@ function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string): P
 
   const series: ParsedSeries[] = numericCols.map((col, i) => ({
     label: col,
-    color: PALETTE[i % PALETTE.length],
+    color: palette[i % palette.length],
     data: rows.map((r) => {
       const v = r[col];
       return isNumeric(v) ? Number(v) : 0;
@@ -560,7 +632,7 @@ const INSIDE_LABEL = '#ffffff';
 
 // Column chart (vertical bars)
 function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; opts: RenderOpts }) {
-  const { style } = opts;
+  const { style, theme } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 40;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
@@ -601,7 +673,7 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
       {/* Plot-area background tint (Format → Plot area → Transparency) */}
       {opts.plotTransparency != null && (
         <rect x={padL} y={padT} width={plotW} height={plotH}
-          fill={tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+          fill={theme.background ?? tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
       )}
       {/* Y gridlines + value labels (value axis) */}
       {opts.showYAxis && gridYFractions.map((f, i) => {
@@ -611,10 +683,10 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
           <g key={`gy${i}`}>
             {style.grid && (
               <line x1={padL} y1={py} x2={W - padR} y2={py}
-                stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+                stroke={theme.gridline ?? tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
             )}
             <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end"
-              fill={tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
+              fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
           </g>
         );
       })}
@@ -654,7 +726,7 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
         return (
           <text key={`dl${ci}-${si}`} x={cx} y={labelY} fontSize={style.fontSize - 0.5}
             textAnchor="middle" fontWeight={style.labelWeight}
-            fill={insideLabel ? INSIDE_LABEL : tokens.colorNeutralForeground1} pointerEvents="none">
+            fill={insideLabel ? INSIDE_LABEL : (theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
             {fmtNum(val)}
           </text>
         );
@@ -667,7 +739,7 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
         const cx = padL + ci * groupW + groupW / 2;
         return (
           <text key={`tl${ci}`} x={cx} y={topY - (showLabels ? 13 : 3)} fontSize={style.fontSize}
-            textAnchor="middle" fontWeight={700} fill={tokens.colorNeutralForeground1} pointerEvents="none">
+            textAnchor="middle" fontWeight={700} fill={(theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
             {fmtNum(total)}
           </text>
         );
@@ -685,7 +757,7 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
         const cx = padL + ci * groupW + groupW / 2;
         return (
           <text key={`xl${ci}`} x={cx} y={H - padB + 14} fontSize={style.fontSize}
-            textAnchor="middle" fill={tokens.colorNeutralForeground3}>
+            textAnchor="middle" fill={theme.foreground ?? tokens.colorNeutralForeground3}>
             {truncLabel(cat, n > 8 ? 6 : 12)}
           </text>
         );
@@ -696,7 +768,7 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
 
 // Bar chart (horizontal)
 function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; opts: RenderOpts }) {
-  const { style } = opts;
+  const { style, theme } = opts;
   const padL = 90, padR = 36, padT = 10, padB = 20;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
@@ -735,7 +807,7 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
       {/* Plot-area background tint */}
       {opts.plotTransparency != null && (
         <rect x={padL} y={padT} width={plotW} height={plotH}
-          fill={tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+          fill={theme.background ?? tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
       )}
       {/* X (value axis) gridlines + labels */}
       {opts.showXAxis && gridXFractions.map((f, i) => {
@@ -745,10 +817,10 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
           <g key={`gx${i}`}>
             {style.grid && (
               <line x1={px} y1={padT} x2={px} y2={padT + plotH}
-                stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+                stroke={theme.gridline ?? tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
             )}
             <text x={px} y={H - 6} fontSize={style.fontSize} textAnchor="middle"
-              fill={tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
+              fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
           </g>
         );
       })}
@@ -789,7 +861,7 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
         return (
           <text key={`dl${ci}-${si}`} x={lx} y={cy} fontSize={style.fontSize - 0.5}
             textAnchor={anchor} fontWeight={style.labelWeight}
-            fill={outside ? tokens.colorNeutralForeground1 : INSIDE_LABEL} pointerEvents="none">
+            fill={outside ? (theme.foreground ?? tokens.colorNeutralForeground1) : INSIDE_LABEL} pointerEvents="none">
             {fmtNum(val)}
           </text>
         );
@@ -802,7 +874,7 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
         const cy = padT + ci * groupH + groupH / 2 + 3;
         return (
           <text key={`tl${ci}`} x={maxEnd + 3} y={cy} fontSize={style.fontSize}
-            textAnchor="start" fontWeight={700} fill={tokens.colorNeutralForeground1} pointerEvents="none">
+            textAnchor="start" fontWeight={700} fill={(theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
             {fmtNum(total)}
           </text>
         );
@@ -820,7 +892,7 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
         const cy = padT + ci * groupH + groupH / 2 + 3;
         return (
           <text key={`yl${ci}`} x={padL - 6} y={cy} fontSize={style.fontSize}
-            textAnchor="end" fill={tokens.colorNeutralForeground3}>
+            textAnchor="end" fill={theme.foreground ?? tokens.colorNeutralForeground3}>
             {truncLabel(cat, 14)}
           </text>
         );
@@ -831,7 +903,7 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
 
 // Line / Area chart (shared, areaFill flag)
 function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], forecast, opts }: { parsed: ParsedData; H: number; areaFill: boolean; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; forecast?: ChartForecast; opts: RenderOpts }) {
-  const { style } = opts;
+  const { style, theme } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 32;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
@@ -882,7 +954,7 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
       {/* Plot-area background tint */}
       {opts.plotTransparency != null && (
         <rect x={padL} y={padT} width={plotW} height={plotH}
-          fill={tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+          fill={theme.background ?? tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
       )}
       {/* Y gridlines (value axis) */}
       {opts.showYAxis && gridYFractions.map((f, i) => {
@@ -892,10 +964,10 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
           <g key={`gy${i}`}>
             {style.grid && (
               <line x1={padL} y1={py} x2={W - padR} y2={py}
-                stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+                stroke={theme.gridline ?? tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
             )}
             <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end"
-              fill={tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
+              fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
           </g>
         );
       })}
@@ -967,7 +1039,7 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
       {showLabels && series.map((sr, si) => sr.data.map((v, i) => (
         <text key={`dl${si}-${i}`} x={xPix(i)} y={labelBelow ? yPix(v) + style.fontSize + 3 : yPix(v) - 5}
           fontSize={style.fontSize - 0.5} textAnchor="middle" fontWeight={style.labelWeight}
-          fill={tokens.colorNeutralForeground1} pointerEvents="none">
+          fill={(theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
           {fmtNum(v)}
         </text>
       )))}
@@ -978,7 +1050,7 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
         const topY = Math.min(...series.map((s) => yPix(s.data[ci])));
         return (
           <text key={`tl${ci}`} x={xPix(ci)} y={topY - (showLabels ? 14 : 5)} fontSize={style.fontSize}
-            textAnchor="middle" fontWeight={700} fill={tokens.colorNeutralForeground1} pointerEvents="none">
+            textAnchor="middle" fontWeight={700} fill={(theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
             {fmtNum(total)}
           </text>
         );
@@ -997,7 +1069,7 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
         const px = xPix(idx);
         return (
           <text key={`xl${i}`} x={px} y={H - padB + 14} fontSize={style.fontSize} textAnchor="middle"
-            fill={tokens.colorNeutralForeground3}>
+            fill={theme.foreground ?? tokens.colorNeutralForeground3}>
             {truncLabel(gridXLabels[i] ?? '', n > 6 ? 7 : 12)}
           </text>
         );
@@ -1008,7 +1080,7 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
 
 // Pie / Donut (shared)
 function PieDonutChart({ parsed, H, donut, opts }: { parsed: ParsedData; H: number; donut: boolean; opts: RenderOpts }) {
-  const { style } = opts;
+  const { style, theme } = opts;
   const { categories, series } = parsed;
   if (categories.length === 0 || series.length === 0) return null;
 
@@ -1046,7 +1118,7 @@ function PieDonutChart({ parsed, H, donut, opts }: { parsed: ParsedData; H: numb
     const midAngle = startAngle + angle / 2;
     const pct = (v / total) * 100;
 
-    return { d, color: PALETTE[i % PALETTE.length], label: categories[i], value: v, pct, midAngle };
+    return { d, color: theme.palette[i % theme.palette.length], label: categories[i], value: v, pct, midAngle };
   });
 
   const labelsOn = opts.dataLabels;
@@ -1056,7 +1128,7 @@ function PieDonutChart({ parsed, H, donut, opts }: { parsed: ParsedData; H: numb
   return (
     <>
       {slices.map((sl, i) => (
-        <path key={i} d={sl.d} fill={sl.color} opacity={style.fillOpacity} stroke={tokens.colorNeutralBackground1} strokeWidth={1.5}>
+        <path key={i} d={sl.d} fill={sl.color} opacity={style.fillOpacity} stroke={theme.background ?? tokens.colorNeutralBackground1} strokeWidth={1.5}>
           <title>{`${sl.label}: ${sl.value.toLocaleString()} (${sl.pct.toFixed(1)}%)`}</title>
         </path>
       ))}
@@ -1073,7 +1145,7 @@ function PieDonutChart({ parsed, H, donut, opts }: { parsed: ParsedData; H: numb
         return (
           <text key={`lbl${i}`} x={lx.toFixed(1)} y={(ly + 3.5).toFixed(1)} fontSize={9.5}
             textAnchor={anchor}
-            fill={outsideLabels ? tokens.colorNeutralForeground1 : INSIDE_LABEL}
+            fill={outsideLabels ? (theme.foreground ?? tokens.colorNeutralForeground1) : INSIDE_LABEL}
             fontWeight={style.labelWeight} pointerEvents="none">
             {txt}
           </text>
@@ -1082,9 +1154,9 @@ function PieDonutChart({ parsed, H, donut, opts }: { parsed: ParsedData; H: numb
       {donut && (
         <>
           <text x={cx} y={cy - 3} fontSize={13} textAnchor="middle" fontWeight="700"
-            fill={tokens.colorNeutralForeground1}>{fmtNum(total)}</text>
+            fill={(theme.foreground ?? tokens.colorNeutralForeground1)}>{fmtNum(total)}</text>
           <text x={cx} y={cy + 12} fontSize={8.5} textAnchor="middle"
-            fill={tokens.colorNeutralForeground3}>Total</text>
+            fill={theme.foreground ?? tokens.colorNeutralForeground3}>Total</text>
         </>
       )}
     </>
@@ -1093,7 +1165,7 @@ function PieDonutChart({ parsed, H, donut, opts }: { parsed: ParsedData; H: numb
 
 // Scatter chart
 function ScatterChart({ parsed, H, refLines = [], errorBars = [], bubble = false, symmetry, opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; bubble?: boolean; symmetry?: ChartSymmetry; opts: RenderOpts }) {
-  const { style } = opts;
+  const { style, theme } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 32;
   const plotW = W - padL - padR;
   const plotH = H - padT - padB;
@@ -1125,7 +1197,7 @@ function ScatterChart({ parsed, H, refLines = [], errorBars = [], bubble = false
   const yPix = (v: number) => padT + plotH - ((v - y0) / yRange) * plotH;
 
   const gridFractions = [0, 0.25, 0.5, 0.75, 1];
-  const color = series[0]?.color ?? PALETTE[0];
+  const color = series[0]?.color ?? theme.palette[0];
   const showLabels = opts.dataLabels && scatter.length <= 30;
 
   // Bubble sizing: area-proportional (radius ∝ √value, Power BI accurate) into a
@@ -1149,7 +1221,7 @@ function ScatterChart({ parsed, H, refLines = [], errorBars = [], bubble = false
       {/* Plot-area background tint */}
       {opts.plotTransparency != null && (
         <rect x={padL} y={padT} width={plotW} height={plotH}
-          fill={tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+          fill={theme.background ?? tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
       )}
       {gridFractions.map((f, i) => {
         const xVal = x0 + f * xRange, yVal = y0 + f * yRange;
@@ -1157,16 +1229,16 @@ function ScatterChart({ parsed, H, refLines = [], errorBars = [], bubble = false
         return (
           <g key={`g${i}`}>
             {style.grid && opts.showYAxis && (
-              <line x1={padL} y1={py} x2={W - padR} y2={py} stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+              <line x1={padL} y1={py} x2={W - padR} y2={py} stroke={theme.gridline ?? tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
             )}
             {style.grid && opts.showXAxis && (
-              <line x1={px} y1={padT} x2={px} y2={padT + plotH} stroke={tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
+              <line x1={px} y1={padT} x2={px} y2={padT + plotH} stroke={theme.gridline ?? tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />
             )}
             {opts.showYAxis && (
-              <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end" fill={tokens.colorNeutralForeground3}>{fmtNum(yVal)}</text>
+              <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end" fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(yVal)}</text>
             )}
             {opts.showXAxis && (
-              <text x={px} y={H - padB + 14} fontSize={style.fontSize} textAnchor="middle" fill={tokens.colorNeutralForeground3}>{fmtNum(xVal)}</text>
+              <text x={px} y={H - padB + 14} fontSize={style.fontSize} textAnchor="middle" fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(xVal)}</text>
             )}
           </g>
         );
@@ -1187,7 +1259,7 @@ function ScatterChart({ parsed, H, refLines = [], errorBars = [], bubble = false
 
       {scatter.map((pt, i) => (
         <circle key={i} cx={xPix(pt.x)} cy={yPix(pt.y)} r={radiusFor(pt.size)}
-          fill={color} opacity={hasSize ? 0.55 : style.fillOpacity} stroke={tokens.colorNeutralBackground1} strokeWidth={0.8}>
+          fill={color} opacity={hasSize ? 0.55 : style.fillOpacity} stroke={theme.background ?? tokens.colorNeutralBackground1} strokeWidth={0.8}>
           <title>{`${pt.label}\nx: ${pt.x.toLocaleString()}, y: ${pt.y.toLocaleString()}${typeof pt.size === 'number' ? `\nsize: ${pt.size.toLocaleString()}` : ''}`}</title>
         </circle>
       ))}
@@ -1195,7 +1267,7 @@ function ScatterChart({ parsed, H, refLines = [], errorBars = [], bubble = false
       {/* Per-point labels */}
       {showLabels && scatter.map((pt, i) => (
         <text key={`dl${i}`} x={xPix(pt.x) + 5} y={yPix(pt.y) + 3} fontSize={style.fontSize - 0.5}
-          textAnchor="start" fontWeight={style.labelWeight} fill={tokens.colorNeutralForeground1} pointerEvents="none">
+          textAnchor="start" fontWeight={style.labelWeight} fill={(theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
           {truncLabel(pt.label, 10)}
         </text>
       ))}
@@ -1240,7 +1312,7 @@ function Legend({ series, orientation = 'horizontal' }: { series: ParsedSeries[]
 }
 
 // Pie/Donut legend (categories)
-function PieLegend({ parsed, orientation = 'horizontal' }: { parsed: ParsedData; orientation?: 'horizontal' | 'vertical' }) {
+function PieLegend({ parsed, palette = PALETTE, orientation = 'horizontal' }: { parsed: ParsedData; palette?: string[]; orientation?: 'horizontal' | 'vertical' }) {
   const { categories, series } = parsed;
   if (categories.length === 0 || series.length === 0) return null;
   const values = series[0].data.map((v) => Math.max(v, 0));
@@ -1251,7 +1323,7 @@ function PieLegend({ parsed, orientation = 'horizontal' }: { parsed: ParsedData;
         const pct = (values[i] / total) * 100;
         return (
           <div key={i} style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', minWidth: 0 }}>
-            <span style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: PALETTE[i % PALETTE.length], flexShrink: 0 }} />
+            <span style={{ width: 10, height: 10, borderRadius: 2, backgroundColor: palette[i % palette.length], flexShrink: 0 }} />
             <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{cat} ({pct.toFixed(1)}%)</Caption1>
           </div>
         );
@@ -1272,9 +1344,10 @@ function PieLegend({ parsed, orientation = 'horizontal' }: { parsed: ParsedData;
  * preset) — see {@link LoomChartFormat} — and `refLines` overlays analytics
  * reference lines on the value axis.
  */
-export function LoomChart({ type, rows, title, height = 280, refLines = [], format, bubble = false, sizeColumn, errorBars = [], forecast, symmetry }: LoomChartProps) {
-  const parsed = useMemo(() => parseRows(rows, sizeColumn), [rows, sizeColumn]);
-  const opts = useMemo(() => optsFromFormat(format), [format]);
+export function LoomChart({ type, rows, title, height = 280, refLines = [], format, bubble = false, sizeColumn, errorBars = [], forecast, symmetry, palette, fontFamily, structural }: LoomChartProps) {
+  const theme = useMemo(() => resolveTheme(palette, fontFamily, structural), [palette, fontFamily, structural]);
+  const parsed = useMemo(() => parseRows(rows, sizeColumn, theme.palette), [rows, sizeColumn, theme.palette]);
+  const opts = useMemo(() => optsFromFormat(format, theme), [format, theme]);
 
   // Empty data state
   if (!parsed) {
@@ -1313,7 +1386,7 @@ export function LoomChart({ type, rows, title, height = 280, refLines = [], form
   const sideLegend = legendPos === 'left' || legendPos === 'right';
   const legendNode = showLegend
     ? (isCircular
-        ? <PieLegend parsed={parsed} orientation={sideLegend ? 'vertical' : 'horizontal'} />
+        ? <PieLegend parsed={parsed} palette={opts.theme.palette} orientation={sideLegend ? 'vertical' : 'horizontal'} />
         : <Legend series={parsed.series} orientation={sideLegend ? 'vertical' : 'horizontal'} />)
     : null;
 
@@ -1328,7 +1401,8 @@ export function LoomChart({ type, rows, title, height = 280, refLines = [], form
           display: 'block',
           border: `1px solid ${tokens.colorNeutralStroke2}`,
           borderRadius: 6,
-          background: tokens.colorNeutralBackground1,
+          background: opts.theme.background ?? tokens.colorNeutralBackground1,
+          fontFamily: opts.theme.fontFamily,
           overflow: 'visible',
         }}
       >

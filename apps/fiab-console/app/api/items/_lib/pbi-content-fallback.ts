@@ -189,22 +189,25 @@ export function semanticModelDetailFromContent(item: WorkspaceItem) {
 
 /**
  * Read-side view of the persisted report content. ADDITIVE over
- * {@link ReportContent} with the wave-2 members the definition route writes
+ * {@link ReportContent} with the wave-2/3 members the definition route writes
  * (`ReportContentV2` in `.../report/[id]/definition/route.ts`) but the base
  * bundle type doesn't declare: per-page canvas `config` (type/size/background/
  * hidden + the visual-interactions matrix + drillthrough/tooltip target),
- * report-level `bookmarks`, and the Filters-pane `filterPaneFormat`. Loosely
+ * report-level `bookmarks`, the Filters-pane `filterPaneFormat`, and the wave-3
+ * report `theme` (built-in or custom palette/typography/background). Loosely
  * typed — every value is already STRUCTURED + server-sanitized at PUT time
  * (no-freeform-config.md), and the designer reparses each defensively on load
- * (reFilters / parseBookmarks / parseInteractions), so this read path only has
- * to pass the stored shape back through unchanged. `reportFilters` and the
- * page-level `filters` are already declared on ReportContent and need no widen.
+ * (reFilters / parseBookmarks / parseInteractions / parseTheme), so this read
+ * path only has to pass the stored shape back through unchanged. `reportFilters`
+ * and the page-level `filters` are already declared on ReportContent and need no
+ * widen.
  */
 type ReportPageRead = ReportContent['pages'][number] & { config?: unknown };
 interface ReportContentRead extends Omit<ReportContent, 'pages'> {
   pages: ReportPageRead[];
   bookmarks?: unknown[];
   filterPaneFormat?: unknown;
+  theme?: unknown;
 }
 
 export function reportListEntry(item: WorkspaceItem) {
@@ -218,16 +221,19 @@ export function reportListEntry(item: WorkspaceItem) {
 
 /**
  * Build the report DETAIL payload from a bundle-installed item's ReportContent.
- * Beyond the base `{ report }` identity, this surfaces the wave-2 REPORT-LEVEL
+ * Beyond the base `{ report }` identity, this surfaces the wave-2/3 REPORT-LEVEL
  * state the report designer persists through `.../report/[id]/definition`:
  *   • `reportFilters`     — report-scope structured filters (apply across pages)
  *   • `bookmarks`         — captured page/filter/selection/visibility snapshots
  *   • `filterPaneFormat`  — Filters-pane styling + the deferred-Apply toggle
+ *   • `theme`             — wave-3 report theme (built-in or custom palette/
+ *                           typography/background) restyling every visual
  * Without these the designer's `loadDetail` reads `j.reportFilters` /
- * `j.bookmarks` as undefined and every report-scope filter, bookmark, and pane
- * format RESETS on reload. Each is emitted only when actually persisted (the PUT
- * route omits empties), so legacy report bundles + the read-only viewer + the
- * PBIR provisioner are unaffected (they ignore the extra keys).
+ * `j.bookmarks` / `j.theme` as undefined and every report-scope filter, bookmark,
+ * pane format, and theme RESETS on reload. Each is emitted only when actually
+ * persisted (the PUT route omits empties), so legacy report bundles + the
+ * read-only viewer + the PBIR provisioner are unaffected (they ignore the extra
+ * keys).
  */
 export function reportDetailFromContent(item: WorkspaceItem) {
   const content = contentOf<ReportContentRead>(item, 'report');
@@ -245,6 +251,7 @@ export function reportDetailFromContent(item: WorkspaceItem) {
       ? { bookmarks: content.bookmarks }
       : {}),
     ...(content.filterPaneFormat ? { filterPaneFormat: content.filterPaneFormat } : {}),
+    ...(content.theme ? { theme: content.theme } : {}),
   };
 }
 

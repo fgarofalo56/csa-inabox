@@ -60,6 +60,8 @@ import {
   ArrowUndo20Regular, ArrowRedo20Regular, ArrowExpand20Regular,
   Bookmark20Regular, BookmarkAdd20Regular, BookmarkMultiple20Regular,
   Eye20Regular, EyeOff20Regular, Checkmark20Regular, ArrowExit20Regular,
+  // ── wave-3 additions (AI-visual gallery + View tab) ──────────────────────────
+  Question20Regular, DataTreemap20Regular,
 } from '@fluentui/react-icons';
 import type { CSSProperties, ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -70,7 +72,7 @@ import {
   LoomChart, type LoomChartType,
   type ChartErrorBar, type ChartForecast, type ChartSymmetry,
 } from '@/lib/components/charts/loom-chart';
-import { ReportPowerBiCopilot, type CopilotVisualSpec } from '@/lib/components/report/report-powerbi-copilot';
+import { ReportPowerBiCopilot, type CopilotVisualSpec, type CopilotWellField } from '@/lib/components/report/report-powerbi-copilot';
 import { DataSourcePicker } from './report/data-source-picker';
 import { FormatPane, type ReportVisualFormat, formatValue, LOOM_DATA_PALETTE } from './report/format-pane';
 // Wave-1 parity panels (extracted, self-contained): the Filters pane (3-scope
@@ -110,6 +112,33 @@ import {
   type ReportBookmark, type BookmarkScope, type BookmarkApply, type BookmarkCaptureSource,
 } from './report/bookmarks-pane';
 import { SelectionPane } from './report/selection-pane';
+// ── Wave-3 parity surfaces (extracted, self-contained) ───────────────────────
+// Themes (built-in + custom + PBI-theme-JSON import/export), the viewer-side
+// Personalize overlay (per-user, never persisted), the dependency-free + server
+// Export menu, and the four real AI visuals (smart narrative / Q&A over AOAI;
+// decomposition tree / key influencers over REAL /query SQL). report-designer
+// MOUNTS these — the canonical implementations live in ./report/* and
+// ./report/ai-visuals/*. Theme model + helpers come from ./report/themes; the
+// ThemesPane authoring surface from ./report/themes-pane (its structurally-
+// compatible ReportTheme assigns both ways).
+import {
+  sanitizeTheme, themeChartProps, applyThemeCssVars,
+  type ReportTheme, type ThemeChartProps,
+} from './report/themes';
+import { ThemesPane } from './report/themes-pane';
+import {
+  usePersonalize, PersonalizeBanner, PersonalizePopover,
+  type DVisual as PersonalizeVisual,
+} from './report/personalize';
+import {
+  ExportMenu, printReport, pngOfElement, buildReportPrintHtml, downloadBlobObject, slugify,
+  type ExportFormat, type ExportScope, type PrintPage,
+} from './report/export-report';
+import { SmartNarrative, type SmartNarrativeVisualRows } from './report/ai-visuals/smart-narrative';
+import { ReportQA } from './report/ai-visuals/qa';
+import { DecompositionTree } from './report/ai-visuals/decomposition-tree';
+import { KeyInfluencers } from './report/ai-visuals/key-influencers';
+import type { ReportFilterInput } from '@/lib/azure/wells-to-sql';
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
@@ -128,7 +157,10 @@ type VisualType =
   | 'table' | 'matrix' | 'card' | 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'scatter' | 'slicer'
   | 'combo' | 'waterfall' | 'funnel' | 'gauge' | 'kpi' | 'treemap' | 'multiRowCard' | 'ribbon'
   // ── wave-2 gallery addition ──────────────────────────────────────────────────
-  | 'map';
+  | 'map'
+  // ── wave-3 AI visuals (each REAL — AOAI smart-narrative/Q&A, real /query SQL
+  //    decomposition-tree/key-influencers; rendered by ./report/ai-visuals/*) ────
+  | 'decompositionTree' | 'keyInfluencers' | 'smartNarrative' | 'qna';
 
 type Agg = 'Sum' | 'Avg' | 'Count' | 'Min' | 'Max';
 const AGGS: Agg[] = ['Sum', 'Avg', 'Count', 'Min', 'Max'];
@@ -249,7 +281,7 @@ interface VisualState { rows: Array<Record<string, unknown>>; loading: boolean; 
 
 // ── Visual catalogue (gallery) ───────────────────────────────────────────────
 
-const VISUALS: { type: VisualType; label: string; icon: ReactElement }[] = [
+const VISUALS: { type: VisualType; label: string; icon: ReactElement; group?: 'ai' }[] = [
   { type: 'table',        label: 'Table',          icon: <Table20Regular /> },
   { type: 'matrix',       label: 'Matrix',         icon: <GridRegular /> },
   { type: 'card',         label: 'Card',           icon: <NumberSymbol20Regular /> },
@@ -270,7 +302,23 @@ const VISUALS: { type: VisualType; label: string; icon: ReactElement }[] = [
   { type: 'scatter',      label: 'Scatter',        icon: <DataScatterRegular /> },
   { type: 'map',          label: 'Map',            icon: <Map20Regular /> },
   { type: 'slicer',       label: 'Slicer',         icon: <Filter20Regular /> },
+  // ── AI visuals (real backends) ───────────────────────────────────────────────
+  { type: 'smartNarrative',    label: 'Smart narrative',   icon: <Sparkle20Regular />,      group: 'ai' },
+  { type: 'qna',               label: 'Q&A',               icon: <Question20Regular />,     group: 'ai' },
+  { type: 'decompositionTree', label: 'Decomposition tree', icon: <DataTreemap20Regular />, group: 'ai' },
+  { type: 'keyInfluencers',    label: 'Key influencers',   icon: <DataTrending20Regular />, group: 'ai' },
 ];
+
+/**
+ * The wave-3 AI visual types. They are NOT folded into CHART_TYPES / KPI_TYPES —
+ * each renders its own ./report/ai-visuals/* surface (VisualBody dispatch). The
+ * two that drill on real SQL (decomposition tree / key influencers) SELF-QUERY via
+ * the shared `queryAdHoc`, so the host's per-visual runVisual effect MUST skip them
+ * (smart narrative / Q&A have no wells and never reach runVisual anyway).
+ */
+const AI_TYPES = new Set<VisualType>(['decompositionTree', 'keyInfluencers', 'smartNarrative', 'qna']);
+/** AI visuals that issue their OWN /query calls — excluded from the host runVisual effect. */
+const AI_SELF_QUERY = AI_TYPES;
 
 /**
  * Map each chart-family visual to the SVG shape LoomChart draws today. The
@@ -331,6 +379,20 @@ const APPROX_GEOMETRY: Partial<Record<VisualType, string>> = {
  */
 function wellsFor(type: VisualType): { name: WellName; label: string }[] {
   switch (type) {
+    // ── wave-3 AI visuals ────────────────────────────────────────────────────
+    case 'smartNarrative':
+    case 'qna':
+      // No field wells: smart narrative summarizes the page's other visuals;
+      // Q&A is driven by a natural-language box. Both render their own surface.
+      return [];
+    case 'decompositionTree':
+    case 'keyInfluencers':
+      // Structured wells, parity-labelled: ONE Analyze measure + N Explain-by
+      // dimensions. The component self-queries real GROUP-BY SQL over these.
+      return [
+        { name: 'values', label: 'Analyze' },
+        { name: 'category', label: 'Explain by' },
+      ];
     case 'card':
     case 'multiRowCard':
       return [{ name: 'values', label: 'Fields' }];
@@ -704,11 +766,54 @@ type Styles = ReturnType<typeof useStyles>;
 
 // ── visual render ─────────────────────────────────────────────────────────────
 
-function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect }: {
+/**
+ * Shared host wiring the wave-3 AI visuals consume. `queryAdHoc` is the generalized
+ * /query POST (Path-3 wells→SQL) the decomposition tree / key influencers / Q&A
+ * self-query through; `onApplyVisual` turns a Q&A answer into a real persisted
+ * visual (the same path the Copilot uses); `pageRows` are the active page's REAL
+ * /query result sets the smart narrative summarizes (it never fetches page data).
+ */
+interface AiVisualWiring {
+  reportId: string;
+  tables: FieldTable[];
+  queryAdHoc: (spec: CopilotVisualSpec, filters?: ReportFilterInput[]) => Promise<Array<Record<string, unknown>>>;
+  onApplyVisual: (spec: CopilotVisualSpec) => void;
+  pageRows: SmartNarrativeVisualRows[];
+}
+
+function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, themeChart, ai }: {
   visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[];
   selection?: VisualSelection | null; interactionMode?: InteractionMode;
   onSelect?: (sel: VisualSelection | null) => void;
+  themeChart?: ThemeChartProps; ai?: AiVisualWiring;
 }) {
+  // Wave-3 AI visuals render their OWN surface (real AOAI / real /query SQL).
+  // Branched BEFORE the hasBinding/state guards: smart narrative + Q&A carry no
+  // wells, and decomposition tree / key influencers self-query (they never use the
+  // host's per-visual `state`). Each surfaces its own honest gate (503 when no AOAI
+  // deployment, verbatim multi-table 400 from /query) — no dead controls.
+  if (AI_TYPES.has(visual.type)) {
+    if (!ai) return <Caption1 className={styles.muted}>Preparing…</Caption1>;
+    if (visual.type === 'smartNarrative') {
+      return <SmartNarrative reportId={ai.reportId} pageRows={ai.pageRows} />;
+    }
+    if (visual.type === 'qna') {
+      return <ReportQA reportId={ai.reportId} tables={ai.tables} queryAdHoc={ai.queryAdHoc} onApplyVisual={ai.onApplyVisual} />;
+    }
+    // Explain-by spans BOTH the Category ("Explain by") AND the Legend wells. A
+    // Copilot-placed decomposition tree / key influencers may carry extra Explain-by
+    // dimensions in `legend` (report-designer-tools documents legend as "Additional
+    // Explain by fields for decompositionTree/keyInfluencers"). Dropping legend here
+    // would render the visual with FEWER dimensions than the author placed.
+    const aiWells = {
+      analyze: visual.wells.values || [],
+      explainBy: [...(visual.wells.category || []), ...(visual.wells.legend || [])],
+    };
+    if (visual.type === 'decompositionTree') {
+      return <DecompositionTree wells={aiWells} queryAdHoc={ai.queryAdHoc} />;
+    }
+    return <KeyInfluencers wells={aiWells} queryAdHoc={ai.queryAdHoc} />;
+  }
   if (!hasBinding(visual)) {
     return <Caption1 className={styles.muted}>Add a field from the Fields pane to render this {visual.type}.</Caption1>;
   }
@@ -813,9 +918,33 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
       // The Format pane's lead data color (a Loom brand-palette token) is applied
       // by overriding the Fluent brand CSS variable LoomChart's series-1 reads
       // (tokens.colorBrandForeground1 === var(--colorBrandForeground1)). What you
-      // pick in Format → Data colors is what the chart paints.
+      // pick in Format → Data colors is what the chart paints. Wave-3: when a
+      // report THEME is active and the visual has no per-visual lead, the theme's
+      // lead (palette[0]) repaints series-1 — but a token value that points at the
+      // very variable we'd override is SKIPPED (assigning `--x: var(--x)` is a CSS
+      // cycle that blanks it; same guard themes.applyThemeCssVars uses).
       const lead = fmt?.dataColors?.[0];
-      const wrapStyle = lead ? ({ '--colorBrandForeground1': lead } as unknown as CSSProperties) : undefined;
+      const themeLead = themeChart && themeChart.palette[0] !== 'var(--colorBrandForeground1)' ? themeChart.palette[0] : undefined;
+      const leadVar = lead || themeLead;
+      const wrapStyle = leadVar ? ({ '--colorBrandForeground1': leadVar } as unknown as CSSProperties) : undefined;
+      // Wave-3 theme props for LoomChart: the WHOLE palette + typography + structural
+      // colors (not just series-1) flip when a theme is active. The per-visual Format
+      // lead still wins as element 0. The theme's foreground + background ride on the
+      // `structural` prop LoomChart actually READS (LoomChartStructural.foreground /
+      // .background) — passing them as top-level props silently DROPPED them (LoomChart
+      // has no top-level foreground/background prop), so under a dark theme the canvas
+      // went dark while axis/gridline labels stayed at the default mid-grey
+      // colorNeutralForeground3 (low contrast). With `structural` set, every axis /
+      // gridline / data label + the plot background repaint under the theme. Spread as
+      // a loose object (compiles regardless of prop-declaration timing). Omitted when
+      // no theme → byte-identical output.
+      const themeChartProps_: Record<string, unknown> | undefined = themeChart
+        ? {
+            palette: lead ? [lead, ...themeChart.palette.slice(1)] : themeChart.palette,
+            fontFamily: themeChart.fontFamily,
+            structural: { foreground: themeChart.foreground, background: themeChart.background },
+          }
+        : undefined;
       // Analytics reference lines — computed from these same rows and OVERLAID
       // on the chart by LoomChart (horizontal, or sloped for a trend line), with
       // a compact legend strip below for quick scanning. Each is data-derived,
@@ -850,7 +979,8 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
       return (
         <div style={wrapStyle}>
           <LoomChart type={CHART_RENDER[visual.type] || 'column'} rows={rows} height={200}
-            refLines={refLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry} format={fmt} />
+            refLines={refLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry} format={fmt}
+            {...(themeChartProps_ as any)} />
           {refLines.length > 0 && (
             <div className={styles.refLineRow}>
               {refLines.map((rl) => (
@@ -1218,6 +1348,29 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const [rightTab, setRightTab] = useState<RightTab>('build');
   const [reportName, setReportName] = useState('');
 
+  // ── wave-3: report theme (View ▸ Themes) ──────────────────────────────────────
+  // The active report theme restyles EVERY visual (palette + font + background +
+  // foreground), persisted ADDITIVELY on state.content.theme via /definition —
+  // exactly like bookmarks / filterPaneFormat. Null/undefined ⇒ Loom default.
+  const [theme, setTheme] = useState<ReportTheme | undefined>(undefined);
+  const [themesOpen, setThemesOpen] = useState(false);
+  // The structural props LoomChart / VisualBody read from the theme (palette /
+  // font / foreground); the canvas-wide CSS-var wrapper comes from applyThemeCssVars.
+  const themeChart = useMemo(() => themeChartProps(theme), [theme]);
+  const themeVars = useMemo(() => applyThemeCssVars(theme), [theme]);
+
+  // ── wave-3: viewer-side Personalize overlay (per-user, NEVER persisted) ───────
+  // A reading-mode overlay layered over each saved visual at render time only.
+  // localStorage-mirrored per browser profile (per-user), outside the shared
+  // definition — overrides never enter buildDefinitionBody.
+  const personalize = usePersonalize(id, '');
+  // Ref so mutatePage can go read-only in personalize mode without a dep churn.
+  const personalizeActiveRef = useRef(false);
+  personalizeActiveRef.current = personalize.active;
+
+  // ── wave-3: export result/gate message (Export menu) ──────────────────────────
+  const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   // Report DATA SOURCE (semantic-model default · direct-query · AAS). Replaces the
   // old AAS-only binding; back-compat falls through to {kind:'aas'} from item state.
   const [dataSource, setDataSource] = useState<ReportDataSource | null>(null);
@@ -1287,6 +1440,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       setPages([{ id: uid('p'), name: 'Page 1', visuals: [] }]);
       setActivePage(0); setReportName(''); setDataSource(null); setReportFilters([]);
       setBookmarks([]); setDrill(null); setSelectedVisualIds(new Set()); setFilterPaneFormat(null);
+      setTheme(undefined);
       historyRef.current = { past: [], future: [] }; prevSnapRef.current = null; restoringRef.current = false;
       setDirty(false); setLoadErr(null); setLoading(false);
       return;
@@ -1310,6 +1464,10 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       setDataSource(ds);
       setReportFilters(reFilters(j.reportFilters));
       setBookmarks(parseBookmarks(j.bookmarks));
+      // Report theme round-trips via reportDetailFromContent → j.theme (additive,
+      // mirrors bookmarks/filterPaneFormat). sanitizeTheme returns undefined when
+      // none is set, leaving the Loom default.
+      setTheme(sanitizeTheme(j.theme));
       // Filters-pane format round-trips via reportDetailFromContent → j.filterPaneFormat.
       { const fpf = parseFilterPaneFormat(j.filterPaneFormat); setFilterPaneFormat(Object.keys(fpf).length ? fpf : null); }
       setDrill(null); setSelectedVisualIds(new Set());
@@ -1415,6 +1573,24 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     [page, selectedVisual],
   );
 
+  // ── wave-3: effective (personalize-overlaid) visuals for the active page ──────
+  // In personalize mode each saved visual is merged with its per-user override at
+  // RENDER time (applyOverride preserves the id, so visualRows + selection still
+  // key correctly). Both the canvas render AND the live query iterate these, so a
+  // personalized FIELD swap re-queries real data and a TYPE swap re-renders live.
+  // When personalize is OFF this is the SAME reference as page.visuals (no change).
+  const effectiveVisuals = useMemo<DVisual[]>(
+    // applyOverride is generic over personalize's structural DVisual (its Wells is
+    // an index signature the designer's fixed-keys Wells doesn't structurally
+    // satisfy); the cast pins the return to the designer DVisual it actually
+    // produces (applyOverride only spreads `{ ...v, type, wells }`, preserving the
+    // concrete shape — id, w/h, format, hidden, etc. all survive).
+    () => (personalize.active
+      ? (page?.visuals || []).map((v) => (personalize.applyOverride as unknown as (x: DVisual) => DVisual)(v))
+      : (page?.visuals || [])),
+    [page?.visuals, personalize.active, personalize.map, personalize.applyOverride],
+  );
+
   // A cross-filter selection is page-scoped — clear it when the active page changes.
   useEffect(() => { setSelection(null); }, [activePage]);
 
@@ -1477,6 +1653,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   // here. The merged set is sent to the route (forward-compatible WHERE/FILTER) AND
   // re-applied client-side in VisualBody so a filter is visible immediately.
   const runVisual = useCallback(async (v: DVisual, scopeFilters: ReportFilter[] = []) => {
+    // AI visuals self-query (decomposition tree / key influencers) or have no
+    // wells (smart narrative / Q&A) — never run them through the host effect.
+    if (AI_SELF_QUERY.has(v.type)) return;
     if (!hasBinding(v)) return;
     const applicable = [...scopeFilters, ...(v.filters || [])];
     setVisualRows((p) => ({ ...p, [v.id]: { rows: p[v.id]?.rows || [], loading: true, err: null } }));
@@ -1499,12 +1678,18 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     if (!bound || !page) return;
     const drillScope = drill && drill.toPage === activePage ? drill.filters : [];
     const scope = [...reportFilters, ...drillScope, ...(page.filters || [])];
-    page.visuals.forEach((v) => { if (hasBinding(v)) runVisual(v, scope); });
+    // Iterate the effective (personalize-overlaid) visuals so a personalized field
+    // swap re-queries; AI self-querying visuals are skipped (runVisual no-ops them).
+    effectiveVisuals.forEach((v) => { if (!AI_SELF_QUERY.has(v.type) && hasBinding(v)) runVisual(v, scope); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bound, activePage, page?.visuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || []), JSON.stringify(drill?.toPage === activePage ? drill?.filters : [])]);
+  }, [bound, activePage, effectiveVisuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || []), JSON.stringify(drill?.toPage === activePage ? drill?.filters : [])]);
 
   // ── mutation helpers ─────────────────────────────────────────────────────────
   const mutatePage = useCallback((fn: (p: DPage) => DPage) => {
+    // Personalize is a reading mode (PBI parity): the shared definition is
+    // read-only while it's active, so any edit (drag / resize / well change /
+    // arrange) is a no-op and overrides never reach the saved model.
+    if (personalizeActiveRef.current) return;
     setPages((prev) => prev.map((p, i) => (i === activePage ? fn(p) : p)));
     setDirty(true);
   }, [activePage]);
@@ -1554,12 +1739,14 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     mutateVisual(vid, (v) => {
       const cur = v.wells[well] || [];
       if (cur.some((x) => fieldKey(x) === fieldKey(f))) return v;
-      // Single-field wells: slicer field, and the gauge/kpi Value/Target/Min/Max
-      // wells (each holds exactly one field). All others accept many.
+      // Single-field wells: slicer field, the gauge/kpi Value/Target/Min/Max
+      // wells, and the wave-3 decomposition-tree / key-influencers Analyze well
+      // (exactly one measure). All others accept many.
       const single =
         (well === 'category' && v.type === 'slicer') ||
         well === 'target' || well === 'minimum' || well === 'maximum' ||
-        ((v.type === 'gauge' || v.type === 'kpi') && well === 'values');
+        ((v.type === 'gauge' || v.type === 'kpi') && well === 'values') ||
+        ((v.type === 'decompositionTree' || v.type === 'keyInfluencers') && well === 'values');
       const base = single ? [] : cur;
       return { ...v, wells: { ...v.wells, [well]: [...base, f] } };
     });
@@ -1570,6 +1757,38 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const setAgg = useCallback((vid: string, well: WellName, fuid: string, agg: Agg) => {
     mutateVisual(vid, (v) => ({ ...v, wells: { ...v.wells, [well]: (v.wells[well] || []).map((x) => (x.uid === fuid ? { ...x, aggregation: agg } : x)) } }));
   }, [mutateVisual]);
+
+  // ── wave-3: shared ad-hoc query helper (the AI visuals self-query through this) ─
+  // Generalizes runVisual's POST to /api/items/report/[id]/query for an arbitrary
+  // structured visual spec (Copilot/AI), returning the REAL aggregated rows (Path-3
+  // wells→SQL over the bound Loom semantic model). Optional `filters` (the
+  // decomposition-tree's ancestor path folded as op:'eq' constraints) ride along as
+  // the route's `filters`. Rejects with the route's honest error (e.g. multi-table)
+  // VERBATIM so each AI surface can show its gate. No new backend route.
+  const queryAdHoc = useCallback(async (
+    spec: CopilotVisualSpec,
+    adHocFilters?: ReportFilterInput[],
+  ): Promise<Array<Record<string, unknown>>> => {
+    const strip = (a?: CopilotWellField[]) =>
+      (a || []).map((f) => ({ table: f.table, column: f.column, measure: f.measure, aggregation: f.aggregation }));
+    const cat = strip(spec.wells?.category);
+    const vals = strip(spec.wells?.values);
+    const leg = strip(spec.wells?.legend);
+    const first = vals[0] || cat[0];
+    const field = first?.measure
+      ? `[${first.measure}]`
+      : first?.column
+        ? `${first.table ? `'${first.table.replace(/'/g, "''")}'` : ''}[${first.column}]`
+        : undefined;
+    const visual = { type: spec.type, field, wells: { category: cat, values: vals, legend: leg } };
+    const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ visual, filters: adHocFilters ?? [], dataSource }),
+    });
+    const j = await r.json().catch(() => ({} as Record<string, unknown>));
+    if (!r.ok || !j?.ok) throw new Error((j?.error as string) || `HTTP ${r.status}`);
+    return (j.rows || []) as Array<Record<string, unknown>>;
+  }, [id, dataSource]);
 
   // ── wave-2: multi-select + Arrange (group / lock / z-order / match-size) ──────
   // Ctrl/Shift-click a card toggles it in the Arrange set; a plain click selects
@@ -1888,8 +2107,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     // Filters-pane format (pane colors) — additive, sanitizer-whitelisted; omitted
     // when nothing is set (wireFilterPaneFormat returns undefined → route drops it).
     filterPaneFormat: wireFilterPaneFormat(filterPaneFormat),
+    // Report theme (wave-3) — additive on state.content.theme (mirrors bookmarks /
+    // filterPaneFormat). Omitted when none is set so a default report persists nothing.
+    theme: theme ?? undefined,
     dataSource,
-  }), [pages, reportFilters, bookmarks, filterPaneFormat, dataSource]);
+  }), [pages, reportFilters, bookmarks, filterPaneFormat, theme, dataSource]);
 
   const save = useCallback(async () => {
     // Brand-new report: route Save to the create-then-redirect flow (the
@@ -2028,6 +2250,78 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     finally { setPublishBusy(false); }
   }, [id, publishTarget]);
 
+  // ── wave-3: export (PBI Export ▸ PDF / PPTX / PNG + Print) ────────────────────
+  // visualId → that visual's last real /query rows (data in == data out) for the
+  // dependency-free client exporters (print HTML + PNG raster reuse these rows).
+  const rowsByVisual = useMemo(() => {
+    const m: Record<string, Array<Record<string, unknown>>> = {};
+    for (const k of Object.keys(visualRows)) m[k] = visualRows[k].rows;
+    return m;
+  }, [visualRows]);
+
+  // Build the self-contained, theme-aware print/PNG document for a scope.
+  const getPrintHtml = useCallback((scope: ExportScope) => buildReportPrintHtml(
+    pages as PrintPage[], rowsByVisual, theme ?? null, scope, page?.id, reportName || 'Report',
+  ), [pages, rowsByVisual, theme, page?.id, reportName]);
+
+  // Always-on client "Print / Save as PDF" — never a dead button (zero infra).
+  const onExportPrint = useCallback((scope: ExportScope) => {
+    printReport(scope, getPrintHtml).catch(() => { /* pop-up/print blocked — no-op */ });
+  }, [getPrintHtml]);
+
+  // Always-on client PNG of the live canvas grid (SVG foreignObject → canvas).
+  const onExportPng = useCallback(async () => {
+    setExportMsg(null);
+    const el = gridRef.current;
+    if (!el) { setExportMsg({ ok: false, text: 'Add a visual to the page before exporting a PNG.' }); return; }
+    try {
+      const blob = await pngOfElement(el);
+      downloadBlobObject(`${slugify(reportName || 'report')}-${slugify(page?.name || 'page')}.png`, blob);
+    } catch (e: any) {
+      setExportMsg({ ok: false, text: `PNG export failed (${e?.message || String(e)}). Use Print / Save as PDF instead.` });
+    }
+  }, [reportName, page?.name]);
+
+  // High-fidelity export → the report /export route. Azure-native loom-native
+  // renderer by default; downloads REAL bytes on a binary 200, else surfaces the
+  // route's honest gate (e.g. set LOOM_REPORT_RENDERER) verbatim — never silent.
+  const onServerExport = useCallback(async (format: ExportFormat, scope: ExportScope) => {
+    setExportMsg(null);
+    try {
+      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/export`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ mode: 'loom-native', format, scope }),
+      });
+      const ct = (r.headers.get('content-type') || '').toLowerCase();
+      if (r.ok && !ct.includes('application/json')) {
+        const blob = await r.blob();
+        downloadBlobObject(`${slugify(reportName || 'report')}.${format.toLowerCase()}`, blob);
+        setExportMsg({ ok: true, text: `Exported ${format}.` });
+      } else {
+        const j = await r.json().catch(() => ({} as Record<string, unknown>));
+        setExportMsg({
+          ok: false,
+          text: (j?.error as string)
+            || `High-fidelity ${format} export needs the Loom report renderer (set LOOM_REPORT_RENDERER) — use Print / Save as PDF for a no-setup file. (HTTP ${r.status})`,
+        });
+      }
+    } catch (e: any) { setExportMsg({ ok: false, text: e?.message || String(e) }); }
+  }, [id, reportName]);
+
+  // ── wave-3: shared AI-visual wiring (one bundle for every AI surface) ─────────
+  // narrativePageRows = the active page's REAL /query rows for its NON-AI visuals;
+  // the smart narrative summarizes these (it never fetches page data itself).
+  const narrativePageRows: SmartNarrativeVisualRows[] = useMemo(
+    () => (page?.visuals || [])
+      .filter((v) => !AI_TYPES.has(v.type) && hasBinding(v))
+      .map((v) => ({ visualTitle: v.title || undefined, type: v.type, rows: visualRows[v.id]?.rows || [] }))
+      .filter((v) => v.rows.length > 0),
+    [page?.visuals, visualRows],
+  );
+  const aiWiring: AiVisualWiring = useMemo(() => ({
+    reportId: id, tables, queryAdHoc, onApplyVisual: applyCopilotVisual, pageRows: narrativePageRows,
+  }), [id, tables, queryAdHoc, applyCopilotVisual, narrativePageRows]);
+
   // ── ribbon ───────────────────────────────────────────────────────────────────
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -2047,7 +2341,22 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         { label: 'New page', icon: <Add20Regular />, onClick: addPage, title: 'add a report page' },
       ]},
     ]},
-  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew, undo, redo, canUndo, canRedo]);
+    // ── View tab (wave-3): report Themes + viewer Personalize ────────────────────
+    { id: 'view', label: 'View', groups: [
+      { label: 'Theme', actions: [
+        { label: 'Themes', icon: <ColorRegular />, onClick: () => setThemesOpen(true), title: 'Restyle every visual — palette, font, background (Loom + custom themes)' },
+      ]},
+      { label: 'Reading', actions: [
+        {
+          label: personalize.active ? 'Personalizing' : 'Personalize',
+          icon: <Edit20Regular />,
+          onClick: () => personalize.toggleActive(),
+          appearance: personalize.active ? 'primary' : undefined,
+          title: 'Change visual types / fields for your own view — temporary, per-user, not saved',
+        },
+      ]},
+    ]},
+  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew, undo, redo, canUndo, canRedo, personalize.active, personalize.toggleActive]);
 
   // ── left: pages ──────────────────────────────────────────────────────────────
   const leftPanel = (
@@ -2097,6 +2406,18 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         {reportName && <Subtitle2>{reportName}{page ? ` — ${page.name}` : ''}</Subtitle2>}
         <div className={styles.spacer} />
         {dirty && <Badge appearance="tint" color="warning">Unsaved</Badge>}
+        {/* Export (PBI Export ▸ PDF / PPTX / PNG + always-on Print/PNG). Print &
+            PNG always produce a real file client-side; the high-fidelity formats
+            hit the /export route (real bytes or an honest renderer gate). */}
+        <ExportMenu
+          reportId={id}
+          pbiEnabled={pbiPublishEnabled}
+          currentPageName={page?.name}
+          disabled={isNew || !page || page.visuals.length === 0}
+          onServerExport={onServerExport}
+          onPrint={onExportPrint}
+          onPng={onExportPng}
+        />
         <Button appearance="primary" icon={<Save20Regular />} disabled={saveBusy || (!isNew && !dirty)} onClick={save}>
           {isNew ? 'Create report' : (saveBusy ? 'Saving…' : 'Save')}
         </Button>
@@ -2105,6 +2426,12 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       {loadErr && <MessageBar intent="error"><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
       {saveMsg && <MessageBar intent={saveMsg.ok ? 'success' : 'error'}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>}
       {dsNote && <MessageBar intent={dsNote.ok ? 'success' : 'warning'}><MessageBarBody>{dsNote.text}</MessageBarBody></MessageBar>}
+      {exportMsg && <MessageBar intent={exportMsg.ok ? 'success' : 'warning'}><MessageBarBody>{exportMsg.text}</MessageBarBody></MessageBar>
+      }
+      {/* Personalize (reading mode) banner — temporary, per-user, unsaved. */}
+      {personalize.active && (
+        <PersonalizeBanner count={personalize.count} onResetAll={personalize.resetAll} onExit={() => personalize.setActive(false)} />
+      )}
       {!bound && !loading && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -2130,8 +2457,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       )}
 
       {/* Arrange toolbar — acts on the multi-selection (Ctrl/Shift-click) or the
-          single selection. Every control mutates the real, persisted layout. */}
-      {!loading && page && page.visuals.length > 0 && arrangeTargets().length > 0 && (
+          single selection. Every control mutates the real, persisted layout.
+          Hidden in personalize (reading) mode, where the definition is read-only. */}
+      {!loading && !personalize.active && page && page.visuals.length > 0 && arrangeTargets().length > 0 && (
         <ArrangeBar
           styles={styles}
           targets={arrangeTargets()}
@@ -2156,8 +2484,15 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
       {!loading && page && page.visuals.length > 0 && (
         <div className={styles.canvasGrid} ref={gridRef}
-          style={page.background?.color ? { backgroundColor: applyAlpha(page.background.color, page.background.transparency), padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge } : undefined}>
-          {page.visuals.map((v, i) => {
+          style={{
+            // Report theme repaints the whole canvas (palette lead + foreground +
+            // background + font) via CSS-var overrides; a per-page background wins.
+            ...(themeVars || {}),
+            ...(page.background?.color
+              ? { backgroundColor: applyAlpha(page.background.color, page.background.transparency), padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }
+              : {}),
+          }}>
+          {effectiveVisuals.map((v, i) => {
             const fmt = v.format;
             const showTitle = fmt?.showTitle !== false;
             const titleText = (fmt?.titleText && fmt.titleText.trim()) || v.title || '(untitled)';
@@ -2175,8 +2510,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               ? pages.map((tp, ti) => ({ tp, ti, seed: drillSeedFor(tp, selection) }))
                   .filter((x) => x.ti !== activePage && x.seed && x.seed.length)
               : [];
-            // Format chrome (background / border / shadow) over the card.
+            // Format chrome (background / border / shadow) over the card. The theme
+            // CSS-vars ride on each card too (per the wave-3 spec) so a per-visual
+            // chart wrapper inherits the theme palette/foreground context.
             const cardStyle: CSSProperties = {
+              ...(themeVars || {}),
               gridColumn: `span ${Math.min(12, Math.max(2, v.w))}`,
               minHeight: `${Math.max(180, v.h * 40)}px`,
             };
@@ -2239,25 +2577,42 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                     </MenuPopover>
                   </Menu>
                 )}
-                <Tooltip content={locked ? 'Unlock' : 'Lock'} relationship="label">
-                  <Button size="small" appearance="subtle" icon={locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
-                    onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { locked: !locked }); }} />
-                </Tooltip>
-                <Tooltip content={v.hidden ? 'Show' : 'Hide'} relationship="label">
-                  <Button size="small" appearance="subtle" icon={v.hidden ? <EyeOff20Regular /> : <Eye20Regular />}
-                    onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { hidden: !v.hidden }); }} />
-                </Tooltip>
-                <Tooltip content="Move left" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronUp20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, -1); }} disabled={i === 0} /></Tooltip>
-                <Tooltip content="Move right" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronDown20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, 1); }} disabled={i === page.visuals.length - 1} /></Tooltip>
-                <Tooltip content="Remove visual" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); removeVisual(v.id); }} /></Tooltip>
+                {/* Personalize (reading mode): per-visual override popover. The
+                    editing affordances are hidden — the shared definition is
+                    read-only — so neither is a dead control. */}
+                {personalize.active ? (
+                  <PersonalizePopover
+                    visual={v as unknown as PersonalizeVisual}
+                    override={personalize.overrideFor(v.id)}
+                    fields={fieldOptions(tables)}
+                    onChangeType={(t) => personalize.setOverride(v.id, { type: t })}
+                    onSwapField={(well, fields) => personalize.setOverride(v.id, { wells: { [well]: fields } })}
+                    onReset={() => personalize.resetVisual(v.id)}
+                  />
+                ) : (
+                  <>
+                    <Tooltip content={locked ? 'Unlock' : 'Lock'} relationship="label">
+                      <Button size="small" appearance="subtle" icon={locked ? <LockClosed20Regular /> : <LockOpen20Regular />}
+                        onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { locked: !locked }); }} />
+                    </Tooltip>
+                    <Tooltip content={v.hidden ? 'Show' : 'Hide'} relationship="label">
+                      <Button size="small" appearance="subtle" icon={v.hidden ? <EyeOff20Regular /> : <Eye20Regular />}
+                        onClick={(e) => { e.stopPropagation(); setVisualFlag([v.id], { hidden: !v.hidden }); }} />
+                    </Tooltip>
+                    <Tooltip content="Move left" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronUp20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, -1); }} disabled={i === 0} /></Tooltip>
+                    <Tooltip content="Move right" relationship="label"><Button size="small" appearance="subtle" icon={<ChevronDown20Regular />} onClick={(e) => { e.stopPropagation(); moveVisual(v.id, 1); }} disabled={i === page.visuals.length - 1} /></Tooltip>
+                    <Tooltip content="Remove visual" relationship="label"><Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); removeVisual(v.id); }} /></Tooltip>
+                  </>
+                )}
               </div>
               <div className={styles.vcardBody}>
                 <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged}
                   selection={selection} interactionMode={interactionMode}
+                  themeChart={themeChart} ai={aiWiring}
                   onSelect={(sel) => setSelection(sel)} />
               </div>
-              {/* Resize grip is disabled on a locked visual (no dead control: it's gone). */}
-              {!locked && (
+              {/* Resize grip is disabled on a locked visual / in personalize mode (no dead control: it's gone). */}
+              {!locked && !personalize.active && (
                 <div className={styles.resizeHandle} title="Drag to resize, or focus and use arrow keys"
                   {...canvas.getResizeHandleProps(v)} />
               )}
@@ -2382,7 +2737,25 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       <>
       <Title3>Visualizations</Title3>
       <div className={styles.gallery}>
-        {VISUALS.map((vt) => (
+        {VISUALS.filter((vt) => vt.group !== 'ai').map((vt) => (
+          <button key={vt.type} type="button"
+            className={mergeClasses(styles.galleryBtn, selected?.type === vt.type && styles.galleryBtnActive)}
+            onClick={() => (selected ? mutateVisual(selected.id, (v) => ({ ...v, type: vt.type })) : addVisual(vt.type))}
+            title={selected ? `change to ${vt.label}` : `add a ${vt.label}`}>
+            {vt.icon}
+            <Caption1>{vt.label}</Caption1>
+          </button>
+        ))}
+      </div>
+
+      {/* AI visuals (real backends) — smart narrative + Q&A over Azure OpenAI;
+          decomposition tree + key influencers over REAL /query SQL. */}
+      <div className={styles.wellHead}>
+        <Sparkle20Regular aria-hidden style={{ color: tokens.colorBrandForeground1 }} />
+        <Subtitle2>AI visuals</Subtitle2>
+      </div>
+      <div className={styles.gallery}>
+        {VISUALS.filter((vt) => vt.group === 'ai').map((vt) => (
           <button key={vt.type} type="button"
             className={mergeClasses(styles.galleryBtn, selected?.type === vt.type && styles.galleryBtnActive)}
             onClick={() => (selected ? mutateVisual(selected.id, (v) => ({ ...v, type: vt.type })) : addVisual(vt.type))}
@@ -2578,6 +2951,24 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
                 disabled={publishBusy} onClick={doPublish}>
                 {publishBusy ? 'Publishing…' : 'Publish'}
               </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Themes (wave-3) — built-in Loom themes + structured custom builder +
+          Power-BI-theme-JSON import/export. Restyles every visual live and
+          round-trips on Save via state.content.theme (no-fabric-dependency:
+          plain client styling over the Synapse/AAS path). */}
+      <Dialog open={themesOpen} onOpenChange={(_e, d) => setThemesOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Report theme</DialogTitle>
+            <DialogContent>
+              <ThemesPane theme={theme ?? null} onChange={(t) => { setTheme(t ?? undefined); setDirty(true); }} />
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setThemesOpen(false)}>Close</Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>

@@ -20,6 +20,18 @@
  * NO-VAPORWARE: the wells reference REAL model fields (the route injects the bound
  * model's table/column/measure list into the system prompt); the tools reject a
  * field that names neither a column nor a measure, and an unknown visual type.
+ *
+ * WAVE-3 (AI visuals): the designer gallery gains `decompositionTree` and
+ * `keyInfluencers`. They are added to DESIGNER_VISUAL_TYPES so the Copilot can
+ * place them too — their structured wells map Analyze → `values` (the measure/
+ * category being explained) and Explain by → `category`/`legend` (the fields to
+ * break down by). Both self-query the unchanged POST …/query (GROUP-BY drill /
+ * per-category lift) at render time, so they emit the same Apply card as any
+ * other visual. The AI *text* visuals (Smart narrative, Q&A) are deliberately
+ * NOT in this vocabulary — they live on the /ai-visual route. That route reuses
+ * the EXACT same well validation as the Copilot's add-visual path by importing
+ * the `sanitizeField` / `sanitizeList` helpers exported below (single source of
+ * truth — Q&A specs and Copilot specs cannot drift apart).
  */
 
 import type { ToolDef } from '@/lib/azure/copilot-orchestrator';
@@ -34,13 +46,29 @@ function obj(props: Record<string, unknown>, required: string[] = []) {
 /** Designer visual vocabulary (matches report-designer.tsx VisualType). */
 export const DESIGNER_VISUAL_TYPES = [
   'table', 'matrix', 'card', 'bar', 'column', 'line', 'area', 'pie', 'donut', 'scatter', 'slicer',
+  // Wave-3 AI visuals — self-query GROUP-BY drill / per-category lift over POST …/query.
+  // Their wells map Analyze → values and Explain by → category/legend (see handler).
+  'decompositionTree', 'keyInfluencers',
 ] as const;
 export type DesignerVisualType = (typeof DESIGNER_VISUAL_TYPES)[number];
+
+/** AI analyze-style visuals: Analyze well → values, Explain-by wells → category/legend. */
+const AI_ANALYZE_TYPES = new Set<DesignerVisualType>(['decompositionTree', 'keyInfluencers']);
+
+/**
+ * Case-insensitive canonical lookup. Legacy types are lowercase, so a plain
+ * `.toLowerCase()` compare worked; the wave-3 camelCase types (`decompositionTree`)
+ * would never match their own lowercased form, so resolve through this map to
+ * recover the canonical spelling regardless of how the model cased the value.
+ */
+const TYPE_BY_LOWER = new Map<string, DesignerVisualType>(
+  DESIGNER_VISUAL_TYPES.map((t) => [t.toLowerCase(), t] as [string, DesignerVisualType]),
+);
 
 const AGGS = new Set(['Sum', 'Avg', 'Count', 'Min', 'Max']);
 
 /** A single field placed in a well — a model column (with an aggregation) or a measure. */
-interface ActWellField { table?: string; column?: string; measure?: string; aggregation?: string }
+export interface ActWellField { table?: string; column?: string; measure?: string; aggregation?: string }
 
 /** The structured spec the pane applies to the designer (one new visual). */
 export interface DesignerVisualSpec {
@@ -51,7 +79,12 @@ export interface DesignerVisualSpec {
   h?: number;
 }
 
-function sanitizeField(raw: unknown): ActWellField | null {
+/**
+ * Validate a single well field. EXPORTED so the /ai-visual route (Q&A) reuses the
+ * EXACT same rule as the Copilot's add-visual path — a field must reference a real
+ * column or measure — keeping Q&A specs and Copilot specs from drifting apart.
+ */
+export function sanitizeField(raw: unknown): ActWellField | null {
   const f = (raw || {}) as Record<string, unknown>;
   const table = typeof f.table === 'string' ? f.table.trim() : undefined;
   const column = typeof f.column === 'string' ? f.column.trim() : undefined;
@@ -67,7 +100,8 @@ function sanitizeField(raw: unknown): ActWellField | null {
   };
 }
 
-function sanitizeList(raw: unknown): ActWellField[] {
+/** Validate a well (array of fields), dropping anything that references nothing real. EXPORTED — see sanitizeField. */
+export function sanitizeList(raw: unknown): ActWellField[] {
   if (!Array.isArray(raw)) return [];
   return raw.map(sanitizeField).filter((x): x is ActWellField => !!x);
 }
@@ -93,24 +127,26 @@ export function buildReportDesignerActTools(): ToolDef[] {
       '"add a Bar chart of <measure> by <category>". Reference ONLY fields from the model field list in ' +
       'the system prompt. Charts (bar/column/line/area/pie/donut/scatter) need a `category` (axis) AND ' +
       '`values`; a `card` needs `values`; a `table` needs `values` (its columns); a `slicer` needs one ' +
-      '`category` field. Never write DAX — the designer synthesizes it from these wells.',
+      '`category` field. AI visuals `decompositionTree` and `keyInfluencers` put the measure to Analyze in ' +
+      '`values` and the fields to "Explain by" in `category`/`legend` (one or more dimensions). Never write ' +
+      'DAX — the designer synthesizes the query from these wells.',
     whenToUse: 'Act on "add a <chart> of X by Y" against the open report designer.',
     readsContext: true,
     parameters: obj(
       {
         type: { ...S_STRING, enum: [...DESIGNER_VISUAL_TYPES], description: 'The visual type.' },
         title: { ...S_STRING, description: 'Human-readable visual title.' },
-        category: { type: 'array', items: FIELD_SCHEMA, description: 'Axis / Category / Rows wells (dimension fields).' },
-        values: { type: 'array', items: FIELD_SCHEMA, description: 'Values / Columns / Fields wells (measures or aggregated columns).' },
-        legend: { type: 'array', items: FIELD_SCHEMA, description: 'Legend / Columns (matrix) wells (optional).' },
+        category: { type: 'array', items: FIELD_SCHEMA, description: 'Axis / Category / Rows wells (dimension fields). For decompositionTree/keyInfluencers these are "Explain by" fields.' },
+        values: { type: 'array', items: FIELD_SCHEMA, description: 'Values / Columns / Fields wells (measures or aggregated columns). For decompositionTree/keyInfluencers this is the "Analyze" measure.' },
+        legend: { type: 'array', items: FIELD_SCHEMA, description: 'Legend / Columns (matrix) wells (optional). Additional "Explain by" fields for decompositionTree/keyInfluencers.' },
         w: { ...S_NUMBER, description: 'Optional canvas span on a 12-column grid (2–12).' },
         h: { ...S_NUMBER, description: 'Optional row-height hint.' },
       },
       ['type', 'title'],
     ),
     handler: async ({ type, title, category, values, legend, w, h }) => {
-      const t = String(type || '').trim().toLowerCase();
-      if (!(DESIGNER_VISUAL_TYPES as readonly string[]).includes(t)) {
+      const t = TYPE_BY_LOWER.get(String(type || '').trim().toLowerCase());
+      if (!t) {
         throw new Error(`Invalid visual type "${type}". Allowed: ${DESIGNER_VISUAL_TYPES.join(', ')}.`);
       }
       const wells = {
@@ -121,9 +157,20 @@ export function buildReportDesignerActTools(): ToolDef[] {
       if (wells.category.length + wells.values.length + wells.legend.length === 0) {
         throw new Error('A visual needs at least one field in a well (e.g. a measure in Values and a column in Category).');
       }
+      if (AI_ANALYZE_TYPES.has(t)) {
+        // Analyze → values, Explain by → category/legend. Both are required: the
+        // visual self-queries a GROUP-BY of the Analyze measure broken down by the
+        // Explain-by field(s), so a missing well would emit an unrunnable spec.
+        if (wells.values.length === 0) {
+          throw new Error(`A ${t} visual needs an "Analyze" measure in Values.`);
+        }
+        if (wells.category.length + wells.legend.length === 0) {
+          throw new Error(`A ${t} visual needs at least one "Explain by" field in Category/Legend.`);
+        }
+      }
       const ttl = String(title || '').trim();
       const spec: DesignerVisualSpec = {
-        type: t as DesignerVisualType,
+        type: t,
         title: ttl || t,
         wells,
         ...(Number(w) >= 2 ? { w: Math.min(12, Math.round(Number(w))) } : {}),

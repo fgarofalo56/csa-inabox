@@ -47,9 +47,12 @@
  * Body: {
  *   pages: DesignerPage[]                  // each: { name, filters?, config?, visuals[] }
  *   reportFilters?: WireFilter[]           // report-scope structured filters
+ *   bookmarks?: ReportBookmark[]           // wave-2 captured bookmarks (additive)
+ *   filterPaneFormat?: FilterPaneFormat    // wave-2 Filters-pane styling (additive)
+ *   theme?: ReportTheme                    // wave-3 palette/typography/structural theme (additive)
  *   dataSource?: ...                       // IGNORED here (owned by …/data-source)
  * }
- * 200 OK → { ok: true, pageCount, visualCount, reportFilterCount }
+ * 200 OK → { ok: true, pageCount, visualCount, reportFilterCount, bookmarkCount, themeApplied }
  * 4xx    → { ok: false, error }
  */
 
@@ -83,6 +86,17 @@ const VISUAL_TYPES = new Set([
   // Azure-Maps gate client-side (no dead control) — both still round-trip here
   // and fold their plotted wells into the existing /query category/values arrays.
   'map', 'bubble',
+  // ── wave-3 AI visual gallery additions ──────────────────────────────────────
+  // The designer's AI visuals (report-designer.tsx AI_TYPES) MUST be whitelisted
+  // here or `buildDefinitionBody`'s `visualType: v.type` gets coerced to 'table'
+  // (line below), silently destroying a saved Smart narrative / Q&A /
+  // Decomposition tree / Key influencers on reload (reportPagesFromContent →
+  // v.type). `smartNarrative`/`qna` drive the REAL AOAI orchestrator;
+  // `decompositionTree`/`keyInfluencers` run REAL /query SQL over their wells.
+  // Round-tripping the type is SAFE for the other readers: the read-only viewer
+  // and PBIR provisioner ignore unknown types, and the loom-native renderer
+  // already falls back to a table for any type it doesn't recognize.
+  'smartNarrative', 'qna', 'decompositionTree', 'keyInfluencers',
 ]);
 const AGGS = new Set(['Sum', 'Avg', 'Count', 'Min', 'Max', 'None']);
 
@@ -350,6 +364,41 @@ interface PersistedFilterPaneFormat {
 }
 
 /**
+ * Report-level THEME (wave-3) — a faithful, STRUCTURED mirror of the Loom theme
+ * model (themes.ts) AND the import/export-compatible subset of a Power BI theme
+ * JSON (grounded in Learn `report-themes-create-custom`): a name, the series
+ * `dataColors` palette, the structural element colors (foreground / tableAccent
+ * / first..fourth-level elements / backgrounds), a Loom accent, and a single
+ * whitelisted `fontFamily` (the import maps `textClasses.*.fontFamily` → here).
+ *
+ * Persisted ADDITIVELY on `content.theme` exactly like `bookmarks` /
+ * `filterPaneFormat`: the Loom-native renderer reads it to repaint the whole
+ * palette + typography + background of every visual (LoomChart `palette` /
+ * `fontFamily` / `foreground` props), while the read-only viewer and the PBIR
+ * provisioner simply ignore an unknown `content.theme`.
+ */
+interface PersistedReportTheme {
+  name: string;
+  /** Built-in Loom theme id when a preset is selected (else a custom theme). */
+  builtinId?: string;
+  /** Series / data palette — hex or Loom color token, applied to ALL visuals. */
+  dataColors?: string[];
+  // ── structural / Power BI-compatible element colors (each clamped) ──
+  background?: string;
+  secondaryBackground?: string;
+  foreground?: string;
+  tableAccent?: string;
+  firstLevelElements?: string;
+  secondLevelElements?: string;
+  thirdLevelElements?: string;
+  fourthLevelElements?: string;
+  /** Loom accent color (brand-foreground restyle). */
+  accent?: string;
+  /** Whitelisted typography family applied report-wide. */
+  fontFamily?: string;
+}
+
+/**
  * Extended persisted content. ADDITIVE over {@link ReportContent}: pages gain an
  * optional `filters` + `config`, and the report gains a top-level `reportFilters`.
  * The visual `config` (typed `any` in ReportContent) carries `wells` / `layout` /
@@ -372,6 +421,8 @@ interface ReportContentV2 extends Omit<ReportContent, 'pages' | 'reportFilters'>
   // ── wave-2 report-level state (additive; viewer + PBIR provisioner ignore) ──
   bookmarks?: PersistedBookmark[];
   filterPaneFormat?: PersistedFilterPaneFormat;
+  // ── wave-3 report-level state (additive; viewer + PBIR provisioner ignore) ──
+  theme?: PersistedReportTheme;
 }
 
 interface WellFieldIn {
@@ -1066,6 +1117,101 @@ function sanitizeFilterPaneFormat(raw: unknown): PersistedFilterPaneFormat | und
   return Object.keys(out).length ? out : undefined;
 }
 
+/**
+ * Font-family WHITELIST (no-freeform-config.md) — the theme builder's font
+ * dropdown + the Power BI-theme import both resolve through this map, so only a
+ * recognized family is ever persisted (canonical casing returned). Mirrors the
+ * Power BI theme `fontFamily` faces plus the Loom/Fluent defaults.
+ */
+const THEME_FONTS: Record<string, string> = {
+  'segoe ui': 'Segoe UI',
+  'inter': 'Inter',
+  'roboto': 'Roboto',
+  'arial': 'Arial',
+  'calibri': 'Calibri',
+  'cambria': 'Cambria',
+  'candara': 'Candara',
+  'consolas': 'Consolas',
+  'constantia': 'Constantia',
+  'corbel': 'Corbel',
+  'courier new': 'Courier New',
+  'georgia': 'Georgia',
+  'tahoma': 'Tahoma',
+  'times new roman': 'Times New Roman',
+  'trebuchet ms': 'Trebuchet MS',
+  'verdana': 'Verdana',
+  'din': 'DIN',
+  'lucida sans unicode': 'Lucida Sans Unicode',
+};
+
+/** Resolve a theme font through {@link THEME_FONTS} (case-insensitive) or drop it. */
+function normalizeThemeFont(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  return THEME_FONTS[v.trim().toLowerCase()];
+}
+
+/**
+ * Sanitize the report-level THEME (wave-3 — mirror of themes.ts + the Power BI
+ * theme-JSON import). Defensive in the SAME style as sanitizeFilterPaneFormat:
+ * the `name` is string-clamped; `dataColors` is a hex/token array capped at
+ * MAX_COLORS via clampColor; every structural color (background / secondary /
+ * foreground / tableAccent / first..fourth-level elements / accent) is clamped;
+ * the `fontFamily` is whitelisted (also accepting a nested `textClasses.fontFamily`
+ * from an imported PBI theme). Returns undefined when nothing valid survives, so
+ * an empty theme is never persisted (legacy reports unaffected). No free-form /
+ * unknown key is ever carried through — purely the structured fields above.
+ */
+function sanitizeReportTheme(raw: unknown): PersistedReportTheme | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: Omit<PersistedReportTheme, 'name'> = {};
+
+  const builtinId = clampStr(o.builtinId ?? o.id, 64);
+  if (builtinId && builtinId.trim()) out.builtinId = builtinId.trim();
+
+  if (Array.isArray(o.dataColors)) {
+    const colors = o.dataColors
+      .map(clampColor)
+      .filter((c): c is string => !!c)
+      .slice(0, MAX_COLORS);
+    if (colors.length) out.dataColors = colors;
+  }
+
+  const background = clampColor(o.background);
+  if (background) out.background = background;
+  const secondaryBackground = clampColor(o.secondaryBackground);
+  if (secondaryBackground) out.secondaryBackground = secondaryBackground;
+  const foreground = clampColor(o.foreground);
+  if (foreground) out.foreground = foreground;
+  const tableAccent = clampColor(o.tableAccent);
+  if (tableAccent) out.tableAccent = tableAccent;
+  const firstLevelElements = clampColor(o.firstLevelElements);
+  if (firstLevelElements) out.firstLevelElements = firstLevelElements;
+  const secondLevelElements = clampColor(o.secondLevelElements);
+  if (secondLevelElements) out.secondLevelElements = secondLevelElements;
+  const thirdLevelElements = clampColor(o.thirdLevelElements);
+  if (thirdLevelElements) out.thirdLevelElements = thirdLevelElements;
+  const fourthLevelElements = clampColor(o.fourthLevelElements);
+  if (fourthLevelElements) out.fourthLevelElements = fourthLevelElements;
+  const accent = clampColor(o.accent);
+  if (accent) out.accent = accent;
+
+  // fontFamily: structured builder emits `fontFamily`; a PBI-theme import maps
+  // its `textClasses.*.fontFamily` here. Either way it's whitelisted.
+  const nestedFont =
+    o.textClasses && typeof o.textClasses === 'object'
+      ? (o.textClasses as Record<string, unknown>).fontFamily
+      : undefined;
+  const fontFamily = normalizeThemeFont(o.fontFamily ?? nestedFont);
+  if (fontFamily) out.fontFamily = fontFamily;
+
+  const named = clampStr(o.name, 200);
+  const name = named && named.trim() ? named.trim() : undefined;
+  // Persist only when the theme carries a name OR at least one styling field.
+  if (!name && !Object.keys(out).length) return undefined;
+  return { name: name ?? 'Custom theme', ...out };
+}
+
 /** Derive the legacy single-`field` shortcut from the wells (first value, else
  *  first category) so the read-only viewer + /query single-field path render. */
 function deriveField(values: any[], category: any[]): string | undefined {
@@ -1086,7 +1232,13 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const rawId = (await ctx.params).id;
   const cosmosId = isLoomContentId(rawId) ? cosmosIdFromLoomId(rawId) : rawId;
 
-  let body: { pages?: unknown; reportFilters?: unknown; bookmarks?: unknown; filterPaneFormat?: unknown } = {};
+  let body: {
+    pages?: unknown;
+    reportFilters?: unknown;
+    bookmarks?: unknown;
+    filterPaneFormat?: unknown;
+    theme?: unknown;
+  } = {};
   try { body = await req.json(); } catch {}
   if (!Array.isArray(body.pages)) {
     return NextResponse.json({ ok: false, error: 'body.pages[] is required' }, { status: 400 });
@@ -1165,6 +1317,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   // capture) + the Filters-pane format. Both additive + fully sanitized.
   const bookmarks = sanitizeBookmarks(body.bookmarks);
   const filterPaneFormat = sanitizeFilterPaneFormat(body.filterPaneFormat);
+  // wave-3 report-level state: the report THEME (palette + typography + structural
+  // colors). Additive + fully sanitized through the structured/whitelisted gate.
+  const theme = sanitizeReportTheme(body.theme);
 
   const state = (item.state || {}) as Record<string, unknown>;
   // ADDITIVE persist: keep every other state key (incl. `state.dataSource`,
@@ -1175,6 +1330,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     ...(reportFilters.length ? { reportFilters } : {}),
     ...(bookmarks.length ? { bookmarks } : {}),
     ...(filterPaneFormat ? { filterPaneFormat } : {}),
+    ...(theme ? { theme } : {}),
   };
   const newState = { ...state, content };
 
@@ -1190,5 +1346,6 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     visualCount,
     reportFilterCount: reportFilters.length,
     bookmarkCount: bookmarks.length,
+    themeApplied: !!theme,
   });
 }

@@ -97,9 +97,19 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ ok: false, error: 'report item not found in this tenant' }, { status: 404 });
   }
   const pages = reportPagesFromContent(item) ?? [];
+  // Surface the same wave-2/3 REPORT-LEVEL state the loom: path emits so the
+  // designer's loadDetail round-trips report-scope filters, captured bookmarks,
+  // the Filters-pane format, and the wave-3 `theme` on plain-Cosmos ids too
+  // (without these `j.theme` / `j.reportFilters` / `j.bookmarks` /
+  // `j.filterPaneFormat` read undefined and RESET on reload). Spread the detail
+  // FIRST, then re-assert `report` with the PLAIN `item.id` (the loom: path uses
+  // a `loom:`-prefixed id) so this stays additive — no behavior change for the
+  // existing report identity or the PBI-backend path.
+  const detail = reportDetailFromContent(item);
   return NextResponse.json({
     ok: true,
     workspaceId: item.workspaceId,
+    ...(detail ?? {}),
     report: {
       id: item.id,
       name: item.displayName,
