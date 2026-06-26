@@ -391,6 +391,15 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
   // ── load definition ────────────────────────────────────────────────────────
   const loadDetail = useCallback(async () => {
+    // Brand-new report has no persisted Cosmos item yet (id === 'new'): don't
+    // fetch /api/items/report/new (404). Start with one empty page — the user
+    // lays out pages/visuals and Save creates the real item.
+    if (id === 'new') {
+      setPages([{ id: uid('p'), name: 'Page 1', visuals: [] }]);
+      setActivePage(0); setReportName(''); setAasServer(null); setAasDatabase(null);
+      setDirty(false); setLoadErr(null); setLoading(false);
+      return;
+    }
     setLoading(true); setLoadErr(null);
     try {
       const r = await fetch(`/api/items/report/${encodeURIComponent(id)}`);
@@ -434,6 +443,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
   // ── load fields (model schema) ───────────────────────────────────────────────
   const loadFields = useCallback(async () => {
+    // New report (id === 'new') has no item to read a model from yet — skip the
+    // fetch (avoids /api/items/report/new/fields 404). The AAS-bind gate already
+    // explains that fields appear once the report is saved + a model is bound.
+    if (id === 'new') {
+      setTables([]); setFieldsErr(null); setFieldsLoading(false);
+      return;
+    }
     setFieldsLoading(true); setFieldsErr(null);
     try {
       const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/fields`);
