@@ -36,7 +36,7 @@ import {
   Badge, Button, Caption1, Dropdown, Option, Divider, Input,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuGroup, MenuGroupHeader, MenuDivider,
   MessageBar, MessageBarBody, MessageBarTitle, Spinner, Subtitle2, Text, Title3, Tooltip,
-  Tree, TreeItem, TreeItemLayout,
+  Tree, TreeItem, TreeItemLayout, TabList, Tab,
   Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
@@ -44,7 +44,7 @@ import {
   Add20Regular, Delete20Regular, Save20Regular, ArrowSync20Regular, Edit20Regular,
   DataBarVerticalRegular, DataBarHorizontalRegular, DataLineRegular, DataAreaRegular,
   DataPieRegular, DataScatterRegular, Table20Regular, GridRegular, NumberSymbol20Regular,
-  Filter20Regular, Dismiss16Regular, ChevronUp20Regular, ChevronDown20Regular,
+  Filter20Regular, Dismiss16Regular, ChevronUp20Regular, ChevronDown20Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import type { ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -52,6 +52,7 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
+import { ReportPowerBiCopilot, type CopilotVisualSpec } from '@/lib/components/report/report-powerbi-copilot';
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
@@ -369,6 +370,8 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const [pages, setPages] = useState<DPage[]>([]);
   const [activePage, setActivePage] = useState(0);
   const [selectedVisual, setSelectedVisual] = useState<string | null>(null);
+  /** Right rail mode: the Build pane (visualizations + fields) or the Power BI Copilot. */
+  const [rightTab, setRightTab] = useState<'build' | 'copilot'>('build');
   const [reportName, setReportName] = useState('');
   const [aasServer, setAasServer] = useState<string | null>(null);
   const [aasDatabase, setAasDatabase] = useState<string | null>(null);
@@ -546,6 +549,38 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     setDirty(true);
   };
 
+  // ── Power BI Copilot actions (applied to the SAME in-memory designer state) ──
+  // The Copilot pane proposes structured specs (never DAX); the user approves and
+  // these handlers add the visual / page to the active page. The visual then
+  // live-renders via …/query and persists on the existing Save (PUT …/definition).
+  const applyCopilotVisual = useCallback((spec: CopilotVisualSpec) => {
+    const reUid = (a?: Array<{ table?: string; column?: string; measure?: string; aggregation?: Agg }>): WellField[] =>
+      (a || []).map((f) => ({ uid: uid('f'), ...f }));
+    const v: DVisual = {
+      id: uid('v'),
+      type: spec.type,
+      title: spec.title || VISUALS.find((x) => x.type === spec.type)?.label || spec.type,
+      wells: {
+        category: reUid(spec.wells?.category),
+        values: reUid(spec.wells?.values),
+        legend: reUid(spec.wells?.legend),
+      },
+      w: spec.w && spec.w >= 2 ? Math.min(12, spec.w) : (spec.type === 'card' ? 3 : 6),
+      h: spec.h && spec.h >= 1 ? spec.h : 4,
+    };
+    mutatePage((p) => ({ ...p, visuals: [...p.visuals, v] }));
+    setSelectedVisual(v.id);
+  }, [mutatePage]);
+
+  const addCopilotPage = useCallback((name?: string) => {
+    setPages((prev) => {
+      const np: DPage = { id: uid('p'), name: (name || '').trim() || `Page ${prev.length + 1}`, visuals: [] };
+      setActivePage(prev.length);
+      return [...prev, np];
+    });
+    setDirty(true);
+  }, []);
+
   // ── save ─────────────────────────────────────────────────────────────────────
   const save = useCallback(async () => {
     setSaveBusy(true); setSaveMsg(null);
@@ -682,6 +717,22 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   ];
   const rightPanel = (
     <div className={styles.pane}>
+      <TabList selectedValue={rightTab} onTabSelect={(_e, d) => setRightTab(d.value as 'build' | 'copilot')} size="small">
+        <Tab value="build" icon={<DataBarVerticalRegular />}>Build</Tab>
+        <Tab value="copilot" icon={<Sparkle20Regular />}>Power BI Copilot</Tab>
+      </TabList>
+      {rightTab === 'copilot' ? (
+        <ReportPowerBiCopilot
+          reportId={id}
+          tables={tables}
+          pageIndex={activePage}
+          pageName={page?.name || ''}
+          visualCount={page?.visuals.length || 0}
+          onApplyVisual={applyCopilotVisual}
+          onAddPage={addCopilotPage}
+        />
+      ) : (
+      <>
       <Title3>Visualizations</Title3>
       <div className={styles.gallery}>
         {VISUALS.map((vt) => (
@@ -772,6 +823,8 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       )}
       {!fieldsLoading && tables.length === 0 && !fieldsErr && (
         <Caption1 className={styles.muted}>No model fields. Bind an AAS model to populate the Fields tree.</Caption1>
+      )}
+      </>
       )}
     </div>
   );
