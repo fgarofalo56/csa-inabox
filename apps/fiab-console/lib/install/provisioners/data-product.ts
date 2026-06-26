@@ -118,6 +118,123 @@ function authGate(status: number, ws: string, endpoint: string): ProvisionResult
   };
 }
 
+// Default governance domain Loom auto-provisions when none is bound. Name is
+// stable so re-installs converge on the same domain (discovery dedupes by name).
+const DEFAULT_DOMAIN_NAME = process.env.LOOM_PURVIEW_DEFAULT_DOMAIN_NAME || 'Loom Governance';
+// Process-cache the resolved domain id so we discover/create once per process.
+let cachedDomainId: string | undefined;
+
+/**
+ * Resolve the governance domain to provision data products / terms into —
+ * WITHOUT hard-gating on LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID as the default.
+ *
+ * Day-one order (no-vaporware: real REST or an honest gate naming the exact
+ * role — never a silent invent):
+ *   1. Explicit env binding (LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID) — authoritative.
+ *   2. AUTO-DISCOVER — GET businessdomains; reuse the first Published domain
+ *      (or, failing that, the named default if present in any state).
+ *   3. AUTO-CREATE — POST a published default domain (best-effort; requires the
+ *      Console UAMI to hold the Governance Domain Creator role).
+ *   4. Honest gate — only when discovery 401/403s or create is forbidden,
+ *      naming Governance Domain Creator + the env var to pin an existing one.
+ *
+ * Returns the domain id, or a ProvisionResult gate to surface verbatim.
+ */
+async function ensureGovernanceDomain(
+  endpoint: string,
+  headers: Record<string, string>,
+  steps: string[],
+): Promise<{ id: string } | { gate: ProvisionResult }> {
+  const pinned = process.env.LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID;
+  if (pinned) { steps.push(`Governance domain (pinned): ${pinned}`); return { id: pinned }; }
+  if (cachedDomainId) { steps.push(`Governance domain (cached): ${cachedDomainId}`); return { id: cachedDomainId }; }
+
+  const base = `${endpoint}/datagovernance/catalog/businessdomains?api-version=${UC_API}`;
+  const domainGate = (status: number): { gate: ProvisionResult } => ({
+    gate: {
+      status: 'remediation',
+      gate: {
+        reason: `No Purview governance domain bound, and Loom could not ${status === 403 || status === 401 ? 'access' : 'auto-provision'} one (Unified Catalog ${status}).`,
+        remediation:
+          'Grant the Console UAMI the Governance Domain Creator role (Unified Catalog > Catalog management > Roles) so Loom can auto-create a default governance domain, OR create a published domain yourself and pin it via LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID. See https://learn.microsoft.com/purview/data-governance-roles-permissions#catalog-level-permissions.',
+        link: 'https://learn.microsoft.com/purview/unified-catalog-governance-domains-create-manage',
+      },
+      steps,
+    },
+  });
+
+  // ── 2. Auto-discover an existing domain ──────────────────────────────────
+  try {
+    const res = await fetchWithTimeout(base, { method: 'GET', headers, cache: 'no-store' });
+    if (res.status === 401 || res.status === 403) { steps.push(`Domain discovery: ${res.status} (no catalog read access).`); return domainGate(res.status); }
+    if (res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const domains: any[] = Array.isArray(body?.value) ? body.value : (Array.isArray(body) ? body : []);
+      const isPub = (s: any) => String(s ?? '').toLowerCase() === 'published';
+      const pick =
+        domains.find((d) => d?.name === DEFAULT_DOMAIN_NAME && isPub(d?.status)) ||
+        domains.find((d) => isPub(d?.status)) ||
+        domains.find((d) => d?.name === DEFAULT_DOMAIN_NAME);
+      if (pick?.id) {
+        cachedDomainId = pick.id;
+        steps.push(`Governance domain (auto-discovered): ${pick.name} [${pick.id}]${isPub(pick.status) ? '' : ' (publishing…)'}`);
+        if (!isPub(pick.status)) await publishDomain(endpoint, headers, pick.id).catch(() => undefined);
+        return { id: pick.id };
+      }
+      steps.push(`Domain discovery: ${domains.length} domain(s), none usable — auto-creating '${DEFAULT_DOMAIN_NAME}'.`);
+    }
+  } catch (e: any) {
+    steps.push(`Domain discovery failed: ${e?.message || e}. Attempting create.`);
+  }
+
+  // ── 3. Auto-create a published default domain (best-effort) ──────────────
+  try {
+    const createRes = await fetchWithTimeout(base, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: DEFAULT_DOMAIN_NAME,
+        description: 'Default governance domain auto-provisioned by CSA Loom for data-product and glossary governance.',
+        type: 'FunctionalUnit',
+        status: 'Published',
+      }),
+      cache: 'no-store',
+    });
+    if (createRes.status === 401 || createRes.status === 403) { steps.push(`Domain create: ${createRes.status} (needs Governance Domain Creator).`); return domainGate(createRes.status); }
+    if (createRes.status === 200 || createRes.status === 201) {
+      const created = await createRes.json().catch(() => ({}));
+      if (created?.id) {
+        cachedDomainId = created.id;
+        steps.push(`Governance domain (auto-created): ${DEFAULT_DOMAIN_NAME} [${created.id}]`);
+        if (String(created?.status ?? '').toLowerCase() !== 'published') await publishDomain(endpoint, headers, created.id).catch(() => undefined);
+        return { id: created.id };
+      }
+    }
+    // A 409 (already exists) means a concurrent install created it — re-discover once.
+    if (createRes.status === 409) {
+      const again = await fetchWithTimeout(base, { method: 'GET', headers, cache: 'no-store' }).then((r) => r.ok ? r.json() : null).catch(() => null);
+      const list: any[] = Array.isArray(again?.value) ? again.value : [];
+      const found = list.find((d) => d?.name === DEFAULT_DOMAIN_NAME);
+      if (found?.id) { cachedDomainId = found.id; steps.push(`Governance domain (existing): ${found.id}`); return { id: found.id }; }
+    }
+    steps.push(`Domain create: ${createRes.status} — ${(await createRes.text().catch(() => '')).slice(0, 200)}`);
+    return domainGate(createRes.status);
+  } catch (e: any) {
+    steps.push(`Domain create failed: ${e?.message || e}`);
+    return domainGate(0);
+  }
+}
+
+/** Publish a governance domain so its business concepts can be published.
+ *  Best-effort: tries the `publish` action, then a status PATCH. */
+async function publishDomain(endpoint: string, headers: Record<string, string>, id: string): Promise<void> {
+  const root = `${endpoint}/datagovernance/catalog/businessdomains/${encodeURIComponent(id)}`;
+  const act = await fetchWithTimeout(`${root}:publish?api-version=${UC_API}`, { method: 'POST', headers, body: '{}', cache: 'no-store' }).catch(() => null);
+  if (act && (act.status === 200 || act.status === 202 || act.status === 204)) return;
+  // Fallback: PATCH status=Published.
+  await fetchWithTimeout(`${root}?api-version=${UC_API}`, { method: 'PATCH', headers, body: JSON.stringify({ status: 'Published' }), cache: 'no-store' }).catch(() => undefined);
+}
+
 export const dataProductProvisioner: Provisioner = async (input): Promise<ProvisionResult> => {
   const steps: string[] = [];
   const content = input.content as any;
@@ -142,22 +259,7 @@ export const dataProductProvisioner: Provisioner = async (input): Promise<Provis
     };
   }
 
-  const governanceDomainId = process.env.LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID;
-  if (!governanceDomainId) {
-    return {
-      status: 'remediation',
-      gate: {
-        reason: 'No Purview governance domain bound for data-product / glossary provisioning.',
-        remediation:
-          'Create a published governance domain in Purview Unified Catalog (Catalog management > Governance domains > New) and set LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID to its id. Creating a governance domain requires the Governance Domain Creator role. See https://learn.microsoft.com/purview/unified-catalog-governance-domains-create-manage.',
-        link: 'https://learn.microsoft.com/purview/unified-catalog-governance-domains-create-manage',
-      },
-      steps,
-    };
-  }
-
   steps.push(`Unified Catalog endpoint: ${endpoint}`);
-  steps.push(`Governance domain: ${governanceDomainId}`);
 
   let tok: string;
   try {
@@ -166,6 +268,14 @@ export const dataProductProvisioner: Provisioner = async (input): Promise<Provis
     return resolveInfraResidual(e, 'Could not acquire an Entra token for the Purview Unified Catalog data plane. Confirm the Console managed identity (LOOM_UAMI_CLIENT_ID) is configured and has Catalog access on the Purview account.', { link: 'https://learn.microsoft.com/purview/unified-catalog-governance-domains-create-manage', steps });
   }
   const headers = { authorization: `Bearer ${tok}`, 'content-type': 'application/json' } as const;
+
+  // Resolve the governance domain WITHOUT hard-gating: pinned id → auto-discover
+  // an existing published domain → auto-create a default one. Only surfaces a
+  // remediation gate when the catalog can't be read / the domain can't be
+  // created (naming the Governance Domain Creator role). (no-vaporware day-one.)
+  const domainResolution = await ensureGovernanceDomain(endpoint, headers, steps);
+  if ('gate' in domainResolution) return domainResolution.gate;
+  const governanceDomainId = domainResolution.id;
 
   const owner = content?.owner || {};
   // Purview contacts[].id must be an AAD oid (uuid). Only attach an owner
