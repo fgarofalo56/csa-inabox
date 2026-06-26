@@ -37,6 +37,11 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 export PYTHONUTF8=1   # Windows az CLI: avoid cp1252 'charmap' crashes on Unicode
+# Git Bash / MSYS mangles leading-slash args (e.g. a /subscriptions/... resource
+# id becomes C:/Program Files/Git/subscriptions/...), which makes
+# --registry-identity / --mi-user-assigned reject the UAMI id. Disable path
+# conversion so ARM resource ids pass through verbatim.
+export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 
 # ---------------------------------------------------------------------------
 # Parameters (override via env)
