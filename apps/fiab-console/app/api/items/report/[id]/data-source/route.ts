@@ -53,6 +53,16 @@
  * `{}` clears all per-table overrides (every table back to DirectQuery). When
  * `tableStorage` is absent the existing single-source PUT behaviour is unchanged.
  *
+ * The data source union may ALSO carry the optional Wave-4 Power Query transform
+ * mixin (`appliedSteps` — a full M section authored via the Transform host's
+ * `m-script.appendStep`; `transformMode` — `'directQuery'` (default) | `'import'`).
+ * `parseDataSource` spreads it onto the parsed source, but `validateDataSource`
+ * reconstructs a fresh per-kind literal and would otherwise drop it, so the PUT
+ * re-attaches the mixin from the parsed source at its single merge point before
+ * persisting `state.dataSource`. The M is carried VERBATIM (it was authored
+ * structurally, not hand-typed); only `transformMode` is enum-validated. Reports
+ * without a transform omit both fields and round-trip byte-identically.
+ *
  * Session-gated; owner-checked against the parent workspace's tenant. The
  * report id may be a plain Cosmos id OR a `loom:<cosmosId>` content-backed id
  * (bundle-installed reports), handled exactly like the sibling `…/definition`
@@ -477,6 +487,27 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       return NextResponse.json({ ok: false, error: validated.error }, { status: validated.status });
     }
     validatedDataSource = validated.dataSource;
+    // Wave 4 (additive, BLOCKING round-trip fix): `validateDataSource` rebuilds a
+    // fresh per-kind literal for the source it returns and therefore DROPS the
+    // optional Power Query transform mixin (`appliedSteps` / `transformMode`) that
+    // `parseDataSource` spread onto the parsed value. Since the PUT below persists
+    // exactly `validatedDataSource`, without re-attaching the mixin a TransformData
+    // Apply → PUT would return ok yet write `state.dataSource` WITHOUT the steps —
+    // the transform would survive only in-session, `hasTransform()` would be false
+    // on reload, and the read-fold in `/native-query`, `/profile`, and `/fields`
+    // could never fire (a no-vaporware "real data round-trip" failure). Re-attach
+    // the mixin from the already-parsed source at this single merge point. The M is
+    // authored exclusively via `m-script.appendStep`, so it is carried through
+    // VERBATIM (never re-typed/validated server-side); only `transformMode` is
+    // pinned to the 2-value enum, defaulting to 'directQuery' when a transform is
+    // present. Absent/blank `appliedSteps` ⇒ no change ⇒ byte-identical back-compat.
+    if (parsed.appliedSteps && parsed.appliedSteps.trim()) {
+      validatedDataSource = {
+        ...validatedDataSource,
+        appliedSteps: parsed.appliedSteps,
+        transformMode: parsed.transformMode === 'import' ? 'import' : 'directQuery',
+      };
+    }
   }
 
   // Persist additively (legacy keys + state.content untouched): set

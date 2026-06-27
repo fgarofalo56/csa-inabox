@@ -157,11 +157,18 @@ import { resolveMlvDeltaUrl } from '@/lib/azure/materialized-lake-view-engine';
 import {
   buildSqlFromVisual,
   wrapDaxWithFilters,
+  type SqlDialect,
   type SqlSource,
   type SqlSourceColumn,
   type SqlSourceFrom,
   type ReportFilterInput,
 } from '@/lib/azure/wells-to-sql';
+import {
+  fromLegacyState,
+  hasTransform,
+  reportTransformMode,
+} from '@/lib/editors/report/report-data-source';
+import { foldAppliedStepsToSql, parseSharedQueries } from '@/lib/components/pipeline/dataflow/m-script';
 import {
   isLoomContentId,
   cosmosIdFromLoomId,
@@ -514,6 +521,96 @@ function objectRows(columns: string[], rows: unknown[][]): Record<string, unknow
   });
 }
 
+// ── REPORT-BUILDER PARITY · WAVE 4 — Power Query "Transform Data" fold ──────────
+//
+// A report's data source can carry an OPTIONAL Power Query transform authored by
+// the report Transform host — the SAME `PowerQueryHost` the Dataflow Gen2 editor
+// mounts — persisted on `state.dataSource.appliedSteps` as a full M section built
+// exclusively via `m-script.appendStep` (structured dialogs / ribbon, never
+// hand-typed — no-freeform-config). DirectQuery (the default) FOLDS those applied
+// steps onto the resolved source's base SELECT: `foldAppliedStepsToSql` emits
+// nested, dialect-quoted derived SELECTs so EVERY visual runs over the TRANSFORMED
+// data — real rows on Synapse / the connector dialect, no mock (no-vaporware),
+// 100% Azure-native (no api.fabric / api.powerbi / onelake host on any path —
+// no-fabric-dependency). A non-foldable step (parse JSON/XML, transpose, pivot,
+// examples-heuristics …) is an HONEST 409 (`code:'not-foldable'`) naming the step
+// + the Import remediation, never a silently-wrong read. The Import path
+// materializes the steps via the report /refresh Spark/wrangling Delta cache and
+// the fold then runs over that cache (the W2 cache-read).
+//
+// The transform mixin (`appliedSteps`/`transformMode`) is read from persisted
+// state via the CLIENT data-source parser (`fromLegacyState` — it carries the
+// Wave-4 mixin; the resolver's `readReportDataSource` intentionally drops it,
+// exactly as the sibling /native-query + /profile routes do). A report WITHOUT a
+// transform skips all of this and behaves byte-for-byte as before (back-compat).
+
+/** The Loom-native report path folds + compiles over the Synapse SQL family. */
+const TRANSFORM_DIALECT: SqlDialect = 'synapse';
+
+/** Strip a trailing `;` so a base SELECT splices cleanly as a derived relation. */
+function stripSemicolons(sql: string): string {
+  return sql.trim().replace(/;+\s*$/, '');
+}
+
+/** The base SELECT a transform folds onto, from a resolved FROM relation: a
+ *  derived source's own SELECT, or `SELECT * FROM [schema].[table]` for a table. */
+function baseSelectFromFrom(from: SqlSourceFrom): string {
+  if (from.kind === 'derived') return stripSemicolons(from.sql);
+  const schema = from.schema ? `${bracket(from.schema)}.` : '';
+  return `SELECT * FROM ${schema}${bracket(from.table)}`;
+}
+
+/**
+ * The base SELECT for a Get-Data CONNECTION source (`table` → `SELECT *`; `query`
+ * → its own validated SELECT). Reconstructed IDENTICALLY to tryConnectionCacheRead
+ * so foldability is validated against the same relation the cache materializes.
+ * Returns null for file / kql refs (no tabular base SELECT) and non-connection
+ * sources — the caller then skips the foldability probe.
+ */
+function connectionBaseSelect(source: ReturnType<typeof readReportDataSource>): string | null {
+  if (!source || source.kind !== 'connection') return null;
+  const ref = source.objectRef;
+  if (ref.mode === 'table') {
+    const rel = ref.schema ? `${bracket(ref.schema)}.${bracket(ref.table)}` : bracket(ref.table);
+    return `SELECT * FROM ${rel}`;
+  }
+  if (ref.mode === 'query') return stripSemicolons(ref.sql);
+  return null;
+}
+
+/** Outcome of folding a Wave-4 transform onto a resolved SqlSource. */
+type TransformFold =
+  | { kind: 'none' }                        // no transform → use the source as-is
+  | { kind: 'folded'; source: SqlSource }   // applied steps folded into a derived FROM
+  | { kind: 'not-foldable'; step: string }  // a step can't fold → honest 409
+  | { kind: 'unparseable' };                // the M section couldn't be parsed → honest 412
+
+/**
+ * Fold a report data source's OPTIONAL Power Query transform onto `source`,
+ * returning a new SqlSource whose FROM is the folded derived SELECT (DirectQuery
+ * query-folding). Byte-identical no-op when the source carries no transform. The
+ * column whitelist is left as the resolver's base-schema whitelist — a renamed /
+ * added column referenced by a well is simply not whitelisted (never a wrong
+ * identifier — injection-safe); the common foldable transforms preserve names, so
+ * the wells still resolve. The dialect is the source's own (Synapse default), so
+ * the folded inner SELECT and the outer wells→SQL quote identifiers identically.
+ */
+function foldTransformOntoSource(
+  source: SqlSource,
+  ds: ReturnType<typeof fromLegacyState>,
+): TransformFold {
+  if (!hasTransform(ds) || !ds?.appliedSteps) return { kind: 'none' };
+  const queries = parseSharedQueries(ds.appliedSteps);
+  if (!queries.length) return { kind: 'unparseable' };
+  const folded = foldAppliedStepsToSql(
+    baseSelectFromFrom(source.from),
+    queries[0].body,
+    source.dialect ?? TRANSFORM_DIALECT,
+  );
+  if (!folded.ok) return { kind: 'not-foldable', step: folded.unfoldableStep };
+  return { kind: 'folded', source: { ...source, from: { kind: 'derived', sql: folded.sql } } };
+}
+
 /**
  * WAVE-2 FIX — per-table storage now really changes execution for a Get-Data
  * CONNECTION source too (not just loom-native Synapse).
@@ -552,6 +649,7 @@ async function tryConnectionCacheRead(
   executor: ConnectionExecutor,
   visual: DaxVisual,
   filters: ReportFilterInput[] | undefined,
+  appliedStepsBody?: string,
 ): Promise<{ rows: Record<string, unknown>[]; sql: string } | null> {
   // The connection's Fields-pane table name + the base SELECT its cache holds,
   // reconstructed IDENTICALLY to the refresh route's `materializableFromConnection`
@@ -624,6 +722,21 @@ async function tryConnectionCacheRead(
     measures: [],
     dialect: 'synapse',
   };
+  // WAVE-4: when a Power Query transform is layered on this connection source, fold
+  // its applied steps onto the cache's OPENROWSET base SELECT so the cached (base)
+  // Delta is read THROUGH the transform — real transformed rows, never the
+  // untransformed cache. A non-foldable step ⇒ null (the caller already returned an
+  // honest 409; this guards a direct call). Pure SQL fold, still 100% serverless
+  // Synapse over ADLS Delta — no Fabric / Power BI / OneLake host.
+  if (appliedStepsBody) {
+    const folded = foldAppliedStepsToSql(
+      (sqlSource.from as { kind: 'derived'; sql: string }).sql,
+      appliedStepsBody,
+      'synapse',
+    );
+    if (!folded.ok) return null;
+    sqlSource.from = { kind: 'derived', sql: folded.sql };
+  }
   const compiled = buildSqlFromVisual(visual, filters, sqlSource);
   if (!compiled) return null; // no fields yet → the live executor surfaces the honest gate.
 
@@ -789,7 +902,44 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         { status: 400 },
       );
     }
-    const sqlSource = projected.source;
+    // ── WAVE-4: fold any Power Query transform onto the resolved relation ───────
+    // DirectQuery folds the applied steps to a derived SELECT here; Import's
+    // resolved relation (the W2 source-groups arm already picked live-vs-cache as
+    // `projected.source.from`) is folded the SAME way, so the visual always runs
+    // over the TRANSFORMED data. A non-foldable step is an honest 409 (Import
+    // materializes it via the report /refresh run), never a silently-wrong read.
+    // No transform ⇒ byte-identical to before (back-compat).
+    const reportSource = fromLegacyState((item.state || {}) as Record<string, unknown>);
+    const fold = foldTransformOntoSource(projected.source, reportSource);
+    if (fold.kind === 'unparseable') {
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'gate',
+          error:
+            'The report’s Power Query transform could not be parsed. Re-open Transform data and ' +
+            're-apply the steps.',
+        },
+        { status: 412 },
+      );
+    }
+    if (fold.kind === 'not-foldable') {
+      const importMode = reportTransformMode(reportSource) === 'import';
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'not-foldable',
+          unfoldableStep: fold.step,
+          error:
+            `Step '${fold.step}' can't fold to a native query — switch this query to Import.` +
+            (importMode
+              ? ' This query is already set to Import — run Refresh to materialize it via the dataflow run, then it reads the materialized Delta.'
+              : ' Set this query to Import in Transform data and run Refresh to materialize it (Synapse-Spark → Delta), or remove/replace the non-foldable step.'),
+        },
+        { status: 409 },
+      );
+    }
+    const sqlSource = fold.kind === 'folded' ? fold.source : projected.source;
     const compiled = buildSqlFromVisual(body.visual, filters, sqlSource);
     if (!compiled) {
       return NextResponse.json(
@@ -851,6 +1001,89 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
             'Analysis Services source.',
         },
         { status: 400 },
+      );
+    }
+    // ── WAVE-4: a Power Query transform layered on a Get-Data connection source ──
+    // The resolver-owned LIVE executor can't accept a folded FROM, so a connection
+    // transform is served Azure-native by folding over the materialized Delta CACHE
+    // (serverless OPENROWSET) — the SAME Delta the report /refresh Spark batch
+    // writes (reportTableMlvSpec, shared SoT). We NEVER fall through to runVisual
+    // when a transform is set (that would read the untransformed source — a silent
+    // wrong result, no-vaporware). Foldability is validated up front so a
+    // non-foldable step is an honest 409.
+    const connSource = fromLegacyState((item.state || {}) as Record<string, unknown>);
+    if (hasTransform(connSource) && connSource?.appliedSteps) {
+      const queries = parseSharedQueries(connSource.appliedSteps);
+      if (!queries.length) {
+        return NextResponse.json(
+          {
+            ok: false,
+            code: 'gate',
+            error:
+              'The report’s Power Query transform could not be parsed. Re-open Transform data and ' +
+              're-apply the steps.',
+          },
+          { status: 412 },
+        );
+      }
+      const base = connectionBaseSelect(readReportDataSource(item));
+      if (base) {
+        const probe = foldAppliedStepsToSql(base, queries[0].body, TRANSFORM_DIALECT);
+        if (!probe.ok) {
+          return NextResponse.json(
+            {
+              ok: false,
+              code: 'not-foldable',
+              unfoldableStep: probe.unfoldableStep,
+              error:
+                `Step '${probe.unfoldableStep}' can't fold to a native query — switch this query to ` +
+                `Import. Set this query to Import in Transform data, set the table’s Storage mode to ` +
+                `Import, and run Refresh to materialize it (Synapse-Spark → Delta); the transformed ` +
+                `read then serves from the materialized cache.`,
+            },
+            { status: 409 },
+          );
+        }
+      }
+      // Import → fold over the materialized Delta cache (serverless OPENROWSET over
+      // the report-table MLV Delta the refresh route wrote). Returns null when no
+      // cache is built yet / the source's storage isn't Import-Dual — handled by
+      // the honest gate below, never an untransformed read.
+      try {
+        const cached = await tryConnectionCacheRead(
+          item,
+          resolved.executor,
+          body.visual,
+          filters,
+          queries[0].body,
+        );
+        if (cached) {
+          return NextResponse.json({ ok: true, rows: cached.rows, sql: cached.sql });
+        }
+      } catch (e: any) {
+        return NextResponse.json(
+          { ok: false, error: e?.message || String(e), status: 502 },
+          { status: 502 },
+        );
+      }
+      // No materialized transformed cache to read (the transform is DirectQuery over
+      // a live connection — which the resolver-owned executor can't fold through
+      // without a resolver change — or its Import cache isn't built yet). Honest 412
+      // naming the exact remediation; never an untransformed read. Azure-native
+      // (serverless OPENROWSET over Delta); no Fabric / Power BI.
+      return NextResponse.json(
+        {
+          ok: false,
+          code: 'transform-import-required',
+          missing: resolved.connType,
+          error:
+            `A Power Query transform over a Get Data "${resolved.connType}" connection source is ` +
+            `served Azure-native by materializing it to a Delta cache. Set this query to Import in ` +
+            `Transform data, set the table’s Storage mode to Import, and run Refresh — the ` +
+            `transformed visual then reads the materialized cache (serverless OPENROWSET over ` +
+            `Delta). No Fabric / Power BI workspace is required.`,
+        },
+        { status: 412 },
       );
     }
     try {

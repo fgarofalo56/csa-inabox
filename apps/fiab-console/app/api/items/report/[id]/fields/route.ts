@@ -52,12 +52,13 @@ import { getSession } from '@/lib/auth/session';
 import { readModel, resolveAasBinding, AasError } from '@/lib/azure/aas-client';
 import { loadModelItem } from '@/lib/azure/model-binding';
 import { extractContent } from '@/lib/azure/tabular-model';
-import { executeQuery, dedicatedTarget, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { executeQuery, dedicatedTarget, serverlessTarget, type SynapseTarget } from '@/lib/azure/synapse-sql-client';
 import { readOnlySelect } from '@/lib/thread/sql-guard';
-import { fromLegacyState } from '@/lib/editors/report/report-data-source';
-import type { DirectQueryTarget } from '@/lib/editors/report/report-data-source';
+import { fromLegacyState, hasTransform, reportTransformMode } from '@/lib/editors/report/report-data-source';
+import type { DirectQueryTarget, ReportDataSource } from '@/lib/editors/report/report-data-source';
 import { buildConnectionExecutor } from '@/lib/azure/report-model-resolver';
 import type { ConnectionExecutor, ReportConnType } from '@/lib/azure/report-model-resolver';
+import { foldAppliedStepsToSql, parseSharedQueries } from '@/lib/components/pipeline/dataflow/m-script';
 import {
   isLoomContentId,
   cosmosIdFromLoomId,
@@ -175,6 +176,113 @@ async function directQueryTables(target: DirectQueryTarget, sql: string): Promis
     isHidden: false,
   }));
   return columns.length ? [{ name: 'Query', columns, measures: [] }] : [];
+}
+
+// ── REPORT-BUILDER PARITY · WAVE 4 — Power Query "Transform Data" ───────────────
+//
+// When a Power Query transform authored by the report Transform host (the SAME
+// `PowerQueryHost` the Dataflow Gen2 editor mounts) is layered on the source
+// (`state.dataSource.appliedSteps`) in the DEFAULT DirectQuery mode, the Fields
+// pane must reflect the TRANSFORMED schema (renamed / added / split / grouped
+// columns), not the raw source schema. We FOLD the applied steps to nested derived
+// SELECTs (`m-script.foldAppliedStepsToSql` — the same query-folding the /query and
+// /profile routes run) over the resolved base relation and probe the folded SELECT
+// for its real post-transform columns. 100% Azure-native over Synapse — no
+// api.fabric / api.powerbi / onelake host (no-fabric-dependency.md), no mock columns
+// (no-vaporware.md); the M was authored exclusively via `m-script.appendStep`
+// (structured dialogs / ribbon), never hand-typed (no-freeform-config.md).
+
+/** Synapse/T-SQL identifier quote (resolver / objectRef names only — injection-safe). */
+function brkt(ident: string): string {
+  return `[${String(ident).replace(/]/g, ']]')}]`;
+}
+
+/**
+ * The base SELECT + Synapse target a report's DirectQuery transform folds over —
+ * resolved ONLY for the sources whose base relation genuinely lives in Synapse and
+ * can therefore be probed here:
+ *   • direct-query (inline SQL, not yet scaffolded into a model) → the guarded
+ *     SELECT, on `ds.target`'s pool (dedicated warehouse / serverless lakehouse);
+ *   • a Synapse-family connection (`synapse-dedicated` / `synapse-serverless`)
+ *     reading a table or a custom query → `SELECT * FROM [schema].[table]` (or the
+ *     guarded custom SELECT), on the matching pool.
+ * Returns null for every other resolved case — a multi-table semantic model, a
+ * non-Synapse connection engine (Azure SQL / Databricks / PostgreSQL / Cosmos), a
+ * file/KQL connection object, or AAS — so those keep the base schema below (the
+ * fold is still enforced at /query + /profile, where the owning engine runs it, and
+ * Import materializes the full M via the report /refresh Spark/wrangling run). Never
+ * a fabricated transformed column.
+ */
+function transformBaseRelation(
+  ds: ReportDataSource,
+  resolved: ResolvedReportModel,
+): { baseSelect: string; target: SynapseTarget } | null {
+  if (resolved.backend === 'loom-native' && ds.kind === 'direct-query' && !ds.modelItemId) {
+    const guard = readOnlySelect(ds.sql);
+    if (!guard.ok) return null;
+    return { baseSelect: guard.sql, target: ds.target === 'lakehouse' ? serverlessTarget() : dedicatedTarget() };
+  }
+  if (
+    resolved.backend === 'connection' &&
+    ds.kind === 'connection' &&
+    (ds.connType === 'synapse-dedicated' || ds.connType === 'synapse-serverless')
+  ) {
+    const ref = ds.objectRef;
+    let baseSelect: string;
+    if (ref.mode === 'table') {
+      baseSelect = `SELECT * FROM ${ref.schema ? `${brkt(ref.schema)}.${brkt(ref.table)}` : brkt(ref.table)}`;
+    } else if (ref.mode === 'query') {
+      const guard = readOnlySelect(ref.sql);
+      if (!guard.ok) return null;
+      baseSelect = guard.sql;
+    } else {
+      return null; // file / kql objects have no plain SQL base relation to fold over
+    }
+    const target = ds.connType === 'synapse-dedicated' ? dedicatedTarget() : serverlessTarget();
+    return { baseSelect, target };
+  }
+  return null;
+}
+
+/**
+ * Probe a folded derived SELECT for its REAL post-transform column names —
+ * `SELECT TOP 0 *` over Synapse (recordset metadata only; no data scan), the same
+ * primitive `directQueryTables` uses. Returns the single "Query" `FieldTable` the
+ * Fields pane binds (renamed / added / split columns included), or [] when the fold
+ * yields no columns.
+ */
+async function foldedProbeTables(target: SynapseTarget, foldedSql: string): Promise<FieldTable[]> {
+  const probe = `SELECT TOP 0 * FROM (\n${foldedSql}\n) AS _loom_fold_probe`;
+  const res = await executeQuery(target, probe, 30_000);
+  const columns: FieldColumn[] = res.columns.map((name) => ({
+    name,
+    dataType: 'string',
+    summarizeBy: undefined,
+    isHidden: false,
+  }));
+  return columns.length ? [{ name: 'Query', columns, measures: [] }] : [];
+}
+
+/**
+ * Pick the query the Transform host is acting on from the persisted M section.
+ * The host can author MULTIPLE `shared` queries and reports the ACTIVE one (via
+ * `onActiveQueryChange`); honoring that name probes THAT query's folded schema
+ * for multi-query parity instead of an implicit `queries[0]`. Falls back to the
+ * first query when no name is supplied (single-query reports — the common case)
+ * or the supplied name isn't present (stale client state), preserving the
+ * original single-query behavior. Returns undefined only when the section parsed
+ * to no queries.
+ */
+function pickActiveQuery(
+  queries: Array<{ name: string; body: string }>,
+  queryName: string | undefined,
+): { name: string; body: string } | undefined {
+  if (queryName) {
+    const want = queryName.trim().toLowerCase();
+    const match = queries.find((qq) => qq.name.toLowerCase() === want);
+    if (match) return match;
+  }
+  return queries[0];
 }
 
 /**
@@ -319,6 +427,12 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   const id = (await ctx.params).id;
 
+  // Optional active-query name. The Transform host can author MULTIPLE `shared`
+  // queries; honoring the active one (via `onActiveQueryChange`) probes THAT
+  // query's folded schema. Absent ⇒ the first query (single-query reports —
+  // back-compat).
+  const queryName = req.nextUrl.searchParams.get('queryName') || undefined;
+
   // Load the report item (loom: content id OR plain Cosmos id), owner-checked.
   let item: WorkspaceItem | null;
   if (isLoomContentId(id)) {
@@ -342,6 +456,68 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   // merely LOOM_AAS_SERVER_URL).
   if (resolved.backend === 'unbound') {
     return NextResponse.json({ ok: false, code: 'unbound', error: resolved.gate }, { status: 412 });
+  }
+
+  // ── REPORT-BUILDER PARITY · WAVE 4 — Power Query "Transform Data" ────────────
+  // A DirectQuery Power Query transform layered on the source (authored by the
+  // report Transform host, the same PowerQueryHost the Dataflow Gen2 editor mounts)
+  // must reflect the TRANSFORMED schema in the Fields pane. The transform M is read
+  // via the CLIENT data-source parser (`fromLegacyState`), which carries the Wave-4
+  // mixin — the resolver's `readReportDataSource` intentionally drops it. We FOLD
+  // the applied steps to nested derived SELECTs and probe the folded relation for
+  // its real post-transform columns (renamed / added / split / grouped), Azure-
+  // native over Synapse. Import mode reads the materialized Delta cache (same
+  // columns the base resolved) → falls through to the base response below. A non-
+  // foldable step is an honest 409 ("switch this query to Import"). Sources whose
+  // base relation isn't on Synapse (multi-table semantic model, a non-Synapse
+  // connection engine, file/KQL objects, AAS) keep the base schema — the fold is
+  // still enforced at /query + /profile where the owning engine runs it.
+  const ds = fromLegacyState((item.state || {}) as Record<string, unknown>);
+  if (
+    ds &&
+    hasTransform(ds) &&
+    reportTransformMode(ds) !== 'import' &&
+    (resolved.backend === 'loom-native' || resolved.backend === 'connection')
+  ) {
+    const base = transformBaseRelation(ds, resolved);
+    if (base && ds.appliedSteps) {
+      const queries = parseSharedQueries(ds.appliedSteps);
+      const active = pickActiveQuery(queries, queryName);
+      if (active) {
+        const folded = foldAppliedStepsToSql(base.baseSelect, active.body, 'synapse');
+        if (!folded.ok) {
+          // DirectQuery can't fold this step to native SQL — honest 409 (the Import
+          // path materializes the full M via the report /refresh Spark/wrangling run).
+          return NextResponse.json(
+            {
+              ok: false,
+              code: 'not-foldable',
+              error: `Step '${folded.unfoldableStep}' can't fold to a native query — switch this query to Import.`,
+              unfoldableStep: folded.unfoldableStep,
+            },
+            { status: 409 },
+          );
+        }
+        try {
+          const tables = await foldedProbeTables(base.target, folded.sql);
+          return NextResponse.json({
+            ok: true,
+            backend: resolved.backend,
+            ...(resolved.backend === 'connection' ? { connType: resolved.connType } : {}),
+            aasServer: null,
+            aasDatabase: null,
+            database: null,
+            transformed: true,
+            tables,
+          });
+        } catch (e: any) {
+          const status = e instanceof AasError ? e.status : 502;
+          return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });
+        }
+      }
+    }
+    // base === null or unparseable M → fall through to the base schema below
+    // (additive; the transform is still enforced at /query + /profile).
   }
 
   // Loom-native: schema came straight from the semantic-model content or the

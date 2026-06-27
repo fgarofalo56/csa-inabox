@@ -51,9 +51,21 @@ import {
   Dismiss20Regular, Database20Regular, DocumentTable20Regular,
   Server20Regular, ArrowSync16Regular, Checkmark16Regular, TableSearch20Regular,
   DatabaseSearch20Regular, DatabasePlugConnected20Regular, CloudArrowUp20Regular,
+  TableSettings20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { readOnlySelect } from '@/lib/thread/sql-guard';
+// ── WAVE 4 — Power Query "Transform Data" host ────────────────────────────────
+// The report Transform surface is the SAME PowerQueryHost the Dataflow Gen2 editor
+// mounts, wrapped by TransformDataDrawer (sibling file): ribbon + formula bar +
+// Queries/Applied-Steps panes + View tab, with the structured (column-aware)
+// transform dialogs, data-profiling, and View-native-query all wired to the report
+// /profile + /native-query routes. Every step is REAL validated M (m-script
+// appendStep — no hand-typed M); DirectQuery folds to real SQL, Import materializes
+// a Delta cache via the W2 /refresh Synapse-Spark batch. No Fabric / Power BI host.
+// The picker mounts it over the bound source and re-persists appliedSteps via its
+// own onChange (the same /data-source PUT the source itself persists through).
+import { TransformDataDrawer } from './transform-data';
 // Get Data connector gallery (Wave 1, sibling file in this chunk). Browses the
 // 32-connector catalog and returns a connection/file/ADLS-backed ReportDataSource
 // via onChosen — the picker mounts it as an overlay drawer and persists the result.
@@ -78,6 +90,7 @@ import {
   type DirectQueryTarget,
   isBound,
   describeSource,
+  hasTransform,
 } from './report-data-source';
 
 // ── WAVE 2 surfaces (sibling files, this chunk) ───────────────────────────────
@@ -190,6 +203,24 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalS,
   },
   footer: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'flex-end' },
+
+  // ── WAVE 4 — Transform data entry card ──────────────────────────────────────
+  // Card-button (sibling to the bound-source affordances) that opens the Power
+  // Query Transform host (TransformDataDrawer) over the bound source. Mirrors the
+  // brand-accented card chrome so it reads as the same product (web3-ui).
+  transformRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalM,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, border-color',
+    transitionDuration: tokens.durationFaster,
+    cursor: 'pointer',
+    width: '100%', textAlign: 'left',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
 });
 
 const KIND_META: { kind: ReportDataSourceKind; label: string; hint: string; icon: ReactElement }[] = [
@@ -244,9 +275,12 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
   const [navigatorOpen, setNavigatorOpen] = useState(false);
   const [tableStorage, setTableStorage] = useState<TableStorageMap>({});
 
+  // (f) WAVE 4 — Transform data host (Power Query) over the bound source.
+  const [transformOpen, setTransformOpen] = useState(false);
+
   // Re-seed the form whenever the drawer (re)opens against a (possibly new) value.
   useEffect(() => {
-    if (!open) { setGalleryOpen(false); setNavigatorOpen(false); return; }
+    if (!open) { setGalleryOpen(false); setNavigatorOpen(false); setTransformOpen(false); return; }
     setKind(value?.kind ?? 'semantic-model');
     setModelId(value?.kind === 'semantic-model' ? value.itemId : '');
     setTarget(value?.kind === 'direct-query' ? value.target : 'warehouse');
@@ -256,6 +290,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
     setGetData(isGetDataSource(value) ? value : null);
     setGalleryOpen(false);
     setNavigatorOpen(false);
+    setTransformOpen(false);
     setTableStorage({});
     setPreviewCols(null); setPreviewErr(null);
   }, [open, value]);
@@ -484,6 +519,11 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
                     Browse with Navigator
                   </Button>
                 )}
+                {getData && isBound(getData) && (
+                  <Button size="small" appearance="subtle" icon={<TableSettings20Regular />} onClick={() => setTransformOpen(true)}>
+                    Transform data{hasTransform(getData) ? ' ·' : ''}
+                  </Button>
+                )}
                 <Button size="small" appearance="subtle" icon={<DatabaseSearch20Regular />} onClick={() => setGalleryOpen(true)}>
                   Change source
                 </Button>
@@ -683,6 +723,30 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
           {w2Visible && (
             <>
               <Divider />
+              {/* ── WAVE 4 — Transform data (Power Query) ───────────────────────
+                  A card-button (sibling to the bound-source affordances) that opens
+                  the SAME PowerQueryHost the Dataflow Gen2 editor uses, over the
+                  bound source. Every ribbon step is real validated M (appendStep);
+                  DirectQuery folds to real SQL, Import materializes via the W2
+                  /refresh Spark batch. Shows "· transformed" once steps exist. */}
+              <button
+                type="button"
+                className={styles.transformRow}
+                onClick={() => setTransformOpen(true)}
+                aria-label="Transform data with Power Query"
+              >
+                <span className={styles.optionIcon} aria-hidden><TableSettings20Regular /></span>
+                <span className={styles.optionText}>
+                  <Subtitle2>Transform data</Subtitle2>
+                  <Caption1 className={styles.muted}>
+                    Shape this source with Power Query — split / merge / pivot / group / conditional columns and more.
+                    Real M, folded to SQL (DirectQuery) or materialized to Delta (Import). No Power BI / Fabric.
+                  </Caption1>
+                </span>
+                {hasTransform(boundForW2) && (
+                  <Badge appearance="filled" color="brand" size="small">Transformed</Badge>
+                )}
+              </button>
               <Caption1 className={styles.muted}>
                 Storage &amp; refresh — set each model table to run live (DirectQuery) or as a materialized Delta cache
                 (Import / Dual / Direct Lake), then refresh the caches on demand. All Azure-native; no Power BI or
@@ -748,6 +812,24 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
           connectionLabel={describeSource(connSource)}
           onConfirm={onNavigatorConfirm}
           onDismiss={() => setNavigatorOpen(false)}
+        />
+      )}
+
+      {/* WAVE 4 — Transform data host. Mounts the canonical TransformDataDrawer (the
+          SAME PowerQueryHost the Dataflow Gen2 editor uses) over the currently-bound
+          source. onApplied is the picker's OWN onChange (parent PUT
+          /api/items/report/[id]/data-source) — the transform (appliedSteps +
+          transformMode) rides on the persisted union, re-persisted via the SAME route
+          as the source itself. `reportId` falls back to 'new' ⇒ the drawer is
+          read-only until the report is saved (honest gate, no silent no-op). Mounted
+          only while a source is bound. */}
+      {boundForW2 && (
+        <TransformDataDrawer
+          open={transformOpen}
+          reportId={reportId || 'new'}
+          dataSource={boundForW2}
+          onApplied={onChange}
+          onDismiss={() => setTransformOpen(false)}
         />
       )}
     </>

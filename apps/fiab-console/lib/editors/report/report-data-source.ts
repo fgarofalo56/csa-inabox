@@ -113,11 +113,53 @@ export type ReportObjectRef =
   | { mode: 'kql'; kql: string };
 
 /**
+ * ── Transform (WAVE 4) ────────────────────────────────────────────────────────
+ * The OPTIONAL Power Query "Transform Data" mixin carried by EVERY arm of the
+ * union. Authored by the report Transform host — the SAME `PowerQueryHost` the
+ * Dataflow Gen2 editor mounts — so the M shape persisted here is byte-identical
+ * to what the dataflow editor persists, and the structured dialogs emit each
+ * applied step through `m-script.appendStep` (no raw-typed M; no-freeform-config).
+ *
+ * It is mixed into each `*DataSource` interface (rather than a 7th union arm) so
+ * a transform rides ALONGSIDE the already-resolved source — `isBound()` is
+ * UNCHANGED (a transform is optional sugar on top of an already-bound source),
+ * and a report saved before Wave 4 omits both fields and behaves byte-identically
+ * (full back-compat). The server folds the chained steps onto the source's base
+ * `SELECT` (DirectQuery) or materializes them via the report `/refresh` Spark/
+ * wrangling path (Import) — all Azure-native (Synapse/ADF), no Fabric/Power BI.
+ */
+export interface ReportTransform {
+  /**
+   * Full Power Query M section authored over THIS source by the Transform host:
+   *   `section Section1;\nshared Query = let Source = <opaque source ref>, <steps…> in <result>;`
+   * Single source of truth — the identical M shape the dataflow editor persists.
+   * The `Source` step is an opaque reference the host treats verbatim; the server
+   * folds the chained applied steps onto the source's base SELECT. Absent ⇒ read
+   * the source as-is (no transform). The M is authored exclusively via
+   * `m-script.appendStep` (structured dialogs / ribbon), never hand-typed, so it
+   * is NOT re-typed server-side on persist.
+   */
+  appliedSteps?: string;
+  /**
+   * Power Query connectivity choice for the transform:
+   *   • `'directQuery'` (DEFAULT) — fold `appliedSteps` to SQL at read time
+   *     (`/fields` / `/query` / `/native-query` / `/profile` wrap the resolved
+   *     FROM in the folded derived SELECT before introspect/compile).
+   *   • `'import'`               — materialize a Delta cache via the report
+   *     `/refresh` POST (Synapse-Spark MLV → ADLS Delta, served by the W2 cache
+   *     read), then fold over the cache. REQUIRED for non-foldable steps.
+   * Only meaningful when `appliedSteps` is present; defaults to `'directQuery'`
+   * in that case, and is `undefined` when there is no transform.
+   */
+  transformMode?: 'directQuery' | 'import';
+}
+
+/**
  * DEFAULT, Azure-native. Points at a Loom `semantic-model` item. That item is
  * itself either Loom-native (SQL over a warehouse/lakehouse — the common case,
  * no AAS) or AAS-bound; the server resolver dispatches on the model's backend.
  */
-export interface SemanticModelDataSource {
+export interface SemanticModelDataSource extends ReportTransform {
   kind: 'semantic-model';
   /** Cosmos id of the bound `semantic-model` item ('' until the user picks one). */
   itemId: string;
@@ -128,7 +170,7 @@ export interface SemanticModelDataSource {
  * first save the designer mints a real `semantic-model` item and rewrites the
  * source to `kind:'semantic-model'`; until then it runs the SQL inline.
  */
-export interface DirectQueryDataSource {
+export interface DirectQueryDataSource extends ReportTransform {
   kind: 'direct-query';
   /** Which Synapse path the SQL runs against (dedicated warehouse vs serverless lakehouse). */
   target: DirectQueryTarget;
@@ -143,7 +185,7 @@ export interface DirectQueryDataSource {
  * model. Kept for parity + back-compat; the resolver routes it to `readModel()`
  * (fields) + DAX (`executeAasQuery`) unchanged.
  */
-export interface AasDataSource {
+export interface AasDataSource extends ReportTransform {
   kind: 'aas';
   /** AAS server name (or XMLA URI, e.g. asazure://eastus2.asazure.windows.net/my-server). */
   server: string;
@@ -158,7 +200,7 @@ export interface AasDataSource {
  * mapped Azure data-plane client. No new credential code lives here — only the
  * non-secret coordinates needed to pick which connection + object to read.
  */
-export interface ConnectionDataSource {
+export interface ConnectionDataSource extends ReportTransform {
   kind: 'connection';
   /** LoomConnection.id (GET /api/connections). '' until bound → isBound()=false. */
   connectionId: string;
@@ -173,7 +215,7 @@ export interface ConnectionDataSource {
  * POST /api/lakehouse/upload, read tabularly through Synapse serverless
  * OPENROWSET (Console MI).
  */
-export interface FileUploadDataSource {
+export interface FileUploadDataSource extends ReportTransform {
   kind: 'file-upload';
   /** Display name of the uploaded file. */
   fileName: string;
@@ -187,7 +229,7 @@ export interface FileUploadDataSource {
  * NEW (Get Data). An existing ADLS Gen2 path (no connection needed; Console MI
  * via adls-client), read tabularly through Synapse serverless OPENROWSET.
  */
-export interface AdlsFileDataSource {
+export interface AdlsFileDataSource extends ReportTransform {
   kind: 'adls-file';
   /** Container (e.g. 'bronze'|'silver'|'gold'|'landing'). */
   container: string;
@@ -227,6 +269,52 @@ export function isReportConnType(v: unknown): v is ReportConnType {
 /** Coerce an arbitrary persisted value to a valid `ReportConnType` (default azure-sql). */
 function coerceReportConnType(v: unknown): ReportConnType {
   return isReportConnType(v) ? v : 'azure-sql';
+}
+
+/**
+ * Extract the OPTIONAL Wave-4 transform mixin (`appliedSteps` + `transformMode`)
+ * from an arbitrary persisted/wire bag, returning ONLY the fields that are
+ * present so it can be spread onto each parsed source arm without disturbing
+ * back-compat:
+ *   • `appliedSteps` — carried only when a non-empty string (the host always
+ *     persists a full M section; blank/missing ⇒ no transform, omit entirely).
+ *   • `transformMode` — validated against the 2-value enum. When `appliedSteps`
+ *     is present and `transformMode` is absent/invalid it defaults to
+ *     `'directQuery'` (the Power Query default); when there is NO transform it is
+ *     omitted (`undefined`) so a Wave-4-naïve report round-trips byte-identically.
+ * The M is NEVER re-typed here — it was authored via `m-script.appendStep`.
+ */
+function parseTransform(v: Record<string, unknown>): {
+  appliedSteps?: string;
+  transformMode?: 'directQuery' | 'import';
+} {
+  const appliedSteps =
+    typeof v.appliedSteps === 'string' && v.appliedSteps.trim().length > 0
+      ? v.appliedSteps
+      : undefined;
+  if (!appliedSteps) return {};
+  const transformMode: 'directQuery' | 'import' =
+    v.transformMode === 'import' ? 'import' : 'directQuery';
+  return { appliedSteps, transformMode };
+}
+
+/**
+ * True when a (Wave-4) Power Query transform is layered on top of the bound
+ * source. Pure convenience for the Transform host / report routes that fold or
+ * materialize the applied steps — never affects `isBound()`.
+ */
+export function hasTransform(ds: MaybeReportDataSource): boolean {
+  return !!ds && typeof ds.appliedSteps === 'string' && ds.appliedSteps.trim().length > 0;
+}
+
+/**
+ * Effective Power Query connectivity mode for the source's transform. Returns
+ * `'directQuery'` (fold to SQL at read time) by default and `'import'` only when
+ * explicitly chosen. When there is no transform the value is irrelevant; callers
+ * gate on `hasTransform()` first — the `'directQuery'` default is harmless.
+ */
+export function reportTransformMode(ds: MaybeReportDataSource): 'directQuery' | 'import' {
+  return ds && ds.transformMode === 'import' ? 'import' : 'directQuery';
 }
 
 /**
@@ -337,24 +425,28 @@ function describeObjectRef(ref: ReportObjectRef): string {
  *   • connection               → "<ConnType label> · <table|file|query|kql>"
  *   • file-upload              → "File · <fileName>"
  *   • adls-file                → "ADLS · <container>/<path>"
+ *
+ * When a Wave-4 Power Query transform is layered on top (`appliedSteps` set), a
+ * cosmetic " · transformed" suffix is appended to the bound label.
  */
 export function describeSource(ds: MaybeReportDataSource): string {
   if (!isBound(ds)) return 'No data source';
+  const suffix = hasTransform(ds) ? ' · transformed' : '';
   switch (ds.kind) {
     case 'semantic-model':
-      return 'Semantic model';
+      return `Semantic model${suffix}`;
     case 'direct-query':
-      return `Direct query · ${ds.target === 'warehouse' ? 'Warehouse' : 'Lakehouse'}`;
+      return `Direct query · ${ds.target === 'warehouse' ? 'Warehouse' : 'Lakehouse'}${suffix}`;
     case 'aas':
-      return ds.database ? `Analysis Services · ${ds.database}` : 'Analysis Services';
+      return `${ds.database ? `Analysis Services · ${ds.database}` : 'Analysis Services'}${suffix}`;
     case 'connection': {
       const label = REPORT_CONN_TYPE_LABEL[ds.connType] ?? 'Connection';
-      return `${label} · ${describeObjectRef(ds.objectRef)}`;
+      return `${label} · ${describeObjectRef(ds.objectRef)}${suffix}`;
     }
     case 'file-upload':
-      return ds.fileName ? `File · ${ds.fileName}` : 'Uploaded file';
+      return `${ds.fileName ? `File · ${ds.fileName}` : 'Uploaded file'}${suffix}`;
     case 'adls-file':
-      return `ADLS · ${ds.container}${ds.path ? `/${ds.path}` : ''}`;
+      return `ADLS · ${ds.container}${ds.path ? `/${ds.path}` : ''}${suffix}`;
     default:
       return 'No data source';
   }
@@ -390,9 +482,12 @@ function parseObjectRef(value: unknown): ReportObjectRef {
 export function parseDataSource(value: unknown): ReportDataSource | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
+  // Wave 4: the OPTIONAL transform mixin rides on EVERY arm (spread onto each
+  // returned kind; absent ⇒ {} ⇒ byte-identical back-compat).
+  const transform = parseTransform(v);
   switch (v.kind) {
     case 'semantic-model':
-      return { kind: 'semantic-model', itemId: typeof v.itemId === 'string' ? v.itemId : '' };
+      return { kind: 'semantic-model', itemId: typeof v.itemId === 'string' ? v.itemId : '', ...transform };
     case 'direct-query': {
       const target: DirectQueryTarget = v.target === 'lakehouse' ? 'lakehouse' : 'warehouse';
       return {
@@ -400,6 +495,7 @@ export function parseDataSource(value: unknown): ReportDataSource | null {
         target,
         sql: typeof v.sql === 'string' ? v.sql : '',
         ...(typeof v.modelItemId === 'string' && v.modelItemId ? { modelItemId: v.modelItemId } : {}),
+        ...transform,
       };
     }
     case 'aas':
@@ -407,6 +503,7 @@ export function parseDataSource(value: unknown): ReportDataSource | null {
         kind: 'aas',
         server: typeof v.server === 'string' ? v.server : '',
         database: typeof v.database === 'string' ? v.database : '',
+        ...transform,
       };
     case 'connection':
       return {
@@ -414,6 +511,7 @@ export function parseDataSource(value: unknown): ReportDataSource | null {
         connectionId: asStr(v.connectionId),
         connType: coerceReportConnType(v.connType),
         objectRef: parseObjectRef(v.objectRef),
+        ...transform,
       };
     case 'file-upload':
       return {
@@ -421,6 +519,7 @@ export function parseDataSource(value: unknown): ReportDataSource | null {
         fileName: asStr(v.fileName),
         format: asStr(v.format),
         containerPath: asStr(v.containerPath),
+        ...transform,
       };
     case 'adls-file':
       return {
@@ -428,6 +527,7 @@ export function parseDataSource(value: unknown): ReportDataSource | null {
         container: asStr(v.container),
         path: asStr(v.path),
         format: asStr(v.format),
+        ...transform,
       };
     default:
       return null;
