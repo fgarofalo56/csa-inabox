@@ -979,6 +979,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         ok: true,
         rows: objectRows(result.columns, result.rows),
         sql: compiled.sql,
+        elapsedMs: result.executionMs,
+        rowCount: result.rowCount,
       });
     } catch (e: any) {
       return NextResponse.json(

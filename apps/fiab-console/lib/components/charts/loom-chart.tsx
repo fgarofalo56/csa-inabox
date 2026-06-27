@@ -39,7 +39,17 @@
 
 import { useMemo, useRef, useState } from 'react';
 import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
-import { Caption1, tokens } from '@fluentui/react-components';
+import {
+  Caption1,
+  tokens,
+  Menu,
+  MenuTrigger,
+  MenuPopover,
+  MenuList,
+  MenuItem,
+  Button,
+} from '@fluentui/react-components';
+import { MoreHorizontal16Regular } from '@fluentui/react-icons';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
 // 8 distinct brand/palette colors that are dark-mode safe (CSS variables via
@@ -370,6 +380,8 @@ export interface LoomChartProps {
    */
   onPointHover?: (category: string, coords: { x: number; y: number }) => void;
   onPointSelect?: (category: string) => void;
+  /** WAVE-9: when set, the chart header shows a "…" menu with "Export data". */
+  onExportData?: () => void;
   /**
    * INTERNAL (trellis): force the value-axis maximum so small-multiples panels
    * share a comparable scale. Set by {@link SmallMultiplesGrid}; never passed by
@@ -2513,7 +2525,7 @@ export function LoomChart(props: LoomChartProps) {
     stackMode = 'none', comboLineSeries = [], target, gaugeMin, gaugeMax,
     kpiTrend, kpiGoal, kpiTarget, smallMultiples, tooltips = [], detailColumn,
     anomalies, shadedRanges = [], hover = false, sharedValueMax,
-    onPointHover, onPointSelect,
+    onPointHover, onPointSelect, onExportData,
   } = props;
   const theme = useMemo(() => resolveTheme(palette, fontFamily, structural), [palette, fontFamily, structural]);
   const parsed = useMemo(() => parseRows(rows, sizeColumn, theme.palette, tooltips), [rows, sizeColumn, theme.palette, tooltips]);
@@ -2683,10 +2695,42 @@ export function LoomChart(props: LoomChartProps) {
 
   return (
     <div style={{ width: '100%', minWidth: 0 }}>
-      {title && (
-        <Caption1 style={{ display: 'block', marginBottom: 4, fontWeight: tokens.fontWeightSemibold }}>
-          {title}
-        </Caption1>
+      {(title || onExportData) && (
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: tokens.spacingHorizontalXS,
+            marginBottom: tokens.spacingVerticalXXS,
+          }}
+        >
+          {title ? (
+            <Caption1 style={{ display: 'block', fontWeight: tokens.fontWeightSemibold, minWidth: 0 }}>
+              {title}
+            </Caption1>
+          ) : (
+            <span style={{ minWidth: 0 }} />
+          )}
+          {onExportData && (
+            <Menu>
+              <MenuTrigger disableButtonEnhancement>
+                <Button
+                  size="small"
+                  appearance="subtle"
+                  icon={<MoreHorizontal16Regular />}
+                  aria-label="Visual options"
+                />
+              </MenuTrigger>
+              <MenuPopover>
+                <MenuList>
+                  <MenuItem onClick={onExportData}>Export data</MenuItem>
+                </MenuList>
+              </MenuPopover>
+            </Menu>
+          )}
+        </div>
       )}
       {body}
     </div>

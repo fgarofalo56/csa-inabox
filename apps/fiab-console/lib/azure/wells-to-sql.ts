@@ -250,6 +250,10 @@ export interface ScalarParamBinding {
 export interface VisualCompileOptions {
   drill?: DrillState;
   whatIf?: ScalarParamBinding[];
+  /** WAVE-9 export-data: project row-level columns of every well (no GROUP BY). */
+  underlying?: boolean;
+  /** WAVE-9 export-data: override the default row cap (csv 30k / xlsx 150k). */
+  rowCapOverride?: number;
 }
 
 // ── Maps ───────────────────────────────────────────────────────────────────────
@@ -728,6 +732,33 @@ export function buildSqlFromVisual(
   const values = wells.values || [];
   const legend = wells.legend || [];
   const type = (visual.type || '').toLowerCase();
+
+  // ── WAVE-9 export-data → underlying-rows projection (every well column, no
+  // aggregation / no GROUP BY). When `opts.underlying` is set, the export-data
+  // route wants the ROW-LEVEL detail behind ANY visual type (chart/matrix/card
+  // included), so we project ALL well columns ([...category, ...values,
+  // ...legend]) raw — reusing the exact `type === 'table'` raw-projection logic
+  // — under a caller-supplied row cap (`rowCapOverride`: csv 30k / xlsx 150k).
+  // Column filters still compile to a parameterized WHERE; identifiers stay
+  // resolver-whitelisted and values bind as @p<n> (no injection, real Synapse
+  // rows). This branch runs ONLY for an explicit underlying export — every
+  // existing caller passes no `underlying`, so the summarized/aggregate paths
+  // below are reached unchanged and compile byte-identical SQL (no regression).
+  if (opts?.underlying) {
+    const cols = [...category, ...values, ...legend]
+      .map((w) => resolveColumn(sqlSource, w.table, w.column))
+      .filter((n): n is string => !!n);
+    const uniq = Array.from(new Set(cols));
+    if (!uniq.length) return null;
+    const pb = paramBag();
+    const { where } = compileFilters(sqlSource, filters, pb, false);
+    const cap = rowCap(d, opts.rowCapOverride ?? ROW_CAP);
+    const select = `SELECT ${cap.prefix}${uniq.map((n) => `${colRef(n, d)} AS ${quoteIdent(n, d)}`).join(', ')}`;
+    return {
+      sql: assemble(select, from, where, [], [], quoteIdent(uniq[0], d), cap.suffix || null),
+      parameters: pb.parameters,
+    };
+  }
 
   // ── table → raw projection (no aggregation, no grouping) ────────────────────
   if (type === 'table') {

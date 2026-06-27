@@ -53,6 +53,7 @@ import {
   type ExportFormat,
   type PaginatedExportFormat,
 } from '@/lib/azure/powerbi-client';
+import { applySensitivityStamp } from '@/lib/azure/report-export-label';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -163,6 +164,7 @@ async function exportLoomNative(
   req: NextRequest,
   reportId: string,
   body: any,
+  session: NonNullable<ReturnType<typeof getSession>>,
 ): Promise<NextResponse> {
   const requested = String(body?.format || 'PDF').toUpperCase() as ExportFormat;
   const mime = MIME[requested];
@@ -219,7 +221,9 @@ async function exportLoomNative(
       );
     }
     const bytes = Buffer.from(await res.arrayBuffer());
-    return new NextResponse(bytes, {
+    const stamped = await applySensitivityStamp(session, reportId, bytes, LOOM_EXT[requested]);
+    if (stamped.blocked) return NextResponse.json({ ok: false, error: stamped.blocked }, { status: 403 });
+    return new NextResponse(stamped.bytes, {
       status: 200,
       headers: {
         'content-type': mime,
@@ -251,7 +255,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Power BI workspace). The Power BI ExportTo path is reached ONLY when a
   // workspace is explicitly bound (no-fabric-dependency.md).
   if (mode === 'loom-native' || !workspaceId) {
-    return exportLoomNative(req, reportId, body);
+    return exportLoomNative(req, reportId, body, session);
   }
 
   // ── Power BI ExportTo (opt-in) ──────────────────────────────────────────────
@@ -309,7 +313,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const { bytes } = await getReportExportFile(workspaceId, reportId, exportId);
-    return new NextResponse(bytes, {
+    const stamped = await applySensitivityStamp(session, reportId, Buffer.from(bytes), ext);
+    if (stamped.blocked) return NextResponse.json({ ok: false, error: stamped.blocked }, { status: 403 });
+    return new NextResponse(stamped.bytes, {
       status: 200,
       headers: {
         'content-type': mime,

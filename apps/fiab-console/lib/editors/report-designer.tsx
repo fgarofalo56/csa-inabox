@@ -77,6 +77,12 @@ import {
   // PBI ships SEPARATE Python + R visual glyphs in the Visualizations pane; mirror
   // that with two distinct dark-legible Fluent glyphs (Code = Python, Braces = R).
   Code20Regular, BracesVariable20Regular,
+  // ── wave-9 additions (governance / lifecycle / settings / performance) ───────
+  // Shield = MIP sensitivity, Ribbon = endorsement, Branch = deployment pipeline,
+  // Settings = report settings. Gauge20Regular (above) drives the Performance tab.
+  // MoreHorizontal = the "…" visual-options overflow on the table/matrix/card path
+  // (charts get theirs from LoomChart) so those export targets reach Export data.
+  Shield20Regular, Ribbon20Regular, Branch20Regular, Settings20Regular, MoreHorizontal20Regular,
 } from '@fluentui/react-icons';
 import type { CSSProperties, ReactElement } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -187,6 +193,16 @@ import {
   ExportMenu, printReport, pngOfElement, buildReportPrintHtml, downloadBlobObject, slugify,
   type ExportFormat, type ExportScope, type PrintPage,
 } from './report/export-report';
+// ── Wave-9 governance / lifecycle / export / perf / settings (ALL logic lives in
+// these sibling files; report-designer just mounts them — no-vaporware: each hits a
+// real backend — Synapse rows, Graph MIP labels + real protection stamp, the Loom
+// deployment-pipeline routes, and Cosmos state persistence). ───────────────────
+import { VisualExportDataDialog, type ExportVisualShape } from './report/visual-export-data';
+import { SensitivityLabelDialog } from './report/sensitivity-label';
+import { EndorsementDialog, type Endorsement } from './report/endorsement';
+import { DeployToPipelineDialog } from './report/deploy-to-pipeline';
+import { usePerfRecorder, PerformanceAnalyzer } from './report/performance-analyzer';
+import { useReportSettings, ReportSettingsDialog } from './report/report-settings';
 import { SmartNarrative, type SmartNarrativeVisualRows } from './report/ai-visuals/smart-narrative';
 import { ReportQA } from './report/ai-visuals/qa';
 import { DecompositionTree } from './report/ai-visuals/decomposition-tree';
@@ -1037,7 +1053,7 @@ interface AiVisualWiring {
   pageRows: SmartNarrativeVisualRows[];
 }
 
-function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, onPageFilter, onSlicerStyle, themeChart, ai, script, reportId, onPointSelect, onPointHover }: {
+function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, onPageFilter, onSlicerStyle, themeChart, ai, script, reportId, onPointSelect, onPointHover, onExportData }: {
   visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[];
   selection?: VisualSelection | null; interactionMode?: InteractionMode;
   onSelect?: (sel: VisualSelection | null) => void;
@@ -1059,6 +1075,9 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
   // Both flow to LoomChart's onPointSelect/onPointHover for cartesian charts.
   onPointSelect?: (category: string) => void;
   onPointHover?: (category: string, coords: { x: number; y: number }) => void;
+  // Wave-9: when set, chart-type visuals show a "…" header menu with "Export data"
+  // (LoomChart renders it); flows to the host's per-visual export-data dialog.
+  onExportData?: () => void;
 }) {
   // Wave-3 AI visuals render their OWN surface (real AOAI / real /query SQL).
   // Branched BEFORE the hasBinding/state guards: smart narrative + Q&A carry no
@@ -1182,7 +1201,7 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
     const gkType: string = visual.type === 'gauge' ? 'gauge' : 'kpi';
     return (
       <div style={wrapStyle}>
-        <LoomChart type={gkType as LoomChartType} rows={rows} height={200} format={fmt} {...(geom as any)} />
+        <LoomChart type={gkType as LoomChartType} rows={rows} height={200} format={fmt} onExportData={onExportData} {...(geom as any)} />
       </div>
     );
   }
@@ -1400,7 +1419,7 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
           <VisualChrome chrome={adapter.axisChrome} format={fmt} fallbackTitle={visual.title} measureValues={titleMeasureValues}>
             <LoomChart type={(CHART_RENDER[visual.type] || 'column') as LoomChartType} rows={adapter.rows} height={200}
               refLines={orientedRefLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry}
-              onPointSelect={onPointSelect} onPointHover={onPointHover}
+              onPointSelect={onPointSelect} onPointHover={onPointHover} onExportData={onExportData}
               {...(adapter.chartProps as any)} {...(geomProps as any)} />
           </VisualChrome>
           {refLines.length > 0 && (
@@ -1462,7 +1481,28 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
     if (onSelect) onSelect(selectionFromRow(visual.id, row, [cols[0]]));
     onPointSelect?.(String(row[cols[0]] ?? ''));
   };
-  return (
+  // Wave-9 export-data parity: table / matrix / card-fallback visuals are
+  // first-class PBI "Export data" targets — the visual-data route fully supports
+  // them (buildSqlFromVisual type==='table' + the underlying-rows projection) — but
+  // unlike charts they don't route through LoomChart, so they carried no "…"
+  // affordance to reach the host's export dialog (a parity ❌ row, not a true
+  // coverage boundary). Render the SAME right-aligned three-dot overflow LoomChart
+  // shows for charts → its single "Export data" item opens the host's per-visual
+  // export dialog. Omitted when the host passes no onExportData (read-only viewer /
+  // Settings → allow-export off). Tokens only, dark-legible.
+  const exportOverflow = onExportData ? (
+    <Menu>
+      <MenuTrigger disableButtonEnhancement>
+        <Button size="small" appearance="subtle" icon={<MoreHorizontal20Regular />} aria-label="Visual options" />
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList>
+          <MenuItem onClick={onExportData}>Export data</MenuItem>
+        </MenuList>
+      </MenuPopover>
+    </Menu>
+  ) : null;
+  const tableEl = (
     <Table size="small">
       <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
       <TableBody>
@@ -1503,6 +1543,16 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
         ))}
       </TableBody>
     </Table>
+  );
+  // No export affordance wired (viewer / export disabled) → render the bare table,
+  // byte-identical to the prior behavior. Otherwise stack a right-aligned overflow
+  // header above it (PBI shows the visual "…" menu on tables/matrices too).
+  if (!exportOverflow) return tableEl;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>{exportOverflow}</div>
+      {tableEl}
+    </div>
   );
 }
 
@@ -1841,7 +1891,7 @@ function WellEditor({
 // ── main ────────────────────────────────────────────────────────────────────
 
 /** Right-rail tab identifiers (wave-2 adds Bookmarks + Selection). */
-type RightTab = 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'bookmarks' | 'selection' | 'syncSlicers' | 'whatIf' | 'copilot';
+type RightTab = 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'bookmarks' | 'selection' | 'syncSlicers' | 'whatIf' | 'performance' | 'copilot';
 
 export function ReportDesigner({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
@@ -1946,6 +1996,18 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
   // Publish (Azure-native Org gallery default · Power BI opt-in).
   const [publishOpen, setPublishOpen] = useState(false);
+  // ── Wave-9 governance / lifecycle / export / perf / settings (mount-only) ─────
+  const [sensitivityOpen, setSensitivityOpen] = useState(false);
+  const [pipelineOpen, setPipelineOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [endorsementOpen, setEndorsementOpen] = useState(false);
+  const [exportVisual, setExportVisual] = useState<DVisual | null>(null);
+  // Small ribbon-display state seeded from detail.state on load and refreshed by the
+  // dialogs' onApplied / onChange callbacks (the dialogs themselves re-fetch on open).
+  const [sensitivityLabelName, setSensitivityLabelName] = useState<string>('');
+  const [endorsement, setEndorsement] = useState<Endorsement | null>(null);
+  const perf = usePerfRecorder(); // ref-backed handle → safe to omit from runVisual deps
+  const reportSettings = useReportSettings(); // seeded from detail.state.content.settings on load (F2), saved in F12
   const [publishBusy, setPublishBusy] = useState(false);
   const [publishTarget, setPublishTarget] = useState<'org' | 'powerbi'>('org');
   const [publishMsg, setPublishMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -2001,6 +2063,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       setActivePage(0); setReportName(''); setDataSource(null); setReportFilters([]);
       setBookmarks([]); setDrill(null); setSelectedVisualIds(new Set()); setFilterPaneFormat(null);
       setTheme(undefined);
+      setSensitivityLabelName(''); setEndorsement(null); reportSettings.setSettings({});
       historyRef.current = { past: [], future: [] }; prevSnapRef.current = null; restoringRef.current = false;
       setDirty(false); setLoadErr(null); setLoading(false);
       return;
@@ -2035,6 +2098,12 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       setSyncGroups(parseSyncGroups(j.syncSlicers));
       setWhatIfs(parseWhatIfParams(j.whatIfParams));
       setFieldParams(parseFieldParameters(j.fieldParameters));
+      // Wave-9 governance / lifecycle / settings display state (additive; defensive
+      // reads — undefined until the detail route surfaces them, and each dialog
+      // re-fetches its authoritative state on open, so this only seeds the ribbon).
+      setSensitivityLabelName(typeof j.sensitivityLabel === 'string' ? j.sensitivityLabel : '');
+      setEndorsement(j.endorsement === 'Promoted' || j.endorsement === 'Certified' ? j.endorsement : null);
+      reportSettings.setSettings(j.settings && typeof j.settings === 'object' ? j.settings : {});
       setDrillByVisual({}); setTooltipHover(null);
       setDrill(null); setSelectedVisualIds(new Set());
       historyRef.current = { past: [], future: [] }; prevSnapRef.current = null; restoringRef.current = false;
@@ -2279,6 +2348,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     if (!hasBinding(v)) return;
     const applicable = [...scopeFilters, ...(v.filters || [])];
     setVisualRows((p) => ({ ...p, [v.id]: { rows: p[v.id]?.rows || [], loading: true, err: null } }));
+    const __t0 = performance.now();
     try {
       // Wave-8: thread the visual's in-visual DRILL state + the report's active
       // WHAT-IF bindings into the /query body so wells-to-sql truncates the
@@ -2296,6 +2366,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       });
       const j = await r.json();
       if (j.ok) setVisualRows((p) => ({ ...p, [v.id]: { rows: j.rows || [], loading: false, err: null } }));
+      // Wave-9 Performance analyzer: capture the REAL server elapsed (result.executionMs
+      // surfaced as j.elapsedMs by the /query route) + browser round-trip when recording.
+      if (j.ok && perf.recording) perf.record(v.id, { title: v.title, serverMs: j.elapsedMs, rowCount: j.rowCount ?? (j.rows || []).length, clientMs: performance.now() - __t0, sql: j.sql || j.daxQuery });
       else setVisualRows((p) => ({ ...p, [v.id]: { rows: [], loading: false, err: j.error || `HTTP ${r.status}` } }));
     } catch (e: any) {
       setVisualRows((p) => ({ ...p, [v.id]: { rows: [], loading: false, err: e?.message || String(e) } }));
@@ -2326,6 +2399,24 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bound, activePage, effectiveVisuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || []), JSON.stringify(drill?.toPage === activePage ? drill?.filters : []), JSON.stringify(drillByVisual), JSON.stringify(whatIfs)]);
+
+  // ── Wave-9 report Settings → auto-refresh. When settings.refreshIntervalSec > 0,
+  // re-run every effective visual's REAL /query on that cadence (same path the
+  // binding-change effect uses → real Synapse rows). Off (0 / undefined) clears the
+  // timer; the dialog's fixed Dropdown is the only writer (no-freeform).
+  useEffect(() => {
+    const sec = reportSettings.settings.refreshIntervalSec || 0;
+    if (!bound || sec <= 0) return;
+    const handle = setInterval(() => {
+      const scope = [...reportFilters, ...(page?.filters || [])];
+      effectiveVisuals.forEach((v) => {
+        if (AI_SELF_QUERY.has(v.type) || !hasBinding(v)) return;
+        runVisual(v, scope);
+      });
+    }, sec * 1000);
+    return () => clearInterval(handle);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportSettings.settings.refreshIntervalSec, bound, activePage, effectiveVisuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || [])]);
 
   // ── mutation helpers ─────────────────────────────────────────────────────────
   const mutatePage = useCallback((fn: (p: DPage) => DPage) => {
@@ -3070,8 +3161,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     syncSlicers: wireSyncGroups(syncGroups),
     fieldParameters: wireFieldParameters(fieldParams),
     whatIfParams: wireWhatIfParams(whatIfs),
+    // Wave-9 report settings — additive on state.content.settings (the /definition
+    // sanitizeReportSettings whitelists + clamps; viewer + PBIR provisioner ignore it).
+    settings: reportSettings.settings,
     dataSource,
-  }), [pages, reportFilters, bookmarks, filterPaneFormat, theme, syncGroups, fieldParams, whatIfs, dataSource]);
+  }), [pages, reportFilters, bookmarks, filterPaneFormat, theme, syncGroups, fieldParams, whatIfs, dataSource, reportSettings.settings]);
 
   const save = useCallback(async () => {
     // Brand-new report: route Save to the create-then-redirect flow (the
@@ -3307,6 +3401,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         { label: 'Data source', icon: <Database20Regular />, onClick: () => setDsOpen(true), title: `Bind data — ${describeSource(dataSource)}` },
         { label: 'Publish', icon: <CloudArrowUp20Regular />, onClick: () => { setPublishMsg(null); setPublishOpen(true); }, disabled: isNew, title: isNew ? 'Save the report before publishing' : 'Publish to the Organization gallery' },
       ]},
+      { label: 'Governance', actions: [
+        { label: sensitivityLabelName ? `Sensitivity: ${sensitivityLabelName}` : 'Sensitivity', icon: <Shield20Regular />, onClick: () => setSensitivityOpen(true), disabled: isNew, title: 'Apply a Microsoft Information Protection sensitivity label' },
+        { label: endorsement ? `Endorsement: ${endorsement}` : 'Endorse', icon: <Ribbon20Regular />, onClick: () => setEndorsementOpen(true), disabled: isNew, title: 'Promote or certify this report' },
+      ]},
+      { label: 'Lifecycle', actions: [
+        { label: 'Pipeline', icon: <Branch20Regular />, onClick: () => setPipelineOpen(true), disabled: isNew, title: 'Add to / deploy through a deployment pipeline' },
+      ]},
       { label: 'Insert', actions: [
         { label: 'New page', icon: <Add20Regular />, onClick: addPage, title: 'add a report page' },
       ]},
@@ -3331,6 +3432,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           title: 'Show alignment gridlines on the canvas',
         },
       ]},
+      { label: 'Settings', actions: [ { label: 'Settings', icon: <Settings20Regular />, onClick: () => setSettingsOpen(true), title: 'Report settings — auto-refresh, persistent filters, export + header toggles, cross-report drillthrough' } ]},
       { label: 'Reading', actions: [
         {
           label: personalize.active ? 'Personalizing' : 'Personalize',
@@ -3341,7 +3443,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         },
       ]},
     ]},
-  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew, undo, redo, canUndo, canRedo, personalize.active, personalize.toggleActive, snapGrid, showGrid]);
+  ], [save, saveBusy, dirty, loadDetail, loadFields, dataSource, id, isNew, undo, redo, canUndo, canRedo, personalize.active, personalize.toggleActive, snapGrid, showGrid, sensitivityLabelName, endorsement]);
 
   // ── left: pages ──────────────────────────────────────────────────────────────
   const leftPanel = (
@@ -3567,6 +3669,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged}
         selection={selection} interactionMode={interactionMode}
         themeChart={themeChart} ai={aiWiring} script={scriptWiring} reportId={id}
+        // Wave-9 per-visual "Export data" (chart-type "…" menu). Suppressed only when
+        // report Settings explicitly disables export (allowExport === false).
+        onExportData={reportSettings.settings.allowExport === false ? undefined : () => setExportVisual(v)}
         onSelect={(sel) => setSelection(sel)}
         // Wave-5 slicer → page-filters channel. A slicer emit (or clear) REPLACES the
         // filter carrying its own stable id in the active page's filters, then the
@@ -3804,6 +3909,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         <Tab value="selection" icon={<Layer20Regular />}>Selection</Tab>
         <Tab value="syncSlicers" icon={<Filter20Regular />}>Sync slicers</Tab>
         <Tab value="whatIf" icon={<DataTrending20Regular />}>What-if</Tab>
+        <Tab value="performance" icon={<Gauge20Regular />}>Performance</Tab>
         <Tab value="copilot" icon={<Sparkle20Regular />}>Power BI Copilot</Tab>
       </TabList>
       {rightTab === 'bookmarks' && (
@@ -3937,6 +4043,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           onChange={(next) => mutatePage((p) => ({ ...p, interactions: next }))}
         />
       )}
+      {rightTab === 'performance' && (<PerformanceAnalyzer perf={perf} onRefreshVisuals={() => effectiveVisuals.forEach((v) => runVisual(v, [...reportFilters, ...(page?.filters || [])]))} />)}
       {rightTab === 'build' && (
       <>
       <Title3>Visualizations</Title3>
@@ -4241,6 +4348,15 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           </DialogBody>
         </DialogSurface>
       </Dialog>
+      {/* ── Wave-9 governance / lifecycle / export / settings dialogs (all logic in
+          sibling files; every control hits a real backend — Graph MIP labels + real
+          export protection, the Loom deployment-pipeline routes, Cosmos endorsement /
+          sensitivity persistence, real Synapse rows for export). ─────────────────── */}
+      <SensitivityLabelDialog open={sensitivityOpen} onClose={() => setSensitivityOpen(false)} reportId={id} appliedName={sensitivityLabelName} onApplied={(n) => setSensitivityLabelName(n)} />
+      <EndorsementDialog open={endorsementOpen} onClose={() => setEndorsementOpen(false)} reportId={id} value={endorsement} onChange={(e) => setEndorsement(e)} />
+      <DeployToPipelineDialog open={pipelineOpen} onClose={() => setPipelineOpen(false)} reportId={id} />
+      <ReportSettingsDialog open={settingsOpen} onClose={() => setSettingsOpen(false)} settings={reportSettings.settings} onChange={reportSettings.setSettings} />
+      {exportVisual && <VisualExportDataDialog reportId={id} visual={exportVisual as unknown as ExportVisualShape} filters={[...reportFilters, ...(page?.filters || [])]} dataSource={dataSource} onClose={() => setExportVisual(null)} />}
     </>
   );
 }

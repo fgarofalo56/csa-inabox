@@ -43,6 +43,16 @@ read-only report viewer and the report-visual-designer Power-BI canvas):
 | Azure-Maps token broker (**NEW** Wave-5 route — the **only** new route Wave 5 adds) | apps/fiab-console/app/api/items/report/[id]/map-token/route.ts |
 | Azure-Maps backend resolver (server) | apps/fiab-console/lib/azure/maps-client.ts |
 | Azure Maps account (**NEW** Wave-5 bicep) | platform/fiab/bicep/modules/landing-zone/azure-maps.bicep |
+| Export-data dialog (**NEW** Wave 9) | apps/fiab-console/lib/editors/report/visual-export-data.tsx |
+| Sensitivity-label dialog (**NEW** Wave 9) | apps/fiab-console/lib/editors/report/sensitivity-label.tsx |
+| Deploy-to-pipeline dialog (**NEW** Wave 9) | apps/fiab-console/lib/editors/report/deploy-to-pipeline.tsx |
+| Endorsement dialog (**NEW** Wave 9) | apps/fiab-console/lib/editors/report/endorsement.tsx |
+| Performance analyzer (**NEW** Wave 9) | apps/fiab-console/lib/editors/report/performance-analyzer.tsx |
+| Report-settings dialog (**NEW** Wave 9) | apps/fiab-console/lib/editors/report/report-settings.tsx |
+| Export MIP-stamp helper (**NEW** Wave 9) | apps/fiab-console/lib/azure/report-export-label.ts |
+| Visual-data export route (**NEW** Wave 9) | apps/fiab-console/app/api/items/report/[id]/visual-data/route.ts |
+| Sensitivity route (**NEW** Wave 9) | apps/fiab-console/app/api/items/report/[id]/sensitivity/route.ts |
+| Endorsement route (**NEW** Wave 9) | apps/fiab-console/app/api/items/report/[id]/endorsement/route.ts |
 
 ## Backend selection (no-fabric-dependency.md)
 
@@ -155,6 +165,19 @@ claimed live that is not.
   they are **NOT shipped as live-but-dead controls**; the adapter carries the
   dormant branch that would emit them once both Wave 5 adds the prop AND the
   format-pane cards land (honest ❌ rows in §3).
+- **OK Wave 9** — the committed Wave-9 build, the **final wave** that closes the
+  parity backlog: per-visual **Export data** (Summarized / Underlying, CSV + xlsx)
+  via the new `/visual-data` Synapse stream + the loom-chart "…" overflow; **MIP
+  sensitivity labels** (tenant labels via Graph, applied + stamped on export, honest
+  `LOOM_MIP_ENABLED` gate) via `/sensitivity`; **Endorsement** (Promote / Certify)
+  via `/endorsement`; the **Loom deployment-pipeline** deploy (over the EXISTING
+  `/api/deployment-pipelines/loom` routes — no new pipeline route); a right-rail
+  **Performance analyzer** (REAL `/query` `executionMs`); and a **Report settings**
+  dialog (auto-refresh / persist-filters / allow-export / visual-headers /
+  cross-report-drillthrough) persisted to `state.content.settings`. Azure-native
+  throughout (Synapse / Graph / Cosmos / the Loom pipeline); Power BI publish /
+  embed stays opt-in. Every new persisted shape is additive + optional so the
+  read-only viewer / PBIR provisioner ignore it.
 - **GATE** — honest infra-gate: the full UI renders and the query still runs, but
   a styled Fluent MessageBar intent="warning" names the exact env var / resource
   to provision (per no-vaporware.md).
@@ -409,6 +432,64 @@ no-vaporware.md (which sits ABOVE convenience) they are **added to the persisted
 will emit `markers` / `lineStyle` / `legendTitle` / label-rotation the instant W5
 adds those chart props (one W5 line later).
 
+### Wave-9 additions (export-data + MIP labels + endorsement + pipeline + perf + settings) — DELIVERED (final wave)
+
+Wave 9 is the **capstone** wave. It mounts six governance / lifecycle / export
+surfaces into report-designer.tsx through **mount-only edits at fixed anchor
+strings** — all logic lives in NEW sibling files (visual-export-data.tsx,
+sensitivity-label.tsx, deploy-to-pipeline.tsx, endorsement.tsx,
+performance-analyzer.tsx, report-settings.tsx) + the export-stamp helper
+(report-export-label.ts), so the five big files (report-designer.tsx,
+loom-chart.tsx, query/route.ts, export/route.ts, definition/route.ts) take only
+minimal return/mount edits and waves 0-8 round-trip byte-identical. Three new
+routes + the EXISTING Loom deployment-pipeline routes; everything else reuses
+shipped infra (the dep-free `recordsetsToXlsxBuffer` xlsx writer, the
+mip-graph-client / mip-file-inject / label-protection MIP libs, item-crud
+load/update, governance-catalog-shapes).
+
+- **New routes (Azure-native, session-gated):**
+  - **POST `/api/items/report/[id]/visual-data`** — streams a single visual's rows
+    as CSV or xlsx. `mode:'summarized'|'underlying'`; underlying REQUIRES report
+    ownership (403 otherwise) and the Azure-native SQL path (412 on AAS / connection
+    backends), compiling a **row-level projection** via the Wave-9
+    `buildSqlFromVisual(..., { underlying:true, rowCapOverride })` mode run by
+    Synapse `executeQuery`. Row caps mirror PBI: CSV ≤ 30 000, xlsx ≤ 150 000. A
+    protected MIP label **blocks CSV** (`checkExportProtection` → 403); xlsx bytes
+    are MIP-stamped before streaming.
+  - **`/api/items/report/[id]/sensitivity`** (GET / PUT) — GET lists tenant labels
+    via Graph (`listSensitivityLabels`) + the currently applied label; on
+    `MipNotConfiguredError` returns the honest `mip-gate` hint (still surfacing the
+    applied label). PUT writes **`state.sensitivityLabel` (NAME — the catalog reads
+    this) + `state.sensitivityLabelId` (GUID) + `state.sensitivityLabelInherited=false`**.
+  - **`/api/items/report/[id]/endorsement`** (GET / PUT) — GET returns the current
+    endorsement + `canCertify` (workspace Admin/Member reviewer via
+    `resolveEffectiveRole` / `checkRbacAdminCapability`, or `LOOM_REPORT_CERTIFIERS`).
+    PUT writes **`state.endorsement`** ('Promoted'|'Certified'|null); certifying
+    without rights is a 403.
+- **Consumed (no new route):** the shipped **Loom deployment-pipeline** routes —
+  GET `/api/deployment-pipelines/loom`, `…/[id]/compare`, POST `…/[id]/deploy`
+  (already accepts `itemType:'report'`), GET `…/[id]/history`.
+- **Persisted model keys (additive, sanitizer-whitelisted, viewer/PBIR-ignored):**
+  `state.endorsement`, `state.sensitivityLabel` / `state.sensitivityLabelId` /
+  `state.sensitivityLabelInherited`, and `state.content.settings`
+  (`{ refreshIntervalSec, persistFilters, allowExport, visualHeaders,
+  crossReportDrillthrough }`, clamped 0..86400 + booleans on PUT /definition).
+- **Minimal big-file edits (return / mount only, at fixed anchors):**
+  `query/route.ts` adds `elapsedMs: result.executionMs` + `rowCount` to its
+  loom-native return (the perf-analyzer reads REAL server timing — no new
+  measurement); `wells-to-sql.ts` gains the `underlying` / `rowCapOverride`
+  projection branch; `export/route.ts` stamps the returned bytes via
+  `applySensitivityStamp` (a try/catch no-op when no label / MIP off / unsupported
+  type, a 403 when a protected label blocks the format); `definition/route.ts`
+  whitelists `content.settings` via `sanitizeReportSettings`; `loom-chart.tsx` adds
+  an `onExportData` "…" overflow menu; report-designer.tsx mounts the six dialogs /
+  tab + the auto-refresh `setInterval` keyed on `refreshIntervalSec`.
+- **Honest gates (no-vaporware):** MIP unconfigured → a Fluent MessageBar
+  `intent="warning"` naming **`LOOM_MIP_ENABLED`** + the admin-plane bicep +
+  `grant-graph-approles.sh` (the `MipNotConfiguredHint` verbatim); underlying export
+  off a non-SQL backend → 412; protected-label CSV → 403. The full UI renders in
+  every gated state.
+
 ---
 
 ## (1) Visualizations pane — visual-type gallery
@@ -633,9 +714,13 @@ Source: desktop-bookmarks, desktop-report-themes, end-user-export-to-pdf. The
 | Sync slicers (across pages) | **OK Wave 8 (shipped)** | **8** | `sync-slicers.tsx` right-rail **Sync slicers** tab — per-slicer-field page×{Visible,Synced} matrix; synced selections propagate to peer pages via the existing `applyFilters` channel; persisted on `state.content.syncSlicers` |
 | Themes — report built-in | OK Wave 6 | 6 | structured built-in presets (`BUILTIN_LOOM_THEMES` in themes.ts) selectable in themes-pane.tsx; `themeChartProps()` feeds LoomChart palette + typography + structural — incl. the new **`gridline`** (from `thirdLevelElements`, previously dropped) — through the designer's **existing** `structural` spread, so axis gridlines repaint under a theme with no designer edit |
 | Themes — custom | OK Wave 6 | 6 | structured theme **builder** (themes-pane.tsx — color pickers + per-text-class font/size/color via `textClasses`, validated `stylePresets`) + the one permitted file action: **PBI theme-JSON import/export** (`pbiJsonToTheme` / `themeToPbiJson`, clamped `visualStyles` passthrough, `sanitizeTheme`-validated) — structured pickers, never a raw-JSON-only box (no-freeform-config) |
-| Export to PDF | GATE | 3 | /export route exists (Power BI ExportTo); Azure-native server render is the Wave-3 plan |
-| Export to PPTX | GATE | 3 | same route / plan |
-| Export to PNG | GATE | 3 | same route / plan |
+| Export to PDF / PPTX / PNG (Azure-native render) | OK Wave 9 | 9 | the **Azure-native loom-native renderer** in export/route.ts (`exportLoomNative`) returns real bytes with **no Power BI** on the default path; Wave 9 threads the session through it and **stamps the returned bytes with the applied MIP sensitivity label** (`report-export-label.ts` → `applySensitivityStamp` → `stampMipLabel`, dispatching pdf / ooxml by extension) before streaming. The stamp **no-ops** when no label / `LOOM_MIP_ENABLED!=='true'` / an unsupported type, and **blocks with a 403** when `checkExportProtection` disallows the format for a protected label. Power BI `ExportTo` remains an **opt-in** alternative (its bytes are stamped too) — never on the default path |
+| Export data — per-visual (Summarized / Underlying · CSV + xlsx) | OK Wave 9 | 9 | the chart header's new **"…" overflow → Export data** (loom-chart.tsx `onExportData`) opens `VisualExportDataDialog`, which POSTs **`/api/items/report/[id]/visual-data`** — a REAL Synapse stream: `buildSqlFromVisual(visual, …, { underlying })` (Wave-9 row-level projection) run by `executeQuery`, returned as CSV (header + escaped rows, cap **30 000**) or xlsx (`recordsetsToXlsxBuffer`, cap **150 000**, MIP-stamped). **Underlying requires report ownership** (else 403) and the Azure-native SQL path (412 on AAS / connection); a protected MIP label **blocks CSV** (403). The route is visual-type-agnostic (table / matrix wells via underlying mode); the on-chart overflow ships for chart visuals this wave (coverage boundary, not a dead control) |
+| Sensitivity label (Microsoft Information Protection) | OK Wave 9 (gate) | 9 | the Home-ribbon **Sensitivity** entry opens `SensitivityLabelDialog`: GET **`/api/items/report/[id]/sensitivity`** lists tenant labels via Graph (`listSensitivityLabels`) + the applied label; PUT `{ labelId }` persists **`state.sensitivityLabel` (NAME — the catalog reads this) + `state.sensitivityLabelId`**. The applied label drives the real export stamp + protection block above. **Honest MIP gate** (`MipNotConfiguredError`): a Fluent MessageBar `intent="warning"` naming **`LOOM_MIP_ENABLED`** + the admin-plane bicep + `grant-graph-approles.sh` (the `MipNotConfiguredHint` verbatim) — the ribbon still shows the current label. Azure / Graph-native, no Fabric |
+| Endorsement — Promote / Certify | OK Wave 9 | 9 | the Home-ribbon **Endorse** entry opens `EndorsementDialog` (GET **`/endorsement`** → `canCertify`): a **Promote** Switch + a **Certify** Button (disabled unless the caller is a workspace Admin / Member reviewer via `resolveEffectiveRole` / `checkRbacAdminCapability`, or in `LOOM_REPORT_CERTIFIERS`) PUT `{ endorsement }` → persisted to **`state.endorsement`** ('Promoted' \| 'Certified' \| null — the catalog reads this); certifying without rights is a 403. Mirrors PBI endorsement, Cosmos-persisted |
+| Deployment pipeline (Dev → Test → Prod) | OK Wave 9 | 9 | the **Pipeline** ribbon entry opens `DeployToPipelineDialog` over the **EXISTING Loom deployment-pipeline routes** (no new pipeline route): GET `/api/deployment-pipelines/loom` (pipeline + stage pickers), GET `…/[id]/compare?source=&target=` (diff preview), POST `…/[id]/deploy { items:[{ sourceItemId:reportId, itemType:'report' }], note? }` (real deploy receipt), GET `…/[id]/history`. `EmptyState` CTA when no pipelines. **Azure-native Loom pipeline**, not Fabric ALM |
+| Performance analyzer | OK Wave 9 | 9 | a new right-rail **Performance** tab (`PerformanceAnalyzer` + `usePerfRecorder`): a record on/off Switch captures, per visual, the **REAL server elapsed `result.executionMs`** (now returned by `/query`) + `rowCount` + the client round-trip ms + the compiled SQL/DAX; a table sorted slowest-first, a **Refresh visuals** button (re-runs every visual's `/query`), and an **Export JSON** button. No new route — reads timings captured at render in report-designer's `runVisual` |
+| Report settings | OK Wave 9 | 9 | the **Settings** ribbon entry opens `ReportSettingsDialog` (dropdowns + toggles only): **auto-refresh interval** (Off / 5m / 15m / 30m / 1h → `refreshIntervalSec`, which **really drives a client `setInterval` re-query** of every visual), **persist filters**, **allow export** (false **hides the Export-data menu item**), **visual headers**, **cross-report drillthrough**, + a Reset-persistent-filters button. Persisted additively to **`state.content.settings`** via /definition (`sanitizeReportSettings` clamps `refreshIntervalSec` 0..86400, booleans only); viewer + PBIR provisioner ignore it |
 
 ---
 
@@ -651,6 +736,7 @@ arrays, no dead handlers (no-vaporware.md):
 | **Client-side LoomChart** | every chart shape — bar/column/line/area/pie/donut/scatter PLUS the **Wave-5 true geometry** (stacked / 100%-stacked / stacked-area, dual-axis combo, ribbon, waterfall + Total, funnel, squarified treemap + Details nest, radial gauge + needle, KPI indicator + sparkline), the multiRowCard card list, the card single-number tile, the Wave-2 bubble `sqrt`-area radius + play-axis frame loop, the **Wave-5 Small-multiples trellis** + **Tooltips hover popover**, Format (colors / labels / **the planned Wave-6 per-axis cards — ❌ NOT YET BUILT** (absent from format-pane.tsx; the **visual-chrome.tsx** overlay is **built but unwired**; the VisualBody seam is unwired): when built, axis max would be consumed via the loom-chart-format adapter's `sharedValueMax`, log / display-units / decimals / zoom-window via the adapter's **rows transform**, gridline / label color via `structural`, axis titles + header-icons + border/shadow via the **visual-chrome** overlay — **NOT a native LoomChart axis-min/max prop**; plus stacking / legend / effects / styles), conditional formatting, Analytics reference lines + the Wave-2 error bars / forecast band / symmetry shading + the **Wave-5 anomalies / X-axis lines / shaded ranges**, the **Wave-5 multi-style slicer** (emits a ReportFilter into applyFilters), and interactions (cross-filter/highlight + the Wave-2 drillthrough navigate). All real geometry over the real /query rows — **every `APPROX_GEOMETRY` closest-shape disclosure is retired** | loom-chart.tsx (**unedited by Wave 6**), **loom-chart-format.ts** (Wave-6 adapter, built ✅) + **visual-chrome.tsx** (Wave-6 chrome, ✅ built but UNWIRED), format-pane.tsx (Wave-6 cards ❌ NOT YET BUILT), conditional-format.tsx, themes.ts, analytics-pane.tsx, interactions |
 | **/definition persistence** | pages (add/rename/duplicate/hide/size/type/background + Wave-2 drillthrough/tooltipPage config), every visual wells/format/filters/position + the Wave-2 hidden/z/locked/groupId, plus `state.content.bookmarks` (Bookmarks pane), the Selection-pane visibility/z-order, and `state.content.filterPaneFormat` (filter-pane format + Apply button) | definition/route.ts to Cosmos state.content (additive config.* + bookmarks + filterPaneFormat, all sanitizer-whitelisted) |
 | **/map-token → Azure Maps** (Wave 5 — the **only** new route Wave 5 adds; the geometry / slicer / analytics need none) | the Azure-Maps visual's basemap only: a session + owner-checked GET that brokers a short-lived atlas.microsoft.com credential via `resolveMapsBackend()` (AAD token minted by the Console UAMI — `Azure Maps Data Reader` — preferred / gov-safe; or a subscription key, commercial). Honest **412 gate** when `LOOM_MAPS_BACKEND` ≠ `azure-maps` or no credential is set (names the env var + azure-maps.bicep); the map panels + real aggregate rows still render. Token scoped to atlas ALONE — never api.fabric / api.powerbi | app/api/items/report/[id]/map-token/route.ts → maps-client.ts; account from platform/fiab/bicep/modules/landing-zone/azure-maps.bicep; env in admin-plane/main.bicep |
+| **Wave-9 export + governance** (three new routes + the EXISTING Loom pipeline) | per-visual **Export data** (CSV/xlsx, summarized/underlying) → `/visual-data` (Synapse `executeQuery` over the Wave-9 underlying projection, xlsx via `recordsetsToXlsxBuffer`, MIP-stamped, CSV/xlsx row caps); **MIP sensitivity** list/apply → `/sensitivity` (Graph `listSensitivityLabels` + Cosmos `state.sensitivityLabel`); **Endorsement** Promote/Certify → `/endorsement` (Cosmos `state.endorsement`); **export MIP stamp / protection block** in export/route.ts (`applySensitivityStamp` → `stampMipLabel` / `checkExportProtection`); the **deployment-pipeline** deploy over the shipped `/api/deployment-pipelines/loom` routes; the **Performance analyzer** reads the REAL `result.executionMs` now returned by `/query`; **Report settings** persisted to `state.content.settings` via /definition (drives a client auto-refresh `setInterval`) | visual-data/route.ts, sensitivity/route.ts, endorsement/route.ts → item-crud + mip-graph-client + mip-file-inject + label-protection + sql-xlsx-export; report-export-label.ts; deploy-to-pipeline.tsx → /api/deployment-pipelines/loom; performance-analyzer.tsx + report-settings.tsx (client) |
 
 The Wave-1 **and Wave-2** builds add **zero** new BFF routes, and **Wave 5** adds
 exactly **one** (the `/map-token` basemap broker) — the rendered additive wells
@@ -848,11 +934,62 @@ the program's first new BFF route; ArcGIS stays a MISSING-by-design non-goal):
   Azure-native — remains the **only** Wave-4 row left MISSING, surfaced as an
   explicit non-goal, never on the default path.
 
+**Wave 9 — DELIVERED (final wave — closes the parity backlog; three new routes +
+the EXISTING Loom pipeline; all other logic in NEW sibling files):**
+- **Export data (per-visual, Summarized / Underlying · CSV + xlsx) — DELIVERED.**
+  `visual-export-data.tsx` (the dialog) + the loom-chart "…" overflow
+  (`onExportData`) POST the new **`/api/items/report/[id]/visual-data`** route,
+  which compiles the visual's wells via `buildSqlFromVisual` (Wave-9 `underlying`
+  row-level projection / `rowCapOverride`) and streams REAL Synapse `executeQuery`
+  rows — CSV (≤ 30 000) or xlsx (≤ 150 000 via the shipped dep-free
+  `recordsetsToXlsxBuffer`). Underlying enforces report ownership (403) + the SQL
+  backend (412); xlsx is MIP-stamped, a protected label blocks CSV (403).
+- **Sensitivity labels (MIP) — DELIVERED (honest gate).** `sensitivity-label.tsx`
+  GET/PUT the new **`/sensitivity`** route — tenant labels via Graph
+  (`listSensitivityLabels`), applied to `state.sensitivityLabel` (NAME, catalog-read)
+  + `state.sensitivityLabelId`. The label drives the export stamp
+  (`report-export-label.ts` → `stampMipLabel`) + `checkExportProtection`. Honest
+  MessageBar gate naming `LOOM_MIP_ENABLED` + the admin-plane bicep +
+  `grant-graph-approles.sh` (`MipNotConfiguredHint` verbatim).
+- **Endorsement (Promote / Certify) — DELIVERED.** `endorsement.tsx` GET/PUT the
+  new **`/endorsement`** route — Promote Switch + Certify Button gated on
+  `canCertify` (workspace reviewer / `LOOM_REPORT_CERTIFIERS`); persisted to
+  `state.endorsement` (catalog-read). Certify-without-rights = 403.
+- **Deployment pipeline — DELIVERED (no new route).** `deploy-to-pipeline.tsx`
+  drives the EXISTING Loom pipeline routes (`/api/deployment-pipelines/loom`,
+  `…/compare`, `…/deploy` with `itemType:'report'`, `…/history`) — pipeline /
+  stage pickers, diff preview, real deploy receipt + history; `EmptyState` CTA.
+- **Performance analyzer — DELIVERED (no new route).** `performance-analyzer.tsx`
+  (`usePerfRecorder` + `PerformanceAnalyzer`) records the REAL server
+  `result.executionMs` (now returned by `/query`) + rowCount + client ms + SQL/DAX
+  per visual; slowest-first table, Refresh-visuals, Export-JSON.
+- **Report settings — DELIVERED.** `report-settings.tsx`
+  (`useReportSettings` + `ReportSettingsDialog`) — auto-refresh interval (really
+  driving a client `setInterval` re-query), persist-filters, allow-export (hides
+  the Export-data menu item), visual-headers, cross-report-drillthrough; persisted
+  to `state.content.settings` via /definition (sanitized + clamped), viewer/PBIR
+  ignore it.
+- **Big-file edits are mount/return-only** at the design's fixed anchor strings:
+  `query/route.ts` (+`elapsedMs`/`rowCount`), `wells-to-sql.ts`
+  (`underlying`/`rowCapOverride` branch), `export/route.ts`
+  (`applySensitivityStamp`), `definition/route.ts` (`content.settings` whitelist),
+  `loom-chart.tsx` (`onExportData` "…" menu), `report-designer.tsx` (six dialogs /
+  Performance tab / ribbon entries / auto-refresh effect) — waves 0-8 + the
+  free-form canvas + the read-only viewer round-trip byte-identical.
+
 ## A-grade gate
 
 A-grade only when every inventory row is OK (shipped or Wave-1 / Wave-2 / Wave-3 /
-Wave-4 / Wave-5 committed) or a GATE (honest infra-gate), with **zero
+Wave-4 / Wave-5 / Wave-8 / Wave-9 committed) or a GATE (honest infra-gate), with **zero
 MISSING that lacks a wave + plan** and **zero disabled "coming soon"** controls.
+**Wave 9 is the FINAL wave and COMPLETES the 9-wave parity backlog** — per-visual
+Export data (CSV/xlsx, summarized + underlying), MIP sensitivity labels (honest
+`LOOM_MIP_ENABLED` gate), Endorsement (Promote/Certify), the Loom
+deployment-pipeline deploy, the Performance analyzer (REAL `/query` `executionMs`),
+and the Report-settings dialog all ship against a real backend (Synapse / Graph /
+the real MIP protection stamp / the shipped Loom pipeline routes / Cosmos), so the
+last GATE rows in §8 (Export to PDF/PPTX/PNG) move to OK and the authoring-panes
+inventory has **zero ❌** outside the four honest no-W5-prop format gaps.
 **Wave 6 is NOT yet A-grade: it is IN PROGRESS.** The per-axis / title / legend /
 effects / data-label / tooltip / header-icon / zoom / small-multiples-grid /
 apply-settings **Format cards are ❌ MISSING** — they are absent from
@@ -1003,21 +1140,51 @@ four no-prop controls are honest ❌ gaps, not dead controls.
   report-designer.tsx stay unedited**, and the single VisualBody seam line is the
   W5-owned integration (until it lands, the `format={fmt}` passthrough paints the
   W5-native subset, no regression).
+- **Wave-9 receipts (no Fabric, Loom semantic-model source):**
+  - **Export data:** open a column chart's **"…" → Export data**, pick
+    **Summarized / CSV** → a `<slug>-summarized.csv` downloads with the GROUP BY
+    aggregate rows; pick **Underlying / Excel** (as the report owner) → a
+    `<slug>-underlying.xlsx` of row-level projection rows (≤ 150 000) via
+    `recordsetsToXlsxBuffer`. As a non-owner the underlying request returns 403; on
+    an AAS / connection backend it returns 412; both surface in the dialog
+    MessageBar. Each download is REAL Synapse `executeQuery` output.
+  - **Sensitivity (MIP gate):** with `LOOM_MIP_ENABLED` UNSET the dialog shows the
+    honest MessageBar naming `LOOM_MIP_ENABLED` + the admin-plane bicep +
+    `grant-graph-approles.sh`; with MIP enabled the Graph tenant labels list,
+    Apply persists `state.sensitivityLabel` (NAME) + `…Id`, and a subsequent
+    **export is stamped** (and a protected label blocks the CSV export with a 403).
+  - **Endorsement:** Promote flips `state.endorsement='Promoted'`; Certify is
+    disabled for a non-reviewer (and a forced PUT returns 403), enabled +
+    persists `'Certified'` for a workspace reviewer / `LOOM_REPORT_CERTIFIERS`
+    member — the catalog card then reflects the endorsement.
+  - **Deployment pipeline:** pick a Loom pipeline + source/target stage, **Compare**
+    renders the diff, **Deploy** POSTs `…/deploy { itemType:'report' }` and shows
+    the operation receipt; **History** lists prior deploys. No new pipeline route.
+  - **Performance analyzer:** turn Record on, refresh the visuals, and the table
+    shows each visual's REAL server `executionMs` (the value `/query` now returns)
+    + rowCount + client ms; Export JSON downloads the records.
+  - **Report settings:** set auto-refresh = 5m and watch the per-visual `/query`
+    re-run on the interval; toggle **allow export** off and the Export-data "…"
+    item disappears; all five settings persist on Save through
+    `state.content.settings` and survive a reload.
 - **No-regression:** the shipped 11-type gallery, Format / Filters / Analytics /
   Interactions / Copilot tabs, the cross-filter engine, /query + wells-to-sql, the
-  free-form canvas, waves 0-4, and the read-only viewer / PBIR provisioner ignore
+  free-form canvas, waves 0-8, and the read-only viewer / PBIR provisioner ignore
   every additive key (Wave-2 config.hidden/z/locked/groupId,
   page.config.drillthrough/tooltipPage, state.content.bookmarks/filterPaneFormat;
   the Wave-5 wells.smallMultiples/tooltips/details + analytics.anomalies/shadedRanges
   + format.stacking; the **Wave-6** axisX/axisY/axisY2 + title/legend/effects +
   dataLabels/totalLabels extensions + tooltipOptions/headerIcons/zoom/
-  smallMultiplesGrid/numberFormatByField + theme textClasses/visualStyles/stylePresets)
+  smallMultiplesGrid/numberFormatByField + theme textClasses/visualStyles/stylePresets;
+  the **Wave-9** state.endorsement + state.sensitivityLabel/sensitivityLabelId/
+  sensitivityLabelInherited + state.content.settings)
   unchanged — sanitizers whitelist them; every new LoomChart prop
   is optional + default-off so the LoomVisual viewer renders byte-identical, and the
   trellis 2nd GROUP BY is read via a narrow local cast (no aas-dax.ts edit).
-  TypeScript stays at its ~184 pre-existing unrelated errors (Wave 5 + Wave 6 add
-  none — the adapter's loom-chart import is type-only, all new model fields are
-  optional/sparse).
+  TypeScript stays at its ~184 pre-existing unrelated errors (Wave 5 + Wave 6 +
+  Wave 9 add none — the adapter's loom-chart import is type-only, and every new
+  Wave-9 persisted shape is additive + optional so the viewer / PBIR provisioner
+  ignore it).
 - **Live side-by-side** (per ui-parity.md / no-scaffold): click every control
   against the real Power BI report editor and confirm the same outcome — DOM
   strings are not parity.

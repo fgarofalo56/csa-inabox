@@ -459,6 +459,8 @@ interface ReportContentV2 extends Omit<ReportContent, 'pages' | 'reportFilters'>
   fieldParameters?: PersistedFieldParameter[];
   /** Numeric-range what-if parameters (value bound into the visual SQL). */
   whatIfParams?: PersistedWhatIfParam[];
+  /** WAVE-9 report settings (additive; viewer/PBIR ignore). */
+  settings?: PersistedReportSettings;
 }
 
 // ── wave-8 report-level interactivity shapes (structured, whitelisted) ────────
@@ -469,6 +471,36 @@ interface PersistedFieldParameter { id: string; name: string; fields: PersistedF
 interface PersistedWhatIfParam {
   id: string; name: string; min: number; max: number; increment: number; value: number;
   apply?: 'multiply' | 'add'; targetAlias?: string;
+}
+
+// ── wave-9 report-level settings shape (structured, whitelisted) ──────────────
+interface PersistedReportSettings {
+  refreshIntervalSec?: number;
+  persistFilters?: boolean;
+  allowExport?: boolean;
+  visualHeaders?: boolean;
+  crossReportDrillthrough?: boolean;
+}
+
+/**
+ * WAVE-9: sanitize the report-settings bag. Clamp refreshIntervalSec to an
+ * integer in [0, 86400]; coerce every other field to a strict boolean. Returns
+ * undefined when nothing valid is present so the persisted content stays lean
+ * and the read-only viewer / PBIR provisioner can keep ignoring it.
+ */
+function sanitizeReportSettings(raw: unknown): PersistedReportSettings | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const out: PersistedReportSettings = {};
+  if (r.refreshIntervalSec !== undefined && r.refreshIntervalSec !== null) {
+    const n = Math.round(Number(r.refreshIntervalSec));
+    if (Number.isFinite(n)) out.refreshIntervalSec = Math.min(86400, Math.max(0, n));
+  }
+  if (typeof r.persistFilters === 'boolean') out.persistFilters = r.persistFilters;
+  if (typeof r.allowExport === 'boolean') out.allowExport = r.allowExport;
+  if (typeof r.visualHeaders === 'boolean') out.visualHeaders = r.visualHeaders;
+  if (typeof r.crossReportDrillthrough === 'boolean') out.crossReportDrillthrough = r.crossReportDrillthrough;
+  return Object.keys(out).length ? out : undefined;
 }
 
 interface WellFieldIn {
@@ -1767,6 +1799,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     syncSlicers?: unknown;
     fieldParameters?: unknown;
     whatIfParams?: unknown;
+    settings?: unknown;
   } = {};
   try { body = await req.json(); } catch {}
   if (!Array.isArray(body.pages)) {
@@ -1875,6 +1908,10 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const syncSlicers = sanitizeSyncGroups(body.syncSlicers);
   const fieldParameters = sanitizeFieldParameters(body.fieldParameters);
   const whatIfParams = sanitizeWhatIfParams(body.whatIfParams);
+  // wave-9 report-level settings: auto-refresh interval + persistent-filters,
+  // export, visual-header, and cross-report-drillthrough toggles. Additive +
+  // structured; drives the client auto-refresh + export-gating.
+  const settings = sanitizeReportSettings(body.settings);
 
   const state = (item.state || {}) as Record<string, unknown>;
   // ADDITIVE persist: keep every other state key (incl. `state.dataSource`,
@@ -1889,6 +1926,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     ...(syncSlicers.length ? { syncSlicers } : {}),
     ...(fieldParameters.length ? { fieldParameters } : {}),
     ...(whatIfParams.length ? { whatIfParams } : {}),
+    ...(settings ? { settings } : {}),
   };
   const newState = { ...state, content };
 
