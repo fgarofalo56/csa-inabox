@@ -4,9 +4,10 @@
  * layer without Next.js cookie-jar abstraction interference.
  */
 
+import { createHash } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
-import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS } from '@/lib/auth/session';
+import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS, sessionSlidingEnabled } from '@/lib/auth/session';
 import { saveUserToken } from '@/lib/azure/user-token-store';
 import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { savePbiUserToken } from '@/lib/azure/pbi-user-token-store';
@@ -256,11 +257,29 @@ export async function GET(req: NextRequest) {
       email: account.username,
       upn: account.username,
     };
-    const cookieValue = encodeSessionCookie({
-      claims,
-      exp: Math.floor((result.expiresOn?.getTime() ?? Date.now() + 3600_000) / 1000),
-    });
-    console.log('[auth/callback] session encoded for', claims.upn, '— cookie length', cookieValue.length);
+    // SLIDING SESSION (LOOM_SESSION_SLIDING_ENABLED, default ON): the cookie
+    // `exp` tracks the cookie LIFETIME (MAX_AGE_SECS, 8h), NOT the MSAL
+    // ACCESS-token expiry (~60m). The access token is NOT in the cookie (claims
+    // only) — it is re-acquired on demand from the MSAL confidential-client cache
+    // (refresh token ≈24h) for OBO/downstream — so pinning the cookie `exp` to a
+    // 60m access-token expiry was logging users out hourly despite the 8h Max-Age.
+    // When the flag is OFF this reverts byte-for-byte to the prior access-token-
+    // expiry behavior (migration-safe + reversible).
+    const exp = sessionSlidingEnabled()
+      ? Math.floor(Date.now() / 1000) + MAX_AGE_SECS
+      : Math.floor((result.expiresOn?.getTime() ?? Date.now() + 3600_000) / 1000);
+    const cookieValue = encodeSessionCookie({ claims, exp });
+    // Security bar: do NOT log the raw UPN (PII) — it lands in stdout / Log
+    // Analytics on every login. Emit a non-reversible, deployment-stable
+    // fingerprint instead (salted with SESSION_SECRET, which is guaranteed
+    // present here — the handler returns early above if it is unset). The
+    // digest is one-way; the secret is never emitted. Still correlatable
+    // per-user for diagnostics, without exposing the email/UPN.
+    const upnFingerprint = createHash('sha256')
+      .update(`${process.env.SESSION_SECRET}:${claims.upn}`)
+      .digest('hex')
+      .slice(0, 12);
+    console.log('[auth/callback] session encoded for upn#', upnFingerprint, '— cookie length', cookieValue.length);
     // Additive + non-breaking: capture the user's ARM token for per-user RBAC.
     // Never await-throws into the login path (the helper swallows all errors).
     await captureUserArmToken(client, account, claims.oid);

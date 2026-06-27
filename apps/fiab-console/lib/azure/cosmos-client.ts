@@ -411,6 +411,28 @@ function client(): CosmosClient {
   return _client;
 }
 
+/**
+ * Cheap reachability probe for the deep-health route (/api/health/deep).
+ *
+ * Does a single `getDatabaseAccount()` — a lightweight metadata read that
+ * exercises connectivity + the Console UAMI's AAD auth WITHOUT the heavier
+ * `ensure()` (which createIfNotExists's ~60 containers). Bounded by `budgetMs`
+ * via an AbortController so a Cosmos blip can't stall the health route. Throws
+ * CosmosNotConfiguredError when LOOM_COSMOS_ENDPOINT is unset (the honest
+ * "not configured in this deployment" signal) and rethrows on unreachable/auth
+ * failure — the caller records it as a degraded check, never a thrown 500.
+ */
+export async function probeCosmosReachable(budgetMs = 2000): Promise<void> {
+  const c = client(); // throws CosmosNotConfiguredError when the endpoint is unset
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), Math.max(250, budgetMs));
+  try {
+    await c.getDatabaseAccount({ abortSignal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function ensure() {
   if (_ensured) return;
   const c = client();
