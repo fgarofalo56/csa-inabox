@@ -137,12 +137,14 @@ export async function POST(req: NextRequest) {
         if (!item) {
           return NextResponse.json({ ok: false, error: 'Loom item not found' }, { status: 404 });
         }
-        typeName = item.itemType === 'lakehouse' ? 'loom_lakehouse'
-          : item.itemType === 'warehouse' ? 'loom_warehouse'
-          : item.itemType === 'semantic-model' ? 'loom_semantic_model'
-          : item.itemType === 'kql-database' ? 'loom_kql_database'
-          : item.itemType === 'sql-database' ? 'loom_sql_database'
-          : 'loom_item';
+        // Purview Atlas only accepts REGISTERED entity types — custom loom_*
+        // types do not exist in the Data Map, so Atlas rejects them with
+        // "Type ENTITY with name loom_lakehouse does not exist" (caught live).
+        // Use the built-in core supertype `DataSet`, which exists in every
+        // Atlas/Purview and accepts any qualifiedName; the real Loom kind is
+        // carried in the comment + displayName for catalog context.
+        const loomKind = item.itemType || 'item';
+        typeName = 'DataSet';
         // Azure-native Atlas-dedup key: prefer the item's real ADLS/abfss path
         // when its state carries one; else a stable Loom identity URI. NEVER an
         // onelake.dfs.fabric host on the default path.
@@ -151,7 +153,7 @@ export async function POST(req: NextRequest) {
           .find((v) => typeof v === 'string' && v) as string | undefined;
         qualifiedName = path || `loom://workspaces/${workspaceId}/items/${itemId}`;
         displayName = displayName || item.displayName;
-        comment = comment || item.description;
+        comment = comment || item.description || `Loom ${loomKind}`;
       }
     } else if (source === 'azure-database') {
       // Register an Azure database (Azure SQL DB / MI / PostgreSQL flexible
