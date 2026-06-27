@@ -660,7 +660,30 @@ export function buildSqlFromVisual(
   }
 
   // ── card / chart / matrix → aggregate (optionally grouped) ──────────────────
-  const groups = (type === 'card' ? [] : [...category, ...legend])
+  // Wave-5 trellis (Small multiples / Details): the report designer folds the
+  // chart "Small multiples" well into `wells.smallMultiples` and the treemap
+  // "Details" well into `wells.details`. NEITHER lives on the owned
+  // `DaxVisual.wells` type, so we read them through a NARROW local cast (no
+  // aas-dax.ts edit, no new tsc error — all properties optional, so the assertion
+  // is comparable to the source shape) and append the resolved facet group
+  // columns AFTER [...category, ...legend] into the SAME `groups` array. The
+  // existing alias-dedupe + GROUP BY + SELECT logic then emits them as ordinary
+  // trailing `<facet> AS [facet]` group columns — a 2nd GROUP BY dimension on
+  // purpose (one row per axis×facet, exactly what LoomChart's SmallMultiplesGrid
+  // and the treemap detail partition consume). Result column order is therefore
+  // category…, legend…, smallMultiples…, details…, <aggregates…>, so parseRows
+  // still picks category[0] as the axis and the renderer pulls each facet by its
+  // known alias. When no Small-multiples / Details well is bound, `trellis` is
+  // empty and `[...category, ...legend, ...trellis]` === `[...category,
+  // ...legend]`, so the no-trellis path (and the card branch's `[]`, and the
+  // table/slicer branches above) compile byte-identical SQL. The DAX mirror
+  // (buildDaxFromWells) is unaffected — it folds category+legend and can ride the
+  // same trellis fold in a later pass; the SQL default path is what Wave-5 renders.
+  const trellisWells = visual.wells as
+    | { smallMultiples?: DaxWellField[]; details?: DaxWellField[] }
+    | undefined;
+  const trellis = [...(trellisWells?.smallMultiples ?? []), ...(trellisWells?.details ?? [])];
+  const groups = (type === 'card' ? [] : [...category, ...legend, ...trellis])
     .map((w) => groupColumn(sqlSource, w))
     .filter((x): x is { ref: string; alias: string } => !!x);
   // Dedupe group columns by alias (category+legend may overlap).
@@ -674,8 +697,10 @@ export function buildSqlFromVisual(
   //   • gauge / KPI       → Target / Min / Max are extra `values`
   //   • treemap / scatter → Details / size measures are extra `values`
   //   • tooltips          → tooltip measures are extra `values`
-  // Small multiples fold into `category`/`legend` as one more group column. Each
-  // therefore returns REAL aggregated SQL rows; LoomChart reads the extra
+  // Small multiples / Details fold into the Wave-5 trellis group column(s) read
+  // below (`wells.smallMultiples` / `wells.details`, appended after category +
+  // legend), not into `values`. Each visual therefore returns REAL aggregated SQL
+  // rows; LoomChart reads the extra
   // columns to draw the new chart shape. (DAX path keeps the SAME contract via
   // aas-dax.buildDaxFromWells, which maps every `values` field through
   // daxValueExpr.) So this single `values → aggProjection` pass already powers

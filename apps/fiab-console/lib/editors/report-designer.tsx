@@ -170,6 +170,17 @@ import { KeyInfluencers } from './report/ai-visuals/key-influencers';
 // just mounts it as one more DVisual (absolute layout, positioned by FreeFormCanvas
 // like any visual). Azure-native (ACA + the existing Synapse /query) — no Fabric.
 import { ScriptVisual } from './report/script-visual';
+import { MapVisual } from './report/map-visual';
+// Wave-5: the Power BI Slicer surface. Until now this component was ORPHANED —
+// nothing imported it, and the slicer branch below rendered a bare single-select
+// <Dropdown> that only emitted a one-value `eq` via the visual-selection channel.
+// It is now THE slicer body: List / Dropdown / Tile / Between / Before / After /
+// Relative-date / Date-range, each emitting a structured ReportFilter the host
+// merges into the page-filters channel that feeds applyFilters. `slicerFilterId`
+// is the deterministic per-field id (slc_<table>_<col>) the host uses to (a) find
+// the slicer's current filter for re-hydrate, (b) replace/remove it on emit, and
+// (c) exclude it from the slicer's OWN query so its value list never self-collapses.
+import { SlicerVisual, slicerFilterId, type SlicerStyle } from './report/slicer-visual';
 import type { ReportFilterInput } from '@/lib/azure/wells-to-sql';
 
 // ── Model ───────────────────────────────────────────────────────────────────
@@ -178,12 +189,12 @@ import type { ReportFilterInput } from '@/lib/azure/wells-to-sql';
  * Visual types. The first 11 are the shipped vocabulary; the 8 gallery additions
  * (combo / waterfall / funnel / gauge / kpi / treemap / multiRowCard / ribbon)
  * are Power BI-parity entries. Each renders REAL aggregated rows through the same
- * /query + wells-to-sql path (no new backend route). multiRowCard draws its own
- * card-list surface; gauge / kpi draw a numeric KPI tile; the rest render today
- * through the closest LoomChart shape with an honest APPROX_GEOMETRY disclosure —
- * their distinctive PBI geometry (dual-axis line, rank ribbons, running-total
- * steps, funnel / squarified-treemap, radial gauge) is a Wave-2 LoomChart build
- * tracked in docs/fiab/parity/report-designer.md. No silent wrong-geometry.
+ * /query + wells-to-sql path (no new backend route). Wave-5 gives every one its
+ * TRUE geometry through LoomChart — dual-axis line+column (combo), rank-connector
+ * ribbons, running-total waterfall, trapezoid funnel, squarified treemap, and a
+ * radial gauge / indicator KPI — so there is no approximate-shape-with-a-caption
+ * (no-vaporware.md). multiRowCard draws its own card-list surface; card stays a
+ * single-number tile.
  */
 type VisualType =
   | 'table' | 'matrix' | 'card' | 'bar' | 'column' | 'line' | 'area' | 'pie' | 'donut' | 'scatter' | 'slicer'
@@ -292,8 +303,13 @@ interface DVisual {
   /** Script-visual config: the chosen language + the user's script text. Persisted
    *  ADDITIVELY under config.{language,script} (like the wave-2 hidden/locked keys)
    *  so a reload reconstructs the editor; the executor reads them at Run time. Only
-   *  set for type 'scriptVisual'. */
-  config?: { language?: 'python' | 'r'; script?: string };
+   *  set for type 'scriptVisual'.
+   *
+   *  Wave-5 slicer: `slicerStyle` is the persisted PBI slicer interaction style
+   *  (List / Dropdown / Tile / Between / Before / After / Relative-date / Date-range)
+   *  the SlicerVisual chooser writes. ADDITIVE (same round-trip pattern as the wave-2
+   *  hidden/locked/groupId keys); only set for type 'slicer'. */
+  config?: { language?: 'python' | 'r'; script?: string; slicerStyle?: SlicerStyle };
 }
 
 /** A bare field reference (no aggregation / client uid) — drillthrough + tooltip wells. */
@@ -397,20 +413,26 @@ const AI_SELF_QUERY = AI_TYPES;
 const SCRIPT_TYPES = new Set<VisualType>(['scriptVisual']);
 
 /**
- * Map each chart-family visual to the SVG shape LoomChart draws today. The
- * shipped 7 (bar/column/line/area/pie/donut/scatter) draw their own true
- * geometry. combo/ribbon/waterfall render through clustered columns and
- * funnel/treemap through bars over their REAL aggregated rows — the data and
- * multi-series are real, but the distinctive PBI geometry (dual-axis line, rank
- * ribbons, running-total steps, funnel + squarified-treemap shapes) is a Wave-2
- * LoomChart enhancement. Each such visual discloses the approximation honestly
- * via {@link APPROX_GEOMETRY} (no silent wrong-geometry per no-vaporware.md) and
- * the parity doc marks the row GATE Wave 2. multiRowCard / gauge / kpi render
- * their own non-chart surfaces (card list / numeric KPI tile).
+ * Wave-5 TRUE GEOMETRY: every chart-family visual maps to the real LoomChart
+ * geometry type that draws its distinctive Power BI shape over the SAME real
+ * aggregated /query rows — NO approximate-shape-with-a-caption (no-vaporware.md):
+ *   • combo     → dual-axis line + column          ('combo')
+ *   • ribbon    → rank-connector ribbons           ('ribbon')
+ *   • waterfall → running-total floating bars       ('waterfall')
+ *   • funnel    → centered trapezoid bands          ('funnel')
+ *   • treemap   → squarified tiles (+ detail nest)  ('treemap')
+ * bar/column/line/area/pie/donut/scatter keep their own true geometry. gauge /
+ * kpi LEAVE the single-number tile and render real radial / indicator geometry
+ * (see GAUGE_KPI below); multiRowCard keeps its card-list surface; card stays a
+ * single-number tile.
+ *
+ * Values are typed `string` (not the imported {@link LoomChartType}) so this
+ * file compiles independently of the loom-chart.tsx geometry extension landing
+ * in the same wave; each is cast to `LoomChartType` at the call site.
  */
-const CHART_RENDER: Partial<Record<VisualType, LoomChartType>> = {
+const CHART_RENDER: Partial<Record<VisualType, string>> = {
   bar: 'bar', column: 'column', line: 'line', area: 'area', pie: 'pie', donut: 'donut', scatter: 'scatter',
-  combo: 'column', ribbon: 'column', waterfall: 'column', funnel: 'bar', treemap: 'bar',
+  combo: 'combo', ribbon: 'ribbon', waterfall: 'waterfall', funnel: 'funnel', treemap: 'treemap',
 };
 /** Visual types rendered through LoomChart. */
 const CHART_TYPES = new Set<VisualType>(Object.keys(CHART_RENDER) as VisualType[]);
@@ -420,38 +442,47 @@ const CHART_TYPES = new Set<VisualType>(Object.keys(CHART_RENDER) as VisualType[
  * runs over) is the SAME set the Analytics pane lets a user author — no drift.
  */
 const CARTESIAN_TYPES = CARTESIAN_VISUAL_TYPES;
-/** Single-big-number visuals (card + KPI + gauge). */
-const KPI_TYPES = new Set<VisualType>(['card', 'kpi', 'gauge']);
+/**
+ * Single-big-number tile (card only). gauge / kpi LEFT this set in wave-5: they
+ * now render true radial-arc / indicator geometry through LoomChart (GAUGE_KPI),
+ * not a numeric tile (no-vaporware: real geometry, never an approximation).
+ */
+const KPI_TYPES = new Set<VisualType>(['card']);
+/**
+ * Gauge / KPI: rendered through LoomChart's real radial-arc / indicator geometry.
+ * The first value result column is the value/indicator; the Target / Minimum /
+ * Maximum wells fold into extra value columns and are read back by their aliases
+ * to drive the needle / arc bounds / goal delta (see VisualBody GAUGE_KPI branch).
+ */
+const GAUGE_KPI = new Set<VisualType>(['gauge', 'kpi']);
+/**
+ * Visual types that drop to a compact default footprint when first added
+ * (card + the KPI/gauge indicators). RENDER routing is separate (KPI_TYPES /
+ * GAUGE_KPI); this only sizes the new visual's drop rect.
+ */
+const COMPACT_TYPES = new Set<VisualType>(['card', 'kpi', 'gauge']);
 
 /**
- * Chart-family / KPI visuals whose true Power BI geometry is a Wave-2 LoomChart
- * build. They render their REAL aggregated rows through the closest available
- * shape (CHART_RENDER) — or the numeric KPI tile (gauge) — and surface this
- * one-line honest disclosure beneath the visual so the canvas is never silently
- * the wrong shape (no-vaporware.md). Each entry is removed once LoomChart draws
- * the real geometry. See docs/fiab/parity/report-designer.md (Wave 2 plan).
+ * The result-set column ALIAS a value-well field produces (lock-step with
+ * wells-to-sql.aggProjection): a measure aliases to its own name; an aggregated
+ * column to `<Agg> of <Column>` (defaulting to Sum). Used to read Target / Min /
+ * Max / tooltip / secondary (combo line) aggregates back off the real rows by
+ * the exact column name the SQL emitted.
  */
-const APPROX_GEOMETRY: Partial<Record<VisualType, string>> = {
-  combo: 'Shown as a clustered column chart — line + column dual-axis geometry ships in Wave 2.',
-  ribbon: 'Shown as a clustered column chart — ribbon rank-connectors ship in Wave 2.',
-  waterfall: 'Shown as a column chart — running-total waterfall geometry ships in Wave 2.',
-  funnel: 'Shown as a bar chart — funnel geometry ships in Wave 2.',
-  treemap: 'Shown as a bar chart — squarified treemap geometry ships in Wave 2.',
-  gauge: 'Shown as a numeric KPI tile — radial gauge arc + target marker ship in Wave 2.',
-};
+function wellResultAlias(f: WellField): string {
+  return f.measure ? f.measure : `${f.aggregation || 'Sum'} of ${f.column}`;
+}
 
 /**
  * Which wells a given visual type exposes, with parity-correct labels.
  *
- * Only wells whose field actually drives the rendered visual are exposed — no
- * dead controls (no-vaporware.md). The Small multiples, Tooltips, and treemap
- * Details wells are intentionally NOT exposed yet: LoomChart reads only the first
- * non-numeric column as the axis and turns every numeric column into a plotted
- * series, so a small-multiples / details group column would silently change the
- * aggregation granularity (no trellis appears) and a tooltips measure would draw
- * as an extra bar/line. They return in Wave 2 with real trellis tiling + detail
- * sub-grouping + hover surfacing (see the report-designer parity doc). queryVisual()
- * likewise stops folding them into the query.
+ * Wave-5 RE-EXPOSES the Small multiples (cartesian charts), Tooltips (charts),
+ * and treemap Details wells: LoomChart now tiles a real trellis by the
+ * small-multiples facet, nests treemap detail sub-partitions, and surfaces
+ * tooltip-only measures in a hover popover (excluded from the plotted series).
+ * queryVisual() folds them accordingly (small multiples / details ride as extra
+ * GROUP columns; tooltips ride as extra aggregates that the chart plots-EXCLUDES)
+ * — so every exposed well DRIVES the render (no dead controls, no-vaporware.md).
  */
 function wellsFor(type: VisualType): { name: WellName; label: string }[] {
   switch (type) {
@@ -499,18 +530,23 @@ function wellsFor(type: VisualType): { name: WellName; label: string }[] {
     case 'treemap':
       return [
         { name: 'category', label: 'Group' },
+        { name: 'details', label: 'Details' },
         { name: 'values', label: 'Values' },
+        { name: 'tooltips', label: 'Tooltips' },
       ];
     case 'funnel':
       return [
         { name: 'category', label: 'Category' },
         { name: 'values', label: 'Values' },
+        { name: 'tooltips', label: 'Tooltips' },
       ];
     case 'waterfall':
       return [
         { name: 'category', label: 'Category' },
         { name: 'values', label: 'Y values' },
         { name: 'legend', label: 'Breakdown' },
+        { name: 'smallMultiples', label: 'Small multiples' },
+        { name: 'tooltips', label: 'Tooltips' },
       ];
     case 'combo':
       return [
@@ -518,12 +554,16 @@ function wellsFor(type: VisualType): { name: WellName; label: string }[] {
         { name: 'values', label: 'Column values' },
         { name: 'secondaryValues', label: 'Line values' },
         { name: 'legend', label: 'Legend' },
+        { name: 'smallMultiples', label: 'Small multiples' },
+        { name: 'tooltips', label: 'Tooltips' },
       ];
     case 'ribbon':
       return [
         { name: 'category', label: 'Axis' },
         { name: 'values', label: 'Values' },
         { name: 'legend', label: 'Legend' },
+        { name: 'smallMultiples', label: 'Small multiples' },
+        { name: 'tooltips', label: 'Tooltips' },
       ];
     case 'scatter':
       // Scatter exposes the wave-2 Size (→ bubble radius, the 3rd plotted
@@ -553,6 +593,8 @@ function wellsFor(type: VisualType): { name: WellName; label: string }[] {
         { name: 'category', label: 'Axis' },
         { name: 'values', label: 'Values' },
         { name: 'legend', label: 'Legend' },
+        { name: 'smallMultiples', label: 'Small multiples' },
+        { name: 'tooltips', label: 'Tooltips' },
       ];
   }
 }
@@ -589,22 +631,20 @@ function stripWell(a?: WellField[]): Array<Omit<WellField, 'uid'>> {
 
 /**
  * Build the wire `visual` payload the /query route understands (type + field +
- * wells). The additive wells that DRIVE the rendered visual fold into the three
- * the route already compiles, so every visual still returns REAL aggregated SQL
- * rows with zero new route work:
+ * wells). The additive wells that DRIVE the rendered visual fold into the wire
+ * wells the route compiles, so every visual returns REAL aggregated SQL rows
+ * with zero new route work:
  *   • secondary values / target / minimum / maximum → extra `values` aggregates
  *     (combo's line series; gauge/KPI target/min/max — each one more projection).
- * Two well families are deliberately NOT folded, because LoomChart can't yet
- * honor them and folding them would corrupt the result (see wellsFor + the
- * parity doc, Wave 2):
- *   • TOOLTIPS are hover-only in Power BI and are never plotted — folding them
- *     into `values` would draw each tooltip measure as an extra bar / line
- *     series in LoomChart (which plots every numeric result column).
- *   • SMALL MULTIPLES / treemap DETAILS would add a 2nd group column, but
- *     LoomChart reads only the first non-numeric column as the axis and ignores
- *     the rest — so the trellis never appears AND the extra GROUP BY silently
- *     changes the aggregation granularity. They return in Wave 2 with real
- *     trellis tiling + detail sub-grouping.
+ *   • size → final `values` aggregate (bubble radius / map size).
+ *   • TOOLTIPS → extra `values` aggregates (wave-5). They ARE returned as result
+ *     columns, but LoomChart EXCLUDES them from the plotted series (the host
+ *     passes their aliases as the `tooltips` prop) and shows them only in the
+ *     hover popover — so a tooltip measure is never an extra bar/line.
+ *   • SMALL MULTIPLES / treemap DETAILS → their OWN wire keys (wave-5). The route
+ *     appends them as trailing GROUP columns after category+legend (one row per
+ *     axis×facet); LoomChart splits the rows into a real trellis (small multiples)
+ *     / nests a treemap detail level (details). Empty ⇒ byte-identical query.
  */
 function queryVisual(v: DVisual) {
   const w = v.wells;
@@ -623,22 +663,31 @@ function queryVisual(v: DVisual) {
         : undefined;
     return { type: 'table' as VisualType, field, wells: { category: [], values: vals, legend: [] } };
   }
-  // Primary group only — small-multiples / details are excluded (Wave 2, above):
-  // folding them would change the aggregation granularity without tiling a panel.
-  // Wave-2 grouped wells (playAxis frame dim + map latitude/longitude) DO fold in:
-  // each is a real GROUP BY column the route returns, sliced/located client-side.
+  // Primary group (category + the wave-2 grouped wells: playAxis frame dim + map
+  // latitude/longitude). Each is a real GROUP BY column the route returns,
+  // sliced/located client-side.
   const cat = stripWell([
     ...(w.category || []), ...(w.playAxis || []), ...(w.latitude || []), ...(w.longitude || []),
   ]);
-  // Plotted series — tooltips are excluded (hover-only; never a plotted series).
-  // The wave-2 Size well folds in LAST so it lands as the final numeric column
-  // (the bubble radius / map size measure) the renderer reads off the result.
+  // Plotted + carried aggregates. Size folds in for the bubble radius / map size
+  // measure; TOOLTIPS now fold in too (wave-5) so the route returns them as real
+  // aggregate columns — LoomChart EXCLUDES them from the plotted series (via the
+  // `tooltips` prop) and surfaces them only in the hover popover, so a tooltip
+  // measure is never an extra bar/line. Order: values, secondary (combo line),
+  // target/min/max (gauge/kpi), size, tooltips.
   const vals = stripWell([
     ...(w.values || []), ...(w.secondaryValues || []),
     ...(w.target || []), ...(w.minimum || []), ...(w.maximum || []),
-    ...(w.size || []),
+    ...(w.size || []), ...(w.tooltips || []),
   ]);
   const leg = stripWell(w.legend || []);
+  // Wave-5 trellis group wells. Carried as their OWN wire keys so the route
+  // (wells-to-sql) appends them as trailing GROUP columns AFTER category+legend
+  // — one row per axis×facet — which LoomChart splits into a real small-multiples
+  // trellis (smallMultiples) / nests as a treemap detail level (details). Empty
+  // for every non-trellis visual ⇒ byte-identical query to before.
+  const trellisSmall = stripWell(w.smallMultiples || []);
+  const trellisDetails = stripWell(w.details || []);
   const first = vals[0] || cat[0];
   const field = first?.measure
     ? `[${first.measure}]`
@@ -648,7 +697,10 @@ function queryVisual(v: DVisual) {
   return {
     type: v.type,
     field,
-    wells: { category: cat, values: vals, legend: leg },
+    wells: {
+      category: cat, values: vals, legend: leg,
+      smallMultiples: trellisSmall, details: trellisDetails,
+    },
   };
 }
 
@@ -917,10 +969,17 @@ interface AiVisualWiring {
   pageRows: SmartNarrativeVisualRows[];
 }
 
-function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, themeChart, ai, script, reportId }: {
+function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, onPageFilter, onSlicerStyle, themeChart, ai, script, reportId }: {
   visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[];
   selection?: VisualSelection | null; interactionMode?: InteractionMode;
   onSelect?: (sel: VisualSelection | null) => void;
+  // Wave-5 slicer host wiring. `onPageFilter` merges the slicer's emitted
+  // ReportFilter into the active page's filters (the SAME channel the Filters pane
+  // writes + applyFilters reads); `removeId` is the slicer's stable id so a clear
+  // (null) removes exactly its own constraint. `onSlicerStyle` persists the chosen
+  // PBI slicer style to visual.config.slicerStyle (additive round-trip).
+  onPageFilter?: (filter: ReportFilter | null, removeId: string) => void;
+  onSlicerStyle?: (style: SlicerStyle) => void;
   themeChart?: ThemeChartProps; ai?: AiVisualWiring;
   // Wave-4 script-visual host wiring (mirrors `ai`): patches the visual's
   // config.{script,language} and marks the report dirty (same persist path the
@@ -1002,7 +1061,8 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
   // resolved once against the real result rows; painted on table cells + KPI value.
   const cf = applyConditionalFormat(rows, fmt?.conditionalFormat);
 
-  // card / KPI / gauge → single big value (+ target/min/max captions for gauge/kpi)
+  // card → single big value (conditional paint applied). gauge / kpi LEFT this
+  // branch in wave-5 — they render real radial / indicator geometry below.
   if (KPI_TYPES.has(visual.type)) {
     const valKey = cols[0];
     const paint = cf.active ? cf.paintFor(valKey, rows[0][valKey]) : undefined;
@@ -1019,43 +1079,100 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
           )}
           {formatValue(rows[0][valKey], nf)}
         </div>
-        {(visual.type === 'gauge' || visual.type === 'kpi') && cols.slice(1).map((c) => (
-          <Caption1 key={c} className={styles.muted}>{c}: {formatValue(rows[0][c], nf)}</Caption1>
-        ))}
-        {APPROX_GEOMETRY[visual.type] && (
-          <div className={styles.approxNote}>
-            <Info16Regular aria-hidden />
-            <Caption1>{APPROX_GEOMETRY[visual.type]}</Caption1>
-          </div>
-        )}
+      </div>
+    );
+  }
+
+  // gauge / kpi → REAL geometry through LoomChart (wave-5): a radial 270° arc with
+  // a target needle (gauge) / a big indicator + sparkline + goal delta (kpi). The
+  // value/indicator is the first numeric result column; the Target / Minimum /
+  // Maximum wells fold into extra value columns and are read back by their exact
+  // SQL aliases to drive the needle, the arc bounds, and the goal delta — no
+  // approximation, no dead control. (LoomChart geometry ships in the same wave.)
+  if (GAUGE_KPI.has(visual.type)) {
+    const numAt = (f?: WellField): number | undefined => {
+      if (!f) return undefined;
+      const cell = rows[0]?.[wellResultAlias(f)];
+      return cellIsNumeric(cell) ? Number(cell) : undefined;
+    };
+    const tgt = numAt(visual.wells.target?.[0]);
+    const lo = numAt(visual.wells.minimum?.[0]);
+    const hi = numAt(visual.wells.maximum?.[0]);
+    const lead = fmt?.dataColors?.[0];
+    const wrapStyle = lead ? ({ '--colorBrandForeground1': lead } as unknown as CSSProperties) : undefined;
+    // Gauge → arc value + target marker + min/max bounds; KPI → indicator + goal
+    // delta (vs Target) + an optional upper target. All optional + read via an
+    // `as any` spread so this file compiles independently of the LoomChart props.
+    const geom = visual.type === 'gauge'
+      ? { target: tgt, gaugeMin: lo, gaugeMax: hi }
+      : { kpiGoal: tgt, kpiTarget: hi };
+    const gkType: string = visual.type === 'gauge' ? 'gauge' : 'kpi';
+    return (
+      <div style={wrapStyle}>
+        <LoomChart type={gkType as LoomChartType} rows={rows} height={200} format={fmt} {...(geom as any)} />
       </div>
     );
   }
 
   if (visual.type === 'slicer') {
     const col = cols[0];
-    const activeVal = selection?.sourceId === visual.id ? String(selection.constraints[0]?.values?.[0] ?? '') : '';
+    // Wave-5: the full Power BI Slicer surface (no longer a bare single-select
+    // Dropdown). SlicerVisual picks a style appropriate to the bound column
+    // (List / Dropdown / Tile for any field; Between / Before / After + a real
+    // min/max slider for numeric; Date-range / Relative-date / On-or-before/after
+    // for date) and emits a STRUCTURED ReportFilter (or null to clear). The host
+    // merges it into the PAGE-FILTERS channel — the same `page.filters` the Filters
+    // pane writes and `applyFilters` reads — so a slicer pick really cross-filters
+    // every other visual on the page AND rides the server-side WHERE on re-query.
+    // NO query-engine change: the slicer just authors a page filter.
+    //   • rows = state.rows: the raw SELECT-DISTINCT list. The re-query effect
+    //     EXCLUDES this slicer's own filter from its own query (slicerFilterId), so
+    //     the value list never collapses to the selection (PBI behaviour).
+    //   • value = the page filter with this slicer's stable id (re-hydrates the
+    //     control on reload / bookmark apply; echo-suppressed inside SlicerVisual).
+    //   • queryAdHoc = the shared Path-3 /query → REAL SELECT MIN/MAX bounds for a
+    //     numeric Between/threshold slider (honest client fallback when absent).
+    const slcField = visual.wells.category?.[0] ?? null;
+    const slcId = slicerFilterId(slcField, col);
     return (
-      <Dropdown placeholder={`Filter by ${col}`} aria-label={`slicer ${col}`}
-        value={activeVal} selectedOptions={activeVal ? [activeVal] : []}
-        onOptionSelect={(_e, d) => {
-          if (!onSelect) return;
-          const v = String(d.optionValue ?? '');
-          onSelect(v === '__all__' || v === '' ? null : selectionFromRow(visual.id, { [col]: v }, [col]));
-        }}>
-        <Option value="__all__" text="(All)">(All)</Option>
-        {rows.slice(0, 200).map((r, i) => {
-          const txt = String(r[col] ?? '—');
-          return <Option key={i} value={txt} text={txt}>{txt}</Option>;
-        })}
-      </Dropdown>
+      <SlicerVisual
+        field={slcField}
+        column={col}
+        rows={state.rows}
+        style={visual.config?.slicerStyle}
+        value={(filters || []).find((f) => f.id === slcId) ?? null}
+        onFilter={(f) => onPageFilter?.(f, slcId)}
+        onStyleChange={onSlicerStyle}
+        queryAdHoc={ai?.queryAdHoc}
+        title={visual.title}
+      />
     );
   }
 
-  // Map → honest Azure-Maps gate over the REAL aggregated rows (full surface
-  // still renders: the gate names the exact remediation and the rows show below).
+  // Map → the REAL Azure Maps renderer over the SAME aggregated rows. MapVisual
+  // fetches the wave-5 map token (GET …/map-token): when LOOM_MAPS_BACKEND is
+  // unset it shows the honest gate + the rows beneath (the full surface still
+  // renders, the data is never hidden); when Azure Maps is configured it draws
+  // real bubbles (lat/long or geocoded Location) or a filled choropleth — no
+  // dead control (no-vaporware.md / no-fabric-dependency.md). The resolved well
+  // column aliases (lat / long / Location / Size / Legend) ride straight off the
+  // bound wells via wellResultAlias so the map keys on the exact SQL columns.
   if (visual.type === 'map') {
-    return <MapVisualBody rows={rows} cols={cols} nf={nf} styles={styles} />;
+    const mapReportId = ai?.reportId ?? reportId ?? '';
+    const aliasOf = (w?: WellField[]) => (w && w.length ? wellResultAlias(w[0]) : undefined);
+    return (
+      <MapVisual
+        reportId={mapReportId}
+        rows={rows}
+        cols={cols}
+        numberFormat={nf}
+        latitudeColumn={aliasOf(visual.wells.latitude)}
+        longitudeColumn={aliasOf(visual.wells.longitude)}
+        locationColumn={aliasOf(visual.wells.category)}
+        sizeColumn={aliasOf(visual.wells.size)}
+        legendColumn={aliasOf(visual.wells.legend)}
+      />
+    );
   }
 
   // Scatter with a Size and/or Play-axis well → bubble + animated frames, drawn
@@ -1110,6 +1227,19 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
       // a compact legend strip below for quick scanning. Each is data-derived,
       // never a dead control.
       const refLines = CARTESIAN_TYPES.has(visual.type) ? computeReferenceLines(rows, visual.analytics) : [];
+      // Wave-5 X-CONSTANT lines: an analytics line authored with axis:'x' is a
+      // VERTICAL (category-axis) constant rather than the default horizontal
+      // value-axis line. The Analytics model's per-line `axis` is read defensively
+      // (it's an additive field) and mapped to LoomChart's refLine `orientation`
+      // ('v' = opposite axis). Horizontal lines keep orientation 'h' (default).
+      const xLineIds = new Set<string>(
+        ((((visual.analytics as { lines?: Array<{ id?: string; axis?: string }> } | undefined)?.lines) || [])
+          .filter((l) => l?.axis === 'x')
+          .map((l) => l?.id)
+          .filter((id): id is string => typeof id === 'string')),
+      );
+      const orientedRefLines = refLines.map((rl) =>
+        (xLineIds.has(rl.id) ? { ...rl, orientation: 'v' as const } : rl));
       // Analytics ERROR BARS / FORECAST / SYMMETRY — computed from these SAME rows
       // and overlaid by LoomChart (it fully supports all three). Authoring any of
       // them in the Analytics pane now visibly changes the canvas; none is a dead
@@ -1136,11 +1266,44 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
         const cs = computeSymmetry(rows, visual.analytics);
         if (cs) symmetry = { color: cs.color };
       }
+      // ── Wave-5 true-geometry + trellis + hover + anomaly props. All optional and
+      //    spread via `as any` so this file compiles independently of the
+      //    loom-chart.tsx geometry extension landing in the same wave.
+      const aliasesOf = (a?: WellField[]) => (a || []).map(wellResultAlias);
+      // Trellis facet (small multiples) / treemap detail = the resolved GROUP
+      // column name (== the SQL alias of a group well, which is the column name).
+      const facetColumn = visual.wells.smallMultiples?.[0]?.column || undefined;
+      const detailColumn = (visual.type === 'treemap' && visual.wells.details?.[0]?.column) || undefined;
+      // Tooltip measures: plotted-EXCLUDED hover-only columns (their aggregates are
+      // in the result; LoomChart drops them from the series + shows them on hover).
+      const tooltipAliases = aliasesOf(visual.wells.tooltips);
+      // Combo: the secondary (line) series painted on the right-hand value axis.
+      const comboLineSeries = aliasesOf(visual.wells.secondaryValues);
+      // Stacking (none / stacked / 100%) — read defensively off the Format pane.
+      const stackingRaw = (fmt as { stacking?: string } | undefined)?.stacking;
+      const stackMode = stackingRaw === 'stacked' || stackingRaw === 'stacked100' ? stackingRaw : 'none';
+      // Anomaly band + flagged points (real rolling-mean / z-score) + shaded ranges
+      // — cartesian only, computed from the SAME rows, read from the additive
+      // analytics model. Absent ⇒ undefined (nothing drawn; never a ghost overlay).
+      const anomalies = CARTESIAN_TYPES.has(visual.type)
+        ? computeAnomalyOverlay(rows, (visual.analytics as { anomalies?: unknown[] } | undefined)?.anomalies, ebCats)
+        : undefined;
+      const shadedRangesRaw = (visual.analytics as { shadedRanges?: unknown[] } | undefined)?.shadedRanges;
+      const shadedRanges = Array.isArray(shadedRangesRaw) && shadedRangesRaw.length ? shadedRangesRaw : undefined;
+      const geomProps: Record<string, unknown> = {
+        stackMode,
+        comboLineSeries,
+        ...(facetColumn ? { smallMultiples: { facetColumn } } : {}),
+        ...(detailColumn ? { detailColumn } : {}),
+        ...(tooltipAliases.length ? { tooltips: tooltipAliases } : {}),
+        ...(anomalies ? { anomalies } : {}),
+        ...(shadedRanges ? { shadedRanges } : {}),
+      };
       return (
         <div style={wrapStyle}>
-          <LoomChart type={CHART_RENDER[visual.type] || 'column'} rows={rows} height={200}
-            refLines={refLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry} format={fmt}
-            {...(themeChartProps_ as any)} />
+          <LoomChart type={(CHART_RENDER[visual.type] || 'column') as LoomChartType} rows={rows} height={200}
+            refLines={orientedRefLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry} format={fmt}
+            {...(themeChartProps_ as any)} {...(geomProps as any)} />
           {refLines.length > 0 && (
             <div className={styles.refLineRow}>
               {refLines.map((rl) => (
@@ -1149,12 +1312,6 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
                   <Caption1>{rl.label || rl.kind}</Caption1>
                 </span>
               ))}
-            </div>
-          )}
-          {APPROX_GEOMETRY[visual.type] && (
-            <div className={styles.approxNote}>
-              <Info16Regular aria-hidden />
-              <Caption1>{APPROX_GEOMETRY[visual.type]}</Caption1>
             </div>
           )}
         </div>
@@ -1247,6 +1404,55 @@ function chartCategories(rows: Array<Record<string, unknown>>): string[] {
     ? cols[0]
     : (cols.find((c) => rows.some((r) => !cellIsNumeric(r[c]) && r[c] != null)) ?? cols[0]);
   return rows.map((r) => (r[labelCol] == null ? '—' : String(r[labelCol])));
+}
+
+/**
+ * Wave-5 ANOMALY overlay (real rolling-mean / z-score, no-vaporware.md). Computes
+ * a trailing rolling mean + standard deviation over the primary (or named) numeric
+ * series and flags any point whose |z| exceeds a sensitivity-driven threshold, plus
+ * the shaded ±threshold·σ band. Cartesian only; consumed by LoomChart's `anomalies`
+ * prop. `defs` is the additive `analytics.anomalies` model (read via a narrow cast);
+ * the FIRST definition drives the overlay. Returns undefined when there's nothing to
+ * flag (no defs / no numeric series) so nothing is drawn — never a ghost overlay.
+ *
+ *   window   = clamp(round(n / 8), 3, 24)
+ *   z-thresh = 3.5 − (sensitivity/100)·2   →  100 ≈ 1.5σ (aggressive), 0 ≈ 3.5σ
+ */
+function computeAnomalyOverlay(
+  rows: Array<Record<string, unknown>>,
+  defs: unknown[] | undefined,
+  cats: string[],
+): { points: Array<{ x: string | number; value: number; isAnomaly: boolean }>; band: Array<{ x: string | number; low: number; high: number }>; color: string } | undefined {
+  if (!Array.isArray(defs) || defs.length === 0 || rows.length === 0) return undefined;
+  const def = (defs[0] || {}) as { measure?: string; sensitivity?: number; color?: string };
+  const { nums } = splitCols(rows, Object.keys(rows[0]));
+  if (nums.length === 0) return undefined;
+  const col = def.measure && nums.includes(def.measure) ? def.measure : nums[0];
+  const vals = rows.map((r) => (cellIsNumeric(r[col]) ? Number(r[col]) : Number.NaN));
+  const n = vals.length;
+  const window = Math.min(24, Math.max(3, Math.round(n / 8)));
+  const sens = Math.min(100, Math.max(0, Number(def.sensitivity ?? 50)));
+  const zThreshold = 3.5 - (sens / 100) * 2.0;
+  const color = typeof def.color === 'string' && def.color ? def.color : tokens.colorPaletteRedForeground1;
+
+  const points: Array<{ x: string | number; value: number; isAnomaly: boolean }> = [];
+  const band: Array<{ x: string | number; low: number; high: number }> = [];
+  let flagged = 0;
+  for (let i = 0; i < n; i++) {
+    const win = vals.slice(Math.max(0, i - window + 1), i + 1).filter((v) => Number.isFinite(v));
+    const m = win.length ? win.reduce((a, b) => a + b, 0) / win.length : 0;
+    const variance = win.length > 1 ? win.reduce((a, b) => a + (b - m) ** 2, 0) / (win.length - 1) : 0;
+    const sd = Math.sqrt(variance);
+    const x = cats[i] ?? String(i);
+    const v = vals[i];
+    const isAnomaly = sd > 0 && Number.isFinite(v) && Math.abs((v - m) / sd) > zThreshold;
+    if (isAnomaly) flagged += 1;
+    points.push({ x, value: Number.isFinite(v) ? v : 0, isAnomaly });
+    if (sd > 0) band.push({ x, low: m - zThreshold * sd, high: m + zThreshold * sd });
+  }
+  // Nothing to draw (no band + no flagged point) ⇒ no overlay.
+  if (band.length === 0 && flagged === 0) return undefined;
+  return { points, band, color };
 }
 
 /**
@@ -1345,47 +1551,6 @@ function BubblePlayBody({ rows, cols, fmt, styles, hasSize, hasPlay }: {
           <Badge appearance="tint" color="brand">{frames[safeFrame]}</Badge>
         </div>
       )}
-    </div>
-  );
-}
-
-/** Env var the Azure-Maps backend reads (named in the honest gate below). */
-const LOOM_MAPS_ENV = 'LOOM_MAPS_BACKEND';
-
-/**
- * Map visual — honest Azure-native gate (no-vaporware.md / no-fabric-dependency.md).
- * A geographic map needs an Azure Maps account + subscription key, which isn't a
- * default deployment dependency; rather than ship a dead control, the FULL surface
- * renders: a Fluent warning MessageBar naming the exact env var (LOOM_MAPS_BACKEND
- * + the Azure Maps key) and the bicep module that provisions it, with the REAL
- * aggregated location rows shown beneath as a table so the data is never hidden.
- */
-function MapVisualBody({ rows, cols, nf, styles }: {
-  rows: Array<Record<string, unknown>>; cols: string[];
-  nf?: ReportVisualFormat['numberFormat']; styles: Styles;
-}) {
-  return (
-    <div className={styles.section}>
-      <MessageBar intent="warning">
-        <MessageBarBody>
-          <MessageBarTitle>Azure Maps not configured</MessageBarTitle>
-          Map rendering uses an Azure-native <strong>Azure Maps</strong> account. Set{' '}
-          <code>{LOOM_MAPS_ENV}=azure-maps</code> and the Azure Maps subscription-key env var
-          (<code>LOOM_AZURE_MAPS_KEY</code>), provisioned by{' '}
-          <code>platform/fiab/bicep/modules/admin-plane/main.bicep</code>. No Power BI / Fabric
-          map is required. The aggregated location rows your wells produce are shown below.
-        </MessageBarBody>
-      </MessageBar>
-      <Table size="small">
-        <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
-        <TableBody>
-          {rows.slice(0, 60).map((row, ri) => (
-            <TableRow key={ri}>
-              {cols.map((c) => <TableCell key={c}>{formatValue(row[c], nf)}</TableCell>)}
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
     </div>
   );
 }
@@ -1715,12 +1880,16 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
               // wave-4 script-visual config — read defensively from the persisted
               // (additively-whitelisted) config.language / config.script. Only
               // materializes for a script visual; a no-op for every other type.
+              // Wave-5: a slicer rehydrates its persisted config.slicerStyle (the
+              // chosen PBI slicer interaction style) the same additive way.
               config: ((v.type as VisualType) === 'scriptVisual')
                 ? {
                     language: v.config?.language === 'r' ? 'r' : 'python',
                     script: typeof v.config?.script === 'string' ? v.config.script : '',
                   }
-                : undefined,
+                : ((v.type as VisualType) === 'slicer' && typeof v.config?.slicerStyle === 'string')
+                  ? { slicerStyle: v.config.slicerStyle as SlicerStyle }
+                  : undefined,
             };
           }),
         };
@@ -1882,7 +2051,20 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     const scope = [...reportFilters, ...drillScope, ...(page.filters || [])];
     // Iterate the effective (personalize-overlaid) visuals so a personalized field
     // swap re-queries; AI self-querying visuals are skipped (runVisual no-ops them).
-    effectiveVisuals.forEach((v) => { if (!AI_SELF_QUERY.has(v.type) && hasBinding(v)) runVisual(v, scope); });
+    // Wave-5: a SLICER must never filter its OWN value list (PBI behaviour) — when a
+    // slicer pick lands in page.filters, every other visual cross-filters, but the
+    // slicer itself re-queries with its own filter (its stable slc_ id) REMOVED, so
+    // its options stay whole and you can still deselect. Identical scope (byte-for-
+    // byte) for every non-slicer visual.
+    effectiveVisuals.forEach((v) => {
+      if (AI_SELF_QUERY.has(v.type) || !hasBinding(v)) return;
+      if (v.type === 'slicer') {
+        const selfId = slicerFilterId(v.wells.category?.[0] ?? null, '');
+        runVisual(v, scope.filter((f) => f.id !== selfId));
+      } else {
+        runVisual(v, scope);
+      }
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bound, activePage, effectiveVisuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || []), JSON.stringify(drill?.toPage === activePage ? drill?.filters : [])]);
 
@@ -1901,7 +2083,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   }, [mutatePage]);
 
   const addVisual = useCallback((type: VisualType, seed?: { language: 'python' | 'r' }) => {
-    const isKpi = KPI_TYPES.has(type);
+    const isKpi = COMPACT_TYPES.has(type);
     mutatePage((p) => {
       const dims = pageDims(p);
       // Default size (px) ~ the PBI default-drop footprint; KPI/card visuals are
@@ -2301,7 +2483,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     };
     mutatePage((p) => {
       const dims = pageDims(p);
-      const isKpi = KPI_TYPES.has(spec.type);
+      const isKpi = COMPACT_TYPES.has(spec.type);
       const w = isKpi ? 280 : 480; const h = isKpi ? 200 : 320;
       const n = p.visuals.length;
       const z = p.visuals.reduce((m, vv) => Math.max(m, (vv.layout?.z ?? -1)), -1) + 1;
@@ -2371,6 +2553,9 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         // config.script. Omitted for every non-script visual (config is undefined).
         ...(v.config?.language ? { language: v.config.language } : {}),
         ...(v.config?.script ? { script: v.config.script } : {}),
+        // Wave-5 slicer style — ADDITIVE, same pattern; round-trips the chosen PBI
+        // slicer interaction style. Omitted for every non-slicer visual.
+        ...(v.config?.slicerStyle ? { slicerStyle: v.config.slicerStyle } : {}),
       })),
     })),
     reportFilters: wireFilters(reportFilters),
@@ -2807,7 +2992,18 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       <VisualBody visual={v} state={visualRows[v.id]} styles={styles} filters={merged}
         selection={selection} interactionMode={interactionMode}
         themeChart={themeChart} ai={aiWiring} script={scriptWiring} reportId={id}
-        onSelect={(sel) => setSelection(sel)} />
+        onSelect={(sel) => setSelection(sel)}
+        // Wave-5 slicer → page-filters channel. A slicer emit (or clear) REPLACES the
+        // filter carrying its own stable id in the active page's filters, then the
+        // re-query effect re-runs every visual with the new scope (the slicer itself
+        // excludes its own id, so its list stays whole). applyFilters paints it
+        // immediately; wells-to-sql's WHERE applies it server-side. Page edits are
+        // a no-op while personalizing (mutatePage guards), matching every other edit.
+        onPageFilter={(f, removeId) => mutatePage((p) => ({
+          ...p,
+          filters: [...(p.filters || []).filter((x) => x.id !== removeId), ...(f ? [f] : [])],
+        }))}
+        onSlicerStyle={(s) => mutateVisual(v.id, (vv) => ({ ...vv, config: { ...(vv.config || {}), slicerStyle: s } }))} />
     );
   };
 

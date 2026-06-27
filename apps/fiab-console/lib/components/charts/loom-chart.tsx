@@ -37,8 +37,8 @@
  * lives here and the component stays pure.
  */
 
-import { useMemo } from 'react';
-import type { CSSProperties } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import type { CSSProperties, MouseEvent as ReactMouseEvent } from 'react';
 import { Caption1, tokens } from '@fluentui/react-components';
 
 // ─── Palette ────────────────────────────────────────────────────────────────
@@ -68,7 +68,18 @@ export type LoomChartType =
   | 'area'      // filled area chart
   | 'donut'     // donut
   | 'pie'       // pie
-  | 'scatter';  // scatter (2 numeric columns → x,y)
+  | 'scatter'   // scatter (2 numeric columns → x,y)
+  // ── Wave-5 true geometry (all additive; existing callers never request them) ──
+  | 'stackedColumn'  // vertical bars stacked per category
+  | 'stackedBar'     // horizontal bars stacked per category
+  | 'stackedArea'    // cumulative band areas
+  | 'combo'          // clustered/stacked columns + secondary-axis line(s)
+  | 'ribbon'         // stacked columns + Bézier rank ribbons between categories
+  | 'waterfall'      // running-total floating bars + Total bar
+  | 'funnel'         // centered trapezoid bands, width ∝ value
+  | 'treemap'        // squarified tiles (recurses on a detail column)
+  | 'gauge'          // 270° radial arc + target marker + center value
+  | 'kpi';           // big indicator + sparkline + goal delta
 
 /** Reference-line stroke style (mirrors the Analytics pane's AnalyticsLineStyle). */
 export type ChartLineStyle = 'solid' | 'dashed' | 'dotted';
@@ -91,6 +102,15 @@ export interface ChartReferenceLine {
   style?: ChartLineStyle;
   /** Inline data label drawn next to the line (omit to hide). */
   label?: string;
+  /**
+   * Wave-5: which axis the line is constant along. 'h' (default) reproduces the
+   * historical behavior — a constant on the VALUE axis (horizontal for
+   * column/line/area, vertical for bar/scatter). 'v' flips it to the OPPOSITE
+   * (category) axis — an X-axis constant line on column/line/area, or a
+   * horizontal category line on bar. Omitted ⇒ 'h', so existing callers are
+   * byte-identical.
+   */
+  orientation?: 'h' | 'v';
 }
 
 /**
@@ -128,6 +148,37 @@ export interface ChartForecast {
  * up exactly with the plotted points. Ignored by every non-scatter type.
  */
 export interface ChartSymmetry {
+  color: string;
+}
+
+/**
+ * Wave-5 anomaly overlay (cartesian charts). `points` carries every category
+ * position with its plotted value + an `isAnomaly` flag (computed client-side by
+ * the Analytics pane via a rolling-mean / z-score pass, or by ADX
+ * series_decompose_anomalies). `band` is the rolling expected range
+ * (low..high) drawn as a translucent ribbon under the series. Flagged points get
+ * an emphasized ring marker in `color`. Pure SVG over the existing category +
+ * value scales; ignored by pie / donut / gauge / kpi. `x` matches the chart's
+ * category labels so the overlay keys onto the same axis the series draws on.
+ */
+export interface ChartAnomalies {
+  points: { x: string | number; value: number; isAnomaly: boolean }[];
+  band?: { x: string | number; low: number; high: number }[];
+  color: string;
+}
+
+/**
+ * Wave-5 shaded analytics range: a translucent rectangle between two positions
+ * on the value axis (`axis:'y'`) or the category axis (`axis:'x'`), drawn UNDER
+ * the marks. `axis` is semantic (value vs. category) regardless of the chart's
+ * physical orientation, so a `'y'` range shades a value band on both column
+ * (vertical) and bar (horizontal) charts. Structured numeric inputs only
+ * (no-freeform-config). Ignored by pie / donut / gauge / kpi.
+ */
+export interface ChartShadedRange {
+  from: number;
+  to: number;
+  axis: 'x' | 'y';
   color: string;
 }
 
@@ -239,6 +290,78 @@ export interface LoomChartProps {
    * token, so the prior rendering is reproduced exactly.
    */
   structural?: LoomChartStructural | null;
+  // ─── Wave-5 true geometry + analytics (all optional, all default-off ⇒ prior
+  //     rendering; existing LoomVisual / wave-1..4 callers are byte-identical) ──
+  /**
+   * Stacking mode for column / bar / area (and the `stacked*` types). 'none'
+   * (default) = today's clustered geometry. 'stacked' = per-category cumulative
+   * offsets (positive/negative split at zero). 'stacked100' = each category's
+   * series normalized to its sum (0–100%). The `stacked*` chart types force
+   * 'stacked' unless this is 'stacked100'.
+   */
+  stackMode?: StackMode;
+  /**
+   * type 'combo' only: result-column names painted as a LINE on a SECONDARY
+   * right-hand Y axis. Every other numeric series paints as a (clustered or
+   * stacked, per `stackMode`) COLUMN on the primary axis. Default [] ⇒ all
+   * columns, no secondary axis. The secondary axis is drawn whenever non-empty.
+   */
+  comboLineSeries?: string[];
+  /** type 'gauge': target value → a needle / marker tick on the arc. */
+  target?: number;
+  /** type 'gauge': arc minimum (default 0). */
+  gaugeMin?: number;
+  /** type 'gauge': arc maximum (default max(value*1.5, target*1.25)). */
+  gaugeMax?: number;
+  /** type 'kpi': the trend sparkline series (defaults to the primary series). */
+  kpiTrend?: number[];
+  /** type 'kpi': goal compared against the latest value for the ▲/▼ delta. */
+  kpiGoal?: number;
+  /** type 'kpi': explicit indicator value (defaults to the latest trend point). */
+  kpiTarget?: number;
+  /**
+   * Small-multiples / trellis: split `rows` by the distinct values of
+   * `facetColumn` and render ONE recursive <LoomChart> per facet over that
+   * subset (the facet column is dropped from each panel's rows so parseRows'
+   * axis-detection is intact). `columns` fixes the grid column count (default
+   * auto). `sharedY` (default true) computes a GLOBAL value-max across panels so
+   * facets are visually comparable. Omitted ⇒ a single chart, byte-identical.
+   */
+  smallMultiples?: { facetColumn: string; columns?: number; sharedY?: boolean };
+  /**
+   * Result-column names that are HOVER-ONLY: parseRows EXCLUDES them from the
+   * plotted series (so a tooltip measure is never an extra bar/line) but surfaces
+   * them in the hover popover. Default [] ⇒ every numeric column plots, identical.
+   */
+  tooltips?: string[];
+  /**
+   * type 'treemap': a 2nd-level nested partition inside each top-level tile. The
+   * squarified algorithm recurses on the rows of each top category grouped by
+   * this column. Omitted ⇒ a flat treemap.
+   */
+  detailColumn?: string;
+  /**
+   * Anomaly overlay (cartesian): a rolling expected band + emphasized flagged
+   * points over the existing series. Default off. See {@link ChartAnomalies}.
+   */
+  anomalies?: ChartAnomalies;
+  /**
+   * Translucent value/category shaded ranges drawn under the marks. Default
+   * none. See {@link ChartShadedRange}.
+   */
+  shadedRanges?: ChartShadedRange[];
+  /**
+   * Enable the interactive hover popover (category + every plotted series value +
+   * every `tooltips` measure). Default false ⇒ only the per-mark <title> renders,
+   * so existing callers are byte-identical. report-designer's VisualBody opts in.
+   */
+  hover?: boolean;
+  /**
+   * INTERNAL (trellis): force the value-axis maximum so small-multiples panels
+   * share a comparable scale. Set by {@link SmallMultiplesGrid}; never passed by
+   * application callers. Omitted ⇒ the per-chart natural maximum.
+   */
+  sharedValueMax?: number;
   /*
    * PLAY AXIS is intentionally NOT a prop here. To keep LoomChart pure (no timer
    * / animation state), the host (report designer) slices `rows` by the active
@@ -246,6 +369,9 @@ export interface LoomChartProps {
    * rows keeps the visual-query signature stable (w/h/x/y/frame aren't queried).
    */
 }
+
+/** Wave-5 stacking mode for column / bar / area + the `stacked*` types. */
+export type StackMode = 'none' | 'stacked' | 'stacked100';
 
 // ─── Style presets → concrete render variables ─────────────────────────────
 // Each preset resolves to the geometry/typography knobs the sub-charts read.
@@ -376,6 +502,12 @@ interface ParsedData {
   scatter?: { x: number; y: number; size?: number; label: string }[];
   xLabel: string;
   yLabel: string;
+  /**
+   * Wave-5 hover-only measures: columns named in `tooltips`, EXCLUDED from the
+   * plotted series above but carried here (value per category index) so the hover
+   * popover can surface them. Empty when no tooltips requested.
+   */
+  tooltipSeries: { label: string; data: Array<number | string> }[];
 }
 
 function isNumeric(v: unknown): v is number {
@@ -384,7 +516,7 @@ function isNumeric(v: unknown): v is number {
 }
 
 /** Parse rows into categories + one-or-more numeric series. */
-function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string, palette: string[] = PALETTE): ParsedData | null {
+function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string, palette: string[] = PALETTE, tooltips: string[] = []): ParsedData | null {
   if (rows.length === 0) return null;
   const cols = Object.keys(rows[0]);
   if (cols.length === 0) return null;
@@ -395,7 +527,14 @@ function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string, pa
     rows.some((r) => isNumeric(r[c])),
   );
   const labelCol = firstNumericIdx === 0 ? cols[0] : (cols.find((c) => rows.some((r) => !isNumeric(r[c]) && r[c] != null)) ?? cols[0]);
-  const numericCols = cols.filter((c) => c !== labelCol && rows.some((r) => isNumeric(r[c])));
+  const allNumericCols = cols.filter((c) => c !== labelCol && rows.some((r) => isNumeric(r[c])));
+
+  // Wave-5: hover-only Tooltip measures are EXCLUDED from the plotted series so a
+  // tooltip never paints as an extra bar/line. With an empty `tooltips` list
+  // (every existing caller) `numericCols === allNumericCols`, so series + scatter
+  // selection are byte-identical.
+  const tipSet = new Set(tooltips);
+  const numericCols = tipSet.size > 0 ? allNumericCols.filter((c) => !tipSet.has(c)) : allNumericCols;
 
   if (numericCols.length === 0) return null; // no numeric data → can't chart
 
@@ -409,6 +548,17 @@ function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string, pa
       return isNumeric(v) ? Number(v) : 0;
     }),
   }));
+
+  // Hover-only tooltip measures, carried for the popover (value per row/category).
+  const tooltipSeries = tooltips
+    .filter((c) => cols.includes(c))
+    .map((col) => ({
+      label: col,
+      data: rows.map((r): number | string => {
+        const v = r[col];
+        return isNumeric(v) ? Number(v) : (v == null ? '—' : String(v));
+      }),
+    }));
 
   // Scatter / bubble: x,y from the first two numeric columns. An optional Size
   // well — the explicit `sizeColumn` when given, else the 3rd numeric column —
@@ -433,6 +583,7 @@ function parseRows(rows: Array<Record<string, unknown>>, sizeColumn?: string, pa
     scatter,
     xLabel: labelCol,
     yLabel: numericCols[0],
+    tooltipSeries,
   };
 }
 
@@ -628,10 +779,248 @@ const W = 520; // viewBox width — scales to container via width="100%"
 // Data-label color when drawn over a filled mark (inside) vs. on the canvas.
 const INSIDE_LABEL = '#ffffff';
 
+// ─── Wave-5 cartesian overlay bundle ───────────────────────────────────────
+/**
+ * Optional analytics + interaction overlays threaded onto every cartesian
+ * sub-chart (column / bar / line / area and the stacked / combo / ribbon /
+ * waterfall variants). EVERY member is optional and default-off, so the legacy
+ * switch — which passes none of them — renders byte-identically. The host
+ * (report designer) computes each from the SAME real `/query` rows the series
+ * draw from, so none is a dead control (no-vaporware.md).
+ */
+interface CartesianExtras {
+  /** Translucent value/category shaded ranges drawn UNDER the marks. */
+  shadedRanges?: ChartShadedRange[];
+  /** Rolling expected band + flagged-point rings drawn OVER the series. */
+  anomalies?: ChartAnomalies;
+  /** Trellis: force a comparable value-axis ceiling across small-multiples panels. */
+  sharedValueMax?: number;
+  /** Hover-popover driver — called with (categoryIndex, event) on mouse move. */
+  onHover?: (index: number, e: ReactMouseEvent) => void;
+}
+
+// ─── Wave-5 shaded-range overlays ──────────────────────────────────────────
+// A translucent rectangle spanning the VALUE axis (`axis:'y'`) or the CATEGORY
+// axis (`axis:'x'`) between two positions, drawn under the marks. `axis` is
+// semantic (value vs. category) regardless of the chart's physical orientation.
+
+/** Shaded ranges for a chart whose VALUE axis is vertical (column / line / area). */
+function ShadedRangesV({ ranges, yPix, catPix, xLeft, xRight, yTop, yBottom }: {
+  ranges?: ChartShadedRange[]; yPix: (v: number) => number; catPix: (v: number) => number;
+  xLeft: number; xRight: number; yTop: number; yBottom: number;
+}) {
+  if (!ranges || ranges.length === 0) return null;
+  return (
+    <g pointerEvents="none">
+      {ranges.map((r, i) => {
+        if (r.axis === 'y') {
+          const ya = yPix(r.from), yb = yPix(r.to);
+          return <rect key={`srv${i}`} x={xLeft} y={Math.min(ya, yb)} width={Math.max(xRight - xLeft, 0)}
+            height={Math.max(Math.abs(yb - ya), 0.5)} fill={r.color} opacity={0.12} />;
+        }
+        const xa = catPix(r.from), xb = catPix(r.to);
+        return <rect key={`srv${i}`} x={Math.min(xa, xb)} y={yTop} width={Math.max(Math.abs(xb - xa), 0.5)}
+          height={Math.max(yBottom - yTop, 0)} fill={r.color} opacity={0.1} />;
+      })}
+    </g>
+  );
+}
+
+/** Shaded ranges for a chart whose VALUE axis is horizontal (bar). */
+function ShadedRangesH({ ranges, xPix, catPix, yTop, yBottom, xLeft, xRight }: {
+  ranges?: ChartShadedRange[]; xPix: (v: number) => number; catPix: (v: number) => number;
+  yTop: number; yBottom: number; xLeft: number; xRight: number;
+}) {
+  if (!ranges || ranges.length === 0) return null;
+  return (
+    <g pointerEvents="none">
+      {ranges.map((r, i) => {
+        if (r.axis === 'y') {
+          const xa = xPix(r.from), xb = xPix(r.to);
+          return <rect key={`srh${i}`} x={Math.min(xa, xb)} y={yTop} width={Math.max(Math.abs(xb - xa), 0.5)}
+            height={Math.max(yBottom - yTop, 0)} fill={r.color} opacity={0.12} />;
+        }
+        const ya = catPix(r.from), yb = catPix(r.to);
+        return <rect key={`srh${i}`} x={xLeft} y={Math.min(ya, yb)} width={Math.max(xRight - xLeft, 0)}
+          height={Math.max(Math.abs(yb - ya), 0.5)} fill={r.color} opacity={0.1} />;
+      })}
+    </g>
+  );
+}
+
+// ─── Wave-5 anomaly overlays ───────────────────────────────────────────────
+// A translucent rolling-expected band (low..high keyed by category) + an
+// emphasized ring marker on each flagged point. Pure SVG over the existing
+// category + value scales; keys onto the same axis the series draws on.
+
+/** Anomaly band + flagged-point rings for a value-axis-VERTICAL chart. */
+function AnomalyOverlayV({ anomalies, categories, catCenter, yPix }: {
+  anomalies?: ChartAnomalies; categories: string[]; catCenter: (i: number) => number; yPix: (v: number) => number;
+}) {
+  if (!anomalies) return null;
+  const idxOf = (x: string | number) => categories.indexOf(String(x));
+  const band = (anomalies.band ?? [])
+    .map((b) => ({ i: idxOf(b.x), low: b.low, high: b.high }))
+    .filter((p) => p.i >= 0).sort((a, b) => a.i - b.i);
+  let bandPath: string | null = null;
+  if (band.length >= 2) {
+    const top = band.map((p, k) => `${k === 0 ? 'M' : 'L'}${catCenter(p.i).toFixed(1)},${yPix(p.high).toFixed(1)}`).join(' ');
+    const bot = [...band].reverse().map((p) => `L${catCenter(p.i).toFixed(1)},${yPix(p.low).toFixed(1)}`).join(' ');
+    bandPath = `${top} ${bot} Z`;
+  }
+  return (
+    <g pointerEvents="none">
+      {bandPath && <path d={bandPath} fill={anomalies.color} opacity={0.1} />}
+      {anomalies.points.filter((p) => p.isAnomaly).map((p, k) => {
+        const i = idxOf(p.x); if (i < 0) return null;
+        return <circle key={`anv${k}`} cx={catCenter(i)} cy={yPix(p.value)} r={4.5}
+          fill="none" stroke={anomalies.color} strokeWidth={2} />;
+      })}
+    </g>
+  );
+}
+
+/** Anomaly band + flagged-point rings for a value-axis-HORIZONTAL chart (bar). */
+function AnomalyOverlayH({ anomalies, categories, catCenter, xPix }: {
+  anomalies?: ChartAnomalies; categories: string[]; catCenter: (i: number) => number; xPix: (v: number) => number;
+}) {
+  if (!anomalies) return null;
+  const idxOf = (x: string | number) => categories.indexOf(String(x));
+  const band = (anomalies.band ?? [])
+    .map((b) => ({ i: idxOf(b.x), low: b.low, high: b.high }))
+    .filter((p) => p.i >= 0).sort((a, b) => a.i - b.i);
+  let bandPath: string | null = null;
+  if (band.length >= 2) {
+    const top = band.map((p, k) => `${k === 0 ? 'M' : 'L'}${xPix(p.high).toFixed(1)},${catCenter(p.i).toFixed(1)}`).join(' ');
+    const bot = [...band].reverse().map((p) => `L${xPix(p.low).toFixed(1)},${catCenter(p.i).toFixed(1)}`).join(' ');
+    bandPath = `${top} ${bot} Z`;
+  }
+  return (
+    <g pointerEvents="none">
+      {bandPath && <path d={bandPath} fill={anomalies.color} opacity={0.1} />}
+      {anomalies.points.filter((p) => p.isAnomaly).map((p, k) => {
+        const i = idxOf(p.x); if (i < 0) return null;
+        return <circle key={`anh${k}`} cx={xPix(p.value)} cy={catCenter(i)} r={4.5}
+          fill="none" stroke={anomalies.color} strokeWidth={2} />;
+      })}
+    </g>
+  );
+}
+
+// ─── Wave-5 oriented (opposite-axis) reference lines ───────────────────────
+// A ChartReferenceLine with orientation:'v' is constant along the OPPOSITE
+// (category) axis: a VERTICAL line on column/line/area, a HORIZONTAL line on
+// bar. `xFor` / `yFor` map the line's value (a category-axis position) to pixels.
+
+/** Vertical (category-axis) reference lines for column / line / area. */
+function RefLinesVertical({ refLines, xFor, yTop, yBottom }: {
+  refLines: ChartReferenceLine[]; xFor: (v: number) => number; yTop: number; yBottom: number;
+}) {
+  if (refLines.length === 0) return null;
+  return (
+    <g pointerEvents="none">
+      {refLines.map((rl) => {
+        const x = xFor(rl.y);
+        return (
+          <g key={rl.id}>
+            <line x1={x} y1={yTop} x2={x} y2={yBottom} stroke={rl.color} strokeWidth={1.6}
+              strokeDasharray={refDash(rl.style)} strokeLinecap="round" opacity={0.95} />
+            {rl.label && (
+              <text x={x + 3} y={yTop + 9} fontSize={9} textAnchor="start"
+                fill={rl.color} fontWeight="600">{rl.label}</text>
+            )}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+/** Horizontal (category-axis) reference lines for the bar chart. */
+function RefLinesHorizontal({ refLines, yFor, xLeft, xRight }: {
+  refLines: ChartReferenceLine[]; yFor: (v: number) => number; xLeft: number; xRight: number;
+}) {
+  if (refLines.length === 0) return null;
+  return (
+    <g pointerEvents="none">
+      {refLines.map((rl) => {
+        const y = yFor(rl.y);
+        return (
+          <g key={rl.id}>
+            <line x1={xLeft} y1={y} x2={xRight} y2={y} stroke={rl.color} strokeWidth={1.6}
+              strokeDasharray={refDash(rl.style)} strokeLinecap="round" opacity={0.95} />
+            {rl.label && (
+              <text x={xRight - 2} y={y - 3} fontSize={9} textAnchor="end"
+                fill={rl.color} fontWeight="600">{rl.label}</text>
+            )}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+// ─── Geometry helpers (dependency-free) ────────────────────────────────────
+
+/** Clamp helper for index→pixel mappers. */
+function clampN(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
+/** Polar→cartesian in SVG (y-down) space; `deg` measured clockwise from +x. */
+function polarPoint(cx: number, cy: number, r: number, deg: number): { x: number; y: number } {
+  const rad = (deg * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+
+/**
+ * Squarified treemap layout (Bruls / Huizing / van Wijk). Returns one rect per
+ * item, areas proportional to `value`, aspect ratios kept near 1. Pure — no I/O.
+ */
+function squarifyLayout<T extends { value: number }>(
+  items: T[], x0: number, y0: number, w: number, h: number,
+): Array<{ x: number; y: number; w: number; h: number; item: T }> {
+  const total = items.reduce((a, b) => a + Math.max(b.value, 0), 0);
+  if (total <= 0 || w <= 0 || h <= 0) return [];
+  const scale = (w * h) / total;
+  const scaled = items.map((it) => ({ item: it, area: Math.max(it.value, 0) * scale })).filter((s) => s.area > 0);
+  const out: Array<{ x: number; y: number; w: number; h: number; item: T }> = [];
+  let rx = x0, ry = y0, rw = w, rh = h;
+  const worst = (r: { area: number }[], side: number) => {
+    if (r.length === 0) return Infinity;
+    const sum = r.reduce((a, b) => a + b.area, 0);
+    const max = Math.max(...r.map((b) => b.area));
+    const min = Math.min(...r.map((b) => b.area));
+    const s2 = sum * sum, side2 = side * side;
+    return Math.max((side2 * max) / s2, s2 / (side2 * min));
+  };
+  const flushRow = (r: { item: T; area: number }[]) => {
+    const sum = r.reduce((a, b) => a + b.area, 0);
+    if (rw >= rh) {
+      const colW = sum / rh; let yy = ry;
+      for (const b of r) { const bh = b.area / colW; out.push({ x: rx, y: yy, w: colW, h: bh, item: b.item }); yy += bh; }
+      rx += colW; rw -= colW;
+    } else {
+      const rowH = sum / rw; let xx = rx;
+      for (const b of r) { const bw = b.area / rowH; out.push({ x: xx, y: ry, w: bw, h: rowH, item: b.item }); xx += bw; }
+      ry += rowH; rh -= rowH;
+    }
+  };
+  let row: { item: T; area: number }[] = [];
+  for (const s of scaled) {
+    const side = Math.min(rw, rh);
+    const next = [...row, s];
+    if (row.length === 0 || worst(next, side) <= worst(row, side)) row = next;
+    else { flushRow(row); row = [s]; }
+  }
+  if (row.length) flushRow(row);
+  return out;
+}
+
 // ─── Sub-chart renderers ──────────────────────────────────────────────────
 
 // Column chart (vertical bars)
-function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; opts: RenderOpts }) {
+function ColumnChart({ parsed, H, refLines = [], errorBars = [], shadedRanges = [], anomalies, sharedValueMax, onHover, stackMode = 'none', opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; stackMode?: StackMode; opts: RenderOpts } & CartesianExtras) {
   const { style, theme } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 40;
   const plotW = W - padL - padR;
@@ -642,12 +1031,30 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
   if (n === 0 || series.length === 0) return null;
 
   // Reference-line + error-bar extremes widen the value domain so neither an
-  // overlaid line nor a whisker cap ever clips.
+  // overlaid line nor a whisker cap ever clips. `sharedValueMax` (trellis) forces
+  // a comparable ceiling across small-multiples panels (default-off ⇒ unchanged).
   const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
   const errVals = errorBars.flatMap((e) => [e.low, e.high]);
+  const shadeVals = shadedRanges.filter((s) => s.axis === 'y').flatMap((s) => [s.from, s.to]);
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, ...refVals, ...errVals, 0);
-  const rawMin = Math.min(...allVals, ...refVals, ...errVals, 0);
+  // Wave-5 stacking: per-category cumulative offsets (positive / negative split at
+  // zero); 'stacked100' normalizes each category's series to its own sum. 'none'
+  // (default) keeps the clustered geometry byte-identical to prior callers.
+  const stacked = stackMode === 'stacked' || stackMode === 'stacked100';
+  const pct100 = stackMode === 'stacked100';
+  const catSums = categories.map((_, ci) => {
+    let pos = 0, neg = 0;
+    for (const s of series) { const v = s.data[ci] || 0; if (v >= 0) pos += v; else neg += v; }
+    return { pos, neg };
+  });
+  const stackMax = pct100 ? 100 : Math.max(0, ...catSums.map((c) => c.pos));
+  const stackMin = pct100 ? (catSums.some((c) => c.neg < 0) ? -100 : 0) : Math.min(0, ...catSums.map((c) => c.neg));
+  const rawMax = stacked
+    ? Math.max(stackMax, ...refVals, ...errVals, ...shadeVals, sharedValueMax ?? 0)
+    : Math.max(...allVals, ...refVals, ...errVals, ...shadeVals, sharedValueMax ?? 0, 0);
+  const rawMin = stacked
+    ? Math.min(stackMin, ...refVals, ...errVals, ...shadeVals, 0)
+    : Math.min(...allVals, ...refVals, ...errVals, ...shadeVals, 0);
   const span = rawMax - rawMin || 1;
   const yMax = rawMax + span * 0.08; // 8% head room
   const yMin = rawMin < 0 ? rawMin - span * 0.04 : 0;
@@ -661,6 +1068,16 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
   const barW = (groupW * style.barFraction) / series.length;
   const barGap = (groupW * (1 - style.barFraction)) / (series.length + 1);
   const barX = (ci: number, si: number) => padL + ci * groupW + barGap * (si + 1) + barW * si;
+  const catCenter = (ci: number) => padL + ci * groupW + groupW / 2;
+  // Stacked geometry: a single full-fraction bar per category, segments stacked.
+  const stackBarW = groupW * style.barFraction;
+  const stackBarX = (ci: number) => padL + ci * groupW + (groupW - stackBarW) / 2;
+  // Index→x for category-axis overlays (vertical ref lines + axis:'x' shaded ranges).
+  const catPixIdx = (v: number) => padL + (Math.max(0, Math.min(n - 1, v)) + 0.5) * groupW;
+  // Oriented reference lines: 'v' = a VERTICAL (category-axis) line; the rest stay
+  // horizontal value-axis lines drawn by RefLinesY.
+  const hRef = refLines.filter((r) => r.orientation !== 'v');
+  const vRef = refLines.filter((r) => r.orientation === 'v');
 
   // 5 y-gridlines
   const gridYFractions = [0, 0.25, 0.5, 0.75, 1];
@@ -675,6 +1092,9 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
         <rect x={padL} y={padT} width={plotW} height={plotH}
           fill={theme.background ?? tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
       )}
+      {/* Analytics shaded ranges, drawn UNDER the marks */}
+      <ShadedRangesV ranges={shadedRanges} yPix={yPix} catPix={catPixIdx}
+        xLeft={padL} xRight={W - padR} yTop={padT} yBottom={padT + plotH} />
       {/* Y gridlines + value labels (value axis) */}
       {opts.showYAxis && gridYFractions.map((f, i) => {
         const val = yMin + f * ySpan;
@@ -703,8 +1123,8 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
         <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
       )}
 
-      {/* Bars */}
-      {categories.map((cat, ci) => series.map((sr, si) => {
+      {/* Bars — clustered (default) or stacked / 100%-stacked (wave-5) */}
+      {!stacked && categories.map((cat, ci) => series.map((sr, si) => {
         const val = sr.data[ci];
         const bx = barX(ci, si);
         const by = val >= 0 ? yPix(val) : zeroY;
@@ -716,9 +1136,29 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
           </rect>
         );
       }))}
+      {stacked && categories.map((cat, ci) => {
+        let accPos = 0, accNeg = 0;
+        const dPos = pct100 ? (catSums[ci].pos || 1) : 1;
+        const dNeg = pct100 ? (Math.abs(catSums[ci].neg) || 1) : 1;
+        return series.map((sr, si) => {
+          const raw = sr.data[ci] || 0;
+          const v = pct100 ? (raw / (raw >= 0 ? dPos : dNeg)) * 100 : raw;
+          const start = raw >= 0 ? accPos : accNeg;
+          const end = start + v;
+          if (raw >= 0) accPos = end; else accNeg = end;
+          const yA = yPix(start), yB = yPix(end);
+          return (
+            <rect key={`${ci}-${si}`} x={stackBarX(ci)} y={Math.min(yA, yB)} width={stackBarW}
+              height={Math.max(Math.abs(yB - yA), raw === 0 ? 0 : 1)} fill={sr.color}
+              opacity={style.fillOpacity} rx={1.5}>
+              <title>{`${sr.label} · ${cat}: ${raw.toLocaleString()}${pct100 ? ` (${v.toFixed(1)}%)` : ''}`}</title>
+            </rect>
+          );
+        });
+      })}
 
-      {/* Per-point data labels */}
-      {showLabels && categories.map((cat, ci) => series.map((sr, si) => {
+      {/* Per-point data labels (clustered) */}
+      {showLabels && !stacked && categories.map((cat, ci) => series.map((sr, si) => {
         const val = sr.data[ci];
         const cx = barX(ci, si) + barW / 2;
         const top = val >= 0 ? yPix(val) : zeroY;
@@ -732,8 +1172,30 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
         );
       }))}
 
-      {/* Per-category total labels */}
-      {showTotals && categories.map((cat, ci) => {
+      {/* Per-segment data labels (stacked) — centered in each segment when it fits */}
+      {showLabels && stacked && categories.map((cat, ci) => {
+        let accPos = 0, accNeg = 0;
+        const dPos = pct100 ? (catSums[ci].pos || 1) : 1;
+        const dNeg = pct100 ? (Math.abs(catSums[ci].neg) || 1) : 1;
+        return series.map((sr, si) => {
+          const raw = sr.data[ci] || 0;
+          const v = pct100 ? (raw / (raw >= 0 ? dPos : dNeg)) * 100 : raw;
+          const start = raw >= 0 ? accPos : accNeg;
+          const end = start + v;
+          if (raw >= 0) accPos = end; else accNeg = end;
+          if (Math.abs(yPix(start) - yPix(end)) < style.fontSize + 2) return null;
+          const my = (yPix(start) + yPix(end)) / 2 + style.fontSize / 2 - 1;
+          return (
+            <text key={`sdl${ci}-${si}`} x={stackBarX(ci) + stackBarW / 2} y={my} fontSize={style.fontSize - 0.5}
+              textAnchor="middle" fontWeight={style.labelWeight} fill={INSIDE_LABEL} pointerEvents="none">
+              {pct100 ? `${v.toFixed(0)}%` : fmtNum(raw)}
+            </text>
+          );
+        });
+      })}
+
+      {/* Per-category total labels (clustered) */}
+      {showTotals && !stacked && categories.map((cat, ci) => {
         const total = series.reduce((a, s) => a + (s.data[ci] || 0), 0);
         const topY = Math.min(...series.map((s) => yPix(Math.max(s.data[ci], 0))));
         const cx = padL + ci * groupW + groupW / 2;
@@ -745,8 +1207,20 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
         );
       })}
 
-      {/* Analytics reference lines, overlaid at the value-axis position */}
-      <RefLinesY refLines={refLines} yPix={yPix} xLeft={padL} xRight={W - padR} />
+      {/* Per-category total labels (stacked, absolute mode only — % stacks sum to 100) */}
+      {showTotals && stacked && !pct100 && categories.map((cat, ci) => (
+        <text key={`stl${ci}`} x={stackBarX(ci) + stackBarW / 2} y={yPix(catSums[ci].pos) - 3} fontSize={style.fontSize}
+          textAnchor="middle" fontWeight={700} fill={(theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
+          {fmtNum(catSums[ci].pos)}
+        </text>
+      ))}
+
+      {/* Analytics anomaly band + flagged-point rings, keyed on the category axis */}
+      <AnomalyOverlayV anomalies={anomalies} categories={categories} catCenter={catCenter} yPix={yPix} />
+
+      {/* Analytics reference lines: horizontal value-axis lines + vertical category lines */}
+      <RefLinesY refLines={hRef} yPix={yPix} xLeft={padL} xRight={W - padR} />
+      <RefLinesVertical refLines={vRef} xFor={catPixIdx} yTop={padT} yBottom={padT + plotH} />
 
       {/* Analytics error bars (whiskers) per category, vertical (value axis) */}
       <ErrorBarsV bars={errorBars} yPix={yPix}
@@ -762,12 +1236,19 @@ function ColumnChart({ parsed, H, refLines = [], errorBars = [], opts }: { parse
           </text>
         );
       })}
+
+      {/* Hover capture: a transparent per-category column that drives the popover
+          (opt-in via `onHover`; the per-mark <title> stays for a11y / no-JS). */}
+      {onHover && categories.map((_, ci) => (
+        <rect key={`hc${ci}`} x={padL + ci * groupW} y={padT} width={groupW} height={plotH}
+          fill="transparent" onMouseMove={(e) => onHover(ci, e)} />
+      ))}
     </>
   );
 }
 
 // Bar chart (horizontal)
-function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; opts: RenderOpts }) {
+function BarChart({ parsed, H, refLines = [], errorBars = [], shadedRanges = [], anomalies, sharedValueMax, onHover, stackMode = 'none', opts }: { parsed: ParsedData; H: number; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; stackMode?: StackMode; opts: RenderOpts } & CartesianExtras) {
   const { style, theme } = opts;
   const padL = 90, padR = 36, padT = 10, padB = 20;
   const plotW = W - padL - padR;
@@ -781,9 +1262,25 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
   // overlaid line nor a whisker cap ever clips.
   const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
   const errVals = errorBars.flatMap((e) => [e.low, e.high]);
+  const shadeVals = shadedRanges.filter((s) => s.axis === 'y').flatMap((s) => [s.from, s.to]);
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, ...refVals, ...errVals, 0);
-  const rawMin = Math.min(...allVals, ...refVals, ...errVals, 0);
+  // Wave-5 stacking (horizontal): per-category cumulative offsets along the value
+  // (X) axis. 'none' (default) keeps the clustered geometry byte-identical.
+  const stacked = stackMode === 'stacked' || stackMode === 'stacked100';
+  const pct100 = stackMode === 'stacked100';
+  const catSums = categories.map((_, ci) => {
+    let pos = 0, neg = 0;
+    for (const s of series) { const v = s.data[ci] || 0; if (v >= 0) pos += v; else neg += v; }
+    return { pos, neg };
+  });
+  const stackMax = pct100 ? 100 : Math.max(0, ...catSums.map((c) => c.pos));
+  const stackMin = pct100 ? (catSums.some((c) => c.neg < 0) ? -100 : 0) : Math.min(0, ...catSums.map((c) => c.neg));
+  const rawMax = stacked
+    ? Math.max(stackMax, ...refVals, ...errVals, ...shadeVals, sharedValueMax ?? 0)
+    : Math.max(...allVals, ...refVals, ...errVals, ...shadeVals, sharedValueMax ?? 0, 0);
+  const rawMin = stacked
+    ? Math.min(stackMin, ...refVals, ...errVals, ...shadeVals, 0)
+    : Math.min(...allVals, ...refVals, ...errVals, ...shadeVals, 0);
   const span = rawMax - rawMin || 1;
   const xMax = rawMax + span * 0.08;
   const xMin = rawMin < 0 ? rawMin - span * 0.04 : 0;
@@ -796,6 +1293,16 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
   const barH = (groupH * style.barFraction) / series.length;
   const barGap = (groupH * (1 - style.barFraction)) / (series.length + 1);
   const barY = (ci: number, si: number) => padT + ci * groupH + barGap * (si + 1) + barH * si;
+  const catCenterY = (ci: number) => padT + ci * groupH + groupH / 2;
+  // Stacked geometry: a single full-fraction bar per category, segments along X.
+  const stackBarH = groupH * style.barFraction;
+  const stackBarY = (ci: number) => padT + ci * groupH + (groupH - stackBarH) / 2;
+  // Index→y for category-axis overlays (horizontal ref lines + axis:'x' ranges).
+  const catPixIdxY = (v: number) => padT + (Math.max(0, Math.min(n - 1, v)) + 0.5) * groupH;
+  // For the bar chart the VALUE axis is horizontal, so the default ('h') line is a
+  // vertical RefLinesX line; a 'v' (opposite-axis) line is a horizontal category line.
+  const xRef = refLines.filter((r) => r.orientation !== 'v');
+  const yRef = refLines.filter((r) => r.orientation === 'v');
 
   const gridXFractions = [0, 0.25, 0.5, 0.75, 1];
   const showLabels = opts.dataLabels && n * series.length <= 48;
@@ -809,6 +1316,9 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
         <rect x={padL} y={padT} width={plotW} height={plotH}
           fill={theme.background ?? tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
       )}
+      {/* Analytics shaded ranges, drawn UNDER the marks (value axis = horizontal) */}
+      <ShadedRangesH ranges={shadedRanges} xPix={xPix} catPix={catPixIdxY}
+        yTop={padT} yBottom={padT + plotH} xLeft={padL} xRight={W - padR} />
       {/* X (value axis) gridlines + labels */}
       {opts.showXAxis && gridXFractions.map((f, i) => {
         const val = xMin + f * xSpan;
@@ -836,8 +1346,8 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
         <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
       )}
 
-      {/* Bars */}
-      {categories.map((cat, ci) => series.map((sr, si) => {
+      {/* Bars — clustered (default) or stacked / 100%-stacked (wave-5) */}
+      {!stacked && categories.map((cat, ci) => series.map((sr, si) => {
         const val = sr.data[ci];
         const by_ = barY(ci, si);
         const bx = val >= 0 ? zeroX : xPix(val);
@@ -849,9 +1359,29 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
           </rect>
         );
       }))}
+      {stacked && categories.map((cat, ci) => {
+        let accPos = 0, accNeg = 0;
+        const dPos = pct100 ? (catSums[ci].pos || 1) : 1;
+        const dNeg = pct100 ? (Math.abs(catSums[ci].neg) || 1) : 1;
+        return series.map((sr, si) => {
+          const raw = sr.data[ci] || 0;
+          const v = pct100 ? (raw / (raw >= 0 ? dPos : dNeg)) * 100 : raw;
+          const start = raw >= 0 ? accPos : accNeg;
+          const end = start + v;
+          if (raw >= 0) accPos = end; else accNeg = end;
+          const xA = xPix(start), xB = xPix(end);
+          return (
+            <rect key={`${ci}-${si}`} x={Math.min(xA, xB)} y={stackBarY(ci)}
+              width={Math.max(Math.abs(xB - xA), raw === 0 ? 0 : 1)} height={stackBarH}
+              fill={sr.color} opacity={style.fillOpacity} rx={1.5}>
+              <title>{`${sr.label} · ${cat}: ${raw.toLocaleString()}${pct100 ? ` (${v.toFixed(1)}%)` : ''}`}</title>
+            </rect>
+          );
+        });
+      })}
 
-      {/* Per-point data labels */}
-      {showLabels && categories.map((cat, ci) => series.map((sr, si) => {
+      {/* Per-point data labels (clustered) */}
+      {showLabels && !stacked && categories.map((cat, ci) => series.map((sr, si) => {
         const val = sr.data[ci];
         const cy = barY(ci, si) + barH / 2 + 3;
         const end = xPix(val);
@@ -867,8 +1397,30 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
         );
       }))}
 
-      {/* Per-category total labels (end of the longest bar in the group) */}
-      {showTotals && categories.map((cat, ci) => {
+      {/* Per-segment data labels (stacked) — centered in each segment when it fits */}
+      {showLabels && stacked && categories.map((cat, ci) => {
+        let accPos = 0, accNeg = 0;
+        const dPos = pct100 ? (catSums[ci].pos || 1) : 1;
+        const dNeg = pct100 ? (Math.abs(catSums[ci].neg) || 1) : 1;
+        return series.map((sr, si) => {
+          const raw = sr.data[ci] || 0;
+          const v = pct100 ? (raw / (raw >= 0 ? dPos : dNeg)) * 100 : raw;
+          const start = raw >= 0 ? accPos : accNeg;
+          const end = start + v;
+          if (raw >= 0) accPos = end; else accNeg = end;
+          if (Math.abs(xPix(start) - xPix(end)) < 24) return null;
+          return (
+            <text key={`sdl${ci}-${si}`} x={(xPix(start) + xPix(end)) / 2} y={stackBarY(ci) + stackBarH / 2 + 3}
+              fontSize={style.fontSize - 0.5} textAnchor="middle" fontWeight={style.labelWeight}
+              fill={INSIDE_LABEL} pointerEvents="none">
+              {pct100 ? `${v.toFixed(0)}%` : fmtNum(raw)}
+            </text>
+          );
+        });
+      })}
+
+      {/* Per-category total labels (clustered — end of the longest bar in the group) */}
+      {showTotals && !stacked && categories.map((cat, ci) => {
         const total = series.reduce((a, s) => a + (s.data[ci] || 0), 0);
         const maxEnd = Math.max(...series.map((s) => xPix(Math.max(s.data[ci], 0))));
         const cy = padT + ci * groupH + groupH / 2 + 3;
@@ -880,8 +1432,20 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
         );
       })}
 
-      {/* Analytics reference lines, overlaid at the value-axis position */}
-      <RefLinesX refLines={refLines} xPix={xPix} yTop={padT} yBottom={padT + plotH} />
+      {/* Per-category total labels (stacked, absolute mode only) */}
+      {showTotals && stacked && !pct100 && categories.map((cat, ci) => (
+        <text key={`stl${ci}`} x={xPix(catSums[ci].pos) + 3} y={stackBarY(ci) + stackBarH / 2 + 3} fontSize={style.fontSize}
+          textAnchor="start" fontWeight={700} fill={(theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
+          {fmtNum(catSums[ci].pos)}
+        </text>
+      ))}
+
+      {/* Analytics anomaly band + flagged-point rings (value axis = horizontal) */}
+      <AnomalyOverlayH anomalies={anomalies} categories={categories} catCenter={catCenterY} xPix={xPix} />
+
+      {/* Analytics reference lines: vertical value-axis lines + horizontal category lines */}
+      <RefLinesX refLines={xRef} xPix={xPix} yTop={padT} yBottom={padT + plotH} />
+      <RefLinesHorizontal refLines={yRef} yFor={catPixIdxY} xLeft={padL} xRight={W - padR} />
 
       {/* Analytics error bars (whiskers) per category, horizontal (value axis) */}
       <ErrorBarsH bars={errorBars} xPix={xPix}
@@ -897,12 +1461,18 @@ function BarChart({ parsed, H, refLines = [], errorBars = [], opts }: { parsed: 
           </text>
         );
       })}
+
+      {/* Hover capture: a transparent per-category row that drives the popover. */}
+      {onHover && categories.map((_, ci) => (
+        <rect key={`hc${ci}`} x={padL} y={padT + ci * groupH} width={plotW} height={groupH}
+          fill="transparent" onMouseMove={(e) => onHover(ci, e)} />
+      ))}
     </>
   );
 }
 
 // Line / Area chart (shared, areaFill flag)
-function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], forecast, opts }: { parsed: ParsedData; H: number; areaFill: boolean; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; forecast?: ChartForecast; opts: RenderOpts }) {
+function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], forecast, shadedRanges = [], anomalies, sharedValueMax, onHover, stackMode = 'none', opts }: { parsed: ParsedData; H: number; areaFill: boolean; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; forecast?: ChartForecast; stackMode?: StackMode; opts: RenderOpts } & CartesianExtras) {
   const { style, theme } = opts;
   const padL = 52, padR = 12, padT = 12, padB = 32;
   const plotW = W - padL - padR;
@@ -919,9 +1489,20 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
   const forecastVals = forecast
     ? [...forecast.projected, ...(forecast.band?.low ?? []), ...(forecast.band?.high ?? [])]
     : [];
+  const shadeVals = shadedRanges.filter((s) => s.axis === 'y').flatMap((s) => [s.from, s.to]);
   const allVals = series.flatMap((s) => s.data);
-  const rawMax = Math.max(...allVals, ...refVals, ...errVals, ...forecastVals, 0);
-  const rawMin = Math.min(...allVals, ...refVals, ...errVals, ...forecastVals, 0);
+  // Wave-5 stacked AREA: cumulative bands (lower = prev cumulative, upper = +series).
+  // Only meaningful for filled areas; line charts keep their overlapping geometry.
+  const stacked = areaFill && (stackMode === 'stacked' || stackMode === 'stacked100');
+  const pct100 = stackMode === 'stacked100';
+  const catTot = categories.map((_, ci) => series.reduce((a, s) => a + Math.max(s.data[ci] || 0, 0), 0));
+  const stackMax = pct100 ? 100 : Math.max(0, ...catTot);
+  const rawMax = stacked
+    ? Math.max(stackMax, ...refVals, ...shadeVals, sharedValueMax ?? 0)
+    : Math.max(...allVals, ...refVals, ...errVals, ...forecastVals, ...shadeVals, sharedValueMax ?? 0, 0);
+  const rawMin = stacked
+    ? Math.min(0, ...refVals, ...shadeVals)
+    : Math.min(...allVals, ...refVals, ...errVals, ...forecastVals, ...shadeVals, 0);
   const span = rawMax - rawMin || 1;
   const yMax = rawMax + span * 0.1;
   const yMin = rawMin < 0 ? rawMin - span * 0.05 : 0;
@@ -936,6 +1517,9 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
   const xPix = (i: number) => padL + (nTotal === 1 ? plotW / 2 : i * xStep);
   const yPix = (v: number) => padT + plotH - ((v - yMin) / ySpan) * plotH;
   const zeroY = yPix(0);
+  // Oriented reference lines: 'v' = vertical category-axis line at index xPix(value).
+  const hRef = refLines.filter((r) => r.orientation !== 'v');
+  const vRef = refLines.filter((r) => r.orientation === 'v');
 
   const gridYFractions = [0, 0.25, 0.5, 0.75, 1];
   const gridXFractions = n <= 8
@@ -956,6 +1540,9 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
         <rect x={padL} y={padT} width={plotW} height={plotH}
           fill={theme.background ?? tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
       )}
+      {/* Analytics shaded ranges, drawn UNDER the marks */}
+      <ShadedRangesV ranges={shadedRanges} yPix={yPix} catPix={xPix}
+        xLeft={padL} xRight={W - padR} yTop={padT} yBottom={padT + plotH} />
       {/* Y gridlines (value axis) */}
       {opts.showYAxis && gridYFractions.map((f, i) => {
         const val = yMin + f * ySpan;
@@ -983,8 +1570,8 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
         <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />
       )}
 
-      {/* Series */}
-      {series.map((sr) => {
+      {/* Series (overlapping line / area — default) */}
+      {!stacked && series.map((sr) => {
         const pts = sr.data.map((v, i) => ({ x: xPix(i), y: yPix(v) }));
         const linePath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
         const areaPath = areaFill && pts.length > 0
@@ -1006,9 +1593,38 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
         );
       })}
 
+      {/* Stacked-area cumulative bands (wave-5): lower = running cumulative, upper =
+          + this series; 'stacked100' normalizes each category column to its sum. */}
+      {stacked && (() => {
+        const cum = categories.map(() => 0);
+        return series.map((sr) => {
+          const lower = categories.map((_, ci) => cum[ci]);
+          const upper = categories.map((_, ci) => {
+            const raw = Math.max(sr.data[ci] || 0, 0);
+            const v = pct100 ? (catTot[ci] ? (raw / catTot[ci]) * 100 : 0) : raw;
+            cum[ci] += v;
+            return cum[ci];
+          });
+          const top = upper.map((v, i) => `${i === 0 ? 'M' : 'L'}${xPix(i).toFixed(1)},${yPix(v).toFixed(1)}`).join(' ');
+          const bot = lower.map((v, i) => ({ v, i })).reverse()
+            .map(({ v, i }) => `L${xPix(i).toFixed(1)},${yPix(v).toFixed(1)}`).join(' ');
+          return (
+            <g key={sr.label}>
+              <path d={`${top} ${bot} Z`} fill={sr.color} opacity={0.55} />
+              <path d={top} fill="none" stroke={sr.color} strokeWidth={style.lineStroke} strokeLinejoin="round" />
+              {upper.length <= 40 && upper.map((v, i) => (
+                <circle key={i} cx={xPix(i)} cy={yPix(v)} r={style.dotR} fill={sr.color}>
+                  <title>{`${sr.label} · ${categories[i]}: ${(sr.data[i] || 0).toLocaleString()}`}</title>
+                </circle>
+              ))}
+            </g>
+          );
+        });
+      })()}
+
       {/* Analytics forecast: dashed projection of the primary series past its
           last real point + an optional low-opacity confidence band. */}
-      {forecast && forecast.projected.length > 0 && series.length > 0 && (() => {
+      {!stacked && forecast && forecast.projected.length > 0 && series.length > 0 && (() => {
         const base = series[0];
         const anchorX = xPix(n - 1);
         const anchorY = yPix(base.data[n - 1] ?? 0);
@@ -1036,7 +1652,7 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
       })()}
 
       {/* Per-point data labels */}
-      {showLabels && series.map((sr, si) => sr.data.map((v, i) => (
+      {showLabels && !stacked && series.map((sr, si) => sr.data.map((v, i) => (
         <text key={`dl${si}-${i}`} x={xPix(i)} y={labelBelow ? yPix(v) + style.fontSize + 3 : yPix(v) - 5}
           fontSize={style.fontSize - 0.5} textAnchor="middle" fontWeight={style.labelWeight}
           fill={(theme.foreground ?? tokens.colorNeutralForeground1)} pointerEvents="none">
@@ -1045,7 +1661,7 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
       )))}
 
       {/* Per-category total labels */}
-      {showTotals && categories.map((cat, ci) => {
+      {showTotals && !stacked && categories.map((cat, ci) => {
         const total = series.reduce((a, s) => a + (s.data[ci] || 0), 0);
         const topY = Math.min(...series.map((s) => yPix(s.data[ci])));
         return (
@@ -1056,8 +1672,12 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
         );
       })}
 
-      {/* Analytics reference lines, overlaid at the value-axis position */}
-      <RefLinesY refLines={refLines} yPix={yPix} xLeft={padL} xRight={W - padR} />
+      {/* Analytics anomaly band + flagged-point rings, keyed on the category axis */}
+      <AnomalyOverlayV anomalies={anomalies} categories={categories} catCenter={(i) => xPix(i)} yPix={yPix} />
+
+      {/* Analytics reference lines: horizontal value-axis + vertical category lines */}
+      <RefLinesY refLines={hRef} yPix={yPix} xLeft={padL} xRight={W - padR} />
+      <RefLinesVertical refLines={vRef} xFor={(v) => xPix(v)} yTop={padT} yBottom={padT + plotH} />
 
       {/* Analytics error bars (whiskers) at each category point, vertical */}
       <ErrorBarsV bars={errorBars} yPix={yPix}
@@ -1072,6 +1692,15 @@ function LineAreaChart({ parsed, H, areaFill, refLines = [], errorBars = [], for
             fill={theme.foreground ?? tokens.colorNeutralForeground3}>
             {truncLabel(gridXLabels[i] ?? '', n > 6 ? 7 : 12)}
           </text>
+        );
+      })}
+
+      {/* Hover capture: a transparent per-category slab that drives the popover. */}
+      {onHover && categories.map((_, ci) => {
+        const w = nTotal > 1 ? plotW / (nTotal - 1) : plotW;
+        return (
+          <rect key={`hc${ci}`} x={Math.max(padL, xPix(ci) - w / 2)} y={padT} width={w} height={plotH}
+            fill="transparent" onMouseMove={(e) => onHover(ci, e)} />
         );
       })}
     </>
@@ -1282,7 +1911,6 @@ function ScatterChart({ parsed, H, refLines = [], errorBars = [], bubble = false
 }
 
 // ─── Legend strip (shared for multi-series charts) ────────────────────────
-
 function legendStyle(orientation: 'horizontal' | 'vertical'): CSSProperties {
   const vertical = orientation === 'vertical';
   return {
@@ -1332,6 +1960,525 @@ function PieLegend({ parsed, palette = PALETTE, orientation = 'horizontal' }: { 
   );
 }
 
+// ─── Combo chart (wave-5) ──────────────────────────────────────────────────
+// Clustered / stacked COLUMNS on the primary (left) value axis + LINE series on a
+// SECONDARY (right) value axis. Shared category x. `comboLineSeries` names the
+// result columns painted as lines; every other numeric series is a column.
+function ComboChart({ parsed, H, comboLineSeries = [], stackMode = 'none', refLines = [], errorBars = [], shadedRanges = [], anomalies, sharedValueMax, onHover, opts }: { parsed: ParsedData; H: number; comboLineSeries?: string[]; stackMode?: StackMode; refLines?: ChartReferenceLine[]; errorBars?: ChartErrorBar[]; opts: RenderOpts } & CartesianExtras) {
+  const { style, theme } = opts;
+  const padL = 52, padR = 48, padT = 12, padB = 40;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+  const { categories } = parsed;
+  const n = categories.length;
+  const lineSet = new Set(comboLineSeries);
+  let colSeries = parsed.series.filter((s) => !lineSet.has(s.label));
+  let lineSeries = parsed.series.filter((s) => lineSet.has(s.label));
+  if (colSeries.length === 0) { colSeries = parsed.series; lineSeries = []; }
+  if (n === 0 || colSeries.length === 0) return null;
+
+  const stacked = stackMode === 'stacked' || stackMode === 'stacked100';
+  const pct100 = stackMode === 'stacked100';
+  const catSums = categories.map((_, ci) => {
+    let pos = 0, neg = 0;
+    for (const s of colSeries) { const v = s.data[ci] || 0; if (v >= 0) pos += v; else neg += v; }
+    return { pos, neg };
+  });
+  const colVals = colSeries.flatMap((s) => s.data);
+  const refVals = refLines.flatMap((r) => (r.y2 != null ? [r.y, r.y2] : [r.y]));
+  const shadeVals = shadedRanges.filter((s) => s.axis === 'y').flatMap((s) => [s.from, s.to]);
+  const pMax = stacked ? (pct100 ? 100 : Math.max(0, ...catSums.map((c) => c.pos))) : Math.max(...colVals, 0);
+  const pMin = stacked ? (pct100 ? (catSums.some((c) => c.neg < 0) ? -100 : 0) : Math.min(0, ...catSums.map((c) => c.neg))) : Math.min(...colVals, 0);
+  const rawMax = Math.max(pMax, ...refVals, ...shadeVals, sharedValueMax ?? 0);
+  const rawMin = Math.min(pMin, ...refVals, ...shadeVals, 0);
+  const span = rawMax - rawMin || 1;
+  const yMax = rawMax + span * 0.08, yMin = rawMin < 0 ? rawMin - span * 0.04 : 0;
+  const ySpan = yMax - yMin;
+  const yPix = (v: number) => padT + plotH - ((v - yMin) / ySpan) * plotH;
+  const zeroY = yPix(0);
+
+  // Secondary (line) domain → right axis.
+  const lineVals = lineSeries.flatMap((s) => s.data);
+  const sMaxRaw = lineVals.length ? Math.max(...lineVals) : 1;
+  const sMinRaw = lineVals.length ? Math.min(...lineVals, 0) : 0;
+  const sSpan = (sMaxRaw - sMinRaw) || 1;
+  const s2Max = sMaxRaw + sSpan * 0.1, s2Min = sMinRaw < 0 ? sMinRaw - sSpan * 0.05 : 0;
+  const s2Span = s2Max - s2Min;
+  const y2Pix = (v: number) => padT + plotH - ((v - s2Min) / s2Span) * plotH;
+
+  const groupW = plotW / n;
+  const catCenter = (ci: number) => padL + ci * groupW + groupW / 2;
+  const catPixIdx = (v: number) => padL + (Math.max(0, Math.min(n - 1, v)) + 0.5) * groupW;
+  const clW = (groupW * style.barFraction) / colSeries.length;
+  const clGap = (groupW * (1 - style.barFraction)) / (colSeries.length + 1);
+  const clX = (ci: number, si: number) => padL + ci * groupW + clGap * (si + 1) + clW * si;
+  const stW = groupW * style.barFraction;
+  const stX = (ci: number) => padL + ci * groupW + (groupW - stW) / 2;
+  const hRef = refLines.filter((r) => r.orientation !== 'v');
+  const vRef = refLines.filter((r) => r.orientation === 'v');
+  const gridYFractions = [0, 0.25, 0.5, 0.75, 1];
+  const lineColor = lineSeries[0]?.color ?? theme.palette[1];
+
+  return (
+    <>
+      {opts.plotTransparency != null && (
+        <rect x={padL} y={padT} width={plotW} height={plotH} fill={theme.background ?? tokens.colorNeutralBackground3} opacity={(100 - opts.plotTransparency) / 100} />
+      )}
+      <ShadedRangesV ranges={shadedRanges} yPix={yPix} catPix={catPixIdx} xLeft={padL} xRight={W - padR} yTop={padT} yBottom={padT + plotH} />
+      {opts.showYAxis && gridYFractions.map((f, i) => {
+        const val = yMin + f * ySpan; const py = padT + plotH - f * plotH;
+        return (
+          <g key={`gy${i}`}>
+            {style.grid && <line x1={padL} y1={py} x2={W - padR} y2={py} stroke={theme.gridline ?? tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />}
+            <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end" fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
+          </g>
+        );
+      })}
+      {lineSeries.length > 0 && gridYFractions.map((f, i) => {
+        const val = s2Min + f * s2Span; const py = padT + plotH - f * plotH;
+        return <text key={`g2${i}`} x={W - padR + 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="start" fill={lineColor}>{fmtNum(val)}</text>;
+      })}
+      {rawMin < 0 && <line x1={padL} y1={zeroY} x2={W - padR} y2={zeroY} stroke={tokens.colorNeutralStroke1} strokeWidth={1} />}
+      {opts.showYAxis && <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />}
+      {lineSeries.length > 0 && <line x1={W - padR} y1={padT} x2={W - padR} y2={padT + plotH} stroke={lineColor} strokeWidth={1} opacity={0.5} />}
+      {opts.showXAxis && <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />}
+
+      {/* Columns (primary axis) */}
+      {!stacked && categories.map((cat, ci) => colSeries.map((sr, si) => {
+        const val = sr.data[ci]; const bx = clX(ci, si); const by = val >= 0 ? yPix(val) : zeroY; const bh = Math.abs(yPix(val) - zeroY);
+        return (
+          <rect key={`c${ci}-${si}`} x={bx} y={by} width={clW} height={Math.max(bh, 1)} fill={sr.color} opacity={style.fillOpacity} rx={1.5}>
+            <title>{`${sr.label} · ${cat}: ${val.toLocaleString()}`}</title>
+          </rect>
+        );
+      }))}
+      {stacked && categories.map((cat, ci) => {
+        let accPos = 0, accNeg = 0;
+        const dPos = pct100 ? (catSums[ci].pos || 1) : 1;
+        const dNeg = pct100 ? (Math.abs(catSums[ci].neg) || 1) : 1;
+        return colSeries.map((sr, si) => {
+          const raw = sr.data[ci] || 0; const v = pct100 ? (raw / (raw >= 0 ? dPos : dNeg)) * 100 : raw;
+          const start = raw >= 0 ? accPos : accNeg; const end = start + v; if (raw >= 0) accPos = end; else accNeg = end;
+          const yA = yPix(start), yB = yPix(end);
+          return (
+            <rect key={`c${ci}-${si}`} x={stX(ci)} y={Math.min(yA, yB)} width={stW} height={Math.max(Math.abs(yB - yA), raw === 0 ? 0 : 1)} fill={sr.color} opacity={style.fillOpacity} rx={1.5}>
+              <title>{`${sr.label} · ${cat}: ${raw.toLocaleString()}`}</title>
+            </rect>
+          );
+        });
+      })}
+
+      {/* Lines (secondary axis) */}
+      {lineSeries.map((sr) => {
+        const pts = sr.data.map((v, i) => ({ x: catCenter(i), y: y2Pix(v) }));
+        const d = pts.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+        return (
+          <g key={`l${sr.label}`}>
+            <path d={d} fill="none" stroke={sr.color} strokeWidth={style.lineStroke + 0.4} strokeLinejoin="round" />
+            {pts.length <= 40 && pts.map((p, i) => (
+              <circle key={i} cx={p.x} cy={p.y} r={style.dotR} fill={sr.color}>
+                <title>{`${sr.label} · ${categories[i]}: ${(sr.data[i] || 0).toLocaleString()}`}</title>
+              </circle>
+            ))}
+          </g>
+        );
+      })}
+
+      <AnomalyOverlayV anomalies={anomalies} categories={categories} catCenter={catCenter} yPix={yPix} />
+      <RefLinesY refLines={hRef} yPix={yPix} xLeft={padL} xRight={W - padR} />
+      <RefLinesVertical refLines={vRef} xFor={catPixIdx} yTop={padT} yBottom={padT + plotH} />
+      <ErrorBarsV bars={errorBars} yPix={yPix} xFor={(x) => { const ci = categories.indexOf(String(x)); return ci < 0 ? null : catCenter(ci); }} />
+
+      {opts.showXAxis && categories.map((cat, ci) => (
+        <text key={`xl${ci}`} x={catCenter(ci)} y={H - padB + 14} fontSize={style.fontSize} textAnchor="middle" fill={theme.foreground ?? tokens.colorNeutralForeground3}>
+          {truncLabel(cat, n > 8 ? 6 : 12)}
+        </text>
+      ))}
+      {onHover && categories.map((_, ci) => (
+        <rect key={`hc${ci}`} x={padL + ci * groupW} y={padT} width={groupW} height={plotH} fill="transparent" onMouseMove={(e) => onHover(ci, e)} />
+      ))}
+    </>
+  );
+}
+
+// ─── Ribbon chart (wave-5) ─────────────────────────────────────────────────
+// Stacked (positive) columns whose same-series segments are joined across
+// adjacent categories by filled Bézier ribbons (width ∝ value, color = series).
+function RibbonChart({ parsed, H, onHover, opts }: { parsed: ParsedData; H: number; opts: RenderOpts } & CartesianExtras) {
+  const { style, theme } = opts;
+  const padL = 52, padR = 12, padT = 12, padB = 40;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const { categories, series } = parsed;
+  const n = categories.length;
+  if (n === 0 || series.length === 0) return null;
+  const catTot = categories.map((_, ci) => series.reduce((a, s) => a + Math.max(s.data[ci] || 0, 0), 0));
+  const yMax = Math.max(...catTot, 1);
+  const yPix = (v: number) => padT + plotH - (v / yMax) * plotH;
+  const groupW = plotW / n;
+  const barW = groupW * style.barFraction;
+  const barX0 = (ci: number) => padL + ci * groupW + (groupW - barW) / 2;
+  // seg[ci][si] = cumulative {bot, top} in value space (positive stacking).
+  const seg = categories.map((_, ci) => {
+    let acc = 0;
+    return series.map((sr) => { const v = Math.max(sr.data[ci] || 0, 0); const bot = acc; acc += v; return { bot, top: acc }; });
+  });
+  return (
+    <>
+      {opts.showYAxis && [0, 0.25, 0.5, 0.75, 1].map((f, i) => {
+        const py = padT + plotH - f * plotH;
+        return (
+          <g key={`gy${i}`}>
+            {style.grid && <line x1={padL} y1={py} x2={W - padR} y2={py} stroke={theme.gridline ?? tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />}
+            <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end" fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(f * yMax)}</text>
+          </g>
+        );
+      })}
+      {opts.showYAxis && <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />}
+      {opts.showXAxis && <line x1={padL} y1={padT + plotH} x2={W - padR} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />}
+      {/* Ribbons between adjacent categories (under the bars) */}
+      {series.map((sr, si) => (
+        <g key={`rib${si}`}>
+          {categories.slice(0, n - 1).map((_, ci) => {
+            const a = seg[ci][si], b = seg[ci + 1][si];
+            const xA = barX0(ci) + barW, xB = barX0(ci + 1); const midX = (xA + xB) / 2;
+            const tA = yPix(a.top), bA = yPix(a.bot), tB = yPix(b.top), bB = yPix(b.bot);
+            const d = `M${xA},${tA} C${midX},${tA} ${midX},${tB} ${xB},${tB} L${xB},${bB} C${midX},${bB} ${midX},${bA} ${xA},${bA} Z`;
+            return <path key={`rb${si}-${ci}`} d={d} fill={sr.color} opacity={0.28} />;
+          })}
+        </g>
+      ))}
+      {/* Stacked segments */}
+      {categories.map((cat, ci) => series.map((sr, si) => {
+        const s = seg[ci][si]; if (s.top <= s.bot) return null;
+        const yT = yPix(s.top), yB = yPix(s.bot);
+        return (
+          <rect key={`${ci}-${si}`} x={barX0(ci)} y={yT} width={barW} height={Math.max(yB - yT, 1)} fill={sr.color} opacity={style.fillOpacity} rx={1.5}>
+            <title>{`${sr.label} · ${cat}: ${(sr.data[ci] || 0).toLocaleString()}`}</title>
+          </rect>
+        );
+      }))}
+      {opts.showXAxis && categories.map((cat, ci) => (
+        <text key={`xl${ci}`} x={barX0(ci) + barW / 2} y={H - padB + 14} fontSize={style.fontSize} textAnchor="middle" fill={theme.foreground ?? tokens.colorNeutralForeground3}>
+          {truncLabel(cat, n > 8 ? 6 : 12)}
+        </text>
+      ))}
+      {onHover && categories.map((_, ci) => (
+        <rect key={`hc${ci}`} x={padL + ci * groupW} y={padT} width={groupW} height={plotH} fill="transparent" onMouseMove={(e) => onHover(ci, e)} />
+      ))}
+    </>
+  );
+}
+
+// ─── Waterfall chart (wave-5) ──────────────────────────────────────────────
+// Running total: each category bar floats from the previous cumulative to the new
+// cumulative (green up / red down), then an explicit brand-colored Total bar.
+function WaterfallChart({ parsed, H, onHover, opts }: { parsed: ParsedData; H: number; opts: RenderOpts } & CartesianExtras) {
+  const { style, theme } = opts;
+  const padL = 52, padR = 12, padT = 12, padB = 40;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const { categories, series } = parsed;
+  const n = categories.length;
+  if (n === 0 || series.length === 0) return null;
+  const vals = series[0].data;
+  let run = 0;
+  const steps = vals.map((v) => { const start = run; run += v; return { start, end: run, delta: v }; });
+  const total = run;
+  const edges = [0, total, ...steps.flatMap((s) => [s.start, s.end])];
+  const rawMax = Math.max(...edges, 0), rawMin = Math.min(...edges, 0);
+  const span = rawMax - rawMin || 1;
+  const yMax = rawMax + span * 0.08, yMin = rawMin < 0 ? rawMin - span * 0.04 : 0;
+  const ySpan = yMax - yMin;
+  const yPix = (v: number) => padT + plotH - ((v - yMin) / ySpan) * plotH;
+  const slots = n + 1;
+  const groupW = plotW / slots;
+  const barW = groupW * style.barFraction;
+  const barX = (i: number) => padL + i * groupW + (groupW - barW) / 2;
+  const inc = tokens.colorPaletteGreenForeground1, dec = tokens.colorPaletteRedForeground1, tot = theme.palette[0];
+  return (
+    <>
+      {opts.showYAxis && [0, 0.25, 0.5, 0.75, 1].map((f, i) => {
+        const val = yMin + f * ySpan; const py = padT + plotH - f * plotH;
+        return (
+          <g key={`gy${i}`}>
+            {style.grid && <line x1={padL} y1={py} x2={W - padR} y2={py} stroke={theme.gridline ?? tokens.colorNeutralStroke3} strokeDasharray="2 3" strokeWidth={0.8} />}
+            <text x={padL - 4} y={py + 3.5} fontSize={style.fontSize} textAnchor="end" fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(val)}</text>
+          </g>
+        );
+      })}
+      <line x1={padL} y1={yPix(0)} x2={W - padR} y2={yPix(0)} stroke={tokens.colorNeutralStroke1} strokeWidth={1} />
+      {opts.showYAxis && <line x1={padL} y1={padT} x2={padL} y2={padT + plotH} stroke={style.axisStroke} strokeWidth={1} />}
+      {steps.map((s, i) => {
+        const yA = yPix(s.start), yB = yPix(s.end); const col = s.delta >= 0 ? inc : dec;
+        return (
+          <g key={`wf${i}`}>
+            <rect x={barX(i)} y={Math.min(yA, yB)} width={barW} height={Math.max(Math.abs(yB - yA), 1)} fill={col} opacity={style.fillOpacity} rx={1.5}>
+              <title>{`${categories[i]}: ${s.delta.toLocaleString()} (→ ${s.end.toLocaleString()})`}</title>
+            </rect>
+            {i < n && <line x1={barX(i) + barW} y1={yPix(s.end)} x2={barX(i + 1)} y2={yPix(s.end)} stroke={tokens.colorNeutralStroke2} strokeDasharray="2 2" strokeWidth={1} />}
+          </g>
+        );
+      })}
+      {(() => { const yA = yPix(0), yB = yPix(total); return (
+        <rect x={barX(n)} y={Math.min(yA, yB)} width={barW} height={Math.max(Math.abs(yB - yA), 1)} fill={tot} opacity={style.fillOpacity} rx={1.5}>
+          <title>{`Total: ${total.toLocaleString()}`}</title>
+        </rect>
+      ); })()}
+      {opts.showXAxis && [...categories, 'Total'].map((cat, i) => (
+        <text key={`xl${i}`} x={barX(i) + barW / 2} y={H - padB + 14} fontSize={style.fontSize} textAnchor="middle" fill={theme.foreground ?? tokens.colorNeutralForeground3}>
+          {truncLabel(String(cat), 8)}
+        </text>
+      ))}
+      {onHover && [...categories, 'Total'].map((_, i) => (
+        <rect key={`hc${i}`} x={padL + i * groupW} y={padT} width={groupW} height={plotH} fill="transparent" onMouseMove={(e) => onHover(Math.min(i, n - 1), e)} />
+      ))}
+    </>
+  );
+}
+
+// ─── Funnel chart (wave-5) ─────────────────────────────────────────────────
+// Horizontally-centered trapezoid bands; width ∝ value; % of first + % of prev.
+function FunnelChart({ parsed, H, opts }: { parsed: ParsedData; H: number; opts: RenderOpts }) {
+  const { style, theme } = opts;
+  const padL = 12, padR = 12, padT = 16, padB = 12;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const { categories, series } = parsed;
+  const n = categories.length;
+  if (n === 0 || series.length === 0) return null;
+  const vals = series[0].data.map((v) => Math.max(v, 0));
+  const max = Math.max(...vals, 1);
+  const first = vals[0] || 1;
+  const cx = padL + plotW / 2;
+  const bandH = plotH / n;
+  const widthFor = (v: number) => (v / max) * plotW;
+  return (
+    <>
+      {categories.map((cat, i) => {
+        const v = vals[i];
+        const wTop = widthFor(v); const wBot = widthFor(i < n - 1 ? vals[i + 1] : v);
+        const yT = padT + i * bandH, yB = yT + bandH * 0.82;
+        const x1 = cx - wTop / 2, x2 = cx + wTop / 2, x3 = cx + wBot / 2, x4 = cx - wBot / 2;
+        const d = `M${x1.toFixed(1)},${yT.toFixed(1)} L${x2.toFixed(1)},${yT.toFixed(1)} L${x3.toFixed(1)},${yB.toFixed(1)} L${x4.toFixed(1)},${yB.toFixed(1)} Z`;
+        const pctFirst = (v / first) * 100; const pctPrev = i > 0 ? (v / (vals[i - 1] || 1)) * 100 : 100;
+        const color = theme.palette[i % theme.palette.length];
+        return (
+          <g key={`fn${i}`}>
+            <path d={d} fill={color} opacity={style.fillOpacity}>
+              <title>{`${cat}: ${v.toLocaleString()} · ${pctFirst.toFixed(1)}% of first`}</title>
+            </path>
+            <text x={cx} y={yT + bandH * 0.42} fontSize={style.fontSize + 0.5} textAnchor="middle" fontWeight={style.labelWeight} fill={INSIDE_LABEL} pointerEvents="none">
+              {truncLabel(cat, 18)}: {fmtNum(v)}
+            </text>
+            <text x={cx} y={yT + bandH * 0.42 + style.fontSize + 2} fontSize={style.fontSize - 1} textAnchor="middle" fill={INSIDE_LABEL} opacity={0.85} pointerEvents="none">
+              {pctFirst.toFixed(0)}% of first{i > 0 ? ` · ${pctPrev.toFixed(0)}% of prev` : ''}
+            </text>
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
+// ─── Treemap (wave-5) ──────────────────────────────────────────────────────
+// Squarified tiles over the aggregated first numeric measure. With a detail
+// column, each top tile is sub-partitioned (recursive squarify) into nested tiles.
+function TreemapChart({ rows, categoryCol, valueCol, detailCol, H, opts }: { rows: Array<Record<string, unknown>>; categoryCol: string; valueCol: string; detailCol?: string; H: number; opts: RenderOpts }) {
+  const { style, theme } = opts;
+  const pad = 4;
+  const plotW = W - pad * 2, plotH = H - pad * 2;
+  const aggMap = new Map<string, number>();
+  for (const r of rows) { const k = String(r[categoryCol] ?? '—'); const v = Number(r[valueCol]); aggMap.set(k, (aggMap.get(k) || 0) + (Number.isFinite(v) ? v : 0)); }
+  const items = [...aggMap.entries()].map(([label, value]) => ({ label, value })).filter((it) => it.value > 0).sort((a, b) => b.value - a.value);
+  const tiles = squarifyLayout(items, pad, pad, plotW, plotH);
+  if (tiles.length === 0) return null;
+  return (
+    <>
+      {tiles.map((t, i) => {
+        const color = theme.palette[i % theme.palette.length];
+        const showLbl = t.w > 42 && t.h > 22;
+        return (
+          <g key={`tm${i}`}>
+            <rect x={t.x} y={t.y} width={Math.max(t.w - 1.5, 0)} height={Math.max(t.h - 1.5, 0)} fill={color} opacity={detailCol ? 0.25 : style.fillOpacity} stroke={theme.background ?? tokens.colorNeutralBackground1} strokeWidth={1.2} rx={2}>
+              <title>{`${t.item.label}: ${t.item.value.toLocaleString()}`}</title>
+            </rect>
+            {detailCol && (() => {
+              const dMap = new Map<string, number>();
+              for (const r of rows) {
+                if (String(r[categoryCol] ?? '—') !== t.item.label) continue;
+                const dk = String(r[detailCol] ?? '—'); const v = Number(r[valueCol]);
+                dMap.set(dk, (dMap.get(dk) || 0) + (Number.isFinite(v) ? v : 0));
+              }
+              const dItems = [...dMap.entries()].map(([label, value]) => ({ label, value })).filter((d) => d.value > 0).sort((a, b) => b.value - a.value);
+              if (dItems.length <= 1) return null;
+              const inset = 2;
+              const dTiles = squarifyLayout(dItems, t.x + inset, t.y + inset, Math.max(t.w - inset * 2, 0), Math.max(t.h - inset * 2, 0));
+              return dTiles.map((dt, di) => (
+                <rect key={`dt${i}-${di}`} x={dt.x} y={dt.y} width={Math.max(dt.w - 1, 0)} height={Math.max(dt.h - 1, 0)} fill={color} opacity={0.55 + 0.4 * ((di % 3) / 3)} stroke={theme.background ?? tokens.colorNeutralBackground1} strokeWidth={0.6}>
+                  <title>{`${t.item.label} › ${dt.item.label}: ${dt.item.value.toLocaleString()}`}</title>
+                </rect>
+              ));
+            })()}
+            {showLbl && (
+              <>
+                <text x={t.x + 5} y={t.y + 14} fontSize={style.fontSize} fontWeight={style.labelWeight} fill={INSIDE_LABEL} pointerEvents="none">{truncLabel(t.item.label, Math.max(4, Math.floor(t.w / 7)))}</text>
+                <text x={t.x + 5} y={t.y + 14 + style.fontSize + 2} fontSize={style.fontSize - 0.5} fill={INSIDE_LABEL} opacity={0.9} pointerEvents="none">{fmtNum(t.item.value)}</text>
+              </>
+            )}
+          </g>
+        );
+      })}
+    </>
+  );
+}
+
+// ─── Gauge (wave-5) ────────────────────────────────────────────────────────
+// 270° radial arc from gaugeMin..gaugeMax; the value fills the arc and `target`
+// draws a marker tick. Center text = value; caption = target or the bounds.
+function GaugeChart({ parsed, H, target, gaugeMin, gaugeMax, opts }: { parsed: ParsedData; H: number; target?: number; gaugeMin?: number; gaugeMax?: number; opts: RenderOpts }) {
+  const { style, theme } = opts;
+  const { series } = parsed;
+  if (series.length === 0 || series[0].data.length === 0) return null;
+  const value = series[0].data[series[0].data.length - 1];
+  const min = gaugeMin ?? 0;
+  const max = gaugeMax ?? Math.max(value * 1.5, (target ?? 0) * 1.25, value, min + 1);
+  const cx = W / 2, cy = H * 0.62;
+  const r = Math.min(W * 0.30, H * 0.42);
+  const startDeg = 135, sweep = 270;
+  const angleFor = (v: number) => startDeg + ((clampN(v, min, max) - min) / ((max - min) || 1)) * sweep;
+  const arc = (a0: number, a1: number, rr: number) => {
+    const p0 = polarPoint(cx, cy, rr, a0); const p1 = polarPoint(cx, cy, rr, a1);
+    const large = (a1 - a0) > 180 ? 1 : 0;
+    return `M${p0.x.toFixed(2)},${p0.y.toFixed(2)} A${rr},${rr} 0 ${large} 1 ${p1.x.toFixed(2)},${p1.y.toFixed(2)}`;
+  };
+  const trackW = Math.max(r * 0.22, 10);
+  const valEnd = angleFor(value);
+  const tickA = target != null ? angleFor(target) : null;
+  const minPt = polarPoint(cx, cy, r + trackW / 2 + 10, startDeg);
+  const maxPt = polarPoint(cx, cy, r + trackW / 2 + 10, startDeg + sweep);
+  return (
+    <>
+      <path d={arc(startDeg, startDeg + sweep, r)} fill="none" stroke={tokens.colorNeutralStroke2} strokeWidth={trackW} strokeLinecap="round" />
+      <path d={arc(startDeg, valEnd, r)} fill="none" stroke={theme.palette[0]} strokeWidth={trackW} strokeLinecap="round" />
+      {tickA != null && (() => {
+        const o = polarPoint(cx, cy, r - trackW / 2 - 2, tickA); const o2 = polarPoint(cx, cy, r + trackW / 2 + 2, tickA);
+        return <line x1={o.x} y1={o.y} x2={o2.x} y2={o2.y} stroke={tokens.colorPaletteRedForeground1} strokeWidth={2.5} strokeLinecap="round" />;
+      })()}
+      <text x={cx} y={cy - 2} fontSize={20} textAnchor="middle" fontWeight={700} fill={theme.foreground ?? tokens.colorNeutralForeground1}>{fmtNum(value)}</text>
+      <text x={cx} y={cy + 16} fontSize={10} textAnchor="middle" fill={theme.foreground ?? tokens.colorNeutralForeground3}>{target != null ? `Target ${fmtNum(target)}` : `${fmtNum(min)}–${fmtNum(max)}`}</text>
+      <text x={minPt.x} y={minPt.y} fontSize={style.fontSize} textAnchor="middle" fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(min)}</text>
+      <text x={maxPt.x} y={maxPt.y} fontSize={style.fontSize} textAnchor="middle" fill={theme.foreground ?? tokens.colorNeutralForeground3}>{fmtNum(max)}</text>
+    </>
+  );
+}
+
+// ─── KPI (wave-5) ──────────────────────────────────────────────────────────
+// Big indicator (latest value) + a sparkline of the trend + a goal delta caption.
+function KpiChart({ parsed, H, kpiTrend, kpiGoal, kpiTarget, opts }: { parsed: ParsedData; H: number; kpiTrend?: number[]; kpiGoal?: number; kpiTarget?: number; opts: RenderOpts }) {
+  const { theme } = opts;
+  const { series } = parsed;
+  const baseTrend = kpiTrend && kpiTrend.length ? kpiTrend : (series[0]?.data ?? []);
+  if (baseTrend.length === 0 && kpiTarget == null) return null;
+  const value = kpiTarget ?? (baseTrend.length ? baseTrend[baseTrend.length - 1] : 0);
+  const goal = kpiGoal;
+  const delta = goal != null ? value - goal : null;
+  const pct = goal != null && goal !== 0 ? ((value - goal) / Math.abs(goal)) * 100 : null;
+  const good = delta != null ? delta >= 0 : true;
+  const goodColor = tokens.colorPaletteGreenForeground1, badColor = tokens.colorPaletteRedForeground1;
+  const sparkY = H * 0.62, sparkH = H * 0.28, sparkX = W * 0.08, sparkW = W * 0.84;
+  const mn = baseTrend.length ? Math.min(...baseTrend) : 0, mx = baseTrend.length ? Math.max(...baseTrend) : 1;
+  const sp = (mx - mn) || 1;
+  const sx = (i: number) => sparkX + (baseTrend.length > 1 ? (i / (baseTrend.length - 1)) * sparkW : sparkW / 2);
+  const sy = (v: number) => sparkY + sparkH - ((v - mn) / sp) * sparkH;
+  const spark = baseTrend.map((v, i) => `${i === 0 ? 'M' : 'L'}${sx(i).toFixed(1)},${sy(v).toFixed(1)}`).join(' ');
+  return (
+    <>
+      <text x={W / 2} y={H * 0.34} fontSize={34} textAnchor="middle" fontWeight={800} fill={theme.foreground ?? tokens.colorNeutralForeground1}>{fmtNum(value)}</text>
+      {delta != null && (
+        <text x={W / 2} y={H * 0.34 + 24} fontSize={13} textAnchor="middle" fontWeight={700} fill={good ? goodColor : badColor}>
+          {good ? '▲' : '▼'} {fmtNum(Math.abs(delta))}{pct != null ? ` (${Math.abs(pct).toFixed(1)}%)` : ''} vs goal
+        </text>
+      )}
+      {baseTrend.length > 1 && (
+        <>
+          <path d={`${spark} L${sx(baseTrend.length - 1).toFixed(1)},${(sparkY + sparkH).toFixed(1)} L${sx(0).toFixed(1)},${(sparkY + sparkH).toFixed(1)} Z`} fill={theme.palette[0]} opacity={0.14} />
+          <path d={spark} fill="none" stroke={theme.palette[0]} strokeWidth={2} strokeLinejoin="round" />
+          <circle cx={sx(baseTrend.length - 1)} cy={sy(baseTrend[baseTrend.length - 1])} r={3} fill={theme.palette[0]} />
+        </>
+      )}
+      {goal != null && baseTrend.length > 1 && goal >= mn && goal <= mx && (
+        <line x1={sparkX} y1={sy(goal)} x2={sparkX + sparkW} y2={sy(goal)} stroke={tokens.colorNeutralStroke1} strokeDasharray="4 3" strokeWidth={1} />
+      )}
+    </>
+  );
+}
+
+// ─── Small-multiples (trellis) grid (wave-5) ───────────────────────────────
+// Splits `rows` by the distinct values of `facetColumn` and renders ONE recursive
+// LoomChart per facet (facet column dropped from each panel's rows). `sharedY`
+// computes a GLOBAL value-max across panels so the facets are comparable.
+function SmallMultiplesGrid({ facetColumn, columns, sharedY = true, rows, base }: {
+  facetColumn: string; columns?: number; sharedY?: boolean;
+  rows: Array<Record<string, unknown>>; base: LoomChartProps;
+}) {
+  const facets: string[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) { const k = String(r[facetColumn] ?? '—'); if (!seen.has(k)) { seen.add(k); facets.push(k); } }
+  const panelRows = (fv: string) => rows
+    .filter((r) => String(r[facetColumn] ?? '—') === fv)
+    .map((r) => { const o: Record<string, unknown> = {}; for (const k of Object.keys(r)) { if (k !== facetColumn) o[k] = r[k]; } return o; });
+  let gMax: number | undefined;
+  if (sharedY) {
+    const tips = new Set(base.tooltips ?? []);
+    let m = 0;
+    for (const r of rows) { for (const k of Object.keys(r)) { if (k === facetColumn || tips.has(k)) continue; const v = Number(r[k]); if (Number.isFinite(v) && v > m) m = v; } }
+    gMax = m > 0 ? m : undefined;
+  }
+  const panelH = Math.max(150, Math.round((base.height ?? 280) * 0.62));
+  const gridCols = columns && columns > 0 ? `repeat(${columns}, minmax(0, 1fr))` : 'repeat(auto-fill, minmax(220px, 1fr))';
+  return (
+    <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: tokens.spacingHorizontalM, width: '100%', minWidth: 0 }}>
+      {facets.map((fv) => (
+        <div key={fv} style={{ minWidth: 0 }}>
+          <Caption1 style={{ display: 'block', marginBottom: 2, color: tokens.colorNeutralForeground2, fontWeight: tokens.fontWeightSemibold }}>{fv}</Caption1>
+          <LoomChart {...base} rows={panelRows(fv)} title={undefined} height={panelH} smallMultiples={undefined} sharedValueMax={gMax} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Hover popover (wave-5) ────────────────────────────────────────────────
+// Fluent-token-styled overlay surfaced on mouse-move over a cartesian mark. Shows
+// the category, every plotted series value, and every hover-only Tooltip measure.
+// Replaces the bare <title> as the primary affordance (the <title> stays for a11y).
+function HoverPopover({ x, y, category, rows, tips }: {
+  x: number; y: number; category: string;
+  rows: { label: string; value: string; color: string }[];
+  tips: { label: string; value: string }[];
+}) {
+  return (
+    <div style={{
+      position: 'absolute', left: Math.round(x) + 12, top: Math.round(y) + 12, pointerEvents: 'none', zIndex: 30,
+      background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
+      borderRadius: tokens.borderRadiusMedium, boxShadow: tokens.shadow16,
+      padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, maxWidth: 260,
+    }}>
+      <Caption1 style={{ display: 'block', fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, marginBottom: 2 }}>{category}</Caption1>
+      {rows.map((r, i) => (
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: r.color, flexShrink: 0 }} />
+          <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{r.label}: {r.value}</Caption1>
+        </div>
+      ))}
+      {tips.map((t, i) => (
+        <div key={`t${i}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: 'transparent', flexShrink: 0 }} aria-hidden />
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>{t.label}: {t.value}</Caption1>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────
 
 /**
@@ -1344,10 +2491,46 @@ function PieLegend({ parsed, palette = PALETTE, orientation = 'horizontal' }: { 
  * preset) — see {@link LoomChartFormat} — and `refLines` overlays analytics
  * reference lines on the value axis.
  */
-export function LoomChart({ type, rows, title, height = 280, refLines = [], format, bubble = false, sizeColumn, errorBars = [], forecast, symmetry, palette, fontFamily, structural }: LoomChartProps) {
+export function LoomChart(props: LoomChartProps) {
+  const {
+    type, rows, title, height = 280, refLines = [], format,
+    bubble = false, sizeColumn, errorBars = [], forecast, symmetry,
+    palette, fontFamily, structural,
+    stackMode = 'none', comboLineSeries = [], target, gaugeMin, gaugeMax,
+    kpiTrend, kpiGoal, kpiTarget, smallMultiples, tooltips = [], detailColumn,
+    anomalies, shadedRanges = [], hover = false, sharedValueMax,
+  } = props;
   const theme = useMemo(() => resolveTheme(palette, fontFamily, structural), [palette, fontFamily, structural]);
-  const parsed = useMemo(() => parseRows(rows, sizeColumn, theme.palette), [rows, sizeColumn, theme.palette]);
+  const parsed = useMemo(() => parseRows(rows, sizeColumn, theme.palette, tooltips), [rows, sizeColumn, theme.palette, tooltips]);
   const opts = useMemo(() => optsFromFormat(format, theme), [format, theme]);
+
+  // Hover popover state (opt-in: the `hover` flag, or any Tooltip measure present
+  // — a Tooltips well must surface somewhere, so it auto-enables the popover).
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const [hoverState, setHoverState] = useState<{ index: number; x: number; y: number } | null>(null);
+  const hoverEnabled = hover || tooltips.length > 0;
+  const handleHover = (index: number, e: ReactMouseEvent) => {
+    const rect = wrapRef.current?.getBoundingClientRect();
+    setHoverState({ index, x: rect ? e.clientX - rect.left : 0, y: rect ? e.clientY - rect.top : 0 });
+  };
+  const clearHover = () => setHoverState(null);
+  const onHover = hoverEnabled ? handleHover : undefined;
+
+  // Small multiples: split into a trellis of recursive panels when a facet column
+  // is bound and actually present in the result rows. Returns BEFORE the single
+  // chart path; hooks above always run so hook order stays stable.
+  if (smallMultiples && smallMultiples.facetColumn && rows.length > 0 &&
+      Object.prototype.hasOwnProperty.call(rows[0], smallMultiples.facetColumn)) {
+    return (
+      <div style={{ width: '100%', minWidth: 0 }}>
+        {title && (
+          <Caption1 style={{ display: 'block', marginBottom: 4, fontWeight: tokens.fontWeightSemibold }}>{title}</Caption1>
+        )}
+        <SmallMultiplesGrid facetColumn={smallMultiples.facetColumn} columns={smallMultiples.columns}
+          sharedY={smallMultiples.sharedY} rows={rows} base={props} />
+      </div>
+    );
+  }
 
   // Empty data state
   if (!parsed) {
@@ -1362,15 +2545,31 @@ export function LoomChart({ type, rows, title, height = 280, refLines = [], form
     );
   }
 
-  // Pie/Donut height is fixed; others use the height prop
-  const svgH = type === 'pie' || type === 'donut' ? Math.max(height, 240) : height;
+  // Pie/Donut height is fixed; gauge gets a comfortable minimum; others use height.
+  const svgH = type === 'pie' || type === 'donut' ? Math.max(height, 240)
+    : type === 'gauge' ? Math.max(height, 220) : height;
+
+  // Wave-5 analytics + interaction overlays threaded onto every cartesian sub-chart.
+  // All default-off so the legacy cases below render byte-identically when the host
+  // passes none of them.
+  const cartesianExtras: CartesianExtras = { shadedRanges, anomalies, sharedValueMax, onHover };
 
   const renderChart = () => {
     switch (type) {
-      case 'column': return <ColumnChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} opts={opts} />;
-      case 'bar':    return <BarChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} opts={opts} />;
-      case 'line':   return <LineAreaChart parsed={parsed} H={svgH} areaFill={false} refLines={refLines} errorBars={errorBars} forecast={forecast} opts={opts} />;
-      case 'area':   return <LineAreaChart parsed={parsed} H={svgH} areaFill refLines={refLines} errorBars={errorBars} forecast={forecast} opts={opts} />;
+      case 'column': return <ColumnChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} stackMode={stackMode} opts={opts} {...cartesianExtras} />;
+      case 'bar':    return <BarChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} stackMode={stackMode} opts={opts} {...cartesianExtras} />;
+      case 'stackedColumn': return <ColumnChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} stackMode={stackMode === 'stacked100' ? 'stacked100' : 'stacked'} opts={opts} {...cartesianExtras} />;
+      case 'stackedBar':    return <BarChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} stackMode={stackMode === 'stacked100' ? 'stacked100' : 'stacked'} opts={opts} {...cartesianExtras} />;
+      case 'line':   return <LineAreaChart parsed={parsed} H={svgH} areaFill={false} refLines={refLines} errorBars={errorBars} forecast={forecast} stackMode={stackMode} opts={opts} {...cartesianExtras} />;
+      case 'area':   return <LineAreaChart parsed={parsed} H={svgH} areaFill refLines={refLines} errorBars={errorBars} forecast={forecast} stackMode={stackMode} opts={opts} {...cartesianExtras} />;
+      case 'stackedArea': return <LineAreaChart parsed={parsed} H={svgH} areaFill refLines={refLines} errorBars={errorBars} forecast={forecast} stackMode={stackMode === 'stacked100' ? 'stacked100' : 'stacked'} opts={opts} {...cartesianExtras} />;
+      case 'combo':  return <ComboChart parsed={parsed} H={svgH} comboLineSeries={comboLineSeries} stackMode={stackMode} refLines={refLines} errorBars={errorBars} opts={opts} {...cartesianExtras} />;
+      case 'ribbon': return <RibbonChart parsed={parsed} H={svgH} opts={opts} {...cartesianExtras} />;
+      case 'waterfall': return <WaterfallChart parsed={parsed} H={svgH} opts={opts} {...cartesianExtras} />;
+      case 'funnel': return <FunnelChart parsed={parsed} H={svgH} opts={opts} />;
+      case 'treemap': return <TreemapChart rows={rows} categoryCol={parsed.xLabel} valueCol={parsed.series[0]?.label ?? parsed.yLabel} detailCol={detailColumn} H={svgH} opts={opts} />;
+      case 'gauge':  return <GaugeChart parsed={parsed} H={svgH} target={target} gaugeMin={gaugeMin} gaugeMax={gaugeMax} opts={opts} />;
+      case 'kpi':    return <KpiChart parsed={parsed} H={svgH} kpiTrend={kpiTrend} kpiGoal={kpiGoal} kpiTarget={kpiTarget} opts={opts} />;
       case 'donut':  return <PieDonutChart parsed={parsed} H={svgH} donut opts={opts} />;
       case 'pie':    return <PieDonutChart parsed={parsed} H={svgH} donut={false} opts={opts} />;
       case 'scatter':return <ScatterChart parsed={parsed} H={svgH} refLines={refLines} errorBars={errorBars} bubble={bubble} symmetry={symmetry} opts={opts} />;
@@ -1379,9 +2578,25 @@ export function LoomChart({ type, rows, title, height = 280, refLines = [], form
   };
 
   const isCircular = type === 'pie' || type === 'donut';
+  // Geometry types that own their own labelling and must NOT carry the multi-series
+  // legend strip (a treemap/funnel/waterfall query can return an extra numeric col).
+  const noLegend = type === 'gauge' || type === 'kpi' || type === 'treemap' || type === 'funnel' || type === 'waterfall';
+
+  // Hover popover content for the current cartesian hover index (category + every
+  // plotted series value + every hover-only Tooltip measure).
+  const popover = hoverEnabled && hoverState && hoverState.index < parsed.categories.length ? (() => {
+    const idx = hoverState.index;
+    const cat = parsed.categories[idx] ?? '';
+    const sRows = parsed.series.map((s) => ({ label: s.label, value: fmtNum(s.data[idx] ?? 0), color: s.color }));
+    const tipRows = parsed.tooltipSeries.map((t) => ({
+      label: t.label,
+      value: typeof t.data[idx] === 'number' ? fmtNum(t.data[idx] as number) : String(t.data[idx] ?? '—'),
+    }));
+    return <HoverPopover x={hoverState.x} y={hoverState.y} category={cat} rows={sRows} tips={tipRows} />;
+  })() : null;
 
   // Legend visibility + placement come from `format` (default: shown, bottom).
-  const showLegend = format?.showLegend !== false;
+  const showLegend = format?.showLegend !== false && !noLegend;
   const legendPos: LoomLegendPosition = format?.legendPosition ?? 'bottom';
   const sideLegend = legendPos === 'left' || legendPos === 'right';
   const legendNode = showLegend
@@ -1391,7 +2606,9 @@ export function LoomChart({ type, rows, title, height = 280, refLines = [], form
     : null;
 
   const chartBlock = (
-    <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+    <div ref={wrapRef}
+      style={{ flex: '1 1 auto', minWidth: 0, position: 'relative' }}
+      onMouseLeave={hoverEnabled ? clearHover : undefined}>
       <svg
         width="100%"
         viewBox={`0 0 ${W} ${svgH}`}
@@ -1408,6 +2625,7 @@ export function LoomChart({ type, rows, title, height = 280, refLines = [], form
       >
         {renderChart()}
       </svg>
+      {popover}
     </div>
   );
 

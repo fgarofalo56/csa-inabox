@@ -15,8 +15,21 @@
  *   • Error bars   — field / percent / value whiskers per category
  *   • Forecast     — linear or additive-seasonal projection + a confidence band
  *   • Symmetry     — the y=x diagonal split (scatter only)
- * (Anomaly detection and the heavier ADX series_decompose_forecast remain
- * honest wave-3 rows in docs/fiab/parity/report-designer.md — not stubbed.)
+ * Wave 5 finishes the surface — every remaining PBI Analytics row is now built
+ * and drawn from the SAME real rows (no approximate-shape-with-a-caption):
+ *   • X-Axis constant line — a constant line authored on the CATEGORY axis
+ *     ({@link AnalyticsLine.axis} = 'x') resolves to a VERTICAL line, surfaced to
+ *     LoomChart via {@link ComputedReferenceLine.orientation} = 'v'.
+ *   • Anomaly detection — a REAL client-side rolling-mean / rolling-std z-score
+ *     pass ({@link computeAnomalies}) flags out-of-band points and shades the
+ *     rolling expected range; a per-definition `useAdx` switch opts into ADX
+ *     `series_decompose_anomalies` only when a Kusto source is bound (an honest
+ *     inline caption otherwise — never a dead control).
+ *   • Shaded range — a translucent band between two structured numeric positions
+ *     on the value ('y') or category ('x') axis ({@link computeShadedRanges}).
+ * (The heavier ADX `series_decompose_forecast` server path stays the documented
+ * follow-up in docs/fiab/parity/report-designer.md — the linear / seasonal
+ * forecast above is fully functional without it.)
  *
  * no-freeform-config.md: every control is structured — a Dropdown of line
  * kinds, a numeric Input for the constant value / percentile (a VALUE, never a
@@ -51,13 +64,14 @@
 import { useId, useState } from 'react';
 import type { ReactElement } from 'react';
 import {
-  Button, Caption1, Divider, Dropdown, Input, Option, Switch, Text,
+  Button, Caption1, Divider, Dropdown, Input, Option, Slider, Switch, Text,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
   DataTrending20Regular, Add20Regular, Delete20Regular, ColorRegular,
   LineHorizontal120Regular, ArrowBidirectionalUpDown20Regular,
   ArrowTrendingLines20Regular, ArrowSplit20Regular,
+  Warning20Regular, Layer20Regular, DatabasePlugConnected20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LOOM_DATA_PALETTE } from './format-pane';
@@ -81,6 +95,15 @@ export interface AnalyticsLine {
   id: string;
   /** Which statistic / line this is. */
   kind: AnalyticsLineKind;
+  /**
+   * Wave-5: which axis a CONSTANT line is constant ALONG. 'y' (default / absent)
+   * is the historical horizontal value-axis line; 'x' makes a constant line a
+   * VERTICAL category-axis line — {@link computeReferenceLines} maps it to
+   * {@link ComputedReferenceLine.orientation} = 'v', and `value` is read as a
+   * category-axis position. Ignored for non-constant kinds (which are always
+   * horizontal value-axis statistics), so the field is additive + back-compatible.
+   */
+  axis?: 'x' | 'y';
   /**
    * Which numeric series the line is computed over (a result-column header). When
    * absent, the PRIMARY (first) numeric series is used — matching LoomChart.
@@ -167,6 +190,49 @@ export interface AnalyticsSymmetry {
 }
 
 /**
+ * One anomaly-detection definition (PBI Analytics → Find anomalies, wave-5). A
+ * REAL computation — never an approximate shape with a caption: {@link
+ * computeAnomalies} runs a trailing rolling-mean / rolling-std z-score over the
+ * targeted numeric series, flags any point whose |z| exceeds a sensitivity-driven
+ * threshold, and shades the rolling expected band. `useAdx` OPTS the detection
+ * over to ADX `series_decompose_anomalies` — but ONLY when the report is bound to
+ * a Kusto / ADX source; absent one the pane shows an honest inline caption and the
+ * client computation is used (no dead control, per no-vaporware.md).
+ */
+export interface AnalyticsAnomaly {
+  /** Stable client id. */
+  id: string;
+  /** Numeric series to scan (a result-column header); primary when absent. */
+  measure?: string;
+  /** Detection sensitivity, 0–100 (higher ⇒ flags more; ~100 ≈ 1.5σ, ~0 ≈ 3.5σ). */
+  sensitivity: number;
+  /** Flag-ring + band color — a Loom brand-palette swatch token. */
+  color: string;
+  /** Opt into ADX series_decompose_anomalies (only acts with a Kusto source bound). */
+  useAdx?: boolean;
+}
+
+/**
+ * One shaded analytics range (PBI Analytics-style highlight band, wave-5). A
+ * translucent rectangle drawn UNDER the marks between two STRUCTURED numeric
+ * positions on the value axis (`axis:'y'`) or the category axis (`axis:'x'`).
+ * Structured numeric inputs only (no-freeform-config); {@link computeShadedRanges}
+ * passes it straight to LoomChart's `shadedRanges` prop.
+ */
+export interface AnalyticsShadedRange {
+  /** Stable client id. */
+  id: string;
+  /** Range start (data space — a value when axis:'y', a category index when axis:'x'). */
+  from: number;
+  /** Range end (data space — same axis semantics as `from`). */
+  to: number;
+  /** Which axis the band spans: 'y' = value axis, 'x' = category axis. */
+  axis: 'x' | 'y';
+  /** Fill color — a Loom brand-palette swatch token. */
+  color: string;
+}
+
+/**
  * The Analytics model attached to a visual. `lines` are the wave-1 reference
  * lines; `errorBars` / `forecast` / `symmetry` are the additive wave-2 families
  * (all OPTIONAL + sanitized — the read-only viewer + PBIR provisioner ignore
@@ -180,6 +246,10 @@ export interface ReportAnalytics {
   forecast?: AnalyticsForecast[];
   /** Symmetry shading (scatter only — PBI Analytics → Symmetry shading). */
   symmetry?: AnalyticsSymmetry;
+  /** Anomaly-detection overlays (wave-5 — PBI Analytics → Find anomalies). */
+  anomalies?: AnalyticsAnomaly[];
+  /** Shaded value/category range bands (wave-5). */
+  shadedRanges?: AnalyticsShadedRange[];
 }
 
 // ── Line-kind catalogue (PBI Analytics pane rows) ────────────────────────────
@@ -212,6 +282,12 @@ const LINE_STYLES: { id: AnalyticsLineStyle; label: string }[] = [
   { id: 'solid',  label: 'Solid' },
   { id: 'dashed', label: 'Dashed' },
   { id: 'dotted', label: 'Dotted' },
+];
+
+/** Axis a CONSTANT line is constant ALONG (PBI: X-Axis / Y-Axis constant line). */
+const CONSTANT_AXES: { id: 'y' | 'x'; label: string }[] = [
+  { id: 'y', label: 'Y-Axis (horizontal)' },
+  { id: 'x', label: 'X-Axis (vertical)' },
 ];
 
 // ── Where the Analytics pane is available (PBI: cartesian value-axis charts) ──
@@ -370,6 +446,14 @@ export interface ComputedReferenceLine {
   style: AnalyticsLineStyle;
   /** Resolved label (name + value) when `showLabel`; otherwise undefined. */
   label?: string;
+  /**
+   * Wave-5: which axis the line is constant ALONG. 'h' (default / undefined)
+   * reproduces the historical value-axis line; 'v' marks an X-Axis constant line
+   * (a VERTICAL category-axis line) — LoomChart honors this via its refLines
+   * `orientation` prop. Only emitted for a constant line authored with axis:'x',
+   * so existing horizontal lines are byte-identical (no `orientation` key).
+   */
+  orientation?: 'h' | 'v';
 }
 
 function fmtNum(v: number): string {
@@ -441,7 +525,14 @@ export function computeReferenceLines(
       label = `${name} · ${shown}`;
     }
 
-    out.push({ id: line.id, kind: line.kind, y, y2, color: line.color, style: line.style, label });
+    // Wave-5: a CONSTANT line authored on the category axis (axis:'x') is a
+    // VERTICAL line — surface it via `orientation:'v'` so LoomChart draws it
+    // across the value axis at the category-index position `y`. Every other line
+    // stays horizontal (no `orientation` key ⇒ byte-identical to prior output).
+    const orientation: 'v' | undefined =
+      line.kind === 'constant' && line.axis === 'x' ? 'v' : undefined;
+
+    out.push({ id: line.id, kind: line.kind, y, y2, color: line.color, style: line.style, label, ...(orientation ? { orientation } : {}) });
   }
   return out;
 }
@@ -612,6 +703,121 @@ export function computeSymmetry(
   return { id: sym.id, color: sym.color, min, max };
 }
 
+// ── Computed anomalies / shaded ranges (consumed by LoomChart, wave-5) ────────
+
+/** The category-label series for these rows (lock-step with {@link numericSeriesFromRows}
+ *  and LoomChart.parseRows — the first non-numeric column, else the first column). */
+export function categoryLabelsFromRows(rows: Array<Record<string, unknown>>): string[] {
+  if (!rows || rows.length === 0) return [];
+  const cols = Object.keys(rows[0]);
+  if (cols.length === 0) return [];
+  const firstNumericIdx = cols.findIndex((c) => rows.some((r) => isNumeric(r[c])));
+  const labelCol = firstNumericIdx === 0
+    ? cols[0]
+    : (cols.find((c) => rows.some((r) => !isNumeric(r[c]) && r[c] != null)) ?? cols[0]);
+  return rows.map((r) => (r[labelCol] == null ? '—' : String(r[labelCol])));
+}
+
+/**
+ * A resolved anomaly overlay ready for LoomChart's `anomalies` prop: every
+ * category position with its plotted value + an `isAnomaly` flag, plus the
+ * rolling expected `band` (low..high) keyed by category label. Structurally a
+ * superset of LoomChart's `ChartAnomalies` (adds an `id`), so the designer passes
+ * it straight through.
+ */
+export interface ComputedAnomaly {
+  id: string;
+  points: Array<{ x: string | number; value: number; isAnomaly: boolean }>;
+  band: Array<{ x: string | number; low: number; high: number }>;
+  color: string;
+}
+
+/**
+ * Resolve a visual's {@link ReportAnalytics.anomalies} into drawable overlays
+ * from its real result `rows`. For each definition a TRAILING rolling window
+ * (`window = clamp(round(n/8), 3, 24)`) yields a rolling mean + sample standard
+ * deviation; a point is flagged when `|value − mean| / sd` exceeds a
+ * sensitivity-driven z threshold (`3.5 − (sensitivity/100)·2` ⇒ ~1.5σ at 100,
+ * ~3.5σ at 0). The expected `band` is `mean ± z·sd`. A real computation — no
+ * approximate caption. Definitions that resolve no series (or flag nothing and
+ * have no band) are dropped so there is never a ghost overlay. When `useAdx` is
+ * set the host may instead post `series_decompose_anomalies` to a bound ADX
+ * source; this client pass is the no-Kusto-source default.
+ */
+export function computeAnomalies(
+  rows: Array<Record<string, unknown>>,
+  analytics?: ReportAnalytics | null,
+): ComputedAnomaly[] {
+  const defs = analytics?.anomalies;
+  if (!defs || defs.length === 0) return [];
+  if (!rows || rows.length === 0) return [];
+  const all = numericSeriesFromRows(rows);
+  if (all.length === 0) return [];
+  const cats = categoryLabelsFromRows(rows);
+
+  const out: ComputedAnomaly[] = [];
+  for (const def of defs) {
+    const series = def.measure ? (all.find((s) => s.name === def.measure) ?? all[0]) : all[0];
+    if (!series || series.values.length === 0) continue;
+    const vals = series.values;
+    const n = vals.length;
+    const window = Math.min(24, Math.max(3, Math.round(n / 8)));
+    const sens = Math.min(100, Math.max(0, Number(def.sensitivity ?? 50)));
+    const zThreshold = 3.5 - (sens / 100) * 2.0;
+
+    const points: ComputedAnomaly['points'] = [];
+    const band: ComputedAnomaly['band'] = [];
+    let flagged = 0;
+    for (let i = 0; i < n; i++) {
+      const win = vals.slice(Math.max(0, i - window + 1), i + 1).filter((v) => Number.isFinite(v));
+      const m = win.length ? win.reduce((a, b) => a + b, 0) / win.length : 0;
+      const variance = win.length > 1 ? win.reduce((a, b) => a + (b - m) ** 2, 0) / (win.length - 1) : 0;
+      const sd = Math.sqrt(variance);
+      const x = cats[i] ?? String(i);
+      const v = vals[i];
+      const isAnomaly = sd > 0 && Number.isFinite(v) && Math.abs((v - m) / sd) > zThreshold;
+      if (isAnomaly) flagged += 1;
+      points.push({ x, value: Number.isFinite(v) ? v : 0, isAnomaly });
+      if (sd > 0) band.push({ x, low: m - zThreshold * sd, high: m + zThreshold * sd });
+    }
+    // Nothing to draw (flat series ⇒ no band, no flags) ⇒ drop, never a ghost overlay.
+    if (band.length === 0 && flagged === 0) continue;
+    out.push({ id: def.id, points, band, color: def.color });
+  }
+  return out;
+}
+
+/**
+ * A resolved shaded range ready for LoomChart's `shadedRanges` prop. A structural
+ * superset of LoomChart's `ChartShadedRange` (adds an `id`), so the designer passes
+ * it straight through.
+ */
+export interface ComputedShadedRange {
+  id: string;
+  from: number;
+  to: number;
+  axis: 'x' | 'y';
+  color: string;
+}
+
+/**
+ * Resolve {@link ReportAnalytics.shadedRanges} into LoomChart shaded-range bands.
+ * A pure pass-through of the author's STRUCTURED numeric inputs — ranges whose
+ * `from`/`to` aren't finite are dropped so nothing draws at a bogus position.
+ */
+export function computeShadedRanges(
+  analytics?: ReportAnalytics | null,
+): ComputedShadedRange[] {
+  const defs = analytics?.shadedRanges;
+  if (!defs || defs.length === 0) return [];
+  const out: ComputedShadedRange[] = [];
+  for (const r of defs) {
+    if (!Number.isFinite(r.from) || !Number.isFinite(r.to)) continue;
+    out.push({ id: r.id, from: r.from, to: r.to, axis: r.axis === 'x' ? 'x' : 'y', color: r.color });
+  }
+  return out;
+}
+
 // ── Model helpers (parse / construct) ────────────────────────────────────────
 
 /** An empty analytics model (no reference lines). */
@@ -619,13 +825,15 @@ export function emptyAnalytics(): ReportAnalytics {
   return { lines: [] };
 }
 
-/** True when a model has at least one reference line, error bar, forecast, or active symmetry shading. */
+/** True when a model has at least one reference line, error bar, forecast, active symmetry shading, anomaly, or shaded range. */
 export function hasAnalytics(a?: ReportAnalytics | null): boolean {
   if (!a) return false;
   return (Array.isArray(a.lines) && a.lines.length > 0)
     || (Array.isArray(a.errorBars) && a.errorBars.length > 0)
     || (Array.isArray(a.forecast) && a.forecast.length > 0)
-    || (!!a.symmetry && a.symmetry.enabled === true);
+    || (!!a.symmetry && a.symmetry.enabled === true)
+    || (Array.isArray(a.anomalies) && a.anomalies.length > 0)
+    || (Array.isArray(a.shadedRanges) && a.shadedRanges.length > 0);
 }
 
 function uid(): string {
@@ -701,6 +909,43 @@ function parseSymmetry(value: unknown): AnalyticsSymmetry | undefined {
   };
 }
 
+/** Defensively hydrate persisted anomaly-detection definitions (unknown shapes dropped). */
+function parseAnomalies(value: unknown): AnalyticsAnomaly[] {
+  if (!Array.isArray(value)) return [];
+  const out: AnalyticsAnomaly[] = [];
+  for (const r of value) {
+    const o = (r || {}) as Record<string, unknown>;
+    out.push({
+      id: typeof o.id === 'string' && o.id ? o.id : uid(),
+      measure: typeof o.measure === 'string' && o.measure ? o.measure : undefined,
+      sensitivity: numOrUndef(o.sensitivity, 0, 100) ?? 50,
+      color: typeof o.color === 'string' && o.color ? o.color : LOOM_DATA_PALETTE[4].token,
+      useAdx: o.useAdx === true ? true : undefined,
+    });
+  }
+  return out;
+}
+
+/** Defensively hydrate persisted shaded-range definitions (non-finite bounds dropped). */
+function parseShadedRanges(value: unknown): AnalyticsShadedRange[] {
+  if (!Array.isArray(value)) return [];
+  const out: AnalyticsShadedRange[] = [];
+  for (const r of value) {
+    const o = (r || {}) as Record<string, unknown>;
+    const from = numOrUndef(o.from);
+    const to = numOrUndef(o.to);
+    if (from == null || to == null) continue;
+    out.push({
+      id: typeof o.id === 'string' && o.id ? o.id : uid(),
+      from,
+      to,
+      axis: o.axis === 'x' ? 'x' : 'y',
+      color: typeof o.color === 'string' && o.color ? o.color : LOOM_DATA_PALETTE[5].token,
+    });
+  }
+  return out;
+}
+
 /**
  * Defensively parse a persisted/wire value into {@link ReportAnalytics} (it
  * arrives from Cosmos `visual.config.analytics` or a PUT body). Unknown shapes
@@ -723,6 +968,7 @@ export function parseAnalytics(value: unknown): ReportAnalytics {
     lines.push({
       id: typeof o.id === 'string' && o.id ? o.id : uid(),
       kind,
+      axis: o.axis === 'x' ? 'x' : undefined,
       measure: typeof o.measure === 'string' && o.measure ? o.measure : undefined,
       value: typeof o.value === 'number' && Number.isFinite(o.value) ? o.value : undefined,
       percentile: typeof o.percentile === 'number' && Number.isFinite(o.percentile)
@@ -740,6 +986,10 @@ export function parseAnalytics(value: unknown): ReportAnalytics {
   if (forecast.length) model.forecast = forecast;
   const symmetry = parseSymmetry(obj.symmetry);
   if (symmetry) model.symmetry = symmetry;
+  const anomalies = parseAnomalies(obj.anomalies);
+  if (anomalies.length) model.anomalies = anomalies;
+  const shadedRanges = parseShadedRanges(obj.shadedRanges);
+  if (shadedRanges.length) model.shadedRanges = shadedRanges;
   return model;
 }
 
@@ -777,12 +1027,24 @@ function newSymmetry(): AnalyticsSymmetry {
   return { id: uid(), enabled: true, color: LOOM_DATA_PALETTE[2].token };
 }
 
+/** Construct a new anomaly-detection definition (defaults: 50% sensitivity, client pass). */
+function newAnomaly(): AnalyticsAnomaly {
+  return { id: uid(), sensitivity: 50, color: LOOM_DATA_PALETTE[4].token };
+}
+
+/** Construct a new shaded-range definition (defaults: a value-axis 0–10 band). */
+function newShadedRange(): AnalyticsShadedRange {
+  return { id: uid(), from: 0, to: 10, axis: 'y', color: LOOM_DATA_PALETTE[5].token };
+}
+
 /** Prune a model to its sparse persisted shape (drop empty families). */
 function pruneModel(m: ReportAnalytics): ReportAnalytics {
   const out: ReportAnalytics = { lines: m.lines ?? [] };
   if (m.errorBars && m.errorBars.length) out.errorBars = m.errorBars;
   if (m.forecast && m.forecast.length) out.forecast = m.forecast;
   if (m.symmetry) out.symmetry = m.symmetry;
+  if (m.anomalies && m.anomalies.length) out.anomalies = m.anomalies;
+  if (m.shadedRanges && m.shadedRanges.length) out.shadedRanges = m.shadedRanges;
   return out;
 }
 
@@ -894,21 +1156,39 @@ function LineCard({
         onChange={(_e, d) => onChange({ label: d.value })}
       />
 
-      {/* constant value (numeric) */}
+      {/* constant value (numeric) + axis (Y horizontal / X vertical) */}
       {line.kind === 'constant' && (
-        <div className={styles.fieldCol}>
-          <Caption1 className={styles.muted}>Value</Caption1>
-          <Input
-            size="small"
-            type="number"
-            aria-label="Constant value"
-            value={line.value == null ? '' : String(line.value)}
-            onChange={(_e, d) => {
-              const n = Number(d.value);
-              onChange({ value: d.value === '' || Number.isNaN(n) ? undefined : n });
-            }}
-          />
-        </div>
+        <>
+          <div className={styles.fieldCol}>
+            <Caption1 className={styles.muted}>Axis</Caption1>
+            <Dropdown
+              size="small"
+              aria-label="Constant line axis"
+              value={(CONSTANT_AXES.find((a) => a.id === (line.axis ?? 'y')) ?? CONSTANT_AXES[0]).label}
+              selectedOptions={[line.axis ?? 'y']}
+              onOptionSelect={(_e, d) => onChange({ axis: d.optionValue === 'x' ? 'x' : undefined })}
+            >
+              {CONSTANT_AXES.map((a) => (
+                <Option key={a.id} value={a.id} text={a.label}>{a.label}</Option>
+              ))}
+            </Dropdown>
+          </div>
+          <div className={styles.fieldCol}>
+            <Caption1 className={styles.muted}>
+              {(line.axis ?? 'y') === 'x' ? 'Category position (index)' : 'Value'}
+            </Caption1>
+            <Input
+              size="small"
+              type="number"
+              aria-label="Constant value"
+              value={line.value == null ? '' : String(line.value)}
+              onChange={(_e, d) => {
+                const n = Number(d.value);
+                onChange({ value: d.value === '' || Number.isNaN(n) ? undefined : n });
+              }}
+            />
+          </div>
+        </>
       )}
 
       {/* percentile (0–100) */}
@@ -1358,6 +1638,169 @@ function SymmetryCard({
   );
 }
 
+// ── Anomaly-detection card (PBI Analytics → Find anomalies, scatter excluded) ──
+
+function AnomalyCard({
+  anomaly, seriesNames, adxAvailable, styles, onChange, onRemove,
+}: {
+  anomaly: AnalyticsAnomaly;
+  seriesNames: string[];
+  /** True when the report is bound to a Kusto / ADX source (enables the ADX path). */
+  adxAvailable: boolean;
+  styles: ReturnType<typeof useStyles>;
+  onChange: (patch: Partial<AnalyticsAnomaly>) => void;
+  onRemove: () => void;
+}): ReactElement {
+  const sens = Math.min(100, Math.max(0, anomaly.sensitivity ?? 50));
+  return (
+    <div className={styles.card}>
+      <div className={styles.cardHead}>
+        <span className={styles.cardKind}>
+          <Warning20Regular />
+          <Caption1><strong>Anomaly detection</strong></Caption1>
+        </span>
+        <span style={{ flex: 1 }} />
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<Delete20Regular />}
+          aria-label="Remove anomaly detection"
+          title="Remove anomaly detection"
+          onClick={onRemove}
+        />
+      </div>
+
+      {seriesNames.length > 1 && (
+        <SeriesPicker
+          label="Scan series"
+          value={anomaly.measure}
+          seriesNames={seriesNames}
+          styles={styles}
+          includePrimary
+          onChange={(name) => onChange({ measure: name })}
+        />
+      )}
+
+      <div className={styles.fieldCol}>
+        <Caption1 className={styles.muted}>Sensitivity — {sens} (higher flags more)</Caption1>
+        <Slider
+          min={0}
+          max={100}
+          step={1}
+          value={sens}
+          aria-label="Anomaly sensitivity"
+          onChange={(_e, d) => onChange({ sensitivity: Math.min(100, Math.max(0, d.value)) })}
+        />
+      </div>
+
+      <ColorSwatches value={anomaly.color} styles={styles} onPick={(t) => onChange({ color: t })} label="Marker color" />
+
+      <Switch
+        label="Use Azure Data Explorer (series_decompose_anomalies)"
+        checked={anomaly.useAdx === true}
+        onChange={(_e, d) => onChange({ useAdx: d.checked ? true : undefined })}
+      />
+      {anomaly.useAdx === true && !adxAvailable ? (
+        <Caption1 className={styles.muted}>
+          <DatabasePlugConnected20Regular style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+          ADX path needs a Kusto-bound model. Bind an Azure Data Explorer source to run
+          series_decompose_anomalies on the cluster — the in-browser rolling z-score computation is used until then.
+        </Caption1>
+      ) : (
+        <Caption1 className={styles.hint}>
+          {anomaly.useAdx === true
+            ? 'Anomalies are detected on the bound ADX cluster via series_decompose_anomalies.'
+            : 'A trailing rolling-mean / standard-deviation z-score over this visual’s real rows flags out-of-band points and shades the expected range.'}
+        </Caption1>
+      )}
+    </div>
+  );
+}
+
+// ── Shaded-range card (translucent value / category band) ─────────────────────
+
+/** Axis a shaded range spans (value vs. category). */
+const SHADED_AXES: { id: 'y' | 'x'; label: string }[] = [
+  { id: 'y', label: 'Value axis' },
+  { id: 'x', label: 'Category axis (index)' },
+];
+
+function ShadedRangeCard({
+  range, styles, onChange, onRemove,
+}: {
+  range: AnalyticsShadedRange;
+  styles: ReturnType<typeof useStyles>;
+  onChange: (patch: Partial<AnalyticsShadedRange>) => void;
+  onRemove: () => void;
+}): ReactElement {
+  const axisLabel = SHADED_AXES.find((a) => a.id === range.axis)?.label ?? 'Value axis';
+  return (
+    <div className={styles.card}>
+      <div className={styles.cardHead}>
+        <span className={styles.cardKind}>
+          <Layer20Regular />
+          <Caption1><strong>Shaded range</strong></Caption1>
+        </span>
+        <span style={{ flex: 1 }} />
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={<Delete20Regular />}
+          aria-label="Remove shaded range"
+          title="Remove shaded range"
+          onClick={onRemove}
+        />
+      </div>
+
+      <div className={styles.fieldCol}>
+        <Caption1 className={styles.muted}>Axis</Caption1>
+        <Dropdown
+          size="small"
+          aria-label="Shaded range axis"
+          value={axisLabel}
+          selectedOptions={[range.axis]}
+          onOptionSelect={(_e, d) => onChange({ axis: d.optionValue === 'x' ? 'x' : 'y' })}
+        >
+          {SHADED_AXES.map((a) => (
+            <Option key={a.id} value={a.id} text={a.label}>{a.label}</Option>
+          ))}
+        </Dropdown>
+      </div>
+
+      <div className={styles.fieldRow}>
+        <div className={styles.fieldCol}>
+          <Caption1 className={styles.muted}>From</Caption1>
+          <Input
+            size="small"
+            type="number"
+            aria-label="Shaded range from"
+            value={String(range.from)}
+            onChange={(_e, d) => {
+              const n = Number(d.value);
+              if (d.value !== '' && Number.isFinite(n)) onChange({ from: n });
+            }}
+          />
+        </div>
+        <div className={styles.fieldCol}>
+          <Caption1 className={styles.muted}>To</Caption1>
+          <Input
+            size="small"
+            type="number"
+            aria-label="Shaded range to"
+            value={String(range.to)}
+            onChange={(_e, d) => {
+              const n = Number(d.value);
+              if (d.value !== '' && Number.isFinite(n)) onChange({ to: n });
+            }}
+          />
+        </div>
+      </div>
+
+      <ColorSwatches value={range.color} styles={styles} onPick={(t) => onChange({ color: t })} />
+    </div>
+  );
+}
+
 // ── AnalyticsPane ─────────────────────────────────────────────────────────────
 
 export interface AnalyticsPaneProps {
@@ -1373,6 +1816,13 @@ export interface AnalyticsPaneProps {
    * used.
    */
   seriesNames?: string[];
+  /**
+   * True when the selected report/visual is bound to a Kusto / Azure Data Explorer
+   * source. Drives the anomaly card's `useAdx` honest gate — when false and the
+   * author toggles ADX on, an inline caption explains the client computation is
+   * used instead (no dead control). Optional; defaults false.
+   */
+  adxAvailable?: boolean;
   /** Emit the next analytics model; host wires this to `mutateVisual`. */
   onChange: (next: ReportAnalytics) => void;
 }
@@ -1384,7 +1834,7 @@ export interface AnalyticsPaneProps {
  * selected or the visual has no value axis (PBI: "not available for this
  * visual").
  */
-export function AnalyticsPane({ visualType, analytics, seriesNames, onChange }: AnalyticsPaneProps): ReactElement {
+export function AnalyticsPane({ visualType, analytics, seriesNames, adxAvailable = false, onChange }: AnalyticsPaneProps): ReactElement {
   const styles = useStyles();
   const [pendingKind, setPendingKind] = useState<AnalyticsLineKind>('average');
 
@@ -1412,12 +1862,14 @@ export function AnalyticsPane({ visualType, analytics, seriesNames, onChange }: 
   const errorBars = analytics?.errorBars ?? [];
   const forecasts = analytics?.forecast ?? [];
   const symmetry = analytics?.symmetry;
+  const anomalies = analytics?.anomalies ?? [];
+  const shadedRanges = analytics?.shadedRanges ?? [];
   const names = seriesNames ?? [];
   const isScatter = visualType === 'scatter';
 
   // All families round-trip through one onChange — pruneModel keeps the stored
   // shape sparse, and {@link parseAnalytics} hydrates each independently.
-  const baseModel: ReportAnalytics = { lines, errorBars, forecast: forecasts, symmetry };
+  const baseModel: ReportAnalytics = { lines, errorBars, forecast: forecasts, symmetry, anomalies, shadedRanges };
   const emit = (patch: Partial<ReportAnalytics>) => onChange(pruneModel({ ...baseModel, ...patch }));
 
   const addLine = () => emit({ lines: [...lines, newLine(pendingKind, lines.length)] });
@@ -1434,6 +1886,16 @@ export function AnalyticsPane({ visualType, analytics, seriesNames, onChange }: 
   const patchForecast = (id: string, patch: Partial<AnalyticsForecast>) =>
     emit({ forecast: forecasts.map((f) => (f.id === id ? { ...f, ...patch } : f)) });
   const removeForecast = (id: string) => emit({ forecast: forecasts.filter((f) => f.id !== id) });
+
+  const addAnomaly = () => emit({ anomalies: [...anomalies, newAnomaly()] });
+  const patchAnomaly = (id: string, patch: Partial<AnalyticsAnomaly>) =>
+    emit({ anomalies: anomalies.map((a) => (a.id === id ? { ...a, ...patch } : a)) });
+  const removeAnomaly = (id: string) => emit({ anomalies: anomalies.filter((a) => a.id !== id) });
+
+  const addShadedRange = () => emit({ shadedRanges: [...shadedRanges, newShadedRange()] });
+  const patchShadedRange = (id: string, patch: Partial<AnalyticsShadedRange>) =>
+    emit({ shadedRanges: shadedRanges.map((r) => (r.id === id ? { ...r, ...patch } : r)) });
+  const removeShadedRange = (id: string) => emit({ shadedRanges: shadedRanges.filter((r) => r.id !== id) });
 
   const setSymmetry = (patch: Partial<AnalyticsSymmetry>) =>
     emit({ symmetry: { ...(symmetry ?? newSymmetry()), ...patch } });
@@ -1546,6 +2008,62 @@ export function AnalyticsPane({ visualType, analytics, seriesNames, onChange }: 
               styles={styles}
               onChange={(patch) => patchForecast(fc.id, patch)}
               onRemove={() => removeForecast(fc.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Anomaly detection ───────────────────────────────────────────────── */}
+      <Divider />
+      <div>
+        <SectionHead icon={<Warning20Regular />} label="Anomaly detection" styles={styles} />
+        <Caption1 className={styles.muted}>
+          Flag out-of-band points with a rolling z-score over this visual&apos;s data — or Azure Data Explorer when a Kusto source is bound.
+        </Caption1>
+      </div>
+      <div className={styles.addRow}>
+        <Button appearance="secondary" size="small" icon={<Add20Regular />} onClick={addAnomaly}>
+          Add anomaly detection
+        </Button>
+      </div>
+      {anomalies.length > 0 && (
+        <div className={styles.list}>
+          {anomalies.map((an) => (
+            <AnomalyCard
+              key={an.id}
+              anomaly={an}
+              seriesNames={names}
+              adxAvailable={adxAvailable}
+              styles={styles}
+              onChange={(patch) => patchAnomaly(an.id, patch)}
+              onRemove={() => removeAnomaly(an.id)}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* ── Shaded ranges ───────────────────────────────────────────────────── */}
+      <Divider />
+      <div>
+        <SectionHead icon={<Layer20Regular />} label="Shaded ranges" styles={styles} />
+        <Caption1 className={styles.muted}>
+          Highlight a value or category band — a translucent rectangle drawn under the marks.
+        </Caption1>
+      </div>
+      <div className={styles.addRow}>
+        <Button appearance="secondary" size="small" icon={<Add20Regular />} onClick={addShadedRange}>
+          Add shaded range
+        </Button>
+      </div>
+      {shadedRanges.length > 0 && (
+        <div className={styles.list}>
+          {shadedRanges.map((r) => (
+            <ShadedRangeCard
+              key={r.id}
+              range={r}
+              styles={styles}
+              onChange={(patch) => patchShadedRange(r.id, patch)}
+              onRemove={() => removeShadedRange(r.id)}
             />
           ))}
         </div>

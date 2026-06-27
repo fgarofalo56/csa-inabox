@@ -30,9 +30,14 @@ read-only report viewer and the report-visual-designer Power-BI canvas):
 | Persist whole definition | apps/fiab-console/app/api/items/report/[id]/definition/route.ts |
 | Data-source binding | apps/fiab-console/lib/editors/report/data-source-picker.tsx + .../data-source/route.ts |
 | Canvas layout / page model | apps/fiab-console/lib/editors/report/use-canvas-layout.ts |
-| Analytics pane (reference lines + Wave-2 error-bars/forecast/symmetry) | apps/fiab-console/lib/editors/report/analytics-pane.tsx |
+| Analytics pane (reference lines + Wave-2 error-bars/forecast/symmetry + **Wave-5 anomalies / X-lines / shaded ranges**) | apps/fiab-console/lib/editors/report/analytics-pane.tsx |
 | Bookmarks pane (**NEW** Wave 2 — right-rail tab) | apps/fiab-console/lib/editors/report/bookmarks-pane.tsx |
 | Selection pane (**NEW** Wave 2 — right-rail tab) | apps/fiab-console/lib/editors/report/selection-pane.tsx |
+| AI visuals (**Wave 3** — decomposition tree / key influencers / Q&A / smart narrative) | apps/fiab-console/lib/editors/report/ai-visuals/*.tsx |
+| Azure-Maps visual (**NEW** Wave 5) | apps/fiab-console/lib/editors/report/map-visual.tsx |
+| Azure-Maps token broker (**NEW** Wave-5 route — the **only** new route Wave 5 adds) | apps/fiab-console/app/api/items/report/[id]/map-token/route.ts |
+| Azure-Maps backend resolver (server) | apps/fiab-console/lib/azure/maps-client.ts |
+| Azure Maps account (**NEW** Wave-5 bicep) | platform/fiab/bicep/modules/landing-zone/azure-maps.bicep |
 
 ## Backend selection (no-fabric-dependency.md)
 
@@ -77,6 +82,11 @@ claimed live that is not.
   **Selection** right-rail panes. Every new shape persists through the existing
   PUT /definition as an **additive, sanitizer-whitelisted** key — the read-only
   viewer and the PBIR provisioner ignore unknowns, so waves 0-1 do not regress.
+- **OK Wave 3** — the committed Wave-3 build: the **AI visuals** (decomposition
+  tree, key influencers, Q&A, smart narrative) render through
+  `lib/editors/report/ai-visuals/*.tsx` over the same Path-3 result rows, with an
+  Azure OpenAI / ADX honest-gate (`LOOM_AOAI_*` / `LOOM_ADX_CLUSTER`) when those
+  back-ends are unbound — the full visual surface still renders.
 - **OK Wave 4** — the committed Wave-4 build: the R / Python **script visuals**,
   backed by a REAL Azure-native sandboxed executor (the `loom-script-runner` ACA
   app) reached through the program's **first new BFF route** (`/script-visual`).
@@ -85,10 +95,31 @@ claimed live that is not.
   executor behind an honest `LOOM_SCRIPT_RUNNER_URL` gate, while still reusing
   /query Path-3 verbatim for its data. See **Follow-on Wave 4** for the executor,
   the sandbox threat model, the bicep sync, and the least-privilege-UAMI caveat.
+- **OK Wave 5** — the committed Wave-5 build: **true chart geometry** in
+  loom-chart.tsx renders REAL geometry from the SAME /query rows (no new route
+  except the Azure-Maps token broker), retiring every `APPROX_GEOMETRY` caption as
+  its geometry lands. It delivers (a) real stacked / 100%-stacked / stacked-area,
+  dual-axis **combo** (line + clustered/stacked column), **ribbon** rank-connectors,
+  running-total **waterfall** with a Total bar, **funnel**, squarified **treemap**
+  (with a Details sub-partition), radial **gauge** arc + target needle, and **KPI**
+  indicator + sparkline + goal delta — all dependency-free SVG over the existing
+  parseRows scales (new LoomChart props are optional + default-off, so the
+  read-only LoomVisual viewer + waves 0-4 render byte-identical); (b) real
+  **Small-multiples trellis** tiling + treemap **Details** sub-grouping via a
+  **1-line additive 2nd GROUP BY** in wells-to-sql.ts (read through a narrow local
+  cast — no aas-dax.ts edit, no new tsc error) and **Tooltips** surfaced in a new
+  **hover popover** (plotted-EXCLUDED, hover-only); (c) a real **multi-style
+  slicer** (list / dropdown / between / relative-date) that emits a `ReportFilter`
+  into the EXISTING applyFilters engine (no engine change); (d) a real
+  **Azure-Maps visual** (bubble + filled/choropleth) behind an honest
+  `LOOM_MAPS_BACKEND` gate, with the new `/map-token` broker + `azure-maps.bicep`;
+  and (e) **anomaly** (client rolling-mean / z-score, ADX `series_decompose_anomalies`
+  opt-in), **X-axis constant lines**, and **shaded ranges** analytics. Every prop
+  is additive + default-off so waves 0-4 and the free-form canvas do not regress.
 - **GATE** — honest infra-gate: the full UI renders and the query still runs, but
   a styled Fluent MessageBar intent="warning" names the exact env var / resource
   to provision (per no-vaporware.md).
-- **MISSING Wave N** — not built; a follow-on wave (2/3/4) owns it, with the plan
+- **MISSING Wave N** — not built; a follow-on wave (2/3/4/5) owns it, with the plan
   + exact files in **Follow-on waves** below. No MISSING exists without a wave +
   plan, and there are **zero disabled "coming soon"** controls (A-grade gate).
 
@@ -96,17 +127,19 @@ Wave-1 key mechanism: the designer queryVisual() **folds the rendered additive
 wells into the existing category / values / legend arrays** that /query +
 buildSqlFromVisual already compile — secondary-values / target / min / max become
 extra value aggregates. So each visual returns REAL aggregated SQL rows. **No new
-BFF route.** Two well families are intentionally **NOT** folded, because LoomChart
-can't yet honor them and folding them corrupts the result: **Tooltips** are
-hover-only in Power BI and would draw as extra plotted series, and **Small
-multiples / treemap Details** would add a 2nd GROUP BY column that LoomChart
-ignores (it reads only the first non-numeric column as the axis) while silently
-changing the aggregation granularity — no trellis. Both are removed from the
-wells UI and the query and return in **Wave 2** (real trellis tiling + detail
-sub-grouping + hover surfacing). Likewise the distinctive PBI **chart geometry**
-for combo / ribbon / waterfall / funnel / treemap / gauge is a **Wave-2**
-LoomChart build: today each renders its REAL rows through the closest shape with
-an honest on-canvas disclosure (`APPROX_GEOMETRY`) — never silent wrong-geometry.
+BFF route.** Two well families were intentionally **NOT** folded in waves 1-2 —
+**Tooltips** (hover-only in Power BI; folding them draws extra plotted series) and
+**Small multiples / treemap Details** (a 2nd GROUP BY column LoomChart could not
+yet tile). **Wave 5 lands both:** buildSqlFromVisual now appends the trellis
+group columns as a **1-line additive 2nd GROUP BY** (read via a narrow local cast,
+no aas-dax.ts edit) so result order stays `category…, legend…, smallMultiples…,
+details…, <aggregates…>` — parseRows still picks category[0] as the axis and the
+renderer pulls the facet by its known alias; Tooltips ride as plotted-EXCLUDED
+aggregates surfaced in the new **hover popover**. Likewise the distinctive PBI
+**chart geometry** for stacked / combo / ribbon / waterfall / funnel / treemap /
+gauge / KPI was a deferred build that **Wave 5 delivers as REAL geometry** in
+loom-chart.tsx — every former `APPROX_GEOMETRY` closest-shape render is retired
+as its true geometry lands (no silent wrong-geometry — the geometry is now real).
 
 ### Wave-2 model additions (additive + sanitized through /definition)
 
@@ -147,6 +180,82 @@ Undo / redo snapshots only the in-memory pages / reportFilters / bookmarks state
 — it never re-queries, because `w`/`h`/`x`/`y`/`hidden`/`z` are not part of the
 visual query signature (queryVisual() still folds only PLOTTED wells).
 
+### Wave-5 additions (true geometry + slicer + maps + analytics)
+
+Wave 5 owns **report-designer.tsx** and the geometry it routes; every change is
+additive + default-off so the read-only viewer, the PBIR provisioner, and waves
+0-4 round-trip byte-identical. The other report/* files (data-source-picker,
+report-data-source, resolver, storage-mode-pane, transform-data, semantic-model)
+are W1-W4 and are **untouched** by this wave.
+
+- **LoomChart geometry props (loom-chart.tsx, all OPTIONAL / default-off):**
+  `stackMode` ('none' | 'stacked' | 'stacked100'); the new chart types
+  `stackedColumn|stackedBar|stackedArea|combo|ribbon|waterfall|funnel|treemap|gauge|kpi`;
+  `comboLineSeries` (secondary-axis line aliases); `target` / `gaugeMin` /
+  `gaugeMax` (gauge); `kpiTrend` / `kpiGoal` / `kpiTarget` (KPI);
+  `smallMultiples:{ facetColumn, columns?, sharedY? }` (trellis splitter);
+  `tooltips` (plotted-EXCLUDED hover-only series); `detailColumn` (treemap nested
+  partition); `refLines[].orientation:'h'|'v'` (X-axis constant lines);
+  `anomalies:{ points, band?, color }`; `shadedRanges:{ from,to,axis,color }[]`.
+  All ride the existing parseRows scales as pure dependency-free SVG; a new
+  **HoverPopover** (React-state overlay) replaces the bare `<title>` as the
+  primary affordance (a `<title>` stays for a11y / no-JS).
+- **Registry (report-designer.tsx):** `CHART_RENDER` is now true-geometry
+  (`combo:'combo'`, `ribbon:'ribbon'`, `waterfall:'waterfall'`, `funnel:'funnel'`,
+  `treemap:'treemap'` beside bar/column/line/area/pie/donut/scatter);
+  `APPROX_GEOMETRY` is emptied entry-by-entry to `{}`; `KPI_TYPES` shrinks to
+  `new Set(['card'])` and a new `GAUGE_KPI` routes gauge → `<LoomChart type='gauge'>`
+  and kpi → `<LoomChart type='kpi'>` with target / min / max / goal pulled from the
+  extra value result columns (cols[1..] in well order). Stacking rides a Format
+  field `stacking?: 'none'|'stacked'|'stacked100'` read defensively as
+  `(fmt as any).stacking`.
+- **Wells re-exposed:** queryVisual() STOPS stripping Small multiples / Tooltips /
+  Details. smallMultiples → `wells.smallMultiples`, details → `wells.details`
+  (trellis group cols, folded into the 2nd GROUP BY), tooltips → `wells.tooltips`
+  (plotted-EXCLUDED, passed to LoomChart `tooltips`). `wellsFor()` re-adds Small
+  multiples (charts), Tooltips (charts), Details (treemap).
+- **2nd GROUP BY (wells-to-sql.ts, ADDITIVE):** the card/chart/matrix aggregate
+  branch appends `trellis = [...smallMultiples, ...details]` group columns AFTER
+  `[...category, ...legend]` (read via a narrow local cast — no DaxVisual /
+  aas-dax.ts edit, no new tsc error); the existing alias-dedupe + GROUP BY + SELECT
+  emit them as trailing `<facet> AS [facet]` columns. table / slicer / card
+  branches are UNCHANGED; single-source byte-identical when no smallMultiples /
+  details present.
+- **Slicer:** a real **multi-style** slicer (list / dropdown / between / relative
+  date) emits a `ReportFilter` into the EXISTING applyFilters engine (eq / in /
+  between / ge / le / relativeDate already implemented in filters-pane) — **no
+  engine change** and **no new route**.
+- **Azure Maps:** the `map` visual (map-visual.tsx) — **hosted on the canvas by
+  report-designer.tsx's `VisualBody` `visual.type === 'map'` branch as
+  `<MapVisual …/>`** (the host passes the resolved latitude / longitude / Location /
+  Size / Legend column aliases via `wellResultAlias`, so it is the running
+  designer that renders it, not a standalone file) — draws bubbles (point =
+  (long,lat), radius ∝ √Size, color ramp by Size; geocodes a Location NAME column
+  via Azure Maps Search Fuzzy when no lat/long is bound) or a filled choropleth
+  (Location key joined to a **bundled OSS TopoJSON** feature set). The new
+  **GET /api/items/report/[id]/map-token** route (session + owner checked, parity
+  with /query) brokers a short-lived atlas.microsoft.com credential via
+  `resolveMapsBackend()`: 200 `{ ok:true, mode:'aad', token, clientId, expiresOn }`
+  (Entra/AAD, preferred — Console UAMI carries `Azure Maps Data Reader`) or
+  `{ ok:true, mode:'key', key }` (commercial fallback), else 412
+  `{ ok:false, error, envVar:'LOOM_MAPS_BACKEND', bicep:'…/landing-zone/azure-maps.bicep' }`.
+  The token is scoped to atlas.microsoft.com **alone** — never api.fabric /
+  api.powerbi. `azure-maps.bicep` deploys the account
+  (`Microsoft.Maps/accounts`, sku G2 / kind Gen2; `disableLocalAuth` default-true
+  at gov; Console UAMI → `Azure Maps Data Reader`; diag → LAW), with
+  `LOOM_MAPS_BACKEND` / `LOOM_AZURE_MAPS_CLIENT_ID` / `LOOM_AZURE_MAPS_KEY` wired in
+  admin-plane/main.bicep. **ArcGIS / Shape-map stay OUT** (third-party Esri); filled
+  maps use the OSS TopoJSON asset, never ArcGIS.
+- **Analytics (analytics-pane.tsx):** `AnalyticsLine.axis?:'x'|'y'` (an axis:'x'
+  constant computes a VERTICAL line via `orientation:'v'`); `AnalyticsAnomaly`
+  (`computeAnomalies` runs a trailing rolling-mean / rolling-std z-score, window =
+  clamp(round(n/8),3,24), threshold mapped from a 0-100 `sensitivity` slider —
+  ~1.5σ at 100, ~3.5σ at 0 — returning the `{points,band,color}` LoomChart
+  consumes; an `useAdx` opt-in posts `series_decompose_anomalies` ONLY when a
+  Kusto source is bound, else an honest inline Caption + the client computation —
+  no dead control); `AnalyticsShadedRange` (structured numeric from / to / axis /
+  color passed straight to LoomChart). All structured inputs (no-freeform-config).
+
 ---
 
 ## (1) Visualizations pane — visual-type gallery
@@ -154,42 +263,44 @@ visual query signature (queryVisual() still folds only PLOTTED wells).
 Source: power-bi-visualizations-overview. Shipped gallery (VISUALS in
 report-designer.tsx): table, matrix, card, column, bar, line, area, pie, donut,
 scatter, slicer (11). LoomChart renders bar/column/line/area/pie/donut/scatter
-as dependency-free SVG.
+as dependency-free SVG; **Wave 5** extends it with true stacked / combo / ribbon /
+waterfall / funnel / treemap / gauge / kpi geometry (same dependency-free SVG over
+the existing parseRows scales), plus the `map` Azure-Maps visual.
 
 | Visual type | Status | Wave | Backend / render |
 |---|---|---|---|
 | Clustered bar / column | OK shipped | — | wells to buildSqlFromVisual GROUP BY; LoomChart grouped bars (multi-series already supported) |
-| Stacked bar / column | GATE | 2 | SQL rows are real; LoomChart draws GROUPED (clustered) bars today — true stacking + the Format stacking toggle ship in Wave 2 |
-| 100%-stacked bar / column | GATE | 2 | SQL rows are real; per-category 100% normalization is a Wave-2 LoomChart build (drawn clustered today) |
+| Stacked bar / column | OK Wave 5 | 5 | REAL stacked geometry: LoomChart `stackedColumn`/`stackedBar` (or bar/column + `stackMode='stacked'`) draws per-category cumulative offsets (positive/negative split at zero) over the real GROUP BY rows; the Format **stacking** toggle drives it |
+| 100%-stacked bar / column | OK Wave 5 | 5 | REAL geometry: `stackMode='stacked100'` normalizes each category's series to its sum (per-category 100%) over the real rows |
 | Line | OK shipped | — | LineAreaChart |
 | Area | OK shipped | — | LineAreaChart (areaFill) |
-| Stacked area | GATE | 2 | SQL rows are real; cumulative area stacking is a Wave-2 LoomChart build (drawn as overlaid area today) |
-| Combo — line + clustered column | GATE | 2 | Secondary-values well adds a real extra aggregate in the SAME SELECT; LoomChart draws it as another clustered column today — the dual-axis line render is Wave 2 (APPROX_GEOMETRY disclosed) |
-| Combo — line + stacked column | GATE | 2 | as above; dual-axis line + stacked columns are Wave 2 |
-| Ribbon | GATE | 2 | category+legend+value rows are real; ribbon rank-connectors are a Wave-2 LoomChart build (drawn as clustered columns today, APPROX_GEOMETRY disclosed) |
-| Waterfall | GATE | 2 | category + value rows are real; running-total rise/fall/total geometry is a Wave-2 LoomChart build (drawn as columns today, APPROX_GEOMETRY disclosed) |
-| Funnel | GATE | 2 | category + value rows are real; funnel geometry is a Wave-2 LoomChart build (drawn as bars today, APPROX_GEOMETRY disclosed) |
+| Stacked area | OK Wave 5 | 5 | REAL geometry: `stackedArea` draws cumulative band paths (lower = prev cumulative, upper = + series) over the real rows |
+| Combo — line + clustered column | OK Wave 5 | 5 | REAL dual-axis: `combo` paints the secondary-values aliases (`comboLineSeries`) as a LINE on a SECONDARY right-hand Y axis; every other numeric series as a clustered COLUMN on the primary axis — same /query SELECT |
+| Combo — line + stacked column | OK Wave 5 | 5 | REAL: `combo` + `stackMode='stacked'` stacks the primary columns under the secondary-axis line |
+| Ribbon | OK Wave 5 | 5 | REAL: `ribbon` draws clustered columns + Bézier ribbons connecting each series' rank between adjacent categories (ribbon width ∝ value, color = series) over the real category+legend+value rows |
+| Waterfall | OK Wave 5 | 5 | REAL running-total: `waterfall` floats each bar from prevCumulative → cumulative (increase = Green / decrease = Red tokens) + an explicit **Total** bar (Brand) over the real rows |
+| Funnel | OK Wave 5 | 5 | REAL: `funnel` draws horizontally-centered trapezoid bands (width ∝ value) with % of first + % of previous labels over the real rows |
 | Scatter | OK shipped | — | ScatterChart (2 numeric cols to x,y) |
 | Bubble (scatter + size) | OK Wave 2 | 2 | a 3rd **Size** measure folds into values[] as a real extra aggregate; LoomChart scales each point's radius by `sqrt(size)` (area-proportional, PBI-parity) over the real /query rows |
 | Pie | OK shipped | — | PieDonutChart |
 | Donut | OK shipped | — | PieDonutChart (donut) |
-| Treemap | GATE | 2 | group + value rows are real; squarified treemap geometry is a Wave-2 LoomChart build (drawn as bars today, APPROX_GEOMETRY disclosed). The Details sub-group well is removed until Wave 2 (see Field wells) |
-| Map — filled (choropleth) | GATE | 2 | **full UI + real location/size aggregate query renders** (rows shown as a location grid with the size measure); drawing on a basemap is an HONEST Azure-Maps gate — a styled MessageBar names `LOOM_MAPS_BACKEND` + the Azure Maps key + the bicep module link. The gate renders, not a dead control |
-| Map — bubble / Azure Maps | GATE | 2 | as above — real location/size aggregate renders; the Azure Maps Web SDK basemap draw is behind the same honest `LOOM_MAPS_BACKEND` gate (gate renders, full UI present) |
-| Map — ArcGIS | MISSING Wave 4 | 4 | third-party (Esri), not Azure-native — listed for completeness, never on the default path |
-| Gauge | GATE | 2 | value + Target/Min/Max wells run a real single-row aggregate, shown as a numeric KPI tile (value + target/min/max captions); the radial arc + target marker are a Wave-2 LoomChart build (APPROX_GEOMETRY disclosed) |
-| KPI | GATE | 2 | value + Target run a real aggregate, shown as a numeric KPI tile; the indicator + trend axis are a Wave-2 build |
+| Treemap | OK Wave 5 | 5 | REAL squarified (Bruls/Huizing/van Wijk) treemap over the first numeric series; the **Details** well drives a 2nd-level nested partition inside each tile (`detailColumn`, recursive squarify); labels when the tile fits. Details is re-exposed + folded into the 2nd GROUP BY (see Field wells) |
+| Map — filled (choropleth) | OK Wave 5 (gate) | 5 | **full UI + real Location/Size aggregate renders**; the Location key joins a **bundled OSS TopoJSON** feature set (country/admin1) colored by a Size ramp. Basemap tiles are an HONEST Azure-Maps gate — `/map-token` returns 412 naming `LOOM_MAPS_BACKEND` + `landing-zone/azure-maps.bicep`; the polygon layer + rows still render (no dead control). NO ArcGIS/Esri, NO Shape-map |
+| Map — bubble / Azure Maps | OK Wave 5 (gate) | 5 | **full UI + real Location/Size aggregate renders**; bubbles plot point = (long,lat), radius ∝ √Size, color ramp by Size (a Location NAME column geocodes via Azure Maps Search Fuzzy — REAL data-plane, cached). The atlas.microsoft.com basemap draws once `LOOM_MAPS_BACKEND=azure-maps` + a credential is set (AAD via `/map-token`, preferred); else the honest gate. Token scoped to atlas ALONE — never api.fabric / api.powerbi |
+| Map — ArcGIS / Shape map | MISSING by design | — | third-party (Esri ArcGIS / PBI Shape map) — **non-goal**, never Azure-native, never on the default path. Filled maps use the OSS TopoJSON asset instead |
+| Gauge | OK Wave 5 | 5 | REAL radial geometry: gauge LEAVES the KPI tile and renders `<LoomChart type='gauge'>` — a 270° SVG arc (gaugeMin..gaugeMax, defaults 0 .. max(value·1.5, target·1.25)) filled by the value, with a **target** needle/marker tick + center value text. Value + Target/Min/Max wells fold into extra value columns read by alias |
+| KPI | OK Wave 5 | 5 | REAL indicator: kpi LEAVES the KPI tile and renders `<LoomChart type='kpi'>` — big last-value indicator + a **sparkline** of the category-ordered series + a goal delta vs `kpiGoal` (▲/▼ + % colored good/bad). Target/goal pulled from the extra value result columns |
 | Card | OK shipped | — | single aggregate to big-number tile |
 | Multi-row card | OK Wave 1 | 1 | real card-list render in VisualBody — one elevated card per result row, field:value pairs (not the table fallback) |
 | Table | OK shipped | — | raw projection SELECT TOP N; Fluent table |
 | Matrix | OK shipped | — | rows+columns group-by; flat grid (client pivots) |
-| Slicer | OK shipped | — | SELECT DISTINCT of the field; value list |
+| Slicer | OK shipped, extended | — / 5 | SELECT DISTINCT of the field (value list) shipped; Wave 5 adds a **multi-style** slicer (list / dropdown / between / relative-date) that emits a `ReportFilter` into the EXISTING applyFilters engine to cross-filter siblings — no engine change, no new route |
 | R visual | OK Wave 4 | 4 | REAL sandboxed executor: the Values fields become a `dataset` DataFrame (Python) / data.frame (R); the script plots to the default device; the ACTIVE figure is captured as a PNG. POST /api/items/report/[id]/script-visual resolves rows via the existing Path-3 wells->SQL (resolveReportModel + buildSqlFromVisual + Synapse executeQuery, group+deduped) then forwards to the loom-script-runner ACA app /run. Honest GATE when LOOM_SCRIPT_RUNNER_URL unset (503 naming the env var + script-runner-app.bicep) — full UI still renders |
 | Python visual | OK Wave 4 | 4 | REAL sandboxed executor: the Values fields become a `dataset` DataFrame (Python) / data.frame (R); the script plots to the default device; the ACTIVE figure is captured as a PNG. POST /api/items/report/[id]/script-visual resolves rows via the existing Path-3 wells->SQL (resolveReportModel + buildSqlFromVisual + Synapse executeQuery, group+deduped) then forwards to the loom-script-runner ACA app /run. Honest GATE when LOOM_SCRIPT_RUNNER_URL unset (503 naming the env var + script-runner-app.bicep) — full UI still renders |
-| Decomposition tree | MISSING Wave 3 | 3 | AI visual — ADX/AOAI plan in Follow-on |
-| Key influencers | MISSING Wave 3 | 3 | AI visual — ADX/AOAI plan |
-| Q and A | MISSING Wave 3 | 3 | NL-to-query — reuses the Power BI Copilot wiring; ADX/AOAI plan |
-| Smart narrative | MISSING Wave 3 | 3 | AOAI summary over the page result rows |
+| Decomposition tree | OK Wave 3 | 3 | AI visual — renders via lib/editors/report/ai-visuals/decomposition-tree.tsx over the Path-3 result rows; AOAI/ADX honest-gate when unbound |
+| Key influencers | OK Wave 3 | 3 | AI visual — lib/editors/report/ai-visuals/key-influencers.tsx over the result rows; AOAI honest-gate when unbound |
+| Q and A | OK Wave 3 | 3 | NL-to-query — lib/editors/report/ai-visuals/qa.tsx (reuses the Power BI Copilot wiring + AOAI); honest-gate when unbound |
+| Smart narrative | OK Wave 3 | 3 | AOAI summary over the page result rows — lib/editors/report/ai-visuals/smart-narrative.tsx; honest-gate when unbound |
 | Custom / AppSource visual | MISSING Wave 3 | 3 | third-party marketplace bundle host; not Azure-native by default |
 
 ## (2) Field wells
@@ -203,15 +314,15 @@ values, legend; aggregation picker Sum/Avg/Count/Min/Max (AGGS).
 | Legend | bar/column/line/pie/donut/treemap/ribbon | OK shipped | — | legend[] to extra GROUP BY column (multi-series) |
 | Values | all charts/card/table | OK shipped | — | values[] to aggregate projections (aggProjection) |
 | Aggregation (per value) | Sum/Avg/Count/Min/Max | OK shipped | — | SQL_AGG_FN / DAX mirror |
-| Secondary values | combo | GATE | 2 | folded into values[] as a real extra aggregate (plotted as another clustered column today); the line / 2nd-axis split is Wave 2 |
-| Small multiples | (removed until Wave 2) | MISSING Wave 2 | 2 | the well is removed and NOT folded into the query — LoomChart ignores a 2nd group column while it silently changes granularity (no trellis). Wave 2 adds real trellis tiling (a panel per group value) |
-| Tooltips | (removed until Wave 2) | MISSING Wave 2 | 2 | the well is removed and excluded from the plotted series — tooltip measures are hover-only in PBI and LoomChart would draw them as extra bars/lines. Wave 2 adds per-point tooltip columns surfaced in the SVG title hover |
+| Secondary values | combo | OK Wave 5 | 5 | folds into values[] as a real extra aggregate in the SAME SELECT; its resolved aliases become `comboLineSeries` so `combo` paints them as the SECONDARY-axis line (every other numeric series = primary-axis column) |
+| Small multiples | bar/column/line/area | OK Wave 5 | 5 | re-exposed in wellsFor(); folds into `wells.smallMultiples` and appends to the **2nd GROUP BY** in wells-to-sql (granularity = axis × facet). LoomChart `smallMultiples.facetColumn` splits rows into a responsive **trellis** (one recursive panel per facet value, facet column dropped from panel rows, sharedY for comparability) |
+| Tooltips | charts | OK Wave 5 | 5 | re-exposed; rides as a plotted-EXCLUDED aggregate (`wells.tooltips`) — parseRows omits it from the series so it is never an extra bar/line — and is surfaced in the new LoomChart **hover popover** (with the category + each plotted series value). Hover-only, PBI-parity |
 | Rows / Columns | matrix | OK shipped | — | category/legend group-bys |
-| Target / Min / Max | gauge / KPI | OK Wave 1 | 1 | real extra single-row aggregates folded into values[], shown as captions on the KPI tile (the gauge arc itself is Wave 2) |
-| Details | (removed until Wave 2) | MISSING Wave 2 | 2 | the treemap Details well is removed and NOT folded — a 2nd group column changes granularity without a sub-group render. Wave 2 adds real detail sub-grouping |
+| Target / Min / Max | gauge / KPI | OK Wave 5 | 5 | real extra single-row aggregates folded into values[] (cols[1..] in well order); read back by alias to drive the **real** radial gauge arc bounds + target needle and the KPI goal delta (the geometry is now real, not a caption) |
+| Details | treemap | OK Wave 5 | 5 | re-exposed in wellsFor(); folds into `wells.details` and the **2nd GROUP BY** — LoomChart `detailColumn` nests a 2nd-level squarified partition inside each top-level treemap tile (real sub-grouping) |
 | Play axis (animation) | scatter / bubble | OK Wave 2 | 2 | a distinct category/time field drives a **client frame loop** — LoomChart steps the play-axis values (play / pause / scrub), re-projecting the already-fetched rows per frame (no per-frame re-query) |
 | Size | scatter / bubble | OK Wave 2 | 2 | folds into values[] as a real 3rd aggregate; drives the bubble `sqrt`-area radius (see Bubble) |
-| Latitude / Longitude / Size | map | GATE | 2 | the lat/long/size wells run a **real location+size aggregate** that renders; the basemap draw is the honest Azure-Maps gate (`LOOM_MAPS_BACKEND` + Azure Maps key + bicep link) — full wells UI present, gate renders |
+| Latitude / Longitude / Location / Size / Legend | map | OK Wave 5 (gate) | 5 | the wells fold to a **real Location+Size aggregate** that renders (bubbles from lat/long or a geocoded Location name; filled choropleth from a Location key + OSS TopoJSON). The atlas.microsoft.com basemap draws once `LOOM_MAPS_BACKEND=azure-maps` + a credential is set (token via `/map-token`); else the honest Azure-Maps gate — full wells UI + aggregate rows present, no dead control |
 | Values (R / Python script visual) | R / Python visual | OK Wave 4 | 4 | scriptVisual exposes **Values only**, non-aggregated, **group + deduped** (PBI parity — duplicate rows collapse to one, default "Don't summarize"). The well field names become the `dataset` DataFrame / data.frame column names verbatim (no rename). Language toggle (R / Python) + the code editor are structured/PBI-1:1 (the editor is exempt from no-freeform-config.md exactly like the ADF expression builder) |
 
 ## (3) Format pane
@@ -226,19 +337,19 @@ visual.config.format via /definition.
 |---|---|---|---|
 | Legend (show + position) | OK shipped | — | showLegend / legendPosition |
 | X axis (show) | OK shipped | — | showXAxis |
-| Y axis (scale / gridlines / title) | OK shipped, extended | 1 | showYAxis shipped; Wave 1 adds scale (min/max), gridline toggle, axis title — structured inputs |
+| Y axis (scale / gridlines / title) | OK shipped, extended | 1 / 5 | showYAxis shipped; Wave 1 added the structured scale (min/max), gridline toggle, and axis-title inputs and **persists** them — Wave 5 is where LoomChart actually **consumes** the axis min/max to clamp the value domain (the persisted Wave-1 scale was honest config until the geometry pass) |
 | Data colors | OK shipped | — | dataColors lead swatch to resolveDataColors palette |
 | Data labels (+ position) | OK Wave 1 | 1 | dataLabels/labelPosition switch+dropdown; LoomChart draws value labels |
-| Total labels | GATE | 2 | the totalLabels switch persists; stacked/waterfall total rendering depends on the Wave-2 stacking/waterfall geometry |
+| Total labels | OK Wave 5 | 5 | the totalLabels switch persists AND now renders: stacked-column totals and the waterfall **Total** bar label draw off the real Wave-5 stacking / waterfall geometry |
 | Plot area | OK Wave 1 | 1 | plotAreaTransparency slider (structured) |
 | Title | OK shipped | — | titleText / showTitle |
 | Background (palette + transparency) | OK Wave 1 | 1 | background swatch + transparency to card style |
 | Border (color / radius) | OK Wave 1 | 1 | border swatch + radius dropdown |
 | Shadow | OK Wave 1 | 1 | shadow switch to tokens.shadow* |
 | Tooltip (default) | OK Wave 1 | 1 | tooltip values well + SVG title |
-| Visual header | GATE | 2 | viewer-chrome (drill/focus icons) — surfaced in Wave 2 with interactions |
+| Visual header | GATE | 5 | viewer-chrome (drill/focus icons) — canvas-chrome follow-on (Wave 5 remaining) |
 | General — position/size (x/y/w/h) | OK shipped, extended | 1 | shipped w/h grid span; Wave 1 adds numeric w/h tied to the grid + lock-aspect + alt text |
-| Zoom (slider) | GATE | 2 | viewer-side zoom; Wave 2 |
+| Zoom (slider) | GATE | 5 | viewer-side zoom; canvas-chrome follow-on (Wave 5 remaining) |
 | Styles preset | OK Wave 1 | 1 | structured style dropdown (Minimal/Bold/Loom) seeding the format block |
 | Conditional formatting (color scale / rules / data bars / icons) | OK Wave 1 | 1 | structured rules (op/value/color) / color-scale / data-bars / icons — all pickers, never typed format strings; applied client-side to chart fills + table cells (conditional-format module) |
 
@@ -253,7 +364,7 @@ numeric value, not DAX).
 | Analytics line | Status | Wave | Mechanism |
 |---|---|---|---|
 | Trend line | OK Wave 1 | 1 | least-squares over result rows; overlay |
-| Constant line (X / Y) | OK Wave 1 | 1 | typed numeric value (structured), horizontal/vertical rule |
+| Constant line (X / Y) | OK Wave 1 / 5 | 1 / 5 | typed numeric value (structured); the **Y** (horizontal) rule shipped Wave 1, the **X** (vertical) rule renders in Wave 5 via `AnalyticsLine.axis:'x'` → `orientation:'v'` consumed by LoomChart refLines |
 | Min line | OK Wave 1 | 1 | Math.min over series |
 | Max line | OK Wave 1 | 1 | Math.max over series |
 | Average line | OK Wave 1 | 1 | mean over series |
@@ -262,7 +373,8 @@ numeric value, not DAX).
 | Symmetry shading | OK Wave 2 | 2 | scatter-only — shades the upper/lower diagonal half-plane (y vs x) client-side over the result rows |
 | Error bars | OK Wave 2 | 2 | structured upper/lower bound pickers (a measure pair, a +/- constant, or a percentage) drawn as whiskers per point — all client-side over the result series |
 | Forecast | OK Wave 2 | 2 | client linear / seasonal projection (least-squares trend + optional seasonal period) with a confidence band over the time series. The heavier ADX `series_decompose_forecast` is the OPTIONAL Wave-3 enhancement, not a blocker |
-| Anomalies | MISSING Wave 3 | 3 | ADX series_decompose_anomalies plan |
+| Anomalies | OK Wave 5 | 5 | `computeAnomalies` runs a REAL client rolling-mean / rolling-std z-score (window = clamp(round(n/8),3,24)) over the result series; a 0-100 **sensitivity** slider maps the z threshold (~1.5σ aggressive → ~3.5σ); flagged points get a ring marker + the rolling expected band shades under the marks (LoomChart `anomalies`). An `useAdx` opt-in posts `series_decompose_anomalies` ONLY when a Kusto source is bound — else an honest inline Caption + the client computation (no dead control) |
+| Shaded range | OK Wave 5 | 5 | `AnalyticsShadedRange` — structured numeric from / to / axis ('x'|'y') / color passed straight to LoomChart `shadedRanges`, drawn as a translucent rect under the marks (no-freeform-config: numeric inputs + a swatch) |
 
 ## (5) Page + canvas
 
@@ -278,7 +390,7 @@ remove visual, size S/M/L/XL (12-col grid), gridlines + snap (canvas grid).
 | Hide page | OK Wave 1 | 1 | page.hidden flag persisted |
 | Canvas size + type (16:9 / 4:3 / Letter / Tooltip / Custom) | OK Wave 1 | 1 | structured pageType dropdown + W/H; Format-page surface (shown when nothing is selected, PBI-parity) |
 | Page background (color + transparency) | OK Wave 1 | 1 | swatch + transparency on the Format-page surface; persisted in page config |
-| Wallpaper (outside canvas) | GATE | 2 | Wave 2 |
+| Wallpaper (outside canvas) | GATE | 5 | canvas-chrome follow-on (Wave 5 remaining) |
 | Gridlines + snap-to-grid | OK shipped | — | canvas grid in use-canvas-layout.ts; snap-to-grid is ON by default (the hook's `snapToGrid` option) so a reposition drag reflows cards into the 12-col grid flow. The explicit **user-facing snap toggle in the canvas ribbon is NOT yet surfaced** — the hook already exposes `snapEnabled` for it, so wiring the toggle is the Wave-3 follow-up (§ Follow-on Wave 3) |
 | Page navigation (page list) | OK shipped | — | left page tree, setActivePage |
 | Group / ungroup visuals | OK Wave 2 | 2 | multi-select model (Ctrl/Shift-click) + group / ungroup sets `groupId` so the group moves/locks/hides as a unit — `groupVisuals` / `ungroupVisuals` in report-designer.tsx, wired from both the Arrange toolbar and the Selection pane. Per-visual **copy / paste / duplicate** (cloning wells/format/filters) is NOT built — the canvas today supports add / remove + duplicate-*page* only, so duplicate-visual is the Wave-3 follow-up (§ Follow-on Wave 3) |
@@ -299,8 +411,8 @@ selection as a filter to target rows / dims non-matching) — no new route.
 | Edit interactions — Highlight | OK Wave 1 | 1 | target dims non-matching rows client-side |
 | Edit interactions — None | OK Wave 1 | 1 | target ignores the selection |
 | Cross-highlight (select a data point) | OK Wave 1 | 1 | dataSelected re-applies selection to peers |
-| Default tooltips | MISSING Wave 2 | 2 | the Tooltips well is removed (hover-only measures aren't plotted); per-point SVG-title tooltip surfacing is a Wave-2 build |
-| Report-page tooltips | OK Wave 2 (authoring) / MISSING Wave 3 (render) | 2 / 3 | **Authoring built:** the Page-format pane (PageFormatPanel, shown when no visual is selected) exposes a structured **Tooltip page** toggle + a bound-field picker that persists `page.config.tooltipPage = { enabled, boundField }` via /definition (pair with Canvas type = Tooltip) — pickers only, no typed config. **Render deferred:** the hover popover that mini-renders this page over a mark whose category == `boundField` is the Wave-3 build (a hover path on canvas marks in report-designer.tsx / loom-chart.tsx); disclosed honestly in the pane (not a dead control). |
+| Default tooltips | OK Wave 5 | 5 | the Tooltips well is re-exposed and rides as a plotted-EXCLUDED aggregate; LoomChart's new **HoverPopover** (a React-state overlay, Fluent-token styled) surfaces the category + each plotted series value + each tooltip measure on hover (a `<title>` stays for a11y / no-JS) |
+| Report-page tooltips | OK Wave 2 (authoring) + Wave 5 (hover popover) | 2 / 5 | **Authoring built (Wave 2):** the Page-format pane exposes a structured **Tooltip page** toggle + a bound-field picker that persists `page.config.tooltipPage = { enabled, boundField }` via /definition (pair with Canvas type = Tooltip) — pickers only. **Hover popover delivered (Wave 5):** the LoomChart HoverPopover affordance now exists on canvas marks; mini-rendering a full tooltip *page* over a mark whose category == `boundField` reuses that hover path and is the remaining follow-on (disclosed honestly in the pane — not a dead control) |
 | Drillthrough | OK Wave 2 | 2 | a target page declares a Drillthrough-filters well (`page.config.drillthrough.fields`); right-click a data point on any visual containing that field → **Drillthrough → \<page\>** navigates to the target seeded with the clicked row's value (reusing applyFilters) + an auto **Back** button |
 | Drill down / up (hierarchy) | MISSING Wave 3 | 3 | needs hierarchy wells + expand/collapse query |
 | Personalize visuals | MISSING Wave 3 | 3 | per-viewer state store |
@@ -350,21 +462,23 @@ arrays, no dead handlers (no-vaporware.md):
 
 | Mechanism | Controls | Where |
 |---|---|---|
-| **/query to SQL** (buildSqlFromVisual) | every plotted visual data path: category/legend/values/secondary-values/target/min/max wells; Top-N + relative-date filters (tooltips / small-multiples / details are NOT plotted — Wave 2) | wells-to-sql.ts run by synapse-sql-client.executeQuery (Synapse dedicated/serverless) |
+| **/query to SQL** (buildSqlFromVisual) | every plotted visual data path: category/legend/values/secondary-values/target/min/max wells; Top-N + relative-date filters; **Wave 5** appends small-multiples / details as a trailing **2nd GROUP BY** (axis × facet) and folds tooltips as plotted-EXCLUDED aggregates | wells-to-sql.ts run by synapse-sql-client.executeQuery (Synapse dedicated/serverless) |
 | **/query to DAX** (AAS mirror) | the same wells + filters when the report is bound to an AAS tabular model | aas-dax.ts (buildDaxFromVisual) + wrapDaxWithFilters run by executeAasQuery |
-| **Client-side LoomChart** | the shipped chart shapes (bar/column/line/area/pie/donut/scatter), the multiRowCard card list, the numeric KPI tile (card/kpi/gauge), the Wave-2 **bubble `sqrt`-area radius** + **play-axis frame loop**, Format (colors/labels/axes/legend/background/border/shadow/styles), conditional formatting, Analytics reference lines + the Wave-2 **error bars / forecast band / symmetry shading**, interactions (cross-filter/highlight + the Wave-2 drillthrough navigate + report-page-tooltip popover). The distinctive geometry for combo/waterfall/funnel/gauge/KPI/treemap/ribbon/stacking remains **Wave 2** (rendered as the closest shape today with an APPROX_GEOMETRY disclosure) | loom-chart.tsx, format-pane.tsx, conditional-format, analytics-pane.tsx, interactions |
+| **Client-side LoomChart** | every chart shape — bar/column/line/area/pie/donut/scatter PLUS the **Wave-5 true geometry** (stacked / 100%-stacked / stacked-area, dual-axis combo, ribbon, waterfall + Total, funnel, squarified treemap + Details nest, radial gauge + needle, KPI indicator + sparkline), the multiRowCard card list, the card single-number tile, the Wave-2 bubble `sqrt`-area radius + play-axis frame loop, the **Wave-5 Small-multiples trellis** + **Tooltips hover popover**, Format (colors/labels/axes incl. Wave-5 axis min/max + stacking/legend/background/border/shadow/styles), conditional formatting, Analytics reference lines + the Wave-2 error bars / forecast band / symmetry shading + the **Wave-5 anomalies / X-axis lines / shaded ranges**, the **Wave-5 multi-style slicer** (emits a ReportFilter into applyFilters), and interactions (cross-filter/highlight + the Wave-2 drillthrough navigate). All real geometry over the real /query rows — **every `APPROX_GEOMETRY` closest-shape disclosure is retired** | loom-chart.tsx, format-pane.tsx, conditional-format, analytics-pane.tsx, interactions |
 | **/definition persistence** | pages (add/rename/duplicate/hide/size/type/background + Wave-2 drillthrough/tooltipPage config), every visual wells/format/filters/position + the Wave-2 hidden/z/locked/groupId, plus `state.content.bookmarks` (Bookmarks pane), the Selection-pane visibility/z-order, and `state.content.filterPaneFormat` (filter-pane format + Apply button) | definition/route.ts to Cosmos state.content (additive config.* + bookmarks + filterPaneFormat, all sanitizer-whitelisted) |
-| **/script-visual → loom-script-runner ACA** (Wave 4 — the **FIRST new BFF route the program adds**; waves 0-3 added **zero**) | the R / Python script visuals only: the route resolves the scriptVisual's Values rows through Path-3 (resolveReportModel + buildSqlFromVisual + Synapse executeQuery, group+deduped), writes them to `dataset.csv`, and forwards `{ language, script, dataset }` to the loom-script-runner ACA app `/run`, which executes the script in a resource-limited subprocess and returns a PNG of the active figure. Honest 503 GATE when `LOOM_SCRIPT_RUNNER_URL` is unset (names the env var + script-runner-app.bicep); the full editor still renders | app/api/items/report/[id]/script-visual/route.ts → the loom-script-runner ACA app (Dockerfile + app.py); env `LOOM_SCRIPT_RUNNER_URL` wired in platform/fiab/bicep |
+| **/map-token → Azure Maps** (Wave 5 — the **only** new route Wave 5 adds; the geometry / slicer / analytics need none) | the Azure-Maps visual's basemap only: a session + owner-checked GET that brokers a short-lived atlas.microsoft.com credential via `resolveMapsBackend()` (AAD token minted by the Console UAMI — `Azure Maps Data Reader` — preferred / gov-safe; or a subscription key, commercial). Honest **412 gate** when `LOOM_MAPS_BACKEND` ≠ `azure-maps` or no credential is set (names the env var + azure-maps.bicep); the map panels + real aggregate rows still render. Token scoped to atlas ALONE — never api.fabric / api.powerbi | app/api/items/report/[id]/map-token/route.ts → maps-client.ts; account from platform/fiab/bicep/modules/landing-zone/azure-maps.bicep; env in admin-plane/main.bicep |
 
-The Wave-1 **and Wave-2** builds add **zero** new BFF routes: the rendered
-additive wells fold into the existing category/values/legend arrays the /query
-compiler already handles, and everything else (bubble radius, play-axis frames,
-error-bars/forecast/symmetry, drillthrough, tooltip pages, bookmarks, selection,
-lock / z-order / undo-redo, filter-pane format) is client render or
-**additive** /definition persistence. Non-rendered wells (tooltips /
-small-multiples / details) and the distinctive chart geometry remain deferred to
-the **Wave-2 follow-on** (below) — disclosed honestly today, not silently
-mis-rendered.
+The Wave-1 **and Wave-2** builds add **zero** new BFF routes, and **Wave 5** adds
+exactly **one** (the `/map-token` basemap broker) — the rendered additive wells
+fold into the existing category/values/legend arrays the /query compiler already
+handles (Wave 5 only appends a **1-line 2nd GROUP BY** for the trellis), and
+everything else (the true chart geometry, the slicer, anomalies / X-lines /
+shaded ranges, bubble radius, play-axis frames, error-bars/forecast/symmetry,
+drillthrough, tooltip pages, bookmarks, selection, lock / z-order / undo-redo,
+filter-pane format) is **client render** or **additive** /definition persistence.
+The previously-deferred non-rendered wells (tooltips / small-multiples / details)
+and the distinctive chart geometry are now **DELIVERED in Wave 5** as REAL
+geometry — no `APPROX_GEOMETRY` remains.
 
 **Honest disclosure (Wave 4):** the R / Python script visual is the **first new
 BFF route the whole report-designer program has added** — waves 0-3 added
@@ -387,15 +501,52 @@ Filters-pane Apply button + pane formatting + drillthrough scope, and the NEW
 Bookmarks + Selection right-rail panes. The map wells render a real location/size
 aggregate behind an honest Azure-Maps gate.
 
-**Wave 2 — remaining follow-on** (chart geometry + deferred wells + canvas chrome,
-still no new route):
-- **Chart geometry (loom-chart.tsx):** true stacked / 100%-stacked / stacked-area, combo dual-axis (line + column), ribbon rank-connectors, running-total waterfall, funnel, squarified treemap, radial gauge arc + target marker, KPI indicator/trend. Each replaces the current closest-shape render + APPROX_GEOMETRY disclosure in report-designer.tsx (CHART_RENDER / the KPI branch).
-- **Deferred wells (report-designer.tsx + loom-chart.tsx):** Small-multiples trellis tiling (a panel per group value), treemap Details sub-grouping, and per-point Tooltips surfaced in the SVG title hover — each re-adds its well to wellsFor() and re-folds into queryVisual() once LoomChart can honor it without changing aggregation granularity.
-- **Map basemap render:** the Azure Maps Web SDK draw behind the shipped `LOOM_MAPS_BACKEND` gate (loom-chart.tsx); env wired in platform/fiab/bicep/modules/admin-plane/main.bicep.
+**Wave 5 — DELIVERED** (true geometry + slicer + maps + analytics; **one** new
+route — the `/map-token` basemap broker — the rest is client render + the additive
+2nd GROUP BY):
+- **Chart geometry (loom-chart.tsx) — DELIVERED as REAL geometry:** stacked /
+  100%-stacked (`stackMode`) / stacked-area, dual-axis combo (line +
+  clustered/stacked column via `comboLineSeries`), ribbon rank-connectors,
+  running-total waterfall + Total bar, funnel, squarified treemap (+ `detailColumn`
+  nest), radial gauge arc + target needle, KPI indicator + sparkline + goal delta.
+  Each retired its closest-shape render + `APPROX_GEOMETRY` disclosure in
+  report-designer.tsx (`CHART_RENDER` is now true-geometry; `KPI_TYPES` shrank to
+  `{'card'}`; `GAUGE_KPI` routes gauge/kpi through LoomChart). All new props are
+  optional + default-off → the LoomVisual viewer + waves 0-4 render byte-identical.
+- **Deferred wells (report-designer.tsx + wells-to-sql.ts) — DELIVERED:**
+  Small-multiples trellis tiling (a recursive panel per facet via
+  `smallMultiples.facetColumn`), treemap Details sub-grouping (`detailColumn`), and
+  Tooltips surfaced in the new **HoverPopover** — each re-added to wellsFor() and
+  re-folded in queryVisual(); the trellis facet rides a **1-line additive 2nd
+  GROUP BY** (narrow local cast, no aas-dax.ts edit, no new tsc error).
+- **Slicer — DELIVERED:** a multi-style slicer (list / dropdown / between /
+  relative-date) — **hosted by report-designer.tsx's `VisualBody`
+  `visual.type === 'slicer'` branch as `<SlicerVisual …/>`** (slicer-visual.tsx),
+  the host merging its emitted `ReportFilter` into the page-filters channel via
+  `onPageFilter` — feeds the EXISTING applyFilters engine: no engine change, no
+  new route. (The host render path is the parity proof — not the standalone file.)
+- **Azure-Maps visual — DELIVERED (honest gate):** map-visual.tsx — **rendered on
+  the canvas by report-designer.tsx's `VisualBody` `map` branch as `<MapVisual …/>`**
+  (the running designer hosts it, verified in the host render path, not just a
+  standalone file) — draws bubbles
+  (point=(long,lat), radius ∝ √Size, color ramp; Location-name geocode via Azure
+  Maps Search Fuzzy) or a filled choropleth (OSS TopoJSON join). The **new
+  `/map-token` route** (maps-client.ts) brokers a short-lived atlas.microsoft.com
+  credential (AAD via Console UAMI `Azure Maps Data Reader`, preferred; or a
+  subscription key); honest 412 gate when `LOOM_MAPS_BACKEND` ≠ `azure-maps`,
+  naming the env var + `landing-zone/azure-maps.bicep`. `azure-maps.bicep` deploys
+  the G2 account + role + diag; env wired in admin-plane/main.bicep. **ArcGIS /
+  Shape map stay OUT** (third-party) — filled maps use the OSS TopoJSON asset.
+- **Analytics — DELIVERED:** anomalies (client rolling-mean / z-score + a
+  sensitivity slider; ADX `series_decompose_anomalies` opt-in only with a Kusto
+  source bound), X-axis constant lines (`AnalyticsLine.axis:'x'` → `orientation:'v'`),
+  and shaded ranges (structured from/to/axis/color) — all over the same /query rows.
+
+**Wave 5 — remaining follow-on** (canvas chrome, still no new route):
 - **Canvas chrome (format-pane.tsx / report-designer.tsx):** Wallpaper (outside canvas), Visual header, Zoom slider.
 
 **Wave 3** (AI + collaboration; new modules / honest infra):
-- AI visuals (decomposition tree, key influencers, Q and A, smart narrative) in new lib/editors/report/ai-visuals.tsx; Q and A / anomaly query ADX (series_decompose_anomalies) and Azure OpenAI for NL-to-query + narrative — honest-gated on LOOM_ADX_CLUSTER / LOOM_AOAI_*. The **optional** ADX `series_decompose_forecast` upgrade to the Wave-2 client forecast also lands here.
+- AI visuals (decomposition tree, key influencers, Q and A, smart narrative) — **DELIVERED** in lib/editors/report/ai-visuals/*.tsx; Q and A + narrative use Azure OpenAI for NL-to-query + narrative — honest-gated on LOOM_AOAI_* / LOOM_ADX_CLUSTER. (Anomalies moved to **Wave 5** — real client z-score with an ADX `series_decompose_anomalies` opt-in.) The **optional** ADX `series_decompose_forecast` upgrade to the Wave-2 client forecast also lands here.
 - Sync slicers (shared slicer state across pages) in the definition — the Wave-2 Bookmarks + Selection panes already shipped (bookmarks-pane.tsx / selection-pane.tsx → state.content.bookmarks).
 - Themes (built-in + custom, structured) in new lib/editors/report/themes.ts (TS preset constants, picker-built — no freeform JSON).
 - Export PDF/PPTX/PNG Azure-native server render: extend app/api/items/report/[id]/export/route.ts.
@@ -476,27 +627,34 @@ the program's first new BFF route; ArcGIS stays a MISSING-by-design non-goal):
 
 ## A-grade gate
 
-A-grade only when every inventory row is OK (shipped or Wave-1 / Wave-2 / Wave-4
-committed) or a GATE (honest infra-gate), with **zero MISSING that lacks a wave +
-plan** and **zero disabled "coming soon"** controls. Every MISSING above names its
-wave and the exact file/plan; every GATE names the env var / resource to provision
-and still renders its full UI surface. Constraints honored: real backend per
-ui-parity.md (/query + /definition + wells-to-sql, plus the Wave-4 /script-visual →
-loom-script-runner ACA executor that really runs the script and returns a real
-PNG); no dead controls per no-vaporware.md (the map row is an honest Azure-Maps
-gate, not a disabled button; the script visual's full editor renders behind an
+A-grade only when every inventory row is OK (shipped or Wave-1 / Wave-2 / Wave-3 /
+Wave-4 / Wave-5 committed) or a GATE (honest infra-gate), with **zero MISSING that
+lacks a wave + plan** and **zero disabled "coming soon"** controls. Every MISSING
+above names its wave and the exact file/plan; every GATE names the env var /
+resource to provision and still renders its full UI surface. Constraints honored:
+real backend per ui-parity.md (/query + /definition + wells-to-sql, the Wave-4
+/script-visual → loom-script-runner ACA executor that really runs the script and
+returns a real PNG, and the Wave-5 **/map-token** broker + **REAL chart geometry**
+drawn from the same /query rows); no dead controls per no-vaporware.md (every
+Wave-5 visual draws real geometry — **no `APPROX_GEOMETRY` remains**; the map row
+is an honest Azure-Maps gate, not a disabled button; the slicer really filters;
+anomaly is a real computation; the script visual's full editor renders behind an
 honest LOOM_SCRIPT_RUNNER_URL 503 gate); all-structured per no-freeform-config.md
-(conditional rules, analytics-line + error-bar + forecast config, filter types,
-drillthrough fields, and bookmark/selection toggles are pickers — never typed
-DAX/JSON; align / distribute, when wired in Wave 3, will be structured pickers too;
-**the only typed surface is the R/Python script visual's code editor, which is PBI
-1:1 parity — PBI's R/Python visual IS a code editor — and is therefore exempt
-exactly like the ADF expression builder**, while its wells + language toggle stay
-structured); Azure-native default + Power BI embed opt-in per
-no-fabric-dependency.md (the script runner is Azure-native ACA + the existing
-Synapse /query Path-3 — no Power BI / Fabric service); Fluent
-v9 + Loom tokens + PBI pane layout (right-rail Bookmarks/Selection tabs match the
-PBI panes) per web3-ui.md.
+(conditional rules, analytics-line + error-bar + forecast + the Wave-5 anomaly
+sensitivity slider + shaded-range numeric inputs, filter types, the Wave-5
+multi-style slicer, drillthrough fields, and bookmark/selection toggles are
+pickers — never typed DAX/JSON; align / distribute, when wired in Wave 5's canvas
+follow-on, will be structured pickers too; **the only typed surface is the
+R/Python script visual's code editor, which is PBI 1:1 parity — PBI's R/Python
+visual IS a code editor — and is therefore exempt exactly like the ADF expression
+builder**, while its wells + language toggle stay structured); Azure-native default
++ Power BI embed opt-in per no-fabric-dependency.md (the script runner is
+Azure-native ACA, the map is Azure Maps / OSS TopoJSON, anomalies are client /
+ADX, all over the existing Synapse /query Path-3 — no Power BI / Fabric service,
+no ArcGIS); Fluent v9 + Loom tokens + PBI pane layout (right-rail
+Bookmarks/Selection tabs match the PBI panes; the geometry is dark-legible via
+theme.foreground/gridline/background; the hover popover + panels are token-styled)
+per web3-ui.md.
 
 ## Verification
 
@@ -533,6 +691,30 @@ PBI panes) per web3-ui.md.
     selection / visibility / sort; the Selection pane eye-toggles visibility
     (`config.hidden`) and reorders z-order (`config.z`); both persist to
     state.content via /definition.
+- **Wave-5 receipts (no Fabric, Loom semantic-model source):**
+  - **True geometry from real rows:** drop a measure + axis + a **Small-multiples**
+    field on a column chart → a real **trellis** of columns (one panel per facet,
+    sharedY); flip **stacking** to Stacked then **100%**; add a **secondary value**
+    → a **combo** dual-axis (line on the right axis + columns on the left); build a
+    **waterfall** with a running total + an explicit **Total** bar; a **funnel**;
+    a **ribbon**; a squarified **treemap** with a **Details** nest; a **gauge** with
+    a target needle; a **KPI** with a sparkline + goal delta. Each Show-SQL renders
+    the exact buildSqlFromVisual query (the trellis adds one trailing GROUP BY
+    column) and the canvas draws REAL geometry — **no `APPROX_GEOMETRY` caption
+    anywhere**.
+  - **Slicer:** a **between** slicer (or list / dropdown / relative-date) filters
+    its sibling visuals via the applyFilters engine (no new route).
+  - **Map gate → real bubbles:** with `LOOM_MAPS_BACKEND` UNSET the map shows the
+    honest MessageBar naming `LOOM_MAPS_BACKEND` + `landing-zone/azure-maps.bicep`
+    while the panels + the real Location/Size aggregate rows still render; set
+    `LOOM_MAPS_BACKEND=azure-maps` (+ AAD client id or key) → `/map-token` returns
+    a token and the basemap draws real bubbles (radius ∝ √Size) / a filled
+    choropleth. Token scoped to atlas.microsoft.com only; ArcGIS / Shape map absent.
+  - **Analytics:** an **anomaly** overlay flags out-of-band points (client rolling
+    z-score; the sensitivity slider changes the flagged set; the ADX opt-in shows
+    the honest Caption absent a Kusto source), an **X-axis** constant line draws
+    vertical, and a **shaded range** paints a translucent band — all over the real
+    result series.
 - **Wave-4 script-visual receipt (no Fabric):** with
   LOOM_DEFAULT_FABRIC_WORKSPACE UNSET and a Loom semantic-model source, a Python
   `dataset.plot()` and an R `ggplot(dataset, ...)` each render a **real PNG on the
@@ -547,11 +729,15 @@ PBI panes) per web3-ui.md.
   script visual is just another DVisual positioned by **FreeFormCanvas** — waves
   0-3, the data E2E, and the Copilot are extended, not regressed.
 - **No-regression:** the shipped 11-type gallery, Format / Filters / Analytics /
-  Interactions / Copilot tabs, the cross-filter engine, /query + wells-to-sql,
-  and the read-only viewer / PBIR provisioner ignore every additive Wave-2 key
-  (config.hidden/z/locked/groupId, page.config.drillthrough/tooltipPage,
-  state.content.bookmarks/filterPaneFormat) unchanged — sanitizers whitelist
-  them; TypeScript stays at its ~181 pre-existing unrelated errors (adds none).
+  Interactions / Copilot tabs, the cross-filter engine, /query + wells-to-sql, the
+  free-form canvas, waves 0-4, and the read-only viewer / PBIR provisioner ignore
+  every additive key (Wave-2 config.hidden/z/locked/groupId,
+  page.config.drillthrough/tooltipPage, state.content.bookmarks/filterPaneFormat;
+  the Wave-5 wells.smallMultiples/tooltips/details + analytics.anomalies/shadedRanges
+  + format.stacking) unchanged — sanitizers whitelist them; every new LoomChart prop
+  is optional + default-off so the LoomVisual viewer renders byte-identical, and the
+  trellis 2nd GROUP BY is read via a narrow local cast (no aas-dax.ts edit).
+  TypeScript stays at its ~184 pre-existing unrelated errors (Wave 5 adds none).
 - **Live side-by-side** (per ui-parity.md / no-scaffold): click every control
   against the real Power BI report editor and confirm the same outcome — DOM
   strings are not parity.
