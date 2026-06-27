@@ -60,21 +60,24 @@ import { useId, useRef, useState } from 'react';
 import type { ReactElement } from 'react';
 import {
   Badge, Button, Caption1, Divider, Dropdown, Input, MessageBar, MessageBarBody,
-  MessageBarTitle, Option, Subtitle2, Text, Tooltip,
+  MessageBarTitle, Option, Slider, Subtitle2, Switch, Text, Tooltip,
   makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowDown20Regular, ArrowDownload20Regular, ArrowUp20Regular,
   ArrowUpload20Regular, Color20Regular, Delete20Regular, Dismiss16Regular,
-  PaintBrush20Regular, TextFont20Regular,
+  PaintBrush20Regular, Sparkle20Regular, TextFont20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { downloadBlob } from '@/lib/editors/components/result-export';
 // Re-used so the None-card preview shows the exact Loom default palette the
 // charts paint with (type-compatible value import; no cycle — format-pane does
-// not import this module).
-import { LOOM_DATA_PALETTE } from './format-pane';
+// not import this module). The style-preset editor (below) reuses the SAME
+// structured preset lists the Format pane renders, so a captured preset's
+// `format` always maps to a control LoomChart already honors (no-vaporware).
+import { LOOM_DATA_PALETTE, STYLE_PRESETS, NUMBER_FORMAT_PRESETS } from './format-pane';
+import type { ReportVisualFormat, StylePreset, NumberFormatPreset } from './format-pane';
 // ── Single source of truth for the theme MODEL + built-ins + converters ───────
 // The ReportTheme shape, the curated built-in themes, and the bidirectional
 // Power-BI-theme-JSON bridge live in ./themes — the SAME module the host
@@ -154,6 +157,56 @@ function scaffoldTheme(): ReportTheme {
   return { name: 'Custom theme', dataColors: BUILDER_HEX_PALETTE.slice(0, 6) };
 }
 
+// ── WAVE-6 theme extensions (text classes · style presets) ───────────────────
+// Additive theme members that round-trip on `content.theme` through the SAME
+// ./themes sanitizer + PBI bridge the structural/sentiment color classes use
+// (additive, exactly like `bookmarks` / `filterPaneFormat`). They are declared
+// here as a LOCAL structural superset of ReportTheme so this pane stays the sole
+// owner of the picker UI without a value-cycle back into ./themes; the shapes
+// match the ./themes ReportTheme additions one-for-one, so a theme authored here
+// round-trips byte-for-byte once the sibling ./themes whitelist carries them.
+
+/** A PBI theme text class (title/header/body/label/callout) — font + color. */
+interface ThemeTextClass { fontFace?: string; fontSize?: number; color?: string }
+interface ThemeTextClasses {
+  title?: ThemeTextClass; header?: ThemeTextClass; body?: ThemeTextClass;
+  label?: ThemeTextClass; callout?: ThemeTextClass;
+}
+/** A named visual style preset → drives the Format pane's Styles dropdown. */
+interface ThemeStylePreset { id: string; label: string; format: Partial<ReportVisualFormat> }
+/** The additive WAVE-6 members layered onto ReportTheme. */
+interface ThemeExtras {
+  textClasses?: ThemeTextClasses;
+  stylePresets?: ThemeStylePreset[];
+  /** Minimal PBI visualStyles passthrough (round-tripped verbatim by ./themes). */
+  visualStyles?: Record<string, unknown>;
+}
+/** ReportTheme + the WAVE-6 additive members (structural superset for read/write). */
+type ExtTheme = ReportTheme & ThemeExtras;
+
+type TextClassKey = 'title' | 'header' | 'body' | 'label';
+/** The four text classes the builder exposes, with PBI-ish default point sizes. */
+const TEXT_CLASSES: { key: TextClassKey; label: string; defaultSize: number }[] = [
+  { key: 'title',  label: 'Title',  defaultSize: 14 },
+  { key: 'header', label: 'Header', defaultSize: 12 },
+  { key: 'body',   label: 'Body',   defaultSize: 11 },
+  { key: 'label',  label: 'Label',  defaultSize: 9 },
+];
+
+/** Drop empty members so a text class never persists as `{}`. */
+function pruneTextClass(c: ThemeTextClass): ThemeTextClass | undefined {
+  const out: ThemeTextClass = {};
+  if (c.fontFace) out.fontFace = c.fontFace;
+  if (typeof c.fontSize === 'number') out.fontSize = c.fontSize;
+  if (c.color) out.color = c.color;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** A short stable id for a new style preset. */
+function mkPresetId(): string {
+  return `sp-${Math.random().toString(36).slice(2, 9)}`;
+}
+
 // ── styles (Fluent v9 + Loom tokens only) ────────────────────────────────────
 
 const useStyles = makeStyles({
@@ -212,6 +265,27 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall,
   },
   miniSwatchActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
+
+  // wave-6 sub-sections (text classes / structural / sentiment / style presets)
+  subSection: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0,
+  },
+  subHint: { color: tokens.colorNeutralForeground3 },
+  sliderRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  sliderVal: {
+    minWidth: '42px', textAlign: 'right',
+    color: tokens.colorNeutralForeground3, fontVariantNumeric: 'tabular-nums',
+  },
+  presetList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  presetCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow2, minWidth: 0,
+  },
+  presetHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  presetBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
 
   // import / export
   ioRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
@@ -295,10 +369,46 @@ export function ThemesPane({ theme, onChange }: ThemesPaneProps): ReactElement {
   const [importError, setImportError] = useState<string | null>(null);
   const [importedName, setImportedName] = useState<string | null>(null);
 
-  // Mutate the current theme (scaffolding one if the author is on None).
-  const update = (patch: Partial<ReportTheme>) => {
+  // Mutate the current theme (scaffolding one if the author is on None). The
+  // patch type is the WAVE-6 superset so text-class / style-preset edits flow
+  // through the same additive round-trip as the structural color classes; the
+  // result is structurally a ReportTheme (every extra member is optional/sparse).
+  const update = (patch: Partial<ExtTheme>) => {
     const base = theme ?? scaffoldTheme();
-    onChange({ ...base, ...patch });
+    // The merged object satisfies ReportTheme (base supplies name + dataColors);
+    // the WAVE-6 extras are additive/optional and round-trip through ./themes.
+    onChange({ ...base, ...patch } as ReportTheme);
+  };
+
+  // ── WAVE-6 additive members (read through the structural superset) ──────────
+  const ext = theme as ExtTheme | null;
+
+  // Text classes — per-class font size + color (Power BI `textClasses`).
+  const textClasses: ThemeTextClasses = ext?.textClasses ?? {};
+  const setTextClass = (key: TextClassKey, patch: Partial<ThemeTextClass>) => {
+    const merged = pruneTextClass({ ...(textClasses[key] ?? {}), ...patch });
+    const next: ThemeTextClasses = { ...textClasses };
+    if (merged) next[key] = merged; else delete next[key];
+    update({ textClasses: Object.keys(next).length ? next : undefined });
+  };
+
+  // Style presets — named bundles that feed the Format pane's Styles dropdown.
+  const presets: ThemeStylePreset[] = ext?.stylePresets ?? [];
+  const setPresetAt = (i: number, patch: Partial<ThemeStylePreset>) => {
+    const next = presets.slice(); next[i] = { ...next[i], ...patch };
+    update({ stylePresets: next });
+  };
+  const setPresetFormat = (i: number, fpatch: Partial<ReportVisualFormat>) =>
+    setPresetAt(i, { format: { ...presets[i].format, ...fpatch } });
+  const addPreset = () =>
+    update({ stylePresets: [...presets, { id: mkPresetId(), label: `Style ${presets.length + 1}`, format: {} }] });
+  const removePresetAt = (i: number) => update({ stylePresets: presets.filter((_, k) => k !== i) });
+  const movePreset = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= presets.length) return;
+    const next = presets.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    update({ stylePresets: next });
   };
 
   // ── palette slot operations (operate on the live theme.dataColors) ──────────
@@ -533,6 +643,162 @@ export function ThemesPane({ theme, onChange }: ThemesPaneProps): ReactElement {
               label="Text color" value={theme.foreground} fallback="#242424"
               allowClear onChange={(c) => update({ foreground: c })} styles={styles}
             />
+
+            <Divider />
+
+            {/* ── Text classes (Power BI textClasses) — size + color per class ── */}
+            <SectionHead icon={<TextFont20Regular />} label="Text classes" styles={styles} />
+            <Caption1 className={styles.subHint}>
+              Title, header, body, and label text — size and color cascade to every visual&apos;s
+              headers, axes, and labels through the theme.
+            </Caption1>
+            {TEXT_CLASSES.map(({ key, label, defaultSize }) => {
+              const cls = textClasses[key] ?? {};
+              const size = cls.fontSize ?? defaultSize;
+              return (
+                <div key={key} className={styles.subSection}>
+                  <div className={styles.sliderRow}>
+                    <Caption1 className={styles.fieldLabel}>{label} size</Caption1>
+                    <Slider
+                      size="small" min={8} max={36} step={1} value={size}
+                      aria-label={`${label} font size`}
+                      onChange={(_e, d) => setTextClass(key, { fontSize: d.value })}
+                      style={{ flex: 1, minWidth: 0 }}
+                    />
+                    <Caption1 className={styles.sliderVal}>{size}pt</Caption1>
+                  </div>
+                  <ColorField
+                    label={`${label} color`} value={cls.color} fallback="#242424"
+                    allowClear onChange={(c) => setTextClass(key, { color: c })} styles={styles}
+                  />
+                </div>
+              );
+            })}
+
+            <Divider />
+
+            {/* ── Structural colors — labels/axis (2nd level) + gridlines (3rd) ── */}
+            <SectionHead icon={<Color20Regular />} label="Structural colors" styles={styles} />
+            <Caption1 className={styles.subHint}>
+              Secondary elements (labels, legend, axis) and gridlines — these repaint chart axes and
+              gridlines through the theme.
+            </Caption1>
+            <ColorField
+              label="Labels & axis" value={theme.secondLevelElements} fallback="#424242"
+              allowClear onChange={(c) => update({ secondLevelElements: c })} styles={styles}
+            />
+            <ColorField
+              label="Gridlines" value={theme.thirdLevelElements} fallback="#e0e0e0"
+              allowClear onChange={(c) => update({ thirdLevelElements: c })} styles={styles}
+            />
+
+            <Divider />
+
+            {/* ── Sentiment colors — good / neutral / bad (KPI, waterfall) ────── */}
+            <SectionHead icon={<Sparkle20Regular />} label="Sentiment colors" styles={styles} />
+            <Caption1 className={styles.subHint}>
+              Positive, neutral, and negative — used by KPI and waterfall visuals and exported 1:1 to a
+              Power BI theme file.
+            </Caption1>
+            <ColorField
+              label="Good" value={theme.good} fallback="#107c10"
+              allowClear onChange={(c) => update({ good: c })} styles={styles}
+            />
+            <ColorField
+              label="Neutral" value={theme.neutral} fallback="#eaa300"
+              allowClear onChange={(c) => update({ neutral: c })} styles={styles}
+            />
+            <ColorField
+              label="Bad" value={theme.bad} fallback="#d13438"
+              allowClear onChange={(c) => update({ bad: c })} styles={styles}
+            />
+
+            <Divider />
+
+            {/* ── Style presets — named bundles → Format pane's Styles dropdown ── */}
+            <SectionHead icon={<PaintBrush20Regular />} label="Style presets" styles={styles} />
+            <Caption1 className={styles.subHint}>
+              Named visual styles — each appears in the Format pane&apos;s Styles dropdown and applies its
+              base style, number format, and label defaults to the selected visual.
+            </Caption1>
+            {presets.length > 0 && (
+              <div className={styles.presetList}>
+                {presets.map((p, i) => (
+                  <div key={p.id} className={styles.presetCard}>
+                    <div className={styles.presetHead}>
+                      <Input
+                        size="small" aria-label={`Style preset ${i + 1} name`}
+                        value={p.label}
+                        onChange={(_e, d) => setPresetAt(i, { label: d.value })}
+                        style={{ flex: 1, minWidth: 0 }}
+                      />
+                      <Button
+                        size="small" appearance="subtle" icon={<ArrowUp20Regular />}
+                        aria-label={`Move ${p.label} up`} disabled={i === 0}
+                        onClick={() => movePreset(i, -1)}
+                      />
+                      <Button
+                        size="small" appearance="subtle" icon={<ArrowDown20Regular />}
+                        aria-label={`Move ${p.label} down`} disabled={i === presets.length - 1}
+                        onClick={() => movePreset(i, 1)}
+                      />
+                      <Button
+                        size="small" appearance="subtle" icon={<Delete20Regular />}
+                        aria-label={`Remove ${p.label}`} onClick={() => removePresetAt(i)}
+                      />
+                    </div>
+                    <div className={styles.presetBody}>
+                      <div className={styles.fieldRow}>
+                        <Caption1 className={styles.fieldLabel}>Base style</Caption1>
+                        <Dropdown
+                          size="small" aria-label={`${p.label} base style`}
+                          value={STYLE_PRESETS.find((s) => s.id === (p.format.stylePreset ?? 'default'))?.label ?? 'Default'}
+                          selectedOptions={[p.format.stylePreset ?? 'default']}
+                          onOptionSelect={(_e, d) =>
+                            setPresetFormat(i, { stylePreset: (d.optionValue as StylePreset) || 'default' })}
+                          style={{ flex: 1, minWidth: 0 }}
+                        >
+                          {STYLE_PRESETS.map((s) => (
+                            <Option key={s.id} value={s.id} text={s.label}>{s.label}</Option>
+                          ))}
+                        </Dropdown>
+                      </div>
+                      <div className={styles.fieldRow}>
+                        <Caption1 className={styles.fieldLabel}>Numbers</Caption1>
+                        <Dropdown
+                          size="small" aria-label={`${p.label} number format`}
+                          value={NUMBER_FORMAT_PRESETS.find((n) => n.id === (p.format.numberFormat ?? 'general'))?.label ?? 'General'}
+                          selectedOptions={[p.format.numberFormat ?? 'general']}
+                          onOptionSelect={(_e, d) =>
+                            setPresetFormat(i, { numberFormat: (d.optionValue as NumberFormatPreset) || 'general' })}
+                          style={{ flex: 1, minWidth: 0 }}
+                        >
+                          {NUMBER_FORMAT_PRESETS.map((n) => (
+                            <Option key={n.id} value={n.id} text={n.label}>{n.label}</Option>
+                          ))}
+                        </Dropdown>
+                      </div>
+                      <Switch
+                        label="Show legend"
+                        checked={p.format.showLegend ?? true}
+                        onChange={(_e, d) => setPresetFormat(i, { showLegend: d.checked })}
+                      />
+                      <Switch
+                        label="Show data labels"
+                        checked={p.format.dataLabels?.show ?? false}
+                        onChange={(_e, d) =>
+                          setPresetFormat(i, { dataLabels: { ...p.format.dataLabels, show: d.checked } })}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className={styles.rowButtons}>
+              <Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={addPreset}>
+                Add style preset
+              </Button>
+            </div>
           </>
         )}
       </div>

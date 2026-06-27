@@ -87,6 +87,18 @@ import {
   LoomChart, type LoomChartType,
   type ChartErrorBar, type ChartForecast, type ChartSymmetry,
 } from '@/lib/components/charts/loom-chart';
+// ── Wave-6 Format-pane parity ACTIVATION SEAM (owned HERE). The Wave-6 Format
+//    controls are translated into REAL LoomChart props + row transforms + axis
+//    titles by `formatToChartProps` (lib/components/charts/loom-chart-format),
+//    and the title / subtitle / header-icons / axis-titles / card frame are
+//    painted AROUND the chart by `VisualChrome` (./report/visual-chrome). Both
+//    are pure passthroughs until a Wave-6 control is set, so wiring them is the
+//    single additive, default-off line the wave needs — and the default render
+//    stays byte-identical (no regression to waves 0-5). This is the ONE seam the
+//    parallel Wave-6 modules (loom-chart-format.ts / visual-chrome.tsx) require
+//    to stop being dormant; loom-chart.tsx itself is NOT edited.
+import { formatToChartProps, type ChartAdapterContext } from '@/lib/components/charts/loom-chart-format';
+import { VisualChrome } from './report/visual-chrome';
 import { ReportPowerBiCopilot, type CopilotVisualSpec, type CopilotWellField } from '@/lib/components/report/report-powerbi-copilot';
 import { DataSourcePicker } from './report/data-source-picker';
 import { FormatPane, type ReportVisualFormat, formatValue, LOOM_DATA_PALETTE } from './report/format-pane';
@@ -124,7 +136,24 @@ import { FreeFormCanvas } from './report/free-form-canvas';
 import {
   type AbsRect, type AlignEdge, type DistributeAxis,
   migrateFlowToAbsolute, absAlign, absDistribute, reorderZ as absReorderZ,
+  reorderZStep as absReorderZStep, defaultElementLayout,
 } from './report/use-canvas-layout';
+// ── Wave-7 free-form CANVAS ELEMENTS (text / image / shape / button / page +
+//    bookmark navigators) — Power BI "Insert" objects. The element registry
+//    (model + parse/wire helpers + the Insert gallery + the per-kind property
+//    pane + the node body/chrome renderers + tokenToSpec) lives in the SIBLING
+//    ./report/canvas-elements module so THIS host stays thin: report-designer
+//    only wires elements onto the page (DPage.elements), MERGES them into the
+//    SAME FreeFormCanvas node array + z-space as data visuals, persists them
+//    ADDITIVELY via /definition (page.elements — the route's sanitizeElements is
+//    the security/structure gate), and resolves REAL data-bound tokens through
+//    the shared /query (queryAdHoc). Pure client + the existing /query +
+//    /definition — zero Fabric / Power BI hosts (no-fabric-dependency). ───────
+import {
+  type CanvasElement, type ElementKind, type FieldToken, type ButtonAction,
+  ElementsGallery, ElementProperties,
+  parseElements, wireElements, newElement, renderElement, renderElementChrome, tokenToSpec,
+} from './report/canvas-elements';
 // Wave-2 right-rail panes (extracted, self-contained, PBI-parity). These are the
 // canonical Bookmarks + Selection panes — report-designer MOUNTS them (the model
 // matches the /definition route's bookmark sanitizer). The previously-inline
@@ -335,7 +364,25 @@ interface DPage {
   /** Tooltip-page binding: when enabled this page renders as a hover tooltip
    *  bound to `boundField` (PBI report-page tooltips). canvasType 'tooltip' pairs. */
   tooltipPage?: { enabled: boolean; boundField?: WellFieldRef };
+  // ── wave-7 free-form ELEMENTS (text / image / shape / button / page + bookmark
+  //    navigators). ADDITIVE sibling of `visuals` (NOT under config). Each element
+  //    carries an absolute `layout` in the SAME px + z-space as a data visual, so
+  //    paint order interleaves the two arrays. Persisted on page.elements via
+  //    /definition (the route's sanitizeElements whitelists kind/layout/per-kind
+  //    props + clampUrl); the loader hydrates via parseElements. The model + all
+  //    element logic live in ./report/canvas-elements (this host stays thin). ──
+  elements?: CanvasElement[];
 }
+
+/** A positioned node on the free-form canvas: EITHER a data visual (carrying an
+ *  absolute `layout`) OR a wave-7 element (tagged `__el`). Both satisfy the
+ *  canvas's generic FFVisual, so the host MERGES them into ONE `visuals` node
+ *  array — paint order by the shared `layout.z` interleaves elements and visuals
+ *  (a shape can sit behind chart A yet in front of chart B — PBI parity). The
+ *  `__el` tag drives the render-prop + dragBody dispatch (data visuals omit it). */
+type FFNode =
+  | (DVisual & { layout: AbsRect; __el?: undefined })
+  | { id: string; layout: AbsRect; locked?: boolean; hidden?: boolean; groupId?: string; __el: CanvasElement };
 
 // A saved bookmark (PBI Bookmarks pane) is the rich `ReportBookmark` imported from
 // ./report/bookmarks-pane (scope + Data/Display/Current-page apply toggles + a
@@ -1204,24 +1251,16 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
       const themeLead = themeChart && themeChart.palette[0] !== 'var(--colorBrandForeground1)' ? themeChart.palette[0] : undefined;
       const leadVar = lead || themeLead;
       const wrapStyle = leadVar ? ({ '--colorBrandForeground1': leadVar } as unknown as CSSProperties) : undefined;
-      // Wave-3 theme props for LoomChart: the WHOLE palette + typography + structural
-      // colors (not just series-1) flip when a theme is active. The per-visual Format
-      // lead still wins as element 0. The theme's foreground + background ride on the
-      // `structural` prop LoomChart actually READS (LoomChartStructural.foreground /
-      // .background) — passing them as top-level props silently DROPPED them (LoomChart
-      // has no top-level foreground/background prop), so under a dark theme the canvas
-      // went dark while axis/gridline labels stayed at the default mid-grey
-      // colorNeutralForeground3 (low contrast). With `structural` set, every axis /
-      // gridline / data label + the plot background repaint under the theme. Spread as
-      // a loose object (compiles regardless of prop-declaration timing). Omitted when
-      // no theme → byte-identical output.
-      const themeChartProps_: Record<string, unknown> | undefined = themeChart
-        ? {
-            palette: lead ? [lead, ...themeChart.palette.slice(1)] : themeChart.palette,
-            fontFamily: themeChart.fontFamily,
-            structural: { foreground: themeChart.foreground, background: themeChart.background },
-          }
-        : undefined;
+      // Wave-3 theme props for LoomChart (palette + typography + structural axis /
+      // gridline / plot colors) are NOW emitted by the Wave-6 format→chart adapter
+      // (formatToChartProps) from `themeChart` + the per-visual lead, alongside the
+      // Format-pane axis/label/effect colors — so the theme still flips the WHOLE
+      // chart (not just series-1) while the Format pane's own color controls layer
+      // on top. The previous inline `themeChartProps_` object is superseded by
+      // `adapter.chartProps` below; passing `themeChart`/`leadVar` through the
+      // adapter context keeps the exact same theme behavior (and finally carries
+      // the theme gridline color the old object dropped). Omitted when no theme +
+      // no Wave-6 color → byte-identical output.
       // Analytics reference lines — computed from these same rows and OVERLAID
       // on the chart by LoomChart (horizontal, or sloped for a trend line), with
       // a compact legend strip below for quick scanning. Each is data-derived,
@@ -1299,11 +1338,44 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
         ...(anomalies ? { anomalies } : {}),
         ...(shadedRanges ? { shadedRanges } : {}),
       };
+      // ── Wave-6 ACTIVATION SEAM (the single additive, default-off line the
+      //    Format-pane parity wave needs). `formatToChartProps` maps the persisted
+      //    Format model onto levers LoomChart already reads — value-axis range,
+      //    secondary axis, gridline / label / plot colors, whole-chart font,
+      //    palette, stacking, small-multiples, tooltips — plus `rows` transforms
+      //    (log / display-units / decimals / zoom window) and axis-title chrome.
+      //    Every shipped control therefore takes REAL effect with NO edit to
+      //    loom-chart.tsx (no-vaporware: no dead controls). The wells-derived
+      //    `geomProps` is spread LAST so the PBI-native field-well geometry keeps
+      //    precedence; the adapter only fills what the Format pane adds. When no
+      //    Wave-6 control is set the adapter returns the same `rows` ref + a format
+      //    passthrough, so the render is byte-identical to wave-5 (no regression).
+      const chartCtx: ChartAdapterContext = {
+        visualType: visual.type,
+        rows,
+        themeChart,
+        perVisualLead: leadVar,
+      };
+      const adapter = formatToChartProps(fmt, chartCtx);
+      // fx-conditional title → a REAL per-measure aggregate from the SAME /query
+      // rows the visual already drew (SUM for numeric columns, first value
+      // otherwise), keyed by column name. Computed ONLY when an fx-title is bound,
+      // so the common path pays nothing; lets VisualChrome paint a real value
+      // instead of a placeholder (no-vaporware). Absent ⇒ the literal title text /
+      // the visual name shows.
+      const titleMeasureValues = fmt?.title?.conditionalField
+        ? measureAggregates(rows, cols)
+        : undefined;
       return (
         <div style={wrapStyle}>
-          <LoomChart type={(CHART_RENDER[visual.type] || 'column') as LoomChartType} rows={rows} height={200}
-            refLines={orientedRefLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry} format={fmt}
-            {...(themeChartProps_ as any)} {...(geomProps as any)} />
+          {/* VisualChrome paints title / subtitle / header-icons / axis-titles /
+              card border+shadow AROUND the chart from the Format model + the
+              adapter's axisChrome; it collapses to a passthrough when none is set. */}
+          <VisualChrome chrome={adapter.axisChrome} format={fmt} fallbackTitle={visual.title} measureValues={titleMeasureValues}>
+            <LoomChart type={(CHART_RENDER[visual.type] || 'column') as LoomChartType} rows={adapter.rows} height={200}
+              refLines={orientedRefLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry}
+              {...(adapter.chartProps as any)} {...(geomProps as any)} />
+          </VisualChrome>
           {refLines.length > 0 && (
             <div className={styles.refLineRow}>
               {refLines.map((rl) => (
@@ -1380,6 +1452,29 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
 function cellIsNumeric(v: unknown): boolean {
   if (v == null || v === '') return false;
   return !Number.isNaN(Number(v));
+}
+/**
+ * Per-column aggregate values for an fx-conditional visual title (no-vaporware:
+ * VisualChrome paints a REAL measure value, not a placeholder). Mirrors Power
+ * BI's default title-measure aggregate — SUM over a numeric column, the first
+ * non-null value otherwise — keyed by result-column name so a title bound to a
+ * measure / column lights up off the SAME /query rows the visual already drew.
+ */
+function measureAggregates(rows: Array<Record<string, unknown>>, cols: string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const c of cols) {
+    let sum = 0;
+    let sawNumeric = false;
+    let firstNonNull: unknown;
+    for (const r of rows) {
+      const v = r[c];
+      if (v == null || v === '') continue;
+      if (firstNonNull === undefined) firstNonNull = v;
+      if (cellIsNumeric(v)) { sum += Number(v); sawNumeric = true; }
+    }
+    out[c] = sawNumeric ? sum : firstNonNull;
+  }
+  return out;
 }
 /** Split result columns into non-numeric (label/category) and numeric, by scanning rows. */
 function splitCols(rows: Array<Record<string, unknown>>, cols: string[]): { cats: string[]; nums: string[] } {
@@ -1824,6 +1919,11 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           tooltipPage: pc.tooltipPage && typeof pc.tooltipPage === 'object'
             ? { enabled: !!pc.tooltipPage.enabled, boundField: pc.tooltipPage.boundField || undefined }
             : undefined,
+          // wave-7 free-form elements — defensively hydrated by the sibling
+          // registry (drops unknown kinds/keys, caps counts). Reads `p.elements`
+          // (the additive sibling of `p.visuals`); a no-op [] until the route
+          // sanitizer persists them, so already-saved reports stay unchanged.
+          elements: parseElements(p.elements),
           visuals: (p.visuals || []).map((v: any): DVisual => {
             const cfgWells = v.config?.wells;
             const reUid = (a: any): WellField[] => (Array.isArray(a) ? a : []).map((f: any) => ({ uid: uid('f'), ...f }));
@@ -1941,6 +2041,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const page = pages[activePage];
   const selected = useMemo(
     () => (page?.visuals || []).find((v) => v.id === selectedVisual) || null,
+    [page, selectedVisual],
+  );
+  // wave-7: the selected node is an ELEMENT when its id resolves in page.elements
+  // (ids are unique across visuals + elements). Drives the Build pane to show the
+  // element property pickers instead of the visual well editors.
+  const selectedElement = useMemo(
+    () => (page?.elements || []).find((e) => e.id === selectedVisual) || null,
     [page, selectedVisual],
   );
 
@@ -2115,6 +2222,82 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     if (selectedVisual === vid) setSelectedVisual(null);
   }, [mutatePage, selectedVisual]);
 
+  // ── wave-7: canvas-element mutators + union-layout glue ──────────────────────
+  // Elements live on `page.elements` (sibling of `visuals`) but share the SAME
+  // absolute sheet + integer z-space. These two pure helpers let every geometry
+  // mutator (move / align / distribute / z-order) run over the UNION of both
+  // arrays and scatter the result back to the correct array by id — so a shape
+  // and a chart interleave in one paint order (PBI parity). Pages with no
+  // elements are returned untouched (no stray `elements:[]` is introduced).
+  const unionNodes = useCallback((p: DPage): Array<{ id: string; layout: AbsRect }> => ([
+    ...p.visuals.filter((v) => v.layout).map((v) => ({ id: v.id, layout: v.layout as AbsRect })),
+    ...(p.elements || []).map((e) => ({ id: e.id, layout: e.layout })),
+  ]), []);
+  const scatterLayouts = useCallback((p: DPage, byId: Map<string, AbsRect>): DPage => {
+    const np: DPage = { ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: byId.get(v.id)! } : v)) };
+    if (p.elements && p.elements.length) {
+      np.elements = p.elements.map((e) => (byId.has(e.id) ? { ...e, layout: byId.get(e.id)! } : e));
+    }
+    return np;
+  }, []);
+
+  /** Patch one element (mirrors mutateVisual). The sibling renderers/property
+   *  pane call this through `elemCtx.onChange(id, updater)` — direct manipulation
+   *  on the structured element model (no-freeform-config). */
+  const mutateElement = useCallback((eid: string, fn: (e: CanvasElement) => CanvasElement) => {
+    mutatePage((p) => ({ ...p, elements: (p.elements || []).map((e) => (e.id === eid ? fn(e) : e)) }));
+  }, [mutatePage]);
+
+  /** Insert a new element (Insert gallery). Mirrors addVisual's drop convention:
+   *  the registry's per-kind default footprint + a down-right cascade, with the
+   *  authoritative z = max-existing-z (over visuals AND elements) + 1 so it paints
+   *  on top. newElement() seeds the kind-specific defaults; selection follows it. */
+  const addElement = useCallback((kind: ElementKind) => {
+    mutatePage((p) => {
+      const dims = pageDims(p);
+      const count = p.visuals.length + (p.elements?.length || 0);
+      const layout = defaultElementLayout(kind, dims, count);
+      const maxZ = unionNodes(p).reduce((m, n) => Math.max(m, n.layout.z ?? -1), -1);
+      const el = newElement(kind, { ...layout, z: maxZ + 1 });
+      setSelectedVisual(el.id);
+      setSelectedVisualIds(new Set());
+      return { ...p, elements: [...(p.elements || []), el] };
+    });
+  }, [mutatePage, unionNodes]);
+
+  /** Remove one element (element chrome's delete / property-pane delete). */
+  const removeElement = useCallback((eid: string) => {
+    mutatePage((p) => ({ ...p, elements: (p.elements || []).filter((e) => e.id !== eid) }));
+    if (selectedVisual === eid) setSelectedVisual(null);
+  }, [mutatePage, selectedVisual]);
+
+  /** Union-aware delete (canvas keyboard Delete + marquee) — routes each id to the
+   *  right array in ONE mutation (one undo entry) and clears it from selection. */
+  const removeNodes = useCallback((ids: string[]) => {
+    if (!ids.length) return;
+    const set = new Set(ids);
+    mutatePage((p) => {
+      const np: DPage = { ...p, visuals: p.visuals.filter((v) => !set.has(v.id)) };
+      if (p.elements && p.elements.length) np.elements = p.elements.filter((e) => !set.has(e.id));
+      return np;
+    });
+    if (selectedVisual && set.has(selectedVisual)) setSelectedVisual(null);
+    setSelectedVisualIds((prev) => { const next = new Set(prev); ids.forEach((i) => next.delete(i)); return next; });
+  }, [mutatePage, selectedVisual]);
+
+  /** Single-step z-layering (Ctrl+] / Ctrl+[) over the visuals+elements union. */
+  const reorderZStepUnion = useCallback((ids: string[], dir: 'forward' | 'backward') => {
+    if (!ids.length) return;
+    const set = new Set(ids);
+    mutatePage((p) => {
+      const union = unionNodes(p);
+      if (!union.length) return p;
+      const next = absReorderZStep(union, set, dir);
+      const byId = new Map(next.map((n) => [n.id, n.layout]));
+      return scatterLayouts(p, byId);
+    });
+  }, [mutatePage, unionNodes, scatterLayouts]);
+
   const addToWell = useCallback((vid: string, well: WellName, f: WellField) => {
     mutateVisual(vid, (v) => {
       const cur = v.wells[well] || [];
@@ -2191,7 +2374,12 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   /** Set hidden / locked on every targeted visual (Selection pane + Arrange). */
   const setVisualFlag = useCallback((ids: string[], patch: Partial<Pick<DVisual, 'hidden' | 'locked'>>) => {
     const set = new Set(ids);
-    mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, ...patch } : v)) }));
+    mutatePage((p) => {
+      const np: DPage = { ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, ...patch } : v)) };
+      // wave-7: lock/hide also applies to selected ELEMENTS (Arrange + Selection).
+      if (p.elements && p.elements.length) np.elements = p.elements.map((e) => (set.has(e.id) ? { ...e, ...patch } : e));
+      return np;
+    });
   }, [mutatePage]);
 
   /** Match the px width (or height) of every targeted visual to the first
@@ -2200,16 +2388,17 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const matchSize = useCallback((ids: string[], dim: 'w' | 'h') => {
     if (ids.length < 2) return;
     mutatePage((p) => {
-      const first = p.visuals.find((v) => v.id === ids[0]);
+      const union = unionNodes(p);
+      const first = union.find((n) => n.id === ids[0]);
       if (!first) return p;
       const set = new Set(ids);
-      return { ...p, visuals: p.visuals.map((v) => {
-        if (!set.has(v.id)) return v;
-        const layout = v.layout && first.layout ? { ...v.layout, [dim]: first.layout[dim] } : v.layout;
-        return { ...v, [dim]: first[dim], layout };
-      }) };
+      const val = first.layout[dim];
+      const byId = new Map<string, AbsRect>(
+        union.filter((n) => set.has(n.id)).map((n) => [n.id, { ...n.layout, [dim]: val }]),
+      );
+      return scatterLayouts(p, byId);
     });
-  }, [mutatePage]);
+  }, [mutatePage, unionNodes, scatterLayouts]);
 
   /** Bring targeted visuals to front / send to back via absolute layout.z (PBI
    *  z-order). Re-numbers z so overlapping visuals layer correctly; preserves the
@@ -2218,44 +2407,52 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     if (!ids.length) return;
     const set = new Set(ids);
     mutatePage((p) => {
-      // Only visuals carrying an absolute layout participate in z math.
-      const withLayout = p.visuals.filter((v) => v.layout) as Array<DVisual & { layout: AbsRect }>;
-      if (!withLayout.length) return p;
-      const next = absReorderZ(withLayout, set, dir);
-      const byId = new Map(next.map((v) => [v.id, v.layout]));
-      return { ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: byId.get(v.id) } : v)) };
+      // Run over the visuals+elements UNION so a "bring to front" lifts a node
+      // above BOTH arrays (shared z-space, PBI parity), then scatter z back.
+      const union = unionNodes(p);
+      if (!union.length) return p;
+      const next = absReorderZ(union, set, dir);
+      const byId = new Map(next.map((n) => [n.id, n.layout]));
+      return scatterLayouts(p, byId);
     });
-  }, [mutatePage]);
+  }, [mutatePage, unionNodes, scatterLayouts]);
 
   /** Align selected visuals' edges/centers on the absolute canvas (PBI Format →
-   *  Align). Distribute equalizes gaps. Both mutate the persisted `layout`. */
+   *  Align). Distribute equalizes gaps. Both mutate the persisted `layout` over
+   *  the visuals+elements union. */
   const alignSelection = useCallback((ids: string[], edge: AlignEdge) => {
     if (ids.length < 2) return;
     const set = new Set(ids);
     mutatePage((p) => {
-      const withLayout = p.visuals.filter((v) => v.layout) as Array<DVisual & { layout: AbsRect }>;
-      const aligned = absAlign(withLayout, set, edge);
-      const byId = new Map(aligned.map((v) => [v.id, v.layout]));
-      return { ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: byId.get(v.id) } : v)) };
+      const aligned = absAlign(unionNodes(p), set, edge);
+      const byId = new Map(aligned.map((n) => [n.id, n.layout]));
+      return scatterLayouts(p, byId);
     });
-  }, [mutatePage]);
+  }, [mutatePage, unionNodes, scatterLayouts]);
   const distributeSelection = useCallback((ids: string[], axis: DistributeAxis) => {
     if (ids.length < 3) return;
     const set = new Set(ids);
     mutatePage((p) => {
-      const withLayout = p.visuals.filter((v) => v.layout) as Array<DVisual & { layout: AbsRect }>;
-      const dist = absDistribute(withLayout, set, axis);
-      const byId = new Map(dist.map((v) => [v.id, v.layout]));
-      return { ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: byId.get(v.id) } : v)) };
+      const dist = absDistribute(unionNodes(p), set, axis);
+      const byId = new Map(dist.map((n) => [n.id, n.layout]));
+      return scatterLayouts(p, byId);
     });
-  }, [mutatePage]);
+  }, [mutatePage, unionNodes, scatterLayouts]);
 
   // ── wave-4 free-form canvas handlers ─────────────────────────────────────────
   /** Commit a batch of drag/resize moves as ONE mutation → one undo entry. */
   const applyLayoutMoves = useCallback((moves: Array<{ id: string; layout: AbsRect }>) => {
     if (!moves.length) return;
     const byId = new Map(moves.map((m) => [m.id, m.layout]));
-    mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: { ...v.layout, ...byId.get(v.id)! } } : v)) }));
+    mutatePage((p) => {
+      // Drag/resize/nudge can move BOTH data visuals and elements (one merged
+      // canvas node array) — write each move back to its array by id.
+      const np: DPage = { ...p, visuals: p.visuals.map((v) => (byId.has(v.id) ? { ...v, layout: { ...v.layout, ...byId.get(v.id)! } } : v)) };
+      if (p.elements && p.elements.length) {
+        np.elements = p.elements.map((e) => (byId.has(e.id) ? { ...e, layout: { ...e.layout, ...byId.get(e.id)! } } : e));
+      }
+      return np;
+    });
   }, [mutatePage]);
 
   /** Canvas selection: additive (ctrl/shift) toggles the multi-set; plain click
@@ -2281,16 +2478,29 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     if (ids.length < 2) return;
     const gid = uid('grp');
     const set = new Set(ids);
-    mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, groupId: gid } : v)) }));
+    mutatePage((p) => {
+      const np: DPage = { ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, groupId: gid } : v)) };
+      if (p.elements && p.elements.length) np.elements = p.elements.map((e) => (set.has(e.id) ? { ...e, groupId: gid } : e));
+      return np;
+    });
   }, [mutatePage]);
   const ungroupVisuals = useCallback((ids: string[]) => {
     const set = new Set(ids);
-    mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, groupId: undefined } : v)) }));
+    mutatePage((p) => {
+      const np: DPage = { ...p, visuals: p.visuals.map((v) => (set.has(v.id) ? { ...v, groupId: undefined } : v)) };
+      if (p.elements && p.elements.length) np.elements = p.elements.map((e) => (set.has(e.id) ? { ...e, groupId: undefined } : e));
+      return np;
+    });
   }, [mutatePage]);
 
-  /** Select every member of a visual's group (click a group badge / Selection pane). */
+  /** Select every member of a node's group (click a group badge / Selection pane)
+   *  — across BOTH visuals and elements (a group can mix the two). */
   const selectGroup = useCallback((gid: string) => {
-    const members = (pages[activePage]?.visuals || []).filter((v) => v.groupId === gid).map((v) => v.id);
+    const p = pages[activePage];
+    const members = [
+      ...(p?.visuals || []).filter((v) => v.groupId === gid).map((v) => v.id),
+      ...(p?.elements || []).filter((e) => e.groupId === gid).map((e) => e.id),
+    ];
     setSelectedVisualIds(new Set(members));
     if (members[0]) setSelectedVisual(members[0]);
   }, [pages, activePage]);
@@ -2403,6 +2613,88 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     setDirty(true);
   }, []);
 
+  // ── wave-7: element-render context (the glue the sibling node renderers +
+  //    property pane consume) ──────────────────────────────────────────────────
+  // Every field below drives a REAL behaviour (no-vaporware): a data-bound text
+  // token / measure-driven image src resolves a REAL aggregated value via the
+  // shared /query (resolveToken → queryAdHoc); page/bookmark navigators + button
+  // actions dispatch the SAME host handlers the chrome already uses; onChange
+  // writes the structured element model back through mutateElement. Pure client +
+  // the existing /query + /definition — zero Fabric / Power BI.
+
+  /** Open a (route-clamped: https / mailto / data:image only) URL from a button,
+   *  text-run, or image link. clampUrl on the /definition side keeps persisted
+   *  links safe (javascript:/vbscript: rejected). */
+  const onOpenUrl = useCallback((url: string) => {
+    if (!url) return;
+    try { window.open(url, '_blank', 'noopener,noreferrer'); } catch { /* popup blocked — no-op */ }
+  }, []);
+
+  /** Navigate to a page by index (page-navigator buttons) or by id (button
+   *  pageNavigation action). Mirrors a page-tab click. */
+  const onNavigatePage = useCallback((target: number | string) => {
+    if (typeof target === 'number') { setActivePage(Math.max(0, Math.min(pages.length - 1, target))); return; }
+    const idx = pages.findIndex((p) => p.id === target);
+    if (idx >= 0) setActivePage(idx);
+  }, [pages]);
+
+  /** Resolve a data-bound element token to a REAL aggregated scalar through the
+   *  shared /query (Path-3 wells→SQL over the bound Loom semantic model), honoring
+   *  the active page + report (+ drillthrough) filter scope — exactly the scope a
+   *  visual on this page sees. Returns the value column (the last selected column);
+   *  the sibling renderer formats it via formatTokenValue + caches per token. */
+  const resolveToken = useCallback(async (token: FieldToken): Promise<unknown> => {
+    const drillScope = drill && drill.toPage === activePage ? drill.filters : [];
+    // wireFilters yields the exact wire shape /query consumes (identical to the
+    // per-visual runVisual POST); the cast bridges the two structurally-equal
+    // filter types (FilterOp vs ReportFilterOp) across the module boundary.
+    const scope = wireFilters([...reportFilters, ...drillScope, ...(page?.filters || [])]) as unknown as ReportFilterInput[];
+    const rows = await queryAdHoc(tokenToSpec(token), scope);
+    const row = rows[0];
+    if (!row) return null;
+    const keys = Object.keys(row);
+    return keys.length ? row[keys[keys.length - 1]] : null;
+  }, [queryAdHoc, reportFilters, drill, activePage, page?.filters]);
+
+  /** Dispatch a button element's action to the SAME host handlers the report
+   *  chrome already uses — every branch DOES something real (no dead control):
+   *   • back → exit drillthrough / back-bar    • bookmark → applyBookmark
+   *   • pageNavigation / drillthrough → setActivePage / seeded drill
+   *   • qna → open the Q&A / Copilot pane       • webUrl → open the clamped URL */
+  const onElementAction = useCallback((action: ButtonAction) => {
+    switch (action.type) {
+      case 'back': exitDrillthrough(); break;
+      case 'bookmark': { const bm = bookmarks.find((b) => b.id === action.bookmarkId); if (bm) applyBookmark(bm); break; }
+      case 'pageNavigation': if (action.pageId) onNavigatePage(action.pageId); break;
+      case 'drillthrough': {
+        const idx = pages.findIndex((p) => p.id === action.pageId);
+        if (idx >= 0) { const seed = selection ? drillSeedFor(pages[idx], selection) : null; navigateDrillthrough(idx, seed || [], pages[idx].name); }
+        break;
+      }
+      case 'qna': setRightTab('copilot'); break;
+      case 'webUrl': if (action.url) onOpenUrl(action.url); break;
+    }
+  }, [bookmarks, applyBookmark, pages, selection, exitDrillthrough, drillSeedFor, navigateDrillthrough, onNavigatePage, onOpenUrl]);
+
+  /** The context object the sibling node renderers (renderElement /
+   *  renderElementChrome) + the element property pane read. Memoized so the
+   *  renderers' token-resolve effects don't thrash on every parent render. */
+  const elemCtx = useMemo(() => ({
+    reportId: id,
+    readOnly: personalize.active,
+    tables,
+    pages: pages.map((p, i) => ({ id: p.id, name: p.name, index: i, hidden: !!p.hidden })),
+    activePageId: page?.id ?? '',
+    bookmarks,
+    resolveToken,
+    onNavigatePage,
+    onApplyBookmark: applyBookmark,
+    onAction: onElementAction,
+    onChange: mutateElement,
+    onRemove: removeElement,
+    onOpenUrl,
+  }), [id, personalize.active, tables, pages, page?.id, bookmarks, resolveToken, onNavigatePage, applyBookmark, onElementAction, mutateElement, removeElement, onOpenUrl]);
+
   // ── pages ──────────────────────────────────────────────────────────────────
   const addPage = () => {
     setPages((prev) => {
@@ -2448,6 +2740,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         interactions: undefined, // visual ids change → drop the old matrix
         filters: (src.filters || []).map((f) => ({ ...f, id: uid('flt') })),
         visuals: src.visuals.map((v) => ({ ...v, id: uid('v'), wells: cloneWells(v.wells), filters: (v.filters || []).map((f) => ({ ...f, id: uid('flt') })) })),
+        // wave-7: deep-clone canvas ELEMENTS with fresh ids too — Power BI carries
+        // Insert objects (text / shape / image / button / page+bookmark navigators)
+        // onto a duplicated page. Without this the `...src` spread would share the
+        // SAME elements array + ids across both pages (editing the copy would mutate
+        // the source, and element ids would collide page-to-page); map to independent
+        // objects so each page owns its own. Mirrors the `visuals` deep-clone above.
+        elements: src.elements ? src.elements.map((e): CanvasElement => ({ ...e, id: uid('el') })) : undefined,
       };
       const next = [...prev.slice(0, idx + 1), dup, ...prev.slice(idx + 1)];
       setActivePage(idx + 1);
@@ -2557,6 +2856,14 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         // slicer interaction style. Omitted for every non-slicer visual.
         ...(v.config?.slicerStyle ? { slicerStyle: v.config.slicerStyle } : {}),
       })),
+      // Wave-7 free-form ELEMENTS — ADDITIVE sibling of `visuals` (NOT under
+      // config). wireElements cleans + caps; the /definition route's
+      // sanitizeElements is the security/structure gate (whitelists kind/layout/
+      // per-kind props + runs every URL through clampUrl). Today's sanitizer +
+      // the read-only viewer + the PBIR provisioner IGNORE an unknown `elements`
+      // key, so this is back-compat safe; it round-trips once the route
+      // whitelists it. `?? []` keeps the key present + harmless when empty.
+      elements: wireElements(p.elements) ?? [],
     })),
     reportFilters: wireFilters(reportFilters),
     // Top-level bookmarks (PBI Bookmarks pane). The rich `wireBookmarks` shape —
@@ -2895,6 +3202,21 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     ...v,
     layout: v.layout ?? { x: 24 + (i % 6) * 24, y: 24 + (i % 6) * 24, w: 480, h: 320, z: i },
   }));
+  // ── wave-7: MERGE elements + data visuals into ONE FreeFormCanvas node array.
+  // Element nodes adapt to the canvas's generic FFVisual (id + layout + locked? /
+  // hidden? / groupId?) and carry the element on `__el`, so drag / resize / select
+  // / marquee / snap / guides / keyboard all work on them unchanged, and the
+  // shared `layout.z` interleaves paint order with the data visuals (PBI parity).
+  const elementsActive = page?.elements || [];
+  const canvasNodes: FFNode[] = [
+    ...ffVisuals.map((v) => ({ ...v })),
+    ...elementsActive.map((e) => ({
+      id: e.id, layout: e.layout, locked: e.locked, hidden: e.hidden, groupId: e.groupId, __el: e,
+    })),
+  ];
+  // Node count drives the empty-state / canvas / Arrange gates — a page with only
+  // elements (no data visual) must still render the canvas + toolbars.
+  const nodeCount = (page?.visuals.length || 0) + elementsActive.length;
   const canvasBg: CSSProperties = {
     ...(themeVars || {}),
     ...(page?.background?.color
@@ -3068,11 +3390,14 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       {/* Arrange toolbar — acts on the multi-selection (Ctrl/Shift-click) or the
           single selection. Every control mutates the real, persisted layout.
           Hidden in personalize (reading) mode, where the definition is read-only. */}
-      {!loading && !personalize.active && page && page.visuals.length > 0 && arrangeTargets().length > 0 && (
+      {!loading && !personalize.active && page && nodeCount > 0 && arrangeTargets().length > 0 && (
         <ArrangeBar
           styles={styles}
           targets={arrangeTargets()}
-          visuals={page.visuals}
+          // ArrangeBar reads only id / locked / hidden / groupId — pass the
+          // visuals+elements union so lock/hide/group state is correct for an
+          // element selection too (elements satisfy those four fields).
+          visuals={[...page.visuals, ...(elementsActive as unknown as DVisual[])]}
           onLock={(lock) => setVisualFlag(arrangeTargets(), { locked: lock })}
           onHide={(hide) => setVisualFlag(arrangeTargets(), { hidden: hide })}
           onMatch={(dim) => matchSize(arrangeTargets(), dim)}
@@ -3085,18 +3410,18 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         />
       )}
 
-      {!loading && page && page.visuals.length === 0 && (
+      {!loading && page && nodeCount === 0 && (
         <EmptyState
           icon={<DataBarVerticalRegular />}
           title="Design your first visual"
-          body="Pick a visualization from the Visualizations pane on the right, then drag model fields into its wells. Every visual renders live against the bound data source."
+          body="Pick a visualization from the Visualizations pane on the right, then drag model fields into its wells. Every visual renders live against the bound data source. Insert text boxes, shapes, images, buttons, and navigators from the Elements gallery below it."
         />
       )}
 
-      {!loading && page && page.visuals.length > 0 && (
+      {!loading && page && nodeCount > 0 && (
         <div ref={gridRef} style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
-          <FreeFormCanvas<DVisual & { layout: AbsRect }>
-            visuals={ffVisuals}
+          <FreeFormCanvas<FFNode>
+            visuals={canvasNodes}
             page={{ width: pageDimsActive.width, height: pageDimsActive.height, background: canvasBg }}
             selectedId={selectedVisual}
             selectedIds={selectedVisualIds}
@@ -3106,13 +3431,22 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
             onSelect={onCanvasSelect}
             onMarquee={onCanvasMarquee}
             onLayout={applyLayoutMoves}
-            onDelete={(ids) => ids.forEach((vid) => removeVisual(vid))}
-            renderChrome={(v) => renderVisualChrome(v)}
-            renderVisual={(v) => renderVisualBody(v)}
-            frameStyle={(v) => {
+            // Union-aware delete (routes each id to its array); Ctrl+] / Ctrl+[
+            // single-steps z over the shared visuals+elements z-space.
+            onDelete={removeNodes}
+            onZStep={reorderZStepUnion}
+            // wave-7: an ELEMENT node drags from ANYWHERE on its body (PBI parity);
+            // a data visual keeps header-only drag so its cross-filter clicks live.
+            dragBody={(n) => !!n.__el}
+            renderChrome={(n) => (n.__el ? renderElementChrome(n.__el, elemCtx) : renderVisualChrome(n))}
+            renderVisual={(n) => (n.__el ? renderElement(n.__el, elemCtx) : renderVisualBody(n))}
+            frameStyle={(n) => {
+              // Elements paint their own surface (shape fill / image / text) edge to
+              // edge — no card frame chrome over them.
+              if (n.__el) return {};
               // Wave-3 Format-pane chrome over the frame: per-visual background,
               // border, and shadow (the same fmt the old card applied — no regress).
-              const fmt = v.format;
+              const fmt = n.format;
               const s: CSSProperties = {};
               if (fmt?.background?.color) s.backgroundColor = applyAlpha(fmt.background.color, fmt.background.transparency);
               if (fmt?.border?.show) {
@@ -3297,9 +3631,42 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         ))}
       </div>
 
+      {/* Wave-7 ELEMENTS (Power BI "Insert") — text boxes, shapes, images,
+          buttons, and page / bookmark navigators. The sibling gallery renders the
+          per-kind tiles; onInsert drops a real element onto the canvas (it then
+          drags / resizes / aligns / persists like any node, and its data-bound
+          tokens resolve through the shared /query). */}
+      <div className={styles.wellHead}>
+        <Add20Regular aria-hidden style={{ color: tokens.colorBrandForeground1 }} />
+        <Subtitle2>Elements</Subtitle2>
+      </div>
+      <ElementsGallery onInsert={addElement} />
+
       <Divider />
 
-      {!selected && <Caption1 className={styles.muted}>Select a visual on the canvas, or click a visualization above to add one, then assign fields.</Caption1>}
+      {!selected && !selectedElement && <Caption1 className={styles.muted}>Select a visual on the canvas, or click a visualization above to add one, then assign fields. Add a text box, shape, image, button, or navigator from the Elements gallery.</Caption1>}
+
+      {/* A selected ELEMENT shows its structured per-kind property pickers (the
+          sibling ElementProperties) instead of the visual well editors. onChange
+          accepts a full element OR an updater so it satisfies either sibling
+          signature; every picker writes the real element model (no-freeform-config:
+          structured pickers + a WYSIWYG rich-text box, not a config blob). */}
+      {selectedElement && (
+        <ElementProperties
+          {...{
+            element: selectedElement,
+            ctx: elemCtx,
+            tables,
+            pages: pages.map((p, i) => ({ id: p.id, name: p.name, index: i, hidden: !!p.hidden })),
+            bookmarks,
+            reportId: id,
+            resolveToken,
+            onChange: (next: CanvasElement | ((e: CanvasElement) => CanvasElement)) =>
+              mutateElement(selectedElement.id, (e) => (typeof next === 'function' ? (next as (x: CanvasElement) => CanvasElement)(e) : next)),
+            onRemove: () => removeElement(selectedElement.id),
+          }}
+        />
+      )}
 
       {selected && (
         <>

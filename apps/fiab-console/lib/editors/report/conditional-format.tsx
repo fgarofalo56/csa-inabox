@@ -57,20 +57,63 @@ import {
 import {
   Add20Regular, Dismiss16Regular, ColorRegular, NumberSymbol20Regular,
   DataHistogram20Regular, Apps20Regular, Options20Regular,
+  PaintBucket20Regular, Link20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { LOOM_DATA_PALETTE } from './format-pane';
 
 // ── Model (persisted on visual.config.format.conditionalFormat) ───────────────
 
-/** The four PBI conditional-formatting modes. */
-export type CondMode = 'rules' | 'colorScale' | 'dataBars' | 'icons';
+/**
+ * The PBI conditional-formatting modes.
+ *  - `rules` — by-value color bands  · `colorScale` — gradient  · `dataBars`
+ *  - `icons` — per-band glyphs (auto or custom numeric thresholds)
+ *  - `fieldValue` — a measure/column whose VALUE is itself a color → painted
+ *    directly as the cell background/font (PBI "Field value" style)
+ *  - `webUrl` — a column whose value is a URL → the cell text becomes a
+ *    hyperlink (`<a>`). Table/matrix only.
+ */
+export type CondMode = 'rules' | 'colorScale' | 'dataBars' | 'icons' | 'fieldValue' | 'webUrl';
 
 /** Numeric comparison operators for by-value rules (structured, never typed DAX). */
 export type CondOp = 'gt' | 'ge' | 'lt' | 'le' | 'eq' | 'ne' | 'between';
 
 /** PBI icon-set families. Each maps to an ordered low→high band set below. */
 export type CondIconSet = 'arrows' | 'triangles' | 'trafficLights' | 'ratings' | 'flags';
+
+/** Icon position relative to the cell value (mode==='icons'). */
+export type CondIconLayout = 'left' | 'right';
+/** Vertical alignment of the icon within the cell (mode==='icons'). */
+export type CondIconAlign = 'top' | 'middle' | 'bottom';
+
+/**
+ * One custom icon band: "{op} {value} → {glyph} in {token}". Present only when
+ * the author opts into custom thresholds; otherwise icons auto-band low→high
+ * across the field domain. Same numeric-operator shape as {@link CondThreshold}.
+ */
+export interface CondIconBand {
+  id: string;
+  op: CondOp;
+  value: number;
+  /** Upper bound for `op==='between'`. */
+  value2?: number;
+  /** The glyph painted for this band (chosen from a structured glyph palette). */
+  glyph: string;
+  /** A Loom-palette token for the glyph color. */
+  token: string;
+}
+
+/**
+ * Icon-mode configuration. `set` chooses the glyph family; `bands` (when
+ * present) overrides the auto low→high banding with explicit numeric thresholds
+ * evaluated top-down (first match wins). `layout`/`align` position the glyph.
+ */
+export interface CondIconConfig {
+  set: CondIconSet;
+  bands?: CondIconBand[];
+  layout?: CondIconLayout;
+  align?: CondIconAlign;
+}
 
 /** Whether a rules/color-scale rule paints the cell background or the font color. */
 export type CondApplyTo = 'background' | 'text';
@@ -119,9 +162,19 @@ export interface CondRule {
   colorScale?: CondColorScale;
   /** mode==='dataBars' */
   dataBars?: CondDataBars;
-  /** mode==='icons' */
-  icons?: CondIconSet;
-  /** rules/colorScale only — paint the background (default) or the font. */
+  /** mode==='icons' — glyph set + optional custom thresholds + layout/align. */
+  icons?: CondIconConfig;
+  /**
+   * mode==='fieldValue' — the measure/column whose value is itself a color.
+   * Omit to use the formatted column's own value as the color.
+   */
+  fieldValueField?: CondField;
+  /**
+   * mode==='webUrl' — the column whose value is the link URL. Omit to use the
+   * formatted column's own value as the URL.
+   */
+  webUrlField?: CondField;
+  /** rules/colorScale/fieldValue only — paint the background (default) or the font. */
   applyTo?: CondApplyTo;
 }
 
@@ -150,12 +203,23 @@ const COND_OPS: { op: CondOp; label: string }[] = [
   { op: 'between', label: 'between' },
 ];
 
-const MODE_META: { mode: CondMode; label: string; icon: ReactElement }[] = [
+const MODE_META: { mode: CondMode; label: string; icon: ReactElement; tableOnly?: boolean }[] = [
   { mode: 'rules', label: 'Rules', icon: <NumberSymbol20Regular /> },
   { mode: 'colorScale', label: 'Color scale', icon: <ColorRegular /> },
   { mode: 'dataBars', label: 'Data bars', icon: <DataHistogram20Regular /> },
   { mode: 'icons', label: 'Icons', icon: <Apps20Regular /> },
+  { mode: 'fieldValue', label: 'Field value', icon: <PaintBucket20Regular /> },
+  { mode: 'webUrl', label: 'Web URL', icon: <Link20Regular />, tableOnly: true },
 ];
+
+/** Visuals whose host renders raw cell text (so a Web-URL hyperlink is meaningful). */
+function isTableLike(visualType?: string): boolean {
+  const t = (visualType || '').toLowerCase();
+  return t === 'table' || t === 'matrix' || t === 'pivot' || t === 'grid';
+}
+
+/** Structured glyph palette for custom icon bands (no free-text glyph entry). */
+const GLYPH_CHOICES = ['▲', '▶', '▼', '△', '◇', '▽', '●', '◐', '○', '⚑', '★', '■'];
 
 /** Ordered low→high icon bands per set; colors are semantic Loom palette tokens. */
 const ICON_SETS: Record<CondIconSet, { label: string; bands: { glyph: string; token: string }[] }> = {
@@ -197,6 +261,49 @@ export function hasConditionalFormat(cfg?: ReportConditionalFormat | null): bool
   return !!cfg && validRules(cfg).length > 0;
 }
 
+/** A field reference from a persisted value (used for fieldValue/webUrl bound fields). */
+function parseField(v: unknown): CondField | undefined {
+  if (!v || typeof v !== 'object') return undefined;
+  const f = v as Record<string, unknown>;
+  const field: CondField = {
+    table: typeof f.table === 'string' ? f.table : undefined,
+    column: typeof f.column === 'string' ? f.column : undefined,
+    measure: typeof f.measure === 'string' ? f.measure : undefined,
+  };
+  return field.column || field.measure ? field : undefined;
+}
+
+/** Hydrate the icon config from either the new object form or the legacy bare-string set. */
+function parseIcons(v: unknown): CondIconConfig {
+  if (typeof v === 'string') {
+    return { set: ICON_SET_IDS.includes(v as CondIconSet) ? (v as CondIconSet) : 'arrows' };
+  }
+  const o = (v || {}) as Record<string, unknown>;
+  const set = ICON_SET_IDS.includes(o.set as CondIconSet) ? (o.set as CondIconSet) : 'arrows';
+  const layout: CondIconLayout | undefined = o.layout === 'right' ? 'right' : o.layout === 'left' ? 'left' : undefined;
+  const align: CondIconAlign | undefined =
+    o.align === 'top' || o.align === 'middle' || o.align === 'bottom' ? o.align : undefined;
+  let bands: CondIconBand[] | undefined;
+  if (Array.isArray(o.bands)) {
+    bands = o.bands
+      .map((b): CondIconBand | null => {
+        const bo = (b || {}) as Record<string, unknown>;
+        if (!COND_OPS.some((x) => x.op === bo.op)) return null;
+        return {
+          id: cuid('band'),
+          op: bo.op as CondOp,
+          value: Number(bo.value) || 0,
+          value2: bo.value2 == null ? undefined : Number(bo.value2) || 0,
+          glyph: typeof bo.glyph === 'string' && bo.glyph ? bo.glyph : '●',
+          token: typeof bo.token === 'string' ? bo.token : AMBER,
+        };
+      })
+      .filter((x): x is CondIconBand => !!x);
+    if (bands.length === 0) bands = undefined;
+  }
+  return { set, layout, align, bands };
+}
+
 /**
  * Defensive hydrate from a persisted/wire value (`state…config.conditionalFormat`
  * or a PUT body). Unknown shapes are dropped rather than thrown, mirroring the
@@ -210,7 +317,10 @@ export function parseConditionalFormat(value: unknown): ReportConditionalFormat 
   for (const r of raw) {
     const o = (r || {}) as Record<string, unknown>;
     const mode = o.mode;
-    if (mode !== 'rules' && mode !== 'colorScale' && mode !== 'dataBars' && mode !== 'icons') continue;
+    if (
+      mode !== 'rules' && mode !== 'colorScale' && mode !== 'dataBars' &&
+      mode !== 'icons' && mode !== 'fieldValue' && mode !== 'webUrl'
+    ) continue;
     const f = (o.field || {}) as Record<string, unknown>;
     const field: CondField = {
       table: typeof f.table === 'string' ? f.table : undefined,
@@ -249,8 +359,12 @@ export function parseConditionalFormat(value: unknown): ReportConditionalFormat 
         positive: typeof db.positive === 'string' ? db.positive : BRAND,
         negative: typeof db.negative === 'string' ? db.negative : RED,
       };
+    } else if (mode === 'fieldValue') {
+      rule.fieldValueField = parseField(o.fieldValueField);
+    } else if (mode === 'webUrl') {
+      rule.webUrlField = parseField(o.webUrlField);
     } else {
-      rule.icons = ICON_SET_IDS.includes(o.icons as CondIconSet) ? (o.icons as CondIconSet) : 'arrows';
+      rule.icons = parseIcons(o.icons);
     }
     rules.push(rule);
   }
@@ -262,9 +376,12 @@ export function wireConditionalFormat(cfg?: ReportConditionalFormat | null): { r
   const valid = cfg ? validRules(cfg) : [];
   if (valid.length === 0) return undefined;
   return {
-    rules: valid.map(({ id: _id, rules, ...rest }) => ({
+    rules: valid.map(({ id: _id, rules, icons, ...rest }) => ({
       ...rest,
       ...(rules ? { rules: rules.map(({ id: _tid, ...t }) => ({ id: '', ...t })) } : {}),
+      ...(icons
+        ? { icons: { ...icons, ...(icons.bands ? { bands: icons.bands.map(({ id: _bid, ...b }) => ({ id: '', ...b })) } : {}) } }
+        : {}),
     })),
   };
 }
@@ -311,6 +428,39 @@ function toNum(v: unknown): number | null {
 }
 function clamp01(t: number): number {
   return t < 0 ? 0 : t > 1 ? 1 : t;
+}
+
+// ── Value coercion for the data-driven modes (fieldValue / webUrl) ────────────
+
+const HEX_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i;
+
+/**
+ * Interpret a field value as a CSS color (mode==='fieldValue'). Accepts hex,
+ * rgb()/hsl(), and Loom `var(--…)` tokens (which is how the palette swatches
+ * serialize). Returns null for anything else so the cell paints unchanged.
+ */
+export function asColor(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+  if (HEX_RE.test(s)) return s;
+  if (/^(?:rgb|hsl)a?\(/i.test(s)) return s;
+  if (/^var\(--/.test(s)) return s;
+  return null;
+}
+
+/**
+ * Interpret a field value as a safe link URL (mode==='webUrl'). Only http(s)
+ * and mailto pass — `javascript:`/`data:` and relative strings are rejected so
+ * the host never renders an unsafe anchor.
+ */
+export function asUrl(v: unknown): string | null {
+  if (typeof v !== 'string') return null;
+  const s = v.trim();
+  if (!s) return null;
+  if (/^https?:\/\//i.test(s)) return s;
+  if (/^mailto:[^\s]+@[^\s]+/i.test(s)) return s;
+  return null;
 }
 
 /** The numeric domain of a result column, computed once per render in the resolver. */
@@ -380,7 +530,8 @@ function bandFor(n: number, domain: CondDomain, count: number): number {
   const t = (n - domain.min) / (domain.max - domain.min);
   return Math.min(count - 1, Math.max(0, Math.floor(t * count)));
 }
-function matchThreshold(n: number, r: CondThreshold): boolean {
+/** Evaluate a numeric threshold (shared by by-value rules and custom icon bands). */
+function matchThreshold(n: number, r: { op: CondOp; value: number; value2?: number }): boolean {
   switch (r.op) {
     case 'gt': return n > r.value;
     case 'ge': return n >= r.value;
@@ -395,11 +546,15 @@ function matchThreshold(n: number, r: CondThreshold): boolean {
 
 // ── Painters (the no-vaporware backend of this surface) ───────────────────────
 
-/** An icon glyph painted before a cell value (mode==='icons'). */
+/** An icon glyph painted before/after a cell value (mode==='icons'). */
 export interface CondIconGlyph {
   glyph: string;
   color: string;
   label: string;
+  /** Position relative to the value; the host may honor it (defaults to left). */
+  layout?: CondIconLayout;
+  /** Vertical alignment within the cell (defaults to middle). */
+  align?: CondIconAlign;
 }
 
 /** What a single (column, value) should render as. Empty when no rule applies. */
@@ -412,15 +567,20 @@ export interface CondCellPaint {
   fill?: string;
   /** Leading icon (mode==='icons'). */
   icon?: CondIconGlyph;
+  /** A safe hyperlink URL (mode==='webUrl'); the host renders the cell text as `<a href>`. */
+  link?: string;
 }
 
 /**
  * Compute the paint for ONE rule against a raw cell value. `domain` is required
- * for colorScale/dataBars/icons (supplied by {@link applyConditionalFormat}); for
- * by-value `rules` it is ignored. Non-numeric / unmatched values return `{}` so
- * the host renders the cell unchanged (honest — never blanks it).
+ * for colorScale/dataBars/auto-band icons (supplied by {@link applyConditionalFormat}).
+ * `bound` is the value of the rule's bound secondary field for this row — used by
+ * `fieldValue` (the color) and `webUrl` (the URL) when they bind a different
+ * column; when the host can't supply the row, both modes fall back to the cell's
+ * own value. Non-numeric / unmatched values return `{}` so the host renders the
+ * cell unchanged (honest — never blanks it).
  */
-export function cellStyleFor(value: unknown, rule: CondRule, domain?: CondDomain): CondCellPaint {
+export function cellStyleFor(value: unknown, rule: CondRule, domain?: CondDomain, bound?: unknown): CondCellPaint {
   const n = toNum(value);
   switch (rule.mode) {
     case 'rules': {
@@ -446,10 +606,34 @@ export function cellStyleFor(value: unknown, rule: CondRule, domain?: CondDomain
       return { background: dataBarBackground(n, domain, db), fill: n >= 0 ? db.positive : db.negative };
     }
     case 'icons': {
-      if (n == null || !domain) return {};
-      const set = ICON_SETS[rule.icons ?? 'arrows'];
+      if (n == null) return {};
+      const cfg = rule.icons;
+      const layout = cfg?.layout;
+      const align = cfg?.align;
+      // Custom numeric thresholds (top-down, first match wins) override auto-banding.
+      if (cfg?.bands?.length) {
+        const hit = cfg.bands.find((b) => matchThreshold(n, b));
+        if (!hit) return {};
+        return { icon: { glyph: hit.glyph, color: hit.token, label: 'Icon threshold', layout, align }, fill: hit.token };
+      }
+      if (!domain) return {};
+      const set = ICON_SETS[cfg?.set ?? 'arrows'];
       const g = set.bands[bandFor(n, domain, set.bands.length)];
-      return { icon: { glyph: g.glyph, color: g.token, label: `${set.label} band` }, fill: g.token };
+      return { icon: { glyph: g.glyph, color: g.token, label: `${set.label} band`, layout, align }, fill: g.token };
+    }
+    case 'fieldValue': {
+      // The bound measure/column returns the color directly (PBI "Field value");
+      // fall back to the formatted cell's own value when no separate field is bound.
+      const color = asColor(bound !== undefined ? bound : value);
+      if (!color) return {};
+      return rule.applyTo === 'text'
+        ? { color, fill: color }
+        : { background: color, fill: color };
+    }
+    case 'webUrl': {
+      const url = asUrl(bound !== undefined ? bound : value);
+      if (!url) return {};
+      return { link: url };
     }
     default:
       return {};
@@ -465,6 +649,8 @@ function validRules(cfg: ReportConditionalFormat): CondRule[] {
       case 'colorScale': return !!r.colorScale;
       case 'dataBars': return !!r.dataBars;
       case 'icons': return true;
+      case 'fieldValue': return true; // bound field optional (own value is the color)
+      case 'webUrl': return true;     // bound field optional (own value is the URL)
       default: return false;
     }
   });
@@ -474,8 +660,13 @@ function validRules(cfg: ReportConditionalFormat): CondRule[] {
 export interface ConditionalFormatResolver {
   /** True when ≥1 rule actually matched a result column. */
   active: boolean;
-  /** Paint for a result column + raw value (undefined when no rule covers the column). */
-  paintFor(columnKey: string, value: unknown): CondCellPaint | undefined;
+  /**
+   * Paint for a result column + raw value (undefined when no rule covers the
+   * column). `row` is optional and only consumed by `fieldValue`/`webUrl` rules
+   * that bind a SEPARATE column (so the painter can read that column's value for
+   * this row); omitting it falls back to the cell's own value.
+   */
+  paintFor(columnKey: string, value: unknown, row?: Record<string, unknown>): CondCellPaint | undefined;
   /** The rule (if any) bound to a result column. */
   ruleForColumn(columnKey: string): CondRule | undefined;
 }
@@ -499,19 +690,25 @@ export function applyConditionalFormat(
   const rules = cfg ? validRules(cfg) : [];
   if (rows.length === 0 || rules.length === 0) return INACTIVE;
   const keys = Object.keys(rows[0]);
-  const byCol = new Map<string, { rule: CondRule; domain?: CondDomain }>();
+  const byCol = new Map<string, { rule: CondRule; domain?: CondDomain; boundKey?: string }>();
   for (const rule of rules) {
     const key = matchCondKey(keys, rule.field);
     if (!key || byCol.has(key)) continue;
-    byCol.set(key, { rule, domain: computeDomain(rows, key) ?? undefined });
+    // fieldValue/webUrl can pull their color/URL from a DIFFERENT column.
+    let boundKey: string | undefined;
+    if (rule.mode === 'fieldValue' && rule.fieldValueField) boundKey = matchCondKey(keys, rule.fieldValueField) ?? undefined;
+    else if (rule.mode === 'webUrl' && rule.webUrlField) boundKey = matchCondKey(keys, rule.webUrlField) ?? undefined;
+    byCol.set(key, { rule, domain: computeDomain(rows, key) ?? undefined, boundKey });
   }
   if (byCol.size === 0) return INACTIVE;
   return {
     active: true,
     ruleForColumn: (c) => byCol.get(c)?.rule,
-    paintFor: (c, value) => {
+    paintFor: (c, value, row) => {
       const e = byCol.get(c);
-      return e ? cellStyleFor(value, e.rule, e.domain) : undefined;
+      if (!e) return undefined;
+      const bound = e.boundKey && row ? row[e.boundKey] : undefined;
+      return cellStyleFor(value, e.rule, e.domain, bound);
     },
   };
 }
@@ -573,6 +770,22 @@ const useStyles = makeStyles({
   },
   iconPreview: { display: 'flex', gap: tokens.spacingHorizontalS, fontSize: '16px', alignItems: 'center' },
   removeBtn: { flexShrink: 0 },
+  // icon glyph picker (custom bands)
+  glyphRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXXS, alignItems: 'center' },
+  glyphDot: {
+    minWidth: '24px', height: '24px', padding: 0, cursor: 'pointer',
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center', fontSize: '14px',
+    backgroundColor: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1,
+    borderRadius: tokens.borderRadiusSmall, border: `1px solid ${tokens.colorNeutralStroke1}`,
+    transitionProperty: 'transform, box-shadow', transitionDuration: tokens.durationFaster,
+    ':hover': { transform: 'scale(1.1)' },
+  },
+  glyphDotActive: { border: `2px solid ${tokens.colorBrandForeground1}`, boxShadow: tokens.shadow4 },
+  // web-url preview anchor
+  previewLink: {
+    color: tokens.colorBrandForeground1, textDecorationLine: 'underline', cursor: 'pointer',
+    ':hover': { color: tokens.colorBrandForeground2 },
+  },
 });
 
 type Styles = ReturnType<typeof useStyles>;
@@ -614,15 +827,54 @@ function SwatchPicker({ value, onChange, ariaLabel, styles }: {
 // ── live preview chip (renders the REAL painter output for a sample value) ────
 
 const SAMPLE_DOMAIN: CondDomain = { min: 0, max: 100, mid: 50, maxAbs: 100, hasNeg: false, count: 3 };
+/** A token (serializes to `var(--…)`, accepted by {@link asColor}) standing in for a field-returned color. */
+const SAMPLE_FIELD_COLOR = tokens.colorBrandBackground;
+const SAMPLE_URL = 'https://contoso.example/orders/SO-4711';
 
 function PreviewChip({ rule, styles }: { rule: CondRule; styles: Styles }): ReactElement {
+  // webUrl — the painter returns a real (safe) link; render it as the host will.
+  if (rule.mode === 'webUrl') {
+    const paint = cellStyleFor(SAMPLE_URL, rule, SAMPLE_DOMAIN, SAMPLE_URL);
+    return (
+      <div className={styles.previewRow}>
+        <Caption1 className={styles.label}>Preview</Caption1>
+        <span className={styles.previewCell} style={{ justifyContent: 'flex-start' }}>
+          {paint.link ? (
+            <a className={styles.previewLink} href={paint.link} target="_blank" rel="noreferrer"
+               onClick={(e) => e.preventDefault()}>
+              <Text size={200}>contoso.example/orders/SO-4711</Text>
+            </a>
+          ) : (
+            <Text size={200}>—</Text>
+          )}
+        </span>
+      </div>
+    );
+  }
+  // fieldValue — the bound field's value IS the color; preview a representative one.
+  if (rule.mode === 'fieldValue') {
+    const bound = rule.applyTo === 'text' ? tokens.colorPaletteGreenForeground1 : SAMPLE_FIELD_COLOR;
+    const paint = cellStyleFor(78, rule, SAMPLE_DOMAIN, bound);
+    return (
+      <div className={styles.previewRow}>
+        <Caption1 className={styles.label}>Preview</Caption1>
+        <span className={styles.previewCell} style={{ background: paint.background, color: paint.color }}>
+          <Text size={200}>78</Text>
+        </span>
+      </div>
+    );
+  }
+  // rules / colorScale / dataBars / icons — honor icon layout + alignment.
   const sample = 78;
   const paint = cellStyleFor(sample, rule, SAMPLE_DOMAIN);
+  const ic = paint.icon;
+  const flexDirection = ic?.layout === 'right' ? 'row-reverse' : 'row';
+  const alignItems = ic?.align === 'top' ? 'flex-start' : ic?.align === 'bottom' ? 'flex-end' : 'center';
   return (
     <div className={styles.previewRow}>
       <Caption1 className={styles.label}>Preview</Caption1>
-      <span className={styles.previewCell} style={{ background: paint.background, color: paint.color }}>
-        {paint.icon && <span aria-hidden style={{ color: paint.icon.color }}>{paint.icon.glyph}</span>}
+      <span className={styles.previewCell} style={{ background: paint.background, color: paint.color, flexDirection, alignItems }}>
+        {ic && <span aria-hidden style={{ color: ic.color }}>{ic.glyph}</span>}
         <Text size={200}>{sample}</Text>
       </span>
     </div>
@@ -728,31 +980,204 @@ function DataBarsEditor({ rule, onChange, styles }: { rule: CondRule; onChange: 
   );
 }
 
+const ICON_LAYOUTS: { id: CondIconLayout; label: string }[] = [
+  { id: 'left', label: 'Left of value' },
+  { id: 'right', label: 'Right of value' },
+];
+const ICON_ALIGNS: { id: CondIconAlign; label: string }[] = [
+  { id: 'top', label: 'Top' },
+  { id: 'middle', label: 'Middle' },
+  { id: 'bottom', label: 'Bottom' },
+];
+
+/** Seed three custom thresholds from the set's low→high bands (≥66 / ≥33 / ≥0). */
+function defaultIconBands(set: CondIconSet): CondIconBand[] {
+  const b = ICON_SETS[set].bands; // low→high == [red, amber, green]
+  return [
+    { id: cuid('band'), op: 'ge', value: 66, glyph: b[2].glyph, token: b[2].token },
+    { id: cuid('band'), op: 'ge', value: 33, glyph: b[1].glyph, token: b[1].token },
+    { id: cuid('band'), op: 'ge', value: 0, glyph: b[0].glyph, token: b[0].token },
+  ];
+}
+
+/** Structured glyph radiogroup for a custom icon band (no free-text). */
+function GlyphPicker({ value, onChange, styles }: { value: string; onChange: (g: string) => void; styles: Styles }): ReactElement {
+  return (
+    <div className={styles.glyphRow} role="radiogroup" aria-label="icon glyph">
+      {GLYPH_CHOICES.map((g) => (
+        <button
+          key={g} type="button" role="radio" aria-checked={value === g} aria-label={`glyph ${g}`}
+          className={mergeClasses(styles.glyphDot, value === g && styles.glyphDotActive)}
+          onClick={() => onChange(g)}
+        >
+          {g}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function IconsEditor({ rule, onChange, styles }: { rule: CondRule; onChange: (r: CondRule) => void; styles: Styles }): ReactElement {
-  const set = rule.icons ?? 'arrows';
-  const meta = ICON_SETS[set];
+  const cfg = rule.icons ?? { set: 'arrows' as CondIconSet };
+  const meta = ICON_SETS[cfg.set];
+  const setCfg = (p: Partial<CondIconConfig>) => onChange({ ...rule, icons: { ...cfg, ...p } });
+  const bands = cfg.bands ?? [];
+  const custom = bands.length > 0;
+  const setBands = (next: CondIconBand[]) => onChange({ ...rule, icons: { ...cfg, bands: next.length ? next : undefined } });
+  const patchBand = (id: string, p: Partial<CondIconBand>) => setBands(bands.map((b) => (b.id === id ? { ...b, ...p } : b)));
   return (
     <div className={styles.section}>
       <Caption1 className={styles.label}>Icon set</Caption1>
       <Dropdown
         size="small" aria-label="icon set"
-        value={meta.label} selectedOptions={[set]}
-        onOptionSelect={(_e, d) => onChange({ ...rule, icons: (d.optionValue as CondIconSet) || 'arrows' })}
+        value={meta.label} selectedOptions={[cfg.set]}
+        onOptionSelect={(_e, d) => setCfg({ set: (d.optionValue as CondIconSet) || 'arrows' })}
       >
         {ICON_SET_IDS.map((id) => <Option key={id} value={id} text={ICON_SETS[id].label}>{ICON_SETS[id].label}</Option>)}
       </Dropdown>
       <div className={styles.iconPreview} aria-hidden>
         {meta.bands.map((b, i) => <span key={i} style={{ color: b.token }}>{b.glyph}</span>)}
       </div>
-      <Caption1 className={styles.hint}>Low → high bands are assigned across the field's value range.</Caption1>
+
+      {/* icon position relative to the value */}
+      <div className={styles.threshRow}>
+        <Caption1 className={styles.label}>Icon position</Caption1>
+        {ICON_LAYOUTS.map((l) => (
+          <ToggleButton
+            key={l.id} size="small" appearance="subtle" checked={(cfg.layout ?? 'left') === l.id}
+            aria-label={l.label} onClick={() => setCfg({ layout: l.id })}
+          >
+            {l.label}
+          </ToggleButton>
+        ))}
+      </div>
+
+      {/* vertical alignment within the cell */}
+      <div className={styles.threshRow}>
+        <Caption1 className={styles.label}>Align</Caption1>
+        {ICON_ALIGNS.map((a) => (
+          <ToggleButton
+            key={a.id} size="small" appearance="subtle" checked={(cfg.align ?? 'middle') === a.id}
+            aria-label={`align ${a.label}`} onClick={() => setCfg({ align: a.id })}
+          >
+            {a.label}
+          </ToggleButton>
+        ))}
+      </div>
+
+      {/* auto low→high banding (default) vs explicit numeric thresholds */}
+      <Switch
+        label="Custom value thresholds"
+        checked={custom}
+        onChange={(_e, d) => setBands(d.checked ? defaultIconBands(cfg.set) : [])}
+      />
+      {custom && bands.map((b) => (
+        <div key={b.id} className={styles.threshRow}>
+          <Dropdown
+            size="small" className={styles.opDd} aria-label="icon condition"
+            value={COND_OPS.find((o) => o.op === b.op)?.label ?? '≥ at least'} selectedOptions={[b.op]}
+            onOptionSelect={(_e, d) => patchBand(b.id, { op: (d.optionValue as CondOp) || 'ge' })}
+          >
+            {COND_OPS.map((o) => <Option key={o.op} value={o.op} text={o.label}>{o.label}</Option>)}
+          </Dropdown>
+          <Input
+            size="small" type="number" className={styles.numInput} aria-label="threshold value"
+            value={String(b.value)} onChange={(_e, d) => patchBand(b.id, { value: d.value === '' ? 0 : Number(d.value) })}
+          />
+          {b.op === 'between' && (
+            <Input
+              size="small" type="number" className={styles.numInput} aria-label="upper threshold value"
+              value={String(b.value2 ?? 0)} onChange={(_e, d) => patchBand(b.id, { value2: d.value === '' ? 0 : Number(d.value) })}
+            />
+          )}
+          <GlyphPicker value={b.glyph} onChange={(g) => patchBand(b.id, { glyph: g })} styles={styles} />
+          <SwatchPicker value={b.token} onChange={(c) => patchBand(b.id, { token: c })} ariaLabel="icon color" styles={styles} />
+          <Button
+            size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="remove threshold"
+            className={styles.removeBtn} onClick={() => setBands(bands.filter((x) => x.id !== b.id))}
+          />
+        </div>
+      ))}
+      {custom && (
+        <div>
+          <Button
+            size="small" appearance="subtle" icon={<Add20Regular />}
+            onClick={() => setBands([{ id: cuid('band'), op: 'ge', value: 0, glyph: GLYPH_CHOICES[0], token: GREEN }, ...bands])}
+          >
+            Add threshold
+          </Button>
+        </div>
+      )}
+      <Caption1 className={styles.hint}>
+        {custom
+          ? 'Each row is evaluated top-down; the first matching threshold sets the icon.'
+          : "Low → high bands are assigned across the field's value range."}
+      </Caption1>
     </div>
+  );
+}
+
+/** Shared bound-field picker for the data-driven modes (fieldValue / webUrl). */
+function BoundFieldEditor({ current, fields, label, emptyLabel, hint, onPick, styles }: {
+  current?: CondField; fields: CondFieldOption[]; label: string; emptyLabel: string; hint: string;
+  onPick: (f: CondField | undefined) => void; styles: Styles;
+}): ReactElement {
+  const key = current ? condFieldKey(current) : '';
+  const pick = (k: string) => {
+    if (!k) { onPick(undefined); return; }
+    const o = fields.find((x) => x.key === k);
+    onPick(o ? { table: o.table, column: o.column, measure: o.measure } : undefined);
+  };
+  return (
+    <div className={styles.section}>
+      <Caption1 className={styles.label}>{label}</Caption1>
+      <Dropdown
+        size="small" aria-label={label}
+        value={current ? condFieldLabel(current) : emptyLabel} selectedOptions={[key]}
+        onOptionSelect={(_e, d) => pick(String(d.optionValue ?? ''))}
+      >
+        <Option value="" text={emptyLabel}>{emptyLabel}</Option>
+        {fields.map((o) => <Option key={o.key} value={o.key} text={o.label}>{o.label}</Option>)}
+      </Dropdown>
+      <Caption1 className={styles.hint}>{hint}</Caption1>
+    </div>
+  );
+}
+
+function FieldValueEditor({ rule, fields, onChange, styles }: {
+  rule: CondRule; fields: CondFieldOption[]; onChange: (r: CondRule) => void; styles: Styles;
+}): ReactElement {
+  return (
+    <BoundFieldEditor
+      current={rule.fieldValueField} fields={fields}
+      label="Color based on field"
+      emptyLabel="This column's value"
+      hint="The chosen measure/column must return a color (e.g. #2E7D32, rgb(…), or a Loom token); its value paints each cell directly."
+      onPick={(f) => onChange({ ...rule, fieldValueField: f })}
+      styles={styles}
+    />
+  );
+}
+
+function WebUrlEditor({ rule, fields, onChange, styles }: {
+  rule: CondRule; fields: CondFieldOption[]; onChange: (r: CondRule) => void; styles: Styles;
+}): ReactElement {
+  return (
+    <BoundFieldEditor
+      current={rule.webUrlField} fields={fields}
+      label="URL based on field"
+      emptyLabel="This column's value"
+      hint="Cell text becomes a hyperlink to the URL value (http, https, or mailto). Table & matrix visuals only."
+      onPick={(f) => onChange({ ...rule, webUrlField: f })}
+      styles={styles}
+    />
   );
 }
 
 // ── one rule card ───────────────────────────────────────────────────────────────
 
-function RuleCard({ rule, fields, onChange, onRemove, styles }: {
-  rule: CondRule; fields: CondFieldOption[];
+function RuleCard({ rule, fields, visualType, onChange, onRemove, styles }: {
+  rule: CondRule; fields: CondFieldOption[]; visualType?: string;
   onChange: (r: CondRule) => void; onRemove: () => void; styles: Styles;
 }): ReactElement {
   const pickField = (key: string) => {
@@ -767,10 +1192,13 @@ function RuleCard({ rule, fields, onChange, onRemove, styles }: {
     if (mode === 'rules' && !next.rules?.length) next.rules = [{ id: cuid('th'), op: 'ge', value: 0, color: GREEN }];
     if (mode === 'colorScale' && !next.colorScale) next.colorScale = { min: RED, max: GREEN };
     if (mode === 'dataBars' && !next.dataBars) next.dataBars = { positive: BRAND, negative: RED };
-    if (mode === 'icons' && !next.icons) next.icons = 'arrows';
+    if (mode === 'icons' && !next.icons) next.icons = { set: 'arrows' };
     onChange(next);
   };
-  const showApplyTo = rule.mode === 'rules' || rule.mode === 'colorScale';
+  // Web URL only makes sense where the host renders raw cell text (table/matrix).
+  // Keep the active mode visible even if the visual type wouldn't otherwise offer it.
+  const modes = MODE_META.filter((m) => !m.tableOnly || isTableLike(visualType) || m.mode === rule.mode);
+  const showApplyTo = rule.mode === 'rules' || rule.mode === 'colorScale' || rule.mode === 'fieldValue';
   return (
     <div className={styles.ruleCard}>
       <div className={styles.ruleHead}>
@@ -790,7 +1218,7 @@ function RuleCard({ rule, fields, onChange, onRemove, styles }: {
       </div>
 
       <div className={styles.modeStrip} role="tablist" aria-label="format style">
-        {MODE_META.map((m) => (
+        {modes.map((m) => (
           <Tooltip key={m.mode} content={m.label} relationship="label" withArrow>
             <ToggleButton
               size="small" appearance="subtle" icon={m.icon} checked={rule.mode === m.mode}
@@ -806,6 +1234,8 @@ function RuleCard({ rule, fields, onChange, onRemove, styles }: {
       {rule.mode === 'colorScale' && <ColorScaleEditor rule={rule} onChange={onChange} styles={styles} />}
       {rule.mode === 'dataBars' && <DataBarsEditor rule={rule} onChange={onChange} styles={styles} />}
       {rule.mode === 'icons' && <IconsEditor rule={rule} onChange={onChange} styles={styles} />}
+      {rule.mode === 'fieldValue' && <FieldValueEditor rule={rule} fields={fields} onChange={onChange} styles={styles} />}
+      {rule.mode === 'webUrl' && <WebUrlEditor rule={rule} fields={fields} onChange={onChange} styles={styles} />}
 
       {showApplyTo && (
         <div className={styles.threshRow}>
@@ -830,6 +1260,12 @@ export interface ConditionalFormatEditorProps {
   value?: ReportConditionalFormat | null;
   /** Bindable fields — pass the designer's `fieldOptions(tables)` result. */
   fields: CondFieldOption[];
+  /**
+   * The host visual type (bar/column/table/matrix/…). Used to table-scope the
+   * Web-URL mode (it's only meaningful where the host renders raw cell text).
+   * When omitted, Web-URL is hidden unless a rule already uses it.
+   */
+  visualType?: string;
   /** Emit the next model; host wires to `mutateVisual` → /definition. */
   onChange: (next: ReportConditionalFormat) => void;
 }
@@ -840,7 +1276,7 @@ export interface ConditionalFormatEditorProps {
  * shows an honest EmptyState gate (no-vaporware: not disabled controls); when
  * fields exist but no rules are authored it shows a styled hint + an Add button.
  */
-export function ConditionalFormatEditor({ value, fields, onChange }: ConditionalFormatEditorProps): ReactElement {
+export function ConditionalFormatEditor({ value, fields, visualType, onChange }: ConditionalFormatEditorProps): ReactElement {
   const styles = useStyles();
   useId();
 
@@ -881,6 +1317,7 @@ export function ConditionalFormatEditor({ value, fields, onChange }: Conditional
           key={r.id}
           rule={r}
           fields={fields}
+          visualType={visualType}
           onChange={(next) => setRules(rules.map((x) => (x.id === r.id ? next : x)))}
           onRemove={() => setRules(rules.filter((x) => x.id !== r.id))}
           styles={styles}

@@ -39,6 +39,22 @@
  * math (snap / guides / marquee / align / distribute / migrate) lives in the pure,
  * unit-testable {@link module:./use-canvas-layout} module and is re-exported there.
  *
+ * Wave-7 elements share this node array + z-space: textboxes, shapes, images,
+ * buttons, and page/bookmark navigators are ALSO {@link FFVisual} nodes, so the
+ * host MERGES them into the SAME `visuals` array. They ride the existing generic
+ * node path unchanged — drag/resize/select/marquee/snap/guides/keyboard all work
+ * on them for free — and their `layout.z` lives in the SAME integer z-space as
+ * the data visuals, so paint order INTERLEAVES elements and visuals (a shape can
+ * sit behind chart A yet in front of chart B — PBI parity). Two ADDITIVE,
+ * default-off props serve elements only, with ZERO regression to data visuals:
+ *   • `dragBody(v)` — element nodes drag from ANYWHERE on their body (text/shape/
+ *     image/button), while data visuals (which omit it) keep header-only drag so
+ *     their live body's cross-filter clicks survive. The `[data-ff-nodrag]` guard
+ *     still lets the element's contentEditable / button action / navigator
+ *     buttons act instead of starting a move.
+ *   • `onZStep(ids, dir)` — Ctrl+] / Ctrl+[ single-step z layering on the
+ *     selection, complementing the host chrome's bring-to-front / send-to-back.
+ *
  * no-vaporware.md: every affordance MOVES/RESIZES/ALIGNS real persisted state —
  * the host commits each `onLayout` into `visual.config.layout {x,y,w,h,z}` via
  * PUT /definition. no-freeform-config.md: this is direct manipulation on a canvas,
@@ -126,6 +142,19 @@ export interface FreeFormCanvasProps<V extends FFVisual> {
   /** Optional per-visual frame style override (Format pane: background / border /
    *  shadow). Merged over the default frame chrome so wave-3 formatting survives. */
   frameStyle?: (v: V) => CSSProperties;
+  /** Wave-7 (default OFF — data visuals never pass it). Return true for an ELEMENT
+   *  node (textbox/shape/image/button/navigator) so a pointer-down ANYWHERE on its
+   *  body starts a MOVE — element parity with PBI, where the whole object drags.
+   *  The existing `[data-ff-nodrag]` guard still wins, so the element's
+   *  contentEditable, button action target, and navigator buttons act instead of
+   *  dragging. Data visuals omit this, keeping header-only drag so their live
+   *  body's cross-filter clicks survive. */
+  dragBody?: (v: V) => boolean;
+  /** Wave-7 (default OFF). Single-step z-order layering for the current selection,
+   *  wired to Ctrl+] (forward) / Ctrl+[ (backward) — complements the host chrome's
+   *  bring-to-front / send-to-back. Operates over the shared visuals+elements
+   *  z-space (ids are unique across both). */
+  onZStep?: (ids: string[], dir: 'forward' | 'backward') => void;
 }
 
 const useStyles = makeStyles({
@@ -278,7 +307,7 @@ export function FreeFormCanvas<V extends FFVisual>(props: FreeFormCanvasProps<V>
   const {
     visuals, page, selectedId, selectedIds, snapToGrid, gridSize = DEFAULT_GRID,
     showGrid = false, readOnly = false, onSelect, onMarquee, onLayout, onDelete,
-    renderVisual, renderChrome, frameStyle,
+    renderVisual, renderChrome, frameStyle, dragBody, onZStep,
   } = props;
   const styles = useStyles();
 
@@ -485,6 +514,13 @@ export function FreeFormCanvas<V extends FFVisual>(props: FreeFormCanvasProps<V>
     if (readOnly) return;
     const ids = selectedIds.size ? [...selectedIds] : selectedId ? [selectedId] : [];
     if (!ids.length) return;
+    // Ctrl+] / Ctrl+[ → single-step z layering on the selection (Wave-7; works on
+    // visuals AND elements since they share one z-space). Complements the host
+    // chrome's bring-to-front / send-to-back.
+    if ((e.ctrlKey || e.metaKey) && (e.key === ']' || e.key === '[')) {
+      if (onZStep) { e.preventDefault(); onZStep(ids, e.key === ']' ? 'forward' : 'backward'); }
+      return;
+    }
     const step = e.shiftKey ? 10 : 1;
     let dx = 0; let dy = 0;
     switch (e.key) {
@@ -502,7 +538,7 @@ export function FreeFormCanvas<V extends FFVisual>(props: FreeFormCanvasProps<V>
       .filter((v) => set.has(v.id) && !v.locked)
       .map((v) => ({ id: v.id, layout: clampRect({ ...v.layout, x: v.layout.x + dx, y: v.layout.y + dy }, page) }));
     if (moves.length) onLayout(moves);
-  }, [readOnly, selectedIds, selectedId, onDelete, onLayout, page]);
+  }, [readOnly, selectedIds, selectedId, onDelete, onLayout, onZStep, page]);
 
   // cleanup any pending rAF on unmount
   useEffect(() => () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); }, []);
@@ -618,8 +654,26 @@ export function FreeFormCanvas<V extends FFVisual>(props: FreeFormCanvasProps<V>
                     {renderChrome(v)}
                   </div>
 
-                  {/* BODY = the live visual (host VisualBody → /query). Untouched. */}
-                  <div className={styles.body}>{renderVisual(v)}</div>
+                  {/* BODY = the live visual (host VisualBody → /query). For a DATA
+                      visual this stays header-only-drag so its body's cross-filter
+                      clicks survive. For an ELEMENT node (`dragBody(v)` → true) a
+                      pointer-down on the body starts a MOVE so text/shape/image/
+                      button drag from anywhere (PBI parity); the `[data-ff-nodrag]`
+                      guard still lets the element's contentEditable / button action
+                      target / navigator buttons act instead of dragging. */}
+                  <div
+                    className={styles.body}
+                    onPointerDown={dragBody?.(v)
+                      ? (e) => {
+                        if (e.button !== 0) return;
+                        const t = e.target as HTMLElement;
+                        if (t.closest('[data-ff-nodrag]')) return; // let the inner control act
+                        startMove(e, v); // selects + captures + stops propagation
+                      }
+                      : undefined}
+                  >
+                    {renderVisual(v)}
+                  </div>
                 </div>
 
                 {/* 8 resize handles — only on the single selection, unlocked, edit mode. */}

@@ -16,6 +16,8 @@ import {
   PublicClientApplication,
   type AccountInfo,
   type Configuration,
+  type ICachePlugin,
+  type TokenCacheContext,
 } from '@azure/msal-node';
 import { getPbiScope } from '@/lib/azure/cloud-endpoints';
 
@@ -31,6 +33,254 @@ function getAuthority(tenantId?: string): string {
   return `${authorityHost()}/${tid}`;
 }
 
+// ---------------------------------------------------------------------------
+// Distributed MSAL token-cache persistence (Cosmos-backed) — makes the silent
+// SLIDING-session refresh reliable on a multi-replica / restarted deployment.
+//
+// WHY (the principal issue behind the "signed out after lunch" reports):
+//   The confidential client's token cache — which holds each signed-in user's
+//   long-lived (~24h) REFRESH token — lived ONLY in the process memory of
+//   whichever replica served the login. loom-console runs minReplicas:2
+//   (admin-plane/main.bicep) with Front Door session affinity DISABLED
+//   (front-door.bicep) and NO ACA sticky sessions, so POST /api/auth/refresh
+//   (and the keepalive ping, and every OBO/silent acquire) round-robins to a
+//   DIFFERENT replica whose getTokenCache().getAllAccounts() is empty. The
+//   refresh route then 401s {reauth:true} and the user is bounced to interactive
+//   sign-in even though their refresh token is still alive — and a container
+//   restart wiped every replica's cache the same way. The 8h sliding cookie
+//   masks this for the first 8h, but the advertised "stay signed in all
+//   afternoon via SILENT refresh" is not reliable without persisting the cache.
+//
+// WHAT:
+//   An MSAL ICachePlugin that persists the serialized token cache to Cosmos,
+//   PARTITIONED per user (one doc per oid = homeAccountId.split('.')[0] — the
+//   same id the session cookie + the /api/auth/refresh account-match use),
+//   encrypted at rest with the SAME SESSION_SECRET-derived AES-256-GCM helpers
+//   the sibling user-token stores use (encryptAtRest/decryptAtRest in
+//   lib/auth/session — they exist for exactly this). On ANY replica a refresh
+//   first loads that user's persisted cache, so getAllAccounts() finds the
+//   account and acquireTokenSilent re-slides the session without an interactive
+//   bounce; the cache also survives container restarts.
+//
+// SAFETY / reversibility / no-regression:
+//   - Reversible: no-op unless LOOM_COSMOS_ENDPOINT is set, and hard-disableable
+//     via LOOM_MSAL_CACHE_PERSIST_ENABLED=false (reverts to today's pure
+//     in-memory cache, byte-for-byte).
+//   - No new crypto and no new container: reuses encryptAtRest and the
+//     tenant-settings container (partition-by-oid), exactly like the ARM / SQL /
+//     Power BI user-token stores. Tokens are NEVER logged and NEVER leave the
+//     server — only the encrypted blob is stored.
+//   - beforeCacheAccess MERGES the requesting user's persisted account INTO the
+//     in-memory cache and NEVER wipes it: (a) when the request has no session
+//     cookie — the login callback, whose post-exchange ARM/SQL/PBI/MCP captures
+//     rely on the just-created account still being in memory; (b) when nothing
+//     is persisted yet. This also sidesteps the shared-singleton race the stock
+//     DistributedCachePlugin has — it REPLACES in-memory state on every access,
+//     so two concurrent users on one replica would clobber each other; we only
+//     ever ADD the requesting user's account.
+//   - afterCacheAccess SPLITS the cache by oid and writes one single-account doc
+//     per user, so a multi-account in-memory cache never cross-contaminates a
+//     partition and no single doc approaches the Cosmos 2 MB item limit.
+//
+// Cosmos + session helpers are DYNAMICALLY imported inside the async plugin
+// methods so msal.ts's STATIC import graph (shared by the lightweight sign-in /
+// cli-session / setup-identity routes) stays free of the Cosmos client — the
+// same discipline captureUserMcpOboTokens uses below.
+// ---------------------------------------------------------------------------
+
+/** Top-level sections of the MSAL serialized token cache. */
+const CACHE_SECTIONS = ['Account', 'IdToken', 'AccessToken', 'RefreshToken', 'AppMetadata'] as const;
+/** The sections whose entries carry a `home_account_id` (so they partition per user). */
+const ACCOUNT_SCOPED_SECTIONS = ['Account', 'IdToken', 'AccessToken', 'RefreshToken'] as const;
+
+interface MsalCacheDoc {
+  id: string; // msalcache:<oid>
+  tenantId: string; // == oid (tenant-settings partition key)
+  kind: 'msalcache';
+  enc: string; // AES-256-GCM(base64url) of the SINGLE-account serialized cache blob
+  updatedAt: string;
+}
+
+/**
+ * Whether the Cosmos-backed MSAL cache persistence is active. Off (pure
+ * in-memory, today's behavior) when Cosmos isn't configured in this deployment
+ * or when explicitly disabled — a single-flip kill switch for the auth path.
+ */
+function msalCachePersistEnabled(): boolean {
+  if ((process.env.LOOM_MSAL_CACHE_PERSIST_ENABLED ?? 'true').toLowerCase() === 'false') return false;
+  return !!process.env.LOOM_COSMOS_ENDPOINT;
+}
+
+/** oid (== session claims.oid) for a homeAccountId — the per-user partition key. */
+function oidOfHomeAccountId(homeAccountId: string): string {
+  return (homeAccountId || '').split('.')[0];
+}
+
+/**
+ * Resolve the current request's user oid from the session cookie. Returns '' for
+ * requests with no session (the login callback, before the cookie is set) or any
+ * non-request context — in which case the plugin never wipes the in-memory cache.
+ */
+async function currentSessionOid(): Promise<string> {
+  try {
+    const { getSession } = await import('@/lib/auth/session');
+    return getSession()?.claims.oid ?? '';
+  } catch {
+    return '';
+  }
+}
+
+/** Read + decrypt the persisted single-account cache blob for a user (null on miss). */
+async function loadMsalAccountBlob(oid: string): Promise<string | null> {
+  try {
+    const { tenantSettingsContainer } = await import('@/lib/azure/cosmos-client');
+    const { decryptAtRest } = await import('@/lib/auth/session');
+    const c = await tenantSettingsContainer();
+    const { resource } = await c.item(`msalcache:${oid}`, oid).read<MsalCacheDoc>();
+    if (!resource || resource.kind !== 'msalcache') return null;
+    return decryptAtRest(resource.enc);
+  } catch {
+    // Cold/unreachable Cosmos or a tampered blob → treat as "nothing persisted".
+    return null;
+  }
+}
+
+/** Encrypt + upsert one user's single-account cache blob. Best-effort (never throws). */
+async function saveMsalAccountBlob(oid: string, blob: string): Promise<void> {
+  try {
+    const { tenantSettingsContainer } = await import('@/lib/azure/cosmos-client');
+    const { encryptAtRest } = await import('@/lib/auth/session');
+    const c = await tenantSettingsContainer();
+    const doc: MsalCacheDoc = {
+      id: `msalcache:${oid}`,
+      tenantId: oid,
+      kind: 'msalcache',
+      enc: encryptAtRest(blob),
+      updatedAt: new Date().toISOString(),
+    };
+    await c.items.upsert(doc);
+  } catch {
+    // A cache-persist failure must NEVER break login/refresh — silent acquire
+    // just falls back to whatever this replica holds in memory.
+  }
+}
+
+/** True when the serialized cache already contains an Account for `oid`. */
+function blobHasOid(serialized: string, oid: string): boolean {
+  try {
+    const parsed = JSON.parse(serialized || '{}');
+    const accounts = parsed.Account || {};
+    for (const key of Object.keys(accounts)) {
+      if (oidOfHomeAccountId(accounts[key]?.home_account_id) === oid) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Merge a persisted single-account blob INTO the current in-memory blob without
+ * dropping any account already present (additive). `current` wins on key
+ * collisions so a freshly-acquired in-memory access token is never overwritten
+ * by a staler stored copy.
+ */
+function mergeCacheBlobs(stored: string, current: string): string {
+  try {
+    const s = JSON.parse(stored || '{}');
+    const c = JSON.parse(current || '{}');
+    const out: Record<string, unknown> = {};
+    for (const section of CACHE_SECTIONS) {
+      out[section] = { ...(s[section] || {}), ...(c[section] || {}) };
+    }
+    return JSON.stringify(out);
+  } catch {
+    return current || '{}';
+  }
+}
+
+/**
+ * Split a (possibly multi-account) serialized cache into one single-account blob
+ * per oid. AppMetadata is per-app (no home_account_id) and is copied into every
+ * bucket so each blob deserializes cleanly. App-only (client-credential) tokens
+ * with no home_account_id are intentionally dropped — they're cheap to re-acquire
+ * and stay in each replica's memory.
+ */
+function splitCacheByOid(serialized: string): Record<string, string> {
+  const buckets: Record<string, Record<string, Record<string, unknown>>> = {};
+  const ensure = (oid: string) => {
+    if (!buckets[oid]) {
+      buckets[oid] = {};
+      for (const section of CACHE_SECTIONS) buckets[oid][section] = {};
+    }
+    return buckets[oid];
+  };
+  try {
+    const parsed = JSON.parse(serialized || '{}');
+    for (const section of ACCOUNT_SCOPED_SECTIONS) {
+      const bag = parsed[section] || {};
+      for (const key of Object.keys(bag)) {
+        const oid = oidOfHomeAccountId(bag[key]?.home_account_id);
+        if (!oid) continue;
+        ensure(oid)[section][key] = bag[key];
+      }
+    }
+    const appMetadata = parsed.AppMetadata || {};
+    for (const oid of Object.keys(buckets)) {
+      buckets[oid].AppMetadata = { ...appMetadata };
+    }
+  } catch {
+    return {};
+  }
+  const result: Record<string, string> = {};
+  for (const oid of Object.keys(buckets)) result[oid] = JSON.stringify(buckets[oid]);
+  return result;
+}
+
+/**
+ * Cosmos-backed, per-user MSAL token-cache plugin. See the block comment above.
+ * Every failure degrades to "use whatever this replica holds in memory" so a
+ * token operation is never broken by the persistence layer.
+ */
+const cosmosTokenCachePlugin: ICachePlugin = {
+  async beforeCacheAccess(ctx: TokenCacheContext): Promise<void> {
+    if (!msalCachePersistEnabled()) return;
+    const oid = await currentSessionOid();
+    // No session cookie (login callback, before the cookie is set) → NEVER wipe
+    // the in-memory cache; the post-exchange captures depend on the just-created
+    // account still being in memory.
+    if (!oid) return;
+    try {
+      const current = ctx.tokenCache.serialize();
+      // Warm replica already holds this user → skip the Cosmos round-trip.
+      if (blobHasOid(current, oid)) return;
+      const stored = await loadMsalAccountBlob(oid);
+      // Nothing persisted for this user → don't wipe; interactive reauth (if any)
+      // will repopulate it.
+      if (!stored) return;
+      ctx.tokenCache.deserialize(mergeCacheBlobs(stored, current));
+    } catch {
+      // Never break a token operation on a cache-load failure.
+    }
+  },
+  async afterCacheAccess(ctx: TokenCacheContext): Promise<void> {
+    if (!msalCachePersistEnabled() || !ctx.cacheHasChanged) return;
+    try {
+      const buckets = splitCacheByOid(ctx.tokenCache.serialize());
+      const oid = await currentSessionOid();
+      // Refresh path (oid known): persist ONLY this user's partition so we never
+      // clobber another user's (possibly fresher) doc. Login path (oid '' — no
+      // cookie yet): persist every account present, which includes the account
+      // just minted by acquireTokenByCode so a later cross-replica refresh finds
+      // it.
+      const targets = oid && buckets[oid] ? [oid] : Object.keys(buckets);
+      await Promise.all(targets.map((k) => saveMsalAccountBlob(k, buckets[k])));
+    } catch {
+      // Best-effort persist — login/refresh proceed regardless.
+    }
+  },
+};
+
 const config: Configuration = {
   auth: {
     // Prefer LOOM_MSAL_CLIENT_ID (separate from AZURE_CLIENT_ID which is
@@ -39,6 +289,12 @@ const config: Configuration = {
     clientId: process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID || '',
     authority: getAuthority(),
     clientSecret: process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET,
+  },
+  // Persist the token cache (per-user, encrypted) to Cosmos so silent refresh
+  // works across replicas + restarts. No-op unless LOOM_COSMOS_ENDPOINT is set;
+  // disable with LOOM_MSAL_CACHE_PERSIST_ENABLED=false. See the block above.
+  cache: {
+    cachePlugin: cosmosTokenCachePlugin,
   },
   system: {
     loggerOptions: {

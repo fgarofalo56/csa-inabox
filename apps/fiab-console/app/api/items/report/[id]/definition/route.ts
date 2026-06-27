@@ -34,6 +34,15 @@
  *                the read-only viewer and PBIR provisioner ignore unknown keys.
  *   - page `config` — { type, size, background, hidden, interactions } is
  *                ADDITIVE on the page (the viewer + provisioner ignore it).
+ *   - page `elements` — the wave-7 free-form CANVAS ELEMENTS ({ textBox | image
+ *                | shape | button | pageNavigator | bookmarkNavigator }[]) is
+ *                ADDITIVE on the page and rides the SAME absolute layout / `z`
+ *                space as the page's visuals (a shape can sit behind chart A but
+ *                in front of chart B). Every element is structured + whitelisted
+ *                server-side (kind/shape/fit/icon/action enums; runs are a fixed
+ *                formatting whitelist with NO raw HTML; every URL passes the
+ *                strict `clampUrl` https:/mailto:/data:image gate → XSS-safe).
+ *                The read-only viewer + PBIR provisioner ignore `page.elements`.
  *
  * The extras are ALL STRUCTURED + whitelisted server-side (no-freeform-
  * config.md): filter operators, format presets, conditional-format modes/ops,
@@ -45,7 +54,7 @@
  * interaction layers apply client-side over the same real `/query` rows.
  *
  * Body: {
- *   pages: DesignerPage[]                  // each: { name, filters?, config?, visuals[] }
+ *   pages: DesignerPage[]                  // each: { name, filters?, config?, visuals[], elements[] }
  *   reportFilters?: WireFilter[]           // report-scope structured filters
  *   bookmarks?: ReportBookmark[]           // wave-2 captured bookmarks (additive)
  *   filterPaneFormat?: FilterPaneFormat    // wave-2 Filters-pane styling (additive)
@@ -426,6 +435,11 @@ interface PersistedPage {
   visuals: PersistedVisual[];
   filters?: PersistedFilter[];
   config?: PersistedPageConfig;
+  // ── wave-7 free-form canvas elements (additive; viewer + PBIR provisioner
+  // ignore `page.elements`, exactly like `page.config`). Each element's
+  // `layout.z` shares the SAME integer z-space as a visual's `layout.z`, so
+  // paint order interleaves elements and visuals (PBI parity). ──
+  elements?: PersistedElement[];
 }
 interface ReportContentV2 extends Omit<ReportContent, 'pages' | 'reportFilters'> {
   pages: PersistedPage[];
@@ -465,6 +479,8 @@ interface PageIn {
   visuals?: unknown;
   filters?: unknown;
   config?: unknown;
+  // ── wave-7 free-form canvas elements (additive; only set when authored) ──
+  elements?: unknown;
 }
 
 function num(v: unknown, fallback: number): number {
@@ -1227,6 +1243,399 @@ function sanitizeReportTheme(raw: unknown): PersistedReportTheme | undefined {
   return { name: name ?? 'Custom theme', ...out };
 }
 
+// ── wave-7 canvas elements (free-form text / image / shape / button / page +
+//    bookmark navigators) — STRUCTURED + whitelisted (no-freeform-config.md;
+//    no-vaporware.md: every element really renders/drags/persists/navigates) ──
+
+/** Element kinds — the free-form canvas node vocabulary (mirror of
+ *  canvas-elements.tsx `ElementKind`). Anything else is dropped. */
+type ElementKind =
+  | 'textBox' | 'image' | 'shape' | 'button' | 'pageNavigator' | 'bookmarkNavigator';
+const ELEMENT_KINDS = new Set<ElementKind>([
+  'textBox', 'image', 'shape', 'button', 'pageNavigator', 'bookmarkNavigator',
+]);
+
+/** Shape geometry / image-fit / navigator-orientation / text-alignment enums. */
+type ElementShapeKind = 'rectangle' | 'oval' | 'line' | 'arrow';
+const SHAPE_KINDS = new Set<ElementShapeKind>(['rectangle', 'oval', 'line', 'arrow']);
+type ImageFit = 'contain' | 'cover' | 'fill';
+const FIT_MODES = new Set<ImageFit>(['contain', 'cover', 'fill']);
+type NavOrientation = 'horizontal' | 'vertical';
+const NAV_ORIENTATIONS = new Set<NavOrientation>(['horizontal', 'vertical']);
+type TextAlign = 'left' | 'center' | 'right';
+type TextVAlign = 'top' | 'middle' | 'bottom';
+const TEXT_ALIGNS = new Set<TextAlign>(['left', 'center', 'right']);
+const TEXT_VALIGNS = new Set<TextVAlign>(['top', 'middle', 'bottom']);
+
+/** Button action discriminator + per-state style keys (mirror canvas-elements.tsx).
+ *  Each action dispatches a REAL host action (back / applyBookmark / drillthrough
+ *  / setActivePage / Q&A / open URL), so a saved button is never a dead control. */
+type ButtonActionType =
+  | 'back' | 'bookmark' | 'drillthrough' | 'pageNavigation' | 'qna' | 'webUrl';
+const ELEMENT_BUTTON_ACTIONS = new Set<ButtonActionType>([
+  'back', 'bookmark', 'drillthrough', 'pageNavigation', 'qna', 'webUrl',
+]);
+type ButtonState = 'default' | 'hover' | 'press' | 'disabled';
+const BUTTON_STATES = new Set<ButtonState>(['default', 'hover', 'press', 'disabled']);
+
+/**
+ * Button ICON whitelist (no-freeform-config.md) — a bounded set of Fluent v9 icon
+ * base names the elements gallery / properties picker emit. Only a recognized
+ * name is ever persisted (the registry maps it to a `<…Icon/>`), so an arbitrary
+ * string can never ride through as an icon. Covers the action-relevant glyphs
+ * (back arrow / bookmark / drill / navigation / Q&A / link) plus common decor.
+ */
+const ELEMENT_ICON_NAMES = new Set<string>([
+  'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'ArrowClockwise', 'ArrowReply',
+  'ArrowDownload', 'ArrowUpload', 'ArrowExport', 'ArrowEnter',
+  'Bookmark', 'BookmarkMultiple', 'Navigation', 'Home', 'Drill',
+  'ChevronLeft', 'ChevronRight', 'ChevronUp', 'ChevronDown',
+  'ChatBubblesQuestion', 'QuestionCircle', 'Lightbulb', 'Link', 'Open', 'Globe',
+  'Add', 'Subtract', 'Delete', 'Edit', 'Save', 'Document', 'Share', 'Print',
+  'Search', 'Filter', 'Settings', 'Info', 'Warning', 'ErrorCircle', 'Checkmark', 'Dismiss',
+  'Play', 'Pause', 'Stop', 'Eye', 'EyeOff', 'Star', 'Heart', 'Flag', 'Pin', 'Tag',
+  'Mail', 'Calendar', 'Clock', 'Person', 'People', 'Location',
+  'Table', 'Grid', 'ChartMultiple', 'DataTrending', 'DataBarVertical',
+  'ZoomIn', 'ZoomOut', 'MoreHorizontal', 'Apps', 'Board',
+]);
+
+// ── wave-7 clamps ─────────────────────────────────────────────────────────────
+const MAX_ELEMENTS = 200;        // canvas elements per page
+const MAX_RUNS = 200;            // rich-text runs per text-box / shape / button label
+const MAX_RUN = 10_000;          // characters per literal text run
+const MAX_URL = 5_000;           // https:/mailto: link length
+const MAX_DATA_URL = 1_500_000;  // inline data:image/* (kept under the Cosmos 2 MB doc cap)
+
+/**
+ * Data-bound token — a measure (or column+agg) the renderer resolves to a REAL
+ * aggregated value via the host's /query (no-vaporware). Same field-ref shape the
+ * visual wells use; `aggregation`/`numberFormat` reuse the route's existing
+ * AGGS / NUMBER_FORMATS whitelists.
+ */
+interface PersistedFieldToken {
+  table?: string;
+  column?: string;
+  measure?: string;
+  aggregation?: 'Sum' | 'Avg' | 'Count' | 'Min' | 'Max' | 'None';
+  numberFormat?: NumberFormatPreset;
+}
+
+/**
+ * One inline run of the structured rich-text model — EITHER literal text OR a
+ * resolved data token, plus a FIXED formatting whitelist. NO raw HTML is ever
+ * stored or rendered (the WYSIWYG serializes to this shape), so the text box is
+ * XSS-safe while staying direct-manipulation (no-freeform-config.md).
+ */
+type PersistedRun =
+  | { text: string; bold?: boolean; italic?: boolean; underline?: boolean; color?: string; size?: number; link?: string }
+  | { token: PersistedFieldToken; bold?: boolean; italic?: boolean; underline?: boolean; color?: string; size?: number };
+
+interface PersistedButtonStateStyle { fill?: string; textColor?: string; border?: string }
+type PersistedButtonAction =
+  | { type: 'back' }
+  | { type: 'bookmark'; bookmarkId?: string }
+  | { type: 'drillthrough'; pageId?: string }
+  | { type: 'pageNavigation'; pageId?: string }
+  | { type: 'qna' }
+  | { type: 'webUrl'; url?: string };
+
+/**
+ * One persisted canvas element. Rides on the SAME absolute layout/z space as a
+ * data visual (id is unique across visuals+elements, so the Selection pane /
+ * z-order / align-distribute machinery works on elements for free). Built as a
+ * wide optional shape and discriminated by `kind`; only the kind's own fields are
+ * ever populated by {@link sanitizeElement}.
+ */
+interface PersistedElement {
+  id: string;
+  kind: ElementKind;
+  layout: { x: number; y: number; w: number; h: number; z?: number; unit: 'px' };
+  hidden?: boolean;
+  locked?: boolean;
+  groupId?: string;
+  rotation?: number;
+  // textBox
+  runs?: PersistedRun[];
+  align?: TextAlign;
+  valign?: TextVAlign;
+  // image
+  src?: string;
+  srcToken?: PersistedFieldToken;
+  fit?: ImageFit;
+  alt?: string;
+  link?: string;
+  // shape
+  shape?: ElementShapeKind;
+  fill?: string;
+  fillTransparency?: number;
+  stroke?: string;
+  strokeWidth?: number;
+  cornerRadius?: number;
+  text?: PersistedRun[];
+  // button
+  icon?: string;
+  action?: PersistedButtonAction;
+  disabled?: boolean;
+  states?: Partial<Record<ButtonState, PersistedButtonStateStyle>>;
+  // pageNavigator / bookmarkNavigator
+  orientation?: NavOrientation;
+  showHiddenPages?: boolean;
+}
+
+/**
+ * Strict URL gate (XSS): accept ONLY `https:`, `mailto:`, and `data:image/*`.
+ * Whitelisting (not blacklisting) the scheme makes `javascript:` / `vbscript:` /
+ * `file:` / `data:text/html` and whitespace/control-char obfuscations all fall
+ * through to `undefined` — the only way past is a literal recognized prefix.
+ */
+function clampUrl(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const s = v.trim();
+  if (!s) return undefined;
+  const lower = s.toLowerCase();
+  if (lower.startsWith('https://') || lower.startsWith('mailto:')) return s.slice(0, MAX_URL);
+  if (lower.startsWith('data:image/')) return s.slice(0, MAX_DATA_URL);
+  return undefined;
+}
+
+/**
+ * Sanitize a data-bound field token (text/value token + measure-driven image src).
+ * Drops it unless it references a column or measure; aggregation ∈ AGGS and
+ * numberFormat ∈ NUMBER_FORMATS (the same whitelists the wells/format use).
+ */
+function sanitizeFieldToken(raw: unknown): PersistedFieldToken | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const table = typeof o.table === 'string' ? o.table.trim() : undefined;
+  const column = typeof o.column === 'string' ? o.column.trim() : undefined;
+  const measure = typeof o.measure === 'string' ? o.measure.trim() : undefined;
+  if (!column && !measure) return undefined; // a token must reference a field
+  const out: PersistedFieldToken = {
+    ...(table ? { table: table.slice(0, MAX_STR) } : {}),
+    ...(column ? { column: column.slice(0, MAX_STR) } : {}),
+    ...(measure ? { measure: measure.slice(0, MAX_STR) } : {}),
+  };
+  const aggRaw = typeof o.aggregation === 'string' ? o.aggregation : undefined;
+  if (aggRaw && AGGS.has(aggRaw)) out.aggregation = aggRaw as PersistedFieldToken['aggregation'];
+  if (typeof o.numberFormat === 'string' && NUMBER_FORMATS.has(o.numberFormat as NumberFormatPreset)) {
+    out.numberFormat = o.numberFormat as NumberFormatPreset;
+  }
+  return out;
+}
+
+/** Shared run-formatting whitelist (bold/italic/underline/color/size). */
+function sanitizeRunFormat(o: Record<string, unknown>): {
+  bold?: boolean; italic?: boolean; underline?: boolean; color?: string; size?: number;
+} {
+  const fmt: { bold?: boolean; italic?: boolean; underline?: boolean; color?: string; size?: number } = {};
+  if (o.bold === true) fmt.bold = true;
+  if (o.italic === true) fmt.italic = true;
+  if (o.underline === true) fmt.underline = true;
+  const color = clampColor(o.color);
+  if (color) fmt.color = color;
+  const size = clampNum(o.size, 4, 400);
+  if (size !== undefined) fmt.size = Math.round(size);
+  return fmt;
+}
+
+/**
+ * Sanitize ONE rich-text run. A valid data token wins (→ token-run, no link); else
+ * a string `text` (→ text-run, link via {@link clampUrl}). Returns null when the
+ * run is neither, so an empty/garbage run is dropped.
+ */
+function sanitizeRun(raw: unknown): PersistedRun | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const fmt = sanitizeRunFormat(o);
+  const token = sanitizeFieldToken(o.token);
+  if (token) return { token, ...fmt };
+  if (typeof o.text === 'string') {
+    const link = clampUrl(o.link);
+    return { text: o.text.slice(0, MAX_RUN), ...fmt, ...(link ? { link } : {}) };
+  }
+  return null;
+}
+
+function sanitizeRuns(raw: unknown): PersistedRun[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out = raw
+    .map(sanitizeRun)
+    .filter((x): x is PersistedRun => !!x)
+    .slice(0, MAX_RUNS);
+  return out.length ? out : undefined;
+}
+
+/**
+ * Sanitize a button ACTION (discriminated by `type` ∈ ELEMENT_BUTTON_ACTIONS).
+ * `webUrl.url` runs through clampUrl; bookmark/page ids are length-clamped. Returns
+ * undefined for an unknown type so the caller can default to a real `back` action.
+ */
+function sanitizeButtonAction(raw: unknown): PersistedButtonAction | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const type = typeof o.type === 'string' ? o.type : '';
+  if (!ELEMENT_BUTTON_ACTIONS.has(type as ButtonActionType)) return undefined;
+  switch (type as ButtonActionType) {
+    case 'bookmark': {
+      const bookmarkId = clampStr(o.bookmarkId, MAX_KEY_STR);
+      return { type: 'bookmark', ...(bookmarkId ? { bookmarkId } : {}) };
+    }
+    case 'drillthrough': {
+      const pageId = clampStr(o.pageId, MAX_KEY_STR);
+      return { type: 'drillthrough', ...(pageId ? { pageId } : {}) };
+    }
+    case 'pageNavigation': {
+      const pageId = clampStr(o.pageId, MAX_KEY_STR);
+      return { type: 'pageNavigation', ...(pageId ? { pageId } : {}) };
+    }
+    case 'webUrl': {
+      const url = clampUrl(o.url);
+      return { type: 'webUrl', ...(url ? { url } : {}) };
+    }
+    case 'qna':
+      return { type: 'qna' };
+    case 'back':
+    default:
+      return { type: 'back' };
+  }
+}
+
+/** Sanitize the per-state button style map (keys ∈ BUTTON_STATES; colors clamped). */
+function sanitizeButtonStates(raw: unknown): Partial<Record<ButtonState, PersistedButtonStateStyle>> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const out: Partial<Record<ButtonState, PersistedButtonStateStyle>> = {};
+  for (const [k, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (!BUTTON_STATES.has(k as ButtonState) || !val || typeof val !== 'object') continue;
+    const s = val as Record<string, unknown>;
+    const style: PersistedButtonStateStyle = {};
+    const fill = clampColor(s.fill);
+    if (fill) style.fill = fill;
+    const textColor = clampColor(s.textColor);
+    if (textColor) style.textColor = textColor;
+    const border = clampColor(s.border);
+    if (border) style.border = border;
+    if (Object.keys(style).length) out[k as ButtonState] = style;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Sanitize an element's absolute layout — the SAME x/y/w/h clamp as a visual,
+ *  z clamped 0..100000, ALWAYS `unit:'px'` (elements are free-form positioned). */
+function sanitizeElementLayout(raw: unknown): PersistedElement['layout'] {
+  const o = (raw || {}) as Record<string, unknown>;
+  const z = clampNum(o.z, 0, 100_000);
+  return {
+    x: num(o.x, 0),
+    y: num(o.y, 0),
+    w: Math.max(1, num(o.w, 6)),
+    h: Math.max(1, num(o.h, 4)),
+    ...(z !== undefined ? { z: Math.round(z) } : {}),
+    unit: 'px',
+  };
+}
+
+/**
+ * Sanitize ONE canvas element — kind-gated, fully structured. Drops it unless it
+ * has a whitelisted `kind` AND an `id` (the id is shared across visuals+elements
+ * for selection/z, so an id-less node can't participate → not persisted). Only the
+ * fields belonging to the element's kind are populated.
+ */
+function sanitizeElement(raw: unknown): PersistedElement | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const kind = typeof o.kind === 'string' ? o.kind : '';
+  if (!ELEMENT_KINDS.has(kind as ElementKind)) return null;
+  const id = clampStr(o.id, MAX_KEY_STR);
+  if (!id || !id.trim()) return null;
+
+  const el: PersistedElement = {
+    id: id.trim(),
+    kind: kind as ElementKind,
+    layout: sanitizeElementLayout(o.layout),
+  };
+  if (o.hidden === true) el.hidden = true;
+  if (o.locked === true) el.locked = true;
+  const groupId = clampStr(o.groupId, MAX_GROUP_STR);
+  if (groupId) el.groupId = groupId;
+  const rotation = clampNum(o.rotation, -360, 360);
+  if (rotation !== undefined) el.rotation = rotation;
+
+  switch (kind as ElementKind) {
+    case 'textBox': {
+      const runs = sanitizeRuns(o.runs);
+      if (runs) el.runs = runs;
+      if (typeof o.align === 'string' && TEXT_ALIGNS.has(o.align as TextAlign)) el.align = o.align as TextAlign;
+      if (typeof o.valign === 'string' && TEXT_VALIGNS.has(o.valign as TextVAlign)) el.valign = o.valign as TextVAlign;
+      break;
+    }
+    case 'image': {
+      const src = clampUrl(o.src);
+      if (src) el.src = src;
+      const srcToken = sanitizeFieldToken(o.srcToken);
+      if (srcToken) el.srcToken = srcToken;
+      if (typeof o.fit === 'string' && FIT_MODES.has(o.fit as ImageFit)) el.fit = o.fit as ImageFit;
+      const alt = clampStr(o.alt, MAX_STR);
+      if (alt !== undefined) el.alt = alt;
+      const link = clampUrl(o.link);
+      if (link) el.link = link;
+      break;
+    }
+    case 'shape': {
+      el.shape = typeof o.shape === 'string' && SHAPE_KINDS.has(o.shape as ElementShapeKind)
+        ? (o.shape as ElementShapeKind)
+        : 'rectangle';
+      const fill = clampColor(o.fill);
+      if (fill) el.fill = fill;
+      const fillTransparency = clampPct(o.fillTransparency);
+      if (fillTransparency !== undefined) el.fillTransparency = fillTransparency;
+      const stroke = clampColor(o.stroke);
+      if (stroke) el.stroke = stroke;
+      const strokeWidth = clampNum(o.strokeWidth, 0, 200);
+      if (strokeWidth !== undefined) el.strokeWidth = Math.round(strokeWidth);
+      const cornerRadius = clampNum(o.cornerRadius, 0, 1000);
+      if (cornerRadius !== undefined) el.cornerRadius = Math.round(cornerRadius);
+      const text = sanitizeRuns(o.text);
+      if (text) el.text = text;
+      const link = clampUrl(o.link);
+      if (link) el.link = link;
+      break;
+    }
+    case 'button': {
+      const text = sanitizeRuns(o.text);
+      if (text) el.text = text;
+      if (typeof o.icon === 'string' && ELEMENT_ICON_NAMES.has(o.icon)) el.icon = o.icon;
+      // A button always carries a REAL action (default 'back') — never a dead control.
+      el.action = sanitizeButtonAction(o.action) ?? { type: 'back' };
+      if (o.disabled === true) el.disabled = true;
+      const states = sanitizeButtonStates(o.states);
+      if (states) el.states = states;
+      break;
+    }
+    case 'pageNavigator': {
+      if (typeof o.orientation === 'string' && NAV_ORIENTATIONS.has(o.orientation as NavOrientation)) {
+        el.orientation = o.orientation as NavOrientation;
+      }
+      if (o.showHiddenPages === true) el.showHiddenPages = true;
+      break;
+    }
+    case 'bookmarkNavigator': {
+      if (typeof o.orientation === 'string' && NAV_ORIENTATIONS.has(o.orientation as NavOrientation)) {
+        el.orientation = o.orientation as NavOrientation;
+      }
+      break;
+    }
+  }
+  return el;
+}
+
+function sanitizeElements(raw: unknown): PersistedElement[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(sanitizeElement)
+    .filter((x): x is PersistedElement => !!x)
+    .slice(0, MAX_ELEMENTS);
+}
+
 /** Derive the legacy single-`field` shortcut from the wells (first value, else
  *  first category) so the read-only viewer + /query single-field path render. */
 function deriveField(values: any[], category: any[]): string | undefined {
@@ -1336,11 +1745,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     });
     const pageFilters = sanitizeFilterList(p.filters);
     const pageConfig = sanitizePageConfig(p.config);
+    // wave-7 free-form canvas elements (additive; share the visuals' layout/z
+    // space). Emitted only when non-empty so legacy pages stay byte-for-byte same.
+    const elements = sanitizeElements(p.elements);
     return {
       name,
       visuals,
       ...(pageFilters.length ? { filters: pageFilters } : {}),
       ...(pageConfig ? { config: pageConfig } : {}),
+      ...(elements.length ? { elements } : {}),
     };
   });
 

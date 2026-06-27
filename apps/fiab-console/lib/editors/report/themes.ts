@@ -8,8 +8,9 @@
  * brings that to the Loom designer. This module is the pure, framework-free core
  * that the designer (`report-designer.tsx`), the chart renderer
  * (`loom-chart.tsx` / `VisualBody`), the export path, and the `/definition`
- * persistence route all build on. It has NO React/runtime dependency (only a
- * type-only `CSSProperties` import, erased at compile) so it is equally safe to
+ * persistence route all build on. It has NO React/runtime dependency (only
+ * type-only imports — `CSSProperties`, and the `ReportVisualFormat` shape reused
+ * for the named style presets — all erased at compile) so it is equally safe to
  * import from the client editor and from the server BFF sanitizer.
  *
  * Grounding (Microsoft Learn — "Create custom report themes in Power BI
@@ -45,6 +46,10 @@
  */
 
 import type { CSSProperties } from 'react';
+// Type-only (erased at compile — keeps this module React/runtime-free and
+// server-safe): a named style preset reuses the Format pane's ReportVisualFormat
+// so a preset's `format` is a real Partial<ReportVisualFormat>, not a loose bag.
+import type { ReportVisualFormat } from './format-pane';
 
 // ─── Model ────────────────────────────────────────────────────────────────────
 
@@ -57,6 +62,21 @@ import type { CSSProperties } from 'react';
  * a Fluent token CSS variable (e.g. `var(--colorBrandForeground1)`) — the built-in
  * 'Loom Default' uses tokens (web3-ui, dark-mode-safe); curated alt themes use hex.
  */
+/**
+ * One Power BI text class (Learn: report-themes-create-custom — `textClasses.*`):
+ * a font face, a point size, and a color. Every channel is optional — a class
+ * supplies only what it overrides; the rest inherit the flat theme font / the
+ * structural colors.
+ */
+export interface ThemeTextClass {
+  /** Font family for this text class (PBI `fontFace`). */
+  fontFace?: string;
+  /** Point size for this text class (PBI `fontSize`). */
+  fontSize?: number;
+  /** Color for this text class (PBI `color`) — hex or a Fluent token var. */
+  color?: string;
+}
+
 export interface ReportTheme {
   /** Stable id for built-ins / saved customs. Absent ⇒ ad-hoc/imported. */
   id?: string;
@@ -84,6 +104,32 @@ export interface ReportTheme {
   bad?: string;
   /** Default font family for all text classes (maps to `textClasses.*.fontFace`). */
   fontFamily?: string;
+  /**
+   * Per-text-class typography (face + size + color), a faithful subset of the
+   * Power BI theme `textClasses`. When present these SUPERSEDE the flat
+   * {@link ReportTheme.fontFamily}: `body.fontFace` drives the chart font and
+   * `label.color` the chart text color (see {@link themeChartProps}). Round-trips
+   * through the PBI bridge ({@link pbiJsonToTheme} / {@link themeToPbiJson}).
+   */
+  textClasses?: {
+    title?: ThemeTextClass;
+    header?: ThemeTextClass;
+    body?: ThemeTextClass;
+    label?: ThemeTextClass;
+    callout?: ThemeTextClass;
+  };
+  /**
+   * Minimal Power BI `visualStyles` passthrough — carried round-trip VERBATIM
+   * (length-capped, never interpreted here). Lets an imported PBI theme keep its
+   * per-visual style block on re-export without this module modelling every visual.
+   */
+  visualStyles?: Record<string, unknown>;
+  /**
+   * Named style presets surfaced in the Format pane's "Styles" dropdown. When a
+   * theme defines these they drive the dropdown instead of the hard-coded presets;
+   * each carries a partial visual-format applied on selection.
+   */
+  stylePresets?: { id: string; label: string; format: Partial<ReportVisualFormat> }[];
 }
 
 /** The structural-color props LoomChart / VisualBody consume from a theme. */
@@ -94,6 +140,8 @@ export interface ThemeChartProps {
   fontFamily?: string;
   /** Primary text color for chart labels/axes, or undefined for the default. */
   foreground?: string;
+  /** Value-axis gridline stroke color (theme `thirdLevelElements`), or undefined. */
+  gridline?: string;
   /** Plot/visual background, or undefined for the default. */
   background?: string;
 }
@@ -252,6 +300,15 @@ const MAX_COLOR_STR = 64;       // single swatch / token string length (mirror r
 const MAX_DATA_COLORS = 64;     // generous cap on palette length
 const MAX_ID = 80;
 
+const MIN_FONT_SIZE = 4;                 // pt — textClasses fontSize floor
+const MAX_FONT_SIZE = 96;                // pt — textClasses fontSize ceiling
+const MAX_VISUAL_STYLES_JSON = 20000;    // verbatim visualStyles passthrough cap (chars)
+const MAX_PRESET_FORMAT_JSON = 8000;     // per-preset format passthrough cap (chars)
+const MAX_STYLE_PRESETS = 24;            // named style-preset count cap
+
+// PBI's authorable text classes we round-trip (Learn: report-themes-create-custom).
+const TEXT_CLASS_KEYS = ['title', 'header', 'body', 'label', 'callout'] as const;
+
 const HEX_RE = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{4}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
 const VAR_RE = /^var\(--[a-zA-Z0-9-]+\)$/;
 // A bare Fluent token name (no `var(...)` wrapper) — tolerated on import.
@@ -294,6 +351,78 @@ function normalizeColor(s: string): string {
   return t;
 }
 
+/** Clamp a textClasses point size into [MIN,MAX]; undefined when not a finite number. */
+function clampFontSize(v: unknown): number | undefined {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return undefined;
+  return Math.min(MAX_FONT_SIZE, Math.max(MIN_FONT_SIZE, Math.round(v)));
+}
+
+/** Whitelist a single text class to {fontFace?, fontSize?, color?}; undefined if empty. */
+function sanitizeTextClass(raw: unknown): ThemeTextClass | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: ThemeTextClass = {};
+  const face = clampStr(o.fontFace, MAX_FONT);
+  if (face) out.fontFace = face;
+  const size = clampFontSize(o.fontSize);
+  if (size !== undefined) out.fontSize = size;
+  const color = clampColor(o.color);
+  if (color) out.color = color;
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** Whitelist the title/header/body/label/callout text classes; undefined if none. */
+function sanitizeTextClasses(raw: unknown): ReportTheme['textClasses'] {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: NonNullable<ReportTheme['textClasses']> = {};
+  for (const k of TEXT_CLASS_KEYS) {
+    const cls = sanitizeTextClass(o[k]);
+    if (cls) out[k] = cls;
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
+/** A bounded, JSON-round-trippable plain-object passthrough; undefined if too big/invalid. */
+function clampJsonObject(raw: unknown, maxLen: number): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  try {
+    const json = JSON.stringify(raw);
+    if (!json || json.length > maxLen) return undefined;
+    const parsed = JSON.parse(json);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch { /* circular / non-serializable → drop */ }
+  return undefined;
+}
+
+/** Minimal PBI `visualStyles` passthrough — carried verbatim, length-capped. */
+function sanitizeVisualStyles(raw: unknown): Record<string, unknown> | undefined {
+  return clampJsonObject(raw, MAX_VISUAL_STYLES_JSON);
+}
+
+/** A bounded per-preset Partial<ReportVisualFormat> passthrough (not re-typed here). */
+function sanitizeStylePresetFormat(raw: unknown): Partial<ReportVisualFormat> {
+  return (clampJsonObject(raw, MAX_PRESET_FORMAT_JSON) ?? {}) as unknown as Partial<ReportVisualFormat>;
+}
+
+/** Validate the named style presets (id+label required, format bounded); undefined if none. */
+function sanitizeStylePresets(raw: unknown): ReportTheme['stylePresets'] {
+  if (!Array.isArray(raw)) return undefined;
+  const out: NonNullable<ReportTheme['stylePresets']> = [];
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue;
+    const o = item as Record<string, unknown>;
+    const id = clampStr(o.id, MAX_ID);
+    const label = clampStr(o.label, MAX_NAME);
+    if (!id || !label) continue;
+    out.push({ id, label, format: sanitizeStylePresetFormat(o.format) });
+    if (out.length >= MAX_STYLE_PRESETS) break;
+  }
+  return out.length ? out : undefined;
+}
+
 // ─── Palette + chart-prop resolution ──────────────────────────────────────────
 
 /**
@@ -316,11 +445,26 @@ export function resolveThemePalette(theme?: ReportTheme | null): string[] {
  */
 export function themeChartProps(theme?: ReportTheme | null): ThemeChartProps {
   const palette = resolveThemePalette(theme);
-  const fg = theme?.foreground ?? theme?.firstLevelElements;
+  // Chart text color: most-specific wins — the `label` text-class color, then the
+  // structural SECONDARY color (PBI axis/legend/label text), then the primary
+  // foreground / firstLevelElements (back-compat fallback).
+  const fg =
+    theme?.textClasses?.label?.color
+    ?? theme?.secondLevelElements
+    ?? theme?.foreground
+    ?? theme?.firstLevelElements;
+  // Value-axis gridline color: PBI's `thirdLevelElements` (faint structural). The
+  // model has always carried this class but themeChartProps DROPPED it — emitting
+  // it now lets the designer's structural spread repaint gridlines under a theme
+  // (no loom-chart / report-designer edit; LoomChartStructural.gridline exists).
+  const grid = theme?.thirdLevelElements;
+  // Font: the `body` text-class face is most specific, else the flat family.
+  const font = theme?.textClasses?.body?.fontFace ?? theme?.fontFamily;
   return {
     palette,
-    fontFamily: theme?.fontFamily ? theme.fontFamily.slice(0, MAX_FONT) : undefined,
+    fontFamily: font ? font.slice(0, MAX_FONT) : undefined,
     foreground: isValidColor(fg) ? normalizeColor(fg) : undefined,
+    gridline: isValidColor(grid) ? normalizeColor(grid) : undefined,
     background: isValidColor(theme?.background) ? normalizeColor(theme!.background!) : undefined,
   };
 }
@@ -409,6 +553,15 @@ export function sanitizeTheme(raw: unknown): ReportTheme | undefined {
   const font = clampStr(o.fontFamily, MAX_FONT);
   if (font) out.fontFamily = font;
 
+  const textClasses = sanitizeTextClasses(o.textClasses);
+  if (textClasses) out.textClasses = textClasses;
+
+  const visualStyles = sanitizeVisualStyles(o.visualStyles);
+  if (visualStyles) out.visualStyles = visualStyles;
+
+  const stylePresets = sanitizeStylePresets(o.stylePresets);
+  if (stylePresets) out.stylePresets = stylePresets;
+
   return out;
 }
 
@@ -421,6 +574,29 @@ function colorToHex(v: string | undefined): string | undefined {
   if (isHexColor(s)) return s.toLowerCase();
   const mapped = TOKEN_HEX[normalizeColor(s)];
   return mapped;
+}
+
+// PBI's four authorable text classes (Learn: report-themes-create-custom). The
+// Loom `body` face (or the flat fontFamily) cascades in as the default fontFace,
+// so a flat-font theme writes all four EXACTLY as before; per-class fontSize and
+// a resolved-hex color are layered on only when the model carries them.
+const PBI_TEXT_CLASS_KEYS = ['label', 'title', 'header', 'callout'] as const;
+function buildPbiTextClasses(theme: ReportTheme): Record<string, unknown> | undefined {
+  const flatFace = theme.textClasses?.body?.fontFace ?? theme.fontFamily;
+  const defFace = flatFace ? flatFace.slice(0, MAX_FONT) : undefined;
+  const src = (theme.textClasses ?? {}) as Record<string, ThemeTextClass | undefined>;
+  const out: Record<string, unknown> = {};
+  for (const k of PBI_TEXT_CLASS_KEYS) {
+    const cls = src[k];
+    const entry: Record<string, unknown> = {};
+    const face = cls?.fontFace ? cls.fontFace.slice(0, MAX_FONT) : defFace;
+    if (face) entry.fontFace = face;
+    if (typeof cls?.fontSize === 'number') entry.fontSize = cls.fontSize;
+    const color = colorToHex(cls?.color);
+    if (color) entry.color = color;
+    if (Object.keys(entry).length) out[k] = entry;
+  }
+  return Object.keys(out).length ? out : undefined;
 }
 
 /**
@@ -459,15 +635,17 @@ export function themeToPbiJson(theme: ReportTheme): Record<string, unknown> {
   const bad = colorToHex(theme.bad);
   if (bad) json.bad = bad;
 
-  if (theme.fontFamily) {
-    const fontFace = theme.fontFamily.slice(0, MAX_FONT);
-    json.textClasses = {
-      label: { fontFace },
-      title: { fontFace },
-      header: { fontFace },
-      callout: { fontFace },
-    };
+  if (theme.fontFamily || theme.textClasses) {
+    const textClasses = buildPbiTextClasses(theme);
+    if (textClasses) json.textClasses = textClasses;
   }
+
+  // Loom-extended (PBI ignores unknown top-level keys) — carried so a theme
+  // round-trips losslessly through export → re-import.
+  const visualStyles = sanitizeVisualStyles(theme.visualStyles);
+  if (visualStyles) json.visualStyles = visualStyles;
+  const stylePresets = sanitizeStylePresets(theme.stylePresets);
+  if (stylePresets) json.stylePresets = stylePresets;
 
   return json;
 }
@@ -541,6 +719,17 @@ export function pbiJsonToTheme(json: unknown): ReportTheme | null {
 
   const font = fontFaceFromTextClasses(o.textClasses) ?? clampStr(o.fontFamily, MAX_FONT);
   if (font) out.fontFamily = font;
+
+  // Full per-class typography (face + size + color), plus the Loom-extended
+  // visualStyles / stylePresets blocks when present — mirrors the export side.
+  const textClasses = sanitizeTextClasses(o.textClasses);
+  if (textClasses) out.textClasses = textClasses;
+
+  const visualStyles = sanitizeVisualStyles(o.visualStyles);
+  if (visualStyles) out.visualStyles = visualStyles;
+
+  const stylePresets = sanitizeStylePresets(o.stylePresets);
+  if (stylePresets) out.stylePresets = stylePresets;
 
   return out;
 }

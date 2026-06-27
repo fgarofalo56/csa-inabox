@@ -823,14 +823,27 @@ export const MIN_H = 60;
 
 const r1 = (n: number): number => Math.round(Number.isFinite(n) ? n : 0);
 
-/** Clamp a rect to ≥ min size and inside `[0..page]` (keeps a visual on the sheet,
- *  but never shrinks it below the min just to fit — a too-big rect is pinned to 0). */
-export function clampRect(rect: AbsRect, page: PageDims): AbsRect {
-  const w = Math.max(MIN_W, Math.min(page.width, r1(rect.w)));
-  const h = Math.max(MIN_H, Math.min(page.height, r1(rect.h)));
+/** Clamp a rect to ≥ (`minW`,`minH`) and inside `[0..page]` — the min-size
+ *  parameterized core of {@link clampRect}. Free-form ELEMENTS (wave-7) reuse
+ *  this so a thin shape (a `line`/`arrow` can be ~2px tall, below the visual
+ *  {@link MIN_H}) still stays on the sheet instead of being forced up to the
+ *  visual minimum. Like {@link clampRect} it never shrinks a rect below the min
+ *  just to fit — a too-big rect is pinned to 0. `minW`/`minH` floor at 1px. */
+export function clampRectMin(rect: AbsRect, page: PageDims, minW: number, minH: number): AbsRect {
+  const mw = Math.max(1, r1(minW));
+  const mh = Math.max(1, r1(minH));
+  const w = Math.max(mw, Math.min(page.width, r1(rect.w)));
+  const h = Math.max(mh, Math.min(page.height, r1(rect.h)));
   const x = Math.max(0, Math.min(page.width - w, r1(rect.x)));
   const y = Math.max(0, Math.min(page.height - h, r1(rect.y)));
   return { x, y, w, h, z: rect.z };
+}
+
+/** Clamp a rect to ≥ the visual min size ({@link MIN_W}/{@link MIN_H}) and inside
+ *  `[0..page]` (keeps a visual on the sheet, but never shrinks it below the min
+ *  just to fit — a too-big rect is pinned to 0). Delegates to {@link clampRectMin}. */
+export function clampRect(rect: AbsRect, page: PageDims): AbsRect {
+  return clampRectMin(rect, page, MIN_W, MIN_H);
 }
 
 /** Snap every coordinate of a rect to the nearest `cell` multiple. */
@@ -1026,4 +1039,86 @@ export function reorderZ<V extends { id: string; layout: AbsRect }>(
     const nz = zById.get(v.id);
     return nz != null && nz !== v.layout.z ? { ...v, layout: { ...v.layout, z: nz } } : v;
   });
+}
+
+/**
+ * Single-step z-layering (PBI "Bring forward" / "Send backward") — the one-slot
+ * complement to {@link reorderZ}'s extreme bring-to-front / send-to-back. Orders
+ * the visuals by `layout.z`, then hops each selected node one position toward
+ * `dir` past the nearest NON-selected neighbour (selected nodes keep their
+ * relative order and shift as a contiguous block, never leapfrogging one
+ * another), and renumbers `layout.z` to the new 0..n−1 paint order. Pure +
+ * React-free like its sibling; unchanged visuals keep their reference. Wired to
+ * Ctrl+] / Ctrl+[ on the free-form canvas, run over the UNION of data visuals +
+ * elements so the two share ONE z-order per page (PBI parity).
+ */
+export function reorderZStep<V extends { id: string; layout: AbsRect }>(
+  visuals: V[], ids: Set<string>, dir: 'forward' | 'backward',
+): V[] {
+  if (!ids || ids.size === 0) return visuals;
+  const ordered = visuals
+    .map((v, i) => ({ v, i, z: Number.isFinite(Number(v.layout.z)) ? Number(v.layout.z) : i }))
+    .sort((a, b) => (a.z - b.z) || (a.i - b.i));
+  const sel = (o: { v: V }): boolean => ids.has(o.v.id);
+  const swap = (a: number, b: number): void => { const t = ordered[a]; ordered[a] = ordered[b]; ordered[b] = t; };
+  if (dir === 'forward') {
+    // toward the front (higher index): walk front→back so a selected run shifts
+    // one slot ahead of the nearest unselected neighbour without leapfrogging.
+    for (let i = ordered.length - 2; i >= 0; i -= 1) {
+      if (sel(ordered[i]) && !sel(ordered[i + 1])) swap(i, i + 1);
+    }
+  } else {
+    // toward the back (lower index): walk back→front for the mirror behaviour.
+    for (let i = 1; i < ordered.length; i += 1) {
+      if (sel(ordered[i]) && !sel(ordered[i - 1])) swap(i, i - 1);
+    }
+  }
+  const zById = new Map<string, number>();
+  ordered.forEach((o, i) => zById.set(o.v.id, i));
+  return visuals.map((v) => {
+    const nz = zById.get(v.id);
+    return nz != null && nz !== v.layout.z ? { ...v, layout: { ...v.layout, z: nz } } : v;
+  });
+}
+
+// ── free-form ELEMENT insert geometry (text/image/shape/button/navigators) ────
+// Padding / position / size factory for the wave-7 canvas elements that ride the
+// SAME absolute sheet (and z-space) as data visuals. Kept here with the rest of
+// the free-form math so the element registry (canvas-elements.tsx) + the designer
+// stay thin — they only pick a kind and let this place it.
+
+/** The free-form element kinds whose default insert footprint this module knows.
+ *  A structural mirror of the registry's `ElementKind` (canvas-elements.tsx),
+ *  declared locally so this lower-level math needs no circular import back. */
+export type ElementLayoutKind =
+  | 'textBox' | 'image' | 'shape' | 'button' | 'pageNavigator' | 'bookmarkNavigator';
+
+/** Per-kind default insert footprint (px) — the element equivalent of the
+ *  free-form `addVisual` default-drop size, sized to each kind's natural shape. */
+const ELEMENT_FOOTPRINT: Record<ElementLayoutKind, { w: number; h: number }> = {
+  textBox:           { w: 240, h: 64 },
+  image:             { w: 240, h: 180 },
+  shape:             { w: 200, h: 160 },
+  button:            { w: 160, h: 48 },
+  pageNavigator:     { w: 360, h: 48 },
+  bookmarkNavigator: { w: 360, h: 48 },
+};
+
+/**
+ * Default insert rect for a new free-form ELEMENT. Mirrors the free-form
+ * `addVisual` drop convention: a per-kind footprint, a down-right cascade (base
+ * 40px, +28px per step, wrapping every 6) so successive inserts never stack
+ * exactly, and `z = index` so a freshly added element provisionally paints on
+ * top of the page's current `index` nodes. Clamped onto the sheet via
+ * {@link clampRectMin} with a tiny (2px) min so even a thin footprint is admitted
+ * unchanged. The host owns the authoritative z (max-existing + 1); `index` is the
+ * cascade ordinal — pass the page's current visual + element count.
+ */
+export function defaultElementLayout(
+  kind: ElementLayoutKind, page: PageDims, index = 0,
+): AbsRect {
+  const fp = ELEMENT_FOOTPRINT[kind] ?? { w: 240, h: 120 };
+  const n = Math.max(0, r1(index));
+  const off = (n % 6) * 28;
+  return clampRectMin({ x: 40 + off, y: 40 + off, w: fp.w, h: fp.h, z: n }, page, 2, 2);
 }

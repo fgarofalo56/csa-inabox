@@ -22,8 +22,13 @@ read-only report viewer and the report-visual-designer Power-BI canvas):
 | Layer | File |
 |---|---|
 | Designer (canvas, ribbon, right-rail) | apps/fiab-console/lib/editors/report-designer.tsx |
-| Format pane | apps/fiab-console/lib/editors/report/format-pane.tsx |
-| Chart renderer | apps/fiab-console/lib/components/charts/loom-chart.tsx |
+| Format pane (**Wave 6 per-axis / title / legend / effects cards ⚠️ NOT YET BUILT** — see §3) | apps/fiab-console/lib/editors/report/format-pane.tsx |
+| Chart renderer (**W5-frozen — never edited by Wave 6**) | apps/fiab-console/lib/components/charts/loom-chart.tsx |
+| Format→chart adapter (**NEW** Wave 6 — built ✅; maps every Format key to a real frozen-W5 lever + `rows` transforms) | apps/fiab-console/lib/components/charts/loom-chart-format.ts |
+| Visual chrome overlay (**NEW** Wave 6 — ✅ BUILT but UNWIRED; no importer / no format-pane cards / seam not landed — title / subtitle / axis-titles / border / shadow / header-icons) | apps/fiab-console/lib/editors/report/visual-chrome.tsx |
+| Conditional formatting (rules / color-scale / data-bars / icons + **Wave-6** field-value / web-URL / icon-thresholds) | apps/fiab-console/lib/editors/report/conditional-format.tsx |
+| Report themes (model + `themeChartProps` + **Wave-6** PBI-JSON import/export) | apps/fiab-console/lib/editors/report/themes.ts |
+| Themes pane (**NEW** Wave 6 — structured builder + theme-JSON import/export) | apps/fiab-console/lib/editors/report/themes-pane.tsx |
 | Wells to SQL compiler | apps/fiab-console/lib/azure/wells-to-sql.ts |
 | Wells to DAX compiler (AAS mirror) | apps/fiab-console/lib/azure/aas-dax.ts |
 | Query route (3 backends) | apps/fiab-console/app/api/items/report/[id]/query/route.ts |
@@ -116,6 +121,40 @@ claimed live that is not.
   and (e) **anomaly** (client rolling-mean / z-score, ADX `series_decompose_anomalies`
   opt-in), **X-axis constant lines**, and **shaded ranges** analytics. Every prop
   is additive + default-off so waves 0-4 and the free-form canvas do not regress.
+- **Wave 6 — IN PROGRESS (PARTIAL, not yet committed)** — **Visual Format-pane
+  parity**, planned as new/edited modules that route through ONE adapter + chrome
+  wrapper **without editing the W5-frozen loom-chart.tsx / report-designer.tsx**.
+  **What is BUILT today:** the **loom-chart-format.ts** adapter ✅ (maps each
+  intended control to a REAL frozen-W5 lever — axis max→`sharedValueMax`, secondary
+  axis→`comboLineSeries`, gridline + label color→`structural`, whole-chart
+  font→`fontFamily`, palette→`palette`, stacking→`stackMode`,
+  small-multiples→`smallMultiples`, tooltips→`tooltips`+`hover`, with
+  log-scale / display-units / decimals / zoom-window as a **rows transform** and
+  axis titles emitted as an `axisChrome` payload); the **themes.ts** model
+  extensions ✅ (`textClasses` / `visualStyles` / `stylePresets` / the new
+  `gridline`) + **themes-pane.tsx** ✅; and the **conditional-format.tsx** Wave-6
+  modes ✅ (`fieldValue` / `webUrl` / icon-thresholds). **What is NOT built yet
+  (the gating gap — per no-vaporware.md these are ❌ MISSING, not delivered):**
+  (1) the per-axis / title / legend / effects **Format cards in format-pane.tsx** —
+  the file contains NONE of `axisX` / `axisY` / `axisY2` / `title` / `legend` /
+  `effects` / `headerIcons` / `tooltipOptions` / `numberFormatByField` /
+  `smallMultiplesGrid` / `zoom`, so there is **no UI to author these values**;
+  (2) the **visual-chrome.tsx** overlay is **BUILT but UNWIRED** — the 487-line file
+  exists (at apps/fiab-console/lib/editors/report/visual-chrome.tsx) and draws titles /
+  axis-titles / header-icons / border / shadow, but **no module imports it yet**, so the
+  seam below has nothing to mount it through;
+  (3) the **single VisualBody integration line owned by Wave 5**
+  (`const a = formatToChartProps(fmt, ctx)` then
+  `<VisualChrome chrome={a.axisChrome}><LoomChart rows={a.rows} {...a.chartProps}/></VisualChrome>`)
+  — **not wired**. Until (1)+(2)+(3) land, the existing `format={fmt}` passthrough
+  still paints only the **pre-Wave-6 W5-native subset** (axes show / legend /
+  labels / plot-area / style / stacking) so waves 0-5 do not regress — but the new
+  per-axis / title / legend / effects cards are **MISSING**, not shipped. Four
+  further controls have **no frozen-W5 prop** (per-series marker shape/size, line
+  dash/width/shape, legend title text, axis label rotation) — per no-vaporware.md
+  they are **NOT shipped as live-but-dead controls**; the adapter carries the
+  dormant branch that would emit them once both Wave 5 adds the prop AND the
+  format-pane cards land (honest ❌ rows in §3).
 - **GATE** — honest infra-gate: the full UI renders and the query still runs, but
   a styled Fluent MessageBar intent="warning" names the exact env var / resource
   to provision (per no-vaporware.md).
@@ -256,6 +295,120 @@ are W1-W4 and are **untouched** by this wave.
   no dead control); `AnalyticsShadedRange` (structured numeric from / to / axis /
   color passed straight to LoomChart). All structured inputs (no-freeform-config).
 
+### Wave-6 additions (Visual Format-pane parity via adapter + chrome + themes) — PARTIAL / IN PROGRESS
+
+Wave 6 **plans** to close the Format-pane gap **without touching the two W5-owned
+files** (loom-chart.tsx, report-designer.tsx). **Landed so far:** the
+loom-chart-format.ts adapter, the themes.ts model extensions + themes-pane.tsx, and
+the conditional-format.tsx Wave-6 modes, plus the **visual-chrome.tsx** overlay
+(**BUILT but UNWIRED** — the 487-line file exists at
+apps/fiab-console/lib/editors/report/visual-chrome.tsx; nothing imports it yet).
+**Still MISSING (not delivered):** the per-axis / title / legend / effects **Format
+cards in format-pane.tsx** (the file contains none of them) and the single VisualBody
+**integration seam** (unwired). The bullets below mark each
+sub-item BUILT ✅ or NOT-YET ❌; everything additive + sparse so TypeScript keeps
+compiling (zero new errors on top of the ~184 pre-existing unrelated ones) and
+waves 0-5 + the free-form canvas round-trip byte-identical.
+
+- **ReportVisualFormat extensions (format-pane.tsx, exported) — ❌ NOT YET BUILT:**
+  the planned structured, sparse, optional members — `axisX` / `axisY` / `axisY2`
+  (`ReportAxisFormat`: show / title / showTitle / gridlines / gridlineColor / min /
+  max / logScale / displayUnits / decimals / labelFont / labelFontSize / labelColor /
+  labelRotation / axisType / `axisY2.series`), `title` (`ReportTitleFormat` incl. a
+  **fx-conditional** `conditionalField?: CondField` reused from conditional-format),
+  `legend` (`ReportLegendFormat`: title / font / fontSize / color / style),
+  `effects` (shadow / border / `plotAreaBg`), an **extended** `dataLabels`
+  (font / color / units / decimals / background / content) and `totalLabels`
+  (font / color / units), `numberFormatByField` ("Apply settings to" per-field
+  map), `headerIcons`, `tooltipOptions` (per-visual Tooltips card),
+  `zoom` (category-window `[0..1]`), and `smallMultiplesGrid` — are **not present
+  in format-pane.tsx today** (a grep finds none of `axisX` / `axisY` / `axisY2` /
+  `ReportAxisFormat` / `ReportTitleFormat` / `ReportLegendFormat` /
+  `ReportEffectsFormat` / `headerIcons` / `tooltipOptions` / `numberFormatByField` /
+  `smallMultiplesGrid`). This is the **gating gap**: with no pane controls there is
+  no way to author these values. The contract below is the **design target**, not a
+  shipped surface. Every existing scalar key (`showXAxis`, `showYAxis`, `showLegend`,
+  `legendPosition`, `titleText`, `dataColors`, `numberFormat`, `stylePreset`,
+  `background`, `border`, `shadow`, `plotArea`, `dataLabels`, `totalLabels`,
+  `conditionalFormat`, `stacking`) **remains intact** and continues to paint via the
+  pre-Wave-6 passthrough; when the new objects land they will be read in preference,
+  falling back to the scalars, sanitizer-whitelisted on PUT /definition and ignored
+  by the viewer + PBIR provisioner so the model round-trips.
+- **loom-chart-format.ts adapter (NEW):** `formatToChartProps(format, ctx)`
+  returns `{ rows, chartProps, axisChrome }`. It uses a **type-only** import of
+  loom-chart (no value import ⇒ no runtime cycle) and maps each Format field to a
+  REAL frozen-W5 lever (see the contract table below) — `chartProps` is **spread**
+  onto `<LoomChart>` (format / palette / fontFamily / structural / comboLineSeries /
+  sharedValueMax / gauge bounds / stackMode / smallMultiples / tooltips / hover /
+  detailColumn); `rows` is the SAME reference when untouched, else a transform
+  (log10 / display-units pre-scale + round / category zoom-window slice); and
+  `axisChrome` carries the titles for the chrome overlay. **No control is dead** —
+  each maps to a lever verified present in the frozen chart.
+- **visual-chrome.tsx (NEW) — ✅ BUILT but UNWIRED:** the token-styled overlay that
+  wraps the chart and draws everything the chart geometry has no prop for **around** it
+  (not inside it) — visual title / subtitle (font / color / align / divider, with the
+  fx-conditional title resolved from a measure), the X / Y / Y2 **axis titles** in the
+  reserved margins, header icons (visual-info / drill / filter / focus / more), and the
+  `effects` border + shadow + plot-area background. The 487-line file **exists** at
+  apps/fiab-console/lib/editors/report/visual-chrome.tsx, but **no module imports it
+  yet** (no importer, the format-pane cards + the VisualBody seam are not landed), so
+  none of this chrome renders today. It is the **built** chrome half of the seam (the
+  adapter is the built geometry half); the seam cannot close until the format-pane cards
+  + the W5-owned integration line land.
+- **Single integration seam (owned by Wave 5, NOT edited by Wave 6):** in
+  VisualBody, `rows={rows} … format={fmt} {...themeChartProps_} {...geomProps}`
+  becomes `const a = formatToChartProps(fmt, ctx);` then
+  `<VisualChrome chrome={a.axisChrome} format={fmt}><LoomChart rows={a.rows} {...a.chartProps} {...geomProps}/></VisualChrome>`.
+  **Until W5 lands that one line, the existing `format={fmt}` passthrough still
+  paints the W5-native subset** (showXAxis / showYAxis / showLegend / legendPosition /
+  dataLabels / totalLabels / plotArea / stylePreset / stacking) so nothing
+  regresses; the adapter-only fields (axis max, secondary axis, gridline / label
+  color, log / units / zoom, titles / chrome) light up at the seam.
+- **Theme path (themes.ts + themes-pane.tsx — already extended this wave):**
+  `ReportTheme` gains `textClasses` (per-class fontFace / fontSize / color),
+  a clamped `visualStyles` passthrough, and named `stylePresets`
+  (`{ id, label, format: Partial<ReportVisualFormat> }[]`) that drive the Format
+  **Styles** dropdown when a theme defines them. `themeChartProps()` now emits
+  **`gridline`** (from `thirdLevelElements`, previously dropped) and prefers
+  `textClasses.label.color` for `foreground` + `textClasses.body.fontFace` for
+  `fontFamily` — so axis gridlines finally repaint under a theme through the
+  designer's **existing** `structural:{foreground,background,gridline}` spread, no
+  designer edit. `sanitizeTheme` / `pbiJsonToTheme` / `themeToPbiJson` carry the
+  new fields; the themes-pane stays **structured pickers + PBI-theme-JSON
+  import/export** (the one permitted file action), never a raw-JSON-only box.
+
+#### Adapter contract — every shipped control → a real frozen-W5 lever
+
+| Format field | Frozen-W5 lever (verified in loom-chart.tsx) | Kind |
+|---|---|---|
+| `axisX.show` / `axisY.show` | `chartProps.format.showXAxis` / `showYAxis` | direct prop |
+| `axisY.max` | `chartProps.sharedValueMax` (clamps the value-axis max) | direct prop |
+| `axisY2.series` | `chartProps.comboLineSeries` (paints the secondary right-hand axis) | direct prop |
+| gauge min / max / target | `gaugeMin` / `gaugeMax` / `target` | direct prop |
+| `axisY.gridlines=false` / `gridlineColor` | `structural.gridline` (`'transparent'` to hide) | structural |
+| axis / label / legend / data-label **color** | `structural.foreground` | structural |
+| whole-chart / axis-label **font** | `chartProps.fontFamily` (cascades to all SVG text) | direct prop |
+| theme palette / data-colors lead | `chartProps.palette` (lead = `palette[0]`) | direct prop |
+| `effects.plotAreaBg` color / transparency | `structural.background` + `format.plotArea.transparency` | structural + prop |
+| `stacking` | `chartProps.stackMode` | direct prop |
+| `smallMultiplesGrid` columns / sharedY | `chartProps.smallMultiples` | direct prop |
+| `tooltipOptions.fields` | `chartProps.tooltips` + `chartProps.hover=true` | direct prop |
+| `axisY.logScale` | `result.rows` = log10 of the plotted numeric cols | rows transform |
+| `displayUnits` / `decimals` (axis + labels) | `result.rows` pre-scaled (÷1e3/1e6/1e9 + round) | rows transform |
+| `zoom.from` / `zoom.to` | `result.rows` sliced to the category window | rows transform |
+| title / subtitle / heading / align / divider / fx-conditional | `result.axisChrome` + VisualChrome | chrome |
+| `axisX` / `axisY` / `axisY2.title` | `result.axisChrome` (drawn in VisualChrome margins) | chrome |
+| `effects.border` / `effects.shadow` / `headerIcons` | VisualChrome wrapper | chrome |
+
+**Honest gaps (no frozen-W5 prop — NOT shipped as live-but-dead controls):**
+per-series **marker shape/size**, **line dash/width/shape**, **legend title text**,
+and **axis label rotation**. The frozen W5 chart exposes no prop for these, so per
+no-vaporware.md (which sits ABOVE convenience) they are **added to the persisted
+`ReportVisualFormat` model so they round-trip**, surfaced only as honest ❌ rows in
+§3 — never as dead controls. The adapter already carries the dormant branch that
+will emit `markers` / `lineStyle` / `legendTitle` / label-rotation the instant W5
+adds those chart props (one W5 line later).
+
 ---
 
 ## (1) Visualizations pane — visual-type gallery
@@ -327,31 +480,57 @@ values, legend; aggregation picker Sum/Avg/Count/Min/Max (AGGS).
 
 ## (3) Format pane
 
-Source: each visual Format section + power-bi-report-display-settings. Shipped
-(format-pane.tsx, ReportVisualFormat): Title (text + show), Data colors (8
-Loom-palette swatches), Axes (X/Y show), Legend (show + position), Number format
-(6 presets). Applied client-side in LoomChart / VisualBody; persisted on
-visual.config.format via /definition.
+Source: each visual Format section + power-bi-report-display-settings. The
+**shipped set today** (format-pane.tsx, ReportVisualFormat) is Title
+(text + show), Data colors (8 Loom-palette swatches), **Axes — X/Y *show* only**,
+Legend (show + position), Number format (6 presets), applied client-side in
+LoomChart / VisualBody and persisted on visual.config.format via /definition.
+**Wave 6 PLANS** the full per-axis cards (`axisX` / `axisY` / `axisY2`) plus rich
+Title / Legend / Effects / extended Data-labels — to be routed through the
+**loom-chart-format.ts** adapter (**built ✅**) + a **visual-chrome.tsx** overlay
+(**built ✅ but UNWIRED — no importer, seam not landed**) (never a loom-chart.tsx edit): the **axis
+min/max would be consumed via the adapter's `sharedValueMax` + a `rows` transform**
+(log / display-units / zoom), gridline + label color via `structural`, secondary
+axis via `comboLineSeries`, and axis titles via VisualChrome — **NOT a native
+LoomChart axis-min/max prop** (none exists). **These cards are MISSING from
+format-pane.tsx today** — the file contains none of `axisX` / `axisY` / `axisY2` /
+`title` / `legend` / `effects` / `headerIcons` / `tooltipOptions` / `zoom` /
+`smallMultiplesGrid` / `numberFormatByField` — so per no-vaporware.md the Wave-6
+rows below are **❌ MISSING Wave 6** (not delivered) until the pane controls AND
+the VisualBody integration seam land (visual-chrome.tsx is built but unwired); the existing
+`format={fmt}` passthrough keeps the pre-Wave-6 show / legend / labels / plot-area /
+style / stacking subset painting so nothing regresses. **Already real this wave:**
+the adapter (loom-chart-format.ts), the theme model (themes.ts) + themes-pane.tsx,
+and the conditional-formatting `fieldValue` / `webUrl` / icon-threshold modes
+(conditional-format.tsx). When the cards land they persist additively through
+/definition.
 
 | Format section | Status | Wave | Mechanism |
 |---|---|---|---|
-| Legend (show + position) | OK shipped | — | showLegend / legendPosition |
-| X axis (show) | OK shipped | — | showXAxis |
-| Y axis (scale / gridlines / title) | OK shipped, extended | 1 / 5 | showYAxis shipped; Wave 1 added the structured scale (min/max), gridline toggle, and axis-title inputs and **persists** them — Wave 5 is where LoomChart actually **consumes** the axis min/max to clamp the value domain (the persisted Wave-1 scale was honest config until the geometry pass) |
+| Legend (show + position) + **Wave-6 legend card (title / font / color / style)** | OK shipped / **❌ MISSING Wave 6** | — / 6 | showLegend / legendPosition **shipped ✅**; the Wave-6 `legend` card is **NOT in format-pane.tsx** (no UI to author it) — when built, font + **color** would apply via `fontFamily` + `structural.foreground` through the adapter; legend *title text* is a separate honest ❌ gap (no W5 `legendTitle` prop) |
+| X / Y axis (show) | OK shipped | — | `showXAxis` / `showYAxis` — the **only** axis controls format-pane ships today (there is no min/max, gridline, or axis-title input, and LoomChart has no axis-min/max prop) |
+| X / Y / Y2 axis card — title / gridline / min / max / log scale / display-units / decimals / label-color / secondary-axis | **❌ MISSING Wave 6** | 6 | **NOT built** — the per-axis Format cards (`axisX` / `axisY` / `axisY2`) are absent from format-pane.tsx; the **visual-chrome.tsx** overlay that would draw axis titles is **built but unwired** (no importer / seam), so there is no UI to author these values yet. The **adapter (loom-chart-format.ts) is built ✅** and would map `axisY.max`→`sharedValueMax`, `axisY2.series`→`comboLineSeries` (+ combo), `gridlines=false` / `gridlineColor`→`structural.gridline`, label colors→`structural.foreground`, `logScale` / `displayUnits` / `decimals` / `zoom`→adapter **rows transform**, axis **titles**→VisualChrome margins — but it is **unwired** (the Wave-5-owned VisualBody integration line is not landed). loom-chart.tsx stays unedited; until the cards + seam land, the `format={fmt}` passthrough keeps only the show/legend/label subset painting |
+| Per-series marker shape / size | ❌ honest gap | — (future W5 prop) | persisted on `ReportVisualFormat` so it round-trips, but the frozen W5 chart exposes **no** marker prop — per no-vaporware.md NOT shipped as a live-but-dead control; the adapter already carries the dormant `markers` branch that lights up the moment Wave 5 adds the prop |
+| Line dash / width / shape (per series) | ❌ honest gap | — (future W5 prop) | model-persisted; no W5 `lineStyle` prop yet (the only line-style prop is the Analytics ref-line `ChartLineStyle`, unrelated) — dormant adapter `lineStyle` branch ready, not a dead control |
+| Legend title text | ❌ honest gap | — (future W5 prop) | model-persisted (`legend.title`); no W5 `legendTitle` prop — dormant adapter branch ready, not a dead control |
+| Axis label rotation | ❌ honest gap | — (future W5 prop) | model-persisted (`axisX/Y.labelRotation`); no W5 label-rotation prop — dormant adapter branch ready, not a dead control |
 | Data colors | OK shipped | — | dataColors lead swatch to resolveDataColors palette |
-| Data labels (+ position) | OK Wave 1 | 1 | dataLabels/labelPosition switch+dropdown; LoomChart draws value labels |
-| Total labels | OK Wave 5 | 5 | the totalLabels switch persists AND now renders: stacked-column totals and the waterfall **Total** bar label draw off the real Wave-5 stacking / waterfall geometry |
+| Data labels (+ position) + **Wave-6 ext (font / color / units / decimals / background / content)** | OK Wave 1 / **❌ MISSING Wave 6** | 1 / 6 | dataLabels / labelPosition **shipped ✅** (LoomChart draws value labels); the Wave-6 extension is **NOT in format-pane.tsx** — when built, color via `structural.foreground`, units / decimals via the adapter `rows` transform, content (value / title+value / detail) + background would persist |
+| Total labels | OK Wave 5 | 5 | the totalLabels switch persists AND renders: stacked-column totals and the waterfall **Total** bar label draw off the real Wave-5 stacking / waterfall geometry |
 | Plot area | OK Wave 1 | 1 | plotAreaTransparency slider (structured) |
-| Title | OK shipped | — | titleText / showTitle |
+| Title (text + show) + **Wave-6 rich card (subtitle / font / color / align / heading / divider / fx-conditional)** | OK shipped / **❌ MISSING Wave 6** | — / 6 | titleText / showTitle **shipped ✅**; the rich `title` card is **NOT built** — it has no control in format-pane.tsx and would be drawn by the **built-but-unwired visual-chrome.tsx** (subtitle, font, color, align, heading, divider, fx-conditional title reusing conditional-format `CondField`) |
 | Background (palette + transparency) | OK Wave 1 | 1 | background swatch + transparency to card style |
 | Border (color / radius) | OK Wave 1 | 1 | border swatch + radius dropdown |
 | Shadow | OK Wave 1 | 1 | shadow switch to tokens.shadow* |
-| Tooltip (default) | OK Wave 1 | 1 | tooltip values well + SVG title |
-| Visual header | GATE | 5 | viewer-chrome (drill/focus icons) — canvas-chrome follow-on (Wave 5 remaining) |
+| Tooltip (default) + **Wave-6 per-visual Tooltips card** | OK Wave 1 / 5 / **❌ MISSING Wave 6** | 1 / 5 / 6 | tooltip values well + SVG title (Wave 1) / Wave-5 hover popover **shipped ✅**; the structured `tooltipOptions` card (show / type / fields) is **NOT in format-pane.tsx** — when built it would feed adapter `tooltips` + `hover=true` |
+| Visual header (info / drill / filter / focus / more icons) | **❌ MISSING Wave 6** | 6 | **NOT built** — `headerIcons` has no control in format-pane.tsx; the **visual-chrome.tsx** overlay that draws the header-icon row is **built but unwired** (no importer / seam); remains the Wave-5 GATE until the cards + seam land |
 | General — position/size (x/y/w/h) | OK shipped, extended | 1 | shipped w/h grid span; Wave 1 adds numeric w/h tied to the grid + lock-aspect + alt text |
-| Zoom (slider) | GATE | 5 | viewer-side zoom; canvas-chrome follow-on (Wave 5 remaining) |
-| Styles preset | OK Wave 1 | 1 | structured style dropdown (Minimal/Bold/Loom) seeding the format block |
-| Conditional formatting (color scale / rules / data bars / icons) | OK Wave 1 | 1 | structured rules (op/value/color) / color-scale / data-bars / icons — all pickers, never typed format strings; applied client-side to chart fills + table cells (conditional-format module) |
+| Zoom (category window slider) | **❌ MISSING Wave 6** | 6 | **NOT built** — `zoom.from` / `zoom.to` has no slider in format-pane.tsx; the adapter `rows` transform that would slice the plotted rows to the category window is unwired. Remains the Wave-5 GATE until the control + seam land |
+| Styles preset | OK Wave 1 / **❌ Wave-6 theme-driven NOT wired** | 1 / 6 | the structured style dropdown (Minimal/Bold/Loom) seeding the format block is **shipped ✅**; driving it from `theme.stylePresets` requires format-pane wiring that is **not present** (the model exists in themes.ts, but format-pane still uses the built-in STYLE_PRESETS) |
+| Conditional formatting (color scale / rules / data bars / icons + **Wave-6** field-value / web-URL / icon-thresholds) | OK Wave 1, extended ✅ | 1 / 6 | structured rules (op/value/color) / color-scale / data-bars / icons shipped; **Wave 6 `fieldValue` / `webUrl` / icon-thresholds are BUILT** in conditional-format.tsx (`fieldValue` a Dropdown-bound measure/column whose value IS the color; `webUrl` a bound column → cell text becomes a link; custom numeric `CondIconConfig`) — all pickers binding a field Dropdown, never free text |
+| Effects (shadow / border / plot-area background) — **Wave-6 unified** | OK Wave 1 / **❌ MISSING Wave 6** | 1 / 6 | the scalar `background` / `border` / `shadow` **shipped ✅ (Wave 1)**; the unified `effects` object is **NOT built** — no control in format-pane.tsx and border + shadow would draw via the **built-but-unwired visual-chrome.tsx** (plot-area bg via `structural.background` + `format.plotArea.transparency`) |
+| Small multiples grid (columns / shared-Y / padding) | **❌ MISSING Wave 6** | 6 | **NOT built** — `smallMultiplesGrid` has no control in format-pane.tsx; the adapter would map it to `chartProps.smallMultiples` (the Wave-5 trellis splitter) but it is unwired |
+| Apply settings to (per-field number format) | **❌ MISSING Wave 6** | 6 | **NOT built** — `numberFormatByField` has no picker in format-pane.tsx; when built it would map a result column → `{preset, decimals, units}` applied by VisualBody's table path + the adapter units/decimals rows transform |
 
 ## (4) Analytics pane
 
@@ -447,8 +626,8 @@ Source: desktop-bookmarks, desktop-report-themes, end-user-export-to-pdf. The
 | Bookmarks (capture / apply / order) | OK Wave 2 | 2 | bookmarks-pane.tsx mounted by report-designer.tsx as the right-rail **Bookmarks** tab (the inline duplicate + flat model were removed; the rich pane is the single source) — a bookmark snapshots active page + filters (report/page/visual) + slicer/selection state + visual visibility + z-order, with Data / Display / Current-page restore toggles; capture / apply / update / rename / delete / reorder all functional in-session; the list is wire-shaped (`wireBookmarks`) and persisted to `state.content.bookmarks` via /definition's `sanitizeBookmark` (the route mirrors this exact shape), and surfaced back on GET via `reportDetailFromContent`. The bookmark list (name / scope / apply toggles) and report-scope filters restore on reload; id-keyed slices (active page / page+visual filters / visibility / z / selection) are skipped on apply when their page/visual id no longer resolves — pages/visuals are re-minted fresh client ids on load today, so durable id persistence is the Wave-3 follow-up (graceful no-op per the pane contract, never a throw) |
 | Selection pane (show/hide/z-order) | OK Wave 2 | 2 | selection-pane.tsx mounted by report-designer.tsx as the right-rail **Selection** tab — lists every object on the active page front-most-first, eye-toggle visibility (`visual.config.hidden`), drag-handle / Up-Down z-order (`visual.config.layout.z`), group/ungroup with collapsible group headers (`groupId`); lock stays on the Arrange toolbar (PBI keeps it off the Selection pane); bookmark visibility/z is sourced from here |
 | Sync slicers (across pages) | MISSING Wave 3 | 3 | shared slicer state in definition |
-| Themes — report built-in | MISSING Wave 3 | 3 | structured theme presets (TS constants, no freeform JSON) |
-| Themes — custom | MISSING Wave 3 | 3 | structured theme builder (pickers, not JSON) |
+| Themes — report built-in | OK Wave 6 | 6 | structured built-in presets (`BUILTIN_LOOM_THEMES` in themes.ts) selectable in themes-pane.tsx; `themeChartProps()` feeds LoomChart palette + typography + structural — incl. the new **`gridline`** (from `thirdLevelElements`, previously dropped) — through the designer's **existing** `structural` spread, so axis gridlines repaint under a theme with no designer edit |
+| Themes — custom | OK Wave 6 | 6 | structured theme **builder** (themes-pane.tsx — color pickers + per-text-class font/size/color via `textClasses`, validated `stylePresets`) + the one permitted file action: **PBI theme-JSON import/export** (`pbiJsonToTheme` / `themeToPbiJson`, clamped `visualStyles` passthrough, `sanitizeTheme`-validated) — structured pickers, never a raw-JSON-only box (no-freeform-config) |
 | Export to PDF | GATE | 3 | /export route exists (Power BI ExportTo); Azure-native server render is the Wave-3 plan |
 | Export to PPTX | GATE | 3 | same route / plan |
 | Export to PNG | GATE | 3 | same route / plan |
@@ -464,7 +643,7 @@ arrays, no dead handlers (no-vaporware.md):
 |---|---|---|
 | **/query to SQL** (buildSqlFromVisual) | every plotted visual data path: category/legend/values/secondary-values/target/min/max wells; Top-N + relative-date filters; **Wave 5** appends small-multiples / details as a trailing **2nd GROUP BY** (axis × facet) and folds tooltips as plotted-EXCLUDED aggregates | wells-to-sql.ts run by synapse-sql-client.executeQuery (Synapse dedicated/serverless) |
 | **/query to DAX** (AAS mirror) | the same wells + filters when the report is bound to an AAS tabular model | aas-dax.ts (buildDaxFromVisual) + wrapDaxWithFilters run by executeAasQuery |
-| **Client-side LoomChart** | every chart shape — bar/column/line/area/pie/donut/scatter PLUS the **Wave-5 true geometry** (stacked / 100%-stacked / stacked-area, dual-axis combo, ribbon, waterfall + Total, funnel, squarified treemap + Details nest, radial gauge + needle, KPI indicator + sparkline), the multiRowCard card list, the card single-number tile, the Wave-2 bubble `sqrt`-area radius + play-axis frame loop, the **Wave-5 Small-multiples trellis** + **Tooltips hover popover**, Format (colors/labels/axes incl. Wave-5 axis min/max + stacking/legend/background/border/shadow/styles), conditional formatting, Analytics reference lines + the Wave-2 error bars / forecast band / symmetry shading + the **Wave-5 anomalies / X-axis lines / shaded ranges**, the **Wave-5 multi-style slicer** (emits a ReportFilter into applyFilters), and interactions (cross-filter/highlight + the Wave-2 drillthrough navigate). All real geometry over the real /query rows — **every `APPROX_GEOMETRY` closest-shape disclosure is retired** | loom-chart.tsx, format-pane.tsx, conditional-format, analytics-pane.tsx, interactions |
+| **Client-side LoomChart** | every chart shape — bar/column/line/area/pie/donut/scatter PLUS the **Wave-5 true geometry** (stacked / 100%-stacked / stacked-area, dual-axis combo, ribbon, waterfall + Total, funnel, squarified treemap + Details nest, radial gauge + needle, KPI indicator + sparkline), the multiRowCard card list, the card single-number tile, the Wave-2 bubble `sqrt`-area radius + play-axis frame loop, the **Wave-5 Small-multiples trellis** + **Tooltips hover popover**, Format (colors / labels / **the planned Wave-6 per-axis cards — ❌ NOT YET BUILT** (absent from format-pane.tsx; the **visual-chrome.tsx** overlay is **built but unwired**; the VisualBody seam is unwired): when built, axis max would be consumed via the loom-chart-format adapter's `sharedValueMax`, log / display-units / decimals / zoom-window via the adapter's **rows transform**, gridline / label color via `structural`, axis titles + header-icons + border/shadow via the **visual-chrome** overlay — **NOT a native LoomChart axis-min/max prop**; plus stacking / legend / effects / styles), conditional formatting, Analytics reference lines + the Wave-2 error bars / forecast band / symmetry shading + the **Wave-5 anomalies / X-axis lines / shaded ranges**, the **Wave-5 multi-style slicer** (emits a ReportFilter into applyFilters), and interactions (cross-filter/highlight + the Wave-2 drillthrough navigate). All real geometry over the real /query rows — **every `APPROX_GEOMETRY` closest-shape disclosure is retired** | loom-chart.tsx (**unedited by Wave 6**), **loom-chart-format.ts** (Wave-6 adapter, built ✅) + **visual-chrome.tsx** (Wave-6 chrome, ✅ built but UNWIRED), format-pane.tsx (Wave-6 cards ❌ NOT YET BUILT), conditional-format.tsx, themes.ts, analytics-pane.tsx, interactions |
 | **/definition persistence** | pages (add/rename/duplicate/hide/size/type/background + Wave-2 drillthrough/tooltipPage config), every visual wells/format/filters/position + the Wave-2 hidden/z/locked/groupId, plus `state.content.bookmarks` (Bookmarks pane), the Selection-pane visibility/z-order, and `state.content.filterPaneFormat` (filter-pane format + Apply button) | definition/route.ts to Cosmos state.content (additive config.* + bookmarks + filterPaneFormat, all sanitizer-whitelisted) |
 | **/map-token → Azure Maps** (Wave 5 — the **only** new route Wave 5 adds; the geometry / slicer / analytics need none) | the Azure-Maps visual's basemap only: a session + owner-checked GET that brokers a short-lived atlas.microsoft.com credential via `resolveMapsBackend()` (AAD token minted by the Console UAMI — `Azure Maps Data Reader` — preferred / gov-safe; or a subscription key, commercial). Honest **412 gate** when `LOOM_MAPS_BACKEND` ≠ `azure-maps` or no credential is set (names the env var + azure-maps.bicep); the map panels + real aggregate rows still render. Token scoped to atlas ALONE — never api.fabric / api.powerbi | app/api/items/report/[id]/map-token/route.ts → maps-client.ts; account from platform/fiab/bicep/modules/landing-zone/azure-maps.bicep; env in admin-plane/main.bicep |
 
@@ -543,12 +722,51 @@ route — the `/map-token` basemap broker — the rest is client render + the ad
   and shaded ranges (structured from/to/axis/color) — all over the same /query rows.
 
 **Wave 5 — remaining follow-on** (canvas chrome, still no new route):
-- **Canvas chrome (format-pane.tsx / report-designer.tsx):** Wallpaper (outside canvas), Visual header, Zoom slider.
+- **Canvas chrome:** **Wallpaper (outside canvas)** remains; **Visual header** and
+  the **Zoom slider** are **NOT yet delivered** — Wave 6 PLANS them (header-icons via
+  visual-chrome.tsx, which is built but unwired; zoom via the adapter rows transform,
+  which is built but unwired) but neither has a control in format-pane.tsx, so both
+  remain MISSING/GATE.
+
+**Wave 6 — IN PROGRESS / PARTIAL** (Visual Format-pane parity; **zero new BFF
+routes** — pure client adapter + chrome + theme model; loom-chart.tsx /
+report-designer.tsx **unedited**):
+- **Format-pane cards (format-pane.tsx) — ❌ NOT YET BUILT:** the per-axis `axisX` /
+  `axisY` / `axisY2` cards, a rich `title` (+ subtitle / align / heading / divider /
+  fx-conditional), `legend` (font / color / style), `effects` (shadow / border /
+  plot-area bg), extended `dataLabels` / `totalLabels`, `tooltipOptions`,
+  `headerIcons`, `zoom`, `smallMultiplesGrid`, and `numberFormatByField` are **absent
+  from format-pane.tsx** (grep finds none of them). This is the gating gap — there is
+  no UI to author these values. When built they are additive / sparse,
+  sanitizer-whitelisted, ignored by the viewer + PBIR provisioner (waves 0-5
+  round-trip unchanged).
+- **Adapter (loom-chart-format.ts, NEW) — ✅ BUILT:** `formatToChartProps(format, ctx)`
+  maps every intended control to a real frozen-W5 lever (a **type-only** loom-chart
+  import ⇒ no runtime cycle) and returns `{ rows, chartProps, axisChrome }`. (Wired
+  to nothing yet — the format-pane cards and the VisualBody seam are missing.)
+- **Chrome (visual-chrome.tsx, NEW) — ✅ BUILT but UNWIRED:** the 487-line file draws
+  title / subtitle / axis-titles / header-icons / border / shadow **around** the
+  chart (never inside it), but nothing imports it yet — the format-pane cards + the
+  W5-owned VisualBody seam are not landed.
+- **Theme model (themes.ts + themes-pane.tsx) — ✅ BUILT:** `textClasses` /
+  `visualStyles` / `stylePresets`; `themeChartProps()` now emits **`gridline`** (from
+  `thirdLevelElements`) so axis gridlines repaint under a theme through the
+  designer's existing `structural` spread; PBI theme-JSON import/export round-trips.
+- **Single seam owned by Wave 5 (NOT edited here) — ❌ NOT WIRED:** VisualBody would
+  swap `format={fmt}` for `const a = formatToChartProps(fmt, ctx)` +
+  `<VisualChrome chrome={a.axisChrome}><LoomChart rows={a.rows} {...a.chartProps}/></VisualChrome>`.
+  Until that one line lands (and the format-pane cards exist; the chrome is already
+  built but unwired), the existing passthrough
+  paints the W5-native subset only (no regression — but the new cards are MISSING).
+- **Honest gaps (❌, no frozen-W5 prop):** per-series marker shape/size, line
+  dash/width/shape, legend title text, axis label rotation — to be persisted in the
+  model, **NOT** shipped as dead controls; the adapter's dormant branch emits them
+  the instant W5 adds the prop (and the cards land).
 
 **Wave 3** (AI + collaboration; new modules / honest infra):
 - AI visuals (decomposition tree, key influencers, Q and A, smart narrative) — **DELIVERED** in lib/editors/report/ai-visuals/*.tsx; Q and A + narrative use Azure OpenAI for NL-to-query + narrative — honest-gated on LOOM_AOAI_* / LOOM_ADX_CLUSTER. (Anomalies moved to **Wave 5** — real client z-score with an ADX `series_decompose_anomalies` opt-in.) The **optional** ADX `series_decompose_forecast` upgrade to the Wave-2 client forecast also lands here.
 - Sync slicers (shared slicer state across pages) in the definition — the Wave-2 Bookmarks + Selection panes already shipped (bookmarks-pane.tsx / selection-pane.tsx → state.content.bookmarks).
-- Themes (built-in + custom, structured) in new lib/editors/report/themes.ts (TS preset constants, picker-built — no freeform JSON).
+- Themes (built-in + custom, structured) — **DELIVERED in Wave 6** (themes.ts `BUILTIN_LOOM_THEMES` + themes-pane.tsx builder + PBI theme-JSON import/export; `themeChartProps()` now feeds palette + typography + the new `gridline`). Picker-built — no freeform JSON.
 - Export PDF/PPTX/PNG Azure-native server render: extend app/api/items/report/[id]/export/route.ts.
 - Personalize / drill-hierarchy in report-designer.tsx.
 - **Canvas precision** (report-designer.tsx + report/use-canvas-layout.ts): move the
@@ -628,9 +846,25 @@ the program's first new BFF route; ArcGIS stays a MISSING-by-design non-goal):
 ## A-grade gate
 
 A-grade only when every inventory row is OK (shipped or Wave-1 / Wave-2 / Wave-3 /
-Wave-4 / Wave-5 committed) or a GATE (honest infra-gate), with **zero MISSING that
-lacks a wave + plan** and **zero disabled "coming soon"** controls. Every MISSING
-above names its wave and the exact file/plan; every GATE names the env var /
+Wave-4 / Wave-5 committed) or a GATE (honest infra-gate), with **zero
+MISSING that lacks a wave + plan** and **zero disabled "coming soon"** controls.
+**Wave 6 is NOT yet A-grade: it is IN PROGRESS.** The per-axis / title / legend /
+effects / data-label / tooltip / header-icon / zoom / small-multiples-grid /
+apply-settings **Format cards are ❌ MISSING** — they are absent from
+format-pane.tsx and — though the **visual-chrome.tsx** overlay is **built** — it is
+unwired (no importer, no format-pane cards, seam not landed), so there is no
+UI to author them and the VisualBody integration seam is unwired (§3). What IS
+A-grade this wave: the **adapter** (loom-chart-format.ts), the **theme model + pane**
+(themes.ts / themes-pane.tsx — built-in + custom themes, `gridline` repaint,
+PBI-JSON import/export), and the **conditional-formatting** `fieldValue` / `webUrl` /
+icon-threshold modes (conditional-format.tsx). Separately, the **four ❌ honest-gap
+rows** (per-series marker shape/size, line dash/width/shape, legend title text, axis
+label rotation) are blocked on a future frozen-W5 chart prop — **not** a Loom stub —
+so per no-vaporware.md they are **to be persisted in the model but never shipped as a
+live-but-dead control** (the adapter's dormant branch lights them up the instant W5
+adds the prop AND the cards land). Every MISSING above names its wave and the exact
+file/plan; every
+GATE names the env var /
 resource to provision and still renders its full UI surface. Constraints honored:
 real backend per ui-parity.md (/query + /definition + wells-to-sql, the Wave-4
 /script-visual → loom-script-runner ACA executor that really runs the script and
@@ -639,7 +873,8 @@ drawn from the same /query rows); no dead controls per no-vaporware.md (every
 Wave-5 visual draws real geometry — **no `APPROX_GEOMETRY` remains**; the map row
 is an honest Azure-Maps gate, not a disabled button; the slicer really filters;
 anomaly is a real computation; the script visual's full editor renders behind an
-honest LOOM_SCRIPT_RUNNER_URL 503 gate); all-structured per no-freeform-config.md
+honest LOOM_SCRIPT_RUNNER_URL 503 gate; **the unbuilt Wave-6 Format cards are
+recorded as MISSING, never shipped as dead controls**); all-structured per no-freeform-config.md
 (conditional rules, analytics-line + error-bar + forecast + the Wave-5 anomaly
 sensitivity slider + shaded-range numeric inputs, filter types, the Wave-5
 multi-style slicer, drillthrough fields, and bookmark/selection toggles are
@@ -654,7 +889,17 @@ ADX, all over the existing Synapse /query Path-3 — no Power BI / Fabric servic
 no ArcGIS); Fluent v9 + Loom tokens + PBI pane layout (right-rail
 Bookmarks/Selection tabs match the PBI panes; the geometry is dark-legible via
 theme.foreground/gridline/background; the hover popover + panels are token-styled)
-per web3-ui.md.
+per web3-ui.md. **Wave 6 will hold the line once it lands:** every Format control is
+designed to route through the loom-chart-format adapter + visual-chrome overlay to a
+real frozen-W5 lever (axis
+max → `sharedValueMax`, log/units/zoom → `rows` transform, gridline/label →
+`structural`, secondary axis → `comboLineSeries`, titles/header-icons/effects →
+VisualChrome) **without editing loom-chart.tsx / report-designer.tsx** — but **today
+the format-pane cards + the seam are not landed** (visual-chrome.tsx is built but
+unwired), so those rows
+are MISSING, not delivered; the theme
+builder stays structured pickers + PBI-JSON import/export (no raw-JSON box); and the
+four no-prop controls are honest ❌ gaps, not dead controls.
 
 ## Verification
 
@@ -728,16 +973,46 @@ per web3-ui.md.
   ADF expression builder); the wells + language toggle stay structured. The
   script visual is just another DVisual positioned by **FreeFormCanvas** — waves
   0-3, the data E2E, and the Copilot are extended, not regressed.
+- **Wave-6 receipt (PENDING — the acceptance test for when Wave 6 lands; NOT yet
+  passing).** The per-axis / title / legend / effects Format cards are not built
+  (absent from format-pane.tsx), visual-chrome.tsx is built but unwired, and the VisualBody
+  seam is unwired, so the steps below describe the **target** test, not a current
+  pass. What is testable TODAY: apply a **theme** and watch the gridlines repaint via
+  `themeChartProps().gridline`; **import / export a PBI theme JSON** round-trip; and
+  bind a conditional **field-value** color + a **web-URL** cell + **custom icon
+  thresholds** on a table (conditional-format.tsx) — these are built. The remaining
+  steps are pending the cards + chrome + seam: on a column chart, open **Y axis** →
+  set **Max** and watch the value-axis clamp
+  (adapter `sharedValueMax`); toggle **gridlines off** / change **gridline color**
+  (adapter `structural.gridline`); flip **Log scale** and set **Display units** =
+  Millions with 1 decimal (adapter **rows transform** — the bars + the in-chart
+  `fmtNum` labels both reflect the scaled values); drop a **secondary value** and
+  confirm it paints on a right-hand axis (`comboLineSeries`); set a **whole-chart
+  font** (`fontFamily` cascades to every SVG text); type an **axis title** + a
+  **visual title / subtitle**, enable **header icons** + a **border / shadow**, and
+  confirm the **visual-chrome** overlay draws them around the chart. Each control
+  must persist through PUT /definition and re-render on reload. The **four ❌
+  honest-gap controls** (marker shape/size, line dash/width, legend title, axis
+  label rotation) **do not appear as live controls** — they round-trip in the model
+  only. The render path will be the adapter + chrome; **loom-chart.tsx and
+  report-designer.tsx stay unedited**, and the single VisualBody seam line is the
+  W5-owned integration (until it lands, the `format={fmt}` passthrough paints the
+  W5-native subset, no regression).
 - **No-regression:** the shipped 11-type gallery, Format / Filters / Analytics /
   Interactions / Copilot tabs, the cross-filter engine, /query + wells-to-sql, the
   free-form canvas, waves 0-4, and the read-only viewer / PBIR provisioner ignore
   every additive key (Wave-2 config.hidden/z/locked/groupId,
   page.config.drillthrough/tooltipPage, state.content.bookmarks/filterPaneFormat;
   the Wave-5 wells.smallMultiples/tooltips/details + analytics.anomalies/shadedRanges
-  + format.stacking) unchanged — sanitizers whitelist them; every new LoomChart prop
+  + format.stacking; the **Wave-6** axisX/axisY/axisY2 + title/legend/effects +
+  dataLabels/totalLabels extensions + tooltipOptions/headerIcons/zoom/
+  smallMultiplesGrid/numberFormatByField + theme textClasses/visualStyles/stylePresets)
+  unchanged — sanitizers whitelist them; every new LoomChart prop
   is optional + default-off so the LoomVisual viewer renders byte-identical, and the
   trellis 2nd GROUP BY is read via a narrow local cast (no aas-dax.ts edit).
-  TypeScript stays at its ~184 pre-existing unrelated errors (Wave 5 adds none).
+  TypeScript stays at its ~184 pre-existing unrelated errors (Wave 5 + Wave 6 add
+  none — the adapter's loom-chart import is type-only, all new model fields are
+  optional/sparse).
 - **Live side-by-side** (per ui-parity.md / no-scaffold): click every control
   against the real Power BI report editor and confirm the same outcome — DOM
   strings are not parity.
