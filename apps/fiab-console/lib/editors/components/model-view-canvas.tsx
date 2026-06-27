@@ -34,7 +34,7 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-  Badge, Button, Caption1, Text, Tooltip, Spinner, Field, Input, Dropdown, Option, Switch,
+  Badge, Button, Caption1, Text, Tooltip, Spinner, Field, Input, Dropdown, Option, Switch, Checkbox,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -43,7 +43,7 @@ import {
 import {
   FullScreenMaximize20Regular, Organization20Regular,
   DocumentTable16Regular, Key16Regular, Add20Regular,
-  MathFormula20Regular, Play16Regular,
+  MathFormula20Regular, Play16Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { accentTint, accentGradient, portStyle } from '@/lib/components/canvas/canvas-node-kit';
 // Shared drag-to-resize host: supplies the definite outer height React Flow
@@ -93,6 +93,14 @@ export interface ModelRelationship {
   cardinality: Cardinality;
   crossFilter: CrossFilter;
   active: boolean;
+  /**
+   * Assume referential integrity — when true the engine may use an INNER join
+   * across this relationship (every value on the many side exists on the one
+   * side), which the warehouse/lakehouse query path can lower to a faster join.
+   * Only meaningful for many-to-one / one-to-one; persisted onto
+   * `StoredRelationship.assumeReferentialIntegrity` (back-compat optional).
+   */
+  assumeReferentialIntegrity?: boolean;
   /** 'uc' when the FK originated from Unity Catalog INFORMATION_SCHEMA. */
   source?: 'cosmos' | 'uc';
 }
@@ -358,6 +366,142 @@ function colFromHandle(handle: string | null | undefined): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Autodetect relationships — a pure, client-side heuristic over the REAL loaded
+// schema (props.tables). It proposes M:1 foreign-key relationships toward the
+// table where the matched column is a primary key, using the same naming
+// conventions a star-schema warehouse follows (`<Dim>Key` / `<Dim>Id` on the
+// fact, or an exact shared key-name). Proposals feed a review dialog; accepted
+// rows are created through the SAME `onCreateRelationship` route the manual
+// dialog uses — no new BFF route, no mock proposals.
+// ---------------------------------------------------------------------------
+
+export interface RelProposal {
+  fromTable: string;   // many side (the referencing / fact table)
+  fromColumn: string;
+  toTable: string;     // one side (the table whose PK is referenced)
+  toColumn: string;
+  cardinality: Cardinality;  // always 'many-to-one' for an inferred FK
+  /** Human-readable rationale shown in the review list. */
+  reason: string;
+  /** Stable dedup / accept-map key. */
+  key: string;
+}
+
+/** Strip length/precision (e.g. `varchar(50)` → `varchar`) and lowercase. */
+function baseType(t?: string): string {
+  if (!t) return '';
+  return t.toLowerCase().replace(/\([^)]*\)/g, '').trim();
+}
+
+/** Coarse type family so e.g. `int` ↔ `bigint` and `varchar` ↔ `nvarchar` match. */
+function typeFamily(t?: string): string {
+  const b = baseType(t);
+  if (!b) return '';
+  if (/(int|long|numeric|decimal|number|money|bit|serial)/.test(b)) return 'num';
+  if (/(char|text|string|clob)/.test(b)) return 'str';
+  if (/(uuid|guid|uniqueidentifier)/.test(b)) return 'uid';
+  if (/(date|time|timestamp)/.test(b)) return 'date';
+  return b;
+}
+
+/** Lenient join-type compatibility — unknown types (missing on either end) pass. */
+function typesCompatible(a?: string, b?: string): boolean {
+  const fa = typeFamily(a);
+  const fb = typeFamily(b);
+  if (!fa || !fb) return true;            // schema didn't carry a type — allow
+  if (fa === fb) return true;
+  // uid columns are commonly typed as strings on one side
+  return (fa === 'uid' && fb === 'str') || (fa === 'str' && fb === 'uid');
+}
+
+/** Primary-key columns for a table — flagged `isPk`, else a key-named fallback. */
+function pkColumns(t: ModelTable): ModelColumn[] {
+  const flagged = t.columns.filter((c) => c.isPk);
+  if (flagged.length) return flagged;
+  const nm = t.name.toLowerCase();
+  const singular = nm.endsWith('s') ? nm.slice(0, -1) : nm;
+  const cand = new Set(['id', `${nm}id`, `${nm}key`, `${singular}id`, `${singular}key`]);
+  return t.columns.filter((c) => cand.has(c.name.toLowerCase()));
+}
+
+function relKey(ft: string, fc: string, tt: string, tc: string): string {
+  return `${ft}::${fc}->${tt}::${tc}`.toLowerCase();
+}
+
+/**
+ * Propose FK relationships from a set of tables, skipping any that already
+ * exist (in either orientation). Pure — no I/O, unit-testable.
+ */
+export function detectRelationships(tables: ModelTable[], existing: ModelRelationship[]): RelProposal[] {
+  const proposals: RelProposal[] = [];
+  const seen = new Set<string>();
+
+  // Existing relationships (both orientations) are off-limits.
+  const taken = new Set<string>();
+  for (const r of existing) {
+    taken.add(relKey(r.fromTable, r.fromColumn, r.toTable, r.toColumn));
+    taken.add(relKey(r.toTable, r.toColumn, r.fromTable, r.fromColumn));
+  }
+
+  const pkMap = new Map<string, ModelColumn[]>(tables.map((t) => [t.id, pkColumns(t)]));
+
+  for (const a of tables) {
+    const aPkNames = new Set((pkMap.get(a.id) || []).map((p) => p.name.toLowerCase()));
+    for (const b of tables) {
+      if (a.id === b.id) continue;
+      const bPks = pkMap.get(b.id) || [];
+      if (!bPks.length) continue;
+
+      const bn = b.name.toLowerCase();
+      const bSingular = bn.endsWith('s') ? bn.slice(0, -1) : bn;
+      const refNames = new Set<string>();
+      for (const n of [bn, bSingular]) {
+        refNames.add(`${n}key`);
+        refNames.add(`${n}id`);
+        refNames.add(`${n}_id`);
+        refNames.add(`${n}_key`);
+      }
+
+      for (const colA of a.columns) {
+        const cl = colA.name.toLowerCase();
+        let target: ModelColumn | undefined;
+        let why = '';
+
+        const exact = bPks.find((p) => p.name.toLowerCase() === cl);
+        if (exact) {
+          // Exact shared key-name. Skip when the column is also A's own PK —
+          // two same-named PKs are ambiguous (no inferable direction).
+          if (aPkNames.has(cl)) continue;
+          target = exact;
+          why = 'shared key name';
+        } else if (refNames.has(cl)) {
+          // `<Dim>Key` / `<Dim>Id` naming convention → B's primary key.
+          target = bPks[0];
+          why = 'naming convention';
+        }
+        if (!target) continue;
+        if (!typesCompatible(colA.type, target.type)) continue;
+
+        const k = relKey(a.id, colA.name, b.id, target.name);
+        if (seen.has(k) || taken.has(k)) continue;
+        seen.add(k);
+        proposals.push({
+          fromTable: a.id,
+          fromColumn: colA.name,
+          toTable: b.id,
+          toColumn: target.name,
+          cardinality: 'many-to-one',
+          reason: `${a.name}.${colA.name} → ${b.name}.${target.name} · ${why}`,
+          key: k,
+        });
+      }
+    }
+  }
+  return proposals;
+}
+
+
+// ---------------------------------------------------------------------------
 // Canvas
 // ---------------------------------------------------------------------------
 
@@ -385,6 +529,20 @@ const useStyles = makeStyles({
     position: 'absolute', inset: '0', display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: tokens.spacingVerticalS, textAlign: 'center', padding: tokens.spacingHorizontalXXL,
   },
+  // Autodetect review dialog — empty gallery state (no proposals found).
+  adEmpty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalS, textAlign: 'center',
+    paddingTop: tokens.spacingVerticalXXL, paddingBottom: tokens.spacingVerticalXXL,
+    color: tokens.colorNeutralForeground3,
+  },
+  adList: {
+    maxHeight: '320px', overflowY: 'auto',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  // Faint hint under the referential-integrity switch.
+  riHint: { color: tokens.colorNeutralForeground3 },
 });
 
 export interface ModelViewCanvasProps {
@@ -410,8 +568,19 @@ function ModelViewCanvasInner({
   const [cardinality, setCardinality] = useState<Cardinality>('many-to-one');
   const [crossFilter, setCrossFilter] = useState<CrossFilter>('single');
   const [active, setActive] = useState(true);
+  // Assume-referential-integrity is only valid when the "one" side is on the
+  // to-end (many-to-one / one-to-one); the switch is disabled otherwise.
+  const [assumeRI, setAssumeRI] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const riValid = cardinality === 'many-to-one' || cardinality === 'one-to-one';
+
+  // Autodetect-relationships review dialog state.
+  const [adOpen, setAdOpen] = useState(false);
+  const [proposals, setProposals] = useState<RelProposal[]>([]);
+  const [adAccepted, setAdAccepted] = useState<Record<string, boolean>>({});
+  const [adBusy, setAdBusy] = useState(false);
+  const [adErr, setAdErr] = useState<string | null>(null);
 
   const positions = useMemo(() => gridLayout(tables), [tables]);
 
@@ -473,6 +642,7 @@ function ModelViewCanvasInner({
       setCardinality('many-to-one');
       setCrossFilter('single');
       setActive(true);
+      setAssumeRI(false);
       setDlgOpen(true);
       return;
     }
@@ -481,6 +651,7 @@ function ModelViewCanvasInner({
     setCardinality('many-to-one');
     setCrossFilter('single');
     setActive(true);
+    setAssumeRI(false);
     setDlgOpen(true);
   }, [readOnly]);
 
@@ -499,6 +670,8 @@ function ModelViewCanvasInner({
         cardinality,
         crossFilter,
         active,
+        // RI only applies on the many-to-one / one-to-one shapes; otherwise off.
+        assumeReferentialIntegrity: riValid ? assumeRI : false,
       });
       setDlgOpen(false);
       setDraft(null);
@@ -507,7 +680,58 @@ function ModelViewCanvasInner({
     } finally {
       setBusy(false);
     }
-  }, [draft, cardinality, crossFilter, active, onCreateRelationship]);
+  }, [draft, cardinality, crossFilter, active, riValid, assumeRI, onCreateRelationship]);
+
+  // --- Autodetect relationships ------------------------------------------
+  // Open the review dialog seeded with proposals from the REAL loaded schema.
+  const openAutodetect = useCallback(() => {
+    const found = detectRelationships(tables, relationships);
+    setProposals(found);
+    setAdAccepted(Object.fromEntries(found.map((p) => [p.key, true])));
+    setAdErr(null);
+    setAdOpen(true);
+  }, [tables, relationships]);
+
+  // Create every accepted proposal through the same onCreateRelationship route
+  // the manual dialog uses. Errors are surfaced; partial success is honest.
+  const applyAutodetect = useCallback(async () => {
+    const toCreate = proposals.filter((p) => adAccepted[p.key] !== false);
+    if (!toCreate.length) { setAdOpen(false); return; }
+    setAdBusy(true); setAdErr(null);
+    let created = 0;
+    const failures: string[] = [];
+    for (const p of toCreate) {
+      try {
+        const fromShort = p.fromTable.split('.').pop();
+        const toShort = p.toTable.split('.').pop();
+        await onCreateRelationship({
+          name: `FK_${fromShort}_${toShort}_${p.fromColumn}`.replace(/[^A-Za-z0-9_]/g, '_'),
+          fromTable: p.fromTable,
+          fromColumn: p.fromColumn,
+          toTable: p.toTable,
+          toColumn: p.toColumn,
+          cardinality: p.cardinality,
+          crossFilter: 'single',
+          active: true,
+          assumeReferentialIntegrity: false,
+        });
+        created += 1;
+      } catch (e: any) {
+        failures.push(`${p.reason}: ${e?.message || String(e)}`);
+      }
+    }
+    setAdBusy(false);
+    if (failures.length) {
+      setAdErr(`Created ${created} of ${toCreate.length}. ${failures.length} failed — ${failures.join('; ')}`);
+    } else {
+      setAdOpen(false);
+    }
+  }, [proposals, adAccepted, onCreateRelationship]);
+
+  const acceptedCount = useMemo(
+    () => proposals.filter((p) => adAccepted[p.key] !== false).length,
+    [proposals, adAccepted],
+  );
 
   const onEdgeClick = useCallback(async (_: React.MouseEvent, edge: Edge) => {
     if (readOnly) return;
@@ -551,6 +775,30 @@ function ModelViewCanvasInner({
         deleteKeyCode={null}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+        <Panel position="top-left">
+          <div className={st.toolbar}>
+            <Tooltip
+              content={
+                readOnly
+                  ? 'Resume the compute to autodetect relationships'
+                  : tables.length < 2
+                    ? 'Load at least two tables to autodetect relationships'
+                    : 'Scan the loaded schema and propose foreign-key relationships'
+              }
+              relationship="label"
+            >
+              <Button
+                size="small"
+                appearance="subtle"
+                icon={<Sparkle20Regular />}
+                onClick={openAutodetect}
+                disabled={readOnly || tables.length < 2}
+              >
+                Autodetect relationships
+              </Button>
+            </Tooltip>
+          </div>
+        </Panel>
         <Panel position="top-right">
           <div className={st.toolbar}>
             <Tooltip content="Auto-layout" relationship="label">
@@ -636,6 +884,19 @@ function ModelViewCanvasInner({
                       </Field>
                     </div>
                     <Switch checked={active} label="Active relationship" onChange={(_, d) => setActive(!!d.checked)} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+                      <Switch
+                        checked={riValid && assumeRI}
+                        disabled={!riValid}
+                        label="Assume referential integrity"
+                        onChange={(_, d) => setAssumeRI(!!d.checked)}
+                      />
+                      <Caption1 className={st.riHint}>
+                        {riValid
+                          ? 'Every value on the many side exists on the one side — lets the query path use a faster INNER join.'
+                          : 'Available only for many-to-one or one-to-one relationships.'}
+                      </Caption1>
+                    </div>
                   </>
                 )}
               </div>
@@ -645,6 +906,94 @@ function ModelViewCanvasInner({
               <Button appearance="primary" onClick={confirmCreate} disabled={busy || !draft?.fromColumn || !draft?.toColumn}>
                 {busy ? 'Creating…' : 'Create relationship'}
               </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Autodetect-relationships review dialog — proposals from the REAL schema */}
+      <Dialog open={adOpen} onOpenChange={(_, d) => { if (!adBusy) setAdOpen(d.open); }}>
+        <DialogSurface style={{ maxWidth: 720 }}>
+          <DialogBody>
+            <DialogTitle>Autodetect relationships</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                {adErr && (
+                  <MessageBar intent="error">
+                    <MessageBarBody><MessageBarTitle>Some relationships could not be created</MessageBarTitle>{adErr}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {proposals.length === 0 ? (
+                  <div className={st.adEmpty}>
+                    <Sparkle20Regular fontSize={28} />
+                    <Text weight="semibold">No new relationships detected</Text>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Loom looks for <code>&lt;Table&gt;Key</code> / <code>&lt;Table&gt;Id</code> columns or shared
+                      key names with compatible types. Add key columns, or draw one by dragging between column keys.
+                    </Caption1>
+                  </div>
+                ) : (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        Proposed from the loaded schema. Each accepted row is created as a many-to-one relationship
+                        through the same backend as a manual relationship; existing relationships are skipped.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <div className={st.adList}>
+                      <Table aria-label="Detected relationship proposals" size="small">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHeaderCell style={{ width: '44px' }}>
+                              <Checkbox
+                                aria-label="Select all proposals"
+                                checked={acceptedCount === proposals.length ? true : acceptedCount === 0 ? false : 'mixed'}
+                                onChange={(_, d) => setAdAccepted(Object.fromEntries(proposals.map((p) => [p.key, !!d.checked])))}
+                              />
+                            </TableHeaderCell>
+                            <TableHeaderCell>From (many)</TableHeaderCell>
+                            <TableHeaderCell>To (one)</TableHeaderCell>
+                            <TableHeaderCell>Match</TableHeaderCell>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {proposals.map((p) => {
+                            const checked = adAccepted[p.key] !== false;
+                            return (
+                              <TableRow key={p.key}>
+                                <TableCell>
+                                  <Checkbox
+                                    aria-label={`Accept ${p.reason}`}
+                                    checked={checked}
+                                    onChange={() => setAdAccepted((prev) => ({ ...prev, [p.key]: !(prev[p.key] !== false) }))}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <code style={{ fontSize: tokens.fontSizeBase100 }}>{p.fromTable.split('.').pop()}.{p.fromColumn}</code>
+                                </TableCell>
+                                <TableCell>
+                                  <code style={{ fontSize: tokens.fontSizeBase100 }}>{p.toTable.split('.').pop()}.{p.toColumn}</code>
+                                </TableCell>
+                                <TableCell><Caption1>{p.reason.split('·').pop()?.trim()}</Caption1></TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setAdOpen(false)} disabled={adBusy}>
+                {proposals.length === 0 ? 'Close' : 'Cancel'}
+              </Button>
+              {proposals.length > 0 && (
+                <Button appearance="primary" onClick={applyAutodetect} disabled={adBusy || acceptedCount === 0}>
+                  {adBusy ? 'Creating…' : `Create ${acceptedCount} relationship${acceptedCount === 1 ? '' : 's'}`}
+                </Button>
+              )}
             </DialogActions>
           </DialogBody>
         </DialogSurface>

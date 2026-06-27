@@ -69,6 +69,10 @@ import { TimeSeriesChart } from '@/lib/components/adx/time-series-chart';
 import { LoomChart, type LoomChartType } from '@/lib/components/charts/loom-chart';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { PbiModelViewPanel } from './components/pbi-model-view-panel';
+// Wave-3 Model-view extras (Azure-native by DEFAULT, no Fabric/Power BI required):
+// what-if parameters, quick measures, calculated tables, and Q&A synonyms — each
+// section owns its real BFF save flow + persists onto the owned item's state.model.
+import { ModelTabsExtra } from './components/model-tabs-extra';
 import { PowerBiTree } from '@/lib/components/powerbi/powerbi-tree';
 import { validateRlsDax } from '@/lib/azure/aas-dax-validate';
 import { ManageAccessPanel, EndorsementControl, GatewayDatasourcesPanel } from '@/lib/components/powerbi/powerbi-governance';
@@ -11559,7 +11563,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const [refreshing, setRefreshing] = useState(false);
   const [refreshErr, setRefreshErr] = useState<string | null>(null);
   const [relationships, setRelationships] = useState<Array<{ name?: string; fromTable?: string; fromColumn?: string; toTable?: string; toColumn?: string; crossFilteringBehavior?: string }>>([]);
-  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot'>('tables');
+  const [tab, setTab] = useState<'tables' | 'relationships' | 'model' | 'modeling' | 'measures' | 'build' | 'aggregations' | 'refresh' | 'incremental' | 'config' | 'direct-lake' | 'direct-lake-query' | 'security' | 'access' | 'governance' | 'embed' | 'calcGroups' | 'fieldParams' | 'datasource' | 'copilot'>('tables');
   // --- Calculation groups + field parameters (calc-group / field-param editor)
   // Loom-native by default: saved to the item's Cosmos content + emitted in TMSL
   // at provision time. AAS / Fabric backends persist to a live model (opt-in).
@@ -11727,6 +11731,38 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   useEffect(() => {
     if (tab === 'tables' && datasetId && modelTables === null && !modelGate && !modelLoading) loadModel();
   }, [tab, datasetId, modelTables, modelGate, modelLoading, loadModel]);
+
+  // --- Wave-3 "Modeling" tab seed (ModelTabsExtra) ----------------------------
+  // The what-if / calculated-table dialogs seed their lists with a one-shot
+  // `useState(() => seed(item.state.model))` initializer and never self-GET, so
+  // ModelTabsExtra MUST be mounted with the item's REAL persisted `state.model`
+  // (the same slot the dialogs POST to at `/items/semantic-model/<id>/model`).
+  // Mounting with `state:{}` left every list empty after reload and pinned the
+  // count badges at 0. We GET that route by `id` (matching the dialogs' POST
+  // target — works Azure-native with no PBI dataset selected) and only render
+  // the surface once the slice has loaded, so the seed initializers see real
+  // data. `null` = not loaded yet (spinner); an object = loaded (may be empty).
+  const [modelingSlice, setModelingSlice] = useState<{
+    whatIfParameters: unknown[]; calculatedTables: unknown[]; dateTables: unknown[];
+  } | null>(null);
+  const loadModelingSlice = useCallback(async () => {
+    if (!id) { setModelingSlice({ whatIfParameters: [], calculatedTables: [], dateTables: [] }); return; }
+    try {
+      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/model`);
+      const j = await r.json().catch(() => ({}));
+      setModelingSlice({
+        whatIfParameters: Array.isArray(j?.whatIfParameters) ? j.whatIfParameters : [],
+        calculatedTables: Array.isArray(j?.calculatedTables) ? j.calculatedTables : [],
+        dateTables: Array.isArray(j?.dateTables) ? j.dateTables : [],
+      });
+    } catch {
+      // Degrade to an empty (but non-null) slice so the surface still renders.
+      setModelingSlice({ whatIfParameters: [], calculatedTables: [], dateTables: [] });
+    }
+  }, [id]);
+  useEffect(() => {
+    if (tab === 'modeling' && modelingSlice === null) void loadModelingSlice();
+  }, [tab, modelingSlice, loadModelingSlice]);
 
   const patchColumn = useCallback(async () => {
     if (!editCol || !datasetId) return;
@@ -12822,6 +12858,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                   <Tab value="tables">Tables ({detail?.tables?.length ?? 0})</Tab>
                   <Tab value="relationships">Relationships ({relationships.length})</Tab>
                   <Tab value="model">Model view</Tab>
+                  <Tab value="modeling" icon={<Table20Regular />}>Modeling</Tab>
                   <Tab value="measures">Measures (DAX)</Tab>
                   <Tab value="copilot" icon={<Sparkle20Regular />}>Copilot (structure)</Tab>
                   <Tab value="calcGroups">Calc groups ({calcGroups.length})</Tab>
@@ -13144,6 +13181,29 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                     workspaceId={workspaceId || undefined}
                     datasetId={datasetId}
                   />
+                )}
+                {tab === 'modeling' && (
+                  modelingSlice === null ? (
+                    <Spinner size="small" label="Loading modeling…" labelPosition="after" style={{ marginTop: tokens.spacingVerticalL }} />
+                  ) : (
+                    <ModelTabsExtra
+                      item={{
+                        id,
+                        workspaceId,
+                        itemType: 'semantic-model',
+                        displayName: item.displayName,
+                        createdBy: '',
+                        createdAt: '',
+                        updatedAt: '',
+                        state: { model: modelingSlice },
+                      }}
+                      id={id}
+                      datasetId={datasetId}
+                      tables={modelTables ?? detail?.tables}
+                      measures={detail?.tables?.flatMap((t) => t.measures ?? [])}
+                      onModelChanged={() => { void loadModelingSlice(); }}
+                    />
+                  )
                 )}
                 {tab === 'build' && (
                   <>
