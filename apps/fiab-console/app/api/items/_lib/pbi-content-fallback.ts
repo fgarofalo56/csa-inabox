@@ -208,6 +208,10 @@ interface ReportContentRead extends Omit<ReportContent, 'pages'> {
   bookmarks?: unknown[];
   filterPaneFormat?: unknown;
   theme?: unknown;
+  // wave-8 report-level interactivity (additive)
+  syncSlicers?: unknown[];
+  fieldParameters?: unknown[];
+  whatIfParams?: unknown[];
 }
 
 export function reportListEntry(item: WorkspaceItem) {
@@ -252,6 +256,18 @@ export function reportDetailFromContent(item: WorkspaceItem) {
       : {}),
     ...(content.filterPaneFormat ? { filterPaneFormat: content.filterPaneFormat } : {}),
     ...(content.theme ? { theme: content.theme } : {}),
+    // wave-8 report-level interactivity (additive — sync slicers, field
+    // parameters, what-if). Surfaced only when present so legacy reports are
+    // unchanged; the designer's loadDetail reads them back as j.* and rehydrates.
+    ...(Array.isArray(content.syncSlicers) && content.syncSlicers.length
+      ? { syncSlicers: content.syncSlicers }
+      : {}),
+    ...(Array.isArray(content.fieldParameters) && content.fieldParameters.length
+      ? { fieldParameters: content.fieldParameters }
+      : {}),
+    ...(Array.isArray(content.whatIfParams) && content.whatIfParams.length
+      ? { whatIfParams: content.whatIfParams }
+      : {}),
   };
 }
 

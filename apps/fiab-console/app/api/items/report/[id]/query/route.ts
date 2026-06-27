@@ -162,6 +162,9 @@ import {
   type SqlSourceColumn,
   type SqlSourceFrom,
   type ReportFilterInput,
+  type DrillState,
+  type ScalarParamBinding,
+  type VisualCompileOptions,
 } from '@/lib/azure/wells-to-sql';
 import {
   fromLegacyState,
@@ -191,6 +194,14 @@ interface QueryRequest {
   // already merged by the designer). Compiled to a DAX CALCULATETABLE (AAS) or a
   // SQL WHERE/HAVING (loom-native) server-side — the user never types DAX/SQL.
   filters?: ReportFilterInput[];
+  // Wave-8 interactivity (additive; undefined ⇒ byte-identical compile):
+  //   • `drill` — the in-visual drill state (active hierarchy level + ancestor
+  //     path) so the loom-native compiler truncates the GROUP BY + adds the path
+  //     WHERE, re-querying REAL Synapse rows for the sub-level.
+  //   • `whatIf` — bound numeric what-if values flowed into the value aggregates.
+  // Forwarded straight to `buildSqlFromVisual`'s 4th options arg.
+  drill?: DrillState;
+  whatIf?: ScalarParamBinding[];
 }
 
 // ── loom-native bridge ────────────────────────────────────────────────────────
@@ -757,6 +768,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const body = (await req.json().catch(() => ({}))) as QueryRequest;
   const filters = Array.isArray(body.filters) ? body.filters : undefined;
+  // Wave-8 interactivity compile options (drill + what-if). Structured + bounded
+  // by the wells-to-sql compiler; undefined ⇒ the pre-Wave-8 compile (no change).
+  const compileOpts: VisualCompileOptions | undefined =
+    body.drill || (Array.isArray(body.whatIf) && body.whatIf.length)
+      ? { ...(body.drill ? { drill: body.drill } : {}), ...(Array.isArray(body.whatIf) ? { whatIf: body.whatIf } : {}) }
+      : undefined;
 
   // ------------------------------------------------------------------
   // Path 1 — Power BI executeQueries (opt-in Visual Designer path)
@@ -940,7 +957,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       );
     }
     const sqlSource = fold.kind === 'folded' ? fold.source : projected.source;
-    const compiled = buildSqlFromVisual(body.visual, filters, sqlSource);
+    const compiled = buildSqlFromVisual(body.visual, filters, sqlSource, compileOpts);
     if (!compiled) {
       return NextResponse.json(
         {

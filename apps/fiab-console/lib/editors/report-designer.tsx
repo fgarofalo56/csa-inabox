@@ -56,7 +56,7 @@ import {
   Layer20Regular, LockClosed20Regular, LockOpen20Regular,
   Group20Regular, GroupDismiss20Regular,
   PositionToFront20Regular, PositionToBack20Regular,
-  ArrowUndo20Regular, ArrowRedo20Regular, ArrowExpand20Regular,
+  ArrowUndo20Regular, ArrowRedo20Regular, ArrowExpand20Regular, ArrowExpand16Regular,
   Bookmark20Regular, BookmarkAdd20Regular, BookmarkMultiple20Regular,
   Eye20Regular, EyeOff20Regular, Checkmark20Regular, ArrowExit20Regular,
   // ── wave-3 additions (AI-visual gallery + View tab) ──────────────────────────
@@ -211,6 +211,21 @@ import { MapVisual } from './report/map-visual';
 // (c) exclude it from the slicer's OWN query so its value list never self-collapses.
 import { SlicerVisual, slicerFilterId, type SlicerStyle } from './report/slicer-visual';
 import type { ReportFilterInput } from '@/lib/azure/wells-to-sql';
+// ── Wave-8 interactivity panes (extracted, self-contained) ────────────────────
+// Sync-slicers (per-page Visible/Synced matrix → cross-page selection propagation)
+// and the What-if + Field-parameters pane (numeric-range what-if bound into the
+// visual SQL + author-defined field-swap switch slicer). report-designer MOUNTS
+// these; the models round-trip via /definition (state.content.syncSlicers /
+// fieldParameters / whatIfParams — additive, whitelisted like bookmarks/theme).
+import {
+  SyncSlicersPane, parseSyncGroups, wireSyncGroups, syncedPeerPages,
+  type SyncGroup,
+} from './report/sync-slicers';
+import {
+  WhatIfPane, parseWhatIfParams, wireWhatIfParams, parseFieldParameters, wireFieldParameters,
+  whatIfBindings, activeField,
+  type WhatIfParam, type FieldParameter,
+} from './report/what-if-pane';
 
 // ── Model ───────────────────────────────────────────────────────────────────
 
@@ -517,7 +532,13 @@ const COMPACT_TYPES = new Set<VisualType>(['card', 'kpi', 'gauge']);
  * the exact column name the SQL emitted.
  */
 function wellResultAlias(f: WellField): string {
-  return f.measure ? f.measure : `${f.aggregation || 'Sum'} of ${f.column}`;
+  // Lock-step with wells-to-sql.aggProjection: an unaggregated column ('None',
+  // useAgg false) is still emitted as `Sum of <Column>` by the compiler, so the
+  // alias MUST collapse 'None' -> 'Sum' (not 'None of <Column>'). Otherwise a
+  // what-if targetAlias / Target / Min / Max read-back built from this alias
+  // would never match the real result column and silently no-op.
+  const agg = !f.aggregation || f.aggregation === 'None' ? 'Sum' : f.aggregation;
+  return f.measure ? f.measure : `${agg} of ${f.column}`;
 }
 
 /**
@@ -1016,7 +1037,7 @@ interface AiVisualWiring {
   pageRows: SmartNarrativeVisualRows[];
 }
 
-function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, onPageFilter, onSlicerStyle, themeChart, ai, script, reportId }: {
+function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, onPageFilter, onSlicerStyle, themeChart, ai, script, reportId, onPointSelect, onPointHover }: {
   visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[];
   selection?: VisualSelection | null; interactionMode?: InteractionMode;
   onSelect?: (sel: VisualSelection | null) => void;
@@ -1033,6 +1054,11 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
   // Format/wells edits use). `reportId` is the executor target for the Run call.
   script?: { onChange: (id: string, patch: { script?: string; language?: 'python' | 'r' }) => void };
   reportId?: string;
+  // Wave-8 in-visual interactivity: `onPointSelect` is the chart drill-down click
+  // (the hovered category member); `onPointHover` drives the tooltip-page popover.
+  // Both flow to LoomChart's onPointSelect/onPointHover for cartesian charts.
+  onPointSelect?: (category: string) => void;
+  onPointHover?: (category: string, coords: { x: number; y: number }) => void;
 }) {
   // Wave-3 AI visuals render their OWN surface (real AOAI / real /query SQL).
   // Branched BEFORE the hasBinding/state guards: smart narrative + Q&A carry no
@@ -1374,6 +1400,7 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
           <VisualChrome chrome={adapter.axisChrome} format={fmt} fallbackTitle={visual.title} measureValues={titleMeasureValues}>
             <LoomChart type={(CHART_RENDER[visual.type] || 'column') as LoomChartType} rows={adapter.rows} height={200}
               refLines={orientedRefLines} errorBars={errorBars} forecast={forecast} symmetry={symmetry}
+              onPointSelect={onPointSelect} onPointHover={onPointHover}
               {...(adapter.chartProps as any)} {...(geomProps as any)} />
           </VisualChrome>
           {refLines.length > 0 && (
@@ -1420,6 +1447,21 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
 
   // table / matrix / non-numeric fallback — conditional paint,
   // selection dim, and click-to-cross-filter (a clicked row becomes a selection).
+  //
+  // Wave-8 matrix DRILL: a matrix with a category hierarchy is `isDrillable`, so the
+  // host hands this body an `onPointSelect` (→ drillDownVisual) exactly as it does a
+  // chart. Cartesian charts forward it to LoomChart, but a matrix renders here on the
+  // table path — so the chart-point click that triggers a drill never fires, leaving
+  // the header's drill-up / expand-all controls + level badge unreachable. Wire the
+  // PBI row-header (first category) cell to that same channel: clicking a member
+  // drills the hierarchy down one level (real sub-level /query via the threaded drill
+  // state — same `cols[0]` member the cross-filter already keys on) AND feeds the
+  // cross-filter selection engine, matching the chart's drill semantics one-for-one.
+  const matrixDrill = visual.type === 'matrix' && !!onPointSelect;
+  const fireDrill = (row: Record<string, unknown>) => {
+    if (onSelect) onSelect(selectionFromRow(visual.id, row, [cols[0]]));
+    onPointSelect?.(String(row[cols[0]] ?? ''));
+  };
   return (
     <Table size="small">
       <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
@@ -1428,14 +1470,32 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
           <TableRow key={ri}
             style={{ opacity: dimmed[ri] ? 0.35 : undefined, cursor: onSelect ? 'pointer' : undefined }}
             onClick={onSelect ? () => onSelect(selectionFromRow(visual.id, row, [cols[0]])) : undefined}>
-            {cols.map((c) => {
+            {cols.map((c, ci) => {
               const paint = cf.active ? cf.paintFor(c, row[c]) : undefined;
+              // First category column of a drillable matrix = the PBI row-header drill
+              // target. Render it as a keyboard-navigable drill control (stopPropagation
+              // so the row's cross-filter handler doesn't double-fire — fireDrill does
+              // the cross-filter itself).
+              const drillCell = matrixDrill && ci === 0;
+              const member = drillCell ? String(row[cols[0]] ?? '') : '';
               return (
                 <TableCell key={c} style={{ background: paint?.background, color: paint?.color }}>
                   {paint?.icon && (
                     <span aria-hidden style={{ color: paint.icon.color, marginInlineEnd: tokens.spacingHorizontalXXS }}>{paint.icon.glyph}</span>
                   )}
-                  {formatValue(row[c], nf)}
+                  {drillCell ? (
+                    <span role="button" tabIndex={0}
+                      aria-label={`Drill down into ${member || '(blank)'}`}
+                      title={`Drill down into ${member || '(blank)'}`}
+                      style={{ cursor: 'pointer', color: paint?.color || tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS }}
+                      onClick={(e) => { e.stopPropagation(); fireDrill(row); }}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); fireDrill(row); } }}>
+                      <ArrowExpand16Regular aria-hidden />
+                      {formatValue(row[c], nf)}
+                    </span>
+                  ) : (
+                    formatValue(row[c], nf)
+                  )}
                 </TableCell>
               );
             })}
@@ -1443,6 +1503,54 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
         ))}
       </TableBody>
     </Table>
+  );
+}
+
+// ── Wave-8 tooltip-page HOVER RENDER content ──────────────────────────────────
+// Mini-renders a bound tooltip page's visuals seeded with an `eq` filter on the
+// hovered category value. Each visual is queried through the SAME shared /query
+// (queryAdHoc) with the seed filter, so the popover shows REAL rows for the
+// hovered member (no-vaporware) — reusing VisualBody for the render. The page is
+// a normal report page configured as a tooltip; nothing here touches Power BI.
+function TooltipPageContent({ visuals, seed, queryAdHoc, styles, themeChart, reportId }: {
+  visuals: DVisual[];
+  seed: ReportFilterInput;
+  queryAdHoc: (spec: CopilotVisualSpec, filters?: ReportFilterInput[]) => Promise<Array<Record<string, unknown>>>;
+  styles: Styles;
+  themeChart?: ThemeChartProps;
+  reportId: string;
+}) {
+  const [rows, setRows] = useState<Record<string, VisualState>>({});
+  const seedKey = JSON.stringify(seed);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      for (const v of visuals) {
+        if (!hasBinding(v) || AI_SELF_QUERY.has(v.type) || SCRIPT_TYPES.has(v.type)) continue;
+        setRows((p) => ({ ...p, [v.id]: { rows: p[v.id]?.rows || [], loading: true, err: null } }));
+        try {
+          const spec = queryVisual(v) as unknown as CopilotVisualSpec;
+          const r = await queryAdHoc(spec, [seed]);
+          if (alive) setRows((p) => ({ ...p, [v.id]: { rows: r, loading: false, err: null } }));
+        } catch (e: any) {
+          if (alive) setRows((p) => ({ ...p, [v.id]: { rows: [], loading: false, err: e?.message || String(e) } }));
+        }
+      }
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visuals.map((v) => v.id).join('~'), seedKey]);
+  const shown = visuals.filter((v) => hasBinding(v) && !AI_SELF_QUERY.has(v.type) && !SCRIPT_TYPES.has(v.type)).slice(0, 4);
+  if (shown.length === 0) return <Caption1 className={styles.muted}>This tooltip page has no bound visuals.</Caption1>;
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+      {shown.map((v) => (
+        <div key={v.id}>
+          {(v.format?.showTitle !== false) && <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>{v.title}</Caption1>}
+          <VisualBody visual={v} state={rows[v.id]} styles={styles} themeChart={themeChart} reportId={reportId} />
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -1733,7 +1841,7 @@ function WellEditor({
 // ── main ────────────────────────────────────────────────────────────────────
 
 /** Right-rail tab identifiers (wave-2 adds Bookmarks + Selection). */
-type RightTab = 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'bookmarks' | 'selection' | 'copilot';
+type RightTab = 'build' | 'format' | 'analytics' | 'filters' | 'interactions' | 'bookmarks' | 'selection' | 'syncSlicers' | 'whatIf' | 'copilot';
 
 export function ReportDesigner({ item, id }: { item: FabricItemType; id: string }) {
   const styles = useStyles();
@@ -1768,6 +1876,34 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const [drill, setDrill] = useState<{ fromPage: number; toPage: number; filters: ReportFilter[]; label: string } | null>(null);
   /** Saved bookmarks (PBI Bookmarks pane). Captured/applied in-memory; persisted additively. */
   const [bookmarks, setBookmarks] = useState<ReportBookmark[]>([]);
+  // ── wave-8: report-level interactivity state (persisted additively via /definition)
+  /** Sync-slicers groups (per-page Visible/Synced matrix → cross-page propagation). */
+  const [syncGroups, setSyncGroups] = useState<SyncGroup[]>([]);
+  /** Numeric-range what-if parameters (current value bound into the visual SQL). */
+  const [whatIfs, setWhatIfs] = useState<WhatIfParam[]>([]);
+  /** Author-defined field parameters (switch-slicer field swap). */
+  const [fieldParams, setFieldParams] = useState<FieldParameter[]>([]);
+  /** Per-visual in-visual DRILL state (active hierarchy level + ancestor path). */
+  const [drillByVisual, setDrillByVisual] = useState<Record<string, { level: number; path: { table?: string; column?: string; value: string }[]; expandAll?: boolean }>>({});
+  /** Live tooltip-page hover popover (Wave-8 hover RENDER). */
+  const [tooltipHover, setTooltipHover] = useState<{ visualId: string; pageIndex: number; field: WellFieldRef; value: string; x: number; y: number } | null>(null);
+  // Live cursor position (VIEWPORT coords) so the tooltip-page popover FOLLOWS the
+  // pointer (PBI parity) instead of pinning bottom-right. A capture-phase listener
+  // keeps this fresh BEFORE the chart's synthetic onPointHover reads it (bubble
+  // phase), so the value stored into tooltipHover.x/y is the current pointer.
+  const pointerVpRef = useRef({ x: 0, y: 0 });
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => { pointerVpRef.current = { x: e.clientX, y: e.clientY }; };
+    window.addEventListener('mousemove', onMove, true);
+    return () => window.removeEventListener('mousemove', onMove, true);
+  }, []);
+  // Refs so runVisual (a stable useCallback) reads the latest drill / what-if
+  // without re-creating the callback on every keystroke; the re-query effect's
+  // serialized deps below still re-run the query when either changes.
+  const drillByVisualRef = useRef(drillByVisual);
+  drillByVisualRef.current = drillByVisual;
+  const whatIfsRef = useRef(whatIfs);
+  whatIfsRef.current = whatIfs;
   /** Right rail mode: Build, Format, Analytics, Filters, Interactions, Bookmarks, Selection, or the Power BI Copilot. */
   const [rightTab, setRightTab] = useState<RightTab>('build');
   const [reportName, setReportName] = useState('');
@@ -1894,6 +2030,12 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       setTheme(sanitizeTheme(j.theme));
       // Filters-pane format round-trips via reportDetailFromContent → j.filterPaneFormat.
       { const fpf = parseFilterPaneFormat(j.filterPaneFormat); setFilterPaneFormat(Object.keys(fpf).length ? fpf : null); }
+      // Wave-8 report-level interactivity (sync slicers / field params / what-if)
+      // round-trip via reportDetailFromContent → j.* (additive; undefined ⇒ empty).
+      setSyncGroups(parseSyncGroups(j.syncSlicers));
+      setWhatIfs(parseWhatIfParams(j.whatIfParams));
+      setFieldParams(parseFieldParameters(j.fieldParameters));
+      setDrillByVisual({}); setTooltipHover(null);
       setDrill(null); setSelectedVisualIds(new Set());
       historyRef.current = { past: [], future: [] }; prevSnapRef.current = null; restoringRef.current = false;
 
@@ -2138,9 +2280,19 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     const applicable = [...scopeFilters, ...(v.filters || [])];
     setVisualRows((p) => ({ ...p, [v.id]: { rows: p[v.id]?.rows || [], loading: true, err: null } }));
     try {
+      // Wave-8: thread the visual's in-visual DRILL state + the report's active
+      // WHAT-IF bindings into the /query body so wells-to-sql truncates the
+      // GROUP BY + adds the drilled-path WHERE and folds the what-if value into
+      // the SELECT — REAL Synapse rows for the drilled sub-level / scaled measure.
+      const dr = drillByVisualRef.current[v.id];
+      const wif = whatIfBindings(whatIfsRef.current);
       const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ visual: queryVisual(v), filters: wireFilters(applicable), dataSource }),
+        body: JSON.stringify({
+          visual: queryVisual(v), filters: wireFilters(applicable), dataSource,
+          ...(dr ? { drill: dr } : {}),
+          ...(wif.length ? { whatIf: wif } : {}),
+        }),
       });
       const j = await r.json();
       if (j.ok) setVisualRows((p) => ({ ...p, [v.id]: { rows: j.rows || [], loading: false, err: null } }));
@@ -2173,7 +2325,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bound, activePage, effectiveVisuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || []), JSON.stringify(drill?.toPage === activePage ? drill?.filters : [])]);
+  }, [bound, activePage, effectiveVisuals.map(bindingSig).join('~'), JSON.stringify(reportFilters), JSON.stringify(page?.filters || []), JSON.stringify(drill?.toPage === activePage ? drill?.filters : []), JSON.stringify(drillByVisual), JSON.stringify(whatIfs)]);
 
   // ── mutation helpers ─────────────────────────────────────────────────────────
   const mutatePage = useCallback((fn: (p: DPage) => DPage) => {
@@ -2184,6 +2336,41 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     setPages((prev) => prev.map((p, i) => (i === activePage ? fn(p) : p)));
     setDirty(true);
   }, [activePage]);
+
+  // ── Wave-8 FIELD-PARAMETER swap: when a field parameter's active field changes,
+  // re-bind every visual whose first category field is one of the parameter's
+  // candidate fields to the active field (Power BI field-parameter behaviour) and
+  // re-query. The visual is genuinely re-bound (PBI binds it to the parameter), so
+  // it round-trips on Save. Depends ONLY on the activeIndex signature, so it never
+  // loops. Skipped while personalizing (reading mode).
+  const fieldParamSig = fieldParams.map((fp) => `${fp.id}:${fp.activeIndex ?? 0}`).join('~');
+  useEffect(() => {
+    if (personalizeActiveRef.current || fieldParams.length === 0) return;
+    const keyOf = (f?: { table?: string; column?: string; measure?: string }) =>
+      f ? `${f.table || ''}.${f.column || ''}|${f.measure || ''}` : '';
+    setPages((prev) => {
+      let changed = false;
+      const next = prev.map((pg) => ({
+        ...pg,
+        visuals: pg.visuals.map((v) => {
+          const cat0 = v.wells.category?.[0];
+          if (!cat0) return v;
+          const cur = keyOf(cat0);
+          for (const fp of fieldParams) {
+            const candidateKeys = fp.fields.map(keyOf);
+            if (!candidateKeys.includes(cur)) continue;
+            const af = activeField(fp);
+            if (!af || keyOf(af) === cur) return v; // already the active field
+            changed = true;
+            return { ...v, wells: { ...v.wells, category: [{ ...cat0, table: af.table, column: af.column, measure: af.measure }, ...(v.wells.category || []).slice(1)] } };
+          }
+          return v;
+        }),
+      }));
+      return changed ? next : prev;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fieldParamSig]);
 
   const mutateVisual = useCallback((vid: string, fn: (v: DVisual) => DVisual) => {
     mutatePage((p) => ({ ...p, visuals: p.visuals.map((v) => (v.id === vid ? fn(v) : v)) }));
@@ -2878,8 +3065,13 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     // Report theme (wave-3) — additive on state.content.theme (mirrors bookmarks /
     // filterPaneFormat). Omitted when none is set so a default report persists nothing.
     theme: theme ?? undefined,
+    // Wave-8 report-level interactivity — additive (state.content.syncSlicers /
+    // fieldParameters / whatIfParams), whitelisted by the /definition sanitizer.
+    syncSlicers: wireSyncGroups(syncGroups),
+    fieldParameters: wireFieldParameters(fieldParams),
+    whatIfParams: wireWhatIfParams(whatIfs),
     dataSource,
-  }), [pages, reportFilters, bookmarks, filterPaneFormat, theme, dataSource]);
+  }), [pages, reportFilters, bookmarks, filterPaneFormat, theme, syncGroups, fieldParams, whatIfs, dataSource]);
 
   const save = useCallback(async () => {
     // Brand-new report: route Save to the create-then-redirect flow (the
@@ -3224,17 +3416,78 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       : {}),
   };
 
+  // ── Wave-8 in-visual DRILL helpers (Power BI hierarchy on the category well) ──
+  // A chart/matrix with ≥2 category fields is a hierarchy. drillByVisual[id] holds
+  // the active level + the fixed ancestor path; the /query body carries it so
+  // wells-to-sql truncates the GROUP BY + adds the path WHERE (real sub-level rows).
+  const isDrillable = (v: DVisual): boolean =>
+    (CHART_TYPES.has(v.type) || v.type === 'matrix') && (v.wells.category?.length || 0) > 1;
+  const drillStateOf = (v: DVisual) => drillByVisual[v.id] || { level: 0, path: [] as { table?: string; column?: string; value: string }[], expandAll: false };
+  const drillDownVisual = (v: DVisual, category: string) => {
+    if (!isDrillable(v)) return;
+    setDrillByVisual((prev) => {
+      const cats = v.wells.category || [];
+      const cur = prev[v.id] || { level: 0, path: [], expandAll: false };
+      if (cur.level >= cats.length - 1) return prev; // already at the deepest level
+      const f = cats[cur.level];
+      const step = { table: f?.table, column: f?.column, value: category };
+      return { ...prev, [v.id]: { level: cur.level + 1, path: [...cur.path, step], expandAll: cur.expandAll } };
+    });
+  };
+  const drillUpVisual = (v: DVisual) => setDrillByVisual((prev) => {
+    const cur = prev[v.id];
+    if (!cur || cur.level <= 0) { const n = { ...prev }; delete n[v.id]; return n; }
+    return { ...prev, [v.id]: { level: cur.level - 1, path: cur.path.slice(0, -1), expandAll: cur.expandAll } };
+  });
+  const toggleExpandAll = (v: DVisual) => setDrillByVisual((prev) => {
+    const cur = prev[v.id] || { level: 0, path: [], expandAll: false };
+    return { ...prev, [v.id]: { ...cur, expandAll: !cur.expandAll } };
+  });
+
+  // ── Wave-8 tooltip-page HOVER RENDER resolver ─────────────────────────────────
+  // On a chart point hover, find a page configured as a tooltip whose boundField
+  // matches the hovered visual's first category field; if found, seed the popover
+  // with an eq filter on the hovered value and mini-render that page's visuals.
+  const resolveTooltipPage = (v: DVisual): { pageIndex: number; field: WellFieldRef } | null => {
+    const cat = v.wells.category?.[0];
+    if (!cat || (!cat.column && !cat.measure)) return null;
+    for (let i = 0; i < pages.length; i++) {
+      const tp = pages[i];
+      if (!tp.tooltipPage?.enabled || !tp.tooltipPage.boundField) continue;
+      const bf = tp.tooltipPage.boundField;
+      const sameCol = bf.column && cat.column && bf.column.toLowerCase() === cat.column.toLowerCase();
+      const sameMeasure = bf.measure && cat.measure && bf.measure.toLowerCase() === cat.measure.toLowerCase();
+      if (sameCol || sameMeasure) return { pageIndex: i, field: bf };
+    }
+    return null;
+  };
+
   const renderVisualChrome = (v: DVisual): ReactElement => {
     const fmt = v.format;
     const showTitle = fmt?.showTitle !== false;
     const titleText = (fmt?.titleText && fmt.titleText.trim()) || v.title || '(untitled)';
     const locked = !!v.locked;
+    const drillable = isDrillable(v);
+    const dstate = drillStateOf(v);
     const drillTargets = (selection && selection.sourceId === v.id)
       ? pages.map((tp, ti) => ({ tp, ti, seed: drillSeedFor(tp, selection) }))
           .filter((x) => x.ti !== activePage && x.seed && x.seed.length)
       : [];
     return (
       <>
+        {drillable && (
+          <span data-ff-nodrag style={{ display: 'inline-flex', gap: tokens.spacingHorizontalXXS, alignItems: 'center' }}>
+            <Tooltip content="Drill up" relationship="label">
+              <Button size="small" appearance="subtle" icon={<ArrowExit20Regular />} disabled={dstate.level <= 0}
+                aria-label="drill up" onClick={(e) => { e.stopPropagation(); drillUpVisual(v); }} />
+            </Tooltip>
+            <Tooltip content={dstate.expandAll ? 'Collapse to one level' : 'Expand all down one level'} relationship="label">
+              <Button size="small" appearance={dstate.expandAll ? 'primary' : 'subtle'} icon={<ArrowExpand20Regular />}
+                aria-label="expand all down" onClick={(e) => { e.stopPropagation(); toggleExpandAll(v); }} />
+            </Tooltip>
+            {dstate.level > 0 && <Badge appearance="tint" size="small" color="brand" data-ff-nodrag>L{dstate.level + 1}</Badge>}
+          </span>
+        )}
         <Badge appearance="tint" size="small" data-ff-nodrag>{VISUALS.find((x) => x.type === v.type)?.label || v.type}</Badge>
         {v.groupId && (
           <Tooltip content="Select group" relationship="label">
@@ -3321,11 +3574,40 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         // excludes its own id, so its list stays whole). applyFilters paints it
         // immediately; wells-to-sql's WHERE applies it server-side. Page edits are
         // a no-op while personalizing (mutatePage guards), matching every other edit.
-        onPageFilter={(f, removeId) => mutatePage((p) => ({
-          ...p,
-          filters: [...(p.filters || []).filter((x) => x.id !== removeId), ...(f ? [f] : [])],
-        }))}
-        onSlicerStyle={(s) => mutateVisual(v.id, (vv) => ({ ...vv, config: { ...(vv.config || {}), slicerStyle: s } }))} />
+        onPageFilter={(f, removeId) => {
+          mutatePage((p) => ({
+            ...p,
+            filters: [...(p.filters || []).filter((x) => x.id !== removeId), ...(f ? [f] : [])],
+          }));
+          // Wave-8 sync slicers: when this slicer's field is SYNCED, apply the same
+          // selection to every peer page that shares it (the SAME page-filters
+          // channel applyFilters reads — real cross-page propagation, no Power BI).
+          const slcField = v.wells.category?.[0];
+          if (slcField && (slcField.column || slcField.measure) && page) {
+            const peers = syncedPeerPages(syncGroups, fieldKey(slcField), page.id);
+            if (peers.length) {
+              setPages((prev) => prev.map((pg) => (peers.includes(pg.id)
+                ? { ...pg, filters: [...(pg.filters || []).filter((x) => x.id !== removeId), ...(f ? [{ ...f }] : [])] }
+                : pg)));
+              setDirty(true);
+            }
+          }
+        }}
+        onSlicerStyle={(s) => mutateVisual(v.id, (vv) => ({ ...vv, config: { ...(vv.config || {}), slicerStyle: s } }))}
+        // Wave-8: a chart click drills the category hierarchy down to the clicked
+        // member (real sub-level re-query); a hover over a category resolves a
+        // bound tooltip page and seeds the hover popover with that member.
+        onPointSelect={isDrillable(v) ? (cat) => drillDownVisual(v, cat) : undefined}
+        onPointHover={(cat, coords) => {
+          const tp = resolveTooltipPage(v);
+          if (!tp) { if (tooltipHover && tooltipHover.visualId === v.id) setTooltipHover(null); return; }
+          // Position the popover at the LIVE cursor (viewport coords from the
+          // capture-phase pointer ref) so the card follows the pointer; fall back
+          // to the chart-relative coords if the ref hasn't been seeded yet.
+          const px = pointerVpRef.current.x || coords.x;
+          const py = pointerVpRef.current.y || coords.y;
+          setTooltipHover({ visualId: v.id, pageIndex: tp.pageIndex, field: tp.field, value: cat, x: px, y: py });
+        }} />
     );
   };
 
@@ -3459,10 +3741,49 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
           />
         </div>
       )}
+      {/* Wave-8 tooltip-page HOVER RENDER: a floating card that mini-renders the
+          bound tooltip page's visuals, seeded with an eq filter on the hovered
+          category value — real /query rows, dismissible. */}
+      {tooltipHover && (() => {
+        const tp = pages[tooltipHover.pageIndex];
+        if (!tp) return null;
+        const f = tooltipHover.field;
+        const seed: ReportFilterInput = {
+          table: f.table, column: f.column, measure: f.measure, op: 'eq', value: tooltipHover.value,
+        };
+        // Follow the cursor: place the card to the lower-right of the stored
+        // pointer position (viewport coords), flipping to the opposite side and
+        // clamping so it never spills off-screen (PBI-style tracking tooltip).
+        const CW = 320, CH = 360, GAP = 16, PAD = 8;
+        const vw = typeof window !== 'undefined' ? window.innerWidth : 1280;
+        const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+        let left = tooltipHover.x + GAP;
+        if (left + CW + PAD > vw) left = tooltipHover.x - CW - GAP;
+        left = Math.max(PAD, Math.min(left, vw - CW - PAD));
+        let top = tooltipHover.y + GAP;
+        if (top + CH + PAD > vh) top = tooltipHover.y - CH - GAP;
+        top = Math.max(PAD, Math.min(top, vh - CH - PAD));
+        return (
+          <div role="tooltip" style={{
+            position: 'fixed', left, top,
+            width: CW, maxHeight: CH, overflow: 'auto', zIndex: 1000, pointerEvents: 'auto',
+            background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke1}`,
+            borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow28, padding: tokens.spacingVerticalM,
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXS }}>
+              <Badge appearance="tint" color="brand" size="small">Tooltip</Badge>
+              <Caption1 style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {tp.name} · {f.measure || f.column} = {tooltipHover.value}
+              </Caption1>
+              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="close tooltip" onClick={() => setTooltipHover(null)} />
+            </div>
+            <TooltipPageContent visuals={tp.visuals} seed={seed} queryAdHoc={queryAdHoc}
+              styles={styles} themeChart={themeChart} reportId={id} />
+          </div>
+        );
+      })()}
     </div>
   );
-
-  // ── right: visualizations + fields ──────────────────────────────────────────
   // Size presets — fractions of the page sheet (the free-form canvas is absolute,
   // so S/M/L/XL set the visual's px width to ¼ / ½ / ¾ / full page width with a
   // proportional height, the keyboard-accessible alternative to dragging a grip).
@@ -3481,6 +3802,8 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         <Tab value="interactions" icon={<Options20Regular />}>Interactions</Tab>
         <Tab value="bookmarks" icon={<BookmarkMultiple20Regular />}>Bookmarks</Tab>
         <Tab value="selection" icon={<Layer20Regular />}>Selection</Tab>
+        <Tab value="syncSlicers" icon={<Filter20Regular />}>Sync slicers</Tab>
+        <Tab value="whatIf" icon={<DataTrending20Regular />}>What-if</Tab>
         <Tab value="copilot" icon={<Sparkle20Regular />}>Power BI Copilot</Tab>
       </TabList>
       {rightTab === 'bookmarks' && (
@@ -3511,6 +3834,41 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
             const ids = (pages[activePage]?.visuals || []).filter((v) => v.groupId === gid).map((v) => v.id);
             ungroupVisuals(ids);
           }}
+        />
+      )}
+      {rightTab === 'syncSlicers' && (
+        <SyncSlicersPane
+          pages={pages.map((p) => ({ id: p.id, name: p.name }))}
+          // Every slicer field present anywhere in the report is a sync-group row.
+          fields={(() => {
+            const seen = new Map<string, { key: string; label: string; pageIds: string[] }>();
+            pages.forEach((p) => p.visuals.forEach((v) => {
+              if (v.type !== 'slicer') return;
+              const f = v.wells.category?.[0];
+              if (!f || (!f.column && !f.measure)) return;
+              const key = fieldKey(f);
+              const ex = seen.get(key);
+              if (ex) { if (!ex.pageIds.includes(p.id)) ex.pageIds.push(p.id); }
+              else seen.set(key, { key, label: fieldLabel(f), pageIds: [p.id] });
+            }));
+            return [...seen.values()];
+          })()}
+          groups={syncGroups}
+          onChange={(g) => { setSyncGroups(g); setDirty(true); }}
+        />
+      )}
+      {rightTab === 'whatIf' && (
+        <WhatIfPane
+          whatIfs={whatIfs}
+          fieldParams={fieldParams}
+          fields={fieldOptions(tables)}
+          // The bound value-aggregate aliases across the active page's visuals are
+          // the what-if "apply to" target choices (lock-step with wells-to-sql).
+          aggregateAliases={Array.from(new Set(
+            (page?.visuals || []).flatMap((v) => (v.wells.values || []).map(wellResultAlias)),
+          ))}
+          onChangeWhatIfs={(l) => { setWhatIfs(l); setDirty(true); }}
+          onChangeFieldParams={(l) => { setFieldParams(l); setDirty(true); }}
         />
       )}
       {rightTab === 'copilot' && (

@@ -153,8 +153,8 @@ const FILTER_OPS = new Set<FilterOp>([
 /** Top N direction / relative-date window enums (Filters pane). */
 type TopDir = 'top' | 'bottom';
 type RelDir = 'last' | 'next';
-type RelUnit = 'days' | 'months' | 'years';
-const REL_UNITS = new Set<RelUnit>(['days', 'months', 'years']);
+type RelUnit = 'days' | 'months' | 'years' | 'minutes' | 'hours';
+const REL_UNITS = new Set<RelUnit>(['days', 'months', 'years', 'minutes', 'hours']);
 
 /** Format-pane scalar enums — mirror `LegendPosition` / `NumberFormatPreset`. */
 type LegendPosition = 'top' | 'bottom' | 'left' | 'right';
@@ -248,6 +248,9 @@ interface PersistedFilter {
   // ── card affordances (any op) ──
   locked?: boolean;
   hidden?: boolean;
+  // ── Wave-8 card affordances (any op) ──
+  displayName?: string;
+  exclude?: boolean;
 }
 
 /** A conditional-format by-value threshold (mode==='rules'). */
@@ -449,6 +452,23 @@ interface ReportContentV2 extends Omit<ReportContent, 'pages' | 'reportFilters'>
   filterPaneFormat?: PersistedFilterPaneFormat;
   // ── wave-3 report-level state (additive; viewer + PBIR provisioner ignore) ──
   theme?: PersistedReportTheme;
+  // ── wave-8 report-level interactivity state (additive; ignored by viewer/PBIR) ──
+  /** Sync-slicers groups (per-page Visible/Synced matrix). */
+  syncSlicers?: PersistedSyncGroup[];
+  /** Author-defined field parameters (switch-slicer field swaps). */
+  fieldParameters?: PersistedFieldParameter[];
+  /** Numeric-range what-if parameters (value bound into the visual SQL). */
+  whatIfParams?: PersistedWhatIfParam[];
+}
+
+// ── wave-8 report-level interactivity shapes (structured, whitelisted) ────────
+interface PersistedSyncMember { pageId: string; visible?: boolean; synced?: boolean }
+interface PersistedSyncGroup { id: string; fieldKey: string; members: PersistedSyncMember[] }
+interface PersistedFieldParamField { label: string; table?: string; column?: string; measure?: string }
+interface PersistedFieldParameter { id: string; name: string; fields: PersistedFieldParamField[]; activeIndex?: number }
+interface PersistedWhatIfParam {
+  id: string; name: string; min: number; max: number; increment: number; value: number;
+  apply?: 'multiply' | 'add'; targetAlias?: string;
 }
 
 interface WellFieldIn {
@@ -603,6 +623,10 @@ function sanitizeFilter(raw: unknown): PersistedFilter | null {
   }
   if (o.locked === true) out.locked = true;
   if (o.hidden === true) out.hidden = true;
+  // Wave-8 (any op): per-card rename + exclude (invert predicate).
+  const displayName = typeof o.displayName === 'string' ? o.displayName.slice(0, MAX_STR).trim() : undefined;
+  if (displayName) out.displayName = displayName;
+  if (o.exclude === true) out.exclude = true;
 
   return out;
 }
@@ -1192,6 +1216,84 @@ function normalizeThemeFont(v: unknown): string | undefined {
  * an empty theme is never persisted (legacy reports unaffected). No free-form /
  * unknown key is ever carried through — purely the structured fields above.
  */
+// ── wave-8 report-level interactivity sanitizers (structured, whitelisted) ────
+const MAX_SYNC_GROUPS = 64, MAX_SYNC_MEMBERS = 256;
+const MAX_FIELD_PARAMS = 64, MAX_FIELD_PARAM_FIELDS = 64;
+const MAX_WHATIF_PARAMS = 64;
+
+function sanitizeSyncGroups(raw: unknown): PersistedSyncGroup[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PersistedSyncGroup[] = [];
+  for (const r of raw.slice(0, MAX_SYNC_GROUPS)) {
+    const o = (r || {}) as Record<string, unknown>;
+    const id = clampStr(o.id, 64)?.trim();
+    const fieldKey = clampStr(o.fieldKey, 256)?.trim();
+    if (!id || !fieldKey) continue;
+    const members: PersistedSyncMember[] = [];
+    if (Array.isArray(o.members)) {
+      for (const m of o.members.slice(0, MAX_SYNC_MEMBERS)) {
+        const mo = (m || {}) as Record<string, unknown>;
+        const pageId = clampStr(mo.pageId, 128)?.trim();
+        if (!pageId) continue;
+        members.push({
+          pageId,
+          ...(mo.visible === false ? { visible: false } : { visible: true }),
+          ...(mo.synced === true ? { synced: true } : {}),
+        });
+      }
+    }
+    out.push({ id, fieldKey, members });
+  }
+  return out;
+}
+
+function sanitizeFieldParameters(raw: unknown): PersistedFieldParameter[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PersistedFieldParameter[] = [];
+  for (const r of raw.slice(0, MAX_FIELD_PARAMS)) {
+    const o = (r || {}) as Record<string, unknown>;
+    const id = clampStr(o.id, 64)?.trim();
+    const name = clampStr(o.name, 128)?.trim();
+    if (!id || !name) continue;
+    const fields: PersistedFieldParamField[] = [];
+    if (Array.isArray(o.fields)) {
+      for (const f of o.fields.slice(0, MAX_FIELD_PARAM_FIELDS)) {
+        const fo = (f || {}) as Record<string, unknown>;
+        const label = clampStr(fo.label, 128)?.trim();
+        const table = clampStr(fo.table, 256)?.trim();
+        const column = clampStr(fo.column, 256)?.trim();
+        const measure = clampStr(fo.measure, 256)?.trim();
+        if (!label || (!column && !measure)) continue; // must bind a real field
+        fields.push({ label, ...(table ? { table } : {}), ...(column ? { column } : {}), ...(measure ? { measure } : {}) });
+      }
+    }
+    if (!fields.length) continue;
+    const activeIndex = clampPosInt(typeof o.activeIndex === 'number' ? o.activeIndex + 1 : undefined, fields.length);
+    out.push({ id, name, fields, ...(activeIndex !== undefined ? { activeIndex: activeIndex - 1 } : {}) });
+  }
+  return out;
+}
+
+function sanitizeWhatIfParams(raw: unknown): PersistedWhatIfParam[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PersistedWhatIfParam[] = [];
+  for (const r of raw.slice(0, MAX_WHATIF_PARAMS)) {
+    const o = (r || {}) as Record<string, unknown>;
+    const id = clampStr(o.id, 64)?.trim();
+    const name = clampStr(o.name, 128)?.trim();
+    if (!id || !name) continue;
+    const fin = (v: unknown, fb: number): number => (typeof v === 'number' && Number.isFinite(v) ? v : fb);
+    const min = fin(o.min, 0);
+    const max = fin(o.max, 100);
+    const increment = Math.max(0, fin(o.increment, 1)) || 1;
+    const value = Math.min(Math.max(fin(o.value, min), min), max);
+    const apply = o.apply === 'add' ? 'add' : 'multiply';
+    const targetAlias = clampStr(o.targetAlias, 256)?.trim();
+    out.push({ id, name, min, max, increment, value, apply, ...(targetAlias ? { targetAlias } : {}) });
+  }
+  return out;
+}
+
 function sanitizeReportTheme(raw: unknown): PersistedReportTheme | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const o = raw as Record<string, unknown>;
@@ -1662,6 +1764,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     bookmarks?: unknown;
     filterPaneFormat?: unknown;
     theme?: unknown;
+    syncSlicers?: unknown;
+    fieldParameters?: unknown;
+    whatIfParams?: unknown;
   } = {};
   try { body = await req.json(); } catch {}
   if (!Array.isArray(body.pages)) {
@@ -1765,6 +1870,11 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   // wave-3 report-level state: the report THEME (palette + typography + structural
   // colors). Additive + fully sanitized through the structured/whitelisted gate.
   const theme = sanitizeReportTheme(body.theme);
+  // wave-8 report-level interactivity state: sync-slicers groups, field
+  // parameters, and numeric-range what-if parameters. All additive + structured.
+  const syncSlicers = sanitizeSyncGroups(body.syncSlicers);
+  const fieldParameters = sanitizeFieldParameters(body.fieldParameters);
+  const whatIfParams = sanitizeWhatIfParams(body.whatIfParams);
 
   const state = (item.state || {}) as Record<string, unknown>;
   // ADDITIVE persist: keep every other state key (incl. `state.dataSource`,
@@ -1776,6 +1886,9 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     ...(bookmarks.length ? { bookmarks } : {}),
     ...(filterPaneFormat ? { filterPaneFormat } : {}),
     ...(theme ? { theme } : {}),
+    ...(syncSlicers.length ? { syncSlicers } : {}),
+    ...(fieldParameters.length ? { fieldParameters } : {}),
+    ...(whatIfParams.length ? { whatIfParams } : {}),
   };
   const newState = { ...state, content };
 

@@ -357,6 +357,20 @@ export interface LoomChartProps {
    */
   hover?: boolean;
   /**
+   * Wave-8 interactivity callbacks (default undefined ⇒ unchanged). Fired from the
+   * per-category hover-capture geometry the cartesian sub-charts already draw:
+   *  - `onPointHover(category, coords)` — on mouse-move over a category, with the
+   *    category label + the pointer position RELATIVE to the chart wrapper (the
+   *    report page uses it to position a tooltip-page popover seeded with the
+   *    hovered value).
+   *  - `onPointSelect(category)` — on click of the hovered category (Power BI
+   *    in-visual drill-down: clicking a member drills the axis hierarchy to it).
+   * Both resolve the category from the SAME `parsed.categories` the marks plot, so
+   * the emitted value is exactly the axis member under the pointer.
+   */
+  onPointHover?: (category: string, coords: { x: number; y: number }) => void;
+  onPointSelect?: (category: string) => void;
+  /**
    * INTERNAL (trellis): force the value-axis maximum so small-multiples panels
    * share a comparable scale. Set by {@link SmallMultiplesGrid}; never passed by
    * application callers. Omitted ⇒ the per-chart natural maximum.
@@ -2499,6 +2513,7 @@ export function LoomChart(props: LoomChartProps) {
     stackMode = 'none', comboLineSeries = [], target, gaugeMin, gaugeMax,
     kpiTrend, kpiGoal, kpiTarget, smallMultiples, tooltips = [], detailColumn,
     anomalies, shadedRanges = [], hover = false, sharedValueMax,
+    onPointHover, onPointSelect,
   } = props;
   const theme = useMemo(() => resolveTheme(palette, fontFamily, structural), [palette, fontFamily, structural]);
   const parsed = useMemo(() => parseRows(rows, sizeColumn, theme.palette, tooltips), [rows, sizeColumn, theme.palette, tooltips]);
@@ -2508,13 +2523,28 @@ export function LoomChart(props: LoomChartProps) {
   // — a Tooltips well must surface somewhere, so it auto-enables the popover).
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hoverState, setHoverState] = useState<{ index: number; x: number; y: number } | null>(null);
-  const hoverEnabled = hover || tooltips.length > 0;
+  // Wave-8: the in-visual hover/select callbacks also activate the hover-capture
+  // geometry even with no popover (so drill / tooltip-page work on a bare chart).
+  const hoverEnabled = hover || tooltips.length > 0 || !!onPointHover || !!onPointSelect;
   const handleHover = (index: number, e: ReactMouseEvent) => {
     const rect = wrapRef.current?.getBoundingClientRect();
-    setHoverState({ index, x: rect ? e.clientX - rect.left : 0, y: rect ? e.clientY - rect.top : 0 });
+    const x = rect ? e.clientX - rect.left : 0;
+    const y = rect ? e.clientY - rect.top : 0;
+    setHoverState({ index, x, y });
+    // Emit the resolved category member under the pointer (Wave-8 tooltip-page +
+    // drill). parsed is guaranteed here (handleHover only fires from rendered marks).
+    if (onPointHover && parsed && index < parsed.categories.length) {
+      onPointHover(String(parsed.categories[index] ?? ''), { x, y });
+    }
   };
   const clearHover = () => setHoverState(null);
   const onHover = hoverEnabled ? handleHover : undefined;
+  // Wave-8 drill-down: a click while a category is hovered emits that member.
+  const handleSelect = () => {
+    if (onPointSelect && parsed && hoverState && hoverState.index < parsed.categories.length) {
+      onPointSelect(String(parsed.categories[hoverState.index] ?? ''));
+    }
+  };
 
   // Small multiples: split into a trellis of recursive panels when a facet column
   // is bound and actually present in the result rows. Returns BEFORE the single
@@ -2607,8 +2637,9 @@ export function LoomChart(props: LoomChartProps) {
 
   const chartBlock = (
     <div ref={wrapRef}
-      style={{ flex: '1 1 auto', minWidth: 0, position: 'relative' }}
-      onMouseLeave={hoverEnabled ? clearHover : undefined}>
+      style={{ flex: '1 1 auto', minWidth: 0, position: 'relative', cursor: onPointSelect ? 'pointer' : undefined }}
+      onMouseLeave={hoverEnabled ? clearHover : undefined}
+      onClick={onPointSelect ? handleSelect : undefined}>
       <svg
         width="100%"
         viewBox={`0 0 ${W} ${svgH}`}

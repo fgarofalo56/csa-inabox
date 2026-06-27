@@ -134,8 +134,14 @@ export type ReportFilterOp =
   | 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le' | 'in' | 'contains' | 'between'
   | 'relativeDate' | 'topN';
 
-/** Granularity for a `relativeDate` window (matches PBI's day/month/year unit). */
-export type RelativeDateUnit = 'days' | 'months' | 'years';
+/**
+ * Granularity for a `relativeDate` window. The original three (day/month/year)
+ * match PBI's calendar units; Wave-8 adds the SUB-DAY units `minutes` / `hours`
+ * (Power BI's relative-time filter). Sub-day windows anchor on the live wall
+ * clock (`GETDATE()` / `NOW()`) instead of midnight `CAST(… AS date)` so an
+ * "last 6 hours" window is exact to the second.
+ */
+export type RelativeDateUnit = 'days' | 'months' | 'years' | 'minutes' | 'hours';
 
 /** Direction of a `relativeDate` window relative to the server clock (now). */
 export type RelativeDateDirection = 'last' | 'next' | 'this';
@@ -183,6 +189,12 @@ export interface ReportFilterInput {
   byMeasure?: string;
   byTable?: string;
   byColumn?: string;
+  /**
+   * Wave-8 "exclude" (PBI): keep rows that do NOT match this predicate. The
+   * compiled WHERE/HAVING predicate is wrapped in `NOT (...)`; `topN` (a global
+   * slice, not a row predicate) ignores it. Mirrors the client `passesFilter`.
+   */
+  exclude?: boolean;
 }
 
 // ── Compiled output ────────────────────────────────────────────────────────────
@@ -191,6 +203,53 @@ export interface ReportFilterInput {
 export interface CompiledSql {
   sql: string;
   parameters: SynapseQueryParam[];
+}
+
+// ── Wave-8 interactivity compile options (drill + what-if) ─────────────────────
+
+/**
+ * One fixed ancestor level of an in-visual drill path: the category column and
+ * the member value the user drilled INTO. Compiled to an `eq` WHERE predicate so
+ * the deeper level is real-queried filtered to that member (Power BI drill-down).
+ */
+export interface DrillPathStep {
+  table?: string;
+  column?: string;
+  value: string;
+}
+
+/**
+ * In-visual drill state (Power BI: multiple Axis fields = a hierarchy). `level`
+ * is the 0-based active hierarchy level shown. `path` carries the fixed ancestor
+ * member at each level above `level`. With `expandAll` the grouping spans
+ * category[0..level] (expand-all-down); otherwise only the single active level
+ * category[level] (drill-down). Either way every step in `path` becomes an `eq`
+ * WHERE — so a drilled visual re-queries REAL Synapse rows for the sub-level.
+ */
+export interface DrillState {
+  level: number;
+  path?: DrillPathStep[];
+  expandAll?: boolean;
+}
+
+/**
+ * A bound what-if / numeric-range parameter value flowed INTO the SELECT. The
+ * value binds as a TDS parameter and is applied to value-well aggregate(s):
+ * `multiply` (× value) or `add` (+ value). `targetAlias` scopes it to one
+ * aggregate (by its result-alias); omitted ⇒ every value aggregate. This is the
+ * Azure-native analogue of a Power BI what-if parameter feeding a measure — no
+ * Fabric, no AAS; the picked value genuinely changes the returned rows.
+ */
+export interface ScalarParamBinding {
+  value: number;
+  apply?: 'multiply' | 'add';
+  targetAlias?: string;
+}
+
+/** Optional Wave-8 compile inputs (drill + what-if). Undefined ⇒ byte-identical. */
+export interface VisualCompileOptions {
+  drill?: DrillState;
+  whatIf?: ScalarParamBinding[];
 }
 
 // ── Maps ───────────────────────────────────────────────────────────────────────
@@ -224,7 +283,12 @@ const SQL_DATE_PART: Record<RelativeDateUnit, string> = {
   days: 'DAY',
   months: 'MONTH',
   years: 'YEAR',
+  minutes: 'MINUTE',
+  hours: 'HOUR',
 };
+
+/** Sub-day relative units anchor on the live clock (GETDATE()) rather than midnight. */
+const SUB_DAY_UNITS: ReadonlySet<RelativeDateUnit> = new Set(['minutes', 'hours']);
 
 /**
  * Clamp a client-supplied count to a positive integer in `[1, max]`. Returns
@@ -416,6 +480,25 @@ function groupColumn(src: SqlSource, w: DaxWellField): { ref: string; alias: str
   return { ref: colRef(name, src.dialect), alias: name };
 }
 
+/**
+ * Wave-8 what-if: wrap a value-well aggregate so a bound numeric parameter flows
+ * INTO the SELECT (× for `multiply`, + for `add`), binding the value as a TDS
+ * parameter (never inlined). A binding with a `targetAlias` only applies to the
+ * aggregate whose result-alias matches; an aliasless binding applies to every
+ * aggregate. No bindings ⇒ the original expression verbatim (byte-identical), so
+ * the common path is unchanged. NaN / non-finite values are ignored.
+ */
+function whatIfExpr(a: Projection, whatIf: ScalarParamBinding[] | undefined, pb: ReturnType<typeof paramBag>): string {
+  let expr = a.expr;
+  for (const b of whatIf || []) {
+    if (!b || !Number.isFinite(b.value)) continue;
+    if (b.targetAlias && b.targetAlias.trim().toLowerCase() !== a.alias.trim().toLowerCase()) continue;
+    const p = pb.add(String(b.value));
+    expr = b.apply === 'add' ? `(${expr} + ${p})` : `(${expr} * ${p})`;
+  }
+  return expr;
+}
+
 // ── WHERE / HAVING from structured filters ─────────────────────────────────────
 
 /**
@@ -433,20 +516,23 @@ function compileFilters(
 ): { where: string[]; having: string[] } {
   const where: string[] = [];
   const having: string[] = [];
+  // Wrap a compiled predicate in NOT(...) when the filter is an "exclude" (Wave-8).
+  const neg = (pred: string | null, f: ReportFilterInput): string | null =>
+    pred && f.exclude ? `NOT (${pred})` : pred;
   for (const f of filters || []) {
     // Measure filter → HAVING (aggregated queries only).
     if (f.measure) {
       if (!allowHaving) continue;
       const expr = resolveMeasure(src, f.measure);
       if (!expr) continue;
-      const pred = scalarPredicate(expr, f, pb);
+      const pred = neg(scalarPredicate(expr, f, pb), f);
       if (pred) having.push(pred);
       continue;
     }
     // Column filter → WHERE.
     const name = resolveColumn(src, f.table, f.column);
     if (!name) continue;
-    const pred = scalarPredicate(colRef(name, src.dialect), f, pb);
+    const pred = neg(scalarPredicate(colRef(name, src.dialect), f, pb), f);
     if (pred) where.push(pred);
   }
   return { where, having };
@@ -480,16 +566,30 @@ function scalarPredicate(ref: string, f: ReportFilterInput, pb: ReturnType<typeo
       return `${ref} IN (${set.map((v) => pb.add(v)).join(', ')})`;
     }
     case 'relativeDate': {
-      // Power BI "relative date": a rolling window vs the server clock. The
-      // (signed) offset binds as a parameter; the DATEADD datepart is a
-      // whitelisted keyword, so this stays injection-safe.
-      //   last N  → ref >= DATEADD(unit, -N, today) AND ref < DATEADD(DAY, 1, today)
-      //   next N  → ref >= today           AND ref < DATEADD(unit,  N, DATEADD(DAY, 1, today))
-      //   this    → treated as `last` (window ending today, inclusive).
-      const n = clampCount(relDateN(f), 100_000);
+      // Power BI "relative date" / "relative time": a rolling window vs the
+      // server clock. The (signed) offset binds as a parameter; the DATEADD
+      // datepart is a whitelisted keyword, so this stays injection-safe.
+      //   last N  → ref >= DATEADD(unit, -N, anchor) AND ref < anchorEnd
+      //   next N  → ref >= anchorStart        AND ref < DATEADD(unit,  N, anchorEnd)
+      //   this    → treated as `last` (window ending now, inclusive).
+      // Calendar units (day/month/year) anchor on midnight today and the upper
+      // bound rolls to the start of tomorrow (whole-day inclusive — unchanged
+      // byte-for-byte). Sub-day units (minutes/hours) anchor on the LIVE clock
+      // GETDATE() so "last 6 hours" is exact to the second (Wave-8).
+      const unit = relDateUnit(f);
+      const n = clampCount(relDateN(f), 10_000_000);
       if (n == null) return null;
-      const part = SQL_DATE_PART[relDateUnit(f)];
+      const part = SQL_DATE_PART[unit];
       if (!part) return null;
+      if (SUB_DAY_UNITS.has(unit)) {
+        const now = 'GETDATE()';
+        if (relDateDir(f) === 'next') {
+          const pos = pb.add(String(n));
+          return `${ref} >= ${now} AND ${ref} < DATEADD(${part}, ${pos}, ${now})`;
+        }
+        const neg = pb.add(String(-n));
+        return `${ref} >= DATEADD(${part}, ${neg}, ${now}) AND ${ref} <= ${now}`;
+      }
       const today = 'CAST(GETDATE() AS date)';
       if (relDateDir(f) === 'next') {
         const pos = pb.add(String(n));
@@ -619,6 +719,7 @@ export function buildSqlFromVisual(
   visual: DaxVisual,
   filters: ReportFilterInput[] | undefined,
   sqlSource: SqlSource,
+  opts?: VisualCompileOptions,
 ): CompiledSql | null {
   const d = sqlSource.dialect;
   const from = renderFrom(sqlSource);
@@ -683,7 +784,32 @@ export function buildSqlFromVisual(
     | { smallMultiples?: DaxWellField[]; details?: DaxWellField[] }
     | undefined;
   const trellis = [...(trellisWells?.smallMultiples ?? []), ...(trellisWells?.details ?? [])];
-  const groups = (type === 'card' ? [] : [...category, ...legend, ...trellis])
+  // ── Wave-8 in-visual DRILL (Power BI: ordered category[] = a hierarchy). The
+  // active `level` either expands one level DEEPER across all members
+  // (expand-all-down ⇒ category[0..level+1]) or drills into just category[level]
+  // (drill-down); each fixed ancestor member in `path` becomes an `eq` WHERE so
+  // the sub-level re-queries REAL rows. Matching PBI's expand-all-down, the
+  // expandAll branch adds the NEXT level (lvl+1) without filtering — so at the
+  // default level=0 it groups by [cat0, cat1] rather than the no-op [cat0]
+  // (clamped by `Math.min(lvl + 2, category.length)` so it never overruns the
+  // hierarchy). No drill ⇒ effCategory === category and drillFilters === [], so
+  // the grouped query is byte-identical to before (no regression).
+  const drill = opts?.drill;
+  let effCategory = category;
+  const drillFilters: ReportFilterInput[] = [];
+  if (drill && Number.isFinite(drill.level) && category.length > 1) {
+    const lvl = Math.max(0, Math.min(Math.floor(drill.level), category.length - 1));
+    effCategory = drill.expandAll
+      ? category.slice(0, Math.min(lvl + 2, category.length))
+      : category.slice(lvl, lvl + 1);
+    for (const step of drill.path || []) {
+      if (step && step.column != null && step.value != null) {
+        drillFilters.push({ table: step.table, column: step.column, op: 'eq', value: String(step.value) });
+      }
+    }
+  }
+  const effFilters = drillFilters.length ? [...(filters || []), ...drillFilters] : filters;
+  const groups = (type === 'card' ? [] : [...effCategory, ...legend, ...trellis])
     .map((w) => groupColumn(sqlSource, w))
     .filter((x): x is { ref: string; alias: string } => !!x);
   // Dedupe group columns by alias (category+legend may overlap).
@@ -715,7 +841,7 @@ export function buildSqlFromVisual(
 
   // No values → distinct grouping (acts like a slicer/category table).
   if (aggs.length === 0) {
-    const { where } = compileFilters(sqlSource, filters, pb, false);
+    const { where } = compileFilters(sqlSource, effFilters, pb, false);
     const cap = rowCap(d, ROW_CAP);
     const select = `SELECT DISTINCT ${cap.prefix}${group.map((c) => `${c.ref} AS ${quoteIdent(c.alias, d)}`).join(', ')}`;
     return {
@@ -725,10 +851,14 @@ export function buildSqlFromVisual(
   }
 
   // Aggregated query (card = no group; chart/matrix = grouped).
-  const { where, having } = compileFilters(sqlSource, filters, pb, true);
+  const { where, having } = compileFilters(sqlSource, effFilters, pb, true);
   const selectCols = [
     ...group.map((c) => `${c.ref} AS ${quoteIdent(c.alias, d)}`),
-    ...aggs.map((a) => `${a.expr} AS ${quoteIdent(a.alias, d)}`),
+    // Wave-8 what-if: a bound numeric value flows INTO the aggregate (× / +),
+    // binding as a TDS parameter — so the picked value genuinely changes the
+    // returned rows. No what-if ⇒ `whatIfExpr` returns the original expression
+    // (byte-identical). `targetAlias` scopes a binding to one aggregate.
+    ...aggs.map((a) => `${whatIfExpr(a, opts?.whatIf, pb)} AS ${quoteIdent(a.alias, d)}`),
   ];
   // Power BI "Top N" filter (op:'topN'): cap the grouped result at N rows and
   // rank by the chosen by-measure DESC. N is a validated integer (clamped to
@@ -776,9 +906,16 @@ function daxLiteral(v: string): string {
  * `last`/`this` window backward from today (inclusive); `next` forward.
  */
 function daxRelativeDate(ref: string, f: ReportFilterInput): string | null {
-  const n = clampCount(relDateN(f), 100_000);
+  const n = clampCount(relDateN(f), 10_000_000);
   if (n == null) return null;
   const unit = relDateUnit(f);
+  // Sub-day windows (Wave-8): DAX datetimes are day-fractional, so minutes/hours
+  // map to NOW() ± n/1440 (minutes) / n/24 (hours) — anchored on the live clock.
+  if (SUB_DAY_UNITS.has(unit)) {
+    const frac = unit === 'minutes' ? `${n} / 1440` : `${n} / 24`;
+    if (relDateDir(f) === 'next') return `${ref} >= NOW() && ${ref} <= NOW() + ${frac}`;
+    return `${ref} >= NOW() - ${frac} && ${ref} <= NOW()`;
+  }
   const moved = (sign: 1 | -1): string => {
     if (unit === 'days') return `TODAY() ${sign < 0 ? '-' : '+'} ${n}`;
     const months = unit === 'years' ? 12 * n : n;

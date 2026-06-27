@@ -98,8 +98,8 @@ export type FilterOp =
 export type TopDir = 'top' | 'bottom';
 /** Relative-date window direction. */
 export type RelDir = 'last' | 'next';
-/** Relative-date window unit. */
-export type RelUnit = 'days' | 'months' | 'years';
+/** Relative-date window unit. Wave-8 adds the sub-day units minutes / hours. */
+export type RelUnit = 'days' | 'months' | 'years' | 'minutes' | 'hours';
 
 /** A single structured filter. Field is a model column (table+column) or measure. */
 export interface ReportFilter {
@@ -140,6 +140,10 @@ export interface ReportFilter {
   locked?: boolean;
   /** Hidden: applied but hidden from report viewers (PBI 👁). Still authored here. */
   hidden?: boolean;
+  /** Wave-8: per-card display name shown as the filter-card title (PBI rename). */
+  displayName?: string;
+  /** Wave-8: invert the predicate (PBI "exclude" — keep rows that do NOT match). */
+  exclude?: boolean;
 }
 
 export const FILTER_OPS: { op: FilterOp; label: string }[] = [
@@ -165,6 +169,8 @@ const REL_DIRS: { v: RelDir; label: string }[] = [
   { v: 'next', label: 'Next' },
 ];
 const REL_UNITS: { v: RelUnit; label: string }[] = [
+  { v: 'minutes', label: 'minutes' },
+  { v: 'hours', label: 'hours' },
   { v: 'days', label: 'days' },
   { v: 'months', label: 'months' },
   { v: 'years', label: 'years' },
@@ -281,6 +287,7 @@ export function reFilters(raw: unknown): ReportFilter[] {
       const topNType = o.topNType === 'bottom' ? 'bottom' : (o.topNType === 'top' ? 'top' : undefined);
       const relDir = o.relDir === 'next' ? 'next' : (o.relDir === 'last' ? 'last' : undefined);
       const relUnit = o.relUnit === 'months' || o.relUnit === 'years' || o.relUnit === 'days'
+        || o.relUnit === 'minutes' || o.relUnit === 'hours'
         ? (o.relUnit as RelUnit) : undefined;
       return {
         id: uid('flt'),
@@ -301,6 +308,8 @@ export function reFilters(raw: unknown): ReportFilter[] {
         relUnit,
         locked: !!o.locked,
         hidden: !!o.hidden,
+        displayName: typeof o.displayName === 'string' ? o.displayName : undefined,
+        exclude: !!o.exclude,
       };
     })
     .filter((x): x is ReportFilter => !!x);
@@ -358,7 +367,9 @@ export function matchFilterKey(keys: string[], f: ReportFilter): string | null {
 /** Shift a date by ±n of a unit (used for the relative-date window). */
 function shiftDate(base: Date, n: number, unit: RelUnit): Date {
   const d = new Date(base.getTime());
-  if (unit === 'days') d.setDate(d.getDate() + n);
+  if (unit === 'minutes') d.setMinutes(d.getMinutes() + n);
+  else if (unit === 'hours') d.setHours(d.getHours() + n);
+  else if (unit === 'days') d.setDate(d.getDate() + n);
   else if (unit === 'months') d.setMonth(d.getMonth() + n);
   else d.setFullYear(d.getFullYear() + n);
   return d;
@@ -381,6 +392,9 @@ export function passesFilter(cell: unknown, f: ReportFilter): boolean {
   const s = cell == null ? '' : String(cell);
   const n = Number(cell);
   const fn = Number(f.value);
+  // Wave-8 exclude: invert the base predicate (PBI "exclude"). Top N is a global
+  // slice, not a per-row test, so exclusion never applies to it (returns true).
+  const base = (): boolean => {
   switch (f.op) {
     case 'eq': return s === (f.value ?? '') || (!Number.isNaN(n) && !Number.isNaN(fn) && n === fn);
     case 'ne': return !(s === (f.value ?? '') || (!Number.isNaN(n) && !Number.isNaN(fn) && n === fn));
@@ -407,6 +421,10 @@ export function passesFilter(cell: unknown, f: ReportFilter): boolean {
     case 'topN': return true; // global sort+slice in applyFilters
     default: return true;
   }
+  };
+  if (f.op === 'topN') return true;
+  const hit = base();
+  return f.exclude ? !hit : hit;
 }
 
 /**
@@ -605,6 +623,21 @@ export function FilterScope({
             </Tooltip>
             <Tooltip content="Remove filter" relationship="label">
               <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="remove filter" onClick={() => remove(f.id)} />
+            </Tooltip>
+          </div>
+          {/* Wave-8: per-card rename (displayName → card title) + include/exclude.
+              The rename is the card's shown label; exclude inverts the predicate
+              (PBI "exclude"), honored both client-side (passesFilter) and in the
+              compiled WHERE/HAVING (wells-to-sql `exclude`). */}
+          <div className={styles.filterValues}>
+            <Input size="small" style={{ minWidth: '140px', flex: 1 }} placeholder="Rename filter card"
+              aria-label="rename filter" value={f.displayName ?? ''}
+              onChange={(_e, d) => patch(f.id, { displayName: d.value || undefined })} />
+            <Tooltip content={f.exclude ? 'Excluding matches — switch to include' : 'Exclude matches (keep rows that do NOT match)'} relationship="label">
+              <Button size="small" appearance={f.exclude ? 'primary' : 'subtle'} aria-pressed={!!f.exclude}
+                onClick={() => patch(f.id, { exclude: !f.exclude })}>
+                {f.exclude ? 'Exclude' : 'Include'}
+              </Button>
             </Tooltip>
           </div>
           <div className={styles.filterValues}>
