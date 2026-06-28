@@ -16,16 +16,21 @@ no-freeform-config / no-fabric-dependency. See README §3–§4.
 
 ## Phase 0 — Refactor foundation + P0 ops fixes (UNBLOCKS EVERYTHING)
 
-> **STATUS (2026-06-28, rev 113 live):** the two big items are DONE — (1) the **unified AOAI
-> client** (`aoai-chat-client.ts` + `aoai-model-contract.ts`; orchestrator delegates behind
-> `LOOM_AOAI_CLIENT_V2`; all 18 callers migrated; `max_completion_tokens` + Commercial/Gov scope
-> fixed) and (2) the **editor split** (`phase3-editors.tsx` 18,078 → 108-line thin barrel; 13
-> per-editor files + 3 shared siblings under `lib/editors/phase3/`, byte-for-byte, 5 reversible
-> slices). Also done: **sliding-session token-refresh** (`/api/auth/refresh`, `LOOM_SESSION_SLIDING_ENABLED`),
-> **`/api/health/deep`**, Front Door `probePath → /api/health`. **Remaining (smaller):** `rls-compiler`
-> de-dup (validators already exist), `aoai-routing.ts` (Gov has no Model Router), item-manifest
-> (`itemtype-framework` de-dup + naming), `fabric-adapter.ts` + `register-loom-typedefs.sh`, madge
-> circular-dep guard. Phase 1 (OBO + multi-domain ACL) is now unblocked.
+> **STATUS (2026-06-28, rev 114 live):** the safe autonomous Phase-0 work is DONE —
+> (1) the **unified AOAI client** (`aoai-chat-client.ts` + `aoai-model-contract.ts`; orchestrator
+> delegates behind `LOOM_AOAI_CLIENT_V2`; all 18 callers migrated; `max_completion_tokens` +
+> Commercial/Gov scope fixed); (2) the **editor split** (`phase3-editors.tsx` 18,078 → 108-line thin
+> barrel; 13 per-editor files + 3 shared siblings under `lib/editors/phase3/`, byte-for-byte, 5
+> reversible slices); (3) **sliding-session token-refresh** (`/api/auth/refresh`,
+> `LOOM_SESSION_SLIDING_ENABLED`), **`/api/health/deep`**, Front Door `probePath → /api/health`;
+> (4) the **madge circular-dep guard** (`pnpm guard:circular`, baseline-aware — already caught a real
+> barrel cycle); (5) the **rls-compiler extraction** (`lib/azure/rls-compiler.ts` — the inlined
+> DAX→SQL/Databricks SECURITY-POLICY compiler moved out of the roles route, 906→557 lines, +7 passing
+> unit tests). **Remaining (needs operator steer):** `aoai-routing.ts` (skippable scaffold — only
+> meaningful with multiple AOAI deployments), the **item-manifest** (the high-blast-radius
+> `FabricItemType`→`LoomItemType` core-contract rename — back-compat/incremental but worth operator
+> awareness), `fabric-adapter.ts` + `register-loom-typedefs.sh` (lower priority; catalog-register bug
+> already fixed via built-in `DataSet`). Phase 1 (OBO + multi-domain ACL) is unblocked.
 
 **Why first:** the 18k-line editor monoliths and ~18 duplicated AOAI callers are the top
 merge-contention surfaces; consolidating them gives every later workstream one place to add
