@@ -16,6 +16,17 @@ no-freeform-config / no-fabric-dependency. See README §3–§4.
 
 ## Phase 0 — Refactor foundation + P0 ops fixes (UNBLOCKS EVERYTHING)
 
+> **STATUS (2026-06-28, rev 113 live):** the two big items are DONE — (1) the **unified AOAI
+> client** (`aoai-chat-client.ts` + `aoai-model-contract.ts`; orchestrator delegates behind
+> `LOOM_AOAI_CLIENT_V2`; all 18 callers migrated; `max_completion_tokens` + Commercial/Gov scope
+> fixed) and (2) the **editor split** (`phase3-editors.tsx` 18,078 → 108-line thin barrel; 13
+> per-editor files + 3 shared siblings under `lib/editors/phase3/`, byte-for-byte, 5 reversible
+> slices). Also done: **sliding-session token-refresh** (`/api/auth/refresh`, `LOOM_SESSION_SLIDING_ENABLED`),
+> **`/api/health/deep`**, Front Door `probePath → /api/health`. **Remaining (smaller):** `rls-compiler`
+> de-dup (validators already exist), `aoai-routing.ts` (Gov has no Model Router), item-manifest
+> (`itemtype-framework` de-dup + naming), `fabric-adapter.ts` + `register-loom-typedefs.sh`, madge
+> circular-dep guard. Phase 1 (OBO + multi-domain ACL) is now unblocked.
+
 **Why first:** the 18k-line editor monoliths and ~18 duplicated AOAI callers are the top
 merge-contention surfaces; consolidating them gives every later workstream one place to add
 cache/budget/quota and kills the systemic `max_completion_tokens` + Gov-scope-401 bugs. The two P0 ops
