@@ -20,13 +20,17 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, Delete20Regular, ArrowSync20Regular, ShieldTask20Regular,
   Folder20Regular, People20Regular, CheckmarkCircle20Filled,
-  CloudArrowUp20Regular,
+  CloudArrowUp20Regular, MoreHorizontal20Regular, FilterRegular, ColumnTripleRegular,
 } from '@fluentui/react-icons';
+
+import { RowSecurityDialog } from '@/lib/panes/onelake-security/row-security-dialog';
+import { ColumnSecurityDialog } from '@/lib/panes/onelake-security/column-security-dialog';
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
@@ -104,6 +108,9 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
   const [fabricSyncEnabled, setFabricSyncEnabled] = useState(false);
   const [aclEnabled, setAclEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  // Row/Column-security dialogs (§2.2) — opened per role from its overflow menu.
+  const [secDialog, setSecDialog] = useState<{ kind: 'rls' | 'cls'; roleName: string } | null>(null);
 
   const loadRoles = useCallback(async () => {
     setLoading(true); setError(null); setGate(null);
@@ -379,7 +386,18 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
                     </TableCell>
                     <TableCell>{r.members.length}</TableCell>
                     <TableCell>
-                      <Button appearance="subtle" size="small" icon={<Delete20Regular />} onClick={() => deleteRole(r)} disabled={busy}>Delete</Button>
+                      <Menu>
+                        <MenuTrigger disableButtonEnhancement>
+                          <Button appearance="subtle" size="small" icon={<MoreHorizontal20Regular />} aria-label={`Actions for role ${r.roleName}`} disabled={busy} />
+                        </MenuTrigger>
+                        <MenuPopover>
+                          <MenuList>
+                            <MenuItem icon={<FilterRegular />} onClick={() => setSecDialog({ kind: 'rls', roleName: r.roleName })}>Row security…</MenuItem>
+                            <MenuItem icon={<ColumnTripleRegular />} onClick={() => setSecDialog({ kind: 'cls', roleName: r.roleName })}>Column security…</MenuItem>
+                            <MenuItem icon={<Delete20Regular />} onClick={() => deleteRole(r)}>Delete role</MenuItem>
+                          </MenuList>
+                        </MenuPopover>
+                      </Menu>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -547,6 +565,26 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* ---- Row / Column-security dialogs (§2.2) ---- */}
+      {secDialog?.kind === 'rls' && (
+        <RowSecurityDialog
+          open
+          onOpenChange={(o) => { if (!o) setSecDialog(null); }}
+          itemId={itemId}
+          itemType={itemType}
+          roleName={secDialog.roleName}
+        />
+      )}
+      {secDialog?.kind === 'cls' && (
+        <ColumnSecurityDialog
+          open
+          onOpenChange={(o) => { if (!o) setSecDialog(null); }}
+          itemId={itemId}
+          itemType={itemType}
+          roleName={secDialog.roleName}
+        />
+      )}
     </div>
   );
 }
