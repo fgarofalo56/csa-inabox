@@ -4,6 +4,13 @@
 > Coverage across the 6 fully-parsed areas + partial canvas: **68 built / 27 honest-gate / 61 missing**.
 > Azure-native per `no-fabric-dependency.md` (no Fabric capacity, no Power BI service, no on-prem gateway on the default path). Fabric/OneLake + Power BI semantic models are **opt-in only** (`LOOM_BI_BACKEND=fabric`).
 
+> **STATUS (2026-06-28): all 9 waves shipped + live** (W1 Get-Data gallery → W9 publish/export/enterprise).
+> The Get-Data connector set is complete end-to-end: the final "coming soon" connector,
+> **Azure Data Explorer (Kusto)**, is now a real bindable report source — Table mode compiles
+> field wells → KQL via `wells-to-kql`, KQL mode runs raw queries verbatim, all through the
+> Console UAMI (no Fabric / RTI Eventhouse). See `report-model-resolver.makeAdxExecutor`.
+> Remaining: live functional re-validation pass after the EH-Phase-0 roll.
+
 ## Key reuse findings (do NOT rebuild)
 - `lib/pipeline/connector-catalog.ts` — **32 ConnectorDefs** (Azure/Database/File/NoSQL/protocol) + `CATEGORY_ORDER`. Drive the Get Data gallery from this.
 - `lib/azure/connections-store.ts` + `connectable-types.ts` + `lib/components/connections/add-existing-wizard.tsx` — **KV-backed Connections store**. No new credential code.
