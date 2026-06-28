@@ -19,6 +19,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import {
@@ -219,6 +220,9 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ type: st
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
 
   const sp = _req.nextUrl.searchParams;
+  // PDP gate (default-off / shadow-ready). Reading OneLake security roles.
+  const blockedGet = await pdpCheck(session, { level: 'item', id: params.id, itemType: params.type }, 'read');
+  if (blockedGet) return blockedGet;
   try {
     if (sp.has('verify')) {
       if (!aclBackendEnabled()) return aclGate();
@@ -256,6 +260,9 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
+  // PDP gate (default-off / shadow-ready). Creating/updating a OneLake security role is admin.
+  const blockedPost = await pdpCheck(session, { level: 'item', id: params.id, itemType: params.type }, 'admin');
+  if (blockedPost) return blockedPost;
   const body = await req.json().catch(() => ({}));
   const action = body?.action || 'create';
 
@@ -332,6 +339,9 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ type: 
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
+  // PDP gate (default-off / shadow-ready). Deleting a OneLake security role is admin.
+  const blockedDel = await pdpCheck(session, { level: 'item', id: params.id, itemType: params.type }, 'admin');
+  if (blockedDel) return blockedDel;
   const roleId = req.nextUrl.searchParams.get('roleId');
   if (!roleId) return NextResponse.json({ ok: false, error: 'roleId required' }, { status: 400 });
 

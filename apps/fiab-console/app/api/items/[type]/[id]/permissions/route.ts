@@ -18,6 +18,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { checkCapability } from '@/lib/auth/feature-gate';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -117,6 +118,9 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ type: st
   const { type, id } = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // PDP gate (default-off / shadow-ready). Item-level read.
+  const blocked = await pdpCheck(s, { level: 'item', id, itemType: type }, 'read');
+  if (blocked) return blocked;
   const item = await loadOwnedItem(id, type, s.claims.oid);
   if (!(await canManage(s, item))) {
     return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
@@ -140,6 +144,9 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   const { type, id } = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // PDP gate (default-off / shadow-ready). Granting a permission is a share.
+  const blocked = await pdpCheck(s, { level: 'item', id, itemType: type }, 'share');
+  if (blocked) return blocked;
   const item = await loadOwnedItem(id, type, s.claims.oid);
   if (!(await canManage(s, item))) {
     return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
@@ -203,6 +210,9 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ type: 
   const { type, id } = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // PDP gate (default-off / shadow-ready). Revoking a permission is admin.
+  const blocked = await pdpCheck(s, { level: 'item', id, itemType: type }, 'admin');
+  if (blocked) return blocked;
   const item = await loadOwnedItem(id, type, s.claims.oid);
   if (!(await canManage(s, item))) {
     return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });

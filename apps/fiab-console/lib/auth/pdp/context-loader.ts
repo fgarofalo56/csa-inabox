@@ -50,6 +50,7 @@ import { resolveEffectiveRole } from '@/lib/azure/workspace-roles-client';
 import { listItemPermissions } from '@/lib/azure/item-permissions-client';
 import { listRoles, type OneLakeSecurityRole } from '@/lib/azure/onelake-security-client';
 import { governanceDomainsContainer } from '@/lib/azure/cosmos-client';
+import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 
 import type {
   AclGrant,
@@ -318,6 +319,38 @@ async function loadProtectionPolicies(resource: ResourceRef): Promise<Protection
 // loadPolicyBundle()
 // ---------------------------------------------------------------------------
 
+/** Resolve an item's workspace (and the workspace's domain) from the item doc,
+ *  so a gate that passes only an item-level ResourceRef still gets workspace +
+ *  domain inheritance. Returns {} on any miss/read failure — authorization must
+ *  never break on a lookup error (the PDP then evaluates without that ancestor). */
+async function resolveItemAncestors(
+  itemId: string,
+  tenantId: string,
+): Promise<{ workspaceId?: string; domainId?: string }> {
+  try {
+    const items = await itemsContainer();
+    const { resources } = await items.items
+      .query<{ workspaceId?: string }>({
+        query: 'SELECT TOP 1 c.workspaceId FROM c WHERE c.id = @id',
+        parameters: [{ name: '@id', value: itemId }],
+      })
+      .fetchAll();
+    const workspaceId = resources[0]?.workspaceId;
+    if (!workspaceId) return {};
+    let domainId: string | undefined;
+    try {
+      const ws = await workspacesContainer();
+      const { resource } = await ws.item(workspaceId, tenantId).read<{ domainId?: string }>();
+      domainId = resource?.domainId;
+    } catch (e: any) {
+      if (e?.code !== 404) throw e;
+    }
+    return { workspaceId, domainId };
+  } catch {
+    return {};
+  }
+}
+
 /**
  * Batch-read the minimal PolicyBundle the PDP needs for (`principal`,
  * `resource`). Memoized 60s per (oid, resourceId). The reads run concurrently;
@@ -339,10 +372,22 @@ export async function loadPolicyBundle(principal: Principal, resource: ResourceR
   const workspaceId = findLevelId(resource, 'workspace');
   const itemId = findLevelId(resource, 'item');
 
+  // A gate may pass only an item-level ResourceRef (no workspace/domain parent).
+  // Resolve the missing ancestors from the item doc so workspace-role + domain
+  // inheritance still evaluate (otherwise the PDP would deny a user whose only
+  // grant is an inherited workspace role). One cheap read each, memoized 60s.
+  let wsId = workspaceId;
+  let domId = domainId;
+  if (itemId && (!wsId || !domId)) {
+    const anc = await resolveItemAncestors(itemId, principal.tenantId);
+    if (!wsId) wsId = anc.workspaceId;
+    if (!domId) domId = anc.domainId;
+  }
+
   const [domainTier, workspaceRole, shares, onelakeRoles, aclGrants, protectionPolicies] = await Promise.all([
-    loadDomainTier(session, principal, domainId, tenantAdmin),
-    workspaceId
-      ? resolveEffectiveRole(principal.oid, workspaceId, { userGroupIds: principal.groups })
+    loadDomainTier(session, principal, domId, tenantAdmin),
+    wsId
+      ? resolveEffectiveRole(principal.oid, wsId, { userGroupIds: principal.groups })
       : Promise.resolve(null),
     loadShares(itemId, principal),
     loadOneLakeRoles(itemId, principal),

@@ -32,6 +32,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import {
   dedicatedTarget,
   serverlessTarget,
@@ -75,6 +76,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ type: stri
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
   const { type, id } = await ctx.params;
+  // PDP gate (default-off / shadow-ready). Visual query reads item data.
+  const blocked = await pdpCheck(session, { level: 'item', id, itemType: type }, 'read');
+  if (blocked) return blocked;
   if (!SYNAPSE_TSQL_ENGINES.has(type) && type !== 'databricks-sql-warehouse') {
     return NextResponse.json(
       { ok: false, error: `Visual query is not supported for item type '${type}'.` },
