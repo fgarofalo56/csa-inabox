@@ -2298,6 +2298,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         env: concat(
           [
             { name: 'LOOM_VERSION', value: loomVersion }
+            // EH Phase-1 multi-domain ACL PDP enforcement mode: off (default, gate
+            // is a no-op) | shadow (run+log to _auditLog, never block) | enforce
+            // (403 on deny). Flip to shadow, review /api/admin/pdp/shadow-report,
+            // then enforce per-domain. _aclGrants/_protectionPolicies are created
+            // on-demand by the PDP context-loader/reconciler (createIfNotExists).
+            { name: 'LOOM_PDP_ENFORCE', value: 'off' }
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
