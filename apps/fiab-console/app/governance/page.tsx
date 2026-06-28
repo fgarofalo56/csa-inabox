@@ -229,6 +229,7 @@ const SECTIONS: {
     group: 'Governance & health',
     items: [
       { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: 'var(--loom-accent-orange)' },
+      { href: '/governance/protection-policies', label: 'Protection policies', desc: 'Label-driven restrict-only allow-lists → real RBAC reconcile (sovereign, no Fabric).', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-red)' },
       { href: '/governance/access-requests', label: 'Access requests', desc: 'Multi-tier approval inbox → real Azure RBAC grant.', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-violet)' },
       { href: '/governance/data-quality', label: 'Data quality', desc: 'Author rules, run on your engine, results + Delta/Lakehouse monitors.', icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
       { href: '/governance/mdm', label: 'Master data', desc: 'Golden-record match/merge + reference data (Azure-native).', icon: Box20Regular, color: 'var(--loom-accent-indigo)' },
