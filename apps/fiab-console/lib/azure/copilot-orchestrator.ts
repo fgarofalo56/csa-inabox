@@ -313,7 +313,9 @@ export async function resolveAoaiTarget(
   return discovered;
 }
 
-async function aoaiToken(): Promise<string> {
+// Exported so the unified aoai-chat-client (LOOM_AOAI_CLIENT_V2) can reuse the
+// EXACT same credential + cogScope() token acquisition — no new credential code.
+export async function aoaiToken(): Promise<string> {
   const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;
@@ -1176,7 +1178,7 @@ export const SYSTEM_PROMPT = getPanePersona('default').systemPrompt({});
  * Those deployments reject any non-default temperature (and top_p); the right
  * move is to retry without the sampling params, not to fail the chat.
  */
-function isUnsupportedSamplingParam(body: string): boolean {
+export function isUnsupportedSamplingParam(body: string): boolean {
   return /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(body)
     && /temperature|top_p/i.test(body);
 }
@@ -1215,6 +1217,16 @@ async function callAoai(
   messages: ChatMessage[],
   tools: unknown[],
 ): Promise<any> {
+  // LOOM_AOAI_CLIENT_V2 cut-over: delegate to the unified aoai-chat-client. Its
+  // aoaiChatRaw reproduces this body/retry/error path byte-for-byte (same
+  // pre-resolved target, same { messages, tools, tool_choice } body with NO cap,
+  // same sampling-param retry, same error text). Flag OFF → the inline path below
+  // runs unchanged (migration-safe / reversible). Dynamic import keeps the static
+  // dependency edge one-way (client → orchestrator), avoiding a load-time cycle.
+  if (process.env.LOOM_AOAI_CLIENT_V2 === 'true') {
+    const { aoaiChatRaw } = await import('./aoai-chat-client');
+    return aoaiChatRaw({ target, messages, tools, toolChoice: 'auto', temperature: 0.2 });
+  }
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   let token: string;
   try {
@@ -1273,6 +1285,12 @@ async function callAoai(
 async function aoaiCompleteText(
   messages: { role: 'system' | 'user'; content: string }[],
 ): Promise<string> {
+  // LOOM_AOAI_CLIENT_V2 cut-over → unified client (byte-for-byte: no-cfg target
+  // resolution, temperature 0.2, max_completion_tokens 2048, same retry/parse).
+  if (process.env.LOOM_AOAI_CLIENT_V2 === 'true') {
+    const { aoaiChat } = await import('./aoai-chat-client');
+    return aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2 });
+  }
   const target = await resolveAoaiTarget();
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
@@ -1321,6 +1339,19 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
   cfg?: TenantCopilotConfig | null,
   maxTokens = 2048,
 ): Promise<T> {
+  // LOOM_AOAI_CLIENT_V2 cut-over → unified client (byte-for-byte: cfg-honoring
+  // target resolution, temperature 0.1, max_completion_tokens=maxTokens,
+  // response_format json_object, same retry + parseJsonObject fallback).
+  if (process.env.LOOM_AOAI_CLIENT_V2 === 'true') {
+    const { aoaiChatJson } = await import('./aoai-chat-client');
+    return aoaiChatJson<T>({
+      messages,
+      cfg: cfg ?? null,
+      maxCompletionTokens: maxTokens,
+      temperature: 0.1,
+      responseFormat: 'json_object',
+    });
+  }
   const target = await resolveAoaiTarget(cfg ?? null);
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
