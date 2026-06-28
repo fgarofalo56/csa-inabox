@@ -14,6 +14,11 @@
 
 import { sqlBracket, sqlString } from '@/lib/azure/synapse-permissions-client';
 
+// Re-export the identifier/literal escapers so callers that reuse the Synapse
+// SECURITY-POLICY / TVF DDL shape (e.g. the OneLake RLS/CLS reconciler) import a
+// single source of truth and emit byte-identical DDL to the semantic-model path.
+export { sqlBracket, sqlString };
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared role contract (SOURCE OF TRUTH for the compiler). Persisted Azure-native
 // onto the owned Cosmos item under `item.state.model.securityRoles` — NO Fabric /
