@@ -20,6 +20,7 @@ import type { SessionPayload } from '@/lib/auth/session';
 export type ConnectionType =
   | 'azure-sql' | 'synapse-dedicated' | 'synapse-serverless' | 'databricks-sql'
   | 'postgres' | 'storage-adls' | 'cosmos' | 'generic-sql'
+  | 'adx'
   | 'event-hub' | 'service-bus' | 'key-vault';
 
 export type AuthMethod =

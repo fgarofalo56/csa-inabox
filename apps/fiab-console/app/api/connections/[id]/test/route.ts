@@ -19,6 +19,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadConnection } from '@/lib/azure/connections-store';
 import { getKeyVaultSecretValue } from '@/lib/azure/kv-secrets-client';
 import { listTablesWithAuth } from '@/lib/azure/sql-objects-client';
+import { executeQuery as kustoExecuteQuery, defaultDatabase as kustoDefaultDatabase, normalizeClusterUri } from '@/lib/azure/kusto-client';
 import type { SqlExplicitAuth } from '@/lib/azure/azure-sql-client';
 
 export const runtime = 'nodejs';
@@ -40,6 +41,30 @@ export async function POST(
   try {
     const conn = await loadConnection(session.claims.oid, params.id);
     if (!conn) return NextResponse.json({ ok: false, error: 'connection not found' }, { status: 404 });
+
+    // Azure Data Explorer: a REAL Kusto reachability probe via the Console UAMI
+    // (kusto-client owns the AAD token + sovereign host). `print 1` is a no-op
+    // query that proves the cluster + database are reachable for this principal.
+    if (conn.type === 'adx') {
+      const rawHost = (conn.host || '').trim();
+      const cluster = rawHost
+        ? (normalizeClusterUri(rawHost) || normalizeClusterUri(`https://${rawHost}`))
+        : null;
+      if (rawHost && !cluster) {
+        return NextResponse.json({
+          ok: false,
+          error: `"${rawHost}" is not a valid Kusto cluster URI`,
+          hint: 'Use the full cluster URI, e.g. https://mycluster.eastus.kusto.windows.net.',
+        }, { status: 400 });
+      }
+      const adxDb = conn.database || kustoDefaultDatabase();
+      const r = await kustoExecuteQuery(adxDb, 'print ping = 1', cluster ? { clusterUri: cluster } : undefined);
+      return NextResponse.json({
+        ok: true,
+        reachable: r.rowCount >= 1,
+        detail: `Connected to the ADX cluster. Database "${adxDb}" is reachable (${r.executionMs} ms).`,
+      });
+    }
 
     // Non-SQL types: honest "validated on first use" gate (no fake success).
     if (!SQL_TESTABLE.has(conn.type)) {

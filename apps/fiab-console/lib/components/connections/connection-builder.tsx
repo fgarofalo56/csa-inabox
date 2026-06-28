@@ -38,6 +38,7 @@ const TYPES: { value: string; label: string }[] = [
   { value: 'postgres', label: 'PostgreSQL' },
   { value: 'storage-adls', label: 'ADLS Gen2 / Storage' },
   { value: 'cosmos', label: 'Azure Cosmos DB' },
+  { value: 'adx', label: 'Azure Data Explorer (Kusto)' },
   { value: 'event-hub', label: 'Event Hubs' },
   { value: 'service-bus', label: 'Service Bus' },
   { value: 'key-vault', label: 'Key Vault' },
@@ -52,6 +53,7 @@ function hostLabel(type: string): string {
     case 'storage-adls': return 'Account / host';
     case 'event-hub': case 'service-bus': return 'Namespace / host';
     case 'key-vault': return 'Vault / host';
+    case 'adx': return 'Cluster URI';
     default: return 'Server / host';
   }
 }
@@ -61,6 +63,7 @@ function hostPlaceholder(type: string): string {
     case 'event-hub': return 'myns.servicebus.windows.net';
     case 'service-bus': return 'mybus.servicebus.windows.net';
     case 'key-vault': return 'myvault.vault.azure.net';
+    case 'adx': return 'https://mycluster.eastus.kusto.windows.net';
     default: return 'myserver.database.windows.net';
   }
 }

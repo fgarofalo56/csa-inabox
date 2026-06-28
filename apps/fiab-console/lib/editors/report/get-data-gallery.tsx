@@ -157,7 +157,7 @@ const CONNECTOR_TYPE_TO_CONN_TYPE: Record<string, ReportConnType> = {
 /** ConnTypes that bind to a REAL queryable backend through the resolver. */
 const SUPPORTED_REPORT_CONN_TYPES: ReadonlySet<ReportConnType> = new Set<ReportConnType>([
   'azure-sql', 'synapse-dedicated', 'synapse-serverless', 'generic-sql',
-  'databricks-sql', 'postgres', 'cosmos', 'storage-adls',
+  'databricks-sql', 'postgres', 'cosmos', 'storage-adls', 'adx',
 ]);
 
 /** SQL-dialect families that share the schema/table + custom-SELECT object picker. */
@@ -182,6 +182,7 @@ function acceptableConnTypes(rct: ReportConnType): ConnectionType[] {
     case 'postgres': return ['postgres'];
     case 'cosmos': return ['cosmos'];
     case 'storage-adls': return ['storage-adls'];
+    case 'adx': return ['adx'];
     default: return [];
   }
 }
@@ -203,6 +204,7 @@ function representativeConnector(rct: ReportConnType): ConnectorDef | undefined 
     'postgres': 'AzurePostgreSql',
     'cosmos': 'CosmosDb',
     'storage-adls': 'AzureBlobFS',
+    'adx': 'AzureDataExplorer',
   };
   const t = byType[rct];
   return t ? connectorByType(t) : undefined;
@@ -553,6 +555,7 @@ function BindStep({
   const isSql = !!connType && SQL_FAMILY.has(connType);
   const isCosmos = connType === 'cosmos';
   const isStorage = connType === 'storage-adls';
+  const isAdx = connType === 'adx';
 
   // Eligible existing connections for this connType.
   const eligible = useMemo(() => {
@@ -571,6 +574,11 @@ function BindStep({
 
   // Cosmos object picker.
   const [collection, setCollection] = useState('');
+
+  // Azure Data Explorer (Kusto) object picker — a table OR an advanced raw KQL query.
+  const [adxMode, setAdxMode] = useState<'table' | 'kql'>('table');
+  const [adxTable, setAdxTable] = useState('');
+  const [adxKql, setAdxKql] = useState('');
 
   // Storage object picker.
   const [storageMode, setStorageMode] = useState<StorageMode>('adls');
@@ -640,10 +648,23 @@ function BindStep({
         : null;
     }
 
+    if (isAdx) {
+      if (!connectionId) return null;
+      if (adxMode === 'kql') {
+        return adxKql.trim()
+          ? { kind: 'connection', connectionId, connType, objectRef: { mode: 'kql', kql: adxKql.trim() } }
+          : null;
+      }
+      return adxTable.trim()
+        ? { kind: 'connection', connectionId, connType, objectRef: { mode: 'table', table: adxTable.trim() } }
+        : null;
+    }
+
     return null;
   }, [
-    supported, isStorage, isCosmos, isSql, storageMode, container, filePath, format,
+    supported, isStorage, isCosmos, isSql, isAdx, storageMode, container, filePath, format,
     uploaded, connectionId, connType, collection, sqlMode, sqlGuard, schema, table,
+    adxMode, adxTable, adxKql,
   ]);
 
   const upload = useCallback(async (file: File) => {
@@ -698,12 +719,6 @@ function BindStep({
 
   // ── honest gates for non-bindable connectors ───────────────────────────────
   function gateMessage(): { title: string; body: string } {
-    if (connType === 'adx') {
-      return {
-        title: 'Azure Data Explorer report source — coming soon',
-        body: 'There is no bindable ADX (Kusto) connection in this wave. Once an ADX connection type lands, this card will bind a real cluster and compile visuals to KQL. For real-time analytics today, use an Eventhouse / KQL dashboard item.',
-      };
-    }
     if (connType === 'mysql') {
       return {
         title: 'MySQL is not yet a Loom report source',
@@ -716,7 +731,7 @@ function BindStep({
     };
   }
 
-  const needsConnection = isSql || isCosmos || (isStorage && storageMode === 'connection');
+  const needsConnection = isSql || isCosmos || isAdx || (isStorage && storageMode === 'connection');
   const connLabel = connType ? (REPORT_CONN_TYPE_LABEL[connType] || def.name) : def.name;
 
   return (
@@ -813,6 +828,37 @@ function BindStep({
               hint="The database comes from the connection; pick the container to read. Visuals compile to Cosmos SQL with GROUP BY.">
               <Input value={collection} placeholder="orders" onChange={(_, d) => { setCollection(d.value); setPreview(null); }} />
             </Field>
+          )}
+
+          {/* Azure Data Explorer (Kusto) object picker ──────────────────────── */}
+          {isAdx && (
+            <>
+              <TabList selectedValue={adxMode} onTabSelect={(_, d) => { setAdxMode(d.value as 'table' | 'kql'); setPreview(null); }}>
+                <Tab value="table" icon={<TableSearch20Regular />}>Table</Tab>
+                <Tab value="kql" icon={<DatabaseSearch20Regular />}>KQL query</Tab>
+              </TabList>
+              {adxMode === 'table' ? (
+                <Field label="Kusto table" required
+                  hint="The database comes from the connection; pick the table to read. Field wells compile to a real KQL pipeline (summarize / where / top).">
+                  <Input value={adxTable} placeholder="StormEvents" onChange={(_, d) => { setAdxTable(d.value); setPreview(null); }} />
+                </Field>
+              ) : (
+                <Field
+                  label="KQL query" required
+                  hint="An advanced raw KQL query, run verbatim against the cluster (you own the shaping — summarize, render, etc.)."
+                >
+                  <Textarea
+                    className={s.sqlArea}
+                    resize="vertical"
+                    placeholder={'StormEvents\n| summarize Count = count() by State\n| top 10 by Count desc'}
+                    value={adxKql}
+                    onChange={(_, d) => { setAdxKql(d.value); setPreview(null); }}
+                    textarea={{ rows: 6 }}
+                    aria-label="KQL query"
+                  />
+                </Field>
+              )}
+            </>
           )}
 
           {/* Storage / file object picker ───────────────────────────────────── */}

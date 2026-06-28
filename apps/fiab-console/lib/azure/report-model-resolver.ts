@@ -79,6 +79,13 @@ import {
 import { executeStatement, databricksConfigGate, warehouseConfigGate } from '@/lib/azure/databricks-client';
 import { executePostgresQuery, postgresQueryGate } from '@/lib/azure/postgres-flex-client';
 import { queryItems } from '@/lib/azure/cosmos-data-client';
+import {
+  executeQuery as kustoExecuteQuery,
+  defaultDatabase as kustoDefaultDatabase,
+  normalizeClusterUri,
+  kustoConfigGate,
+} from '@/lib/azure/kusto-client';
+import { buildKqlFromVisual, kqlIdent, type KqlSourceColumn } from '@/lib/azure/wells-to-kql';
 import { pathToHttpsUrl, downloadFile } from '@/lib/azure/adls-client';
 import { parseDeltaSchema } from '@/lib/azure/delta-schema-parse';
 import { resolveMlvDeltaUrl } from '@/lib/azure/materialized-lake-view-engine';
@@ -1324,6 +1331,86 @@ function makeCosmosExecutor(db: string, ref: ReportObjectRef): ConnectionExecuto
   };
 }
 
+// ── Azure Data Explorer (Kusto) executor ────────────────────────────────────
+// Real-time analytics report source. Azure-native (NO Fabric / RTI Eventhouse
+// required): queries run against the ADX cluster through the Console UAMI
+// (kusto-client owns the AAD token + .com/.us sovereign host). `ref.mode`:
+//   • 'table' → a Kusto table; the field wells compile to a real KQL pipeline
+//               via wells-to-kql (group/aggregate/filter/slicer/topN).
+//   • 'kql'   → an advanced raw KQL query, run verbatim (the user owns shaping).
+// `clusterUri` targets the connection's cluster (or undefined = the env default
+// LOOM_KUSTO_CLUSTER_URI). All three methods return REAL rows — no mock.
+function makeAdxExecutor(db: string, ref: ReportObjectRef, clusterUri?: string): ConnectionExecutor {
+  const table = ref.mode === 'table' ? ref.table : '';
+  const rawKql = ref.mode === 'kql' ? ref.kql : null;
+  const opts = clusterUri ? { clusterUri } : undefined;
+  let cachedCols: KqlSourceColumn[] | null = null;
+
+  // Resolve the source columns (typed) once — drives the Fields pane + the
+  // wells→KQL compiler. Table: `<t> | getschema`. Raw KQL: a zero-row probe
+  // (falls back to a verbatim run if the query ends in `| render`/can't `take 0`).
+  async function loadColumns(): Promise<KqlSourceColumn[]> {
+    if (cachedCols) return cachedCols;
+    if (table) {
+      const r = await kustoExecuteQuery(db, `${kqlIdent(table)} | getschema | project ColumnName, ColumnType`, opts);
+      const nameIdx = r.columns.indexOf('ColumnName');
+      const typeIdx = r.columns.indexOf('ColumnType');
+      cachedCols = r.rows
+        .map((row) => ({
+          name: String(row[nameIdx >= 0 ? nameIdx : 0] ?? ''),
+          dataType: String(row[typeIdx >= 0 ? typeIdx : 1] ?? 'string'),
+        }))
+        .filter((c) => c.name);
+    } else if (rawKql) {
+      let r;
+      try {
+        r = await kustoExecuteQuery(db, `${rawKql}\n| take 0`, opts);
+      } catch {
+        r = await kustoExecuteQuery(db, rawKql, opts);
+      }
+      cachedCols = r.columns.map((name, i) => ({ name, dataType: r.columnTypes[i] || 'string' }));
+    } else {
+      cachedCols = [];
+    }
+    return cachedCols;
+  }
+
+  return {
+    connType: 'adx',
+    async introspectFields(): Promise<FieldTable[]> {
+      const cols = await loadColumns();
+      return fieldTableFromColumns(table || 'Query', cols.map((c) => ({ name: c.name, dataType: c.dataType })));
+    },
+    async runVisual(visual, filters): Promise<ConnectionVisualResult> {
+      // Advanced raw KQL: the query IS the visual's dataset (wells don't apply),
+      // matching the Cosmos custom-query path.
+      if (rawKql) {
+        const r = await kustoExecuteQuery(db, rawKql, opts);
+        return { rows: rowsToRecords(r.columns, r.rows), query: rawKql, lang: 'kql' };
+      }
+      const cols = await loadColumns();
+      const compiled = buildKqlFromVisual(visual, filters, { table, columns: cols });
+      // No usable wells yet → honest empty (a zero-row probe), same as the SQL path.
+      const kql = compiled ? compiled.kql : `${kqlIdent(table)} | take 0`;
+      const r = await kustoExecuteQuery(db, kql, opts);
+      return { rows: rowsToRecords(r.columns, r.rows), query: kql, lang: 'kql' };
+    },
+    async preview(limit): Promise<ConnectionPreviewResult> {
+      const n = clampRows(limit);
+      if (rawKql) {
+        // Run the user's query; cap the displayed rows client-side (a trailing
+        // `| take` is unsafe after a `| render`).
+        const r = await kustoExecuteQuery(db, rawKql, opts);
+        const rows = rowsToRecords(r.columns, r.rows);
+        return { columns: r.columns, rows: rows.slice(0, n), truncated: rows.length > n || r.truncated };
+      }
+      const q = `${kqlIdent(table)} | take ${n}`;
+      const r = await kustoExecuteQuery(db, q, opts);
+      return { columns: r.columns, rows: rowsToRecords(r.columns, r.rows), truncated: r.rowCount >= n };
+    },
+  };
+}
+
 // ── ADLS / file executor (Synapse serverless OPENROWSET) ────────────────────
 
 /** Resolve a Get-Data file source to an https BULK URL (+container/path when
@@ -1759,12 +1846,47 @@ export async function buildConnectionExecutor(
           source,
         };
       }
+      case 'adx': {
+        if (ref.mode !== 'table' && ref.mode !== 'kql') {
+          return connGate('An Azure Data Explorer connection reads a Kusto table or a raw KQL query — not a SQL SELECT or a file.', 'objectRef');
+        }
+        // ADX is reached through the Console UAMI (kusto-client owns the token +
+        // sovereign host). Resolve the cluster URI from the connection host (any
+        // *.kusto.* / ADX-proxy host); fall back to the env default cluster.
+        const rawHost = (conn.host || '').trim();
+        const cluster = rawHost
+          ? (normalizeClusterUri(rawHost) || normalizeClusterUri(`https://${rawHost}`))
+          : null;
+        if (rawHost && !cluster) {
+          return connGate(
+            `The ADX connection host "${rawHost}" is not a valid Kusto cluster URI (e.g. https://mycluster.eastus.kusto.windows.net).`,
+            'host',
+          );
+        }
+        if (!cluster && kustoConfigGate()) {
+          return connGate(
+            'No Azure Data Explorer cluster is configured for this report source. Set the connection\'s cluster URI (host) — ' +
+              'or LOOM_KUSTO_CLUSTER_URI on the Loom Console (the shared ADX cluster deployed by admin-plane/adx-cluster.bicep).',
+            'LOOM_KUSTO_CLUSTER_URI',
+          );
+        }
+        if ((ref.mode === 'table' && !ref.table.trim()) || (ref.mode === 'kql' && !ref.kql.trim())) {
+          return connGate('Pick a Kusto table — or enter a KQL query — for this Azure Data Explorer report source.', 'objectRef');
+        }
+        const adxDb = conn.database || kustoDefaultDatabase();
+        return {
+          backend: 'connection',
+          connType: 'adx',
+          executor: makeAdxExecutor(adxDb, ref, cluster || undefined),
+          source,
+        };
+      }
       // event-hub | service-bus | key-vault are real Loom connection types but
       // are NOT queryable as a tabular report source — honest gate (no mock).
       default:
         return connGate(
           `A "${conn.type}" connection isn't queryable as a report source. Pick an Azure SQL, Synapse, Databricks SQL, ` +
-            'PostgreSQL, Cosmos DB, or ADLS/Blob connection.',
+            'PostgreSQL, Cosmos DB, ADLS/Blob, or Azure Data Explorer connection.',
           'connType',
         );
     }

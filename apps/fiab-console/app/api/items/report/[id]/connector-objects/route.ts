@@ -759,8 +759,8 @@ function providerForConnType(t: string): NavProvider {
     case 'storage-adls':
       return 'adls';
     case 'adx':
-      // Forward-compat: no bindable ADX ConnectionType lands until the ADX
-      // report-source task, but the dispatch is ready the moment one does.
+      // Real-time analytics: the ADX report source binds a Kusto cluster and
+      // lists databases→tables via kusto-client (Console UAMI). Azure-native.
       return 'adx';
     default:
       // event-hub / service-bus / key-vault aren't tabular sources — caller gates.
