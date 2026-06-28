@@ -21,6 +21,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from './copilot-orchestrator';
+import { buildAoaiBody, type AoaiChatMessage } from './aoai-model-contract';
+import { cogScope } from './cloud-endpoints';
 import { executeSourceQuery, executionToText, type SourceExecution } from './data-agent-execute';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -109,7 +111,7 @@ function composeSystemPrompt(cfg: DataAgentConfig): string {
 }
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token for data agent');
   return t.token;
 }
@@ -216,11 +218,10 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
 
   // One AOAI round-trip with the reasoning-model temperature fallback.
   const runChat = async (messages: Array<{ role: string; content: string }>): Promise<{ content: string; usage: any }> => {
-    const base: Record<string, unknown> = { messages, max_completion_tokens: 1200 };
     const send = async (withTemp: boolean) => fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
+      body: JSON.stringify(buildAoaiBody({ messages: messages as AoaiChatMessage[], maxCompletionTokens: 1200, temperature: withTemp ? 0.2 : undefined })),
     }, LLM_FETCH_TIMEOUT_MS);
     let res = await send(true);
     if (res.status === 400) {

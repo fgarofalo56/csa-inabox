@@ -17,14 +17,8 @@
  * against the live source on the next test-chat turn.
  */
 
-import {
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-  ChainedTokenCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { resolveAoaiTarget, NoAoaiDeploymentError } from '../azure/copilot-orchestrator';
-import { cogScope } from '../azure/cloud-endpoints';
+import { aoaiChat } from '../azure/aoai-chat-client';
+import { NoAoaiDeploymentError } from '../azure/copilot-orchestrator';
 import { executeQuery as synapseExecute, dedicatedTarget, serverlessTarget } from '../azure/synapse-sql-client';
 import { listTableDetails, getTableSchema, kustoConfigGate, defaultDatabase, clusterUri } from '../azure/kusto-client';
 import { getIndex, searchConfigGate } from '../azure/search-index-client';
@@ -34,15 +28,6 @@ import type { DataAgentSource } from '../azure/data-agent-client';
 
 export { NoAoaiDeploymentError };
 export { mergeSuggestionIntoSources, mergeInstructions, descriptionsToBlock } from '../editors/_da-config-merge';
-
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new AcaManagedIdentityCredential(),
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
 
 const SCHEMA_CHAR_CAP = 8_000;
 
@@ -249,47 +234,20 @@ export function parseSuggestion(content: string, schemaText: string): AgentConfi
   return { examples, descriptions, schemaUsed: schemaText };
 }
 
-async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken(cogScope());
-  if (!t?.token) throw new Error('Failed to acquire AOAI token for the config copilot');
-  return t.token;
-}
-
 /**
  * Ask the live AOAI deployment to generate examples + descriptions grounded on
  * `schemaText`. Throws NoAoaiDeploymentError when no model is deployed (the BFF
  * turns that into a 503 + Foundry-hub remediation).
  */
 export async function generateSuggestions(src: DataAgentSource, schemaText: string): Promise<AgentConfigSuggestion> {
-  const target = await resolveAoaiTarget();
-  const token = await aoaiToken();
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const messages = [
-    { role: 'system', content: AGENT_CONFIG_COPILOT.systemPrompt },
-    { role: 'user', content: buildUserMessage(src, schemaText) },
-  ];
-  const base: Record<string, unknown> = { messages, max_completion_tokens: 1500 };
-  const send = (withTemp: boolean) =>
-    fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
-    });
-  let res = await send(true);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
-      res = await send(false);
-    } else {
-      throw new Error(`Config copilot generation failed (400): ${t.slice(0, 400)}`);
-    }
-  }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Config copilot generation failed (${res.status}): ${t.slice(0, 400)}`);
-  }
-  const j: any = await res.json();
-  const content = j?.choices?.[0]?.message?.content || '';
+  const content = await aoaiChat({
+    messages: [
+      { role: 'system', content: AGENT_CONFIG_COPILOT.systemPrompt },
+      { role: 'user', content: buildUserMessage(src, schemaText) },
+    ],
+    maxCompletionTokens: 1500,
+    temperature: 0.2,
+  });
   return parseSuggestion(content, schemaText);
 }
 

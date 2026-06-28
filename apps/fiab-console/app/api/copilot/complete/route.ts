@@ -34,6 +34,7 @@ export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
+import { buildAoaiBody } from '@/lib/azure/aoai-model-contract';
 import { resolveCompletionTarget } from '@/lib/copilot/inline-complete';
 import { cogScope } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
@@ -157,9 +158,7 @@ export async function POST(req: NextRequest) {
         method: 'POST',
         headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
         body: JSON.stringify({
-          messages,
-          ...(temp !== undefined ? { temperature: temp } : {}),
-          max_completion_tokens: 256,
+          ...buildAoaiBody({ messages, maxCompletionTokens: 256, temperature: temp }),
           // Stop at a blank line so ghost text stays a focused completion.
           stop: ['\n\n', '```'],
         }),

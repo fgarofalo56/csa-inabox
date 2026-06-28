@@ -43,6 +43,7 @@ import {
   aasXmlaConfig, command as executeXmlaCommand, AasError,
   buildRenameMeasureTmsl, buildSetMeasureDescriptionTmsl,
 } from '@/lib/azure/aas-client';
+import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -63,53 +64,26 @@ interface EditPlan {
 
 const CARDINALITIES = ['many-to-one', 'one-to-many', 'one-to-one', 'many-to-many'] as const;
 
-// ── AOAI plan generation (mirrors dax-tools.ts transport, cloud-portable) ───
+// ── AOAI plan generation (unified aoai-chat-client, cloud-portable) ──────────
 
 async function aoaiPlan(userOid: string, system: string, user: string): Promise<string> {
-  const [{ resolveAoaiTarget }, { loadTenantCopilotConfig }] = await Promise.all([
-    import('@/lib/azure/copilot-orchestrator'),
-    import('@/lib/azure/copilot-config-store'),
-  ]);
+  const { loadTenantCopilotConfig } = await import('@/lib/azure/copilot-config-store');
   const cfg = await loadTenantCopilotConfig(userOid).catch(() => null);
-  const target = await resolveAoaiTarget(cfg);
-
-  const { uamiArmCredential } = await import('@/lib/azure/arm-credential');
-  const { cogScope } = await import('@/lib/azure/cloud-endpoints');
-  // ACA-first UAMI chain (shared helper) — AcaManagedIdentityCredential is the
-  // first link so the ACA MI token bug never breaks AOAI token acquisition.
-  const credential = uamiArmCredential();
-  const tok = await credential.getToken(cogScope());
-  if (!tok?.token) throw new Error('Failed to acquire an Azure OpenAI token for the model-structure Copilot.');
-
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const payload: Record<string, unknown> = {
-    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-    max_completion_tokens: 900,
+  // The unified client owns target resolution (tenant cfg → env → Foundry
+  // discovery), cogScope token, the canonical max_completion_tokens body, and
+  // the temperature-only retry (response_format is kept across the retry, as the
+  // inline call did). Returns choices[0].message.content untrimmed — normalizePlan
+  // does JSON.parse(raw||'{}') so surrounding whitespace is harmless.
+  return await aoaiChat({
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    maxCompletionTokens: 900,
     temperature: 0.1,
-    response_format: { type: 'json_object' },
-  };
-  const send = (b: Record<string, unknown>) => fetch(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${tok.token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(b),
-    signal: AbortSignal.timeout(40_000),
+    responseFormat: 'json_object',
+    cfg,
   });
-  let res = await send(payload);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (/temperature|unsupported_value|does not support/i.test(t)) {
-      const { temperature, ...rest } = payload;
-      res = await send(rest);
-    } else {
-      throw new Error(`Azure OpenAI returned 400: ${t.slice(0, 300)}`);
-    }
-  }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Azure OpenAI chat failed ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const body = await res.json();
-  return String(body?.choices?.[0]?.message?.content ?? '').trim();
 }
 
 /** Compact schema fed to AOAI so it grounds edits in the real model. */

@@ -43,6 +43,7 @@ import {
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import { buildAoaiBody } from '@/lib/azure/aoai-model-contract';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { cogScope, getOpenAiSuffix } from '@/lib/azure/cloud-endpoints';
 import { executeQuery } from '@/lib/azure/azure-sql-client';
@@ -256,12 +257,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           fetch(url, {
             method: 'POST',
             headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-            body: JSON.stringify({
-              messages,
-              stream: true,
-              ...(temp !== undefined ? { temperature: temp } : {}),
-              max_completion_tokens: 4096,
-            }),
+            body: JSON.stringify(
+              buildAoaiBody({
+                messages,
+                maxCompletionTokens: 4096,
+                temperature: temp,
+                stream: true,
+              }),
+            ),
           });
 
         let res = await callWithTemperature(0.2);

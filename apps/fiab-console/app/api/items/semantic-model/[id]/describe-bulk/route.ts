@@ -32,11 +32,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
 
 import { getSession } from '@/lib/auth/session';
-import { cogScope } from '@/lib/azure/cloud-endpoints';
-import { resolveAoaiTarget, type AoaiTarget } from '@/lib/azure/copilot-orchestrator';
+import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import {
   getDataset, listDatasetTables, type PbiTable,
@@ -56,47 +54,22 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// ── AOAI credential + chat (mirrors lib/copilot/dax-tools.ts) ────────────────
-
-// ACA-first UAMI chain (shared helper) — AcaManagedIdentityCredential first.
-const credential = uamiArmCredential();
-
-async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken(cogScope());
-  if (!t?.token) throw new Error('Failed to acquire an AOAI token for the auto-description generator.');
-  return t.token;
-}
-
-async function getAoaiTarget(tenantId: string): Promise<AoaiTarget> {
-  const cfg = await loadTenantCopilotConfig(tenantId).catch(() => null);
-  return resolveAoaiTarget(cfg);
-}
+// ── AOAI chat (unified client) ───────────────────────────────────────────────
 
 async function aoaiChatJson(tenantId: string, system: string, user: string, maxTokens: number): Promise<any> {
-  const target = await getAoaiTarget(tenantId);
-  const token = await aoaiToken();
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const payload: Record<string, unknown> = {
+  const cfg = await loadTenantCopilotConfig(tenantId).catch(() => null);
+  const content = await aoaiChat({
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    max_completion_tokens: maxTokens,
-    response_format: { type: 'json_object' },
-  };
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(60_000),
+    maxCompletionTokens: maxTokens,
+    responseFormat: 'json_object',
+    cfg,
   });
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI chat failed ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const body = await res.json();
-  const content = String(body?.choices?.[0]?.message?.content ?? '').trim();
-  try { return JSON.parse(content || '{}'); } catch { return {}; }
+  // Soft-parse: this bulk surface deliberately degrades to {} on unparseable
+  // JSON (the proposal validators then yield empty proposals) rather than 502.
+  try { return JSON.parse(content.trim() || '{}'); } catch { return {}; }
 }
 
 // ── Model context (tables + columns + measures) ──────────────────────────────

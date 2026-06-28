@@ -33,29 +33,15 @@ import {
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { aoaiChat } from '@/lib/azure/aoai-chat-client';
+import type { TenantCopilotConfig } from '@/lib/types/copilot-config';
 import { serverlessTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
-import { cogScope } from '@/lib/azure/cloud-endpoints';
 import { buildAssistMessages, type InCellMode } from '@/lib/copilot/notebook-tools';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getLastLivyError } from '@/lib/azure/synapse-livy-client';
 
 type AssistMode = InCellMode; // 'generate' | 'explain' | 'fix' | 'comments' | 'optimize'
 const ASSIST_MODES: AssistMode[] = ['generate', 'explain', 'fix', 'comments', 'optimize'];
-
-// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
-const credential = uamiArmCredential();
-
-async function aoaiToken(): Promise<string> {
-  // Boundary-aware AOAI audience: cogScope() returns .us for Gov (GCC-High /
-  // DoD), .com for Commercial / GCC. LOOM_AOAI_AUDIENCE (set per-cloud by
-  // admin-plane/main.bicep) overrides when present.
-  const audience = process.env.LOOM_AOAI_AUDIENCE;
-  const scope = audience ? `${audience.replace(/\/+$/, '')}/.default` : cogScope();
-  const t = await credential.getToken(scope);
-  if (!t?.token) throw new Error('Failed to acquire AOAI token');
-  return t.token;
-}
 
 // ---------- T2 lakehouse schema grounding (soft-fail, never blocks) ----------
 async function buildServerSchemaContext(): Promise<string> {
@@ -167,10 +153,12 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Honor the admin-picked tenant Copilot deployment (Admin → Tenant settings →
   // Copilot & Agents) so the in-cell Copilot works in tenant-config-only
   // deployments where LOOM_AOAI_ENDPOINT is unset.
-  let target;
+  let tenantConfig: TenantCopilotConfig | null = null;
   try {
-    const tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
-    target = await resolveAoaiTarget(tenantConfig);
+    tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
+    // Pre-resolve to surface the honest 503 no_aoai gate before we build the
+    // request; aoaiChat re-resolves with the same cfg harmlessly below.
+    await resolveAoaiTarget(tenantConfig);
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -193,48 +181,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const messages = buildAssistMessages(mode, lang, source, prompt, errorText, schema, runtime);
 
   try {
-    const token = await aoaiToken();
-    const apiVersion = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
-    const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(
-      target.deployment,
-    )}/chat/completions?api-version=${apiVersion}`;
-
-    const callWithTemperature = (temp?: number) =>
-      fetch(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          messages,
-          ...(temp !== undefined ? { temperature: temp } : {}),
-          max_completion_tokens: 2048,
-        }),
-      });
-
-    let res = await callWithTemperature(0.2);
-    if (res.status === 400) {
-      const txt = await res.text();
-      // Reasoning models (o1/o3/gpt-5/MAI-*) reject non-default temperature — retry once.
-      if (
-        /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(txt) &&
-        /temperature|top_p/i.test(txt)
-      ) {
-        res = await callWithTemperature(undefined);
-      } else {
-        return NextResponse.json(
-          { ok: false, error: `AOAI 400: ${txt.slice(0, 300)}` },
-          { status: 502 },
-        );
-      }
-    }
-    if (!res.ok) {
-      const txt = await res.text();
-      return NextResponse.json(
-        { ok: false, error: `AOAI ${res.status}: ${txt.slice(0, 300)}` },
-        { status: 502 },
-      );
-    }
-    const j = await res.json();
-    const raw: string = j?.choices?.[0]?.message?.content ?? '';
+    // Unified AOAI client: same target resolution (tenant cfg → LOOM_AOAI_*
+    // env → Foundry discovery), same max_completion_tokens cap (2048), same
+    // temperature (0.2) with the temperature-only retry for reasoning models,
+    // and a cogScope bearer token that is Commercial- AND Gov-correct.
+    const raw = await aoaiChat({
+      messages,
+      maxCompletionTokens: 2048,
+      temperature: 0.2,
+      cfg: tenantConfig,
+    });
     // Strip any stray ```lang fences the model may add despite instructions.
     const result = raw
       .replace(/^\s*```[a-zA-Z0-9_+-]*\s*\n?/, '')

@@ -27,6 +27,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { armBase, armScope, cogScope } from './cloud-endpoints';
+import { buildAoaiBody } from './aoai-model-contract';
 
 const ARM_SCOPE = armScope();
 const CS_API = '2024-10-01';
@@ -563,9 +564,18 @@ export async function chatCompletion(
   const endpoint = await aoaiEndpoint(acct);
   const tok = await dataPlaneToken();
   const url = `${endpoint}/openai/deployments/${encodeURIComponent(deploymentName)}/chat/completions?api-version=${AOAI_DATA_API}`;
-  const body: any = { messages };
-  if (params.temperature !== undefined) body.temperature = params.temperature;
-  if (params.maxTokens !== undefined) body.max_completion_tokens = params.maxTokens;
+  // Body via the shared contract (centralizes the max_completion_tokens cap +
+  // canonical messages,temperature,max_completion_tokens key order). top_p/stop
+  // are appended after — this data-plane endpoint supports both and the unified
+  // client's buildAoaiBody does not — preserving the original key sequence and
+  // the conditional emission. See aoai-model-contract.ts.
+  const body: any = {
+    ...buildAoaiBody({
+      messages,
+      temperature: params.temperature,
+      maxCompletionTokens: params.maxTokens,
+    }),
+  };
   if (params.topP !== undefined) body.top_p = params.topP;
   if (params.stop && params.stop.length) body.stop = params.stop;
   const res = await fetchWithTimeout(url, {
