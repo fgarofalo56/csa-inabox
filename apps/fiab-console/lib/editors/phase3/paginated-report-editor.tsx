@@ -8,8 +8,8 @@
  * phase3-editors.tsx; behavior is identical. The Power BI WorkspacePicker trio
  * (`PbiWorkspaceLite` / `usePowerBiWorkspaces` / `WorkspacePicker`) is duplicated
  * locally here — matching the sibling scorecard/activator editors — so this
- * module carries no value import cycle back to the barrel; only the `ReportLite`
- * type is imported from the barrel.
+ * module carries no import cycle back to the barrel; the `ReportLite` type is
+ * imported directly from its defining sibling (`./report-editor`), not the barrel.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -40,7 +40,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
-import { type ReportLite } from '../phase3-editors';
+import { type ReportLite } from './report-editor';
 import { useStyles } from './styles';
 
 interface PbiWorkspaceLite { id: string; name: string; description?: string; }
