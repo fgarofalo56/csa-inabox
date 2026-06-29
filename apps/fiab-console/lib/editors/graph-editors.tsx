@@ -722,6 +722,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const [indexName, setIndexName] = useState<string>('docs-vec');
   const [dim, setDim] = useState<number>(1536);
   const [metric, setMetric] = useState<'cosine' | 'euclidean' | 'dotProduct'>('cosine');
+  const [algorithm, setAlgorithm] = useState<'hnsw' | 'exhaustiveKnn'>('hnsw');
   // Guided embedding-dimension picker — common model output sizes; "Custom…"
   // reveals a number input for anything else (replaces the freeform number box).
   const DIM_PRESETS: Array<{ v: number; label: string }> = [
@@ -774,6 +775,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
           if (st.indexName) setIndexName(st.indexName);
           if (typeof st.dim === 'number') setDim(st.dim);
           if (st.metric) setMetric(st.metric);
+          if (st.algorithm) setAlgorithm(st.algorithm);
           setSavedAt(j.item.updatedAt || null);
         }
       } catch { /* ignore */ }
@@ -789,11 +791,11 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       const r = isNew
         ? await fetch(`/api/items/vector-store`, {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ workspaceId: 'default', displayName: indexName, state: { backend, indexName, dim, metric } }),
+            body: JSON.stringify({ workspaceId: 'default', displayName: indexName, state: { backend, indexName, dim, metric, algorithm } }),
           })
         : await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`, {
             method: 'PATCH', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ state: { backend, indexName, dim, metric } }),
+            body: JSON.stringify({ state: { backend, indexName, dim, metric, algorithm } }),
           });
       const j = await r.json();
       if (j?.ok) {
@@ -804,7 +806,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       return j;
     } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
     finally { setSaving(false); }
-  }, [id, backend, indexName, dim, metric]);
+  }, [id, backend, indexName, dim, metric, algorithm]);
 
   // Load the live AI Search index schema.
   const loadSchema = useCallback(async () => {
@@ -830,14 +832,14 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     try {
       const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ indexName, dim, metric }),
+        body: JSON.stringify({ indexName, dim, metric, algorithm }),
       });
       const j = await r.json();
       setCreateResult(j);
       if (j.ok) await loadSchema();
     } catch (e: any) { setCreateResult({ ok: false, error: e?.message || String(e) }); }
     finally { setCreating(false); }
-  }, [persistSpec, isAiSearch, backend, id, indexName, dim, metric, loadSchema]);
+  }, [persistSpec, isAiSearch, backend, id, indexName, dim, metric, algorithm, loadSchema]);
 
   const uploadDocs = useCallback(async () => {
     setUploading(true); setUploadResult(null);
@@ -947,6 +949,16 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               <Option value="cosine">cosine</Option>
               <Option value="euclidean">euclidean</Option>
               <Option value="dotProduct">dotProduct</Option>
+            </Dropdown>
+          </Field>
+          <Field label={<InfoLabel info="Vector search algorithm. HNSW = approximate nearest-neighbor, fast at scale (the default). Exhaustive kNN = brute-force exact search, best for small corpora or recall validation.">Algorithm</InfoLabel>}>
+            <Dropdown
+              value={algorithm === 'exhaustiveKnn' ? 'Exhaustive kNN (exact)' : 'HNSW (approximate, fast)'}
+              selectedOptions={[algorithm]}
+              onOptionSelect={(_, d) => { if (d.optionValue) { setAlgorithm(d.optionValue as 'hnsw' | 'exhaustiveKnn'); setDirty(true); } }}
+            >
+              <Option value="hnsw" text="HNSW (approximate, fast)">HNSW (approximate, fast)</Option>
+              <Option value="exhaustiveKnn" text="Exhaustive kNN (exact)">Exhaustive kNN (exact)</Option>
             </Dropdown>
           </Field>
           <Divider />

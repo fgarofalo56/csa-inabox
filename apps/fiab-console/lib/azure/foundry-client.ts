@@ -1743,12 +1743,18 @@ export async function vectorSearch(name: string, opts: {
  */
 export function buildVectorIndexDefinition(opts: {
   indexName: string; dim: number; metric: 'cosine' | 'euclidean' | 'dotProduct';
-  vectorField?: string; contentField?: string;
+  vectorField?: string; contentField?: string; algorithm?: 'hnsw' | 'exhaustiveKnn';
 }): any {
   const vectorField = opts.vectorField || 'embedding';
   const contentField = opts.contentField || 'content';
   const profileName = 'loom-vec-profile';
-  const algoName = 'loom-hnsw';
+  // Vector search algorithm: HNSW (approximate, fast — the default) or
+  // exhaustiveKnn (brute-force, exact — best for small corpora / recall checks).
+  const algoKind = opts.algorithm === 'exhaustiveKnn' ? 'exhaustiveKnn' : 'hnsw';
+  const algoName = `loom-${algoKind}`;
+  const algorithm = algoKind === 'exhaustiveKnn'
+    ? { name: algoName, kind: 'exhaustiveKnn', exhaustiveKnnParameters: { metric: opts.metric } }
+    : { name: algoName, kind: 'hnsw', hnswParameters: { metric: opts.metric, m: 4, efConstruction: 400, efSearch: 500 } };
   return {
     name: opts.indexName,
     fields: [
@@ -1760,7 +1766,7 @@ export function buildVectorIndexDefinition(opts: {
       },
     ],
     vectorSearch: {
-      algorithms: [{ name: algoName, kind: 'hnsw', hnswParameters: { metric: opts.metric, m: 4, efConstruction: 400, efSearch: 500 } }],
+      algorithms: [algorithm],
       profiles: [{ name: profileName, algorithm: algoName }],
     },
   };

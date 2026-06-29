@@ -61,6 +61,7 @@ export async function POST(req: NextRequest) {
     const def = buildVectorIndexDefinition({
       indexName, dim, metric,
       vectorField: body?.vectorField, contentField: body?.contentField,
+      algorithm: body?.algorithm === 'exhaustiveKnn' ? 'exhaustiveKnn' : 'hnsw',
     });
     const created = await upsertIndex(indexName, def);
     return NextResponse.json({ ok: true, index: { name: created?.name || indexName, fields: created?.fields }, definition: def });
