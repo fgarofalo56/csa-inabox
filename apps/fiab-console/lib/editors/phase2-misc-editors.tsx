@@ -852,8 +852,10 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
                 <InfoLabel info="The dbt commands to run, in order. Leave all unchecked for the default (dbt deps + dbt build).">Commands</InfoLabel>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
                   {DBT_COMMANDS.map((c) => (
-                    <Checkbox key={c.cmd} checked={checkedCmds.has(c.cmd)} onChange={(_, d) => toggleCmd(c.cmd, !!d.checked)}
-                      label={<InfoLabel info={c.help}><code>{c.cmd}</code></InfoLabel>} />
+                    <Tooltip key={c.cmd} relationship="description" content={c.help}>
+                      <Checkbox checked={checkedCmds.has(c.cmd)} onChange={(_, d) => toggleCmd(c.cmd, !!d.checked)}
+                        label={<code>{c.cmd}</code>} />
+                    </Tooltip>
                   ))}
                 </div>
               </div>
