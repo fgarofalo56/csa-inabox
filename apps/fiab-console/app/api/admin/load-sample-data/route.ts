@@ -29,7 +29,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const GEO_KQL = `
-.create-or-alter table SampleEarthquakes (
+.create-merge table SampleEarthquakes (
   EventId: string, Place: string, Magnitude: real, Depth: real,
   Latitude: real, Longitude: real, EventTime: datetime
 )
@@ -50,7 +50,7 @@ eq-010,Mexico City MX,4.8,35.0,19.4326,-99.1332,2026-01-22T23:59:00Z
 `;
 
 const GRAPH_KQL = `
-.create-or-alter table SampleSocialGraph (
+.create-merge table SampleSocialGraph (
   Source: string, Target: string, EdgeType: string, Weight: real, Since: datetime
 )
 `;
@@ -84,7 +84,7 @@ carol,frank,follows,1.0,2026-01-10T00:00:00Z
 const INV_TABLES: Array<{ name: string; create: string; ingest: string }> = [
   {
     name: 'Node_Person',
-    create: `.create-or-alter table Node_Person (id: string, name: string, role: string, lat: real, lon: real)`,
+    create: `.create-merge table Node_Person (id: string, name: string, role: string, lat: real, lon: real)`,
     ingest: `.ingest inline into table Node_Person <|
 p-alice,Alice Reyes,Analyst,38.9072,-77.0369
 p-bob,Bob Tan,Courier,40.7128,-74.0060
@@ -95,7 +95,7 @@ p-frank,Frank Moretti,Fixer,41.9028,12.4964`,
   },
   {
     name: 'Node_Org',
-    create: `.create-or-alter table Node_Org (id: string, name: string, kind: string, lat: real, lon: real)`,
+    create: `.create-merge table Node_Org (id: string, name: string, kind: string, lat: real, lon: real)`,
     ingest: `.ingest inline into table Node_Org <|
 o-meridian,Meridian Holdings,ShellCo,51.5074,-0.1278
 o-castor,Castor Logistics,Front,40.7128,-74.0060
@@ -103,7 +103,7 @@ o-aurora,Aurora Trust,Bank,38.9072,-77.0369`,
   },
   {
     name: 'Node_Location',
-    create: `.create-or-alter table Node_Location (id: string, name: string, country: string, lat: real, lon: real)`,
+    create: `.create-merge table Node_Location (id: string, name: string, country: string, lat: real, lon: real)`,
     ingest: `.ingest inline into table Node_Location <|
 l-dc,Washington DC,US,38.9072,-77.0369
 l-nyc,New York,US,40.7128,-74.0060
@@ -113,7 +113,7 @@ l-sto,Stockholm,SE,59.3293,18.0686`,
   },
   {
     name: 'Node_Event',
-    create: `.create-or-alter table Node_Event (id: string, name: string, eventTime: datetime)`,
+    create: `.create-merge table Node_Event (id: string, name: string, eventTime: datetime)`,
     ingest: `.ingest inline into table Node_Event <|
 e-handoff1,Handoff at DC,2026-02-03T14:00:00Z
 e-wire1,Wire transfer,2026-02-10T09:30:00Z
@@ -121,7 +121,7 @@ e-meet1,Meeting in London,2026-02-18T16:45:00Z`,
   },
   {
     name: 'Edge_Knows',
-    create: `.create-or-alter table Edge_Knows (src: string, dst: string, weight: real, timestamp: datetime)`,
+    create: `.create-merge table Edge_Knows (src: string, dst: string, weight: real, timestamp: datetime)`,
     ingest: `.ingest inline into table Edge_Knows <|
 p-alice,p-bob,0.9,2026-01-05T00:00:00Z
 p-alice,p-carol,0.7,2026-01-12T00:00:00Z
@@ -132,7 +132,7 @@ p-eve,p-frank,0.4,2026-02-15T00:00:00Z`,
   },
   {
     name: 'Edge_MemberOf',
-    create: `.create-or-alter table Edge_MemberOf (src: string, dst: string, since: datetime, timestamp: datetime)`,
+    create: `.create-merge table Edge_MemberOf (src: string, dst: string, since: datetime, timestamp: datetime)`,
     ingest: `.ingest inline into table Edge_MemberOf <|
 p-carol,o-meridian,2025-11-01T00:00:00Z,2025-11-01T00:00:00Z
 p-bob,o-castor,2025-12-01T00:00:00Z,2025-12-01T00:00:00Z
@@ -141,7 +141,7 @@ p-frank,o-meridian,2026-01-15T00:00:00Z,2026-01-15T00:00:00Z`,
   },
   {
     name: 'Edge_LocatedAt',
-    create: `.create-or-alter table Edge_LocatedAt (src: string, dst: string, timestamp: datetime)`,
+    create: `.create-merge table Edge_LocatedAt (src: string, dst: string, timestamp: datetime)`,
     ingest: `.ingest inline into table Edge_LocatedAt <|
 p-alice,l-dc,2026-02-03T13:00:00Z
 p-bob,l-nyc,2026-02-04T10:00:00Z
@@ -151,7 +151,7 @@ p-eve,l-sto,2026-02-12T08:00:00Z`,
   },
   {
     name: 'Edge_Attended',
-    create: `.create-or-alter table Edge_Attended (src: string, dst: string, timestamp: datetime)`,
+    create: `.create-merge table Edge_Attended (src: string, dst: string, timestamp: datetime)`,
     ingest: `.ingest inline into table Edge_Attended <|
 p-alice,e-handoff1,2026-02-03T14:00:00Z
 p-bob,e-handoff1,2026-02-03T14:05:00Z
@@ -162,14 +162,14 @@ p-frank,e-meet1,2026-02-18T16:50:00Z`,
 ];
 
 /**
- * Convert a `.create-or-alter table X (schema)` + `.ingest inline into table X <| <csv>`
+ * Convert a `.create-merge table X (schema)` + `.ingest inline into table X <| <csv>`
  * pair into a `.set-or-replace X <| datatable(schema)[typed values]` command.
  * Inline ingestion (`<|` CSV) is rejected by the ADX engine /v1/rest/mgmt REST
  * endpoint; a datatable-backed set-or-replace is REST-friendly AND idempotent
  * (re-running replaces the sample rows rather than duplicating them).
  */
 function buildSetOrReplace(create: string, ingest: string): string {
-  const m = create.match(/\.create-or-alter\s+table\s+(\S+)\s*\(([\s\S]*?)\)/);
+  const m = create.match(/\.create(?:-merge|-or-alter)?\s+table\s+(\S+)\s*\(([\s\S]*?)\)/);
   if (!m) throw new Error(`load-sample: cannot parse create command: ${create.slice(0, 80)}`);
   const name = m[1];
   const schema = m[2].replace(/\s+/g, ' ').trim(); // "id: string, name: string, ..."
