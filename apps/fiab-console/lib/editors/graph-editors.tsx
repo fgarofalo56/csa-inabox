@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Caption1, Subtitle2, Badge, Button, Input, Label, Spinner,
-  Tab, TabList, Textarea, Dropdown, Option, Field, Divider,
+  Tab, TabList, Textarea, Dropdown, Option, Field, Divider, InfoLabel, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, shorthands, tokens,
@@ -194,8 +194,12 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
           </div>
           <Caption1 style={{ marginTop: tokens.spacingVerticalS }}>Use the buttons below to quick-load <code>g.V()</code> / <code>g.E()</code> previews.</Caption1>
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalS }}>
-            <Button size="small" onClick={showVertices} disabled={loading}>Vertices</Button>
-            <Button size="small" onClick={showEdges} disabled={loading}>Edges</Button>
+            <Tooltip relationship="label" content="Quick-load g.V() — preview the first 25 vertices (nodes) and render them on the graph">
+              <Button size="small" onClick={showVertices} disabled={loading}>Vertices</Button>
+            </Tooltip>
+            <Tooltip relationship="label" content="Quick-load g.E() — preview the first 25 edges (relationships) and render them on the graph">
+              <Button size="small" onClick={showEdges} disabled={loading}>Edges</Button>
+            </Tooltip>
           </div>
         </div>
       }
@@ -718,6 +722,18 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const [indexName, setIndexName] = useState<string>('docs-vec');
   const [dim, setDim] = useState<number>(1536);
   const [metric, setMetric] = useState<'cosine' | 'euclidean' | 'dotProduct'>('cosine');
+  // Guided embedding-dimension picker — common model output sizes; "Custom…"
+  // reveals a number input for anything else (replaces the freeform number box).
+  const DIM_PRESETS: Array<{ v: number; label: string }> = [
+    { v: 384, label: '384 — MiniLM-L6' },
+    { v: 768, label: '768 — MPNet / all-mpnet' },
+    { v: 1024, label: '1024 — text-embedding-3-large (1024)' },
+    { v: 1536, label: '1536 — text-embedding-3-small / ada-002' },
+    { v: 3072, label: '3072 — text-embedding-3-large' },
+  ];
+  const [customDim, setCustomDim] = useState(false);
+  const dimIsPreset = DIM_PRESETS.some((p) => p.v === dim);
+  const dimCustomMode = customDim || !dimIsPreset;
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -890,7 +906,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
             <Database24Regular className={s.emptyIcon} />
             <Subtitle2>Index spec</Subtitle2>
           </div>
-          <Field label="Backend" hint="Azure-native vector store backing this index.">
+          <Field label={<InfoLabel info="The Azure-native service that stores and searches the embedding vectors. AI Search (default) gives hybrid BM25 + vector; Cosmos NoSQL/vCore and pgvector are alternatives.">Backend</InfoLabel>}>
             <Dropdown
               value={VECTOR_BACKEND_DESCRIPTIONS[backend]}
               selectedOptions={[backend]}
@@ -901,13 +917,28 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               ))}
             </Dropdown>
           </Field>
-          <Field label="Index name">
+          <Field label={<InfoLabel info="Name of the search index / collection that will hold your vectors. Lowercase letters, digits and dashes.">Index name</InfoLabel>}>
             <Input value={indexName} onChange={(_: unknown, d: any) => { setIndexName(d.value); setDirty(true); }} />
           </Field>
-          <Field label="Dimensions" hint="Length of each embedding vector (e.g. 1536 for text-embedding-3-small).">
-            <Input type="number" value={String(dim)} onChange={(_: unknown, d: any) => { setDim(Number(d.value || '0')); setDirty(true); }} />
+          <Field label={<InfoLabel info="Length of each embedding vector — must match your embedding model's output. Pick the model you embed with; choose Custom… for any other size.">Dimensions</InfoLabel>}>
+            <Dropdown
+              value={dimCustomMode ? 'Custom…' : (DIM_PRESETS.find((p) => p.v === dim)?.label || String(dim))}
+              selectedOptions={dimCustomMode ? ['custom'] : [String(dim)]}
+              onOptionSelect={(_, d) => {
+                if (d.optionValue === 'custom') { setCustomDim(true); }
+                else if (d.optionValue) { setCustomDim(false); setDim(Number(d.optionValue)); setDirty(true); }
+              }}
+            >
+              {DIM_PRESETS.map((p) => <Option key={p.v} value={String(p.v)} text={p.label}>{p.label}</Option>)}
+              <Option value="custom" text="Custom…">Custom…</Option>
+            </Dropdown>
+            {dimCustomMode && (
+              <Input type="number" value={String(dim)} placeholder="e.g. 512"
+                onChange={(_: unknown, d: any) => { setDim(Number(d.value || '0')); setDirty(true); }}
+                style={{ marginTop: tokens.spacingVerticalXS }} />
+            )}
           </Field>
-          <Field label="Metric">
+          <Field label={<InfoLabel info="How vector similarity is scored. cosine = angle (best for normalized embeddings, the default); dotProduct = inner product (fastest, needs normalized vectors); euclidean = L2 distance.">Metric</InfoLabel>}>
             <Dropdown
               value={metric}
               selectedOptions={[metric]}
