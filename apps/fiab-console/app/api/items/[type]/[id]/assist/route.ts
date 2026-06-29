@@ -48,6 +48,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withRateLimit } from '@/lib/azure/rate-limiter';
 import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
@@ -321,6 +322,11 @@ export async function POST(
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
+
+  // Per-principal AOAI rate limit — opt-in (LOOM_RATE_LIMIT=on). Default = no-op
+  // (returns null → identical behavior).
+  const limited = withRateLimit(session, 'aoai');
+  if (limited) return limited;
 
   const { type } = await ctx.params;
   const engine = type as Engine;

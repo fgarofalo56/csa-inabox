@@ -58,6 +58,7 @@ import { fromLegacyState, hasTransform, reportTransformMode } from '@/lib/editor
 import type { DirectQueryTarget, ReportDataSource } from '@/lib/editors/report/report-data-source';
 import { buildConnectionExecutor } from '@/lib/azure/report-model-resolver';
 import type { ConnectionExecutor, ReportConnType } from '@/lib/azure/report-model-resolver';
+import { withQueryCache } from '@/lib/azure/query-cache';
 import { foldAppliedStepsToSql, parseSharedQueries } from '@/lib/components/pipeline/dataflow/m-script';
 import {
   isLoomContentId,
@@ -444,9 +445,17 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
 
   // Resolve the report's data source → backend descriptor (Azure-native default).
+  // Expensive read (AAS Discover / Synapse probe / connection introspect) wrapped
+  // in withQueryCache — passthrough unless LOOM_QUERY_CACHE=on (identical when off);
+  // oid-prefixed key so no cross-tenant bleed.
   let resolved: ResolvedReportModel;
   try {
-    resolved = await resolveReportModel(item, session.claims.oid);
+    resolved = await withQueryCache(
+      session.claims.oid,
+      `report:fields:${id}:${queryName || ''}`,
+      30_000,
+      () => resolveReportModel(item, session.claims.oid),
+    );
   } catch (e: any) {
     const status = e instanceof AasError ? e.status : 502;
     return NextResponse.json({ ok: false, error: e?.message || String(e), status }, { status });

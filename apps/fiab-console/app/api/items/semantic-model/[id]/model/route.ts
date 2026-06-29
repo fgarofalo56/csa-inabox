@@ -43,6 +43,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withQueryCache } from '@/lib/azure/query-cache';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
@@ -893,12 +894,23 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const tenantId = session.claims.oid;
 
-  const mctx = await loadModelContext(id, workspaceId, tenantId);
-  const state = await readSmModelState(id, tenantId);
-  const modelState = await readLoomModelState(id, tenantId);
+  // Expensive Fields-pane read (Cosmos/PBI tables + relationships + calc objects)
+  // wrapped in withQueryCache — passthrough unless LOOM_QUERY_CACHE=on (identical
+  // when off); oid-prefixed key so no cross-tenant bleed.
+  const { mctx, state, modelState, calc } = await withQueryCache(
+    tenantId,
+    `sm:model:${id}:${workspaceId || ''}`,
+    30_000,
+    async () => {
+      const mctx = await loadModelContext(id, workspaceId, tenantId);
+      const state = await readSmModelState(id, tenantId);
+      const modelState = await readLoomModelState(id, tenantId);
+      const calc = await loadCalcObjects(req, id, tenantId);
+      return { mctx, state, modelState, calc };
+    },
+  );
   const merged = mergeRelationships(mctx.baseRels, state.relationships);
   const tmslPreview = buildPreview(mctx, merged, state, modelState.state.dateTables || []);
-  const calc = await loadCalcObjects(req, id, tenantId);
 
   return NextResponse.json({
     ok: true,

@@ -33,6 +33,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withRateLimit } from '@/lib/azure/rate-limiter';
 import { NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
 import { buildAoaiBody } from '@/lib/azure/aoai-model-contract';
 import { resolveCompletionTarget } from '@/lib/copilot/inline-complete';
@@ -92,6 +93,11 @@ export async function POST(req: NextRequest) {
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
+
+  // Per-principal AOAI rate limit — opt-in (LOOM_RATE_LIMIT=on). Default = no-op
+  // (returns null → identical behavior). No streaming body altered.
+  const limited = withRateLimit(session, 'aoai');
+  if (limited) return limited;
 
   const body = await req.json().catch(() => ({}));
   const prefix = String(body?.prefix ?? '');

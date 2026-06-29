@@ -15,6 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withRateLimit } from '@/lib/azure/rate-limiter';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveAoaiTarget } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
@@ -47,6 +48,11 @@ export async function POST(req: NextRequest) {
   if (!isTenantAdmin(s)) {
     return NextResponse.json({ ok: false, error: 'forbidden', code: 'admin_only' }, { status: 403 });
   }
+
+  // Per-principal AOAI rate limit — opt-in (LOOM_RATE_LIMIT=on). Default = no-op
+  // (returns null → identical behavior). Checked before any stream is opened.
+  const limited = withRateLimit(s, 'aoai');
+  if (limited) return limited;
 
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
