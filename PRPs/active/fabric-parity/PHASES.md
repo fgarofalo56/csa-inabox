@@ -282,8 +282,10 @@ wizard (folder tree + RLS/CLS sub-tab + preview-as); reusable Share dialog
 + subresource dropdown + justification); endorsement radio + certifier; Identity
 settings tab. No freeform.
 
-**Acceptance:** apply a protection policy → reconciler revokes real ADLS RBAC +
-Synapse DENY for non-allowed principals; create an OneLake role → preview-as
+**Acceptance:** apply a protection policy → reconciler converges real ADLS RBAC
+to the allow-list (grant allow-list + revoke non-allowed live principals; apps
+cannot author Azure deny assignments, so enforcement = positive-grant allowlist +
+RLS, not a deny assignment); create an OneLake role → preview-as
 shows masked rows; create a managed PE → connection-state polls to Approved;
 per-ws UAMI granted Blob Data role and added to storage trusted rules.
 
