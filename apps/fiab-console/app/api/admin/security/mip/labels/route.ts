@@ -12,6 +12,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { listSensitivityLabels } from '@/lib/azure/mip-graph-client';
 import { createLabel } from '@/lib/azure/scc-labels-client';
 import { handleSecurityError } from '../../_lib/error-handling';
@@ -22,6 +23,9 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // PDP gate (default-off / shadow-ready). Admin read of tenant sensitivity labels.
+  const blocked = await pdpCheck(s, { level: 'domain', id: s.claims.oid }, 'read');
+  if (blocked) return blocked;
   try {
     const labels = await listSensitivityLabels();
     return NextResponse.json({ ok: true, labels, source: 'graph-beta' });
@@ -31,6 +35,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // PDP gate (default-off / shadow-ready). Admin write — create sensitivity label.
+  const blocked = await pdpCheck(s, { level: 'domain', id: s.claims.oid }, 'admin');
+  if (blocked) return blocked;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
   const displayName = (body?.displayName || '').toString().trim();

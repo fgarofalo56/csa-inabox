@@ -18,6 +18,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import {
   listDlpCompliancePolicies,
   getDlpCompliancePolicy,
@@ -31,9 +32,17 @@ import { handleSecurityError } from '../../_lib/error-handling';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+/** Tenant-scoped resource ref for the PDP gate (default-off / shadow-ready). */
+const tenantRef = () => ({
+  level: 'domain' as const,
+  id: process.env.LOOM_TENANT_ID || process.env.AZURE_TENANT_ID || 'common',
+});
+
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const blocked = await pdpCheck(s, tenantRef(), 'read');
+  if (blocked) return blocked;
   const id = req.nextUrl.searchParams.get('id');
   try {
     if (id) {
@@ -48,6 +57,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const blocked = await pdpCheck(s, tenantRef(), 'admin');
+  if (blocked) return blocked;
   let body: { policy?: DlpPolicyInput };
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
   if (!body?.policy) return NextResponse.json({ ok: false, error: 'policy is required' }, { status: 400 });
@@ -60,6 +71,8 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const blocked = await pdpCheck(s, tenantRef(), 'admin');
+  if (blocked) return blocked;
   let body: { id?: string; policy?: Partial<DlpPolicyInput> };
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON body' }, { status: 400 }); }
   if (!body?.id || !body?.policy) return NextResponse.json({ ok: false, error: 'id and policy are required' }, { status: 400 });
@@ -72,6 +85,8 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const blocked = await pdpCheck(s, tenantRef(), 'admin');
+  if (blocked) return blocked;
   let id = req.nextUrl.searchParams.get('id') || '';
   if (!id) {
     try { const body = await req.json(); id = body?.id || ''; } catch { /* ignore */ }

@@ -732,9 +732,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       ]},
       { label: 'View', actions: [
         { label: running ? 'Refreshing…' : 'Refresh all', onClick: running ? undefined : runAll, disabled: running },
-        // The interval is authored via the toolbar <Select>; the ribbon shows
-        // current state (a one-state cycle button was undiscoverable).
-        { label: refreshLabel(autoRefreshMs), onClick: undefined, disabled: true },
+        // The auto-refresh interval is authored + displayed via the toolbar
+        // <Select> (a status-only, click-undefined ribbon button was a dead
+        // action — no-vaporware). Time stays a real cycle action.
         { label: `Time: ${timeRange}`, onClick: cycleTime },
       ]},
       { label: 'Manage', actions: [

@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { tenantSettingsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
   defaultSettings,
@@ -97,6 +98,9 @@ export async function PUT(req: NextRequest) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const tenantId = s.claims.oid;
+  // PDP gate (default-off / shadow-ready). Admin write to tenant-wide toggles.
+  const blocked = await pdpCheck(s, { level: 'domain', id: tenantId }, 'admin');
+  if (blocked) return blocked;
   const body = await req.json().catch(() => ({}));
   const incoming = body?.settings;
   const incomingScope = body?.scopeConfig;

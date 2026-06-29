@@ -56,10 +56,15 @@ import { KqlResultsPanel, type KqlResult } from './kql-results';
 import { useStyles } from './styles';
 
 // ----- KQL Database -----
-// Ribbon is built inside the editor via useMemo. None of the actions
-// below have inline handlers yet (table creation, schema mgmt, ingestion
-// wizards all land in a follow-up PR) so each is disabled with a
-// "not yet wired" tooltip — see no-vaporware.md.
+// Ribbon is built inside the editor via useMemo. Every action is wired to a
+// real, working dialog against the live ADX cluster (kusto-client executeMgmt
+// / executeQuery): New → Table opens a guided column grid → .create table;
+// Materialized view, Function, Update policy, Ingestion mapping, Get data
+// (.ingest inline / blob), and Data connections (Event Hub / IoT Hub) all post
+// to dedicated /api/adx/* + /api/items/kql-database/[id]/* routes. The only
+// disabled item is OneLake availability — an honest Fabric-managed gate. If the
+// cluster env (LOOM_KUSTO_CLUSTER_URI) is unset, the info fetch returns ok:false
+// and the editor shows the "Database unavailable" MessageBar — no fake data.
 
 interface KqlDbInfo {
   ok: boolean;
