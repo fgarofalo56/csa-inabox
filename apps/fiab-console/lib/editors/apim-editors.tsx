@@ -14,7 +14,7 @@
  * through APIM for auth, rate limiting, observability, and marketplace discovery.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Switch, Dropdown, Option, Field,
@@ -2263,6 +2263,15 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const ws = useDataProductWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [state, setState] = useState<DataProductState>(DP_EMPTY);
+  // Mirror `state` into a ref so async action handlers (save / publish*) read
+  // the freshest committed field values directly. The old trick —
+  // `setState(prev => { snapshot = prev; return prev; })` — only captured fresh
+  // state via React's eager-evaluation bailout, which is SKIPPED once the fiber
+  // already has a pending update (e.g. setStatus('saving') runs first), so the
+  // snapshot read DP_EMPTY and create persisted an empty product. The ref is
+  // unconditionally current.
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [loading, setLoading] = useState(id !== 'new');
   // F4 — Data Product Edit dialog (3-step, per-step PATCH) open state.
   const [editOpen, setEditOpen] = useState(false);
@@ -2422,8 +2431,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     // Snapshot current state from the latest committed render via functional
     // setter — guarantees we PUT the user's freshest field values, not a
     // stale closure capture from when the Save callback was last memoised.
-    let snapshot: DataProductState = DP_EMPTY;
-    setState((prev) => { snapshot = prev; return prev; });
+    const snapshot: DataProductState = stateRef.current;
     const displayName = snapshot.displayName || 'Untitled data product';
     try {
       if (id === 'new') {
@@ -2460,8 +2468,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     setStatus({ kind: 'saving' });
     setPurviewHint(null);
     // Snapshot to avoid stale closure of state.displayName/description.
-    let snapshot: DataProductState = DP_EMPTY;
-    setState((prev) => { snapshot = prev; return prev; });
+    const snapshot: DataProductState = stateRef.current;
     try {
       const r = await fetch(`/api/items/apim-product`, {
         method: 'POST',
@@ -2500,8 +2507,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (!publishApiServiceUrl.trim()) { setPublishApiErr('Backing service URL is required.'); return; }
     setPublishApiBusy(true); setPublishApiErr(null); setPublishApiGate(null); setPublishApiResult(null);
     // Snapshot so the request body uses the freshest name/description.
-    let snapshot: DataProductState = DP_EMPTY;
-    setState((prev) => { snapshot = prev; return prev; });
+    const snapshot: DataProductState = stateRef.current;
     try {
       const r = await fetch(`/api/items/data-product/${encodeURIComponent(id)}/publish-api`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
