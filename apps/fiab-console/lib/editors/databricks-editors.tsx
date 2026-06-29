@@ -35,7 +35,6 @@ import {
   ArrowDownload20Regular,
   Organization20Regular,
   ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
-  PlugConnected20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -2311,11 +2310,6 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'Permanently delete this warehouse'} relationship="label">
               <Button appearance="outline" icon={<Delete20Regular />} disabled={!warehouseId} onClick={() => { setDeleteError(null); setDeleteOpen(true); }}>
                 Delete
-              </Button>
-            </Tooltip>
-            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'JDBC / ODBC / CLI connection details (drivers, server hostname, HTTP path)'} relationship="label">
-              <Button appearance="outline" icon={<PlugConnected20Regular />} disabled={!warehouseId} onClick={() => setConnOpen(true)}>
-                Connection
               </Button>
             </Tooltip>
             <Tooltip
