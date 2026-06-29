@@ -517,6 +517,14 @@ function CatalogFieldControl({
       </Field>
     );
   }
+  // password (masked)
+  if (field.type === 'password') {
+    return (
+      <Field label={field.label} hint={field.help} required={field.required} validationMessage={error}>
+        <Input type="password" value={value === undefined || value === null ? '' : String(value)} placeholder={field.placeholder} onChange={(_, d) => onChange(d.value)} />
+      </Field>
+    );
+  }
   // text
   return (
     <Field label={field.label} hint={field.help} required={field.required} validationMessage={error}>

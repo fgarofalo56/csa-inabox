@@ -361,6 +361,55 @@ export const INTEGRATION_RUNTIME_TYPES: IntegrationRuntimeType[] = [
         required: true,
         help: 'Azure Hybrid Benefit lets you bring your own SQL Server license with Software Assurance to save money.',
       },
+      {
+        key: 'subnetId',
+        label: 'VNet subnet (optional)',
+        type: 'text',
+        help: 'Join the SSIS cluster to a VNet subnet to reach private data sources. Full ARM resource id of the subnet, or leave blank for public.',
+      },
+      {
+        key: 'useCatalog',
+        label: 'Host SSIS catalog (SSISDB)',
+        type: 'boolean',
+        default: false,
+        help: 'Deploy the SSISDB project catalog to an Azure SQL server. Required to deploy and run Integration Services projects.',
+      },
+      {
+        key: 'catalogServerEndpoint',
+        label: 'Catalog SQL server',
+        type: 'text',
+        showWhen: { key: 'useCatalog', equals: [true] },
+        help: 'Azure SQL server endpoint that hosts SSISDB, e.g. myserver.database.windows.net.',
+      },
+      {
+        key: 'catalogAdminUser',
+        label: 'Catalog admin user',
+        type: 'text',
+        showWhen: { key: 'useCatalog', equals: [true] },
+        help: 'SQL admin username for the SSISDB server.',
+      },
+      {
+        key: 'catalogAdminPassword',
+        label: 'Catalog admin password',
+        type: 'password',
+        showWhen: { key: 'useCatalog', equals: [true] },
+        help: 'SQL admin password for the SSISDB server. Stored only in the IR spec sent to ARM.',
+      },
+      {
+        key: 'catalogPricingTier',
+        label: 'Catalog pricing tier',
+        type: 'select',
+        options: [
+          { value: 'Basic', label: 'Basic' },
+          { value: 'S0', label: 'Standard S0' },
+          { value: 'S1', label: 'Standard S1' },
+          { value: 'S2', label: 'Standard S2' },
+          { value: 'S3', label: 'Standard S3' },
+        ],
+        default: 'S0',
+        showWhen: { key: 'useCatalog', equals: [true] },
+        help: 'SSISDB database tier.',
+      },
     ],
   },
 ];
@@ -506,23 +555,33 @@ export function integrationRuntimeSpecFromForm(
   }
 
   // azure-ssis → ARM "Managed" with computeProperties + ssisProperties.
+  const ssisProperties: Record<string, unknown> = {
+    edition: str('edition', 'Standard'),
+    licenseType: str('licenseType', 'LicenseIncluded'),
+  };
+  if (bool('useCatalog')) {
+    ssisProperties.catalogInfo = {
+      catalogServerEndpoint: str('catalogServerEndpoint'),
+      catalogAdminUserName: str('catalogAdminUser'),
+      ...(str('catalogAdminPassword') ? { catalogAdminPassword: { type: 'SecureString', value: str('catalogAdminPassword') } } : {}),
+      catalogPricingTier: str('catalogPricingTier', 'S0'),
+    };
+  }
+  const computeProperties: Record<string, unknown> = {
+    location: str('region', 'eastus2'),
+    nodeSize: str('nodeSize', 'Standard_D4_v3'),
+    numberOfNodes: num('nodeCount', 1),
+    maxParallelExecutionsPerNode: num('maxParallelPerNode', 2),
+  };
+  if (str('subnetId')) {
+    computeProperties.vNetProperties = { subnetId: str('subnetId') };
+  }
   return {
     name,
     properties: {
       type: 'Managed',
       description: str('description') || undefined,
-      typeProperties: {
-        computeProperties: {
-          location: str('region', 'eastus2'),
-          nodeSize: str('nodeSize', 'Standard_D4_v3'),
-          numberOfNodes: num('nodeCount', 1),
-          maxParallelExecutionsPerNode: num('maxParallelPerNode', 2),
-        },
-        ssisProperties: {
-          edition: str('edition', 'Standard'),
-          licenseType: str('licenseType', 'LicenseIncluded'),
-        },
-      },
+      typeProperties: { computeProperties, ssisProperties },
     } as AdfIntegrationRuntime['properties'],
   };
 }

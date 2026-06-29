@@ -20,9 +20,10 @@
  *  /format-delimited-text, /format-orc)
  */
 
-/** The common file + relational dataset types Loom exposes a guided form for. */
+/** The common file + relational + API dataset types Loom exposes a guided form for. */
 export const DS_TYPES = [
   'DelimitedText', 'Json', 'Parquet', 'Avro', 'Orc', 'Binary', 'AzureSqlTable', 'AzureSqlDWTable',
+  'RestResource', 'CosmosDbSqlApiCollection', 'CommonDataServiceForAppsEntity',
 ] as const;
 export type DatasetType = (typeof DS_TYPES)[number];
 
@@ -30,6 +31,12 @@ export type DatasetType = (typeof DS_TYPES)[number];
 export const FILE_DS_TYPES = new Set<string>(['DelimitedText', 'Json', 'Parquet', 'Avro', 'Orc', 'Binary']);
 /** Relational dataset types (schema + table). */
 export const TABLE_DS_TYPES = new Set<string>(['AzureSqlTable', 'AzureSqlDWTable']);
+/** REST endpoint dataset (relative URL + pagination). */
+export const REST_DS_TYPES = new Set<string>(['RestResource']);
+/** Cosmos DB (SQL API) container dataset. */
+export const COSMOS_DS_TYPES = new Set<string>(['CosmosDbSqlApiCollection']);
+/** Dynamics 365 / Dataverse entity dataset. */
+export const DYNAMICS_DS_TYPES = new Set<string>(['CommonDataServiceForAppsEntity']);
 
 /** Human labels for the dataset type dropdown. */
 export const DS_TYPE_LABELS: Record<string, string> = {
@@ -41,6 +48,9 @@ export const DS_TYPE_LABELS: Record<string, string> = {
   Binary: 'Binary',
   AzureSqlTable: 'Azure SQL table',
   AzureSqlDWTable: 'Azure Synapse / SQL DW table',
+  RestResource: 'REST resource (relative URL)',
+  CosmosDbSqlApiCollection: 'Azure Cosmos DB container',
+  CommonDataServiceForAppsEntity: 'Dynamics 365 / Dataverse entity',
 };
 
 /** Compression codecs valid for the file formats Loom exposes. */
@@ -91,6 +101,14 @@ export interface DatasetBuilderOpts {
   // ---- relational ----
   schema?: string;
   table?: string;
+  // ---- REST resource ----
+  relativeUrl?: string;
+  requestMethod?: string;     // GET | POST
+  paginationRule?: string;    // e.g. AbsoluteUrl, headerNext (free-text token, optional)
+  // ---- Cosmos DB (SQL API) ----
+  collectionName?: string;
+  // ---- Dynamics / Dataverse ----
+  entityName?: string;
 }
 
 const trimmed = (v?: string) => (typeof v === 'string' ? v.trim() : '');
@@ -134,6 +152,20 @@ export function buildDatasetTypeProperties(opts: DatasetBuilderOpts): Record<str
     const table = trimmed(opts.table);
     if (schema) tp.schema = schema;
     if (table) tp.table = table;
+  } else if (REST_DS_TYPES.has(opts.type)) {
+    // REST resource — relativeUrl + optional method/pagination, never raw JSON.
+    const rel = trimmed(opts.relativeUrl);
+    if (rel) tp.relativeUrl = rel;
+    const method = trimmed(opts.requestMethod);
+    if (method) tp.requestMethod = method;
+    const page = trimmed(opts.paginationRule);
+    if (page) tp.paginationRules = { AbsoluteUrl: page };
+  } else if (COSMOS_DS_TYPES.has(opts.type)) {
+    const coll = trimmed(opts.collectionName);
+    if (coll) tp.collectionName = coll;
+  } else if (DYNAMICS_DS_TYPES.has(opts.type)) {
+    const ent = trimmed(opts.entityName);
+    if (ent) tp.entityName = ent;
   }
 
   return tp;
@@ -160,5 +192,10 @@ export function readDatasetTypeProperties(tp: Record<string, any> | undefined): 
     encodingName: t.encodingName ?? '',
     schema: t.schema ?? '',
     table: t.table ?? t.tableName ?? '',
+    relativeUrl: t.relativeUrl ?? '',
+    requestMethod: t.requestMethod ?? 'GET',
+    paginationRule: t.paginationRules?.AbsoluteUrl ?? '',
+    collectionName: t.collectionName ?? '',
+    entityName: t.entityName ?? '',
   };
 }

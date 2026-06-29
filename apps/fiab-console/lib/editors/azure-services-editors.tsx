@@ -29,6 +29,7 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import {
   DS_TYPES, DS_TYPE_LABELS, FILE_DS_TYPES, TABLE_DS_TYPES, COMPRESSION_CODECS,
+  REST_DS_TYPES, COSMOS_DS_TYPES, DYNAMICS_DS_TYPES,
   containerLabelFor, locationTypeFor, buildDatasetTypeProperties, readDatasetTypeProperties,
 } from '@/lib/azure/adf-dataset-builder';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -570,6 +571,12 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   const [encodingName, setEncodingName] = useState<string>('');
   const [tableSchema, setTableSchema] = useState<string>('');
   const [tableName, setTableName] = useState<string>('');
+  // REST / Cosmos / Dynamics guided fields (no raw typeProperties JSON).
+  const [relativeUrl, setRelativeUrl] = useState<string>('');
+  const [requestMethod, setRequestMethod] = useState<string>('GET');
+  const [paginationRule, setPaginationRule] = useState<string>('');
+  const [collectionName, setCollectionName] = useState<string>('');
+  const [entityName, setEntityName] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -618,6 +625,11 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
       setEncodingName(g.encodingName || '');
       setTableSchema(g.schema || '');
       setTableName(g.table || '');
+      setRelativeUrl(g.relativeUrl || '');
+      setRequestMethod(g.requestMethod || 'GET');
+      setPaginationRule(g.paginationRule || '');
+      setCollectionName(g.collectionName || '');
+      setEntityName(g.entityName || '');
     } catch (e: any) { setError(e?.message || String(e)); }
   }, []);
 
@@ -649,6 +661,11 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
         encodingName,
         schema: tableSchema,
         table: tableName,
+        relativeUrl,
+        requestMethod,
+        paginationRule,
+        collectionName,
+        entityName,
       });
       const body: AdfDatasetDTO = {
         name: selected,
@@ -672,7 +689,8 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     finally { setBusy(false); }
   }, [selected, linkedService, linkedServices, type, container, folder, file, compression,
       columnDelimiter, rowDelimiter, firstRowAsHeader, quoteChar, escapeChar, encodingName,
-      tableSchema, tableName, ds, loadDataset]);
+      tableSchema, tableName, relativeUrl, requestMethod, paginationRule, collectionName, entityName,
+      ds, loadDataset]);
 
   // v3.28 Phase 4.5: Ctrl+S triggers Save. Mirrors ADF Studio behavior.
   useEffect(() => {
@@ -874,6 +892,52 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
                 <div className={s.field}>
                   <Caption1>Table</Caption1>
                   <Input value={tableName} onChange={(_, d) => setTableName(d.value)} placeholder="FactSales" />
+                </div>
+              </div>
+            </div>
+          )}
+          {REST_DS_TYPES.has(type) && (
+            <div className={s.section}>
+              <Subtitle2>REST resource</Subtitle2>
+              <Caption1 className={s.hint}>Path appended to the linked service base URL — no raw JSON. Maps to dataset typeProperties.relativeUrl / requestMethod.</Caption1>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>Relative URL</Caption1>
+                  <Input value={relativeUrl} onChange={(_, d) => setRelativeUrl(d.value)} placeholder="v1/customers" />
+                </div>
+                <div className={s.field}>
+                  <Caption1>Request method</Caption1>
+                  <Dropdown value={requestMethod} selectedOptions={[requestMethod]} onOptionSelect={(_, d) => setRequestMethod(d.optionValue || 'GET')}>
+                    {['GET', 'POST'].map((m) => <Option key={m} value={m}>{m}</Option>)}
+                  </Dropdown>
+                </div>
+                <div className={s.field}>
+                  <Caption1>Pagination next-URL (optional)</Caption1>
+                  <Input value={paginationRule} onChange={(_, d) => setPaginationRule(d.value)} placeholder="$.paging.next" />
+                </div>
+              </div>
+            </div>
+          )}
+          {COSMOS_DS_TYPES.has(type) && (
+            <div className={s.section}>
+              <Subtitle2>Cosmos DB container</Subtitle2>
+              <Caption1 className={s.hint}>SQL-API container (collection) on the linked Cosmos DB account. Maps to typeProperties.collectionName.</Caption1>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>Container / collection</Caption1>
+                  <Input value={collectionName} onChange={(_, d) => setCollectionName(d.value)} placeholder="orders" />
+                </div>
+              </div>
+            </div>
+          )}
+          {DYNAMICS_DS_TYPES.has(type) && (
+            <div className={s.section}>
+              <Subtitle2>Dataverse / Dynamics entity</Subtitle2>
+              <Caption1 className={s.hint}>Logical entity (table) name on the linked Dataverse / Dynamics 365 environment. Maps to typeProperties.entityName.</Caption1>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>Entity name</Caption1>
+                  <Input value={entityName} onChange={(_, d) => setEntityName(d.value)} placeholder="account" />
                 </div>
               </div>
             </div>
