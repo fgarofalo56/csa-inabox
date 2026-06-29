@@ -172,7 +172,15 @@ function buildSetOrReplace(create: string, ingest: string): string {
   const m = create.match(/\.create(?:-merge|-or-alter)?\s+table\s+(\S+)\s*\(([\s\S]*?)\)/);
   if (!m) throw new Error(`load-sample: cannot parse create command: ${create.slice(0, 80)}`);
   const name = m[1];
-  const schema = m[2].replace(/\s+/g, ' ').trim(); // "id: string, name: string, ..."
+  // KQL datatable()/create-table schemas want `col:type` with NO space after the
+  // colon ("id: string" → SYN0002 at the *next* column). Strip whitespace around
+  // colons; keep ", " between columns for readability. Values are built separately
+  // below so datetime literals like datetime(2026-01-12T03:14:00Z) keep their colons.
+  const schema = m[2]
+    .replace(/\s+/g, ' ')
+    .replace(/\s*:\s*/g, ':')
+    .replace(/\s*,\s*/g, ', ')
+    .trim(); // "id:string, name:string, ..."
   const cols = schema.split(',').map((c) => {
     const [col, type] = c.split(':').map((x) => x.trim());
     return { col, type: (type || 'string').toLowerCase() };
@@ -194,6 +202,15 @@ function buildSetOrReplace(create: string, ingest: string): string {
   return `.set-or-replace ${name} <| datatable(${schema})[\n${flat.join(', ')}\n]`;
 }
 
+/**
+ * Strip the space after the colon in a create/alter table schema so KQL
+ * parses `(id:string, …)` not `(id: string, …)` (the latter triggers SYN0002).
+ * Safe because create/alter commands carry no value literals (no datetime colons).
+ */
+function normCreate(create: string): string {
+  return create.replace(/\s*:\s*/g, ':');
+}
+
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -209,7 +226,7 @@ export async function POST(req: NextRequest) {
     if (kind === 'investigation') {
       // Materialize every Node_*/Edge_* table Tapestry discovers.
       for (const t of INV_TABLES) {
-        await executeMgmtCommand(db, t.create);
+        await executeMgmtCommand(db, normCreate(t.create));
         await executeMgmtCommand(db, buildSetOrReplace(t.create, t.ingest));
       }
       return NextResponse.json({ ok: true, db, kind, tables: INV_TABLES.map((t) => t.name) });
@@ -218,7 +235,7 @@ export async function POST(req: NextRequest) {
     const create = kind === 'geo' ? GEO_KQL : GRAPH_KQL;
     const ingest = kind === 'geo' ? GEO_INGEST : GRAPH_INGEST;
     const table = kind === 'geo' ? 'SampleEarthquakes' : 'SampleSocialGraph';
-    await executeMgmtCommand(db, create);
+    await executeMgmtCommand(db, normCreate(create));
     await executeMgmtCommand(db, buildSetOrReplace(create, ingest));
     return NextResponse.json({ ok: true, db, table, kind });
   } catch (e: any) {
