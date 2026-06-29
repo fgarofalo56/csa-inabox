@@ -35,6 +35,7 @@ import {
   ArrowDownload20Regular,
   Organization20Regular,
   ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
+  PlugConnected20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -1376,6 +1377,23 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [deleteBusy, setDeleteBusy] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
+  // ---- Connection details dialog (GET .../connection) — server hostname,
+  // HTTP path, JDBC URL, CLI snippet read from the real warehouse odbc_params. ----
+  const [connOpen, setConnOpen] = useState(false);
+  const [connBusy, setConnBusy] = useState(false);
+  const [connErr, setConnErr] = useState<string | null>(null);
+  const [connData, setConnData] = useState<{ hostname?: string; httpPath?: string; port?: number; jdbcUrl?: string; cliSnippet?: string } | null>(null);
+  const openConn = useCallback(async () => {
+    if (!warehouseId) return;
+    setConnOpen(true); setConnBusy(true); setConnErr(null); setConnData(null);
+    try {
+      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/connection?warehouseId=${encodeURIComponent(warehouseId)}`);
+      const j = await r.json();
+      if (j.ok) setConnData(j); else setConnErr(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setConnErr(e?.message || String(e)); }
+    finally { setConnBusy(false); }
+  }, [id, warehouseId]);
+
   // ---- Save as table (CTAS) dialog — CREATE TABLE … USING DELTA AS SELECT … ----
   const [ctasOpen, setCtasOpen] = useState(false);
   const [ctasCatalog, setCtasCatalog] = useState('');
@@ -2312,6 +2330,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                 Delete
               </Button>
             </Tooltip>
+            <Tooltip content={!warehouseId ? 'Pick a warehouse first' : 'JDBC / ODBC / CLI connection details (drivers, server hostname, HTTP path)'} relationship="label">
+              <Button appearance="outline" icon={<PlugConnected20Regular />} disabled={!warehouseId} onClick={openConn}>
+                Connection
+              </Button>
+            </Tooltip>
             <Tooltip
               content={
                 !warehouseId ? 'Pick a warehouse first'
@@ -2505,6 +2528,51 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
 
           {/* Create dialog — POST .../create (Databricks SQL Warehouse on Comm/GCC; */}
           {/* Synapse Dedicated SQL pool on Gov). Azure-native default, no Fabric. */}
+          <Dialog open={connOpen} onOpenChange={(_, d) => setConnOpen(d.open)}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Connection details</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                    {connBusy && <Spinner size="small" label="Reading warehouse odbc_params…" labelPosition="after" />}
+                    {connErr && (
+                      <MessageBar intent="warning"><MessageBarBody>
+                        <MessageBarTitle>Connection details unavailable</MessageBarTitle>
+                        <span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{connErr}</span>
+                      </MessageBarBody></MessageBar>
+                    )}
+                    {connData && ([
+                      ['Server hostname', connData.hostname],
+                      ['HTTP path', connData.httpPath],
+                      ['Port', connData.port != null ? String(connData.port) : undefined],
+                      ['JDBC URL', connData.jdbcUrl],
+                      ['Databricks CLI', connData.cliSnippet],
+                    ] as Array<[string, string | undefined]>).filter(([, v]) => !!v).map(([label, value]) => (
+                      <Field key={label} label={label}>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
+                          <Input readOnly value={value!} style={{ flex: 1, fontFamily: 'monospace' }} />
+                          <Tooltip content="Copy" relationship="label">
+                            <Button appearance="subtle" icon={<Copy20Regular />} aria-label={`Copy ${label}`}
+                              onClick={() => { try { navigator.clipboard?.writeText(value!); } catch {} }} />
+                          </Tooltip>
+                        </div>
+                      </Field>
+                    ))}
+                    {connData && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        Authenticate with a Databricks personal access token (PAT) or Entra ID OAuth. Replace
+                        <code> &lt;PAT&gt; </code> in the CLI snippet with your token.
+                      </Caption1>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setConnOpen(false)}>Close</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
           <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
             <DialogSurface style={{ maxWidth: '580px' }}>
               <DialogBody>
