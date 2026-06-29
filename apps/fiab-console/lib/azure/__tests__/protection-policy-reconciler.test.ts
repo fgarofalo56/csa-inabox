@@ -11,7 +11,9 @@ vi.mock('@azure/identity', () => ({
   ChainedTokenCredential: class {}, DefaultAzureCredential: class {}, ManagedIdentityCredential: class {},
 }));
 vi.mock('@/lib/azure/aca-managed-identity', () => ({ AcaManagedIdentityCredential: class {} }));
-vi.mock('@/lib/azure/rbac-client', () => ({ enforceAccessGrant: vi.fn(), revokeAccessGrant: vi.fn(), listContainerRoleAssignments: vi.fn() }));
+vi.mock('@/lib/azure/rbac-client', () => ({ enforceAccessGrant: vi.fn(), revokeAccessGrant: vi.fn(), revokeStructuredGrant: vi.fn(), listContainerRoleAssignments: vi.fn() }));
+vi.mock('@/lib/azure/access-policy-client', () => ({ listWarehousePrincipals: vi.fn() }));
+vi.mock('@/lib/azure/kusto-client', () => ({ showDatabasePrincipals: vi.fn(), dropDatabasePrincipal: vi.fn(), kustoConfigGate: vi.fn() }));
 vi.mock('@/lib/azure/cosmos-client', () => ({ itemsContainer: vi.fn(), auditLogContainer: vi.fn() }));
 vi.mock('@/lib/azure/label-protection', () => ({ resolveItemBackingScope: vi.fn() }));
 
@@ -45,6 +47,25 @@ describe('computeReconcile (pure)', () => {
   it('retainFullControl=false drops issuer from target', () => {
     const p = computeReconcile(base({ retainFullControl: false }), []);
     expect(p.target).not.toContain('owner');
+  });
+});
+
+// The SQL/ADX revoke set is the SAME pure live−target diff the ADLS path uses:
+// every member/principal currently holding the backing store who is NOT on the
+// allow-list (and not the issuer) is dropped. Positive-grant: apps never author
+// Azure deny — they revoke non-allowed and grant missing.
+describe('computeReconcile — SQL/ADX revoke set', () => {
+  it('Synapse SQL: db-role members not in allow → revoke (issuer kept)', () => {
+    const sqlMembers = ['alice@x', 'eve@x', 'owner', 'bob'];
+    const p = computeReconcile(base({ allowPrincipals: ['alice@x', 'bob'] }), sqlMembers);
+    expect(p.toRevoke.sort()).toEqual(['eve@x']); // owner=issuer retained
+    expect(p.toGrant).toEqual([]);
+  });
+  it('ADX: cluster/db principals not in allow → revoke; missing → grant', () => {
+    const adxOids = ['oid-alice', 'oid-mallory', 'owner'];
+    const p = computeReconcile(base({ allowPrincipals: ['oid-alice', 'oid-bob'] }), adxOids);
+    expect(p.toRevoke).toEqual(['oid-mallory']);
+    expect(p.toGrant).toEqual(['oid-bob']);
   });
 });
 

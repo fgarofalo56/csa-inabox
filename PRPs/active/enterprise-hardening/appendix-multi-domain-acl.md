@@ -237,10 +237,12 @@ sovereign requirement (`no-fabric-dependency`).
    label stored on the item doc — no Graph call needed).
 2. Compute the target grant set = `allowPrincipals` (+ label issuer, who is
    never blocked — Learn note).
-3. Diff against live grants (`listContainerRoleAssignments`, SQL role members,
-   ADX principals) and converge via the proven `enforceAccessGrant` /
-   `revokeAccessGrant` path — *positive grants only* (apps cannot create Azure
-   deny assignments; enforcement = grant-allowlist + remove-others + RLS).
+3. Diff against live grants (`listContainerRoleAssignments`, Synapse SQL db-role
+   members, ADX `showDatabasePrincipals`) and converge — `enforceAccessGrant`
+   for missing; `revokeAccessGrant` (ADLS) / `revokeStructuredGrant` (SQL) /
+   `dropDatabasePrincipal` (ADX) for non-allowed — *positive grants only* (apps
+   cannot create Azure deny assignments; enforcement = grant-allowlist +
+   remove-others + RLS). Each backend gates honestly when unset.
 4. Write a drift/convergence receipt to `_auditLog`.
 
 **Deploy as an ACA Job** (KEDA cron, scale-to-zero) — see §3. Also exposed as an

@@ -7,10 +7,13 @@
  *       item docs (state.sensitivityLabel); pure Cosmos query, no Graph call;
  *   (b) target grant set = allowPrincipals + issuer (never blocked);
  *   (c) diff vs live grants — listContainerRoleAssignments on each item's ADLS
- *       backing container (reuse adls/rbac-client); SQL role members + ADX
- *       principals follow the same diff, gated honestly when not configured;
+ *       backing container (reuse adls/rbac-client); for warehouse items list
+ *       Synapse SQL db-role members (db_datareader/writer/owner) and for
+ *       kql-database items list ADX database principals — all three follow the
+ *       SAME live−target diff, gated honestly when their backend is unset;
  *   (d) converge POSITIVE grants only — enforceAccessGrant for missing,
- *       revokeAccessGrant for principals NOT in target. Apps cannot create Azure
+ *       revokeAccessGrant (ADLS) / revokeStructuredGrant (SQL) / dropDatabase-
+ *       Principal (ADX) for principals NOT in target. Apps cannot create Azure
  *       deny assignments, so enforcement = grant-allowlist + remove-others + RLS;
  *   (e) write a drift/convergence receipt to _auditLog.
  *
@@ -23,10 +26,13 @@
 import {
   enforceAccessGrant,
   revokeAccessGrant,
+  revokeStructuredGrant,
   type AccessGrantInput,
   type PrincipalType,
 } from './rbac-client';
 import { listContainerRoleAssignments } from './rbac-client';
+import { listWarehousePrincipals } from './access-policy-client';
+import { showDatabasePrincipals, dropDatabasePrincipal, kustoConfigGate } from './kusto-client';
 import { itemsContainer, auditLogContainer } from './cosmos-client';
 import { resolveItemBackingScope } from './label-protection';
 import type { ProtectionPolicy } from './protection-policy-client';
@@ -118,8 +124,10 @@ async function listLabeledItems(policy: ProtectionPolicy): Promise<WorkspaceItem
 
 /**
  * Converge one policy. Real ADLS RBAC converge per labeled lakehouse container;
- * warehouse/kql backings carry the plan but enforce via enforceAccessGrant.
- * Returns counters; idempotent; writes a receipt to the audit log.
+ * warehouse converges via Synapse SQL db-role membership (list + drop-others)
+ * and kql-database via ADX database principals (list + drop-others). All three
+ * grant the allow-list and revoke non-allowed; gated honestly when a backend is
+ * unset. Returns counters; idempotent; writes a receipt to the audit log.
  */
 export async function reconcilePolicy(policy: ProtectionPolicy): Promise<ReconcileReceipt> {
   const at = new Date().toISOString();
@@ -146,11 +154,17 @@ export async function reconcilePolicy(policy: ProtectionPolicy): Promise<Reconci
   for (const item of items) {
     const scope = resolveItemBackingScope(item);
     if ('pending' in scope) { detail.push(scope.pending); continue; }
-    // Only ADLS-container backings have a list+diff today; others enforce
-    // allow-list grants without a live-diff revoke (no silent no-op).
+    // Per-scope live enumeration → POSITIVE-grant converge: enforceAccessGrant
+    // for missing target principals, revoke for live principals NOT in target.
+    // ADLS = ARM role assignments; warehouse = Synapse SQL db-role members;
+    // kql = ADX database principals. Each gates honestly when its backend is
+    // unset (status:gated) — never a silent no-op (no-vaporware.md).
     let live: string[] = [];
     const liveTypes = new Map<string, PrincipalType>();
     const liveAssignmentIds = new Map<string, string>();
+    // ADX rows keyed by objectId so a non-allowed principal is dropped by its
+    // real role + FQN (apps cannot author Azure deny — remove-others only).
+    const adxRevoke = new Map<string, { role: string; fqn: string }[]>();
     if (scope.scopeType === 'adls-container') {
       try {
         const assignments = await listContainerRoleAssignments(scope.scopeRef);
@@ -163,6 +177,25 @@ export async function reconcilePolicy(policy: ProtectionPolicy): Promise<Reconci
         }
       }
       catch (e: any) { gate = gate || `ADLS RBAC list gated: ${String(e?.message || e).slice(0, 120)}`; }
+    } else if (scope.scopeType === 'warehouse') {
+      const wh = await listWarehousePrincipals().catch((e: any) => ({ gate: String(e?.message || e).slice(0, 120) }));
+      if ('gate' in wh) gate = gate || wh.gate;
+      else live = wh.principals;
+    } else if (scope.scopeType === 'kql-database') {
+      if (kustoConfigGate()) { gate = gate || 'ADX not configured: set LOOM_KUSTO_CLUSTER_URI to converge KQL-database access.'; }
+      else {
+        try {
+          const rows = await showDatabasePrincipals(scope.scopeRef);
+          for (const r of rows) {
+            const key = r.objectId || r.fqn;
+            if (!key) continue;
+            const list = adxRevoke.get(key) || [];
+            list.push({ role: r.role, fqn: r.fqn });
+            adxRevoke.set(key, list);
+          }
+          live = [...adxRevoke.keys()];
+        } catch (e: any) { gate = gate || `ADX principals list gated: ${String(e?.message || e).slice(0, 120)}`; }
+      }
     }
     const plan = computeReconcile(policy, live);
     for (const principalId of plan.toGrant) {
@@ -181,8 +214,24 @@ export async function reconcilePolicy(policy: ProtectionPolicy): Promise<Reconci
     }
     for (const principalId of plan.toRevoke) {
       try {
-        const assignmentId = liveAssignmentIds.get(principalId);
-        if (assignmentId) { await revokeAccessGrant(assignmentId); grantsRevoked++; }
+        if (scope.scopeType === 'adls-container') {
+          const assignmentId = liveAssignmentIds.get(principalId);
+          if (assignmentId) { await revokeAccessGrant(assignmentId); grantsRevoked++; }
+        } else if (scope.scopeType === 'warehouse') {
+          // Drop the Entra DB user from every data-access role (one revoke).
+          for (const permission of ['read', 'write', 'admin'] as const) {
+            await revokeStructuredGrant({
+              principalId, principalName: principalId, principalType: 'User',
+              scopeType: 'warehouse', scopeRef: scope.scopeRef, permission,
+            });
+          }
+          grantsRevoked++;
+        } else if (scope.scopeType === 'kql-database') {
+          for (const { role, fqn } of adxRevoke.get(principalId) || []) {
+            await dropDatabasePrincipal(scope.scopeRef, role, fqn);
+          }
+          grantsRevoked++;
+        }
       } catch { errors++; }
     }
   }
