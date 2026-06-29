@@ -742,15 +742,26 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
     if (loading) return <Spinner label="Loading data product…" />;
     if (loadErr) {
       return (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Unable to load this data product</MessageBarTitle>
-            {loadErr}
-          </MessageBarBody>
-        </MessageBar>
+        <EmptyState
+          icon={<DatabaseRegular style={{ fontSize: 44 }} />}
+          title="Couldn't open this data product"
+          body={loadErr}
+          primaryAction={{ label: 'Browse the marketplace', href: '/marketplace' }}
+          secondaryAction={{ label: 'Create a data product', href: '/items/data-product/new' }}
+        />
       );
     }
-    if (!product) return <Body1>No data product to show.</Body1>;
+    if (!product) {
+      return (
+        <EmptyState
+          icon={<DatabaseRegular style={{ fontSize: 44 }} />}
+          title="Data product not found"
+          body="This data product may have been deleted, or you may not have access to it. Browse the marketplace to find published data products, or create a new one."
+          primaryAction={{ label: 'Browse the marketplace', href: '/marketplace' }}
+          secondaryAction={{ label: 'Create a data product', href: '/items/data-product/new' }}
+        />
+      );
+    }
 
     const owners: DataProductOwner[] = product.owners ?? [];
 
