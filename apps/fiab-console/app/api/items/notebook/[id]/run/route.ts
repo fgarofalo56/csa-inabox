@@ -276,7 +276,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       try {
         const items = await itemsContainer();
         const pendingRuns = { ...(state.pendingRuns || {}) };
-        if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: effectiveStmtKind, cellId };
+        if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: effectiveStmtKind, cellId, startedAt: new Date().toISOString() };
         await items.item(nb.id, workspaceId).replace({
           ...nb,
           state: {

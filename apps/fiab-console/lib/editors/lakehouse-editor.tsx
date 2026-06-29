@@ -42,6 +42,7 @@ import {
   History20Regular,
   CloudArrowUp20Regular,
   Copy20Regular,
+  Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { OpenInPbiDesktopButton } from './components/open-in-pbi-desktop-button';
@@ -451,6 +452,18 @@ export function LakehouseEditor({ item, id }: Props) {
   // ---- Delta maintenance dialog (OPTIMIZE / VACUUM / ZORDER BY) ----
   const [maintainOpen, setMaintainOpen] = useState(false);
   const [maintainTable, setMaintainTable] = useState('');
+
+  // ---- Add-to-data-agent dialog (Fabric "Add to AI skill / data agent") ----
+  // Lists the caller's real data-agent items, lets them pick one (or jump to
+  // create a new one), then PATCHes its sources to add THIS lakehouse as a
+  // grounded source — real Cosmos-backed routes, no mock.
+  interface DaAgentRow { id: string; displayName: string; state?: { sources?: unknown[] } }
+  const [daOpen, setDaOpen] = useState(false);
+  const [daAgents, setDaAgents] = useState<DaAgentRow[] | null>(null);
+  const [daLoadErr, setDaLoadErr] = useState<string | null>(null);
+  const [daSel, setDaSel] = useState<string>('');
+  const [daBusy, setDaBusy] = useState(false);
+  const [daMsg, setDaMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   // Resolve ZORDER candidate columns from the installed bundle's DDL (available
   // even before the live ADLS schema is read). Falls back to [] when unknown.
   const maintainColumns = useMemo(() => {
@@ -1649,7 +1662,10 @@ export function LakehouseEditor({ item, id }: Props) {
   }, []);
 
   // ---- selection / preview -------------------------------------------
-  const selectFile = useCallback(async (entry: PathEntry) => {
+  // `opts` lets callers preview a managed Delta TABLE (format='DELTA') at the
+  // Fabric 1000-row sample cap — the per-table "Preview" action below passes
+  // { top: 1000, format: 'DELTA' }; file previews fall back to detect + 100.
+  const selectFile = useCallback(async (entry: PathEntry, opts?: { top?: number; format?: string }) => {
     setActivePath(entry);
     setActionError(null);
     if (entry.isDirectory) {
@@ -1681,6 +1697,8 @@ export function LakehouseEditor({ item, id }: Props) {
     } catch { /* non-browser / no history — ignore */ }
     try {
       const qs = new URLSearchParams({ container: activeContainer, path: entry.name });
+      if (opts?.top) qs.set('top', String(opts.top));
+      if (opts?.format) qs.set('format', opts.format);
       const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
       const j = await parseJsonOrError<PreviewResponse>(r, 'Preview');
       setPreview(j);
@@ -1725,6 +1743,53 @@ export function LakehouseEditor({ item, id }: Props) {
     deepLinkRef.current = null;
     void selectFile({ name: dl.path, isDirectory: false, size: 0 });
   }, [containers, activeContainer, selectFile]);
+
+  // Preview a managed Delta table at the Fabric 1000-row cap. `relPath` is the
+  // table directory relative to the container (e.g. Tables/customers); forcing
+  // FORMAT='DELTA' makes the Serverless OPENROWSET read the Delta log, not a
+  // single file. Reuses the shared DeltaPreviewGrid on the Preview tab.
+  const previewTable = useCallback((relPath: string) => {
+    setPreviewMode('table');
+    void selectFile({ name: relPath, isDirectory: false, size: 0 }, { top: 1000, format: 'DELTA' });
+    setTab('preview');
+  }, [selectFile]);
+
+  // Open the Add-to-data-agent dialog: load the caller's real data agents.
+  const openAddToAgent = useCallback(async () => {
+    setDaOpen(true); setDaMsg(null); setDaSel(''); setDaAgents(null); setDaLoadErr(null);
+    try {
+      const r = await fetch('/api/items/data-agent');
+      const j = await parseJsonOrError<{ ok: boolean; items?: DaAgentRow[]; error?: string }>(r, 'List data agents');
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setDaAgents(j.items || []);
+    } catch (e: any) { setDaLoadErr(e?.message || String(e)); }
+  }, []);
+
+  // Add THIS lakehouse as a grounded source on the selected data agent (real PATCH).
+  const addToAgent = useCallback(async () => {
+    const agent = (daAgents || []).find((a) => a.id === daSel);
+    if (!agent) return;
+    setDaBusy(true); setDaMsg(null);
+    try {
+      const lhName = itemQ.data?.displayName || `lakehouse-${id}`;
+      const sourceId = `lakehouse:${id}`;
+      const existing = Array.isArray(agent.state?.sources) ? agent.state!.sources! : [];
+      if (existing.some((s: any) => s?.id === sourceId)) {
+        setDaMsg({ intent: 'success', text: `${lhName} is already a source on ${agent.displayName}.` });
+        setDaBusy(false); return;
+      }
+      const src = { id: sourceId, type: 'lakehouse', name: lhName, tables: maintainTable || '', instructions: '', description: `Lakehouse ${lhName} (${id})`, examples: [] };
+      const nextState = { ...(agent.state || {}), sources: [...existing, src] };
+      const r = await fetch(`/api/items/data-agent/${agent.id}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: nextState }),
+      });
+      const j = await parseJsonOrError<{ ok?: boolean; error?: string }>(r, 'Add source');
+      if (j.error || j.ok === false) throw new Error(j.error || 'PATCH failed');
+      setDaMsg({ intent: 'success', text: `Added ${lhName} to ${agent.displayName}. Open the agent's Build tab to ground it.` });
+      setDaAgents((prev) => (prev || []).map((a) => a.id === agent.id ? { ...a, state: nextState } : a));
+    } catch (e: any) { setDaMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setDaBusy(false); }
+  }, [daAgents, daSel, itemQ.data?.displayName, id, maintainTable]);
 
   // ---- file actions ---------------------------------------------------
   const onUploadClick = useCallback(() => fileInputRef.current?.click(), []);
@@ -2314,13 +2379,25 @@ export function LakehouseEditor({ item, id }: Props) {
           disabled: !(tab === 'tables' && maintainTable),
           title: !(tab === 'tables' && maintainTable) ? 'Select a table in the Tables tab first' : 'OPTIMIZE / VACUUM / ZORDER BY',
         },
+        {
+          label: 'OneLake security', icon: <ShieldTask20Regular />,
+          onClick: () => setTab('security'),
+          title: 'Manage OneLake data-access roles + row/column security for this lakehouse',
+        },
+      ]},
+      { label: 'AI', actions: [
+        {
+          label: 'Add to data agent', icon: <Sparkle20Regular />,
+          onClick: () => { void openAddToAgent(); },
+          title: 'Ground a data agent on this lakehouse (Fabric "Add to AI skill")',
+        },
       ]},
     ]},
   ], [
     writeBlocked, writeTitle, canFileAction, uploading, runningUploads.length,
     onUploadClick, onFolderUploadClick, onNewFolder, refreshActive, openShortcutWizard, router,
     notebookHref, hasFile, activePath, selectFile, onLoadToTables, openLabelDialog,
-    activeContainer, openPerms, openSettings, tab, maintainTable,
+    activeContainer, openPerms, openSettings, tab, maintainTable, openAddToAgent,
   ]);
 
   // ---- render ---------------------------------------------------------
@@ -3031,7 +3108,12 @@ export function LakehouseEditor({ item, id }: Props) {
                                               <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{shortcutLakehouseId}.{schemaName}.{tableName}</code></TableCell>
                                               <TableCell>
                                                 <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalS }}>
-                                                  <Button size="small" appearance="primary"
+                                                  <Button size="small" appearance="primary" icon={<Eye20Regular />}
+                                                    title="Sample 1,000 rows"
+                                                    onClick={() => previewTable(t.name)}>
+                                                    Preview
+                                                  </Button>
+                                                  <Button size="small" appearance="outline"
                                                     onClick={() => {
                                                       setSqlText(`-- 4-part name: ${shortcutLakehouseId}.${schemaName}.${tableName}\n-- Serverless view (if registered): SELECT TOP 100 * FROM loom_lakehouse.${schemaName}.${tableName};\nSELECT TOP 100 *\nFROM OPENROWSET(BULK 'https://__account__.dfs.core.windows.net/${activeContainer}/${t.name}', FORMAT='DELTA') AS r;`);
                                                       setTab('sql');
@@ -3115,15 +3197,24 @@ export function LakehouseEditor({ item, id }: Props) {
                                     <TableCell className={s.cell}>{typeof t.sizeBytes === 'number' ? formatBytes(t.sizeBytes) : '—'}</TableCell>
                                     <TableCell className={s.cell}>{t.lastModified ? new Date(t.lastModified).toLocaleString() : '—'}</TableCell>
                                     <TableCell>
-                                      <Button size="small" appearance="primary"
-                                        disabled={t.format !== 'delta'}
-                                        title={t.format !== 'delta' ? 'OPENROWSET DELTA query available for Delta tables' : undefined}
-                                        onClick={() => {
-                                          setSqlText(`-- Read Delta table ${t.schema}.${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK '${t.bulkUrl}', FORMAT='DELTA') AS r;`);
-                                          setTab('sql');
-                                        }}>
-                                        Query
-                                      </Button>
+                                      <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalS }}>
+                                        <Button size="small" appearance="primary"
+                                          disabled={t.format !== 'delta'}
+                                          icon={<Eye20Regular />}
+                                          title={t.format !== 'delta' ? 'Preview available for Delta tables' : 'Sample 1,000 rows'}
+                                          onClick={() => previewTable(t.adlsPath)}>
+                                          Preview
+                                        </Button>
+                                        <Button size="small" appearance="outline"
+                                          disabled={t.format !== 'delta'}
+                                          title={t.format !== 'delta' ? 'OPENROWSET DELTA query available for Delta tables' : undefined}
+                                          onClick={() => {
+                                            setSqlText(`-- Read Delta table ${t.schema}.${t.name}\nSELECT TOP 100 *\nFROM OPENROWSET(BULK '${t.bulkUrl}', FORMAT='DELTA') AS r;`);
+                                            setTab('sql');
+                                          }}>
+                                          Query
+                                        </Button>
+                                      </span>
                                     </TableCell>
                                   </TableRow>
                                 ))}
@@ -4766,6 +4857,51 @@ export function LakehouseEditor({ item, id }: Props) {
             tableName={maintainTable}
             columns={maintainColumns}
           />
+
+          {/* Add-to-data-agent dialog — Fabric "Add to AI skill / data agent". */}
+          <Dialog open={daOpen} onOpenChange={(_, d) => setDaOpen(d.open)}>
+            <DialogSurface style={{ maxWidth: 520 }}>
+              <DialogBody>
+                <DialogTitle>Add lakehouse to a data agent</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                    <Body1>
+                      Ground a data agent on <strong>{itemQ.data?.displayName || `lakehouse-${id}`}</strong> so it
+                      can answer natural-language questions over its Delta tables. Open the agent&apos;s Build tab
+                      after adding to pick tables and write grounding instructions.
+                    </Body1>
+                    {daLoadErr && (
+                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not list data agents</MessageBarTitle>{daLoadErr}</MessageBarBody></MessageBar>
+                    )}
+                    {daMsg && (
+                      <MessageBar intent={daMsg.intent}><MessageBarBody>{daMsg.text}</MessageBarBody></MessageBar>
+                    )}
+                    {daAgents === null && !daLoadErr && <Spinner size="tiny" label="Loading data agents…" labelPosition="after" />}
+                    {daAgents !== null && daAgents.length === 0 && (
+                      <MessageBar intent="info"><MessageBarBody>No data agents yet. Create one, then return to add this lakehouse as a source.</MessageBarBody></MessageBar>
+                    )}
+                    {daAgents !== null && daAgents.length > 0 && (
+                      <Field label="Data agent">
+                        <Dropdown
+                          placeholder="Select a data agent"
+                          selectedOptions={daSel ? [daSel] : []}
+                          value={daAgents.find((a) => a.id === daSel)?.displayName || ''}
+                          onOptionSelect={(_, d) => setDaSel(d.optionValue || '')}
+                        >
+                          {daAgents.map((a) => <Option key={a.id} value={a.id}>{a.displayName}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" icon={<Add20Regular />} onClick={() => router.push('/items/data-agent/new')}>New data agent</Button>
+                  <Button appearance="subtle" onClick={() => setDaOpen(false)}>Close</Button>
+                  <Button appearance="primary" disabled={!daSel || daBusy} icon={daBusy ? <Spinner size="tiny" /> : <Sparkle20Regular />} onClick={() => void addToAgent()}>Add as source</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           {/* New schema dialog (F9) — name = letters/digits/underscores; 'dbo' reserved. */}
           <Dialog open={newSchemaOpen} onOpenChange={(_, d) => setNewSchemaOpen(d.open)}>

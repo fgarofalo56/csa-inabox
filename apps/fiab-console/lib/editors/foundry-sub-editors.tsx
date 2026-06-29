@@ -24,6 +24,7 @@ import {
   Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions, Breadcrumb, BreadcrumbItem, BreadcrumbButton,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -31,7 +32,9 @@ import {
   BrainCircuit20Regular, FlowchartCircle20Regular, ChartMultiple20Regular,
   ShieldTask20Regular, Search20Regular, BranchCompare20Regular,
   Server20Regular, Database20Regular,
+  Folder20Regular, Document20Regular, FolderOpen20Regular, ArrowUp20Regular, TableSimple20Regular,
 } from '@fluentui/react-icons';
+import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -2670,6 +2673,211 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
 // 8. DatasetEditor
 // =====================================================================
 
+// The five DLZ medallion containers the lakehouse data-plane allow-lists; a
+// dataset whose dataUri lands in one of these previews + profiles against the
+// PRIMARY account without an explicit account param. Others still preview via
+// the account-scoped route, but Spark profiling (table-stats) is gated to these.
+const DLZ_KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'];
+
+interface ParsedAdls { account: string; container: string; path: string; }
+
+/**
+ * Parse an `abfss://<container>@<account>.dfs.<suffix>/<path>` or
+ * `https://<account>.dfs.<suffix>/<container>/<path>` data-asset URI into its
+ * {account, container, path}. Returns null for non-ADLS URIs (azureml://, etc.)
+ * so the caller can surface an honest "not previewable" gate instead of guessing.
+ */
+function parseAdlsUri(uri: string | undefined): ParsedAdls | null {
+  if (!uri) return null;
+  const abfss = uri.match(/^abfss:\/\/([^@/]+)@([^./]+)\.dfs\.[^/]+\/(.*)$/i);
+  if (abfss) return { container: abfss[1], account: abfss[2], path: abfss[3] };
+  const https = uri.match(/^https:\/\/([^./]+)\.dfs\.[^/]+\/([^/]+)\/(.*)$/i);
+  if (https) return { account: https[1], container: https[2], path: https[3] };
+  return null;
+}
+
+/** A folder path the user is currently sitting in (prefix), plus its breadcrumb. */
+function crumbsFor(prefix: string): string[] {
+  return prefix.split('/').filter(Boolean);
+}
+
+/**
+ * AdlsBrowseDialog — modal ADLS Gen2 file browser for picking a dataset URI.
+ * Lists the real DLZ containers (/api/lakehouse/containers) then walks paths
+ * (/api/lakehouse/paths); selecting a file → uri_file, a folder → uri_folder.
+ * Emits the abfss URI the new-asset form posts. Honest gate when no container
+ * is reachable. Parity with the portal "Browse" picker when registering data.
+ */
+function AdlsBrowseDialog({ open, onClose, onPick }: {
+  open: boolean; onClose: () => void;
+  onPick: (uri: string, dataType: 'uri_file' | 'uri_folder') => void;
+}) {
+  const s = useStyles();
+  const [containers, setContainers] = useState<{ name: string; url: string }[] | null>(null);
+  const [gate, setGate] = useState<string | null>(null);
+  const [container, setContainer] = useState<string>('');
+  const [account, setAccount] = useState<string>('');
+  const [prefix, setPrefix] = useState('');
+  const [entries, setEntries] = useState<{ name: string; isDirectory: boolean; size: number }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setContainer(''); setPrefix(''); setEntries([]); setErr(null); setGate(null);
+    (async () => {
+      const r = await fetch('/api/lakehouse/containers');
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate.remediation || j.gate.reason); setContainers([]); return; }
+      const cs = j.containers || [];
+      setContainers(cs);
+      if (!cs.length) setGate('No DLZ ADLS Gen2 containers reachable. Set LOOM_LANDING_URL / LOOM_BRONZE_URL etc.');
+    })();
+  }, [open]);
+
+  const loadPaths = useCallback(async (c: string, p: string) => {
+    setLoading(true); setErr(null);
+    const r = await fetch(`/api/lakehouse/paths?container=${encodeURIComponent(c)}&prefix=${encodeURIComponent(p)}`);
+    const j = await r.json();
+    if (!j.ok) setErr(j.error || 'List failed'); else setEntries(j.paths || []);
+    setLoading(false);
+  }, []);
+
+  const enterContainer = (c: { name: string; url: string }) => {
+    const acct = (c.url.match(/^https:\/\/([^./]+)\./i) || [])[1] || '';
+    setContainer(c.name); setAccount(acct); setPrefix(''); loadPaths(c.name, '');
+  };
+  const openDir = (name: string) => { setPrefix(name); loadPaths(container, name); };
+  const dfsHost = useMemo(() => (containers?.find((c) => c.name === container)?.url.match(/^https:\/\/([^/]+)/i) || [])[1] || `${account}.dfs.core.windows.net`, [containers, container, account]);
+  const pickUri = (path: string) => `abfss://${container}@${dfsHost}/${path.replace(/^\/+/, '')}`;
+  const goUp = () => { const next = prefix.split('/').slice(0, -1).join('/'); setPrefix(next); loadPaths(container, next); };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 720 }}>
+        <DialogBody>
+          <DialogTitle>Browse ADLS Gen2 for a data URI</DialogTitle>
+          <DialogContent>
+            {gate ? <ErrorBar msg={gate} notDeployed /> : !container ? (
+              containers === null ? <TableSkeleton rows={4} /> : (
+                <div className={s.tableWrap}>
+                  <Table size="small"><TableHeader><TableRow><TableHeaderCell>Container</TableHeaderCell><TableHeaderCell>Account</TableHeaderCell></TableRow></TableHeader>
+                    <TableBody>
+                      {containers.map((c) => (
+                        <TableRow key={c.name} onClick={() => enterContainer(c)} style={{ cursor: 'pointer' }}>
+                          <TableCell className={s.cell}><FolderOpen20Regular /> <strong>{c.name}</strong></TableCell>
+                          <TableCell className={s.cell}>{(c.url.match(/^https:\/\/([^./]+)\./i) || [])[1] || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody></Table>
+                </div>
+              )
+            ) : (
+              <>
+                <div className={s.toolbar}>
+                  <Breadcrumb>
+                    <BreadcrumbItem><BreadcrumbButton onClick={() => { setContainer(''); setPrefix(''); }}>{container}</BreadcrumbButton></BreadcrumbItem>
+                    {crumbsFor(prefix).map((seg) => (<BreadcrumbItem key={seg}><BreadcrumbButton>{seg}</BreadcrumbButton></BreadcrumbItem>))}
+                  </Breadcrumb>
+                  {prefix && <Button size="small" icon={<ArrowUp20Regular />} onClick={goUp}>Up</Button>}
+                  <Button size="small" appearance="primary" onClick={() => onPick(pickUri(prefix), 'uri_folder')}>Use this folder</Button>
+                </div>
+                {err && <ErrorBar msg={err} />}
+                {loading ? <TableSkeleton rows={4} /> : (
+                  <div className={s.tableWrap}>
+                    <Table size="small"><TableBody>
+                      {entries.length === 0 && <TableRow><TableCell className={s.cell}>Empty.</TableCell></TableRow>}
+                      {entries.map((e) => {
+                        const leaf = e.name.split('/').pop() || e.name;
+                        return (
+                          <TableRow key={e.name}>
+                            <TableCell className={s.cell}>
+                              {e.isDirectory
+                                ? <Button size="small" appearance="subtle" icon={<Folder20Regular />} onClick={() => openDir(e.name)}>{leaf}</Button>
+                                : <span><Document20Regular /> {leaf}</span>}
+                            </TableCell>
+                            <TableCell className={s.cell}>{e.isDirectory ? 'folder' : `${(e.size / 1024).toFixed(1)} KB`}</TableCell>
+                            <TableCell className={s.cell}><Button size="small" onClick={() => onPick(pickUri(e.name), e.isDirectory ? 'uri_folder' : 'uri_file')}>Select</Button></TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody></Table>
+                  </div>
+                )}
+              </>
+            )}
+          </DialogContent>
+          <DialogActions><Button appearance="secondary" onClick={onClose}>Close</Button></DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/**
+ * DatasetPreviewPanel — live data preview + schema profiler for a registered
+ * data asset version. Parses the asset's abfss/https dataUri, fetches up to 50
+ * rows via /api/lakehouse/preview (Synapse Serverless OPENROWSET), and renders
+ * the shared DeltaPreviewGrid. The "Profile schema" action runs a real Spark
+ * summary() via /api/lakehouse/table-stats (polled) so per-column min/max/mean/
+ * stddev/null-count + a distribution histogram fill the grid's stats panel.
+ */
+function DatasetPreviewPanel({ uri }: { uri: string | undefined }) {
+  const parsed = useMemo(() => parseAdlsUri(uri), [uri]);
+  const [pv, setPv] = useState<{ loading: boolean; cols: string[]; rows: unknown[][]; total: number; ms?: number; truncated?: boolean; error?: string } | null>(null);
+  const [stats, setStats] = useState<Record<string, ColStat> | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const known = parsed ? DLZ_KNOWN_CONTAINERS.includes(parsed.container) : false;
+
+  const runPreview = useCallback(async () => {
+    if (!parsed) return;
+    setPv({ loading: true, cols: [], rows: [], total: 0 });
+    const qs = new URLSearchParams({ container: parsed.container, path: parsed.path });
+    if (!known) qs.set('account', parsed.account);
+    const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
+    const j = await r.json();
+    if (!j.ok) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.error || 'Preview failed' }); return; }
+    if (j.previewable === false) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.message || 'Not tabular — not previewable.' }); return; }
+    const allRows = (j.rows || []) as unknown[][];
+    setPv({ loading: false, cols: j.columns || [], rows: allRows.slice(0, 50), total: j.rowCount ?? allRows.length, ms: j.executionMs, truncated: allRows.length > 50 || !!j.truncated });
+  }, [parsed, known]);
+
+  useEffect(() => { if (parsed) runPreview(); else setPv(null); }, [parsed, runPreview]);
+
+  const profile = useCallback(async () => {
+    if (!parsed || !known) return;
+    setStatsLoading(true); setStatsError(null); setStats(null);
+    let qs = new URLSearchParams({ container: parsed.container, path: parsed.path });
+    let r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`);
+    let j = await r.json();
+    for (let i = 0; i < 40 && j.ok && j.status !== 'available'; i++) {
+      await new Promise((res) => setTimeout(res, 3000));
+      qs = new URLSearchParams({ jobId: j.jobId, container: parsed.container, path: parsed.path });
+      r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`); j = await r.json();
+    }
+    if (j.ok && j.status === 'available') setStats(j.stats || {});
+    else setStatsError(j.error || 'Profiler timed out.');
+    setStatsLoading(false);
+  }, [parsed, known]);
+
+  if (!uri) return <Caption1>This version has no data URI.</Caption1>;
+  if (!parsed) return <ErrorBar msg={`URI is not an ADLS path (${uri}). In-browser preview supports abfss:// / https:// DLZ paths.`} notDeployed />;
+  if (pv?.loading || !pv) return <TableSkeleton rows={6} />;
+  if (pv.error) return <ErrorBar msg={pv.error} />;
+  return (
+    <>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Button size="small" icon={<TableSimple20Regular />} onClick={runPreview}>Reload preview</Button>
+        <Button size="small" appearance="primary" disabled={!known || statsLoading} onClick={profile}>{statsLoading ? 'Profiling…' : 'Profile schema'}</Button>
+        {!known && <Caption1>Schema profiler runs on the DLZ medallion containers (bronze/silver/gold/landing/csv-imports); this asset is in <code>{parsed.container}</code>.</Caption1>}
+      </div>
+      <DeltaPreviewGrid columns={pv.cols} rows={pv.rows} rowCount={Math.min(pv.total, 50)} executionMs={pv.ms} truncated={pv.truncated}
+        columnStats={stats} statsLoading={statsLoading} statsError={statsError} mode="file" />
+    </>
+  );
+}
+
 export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const isNew = id === 'new' || id === 'create';
@@ -2690,6 +2898,8 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [form, setForm] = useState({ name: '', dataType: 'uri_folder', dataUri: '', version: '1', description: '' });
   const [msg, setMsg] = useState<string | null>(null);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [tab, setTab] = useState<'versions' | 'preview'>('versions');
 
   const create = async () => {
     setMsg(null);
@@ -2737,7 +2947,11 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
               <Option value="uri_folder">uri_folder</Option>
               <Option value="mltable">mltable</Option>
             </Dropdown>
-            <span>URI</span><Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." />
+            <span>URI</span>
+            <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
+              <Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." style={{ flex: 1, minWidth: 240 }} />
+              <Button icon={<FolderOpen20Regular />} onClick={() => setBrowseOpen(true)}>Browse…</Button>
+            </div>
             <span>Version</span><Input value={form.version} onChange={(_, d) => setForm((f) => ({ ...f, version: d.value }))} />
             <span>Description</span><Input value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
           </div>
@@ -2768,8 +2982,14 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
           </div>
         )}
       </div>
+      <AdlsBrowseDialog open={browseOpen} onClose={() => setBrowseOpen(false)}
+        onPick={(uri, dataType) => { setForm((f) => ({ ...f, dataUri: uri, dataType })); setBrowseOpen(false); }} />
     </Shell>;
   }
+
+  // Active version drives the preview/profile panel — latest by default.
+  const versions: any[] = detail.data?.versions || [];
+  const activeUri = detail.data?.asset?.dataUri || versions[0]?.dataUri;
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
@@ -2777,24 +2997,31 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
         <>
           <SectionHead icon={<Database20Regular />}>{detail.data.asset.name}</SectionHead>
           <Body1>{detail.data.asset.description || '—'}</Body1>
-          <div className={s.tableWrap}>
-            <Table size="small">
-              <TableHeader><TableRow>
-                <TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
-                <TableHeaderCell>URI</TableHeaderCell><TableHeaderCell>Created</TableHeaderCell>
-              </TableRow></TableHeader>
-              <TableBody>
-                {(detail.data.versions || []).map((v: any) => (
-                  <TableRow key={v.version}>
-                    <TableCell className={s.cell}><strong>{v.version}</strong></TableCell>
-                    <TableCell className={s.cell}>{v.dataType || '—'}</TableCell>
-                    <TableCell className={s.cell}>{v.dataUri || '—'}</TableCell>
-                    <TableCell className={s.cell}>{v.createdAt || '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+            <Tab value="versions">Versions ({versions.length})</Tab>
+            <Tab value="preview">Data &amp; schema</Tab>
+          </TabList>
+          {tab === 'versions' && (
+            <div className={s.tableWrap}>
+              <Table size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>URI</TableHeaderCell><TableHeaderCell>Created</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {versions.map((v: any) => (
+                    <TableRow key={v.version}>
+                      <TableCell className={s.cell}><strong>{v.version}</strong></TableCell>
+                      <TableCell className={s.cell}>{v.dataType || '—'}</TableCell>
+                      <TableCell className={s.cell}>{v.dataUri || '—'}</TableCell>
+                      <TableCell className={s.cell}>{v.createdAt || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+          {tab === 'preview' && <DatasetPreviewPanel uri={activeUri} />}
         </>
       )}
     </div>
