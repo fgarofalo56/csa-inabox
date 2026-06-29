@@ -161,6 +161,39 @@ p-frank,e-meet1,2026-02-18T16:50:00Z`,
   },
 ];
 
+/**
+ * Convert a `.create-or-alter table X (schema)` + `.ingest inline into table X <| <csv>`
+ * pair into a `.set-or-replace X <| datatable(schema)[typed values]` command.
+ * Inline ingestion (`<|` CSV) is rejected by the ADX engine /v1/rest/mgmt REST
+ * endpoint; a datatable-backed set-or-replace is REST-friendly AND idempotent
+ * (re-running replaces the sample rows rather than duplicating them).
+ */
+function buildSetOrReplace(create: string, ingest: string): string {
+  const m = create.match(/\.create-or-alter\s+table\s+(\S+)\s*\(([\s\S]*?)\)/);
+  if (!m) throw new Error(`load-sample: cannot parse create command: ${create.slice(0, 80)}`);
+  const name = m[1];
+  const schema = m[2].replace(/\s+/g, ' ').trim(); // "id: string, name: string, ..."
+  const cols = schema.split(',').map((c) => {
+    const [col, type] = c.split(':').map((x) => x.trim());
+    return { col, type: (type || 'string').toLowerCase() };
+  });
+  const lines = ingest.split('\n');
+  const sepIdx = lines.findIndex((l) => l.includes('<|'));
+  const rows = lines.slice(sepIdx + 1).map((l) => l.trim()).filter(Boolean);
+  const flat: string[] = [];
+  for (const row of rows) {
+    const vals = row.split(',');
+    cols.forEach((c, i) => {
+      const v = (vals[i] ?? '').trim();
+      if (c.type === 'string') flat.push(JSON.stringify(v));
+      else if (c.type === 'datetime') flat.push(`datetime(${v})`);
+      else if (c.type === 'bool' || c.type === 'boolean') flat.push(v.toLowerCase());
+      else flat.push(v); // real / long / int / decimal — bare numeric literal
+    });
+  }
+  return `.set-or-replace ${name} <| datatable(${schema})[\n${flat.join(', ')}\n]`;
+}
+
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
@@ -177,7 +210,7 @@ export async function POST(req: NextRequest) {
       // Materialize every Node_*/Edge_* table Tapestry discovers.
       for (const t of INV_TABLES) {
         await executeMgmtCommand(db, t.create);
-        await executeMgmtCommand(db, t.ingest);
+        await executeMgmtCommand(db, buildSetOrReplace(t.create, t.ingest));
       }
       return NextResponse.json({ ok: true, db, kind, tables: INV_TABLES.map((t) => t.name) });
     }
@@ -186,7 +219,7 @@ export async function POST(req: NextRequest) {
     const ingest = kind === 'geo' ? GEO_INGEST : GRAPH_INGEST;
     const table = kind === 'geo' ? 'SampleEarthquakes' : 'SampleSocialGraph';
     await executeMgmtCommand(db, create);
-    await executeMgmtCommand(db, ingest);
+    await executeMgmtCommand(db, buildSetOrReplace(create, ingest));
     return NextResponse.json({ ok: true, db, table, kind });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 502;
