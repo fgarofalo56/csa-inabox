@@ -476,7 +476,7 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
         <div className={s.treePad}>
           <Caption1>ISO GQL / openCypher. Pick a language and backend below.</Caption1>
           <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
-            <Label>Language</Label>
+            <InfoLabel info="Authoring language for your graph query. GQL is the ISO standard graph query language and openCypher is Neo4j-style Cypher; either way Loom translates it to ADX KQL graph operators (make-graph / graph-match) to run.">Language</InfoLabel>
             <Dropdown
               aria-label="Language"
               value={lang === 'cypher' ? 'openCypher → KQL (ADX make-graph)' : 'ISO GQL (39075:2024)'}
@@ -494,13 +494,13 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
           </div>
           {lang === 'cypher' && (
             <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
-              <Label>Source table</Label>
+              <InfoLabel info="The ADX table holding your edges/nodes that make-graph builds the graph from — it's the input snapshot graph-match traverses.">Source table</InfoLabel>
               <Input value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} placeholder="GraphSnapshot" />
               <Caption1>The ADX table that holds the graph snapshot (input to <code>make-graph</code>).</Caption1>
             </div>
           )}
           <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
-            <Label>Backend</Label>
+            <InfoLabel info="Engine that executes the query. adx-graph = Azure Data Explorer make-graph/graph-match, the Azure-native default (no Fabric). Cosmos Gremlin best-effort translates, persist-only just saves, and Fabric Graph is opt-in and gated on a bound workspace.">Backend</InfoLabel>
             <Dropdown
               aria-label="Backend"
               value={{ 'adx-graph': 'Azure Data Explorer (KQL graph — default, no Fabric)', 'cosmos-gremlin-translate': 'Cosmos Gremlin (best-effort translate)', 'persist-only': 'Persist-only (no dispatch)', 'fabric-graph': 'Fabric Graph REST (opt-in — gated on workspace)' }[backend]}

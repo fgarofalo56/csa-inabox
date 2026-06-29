@@ -28,7 +28,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Tooltip,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Label, Select, Textarea, SpinButton,
+  Label, Select, Textarea, SpinButton, InfoLabel,
   tokens,
 } from '@fluentui/react-components';
 import {
@@ -243,7 +243,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
       ]},
       { label: 'Layout', actions: [
         { label: saving ? 'Saving…' : 'Save layout', icon: <Save20Regular />, onClick: dirty && !saving ? saveOverlay : undefined, disabled: !dirty || saving, title: dirty ? 'persist tiles + grid to Cosmos' : 'no unsaved changes' },
-        { label: 'Auto-arrange', icon: <DataBarVertical20Regular />, onClick: (tiles.length + loomTiles.length) > 0 ? autoArrange : undefined, disabled: (tiles.length + loomTiles.length) === 0 },
+        { label: 'Auto-arrange', icon: <DataBarVertical20Regular />, onClick: (tiles.length + loomTiles.length) > 0 ? autoArrange : undefined, disabled: (tiles.length + loomTiles.length) === 0, title: 'Auto-pack tiles left-to-right in the 12-column grid' },
       ]},
       { label: 'Metadata', actions: [
         { label: 'Refresh', icon: <ArrowSync20Regular />, onClick: refreshDash, title: 'reload tiles + overlay' },
@@ -279,7 +279,11 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
               <Tab value="canvas">Tiles ({tiles.length + loomTiles.length})</Tab>
               <Tab value="pbi">Power BI view</Tab>
             </TabList>
-            <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+            <Tooltip content="Pick the Power BI workspace whose dashboards you want to link and embed. The Loom canvas (streaming/Q&A tiles) works without one." relationship="description">
+              <div style={{ display: 'flex' }}>
+                <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+              </div>
+            </Tooltip>
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}
@@ -309,7 +313,9 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
                       overflow: 'hidden', minHeight: 220, position: 'relative', background: tokens.colorNeutralBackground1,
                     }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-                        <Pin20Regular />
+                        <Tooltip content="Pinned from a Power BI report/visual" relationship="label">
+                          <Pin20Regular />
+                        </Tooltip>
                         <Caption1 style={{ fontWeight: 600, flex: 1 }}>{t.title || t.subTitle || 'Power BI tile'}</Caption1>
                         {t.reportId && (
                           <Tooltip content="Drill to the source report in Power BI" relationship="label">
@@ -663,7 +669,7 @@ function QaTileDialog({ dashboardItemId, workspaceId, onClose, onAdd }: {
                 </Select>
               </Field>
             )}
-            <Field label="Question" style={{ marginTop: tokens.spacingVerticalS}}>
+            <Field label={<InfoLabel info="Ask a natural-language question; Loom generates the DAX over the bound model">Question</InfoLabel>} style={{ marginTop: tokens.spacingVerticalS}}>
               <Textarea value={nl} onChange={(_, d) => setNl(d.value)} placeholder="e.g. Show total sales by region for the last 12 months" rows={2} />
             </Field>
             <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Sparkle20Regular />} disabled={!nl.trim() || busy} onClick={ask} style={{ marginTop: tokens.spacingVerticalS}}>Ask Copilot</Button>

@@ -279,13 +279,17 @@ function ScRollupEditor({ goal, childCount, onChange }: {
         </div>
       ))}
       <div style={fieldRow}>
-        <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={addRule}>Add rule</Button>
+        <Tooltip relationship="label" content="Add a threshold-based status rule, e.g. if value >= 100 then on-track">
+          <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={addRule}>Add rule</Button>
+        </Tooltip>
         <Label size="small" style={{ marginLeft: tokens.spacingHorizontalM}}>Otherwise</Label>
-        <Select size="small" value={goal.otherwiseStatus || ''} aria-label={`${goal.name || goal.id} otherwise status`}
-          onChange={(_: unknown, d: any) => onChange({ otherwiseStatus: (d.value || undefined) as StatusColor | undefined })}>
-          <option value="">Not Started (default)</option>
-          {SC_STATUS_COLORS.map((c) => <option key={c} value={c}>{SC_STATUS_LABEL[c]}</option>)}
-        </Select>
+        <Tooltip relationship="label" content="Status when no other rule matches">
+          <Select size="small" value={goal.otherwiseStatus || ''} aria-label={`${goal.name || goal.id} otherwise status`}
+            onChange={(_: unknown, d: any) => onChange({ otherwiseStatus: (d.value || undefined) as StatusColor | undefined })}>
+            <option value="">Not Started (default)</option>
+            {SC_STATUS_COLORS.map((c) => <option key={c} value={c}>{SC_STATUS_LABEL[c]}</option>)}
+          </Select>
+        </Tooltip>
       </div>
     </div>
   );
@@ -570,7 +574,9 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Scorecard</Badge>
             <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-            <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            <Tooltip relationship="label" content="Reload the list of scorecards in the selected Power BI workspace">
+              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            </Tooltip>
             {scorecardId && pbiPortal && <Button appearance="primary" onClick={openScorecardInPbi} style={{ marginLeft: 'auto' }}>Open in Power BI</Button>}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
@@ -653,9 +659,15 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                             <TableCell>
                               {g.id && (
                                 <div style={{ display: 'flex', gap: tokens.spacingVerticalXS}}>
-                                  <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={(e) => { e.stopPropagation(); openCheckIn(g.id!); }}>Check in</Button>
-                                  <Button size="small" appearance="subtle" icon={<DatabaseLink20Regular />} onClick={(e) => { e.stopPropagation(); openBinder(g.id!); }}>Bind</Button>
-                                  <Button size="small" appearance="subtle" icon={<List20Regular />} onClick={(e) => { e.stopPropagation(); openHistory(g.id!); }}>History</Button>
+                                  <Tooltip relationship="label" content="Record a goal value, target, status, and note — updates history">
+                                    <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={(e) => { e.stopPropagation(); openCheckIn(g.id!); }}>Check in</Button>
+                                  </Tooltip>
+                                  <Tooltip relationship="label" content="Connect this goal's value to a live DAX measure from a Power BI/AAS semantic model">
+                                    <Button size="small" appearance="subtle" icon={<DatabaseLink20Regular />} onClick={(e) => { e.stopPropagation(); openBinder(g.id!); }}>Bind</Button>
+                                  </Tooltip>
+                                  <Tooltip relationship="label" content="View all past check-ins for this goal">
+                                    <Button size="small" appearance="subtle" icon={<List20Regular />} onClick={(e) => { e.stopPropagation(); openHistory(g.id!); }}>History</Button>
+                                  </Tooltip>
                                 </div>
                               )}
                             </TableCell>

@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Caption1, Badge, Button, Input, Spinner, Field,
+  Subtitle2, Caption1, Badge, Button, Input, Spinner, Field, InfoLabel,
   Tab, TabList, Dropdown, Option,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
@@ -411,14 +411,16 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
         { label: saveBusy ? 'Saving…' : 'Save', icon: <Save20Regular />, onClick: def ? handleSave : undefined, disabled: !def || saveBusy || !isDirty },
       ]},
       { label: 'Data', actions: [
-        { label: 'Add data source', icon: <Database20Regular />, onClick: () => setDsDialog({ open: true }), disabled: !def },
+        { label: 'Add data source', icon: <Database20Regular />, onClick: () => setDsDialog({ open: true }), disabled: !def,
+          title: 'Connect to Azure SQL / Synapse / Cosmos / ADLS' },
         { label: 'Add dataset', icon: <DocumentTable20Regular />, onClick: () => setDsetDialog({ open: true }), disabled: !def || (def?.dataSources.length ?? 0) === 0,
-          title: (def?.dataSources.length ?? 0) === 0 ? 'Add a data source first' : undefined },
+          title: (def?.dataSources.length ?? 0) === 0 ? 'Add a data source first' : 'Define a SQL query over a data source; its fields bind into tables' },
       ]},
       { label: 'Design', actions: [
         { label: 'Add tablix', icon: <Table20Regular />, onClick: () => setTablixWizard(true), disabled: !def || (def?.datasets.length ?? 0) === 0,
-          title: (def?.datasets.length ?? 0) === 0 ? 'Add a dataset first' : undefined },
-        { label: 'Add parameter', icon: <Form20Regular />, onClick: () => setParamDialog({ open: true }), disabled: !def },
+          title: (def?.datasets.length ?? 0) === 0 ? 'Add a dataset first' : 'Add a table or matrix with row/column groups' },
+        { label: 'Add parameter', icon: <Form20Regular />, onClick: () => setParamDialog({ open: true }), disabled: !def,
+          title: 'A value the report viewer is prompted for at render time' },
       ]},
       { label: 'Export', actions: [
         { label: exportBusy === 'pdf' ? 'Exporting…' : 'Export PDF', onClick: () => doExport('pdf'),
@@ -1033,7 +1035,7 @@ function ParameterDialog({ open, editing, onClose, onSave, onDelete }: {
           <DialogContent>
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM}}>
               <Field label="Name" required><Input value={name} disabled={!!editing} onChange={(_, d) => setName(d.value)} /></Field>
-              <Field label="Type">
+              <Field label={<InfoLabel info="The data type the viewer is prompted for: String (free text), Int (whole number), Boolean (true/false), or DateTime (date/time picker). It controls the prompt control and how the value is passed to the dataset query.">Type</InfoLabel>}>
                 <Dropdown selectedOptions={[type]} value={type} onOptionSelect={(_, d) => setType((d.optionValue as RdlParameter['type']) || 'String')}>
                   {RDL_PARAM_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
                 </Dropdown>

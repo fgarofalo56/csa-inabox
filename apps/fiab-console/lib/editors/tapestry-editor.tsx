@@ -26,7 +26,7 @@
 
 import { useCallback, useMemo, useState } from 'react';
 import {
-  Caption1, Subtitle2, Badge, Button, Input, Label, Spinner, Field,
+  Caption1, Subtitle2, Badge, Button, Input, Label, Spinner, Field, InfoLabel,
   Tab, TabList, Dropdown, Option, Divider,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, shorthands, tokens,
@@ -266,10 +266,10 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
             Azure-native — no Microsoft Fabric required.
           </Caption1>
           <Divider />
-          <Field label="ADX database (optional)" hint="Defaults to LOOM_KUSTO_DEFAULT_DB.">
+          <Field label={<InfoLabel info="Optional ADX (Azure Data Explorer) database to query instead of the default. Leave blank to use LOOM_KUSTO_DEFAULT_DB.">ADX database (optional)</InfoLabel>} hint="Defaults to LOOM_KUSTO_DEFAULT_DB.">
             <Input value={database} onChange={(_: unknown, d: any) => setDatabase(d.value)} placeholder="loomdb-default" />
           </Field>
-          <Field label="Seed / focus node id (shared)" hint="Set by clicking a node, or type one. Used by shortest-path / neighbors and carried across panes.">
+          <Field label={<InfoLabel info="Starting node for neighbor expansion and the source for shortest-path. Set it by clicking a node in the graph, or type a node id here. It is carried across the Geo and Timeline panes.">Seed / focus node id (shared)</InfoLabel>} hint="Set by clicking a node, or type one. Used by shortest-path / neighbors and carried across panes.">
             <Input value={seedId} onChange={(_: unknown, d: any) => setSeedId(d.value)} placeholder="p-alice" />
           </Field>
           <Divider />
@@ -299,7 +299,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
             {tab === 'link' && (
               <>
                 <div className={s.filterBar}>
-                  <Field className={s.grow} label="Analysis">
+                  <Field className={s.grow} label={<InfoLabel info="pattern = all matching paths; shortest-path = source → target; components = connected clusters; neighbors = N-hop from a seed">Analysis</InfoLabel>}>
                     <Dropdown
                       value={ANALYSIS_LABELS[analysis]} selectedOptions={[analysis]}
                       onOptionSelect={(_, d) => { if (d.optionValue) setAnalysis(d.optionValue as LinkAnalysis); }}
@@ -309,14 +309,14 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
                       ))}
                     </Dropdown>
                   </Field>
-                  <Field className={s.narrow} label="Hops">
+                  <Field className={s.narrow} label={<InfoLabel info="How many relationship hops to traverse, 1-6">Hops</InfoLabel>}>
                     <Input type="number" min={1} max={6} value={String(hops)} onChange={(_: unknown, d: any) => setHops(Math.max(1, Math.min(6, Number(d.value || '2'))))} />
                   </Field>
-                  <Field className={s.grow} label="Node label (optional)">
+                  <Field className={s.grow} label={<InfoLabel info="Filter to a node type, e.g. Person / Org / Location">Node label (optional)</InfoLabel>}>
                     <Input value={nodeLabel} onChange={(_: unknown, d: any) => setNodeLabel(d.value)} placeholder="Person" />
                   </Field>
                   {analysis === 'shortest-path' && (
-                    <Field className={s.grow} label="Target id">
+                    <Field className={s.grow} label={<InfoLabel info="Required for shortest-path: the destination node id">Target id</InfoLabel>}>
                       <Input value={targetId} onChange={(_: unknown, d: any) => setTargetId(d.value)} placeholder="p-frank" />
                     </Field>
                   )}
@@ -415,7 +415,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
             {tab === 'timeline' && (
               <>
                 <div className={s.filterBar}>
-                  <Field className={s.grow} label="Bin window">
+                  <Field className={s.grow} label={<InfoLabel info="Time bucket for the timeline: hourly / daily / weekly">Bin window</InfoLabel>}>
                     <Dropdown
                       value={WINDOW_LABELS[twindow]} selectedOptions={[twindow]}
                       onOptionSelect={(_, d) => { if (d.optionValue) setTwindow(d.optionValue as TimelineWindow); }}

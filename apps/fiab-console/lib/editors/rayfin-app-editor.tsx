@@ -49,7 +49,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
-  makeStyles, tokens, Button, Input, Field, Switch, Subtitle2, Body1, Caption1,
+  makeStyles, tokens, Button, Input, Field, InfoLabel, Switch, Subtitle2, Body1, Caption1,
   Badge, MessageBar, MessageBarBody, MessageBarTitle, Dropdown, Option, Divider,
   Spinner, Tooltip, useId, useToastController, Toast, ToastTitle, Toaster,
   Checkbox, SpinButton, Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
@@ -96,6 +96,13 @@ const KIND_ICON: Record<ComponentKind, ReactElement> = {
 };
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
+};
+const KIND_HINT: Record<ComponentKind, string> = {
+  table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
+  metric: 'Add a single-value KPI tile showing one measure (a big number).',
+  chart: 'Add a bar chart — one measure plotted across a category column.',
+  form: 'Add a create/edit form bound to a backend entity (write-back runs in the deployed app, not in Loom).',
+  text: 'Add a static text block for a heading, caption, or notes.',
 };
 
 const useStyles = makeStyles({
@@ -425,9 +432,15 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
       </MessageBar>
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'backend' | 'binding' | 'app')}>
-        <Tab value="backend">Backend definition</Tab>
-        <Tab value="binding" icon={<Database20Regular />}>Model binding</Tab>
-        <Tab value="app" icon={<Apps20Regular />}>App builder</Tab>
+        <Tooltip relationship="description" content="Define the entities and services your app manages.">
+          <Tab value="backend">Backend definition</Tab>
+        </Tooltip>
+        <Tooltip relationship="description" content="Bind your app to a real semantic model — Azure Analysis Services by default.">
+          <Tab value="binding" icon={<Database20Regular />}>Model binding</Tab>
+        </Tooltip>
+        <Tooltip relationship="description" content="Low-code visual builder — pages, components, and a live data preview.">
+          <Tab value="app" icon={<Apps20Regular />}>App builder</Tab>
+        </Tooltip>
       </TabList>
 
       {tab === 'backend' ? (
@@ -573,7 +586,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
                       </div>
                     )}
 
-                    <Field label="Max rows (preview & read view)">
+                    <Field label={<InfoLabel info="Max rows returned in the preview and the deployed read view (caps the DAX TOPN).">Max rows (preview &amp; read view)</InfoLabel>}>
                       <SpinButton min={1} max={1000} value={binding.topN}
                         onChange={(_, d) => patchBinding({ topN: d.value ?? (Number(d.displayValue) || 100) })} />
                     </Field>
@@ -850,8 +863,10 @@ function AppBuilder(props: AppBuilderProps) {
         <Caption1>Adds to the selected page.</Caption1>
         <div className={s.palette}>
           {COMPONENT_KINDS.map((k) => (
-            <Button key={k} size="small" appearance="outline" icon={KIND_ICON[k]} disabled={!activePageId}
-              onClick={() => addComponent(k)}>{KIND_LABEL[k]}</Button>
+            <Tooltip key={k} relationship="description" content={KIND_HINT[k]}>
+              <Button size="small" appearance="outline" icon={KIND_ICON[k]} disabled={!activePageId}
+                onClick={() => addComponent(k)}>{KIND_LABEL[k]}</Button>
+            </Tooltip>
           ))}
         </div>
 
@@ -1019,11 +1034,11 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
             </div>
           </div>
           {kind !== 'metric' ? (
-            <Field label="Max rows"><SpinButton min={1} max={1000} value={b.topN}
+            <Field label={<InfoLabel info="Max rows this component returns in preview and the deployed app (caps the DAX TOPN).">Max rows</InfoLabel>}><SpinButton min={1} max={1000} value={b.topN}
               onChange={(_, d) => setBinding({ topN: d.value ?? (Number(d.displayValue) || 50) })} /></Field>
           ) : null}
           <details>
-            <summary><Caption1>Read-view DAX</Caption1></summary>
+            <summary><Caption1><InfoLabel info="The generated DAX query Loom runs against the bound semantic model for this component; read-only.">Read-view DAX</InfoLabel></Caption1></summary>
             <pre className={s.code}>{dax}</pre>
           </details>
         </>

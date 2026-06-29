@@ -22,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Title3, Subtitle2, Caption1, Body1, Badge, Spinner, Button, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  makeStyles, tokens,
+  InfoLabel, Tooltip, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   BotSparkle24Filled, Send20Filled, DataPie24Regular, Open16Regular,
@@ -337,13 +337,19 @@ function PowerBiAuthoringPanel({ onSuggestedPrompt }: { onSuggestedPrompt: (p: s
       <div className={s.pbiHead}>
         <DataPie24Regular className={s.pbiHeadIcon} aria-hidden />
         <div className={s.pbiHeadText}>
-          <Subtitle2>Power BI authoring</Subtitle2>
+          <Subtitle2>
+            <InfoLabel info="5 cloud-native semantic-model & report authoring skills; Azure-native by default, Power BI MCP is opt-in">
+              Power BI authoring
+            </InfoLabel>
+          </Subtitle2>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             {POWERBI_AUTHORING_SKILLS.length} skills · Azure-native by default
           </Caption1>
         </div>
         {loading ? (
-          <Badge appearance="tint" color="informative">Checking…</Badge>
+          <Tooltip relationship="label" content="Verifying Power BI MCP connection state">
+            <Badge appearance="tint" color="informative">Checking…</Badge>
+          </Tooltip>
         ) : (
           <a
             className={s.chipLink}

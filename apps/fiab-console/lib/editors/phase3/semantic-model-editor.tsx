@@ -23,7 +23,7 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Label, Select, Textarea, Switch, SpinButton,
+  Label, Select, Textarea, Switch, SpinButton, InfoLabel, Tooltip,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -335,7 +335,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
                           ))}
                         </div>
                       </div>
-                      <Field label="Time(s) — HH:MM (24h), comma-separated">
+                      <Field label={<InfoLabel info="One or more 24-hour clock times at which the scheduler triggers an Analysis Services refresh, in the time zone below. Separate multiple times with commas. AAS has no 30-minute-boundary limit, so any HH:MM is allowed.">Time(s) — HH:MM (24h), comma-separated</InfoLabel>}>
                         <Input value={schedTimes} onChange={(_, d) => setSchedTimes(d.value)} placeholder="07:00, 12:15" />
                       </Field>
                       <Field label="Time zone">
@@ -549,7 +549,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
               <Table aria-label="Row filters" size="small">
                 <TableHeader><TableRow>
                   <TableHeaderCell>Table</TableHeaderCell>
-                  <TableHeaderCell>Filter DAX (boolean; empty = full access)</TableHeaderCell>
+                  <TableHeaderCell><InfoLabel info="A DAX boolean expression evaluated per row for this role. Rows where it returns TRUE stay visible to members of the role; leaving it empty grants the role full access to the table. Reference the signed-in user with USERPRINCIPALNAME(), e.g. [Region] = 'East'.">Filter DAX (boolean; empty = full access)</InfoLabel></TableHeaderCell>
                 </TableRow></TableHeader>
                 <TableBody>
                   {tables.map((t) => {
@@ -590,7 +590,7 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
                   <div key={t.name} style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall, padding: tokens.spacingVerticalS }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalM}}>
                       <Label weight="semibold" style={{ minWidth: 160 }}>{t.name}</Label>
-                      <Field label="Table" orientation="horizontal">
+                      <Field label={<InfoLabel info="Object-level security for the whole table. Read shows the table to this role; None hides the entire table — and every column in it — from anyone in the role.">Table</InfoLabel>} orientation="horizontal">
                         <Select
                           value={tableHidden ? 'none' : 'read'}
                           onChange={(_, d) => onSetTableOls(role.name, t.name, d.value as 'read' | 'none')}
@@ -608,16 +608,18 @@ function SemanticModelSecurityTab(props: SecurityTabProps) {
                           return (
                             <div key={c.name} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS}}>
                               <Caption1>{c.name}</Caption1>
-                              <Select
-                                value={cp?.metadataPermission === 'none' ? 'none' : 'read'}
-                                disabled={tableHidden}
-                                onChange={(_, d) => onSetColumnOls(role.name, t.name, c.name, d.value as 'read' | 'none')}
-                                aria-label={`Column ${t.name}.${c.name} permission`}
-                                style={{ minWidth: 90 }}
-                              >
-                                <option value="read">Read</option>
-                                <option value="none">None</option>
-                              </Select>
+                              <Tooltip relationship="description" content="Column-level security (OLS). Read keeps this column visible to the role; None hides only this column while the rest of the table stays visible. Disabled when the whole table is set to None.">
+                                <Select
+                                  value={cp?.metadataPermission === 'none' ? 'none' : 'read'}
+                                  disabled={tableHidden}
+                                  onChange={(_, d) => onSetColumnOls(role.name, t.name, c.name, d.value as 'read' | 'none')}
+                                  aria-label={`Column ${t.name}.${c.name} permission`}
+                                  style={{ minWidth: 90 }}
+                                >
+                                  <option value="read">Read</option>
+                                  <option value="none">None</option>
+                                </Select>
+                              </Tooltip>
                             </div>
                           );
                         })}
@@ -2407,18 +2409,20 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                             ))}
                           </Select>
                         </Field>
-                        <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalXXL }}
-                          onClick={() => { setCalcMsg(null); setCalcColDlgOpen(true); }}
-                          disabled={!selectedTableName || !modelTables}
-                          title={!modelTables ? 'Configure LOOM_AAS_SERVER_URL to enable calculated columns' : 'Add a calculated column (DAX)'}>
-                          Add calculated column
-                        </Button>
-                        <Button size="small" appearance="outline" icon={<Table20Regular />} style={{ marginTop: tokens.spacingVerticalXXL }}
-                          onClick={() => { setCalcMsg(null); setCalcTableDlgOpen(true); }}
-                          disabled={!modelTables}
-                          title={!modelTables ? 'Configure LOOM_AAS_SERVER_URL to enable calculated tables' : 'Create a calculated table (DAX)'}>
-                          Add calculated table
-                        </Button>
+                        <Tooltip relationship="description" content={!modelTables ? 'Configure an Analysis Services XMLA backend (set LOOM_AAS_SERVER_URL) to add calculated columns.' : 'Add a calculated column defined by a DAX expression to the selected table.'}>
+                          <Button size="small" appearance="outline" icon={<Add20Regular />} style={{ marginTop: tokens.spacingVerticalXXL }}
+                            onClick={() => { setCalcMsg(null); setCalcColDlgOpen(true); }}
+                            disabled={!selectedTableName || !modelTables}>
+                            Add calculated column
+                          </Button>
+                        </Tooltip>
+                        <Tooltip relationship="description" content={!modelTables ? 'Configure an Analysis Services XMLA backend (set LOOM_AAS_SERVER_URL) to create calculated tables.' : 'Create a calculated table from a DAX expression (e.g. CALENDAR(...)) and add it to the model.'}>
+                          <Button size="small" appearance="outline" icon={<Table20Regular />} style={{ marginTop: tokens.spacingVerticalXXL }}
+                            onClick={() => { setCalcMsg(null); setCalcTableDlgOpen(true); }}
+                            disabled={!modelTables}>
+                            Add calculated table
+                          </Button>
+                        </Tooltip>
                         <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} style={{ marginTop: tokens.spacingVerticalXXL }}
                           onClick={() => { setModelTables(null); setModelGate(null); loadModel(); }}
                           disabled={!datasetId || modelLoading}>
@@ -2497,7 +2501,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                               {SM_SUMMARIZE.map((v) => <option key={v} value={v}>{v}</option>)}
                             </Select>
                           </Field>
-                          <Field label="Format string" style={{ minWidth: 200 }}>
+                          <Field label={<InfoLabel info="The display format applied to this column's values (TMSL formatString) — e.g. #,0 for integers, 0.00% for percent, or a currency mask. It changes how values render in reports, not the stored data.">Format string</InfoLabel>} style={{ minWidth: 200 }}>
                             <Select value={colPatch.formatString ?? editCol.col.formatString ?? ''}
                               onChange={(_, d) => setColPatch((p) => ({ ...p, formatString: d.value }))}>
                               {SM_FORMATS.map((f) => <option key={f.value} value={f.value}>{f.label}</option>)}
@@ -2803,7 +2807,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       <Field label="Measure name" style={{ minWidth: 200 }}>
                         <Input value={measureName} onChange={(_, d) => setMeasureName(d.value)} placeholder="TotalSales" />
                       </Field>
-                      <Field label="Format string" hint="TMSL formatString — e.g. $#,0.00 currency, 0.00% percent, #,0 integer" style={{ minWidth: 200 }}>
+                      <Field label={<InfoLabel info="The display format for this measure's result (TMSL formatString). Controls how the number renders in reports — currency, percent, thousands separators — without changing the underlying value.">Format string</InfoLabel>} hint="TMSL formatString — e.g. $#,0.00 currency, 0.00% percent, #,0 integer" style={{ minWidth: 200 }}>
                         <Input value={formatString} onChange={(_, d) => setFormatString(d.value)} placeholder="$#,0.00;($#,0.00);$#,0.00" />
                       </Field>
                       <Field label="Display folder" hint="Organizes the measure in reporting tools (backslash-separated)" style={{ minWidth: 200 }}>
@@ -2972,10 +2976,10 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                         <div className={s.tableWrap}>
                           <Table aria-label="Aggregation column mappings" size="small">
                             <TableHeader><TableRow>
-                              <TableHeaderCell>Agg column</TableHeaderCell>
+                              <TableHeaderCell><InfoLabel info="The column created on the hidden, Import-mode aggregation table. It stores a pre-aggregated value the engine can substitute for queries against the detail table.">Agg column</InfoLabel></TableHeaderCell>
                               <TableHeaderCell>Data type</TableHeaderCell>
-                              <TableHeaderCell>Summarization</TableHeaderCell>
-                              <TableHeaderCell>Detail table</TableHeaderCell>
+                              <TableHeaderCell><InfoLabel info="How this column rolls up the detail data: GroupBy for grain/key columns, or Sum / Count / Min / Max for measures. The engine only rewrites a query to the agg table when its grain and summarizations match.">Summarization</InfoLabel></TableHeaderCell>
+                              <TableHeaderCell><InfoLabel info="The DirectQuery detail table this aggregation column maps to (via alternateOf). Queries answerable at the agg grain hit the small agg table; everything else falls through to this detail table.">Detail table</InfoLabel></TableHeaderCell>
                               <TableHeaderCell>Detail column</TableHeaderCell>
                               <TableHeaderCell />
                             </TableRow></TableHeader>
@@ -3214,7 +3218,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                           ))}
                         </div>
                       </div>
-                      <Field label="Time(s) — HH:MM on :00 or :30, comma-separated">
+                      <Field label={<InfoLabel info="Clock times when Power BI runs the scheduled dataset refresh, in the time zone below. Power BI only accepts times on the hour or half-hour (minutes :00 or :30). Separate multiple times with commas.">Time(s) — HH:MM on :00 or :30, comma-separated</InfoLabel>}>
                         <Input value={schedTimes} onChange={(_, d) => setSchedTimes(d.value)} placeholder="07:00, 12:30" />
                       </Field>
                       <Field label="Time zone (PBI id)">

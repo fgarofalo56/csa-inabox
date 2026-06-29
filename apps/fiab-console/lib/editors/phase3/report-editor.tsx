@@ -27,7 +27,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Textarea, Switch, tokens,
+  Textarea, Switch, Tooltip, InfoLabel, tokens,
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, ArrowSync20Regular,
@@ -733,18 +733,34 @@ function ReportLikeEditor({
             <Button appearance="primary" icon={refreshBusy ? <Spinner size="tiny" /> : <ArrowSync20Regular />} onClick={refreshData} disabled={!reportId || refreshBusy || !powerBiConfigured} title={!powerBiConfigured ? 'Power BI embed is opt-in; workspace not configured' : undefined}>{refreshBusy ? 'Refreshing…' : 'Refresh data'}</Button>
             {kind !== 'paginated' && powerBiConfigured && (
               <>
-                <Button appearance="outline" onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
-                <Button appearance="outline" onClick={() => exportReport('PPTX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX'}</Button>
-                <Button appearance="outline" onClick={() => exportReport('PNG')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG'}</Button>
-                <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={refreshVisuals} disabled={!reportId}>Refresh visuals</Button>
-                <Switch label={editMode ? 'Edit mode' : 'View mode'} checked={editMode} onChange={toggleEditMode} disabled={!reportId} />
+                <Tooltip relationship="label" content="Render this report as a PDF document (one page per report page) via the Power BI REST ExportTo job, then download it.">
+                  <Button appearance="outline" onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
+                </Tooltip>
+                <Tooltip relationship="label" content="Export to a PowerPoint deck (.pptx) — each report page becomes a slide — via the Power BI REST ExportTo job.">
+                  <Button appearance="outline" onClick={() => exportReport('PPTX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PPTX' ? 'Exporting…' : 'Export PPTX'}</Button>
+                </Tooltip>
+                <Tooltip relationship="label" content="Export the current report view as a PNG image via the Power BI REST ExportTo job.">
+                  <Button appearance="outline" onClick={() => exportReport('PNG')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PNG' ? 'Exporting…' : 'Export PNG'}</Button>
+                </Tooltip>
+                <Tooltip relationship="label" content="Reload the embedded report's visuals against the latest data (report.refresh) without re-loading the whole report.">
+                  <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={refreshVisuals} disabled={!reportId}>Refresh visuals</Button>
+                </Tooltip>
+                <Tooltip relationship="label" content="Toggle the embedded report between read-only View and authoring Edit mode. Edit mode unlocks the format pane to add and style visuals.">
+                  <Switch label={editMode ? 'Edit mode' : 'View mode'} checked={editMode} onChange={toggleEditMode} disabled={!reportId} />
+                </Tooltip>
               </>
             )}
             {kind === 'paginated' && powerBiConfigured && (
               <>
-                <Button appearance="outline" icon={exportBusy === 'PDF' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy} title="export the paginated report to PDF via Power BI REST">{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
-                <Button appearance="outline" icon={exportBusy === 'XLSX' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('XLSX')} disabled={!reportId || !!exportBusy} title="export the paginated report to Excel (.xlsx) via Power BI REST">{exportBusy === 'XLSX' ? 'Exporting…' : 'Export Excel'}</Button>
-                <Button appearance="outline" icon={exportBusy === 'DOCX' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('DOCX')} disabled={!reportId || !!exportBusy} title="export the paginated report to Word (.docx) via Power BI REST">{exportBusy === 'DOCX' ? 'Exporting…' : 'Export Word'}</Button>
+                <Tooltip relationship="label" content="Render the paginated (RDL) report to a pixel-perfect, print-ready PDF via the Power BI REST ExportTo job, then download it.">
+                  <Button appearance="outline" icon={exportBusy === 'PDF' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('PDF')} disabled={!reportId || !!exportBusy}>{exportBusy === 'PDF' ? 'Exporting…' : 'Export PDF'}</Button>
+                </Tooltip>
+                <Tooltip relationship="label" content="Export the paginated report to an Excel workbook (.xlsx) — rows and tables become spreadsheet cells — via the Power BI REST ExportTo job.">
+                  <Button appearance="outline" icon={exportBusy === 'XLSX' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('XLSX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'XLSX' ? 'Exporting…' : 'Export Excel'}</Button>
+                </Tooltip>
+                <Tooltip relationship="label" content="Export the paginated report to a Word document (.docx) via the Power BI REST ExportTo job.">
+                  <Button appearance="outline" icon={exportBusy === 'DOCX' ? <Spinner size="tiny" /> : <ArrowDownload20Regular />} onClick={() => exportReport('DOCX')} disabled={!reportId || !!exportBusy}>{exportBusy === 'DOCX' ? 'Exporting…' : 'Export Word'}</Button>
+                </Tooltip>
               </>
             )}
           </div>
@@ -879,16 +895,20 @@ function ReportLikeEditor({
                       {pages.length === 0 && <Caption1>No pages reported.</Caption1>}
                       <Tree aria-label="Report pages">
                         {pages.map((p) => (
-                          <TreeItem key={p.name} itemType="leaf" value={p.name} onClick={() => gotoPage(p.name)}>
-                            <TreeItemLayout>{activePage === p.name ? <strong>{p.displayName || p.name}</strong> : (p.displayName || p.name)}</TreeItemLayout>
-                          </TreeItem>
+                          <Tooltip key={p.name} relationship="label" content={`Go to report page "${p.displayName || p.name}" — navigates the live embed (report.setPage) to this page.`}>
+                            <TreeItem itemType="leaf" value={p.name} onClick={() => gotoPage(p.name)}>
+                              <TreeItemLayout>{activePage === p.name ? <strong>{p.displayName || p.name}</strong> : (p.displayName || p.name)}</TreeItemLayout>
+                            </TreeItem>
+                          </Tooltip>
                         ))}
                       </Tree>
                     </div>
                     <div className={s.card}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: tokens.spacingVerticalS}}>
                         <Subtitle2>Bookmarks ({bookmarks.length})</Subtitle2>
-                        <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={reloadBookmarks} title="reload report bookmarks" aria-label="Reload report bookmarks" />
+                        <Tooltip relationship="label" content="Reload the report's saved bookmarks. A bookmark captures a saved view — the current filters, slicers, and visual state — so reloading picks up bookmarks added in the report.">
+                          <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={reloadBookmarks} aria-label="Reload report bookmarks" />
+                        </Tooltip>
                       </div>
                       {bookmarks.length === 0 && <Caption1>No bookmarks. Use Capture bookmark.</Caption1>}
                       <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS}}>
@@ -897,8 +917,12 @@ function ReportLikeEditor({
                         ))}
                       </div>
                       <div style={{ display: 'flex', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS}}>
-                        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark}>Capture</Button>
-                        <Button size="small" appearance={slideshow ? 'primary' : 'outline'} icon={<Play20Regular />} onClick={toggleSlideshow}>{slideshow ? 'Stop' : 'Play'}</Button>
+                        <Tooltip relationship="label" content="Capture the current view — active filters, slicers, and visual selections — as a new bookmark you can return to later.">
+                          <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={captureBookmark}>Capture</Button>
+                        </Tooltip>
+                        <Tooltip relationship="label" content={slideshow ? 'Stop cycling through the report bookmarks.' : 'Play the bookmarks as a slideshow — automatically steps through each saved view in order (bookmarksManager.play).'}>
+                          <Button size="small" appearance={slideshow ? 'primary' : 'outline'} icon={<Play20Regular />} onClick={toggleSlideshow}>{slideshow ? 'Stop' : 'Play'}</Button>
+                        </Tooltip>
                       </div>
                     </div>
                     <div className={s.card}>
@@ -967,7 +991,7 @@ function ReportLikeEditor({
                       Pick a built-in Loom theme or paste a Power BI theme JSON. Applied live to the embedded
                       report via <code>report.applyTheme</code> — the same engine the Power BI service uses.
                     </Caption1>
-                    <Field label="Preset theme">
+                    <Field label={<InfoLabel info="A built-in Loom color/font theme (Light, Dark, High Contrast). Picking one fills the Theme JSON box below, which you can then tweak before applying.">Preset theme</InfoLabel>}>
                       <Dropdown
                         value={PRESET_THEMES.find((t) => t.key === themePreset)?.label || 'Custom'}
                         selectedOptions={[themePreset]}
@@ -981,7 +1005,7 @@ function ReportLikeEditor({
                         {PRESET_THEMES.map((t) => <Option key={t.key} value={t.key} text={t.label}>{t.label}</Option>)}
                       </Dropdown>
                     </Field>
-                    <Field label="Theme JSON (editable)" hint="leave as a preset, or paste a custom Power BI report-theme JSON">
+                    <Field label={<InfoLabel info="Power BI theme JSON — colors/fonts. The dataColors array, background, foreground, and visualStyles control the report's look; applied live to the embed via report.applyTheme (the same engine the Power BI service uses).">Theme JSON (editable)</InfoLabel>} hint="leave as a preset, or paste a custom Power BI report-theme JSON">
                       <Textarea
                         value={themeJson}
                         onChange={(_, d) => setThemeJson(d.value)}
