@@ -39,9 +39,11 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const filter = url.searchParams.get('filter') || undefined;
   const maxResultsRaw = url.searchParams.get('maxResults');
   const maxResults = maxResultsRaw ? Math.max(1, Math.min(1000, Number(maxResultsRaw) || 200)) : 200;
+  const rv = url.searchParams.get('runViewType');
+  const runViewType = rv === 'DELETED_ONLY' || rv === 'ALL' ? rv : 'ACTIVE_ONLY';
 
   try {
-    const { experiment, runs } = await searchRunsByExperimentName(experimentName, { filter, maxResults });
+    const { experiment, runs } = await searchRunsByExperimentName(experimentName, { filter, maxResults, runViewType });
     return NextResponse.json({
       ok: true,
       configured: true,

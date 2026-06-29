@@ -3097,6 +3097,10 @@ interface Cluster {
   }>;
   custom_tags?: Record<string, string>;
   data_security_mode?: string;
+  driver_node_type_id?: string;
+  runtime_engine?: string;
+  spark_env_vars?: Record<string, string>;
+  azure_attributes?: { availability?: string; first_on_demand?: number };
 }
 
 // Library object returned by /api/2.0/libraries/cluster-status — slim shape,
@@ -5277,6 +5281,32 @@ interface ClusterEvent {
   details?: { reason?: { code?: string }; cause?: string; user?: string; current_num_workers?: number };
 }
 
+/** Reusable key/value rows editor — spark_conf, spark_env_vars, custom_tags. */
+function KvEditor({ label, rows, setRows, kPlaceholder, vPlaceholder }: {
+  label: string;
+  rows: Array<{ key: string; value: string }>;
+  setRows: (r: Array<{ key: string; value: string }>) => void;
+  kPlaceholder?: string; vPlaceholder?: string;
+}) {
+  return (
+    <Field label={label}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+        {rows.map((r, i) => (
+          <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+            <Input style={{ flex: 1 }} placeholder={kPlaceholder} value={r.key}
+              onChange={(_, d) => { const n = [...rows]; n[i] = { ...n[i], key: d.value }; setRows(n); }} />
+            <Input style={{ flex: 1 }} placeholder={vPlaceholder} value={r.value}
+              onChange={(_, d) => { const n = [...rows]; n[i] = { ...n[i], value: d.value }; setRows(n); }} />
+            <Button appearance="subtle" onClick={() => setRows(rows.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button appearance="secondary" size="small" style={{ alignSelf: 'flex-start' }}
+          onClick={() => setRows([...rows, { key: '', value: '' }])}>+ Add</Button>
+      </div>
+    </Field>
+  );
+}
+
 export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
 
@@ -5293,6 +5323,21 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
   const [maxWorkers, setMaxWorkers] = useState(8);
   const [numWorkers, setNumWorkers] = useState(2);
   const [autoterm, setAutoterm] = useState(60);
+
+  // Advanced compute config — round-trips through ClusterSpec into clusters/create+edit.
+  const [driverNodeType, setDriverNodeType] = useState('');
+  const [accessMode, setAccessMode] = useState<'SINGLE_USER' | 'USER_ISOLATION' | 'LEGACY_SINGLE_USER' | ''>('');
+  const [photon, setPhoton] = useState(false);
+  const [spot, setSpot] = useState(false);
+  const [sparkConf, setSparkConf] = useState<Array<{ key: string; value: string }>>([]);
+  const [sparkEnv, setSparkEnv] = useState<Array<{ key: string; value: string }>>([]);
+  const [tags, setTags] = useState<Array<{ key: string; value: string }>>([]);
+  const [initScripts, setInitScripts] = useState<Array<{ kind: 'workspace' | 'volumes' | 'dbfs'; dest: string }>>([]);
+  // Library install form
+  const [libType, setLibType] = useState<'pypi' | 'maven' | 'cran' | 'whl' | 'jar' | 'requirements'>('pypi');
+  const [libCoord, setLibCoord] = useState('');
+  const [libBusy, setLibBusy] = useState(false);
+  const [libErr, setLibErr] = useState<string | null>(null);
 
   const [nodeTypes, setNodeTypes] = useState<{ node_type_id: string; description?: string }[]>([]);
   const [sparkVersions, setSparkVersions] = useState<{ key: string; name: string }[]>([]);
@@ -5355,6 +5400,18 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         setNumWorkers(c.num_workers || 2);
       }
       setAutoterm(c.autotermination_minutes ?? 60);
+      setDriverNodeType(c.driver_node_type_id || '');
+      setAccessMode((c.data_security_mode as any) || '');
+      setPhoton(c.runtime_engine === 'PHOTON');
+      setSpot((c.azure_attributes?.availability || '').startsWith('SPOT'));
+      setSparkConf(Object.entries(c.spark_conf || {}).map(([key, value]) => ({ key, value: String(value) })));
+      setSparkEnv(Object.entries(c.spark_env_vars || {}).map(([key, value]) => ({ key, value: String(value) })));
+      setTags(Object.entries(c.custom_tags || {}).map(([key, value]) => ({ key, value: String(value) })));
+      setInitScripts((c.init_scripts || []).map((sc) => {
+        if (sc.volumes?.destination) return { kind: 'volumes' as const, dest: sc.volumes.destination };
+        if (sc.dbfs?.destination) return { kind: 'dbfs' as const, dest: sc.dbfs.destination };
+        return { kind: 'workspace' as const, dest: sc.workspace?.destination || '' };
+      }));
       // events
       const er = await fetch(`/api/items/databricks-cluster/${id}/events?clusterId=${encodeURIComponent(cid)}&limit=50`);
       const ej = await er.json();
@@ -5381,8 +5438,21 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     };
     if (autoscale) spec.autoscale = { min_workers: minWorkers, max_workers: maxWorkers };
     else spec.num_workers = numWorkers;
+    if (driverNodeType) spec.driver_node_type_id = driverNodeType;
+    if (accessMode) spec.data_security_mode = accessMode;
+    if (photon) spec.runtime_engine = 'PHOTON';
+    if (spot) spec.azure_attributes = { availability: 'SPOT_WITH_FALLBACK_AZURE', first_on_demand: 1 };
+    const conf = sparkConf.filter((r) => r.key.trim());
+    if (conf.length) spec.spark_conf = Object.fromEntries(conf.map((r) => [r.key.trim(), r.value]));
+    const env = sparkEnv.filter((r) => r.key.trim());
+    if (env.length) spec.spark_env_vars = Object.fromEntries(env.map((r) => [r.key.trim(), r.value]));
+    const t = tags.filter((r) => r.key.trim());
+    if (t.length) spec.custom_tags = Object.fromEntries(t.map((r) => [r.key.trim(), r.value]));
+    const inits = initScripts.filter((r) => r.dest.trim());
+    if (inits.length) spec.init_scripts = inits.map((r) => ({ [r.kind]: { destination: r.dest.trim() } }));
     return spec;
-  }, [name, sparkVersion, nodeType, autoscale, minWorkers, maxWorkers, numWorkers, autoterm]);
+  }, [name, sparkVersion, nodeType, autoscale, minWorkers, maxWorkers, numWorkers, autoterm,
+      driverNodeType, accessMode, photon, spot, sparkConf, sparkEnv, tags, initScripts]);
 
   const save = useCallback(async () => {
     setSaving(true);
@@ -5467,6 +5537,56 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
       setSaving(false);
     }
   }, [id, clusterId, buildSpec, loadClusters, selectCluster]);
+
+  const refreshLibraries = useCallback(async (cid: string) => {
+    try {
+      const lr = await fetch(`/api/items/databricks-cluster/${id}/libraries?clusterId=${encodeURIComponent(cid)}`);
+      const lj = await lr.json();
+      if (lj.ok) { setLibraries(lj.libraries || []); setLibrariesErr(null); }
+      else setLibrariesErr(lj.error || `HTTP ${lr.status}`);
+    } catch (le: any) { setLibrariesErr(le?.message || String(le)); }
+  }, [id]);
+
+  const libSpecFromForm = useCallback((): any | null => {
+    const c = libCoord.trim();
+    if (!c) return null;
+    if (libType === 'pypi') return { pypi: { package: c } };
+    if (libType === 'maven') return { maven: { coordinates: c } };
+    if (libType === 'cran') return { cran: { package: c } };
+    if (libType === 'whl') return { whl: c };
+    if (libType === 'jar') return { jar: c };
+    return { requirements: c };
+  }, [libType, libCoord]);
+
+  const installLibrary = useCallback(async () => {
+    if (!clusterId) return;
+    const lib = libSpecFromForm(); if (!lib) return;
+    setLibBusy(true); setLibErr(null);
+    try {
+      const r = await fetch(`/api/items/databricks-cluster/${id}/libraries`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clusterId, libraries: [lib] }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setLibErr(j.error || `HTTP ${r.status}`); return; }
+      setLibCoord('');
+      await refreshLibraries(clusterId);
+    } catch (e: any) { setLibErr(e?.message || String(e)); } finally { setLibBusy(false); }
+  }, [id, clusterId, libSpecFromForm, refreshLibraries]);
+
+  const uninstallLibrary = useCallback(async (lib: any) => {
+    if (!clusterId) return;
+    setLibBusy(true); setLibErr(null);
+    try {
+      const r = await fetch(`/api/items/databricks-cluster/${id}/libraries`, {
+        method: 'DELETE', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ clusterId, libraries: [lib] }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setLibErr(j.error || `HTTP ${r.status}`); return; }
+      await refreshLibraries(clusterId);
+    } catch (e: any) { setLibErr(e?.message || String(e)); } finally { setLibBusy(false); }
+  }, [id, clusterId, refreshLibraries]);
 
   const doState = useCallback(async (action: 'start' | 'stop' | 'restart') => {
     if (!clusterId) return;
@@ -5673,6 +5793,39 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
             </Field>
           </div>
 
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <Field label="Access mode" style={{ minWidth: 220 }}>
+              <Dropdown
+                value={accessMode || 'Workspace default'}
+                selectedOptions={accessMode ? [accessMode] : []}
+                onOptionSelect={(_, d) => setAccessMode((d.optionValue as any) || '')}
+              >
+                <Option value="" text="Workspace default">Workspace default</Option>
+                <Option value="SINGLE_USER" text="Single user">Single user</Option>
+                <Option value="USER_ISOLATION" text="Shared (isolation)">Shared (isolation)</Option>
+                <Option value="LEGACY_SINGLE_USER" text="No isolation (legacy)">No isolation (legacy)</Option>
+              </Dropdown>
+            </Field>
+            <Field label="Driver node type" style={{ minWidth: 220 }}>
+              <Dropdown
+                value={driverNodeType || 'Same as worker'}
+                selectedOptions={driverNodeType ? [driverNodeType] : []}
+                onOptionSelect={(_, d) => setDriverNodeType(d.optionValue || '')}
+              >
+                <Option value="" text="Same as worker">Same as worker</Option>
+                {nodeTypes.slice(0, 80).map((n) => (
+                  <Option key={n.node_type_id} value={n.node_type_id} text={n.node_type_id}>{n.node_type_id}</Option>
+                ))}
+              </Dropdown>
+            </Field>
+            <Switch checked={photon} onChange={(_, d) => setPhoton(!!d.checked)} label="Photon acceleration" />
+            <Switch checked={spot} onChange={(_, d) => setSpot(!!d.checked)} label="Spot workers" />
+          </div>
+
+          <KvEditor label="Spark config" rows={sparkConf} setRows={setSparkConf} kPlaceholder="spark.databricks.x" vPlaceholder="value" />
+          <KvEditor label="Environment variables" rows={sparkEnv} setRows={setSparkEnv} kPlaceholder="PYSPARK_PYTHON" vPlaceholder="/databricks/python3/bin/python" />
+          <KvEditor label="Tags (cost allocation)" rows={tags} setRows={setTags} kPlaceholder="cost-center" vPlaceholder="data-eng" />
+
           {clusterId && (
             <>
               <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginTop: tokens.spacingVerticalM }}>
@@ -5712,15 +5865,19 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
               {detailTab === 'libraries' && (
                 <>
                   {librariesErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Library list failed</MessageBarTitle>{librariesErr}</MessageBarBody></MessageBar>}
-                  <MessageBar intent="info">
-                    <MessageBarBody>
-                      <MessageBarTitle>Read-only library status</MessageBarTitle>
-                      Install + uninstall is performed in the Databricks workspace UI — each non-public source
-                      (private PyPI, ADO artifact feeds, JARs in protected blob containers) needs its own
-                      credential dance. The Loom editor surfaces the per-library install state via
-                      <code> /api/2.0/libraries/cluster-status</code>.
-                    </MessageBarBody>
-                  </MessageBar>
+                  {libErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Install/uninstall failed</MessageBarTitle>{libErr}</MessageBarBody></MessageBar>}
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <Field label="Type" style={{ minWidth: 130 }}>
+                      <Dropdown value={libType} selectedOptions={[libType]}
+                        onOptionSelect={(_, d) => d.optionValue && setLibType(d.optionValue as any)}>
+                        {['pypi', 'maven', 'cran', 'whl', 'jar', 'requirements'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label={libType === 'pypi' ? 'Package (e.g. scikit-learn==1.4.0)' : libType === 'maven' ? 'Coordinates (group:artifact:ver)' : 'Path / package'} style={{ flex: 1, minWidth: 240 }}>
+                      <Input value={libCoord} onChange={(_, d) => setLibCoord(d.value)} placeholder={libType === 'whl' ? '/Volumes/main/default/wheels/x.whl' : 'name'} />
+                    </Field>
+                    <Button appearance="primary" disabled={libBusy || !libCoord.trim()} onClick={() => void installLibrary()}>Install</Button>
+                  </div>
                   {libraries.length === 0 ? (
                     <Caption1>No libraries attached.</Caption1>
                   ) : (
@@ -5731,6 +5888,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                           <TableHeaderCell>Coordinates / package</TableHeaderCell>
                           <TableHeaderCell>Status</TableHeaderCell>
                           <TableHeaderCell>Messages</TableHeaderCell>
+                          <TableHeaderCell>Action</TableHeaderCell>
                         </TableRow></TableHeader>
                         <TableBody>
                           {libraries.map((lib, i) => {
@@ -5743,6 +5901,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
                                 <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{coords}</code></TableCell>
                                 <TableCell><Badge appearance="filled" color={lib.status === 'INSTALLED' ? 'success' : lib.status === 'FAILED' ? 'danger' : 'warning'}>{lib.status || '—'}</Badge></TableCell>
                                 <TableCell style={{ fontSize: tokens.fontSizeBase100 }}>{(lib.messages || []).join('; ') || '—'}</TableCell>
+                                <TableCell><Button size="small" appearance="subtle" disabled={libBusy} onClick={() => void uninstallLibrary(lib.library)}>Uninstall</Button></TableCell>
                               </TableRow>
                             );
                           })}
@@ -5755,38 +5914,22 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
 
               {detailTab === 'init' && (
                 <>
-                  <MessageBar intent="info">
-                    <MessageBarBody>
-                      <MessageBarTitle>Read-only init script list</MessageBarTitle>
-                      Init scripts run on every node when the cluster starts. Edit + reorder in the Databricks
-                      workspace UI (Compute → cluster → Advanced options → Init scripts) — Loom surfaces the
-                      configured list from <code>/api/2.0/clusters/get</code>.
-                    </MessageBarBody>
-                  </MessageBar>
-                  {(cluster?.init_scripts || []).length === 0 ? (
-                    <Caption1>No init scripts configured.</Caption1>
-                  ) : (
-                    <div className={s.tableWrap}>
-                      <Table size="small" aria-label="Init scripts">
-                        <TableHeader><TableRow>
-                          <TableHeaderCell>Source</TableHeaderCell>
-                          <TableHeaderCell>Destination</TableHeaderCell>
-                        </TableRow></TableHeader>
-                        <TableBody>
-                          {(cluster?.init_scripts || []).map((script, i) => {
-                            const src = script.workspace ? 'workspace' : script.volumes ? 'volumes' : script.dbfs ? 'dbfs' : script.abfss ? 'abfss' : script.s3 ? 's3' : script.gcs ? 'gcs' : script.file ? 'file' : '?';
-                            const dest = script.workspace?.destination || script.volumes?.destination || script.dbfs?.destination || script.abfss?.destination || script.s3?.destination || script.gcs?.destination || script.file?.destination || '—';
-                            return (
-                              <TableRow key={i}>
-                                <TableCell><Badge appearance="outline">{src}</Badge></TableCell>
-                                <TableCell><code style={{ fontSize: tokens.fontSizeBase200 }}>{dest}</code></TableCell>
-                              </TableRow>
-                            );
-                          })}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  )}
+                  <Caption1>Bootstrap scripts run on every node at startup. Add a path, then <strong>Save</strong> (cluster must be RUNNING or TERMINATED). Edits apply on next start.</Caption1>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                    {initScripts.map((sc, i) => (
+                      <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+                        <Dropdown style={{ minWidth: 120 }} value={sc.kind} selectedOptions={[sc.kind]}
+                          onOptionSelect={(_, d) => { if (!d.optionValue) return; const n = [...initScripts]; n[i] = { ...n[i], kind: d.optionValue as any }; setInitScripts(n); }}>
+                          {['workspace', 'volumes', 'dbfs'].map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
+                        </Dropdown>
+                        <Input style={{ flex: 1 }} placeholder="/Workspace/init/setup.sh" value={sc.dest}
+                          onChange={(_, d) => { const n = [...initScripts]; n[i] = { ...n[i], dest: d.value }; setInitScripts(n); }} />
+                        <Button appearance="subtle" onClick={() => setInitScripts(initScripts.filter((_, j) => j !== i))}>Remove</Button>
+                      </div>
+                    ))}
+                    <Button appearance="secondary" size="small" style={{ alignSelf: 'flex-start' }}
+                      onClick={() => setInitScripts([...initScripts, { kind: 'workspace', dest: '' }])}>+ Add init script</Button>
+                  </div>
                 </>
               )}
 

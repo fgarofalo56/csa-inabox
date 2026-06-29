@@ -419,9 +419,17 @@ export async function listEndpointDeployments(endpointName: string, workspaceNam
 
 /** Blue-green: set the traffic split (deployment → 0-100) on an endpoint. Real ARM PUT. */
 export async function setEndpointTraffic(endpointName: string, traffic: Record<string, number>, workspaceName?: string): Promise<FoundryEndpoint> {
-  const location = await workspaceLocation(workspaceName);
   const path = `${workspaceArmBase(workspaceName)}/onlineEndpoints/${encodeURIComponent(endpointName)}`;
-  const armBody = { location, identity: { type: 'SystemAssigned' }, properties: { traffic } };
+  // Read the live endpoint first so the traffic PUT echoes its EXISTING identity,
+  // location, and authMode — hard-coding SystemAssigned would clobber an endpoint
+  // that uses a UserAssigned (or None) identity. Fall back to SystemAssigned only
+  // when the endpoint has no identity to preserve.
+  const existing = await readJson<any>(await armFetch(path, { apiVersion: ML_API }));
+  const location = existing?.location || (await workspaceLocation(workspaceName));
+  const identity = existing?.identity || { type: 'SystemAssigned' };
+  const props: Record<string, unknown> = { traffic };
+  if (existing?.properties?.authMode) props.authMode = existing.properties.authMode;
+  const armBody = { location, identity, properties: props };
   const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
   if (res.status === 202) return { id: '', name: endpointName, provisioningState: 'Updating', traffic };
   const j = await readJson<any>(res);
@@ -1940,7 +1948,13 @@ export async function getDataAssetLineage(name: string, workspaceName?: string):
   const j = await readJson<{ value?: any[] }>(res);
   const jobs = j?.value || [];
   const producers: any[] = []; const consumers: any[] = [];
-  const matches = (o: any) => o && typeof o.uri === 'string' && o.uri.toLowerCase().includes(name.toLowerCase());
+  // Match the asset name only as a delimited path/ref SEGMENT — a full azureml
+  // ref (azureml:<name>:<ver>), an ARM data path (.../data/<name>/versions/1),
+  // or a host/path token — never a loose substring (so "data" won't false-match
+  // "metadata", "sales" won't match "wholesale").
+  const target = name.toLowerCase();
+  const matches = (o: any) =>
+    o && typeof o.uri === 'string' && o.uri.toLowerCase().split(/[/:]+/).includes(target);
   for (const job of jobs) {
     const p = job?.properties || {};
     const row = { name: job?.name, displayName: p.displayName, status: p.status, jobType: p.jobType };

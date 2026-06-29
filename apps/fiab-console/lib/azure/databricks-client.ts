@@ -1069,6 +1069,14 @@ export interface ClusterSpec {
   };
   /** Driver/worker/event-log delivery target so logs persist + can be ingested. */
   cluster_log_conf?: { dbfs?: { destination: string }; volumes?: { destination: string } };
+  /** Environment variables injected into every node (e.g. PYSPARK_PYTHON, custom secrets refs). */
+  spark_env_vars?: Record<string, string>;
+  /** Bootstrap scripts run on each node at startup (workspace/volumes/dbfs paths). */
+  init_scripts?: Array<{
+    workspace?: { destination: string };
+    volumes?: { destination: string };
+    dbfs?: { destination: string };
+  }>;
 }
 
 export async function listClusters(): Promise<Cluster[]> {
@@ -1213,6 +1221,34 @@ export async function listClusterLibraries(clusterId: string): Promise<LibrarySt
   );
   const body = await asJsonOrThrow<{ library_statuses?: LibraryStatus[] }>(res, 'listClusterLibraries');
   return body.library_statuses || [];
+}
+
+/** A single library spec accepted by /api/2.0/libraries/install + /uninstall. */
+export type LibrarySpec =
+  | { pypi: { package: string; repo?: string } }
+  | { maven: { coordinates: string; repo?: string } }
+  | { cran: { package: string } }
+  | { jar: string }
+  | { whl: string }
+  | { egg: string }
+  | { requirements: string };
+
+/** Install one or more libraries on a cluster (async — poll cluster-status for state). */
+export async function installClusterLibraries(clusterId: string, libraries: LibrarySpec[]): Promise<void> {
+  const res = await dbxFetch('/api/2.0/libraries/install', {
+    method: 'POST',
+    body: JSON.stringify({ cluster_id: clusterId, libraries }),
+  });
+  await asJsonOrThrow<unknown>(res, 'installClusterLibraries');
+}
+
+/** Queue uninstall of one library; takes effect after the next cluster restart. */
+export async function uninstallClusterLibraries(clusterId: string, libraries: LibrarySpec[]): Promise<void> {
+  const res = await dbxFetch('/api/2.0/libraries/uninstall', {
+    method: 'POST',
+    body: JSON.stringify({ cluster_id: clusterId, libraries }),
+  });
+  await asJsonOrThrow<unknown>(res, 'uninstallClusterLibraries');
 }
 
 // ============================================================

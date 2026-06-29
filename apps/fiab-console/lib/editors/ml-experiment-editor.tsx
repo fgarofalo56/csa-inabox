@@ -6,7 +6,9 @@
  *
  * Parity target: the Azure ML Studio "Jobs / Experiment" experience —
  *   - a sortable + filterable runs table (sort any metric/param/attribute,
- *     free-text filter client-side, MLflow filter string server-side),
+ *     free-text filter client-side, MLflow filter string server-side, plus an
+ *     Active/Archived lifecycle filter that surfaces soft-deleted runs and
+ *     restores them via runs/restore),
  *   - run detail: metric step charts, params, tags, and the artifact tree,
  *   - compare-runs: an overlaid metric step chart + a parallel-coordinates plot
  *     across the selected runs.
@@ -343,6 +345,8 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const [localSearch, setLocalSearch] = useState('');
   const [serverFilter, setServerFilter] = useState('');
   const [applying, setApplying] = useState(false);
+  // lifecycle: ACTIVE_ONLY (default) vs DELETED_ONLY (archived / soft-deleted)
+  const [lifecycle, setLifecycle] = useState<'ACTIVE_ONLY' | 'DELETED_ONLY'>('ACTIVE_ONLY');
 
   // selection
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
@@ -363,7 +367,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs`);
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs?runViewType=${lifecycle}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setLoading(false); return; }
       if (j.configured === false) { setConfigured(false); setHint(j.hint || null); setRuns([]); setLoading(false); return; }
@@ -374,7 +378,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
       setDetailRunId((prev) => (prev && rows.some((x) => x.runId === prev) ? prev : rows[0]?.runId || null));
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setLoading(false); }
-  }, [id]);
+  }, [id, lifecycle]);
   useEffect(() => { load(); }, [load]);
 
   // ---- server query (MLflow filter + orderBy) via /api/aml/runs ----
@@ -383,8 +387,9 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
       // No resolved id (e.g. older route) — re-run name resolution + filter.
       setApplying(true);
       try {
-        const qs = serverFilter ? `?filter=${encodeURIComponent(serverFilter)}` : '';
-        const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs${qs}`);
+        const params = new URLSearchParams({ runViewType: lifecycle });
+        if (serverFilter) params.set('filter', serverFilter);
+        const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs?${params.toString()}`);
         const j = await r.json();
         if (j.ok && j.configured !== false) setRuns(Array.isArray(j.runs) ? j.runs : []);
         else if (j.configured === false) { setConfigured(false); setHint(j.hint || null); }
@@ -402,6 +407,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
           filter: serverFilter || undefined,
           orderBy,
           maxResults: 1000,
+          runViewType: lifecycle,
         }),
       });
       const j = await r.json();
@@ -410,7 +416,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
       setRuns(Array.isArray(j.runs) ? j.runs : []);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setApplying(false); }
-  }, [experiment, id, serverFilter, sortCol, sortDir]);
+  }, [experiment, id, serverFilter, sortCol, sortDir, lifecycle]);
 
   // ---- detail metric history ----
   const selectedRun = useMemo(() => runs.find((r) => r.runId === detailRunId) || null, [runs, detailRunId]);
@@ -490,10 +496,10 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
   const openDetail = useCallback((runId: string) => { setDetailRunId(runId); setView('detail'); setDetailTab('metrics'); }, []);
 
-  // Run lifecycle actions (delete / clone / archive) — real MLflow REST.
+  // Run lifecycle actions (delete / clone / archive / restore) — real MLflow REST.
   const [actionBusy, setActionBusy] = useState<string | null>(null);
   const [actionMsg, setActionMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
-  const runAction = useCallback(async (runId: string, action: 'delete' | 'clone' | 'archive') => {
+  const runAction = useCallback(async (runId: string, action: 'delete' | 'clone' | 'archive' | 'restore') => {
     setActionBusy(`${action}:${runId}`); setActionMsg(null);
     try {
       const r = await fetch(`/api/aml/runs/${encodeURIComponent(runId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) });
@@ -575,6 +581,17 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
               {view === 'runs' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge }}>
                   <div className={s.toolbar}>
+                    <Field label="Show" style={{ minWidth: 140 }}>
+                      <Dropdown
+                        value={lifecycle === 'DELETED_ONLY' ? 'Archived' : 'Active'}
+                        selectedOptions={[lifecycle]}
+                        onOptionSelect={(_, d) => { setLifecycle((d.optionValue as 'ACTIVE_ONLY' | 'DELETED_ONLY') || 'ACTIVE_ONLY'); setChecked(new Set()); }}
+                        aria-label="Run lifecycle filter"
+                      >
+                        <Option value="ACTIVE_ONLY">Active</Option>
+                        <Option value="DELETED_ONLY">Archived</Option>
+                      </Dropdown>
+                    </Field>
                     <Field label="Filter rows (name / param / metric)" style={{ minWidth: 240 }}>
                       <Input value={localSearch} onChange={(_, d) => setLocalSearch(d.value)} placeholder="e.g. lr, accuracy, run-42" />
                     </Field>
@@ -598,8 +615,10 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                   {runs.length === 0 ? (
                     <EmptyState
                       icon={<BeakerRegular />}
-                      title="No runs for this experiment"
-                      body={`Log a run with mlflow.start_run() + mlflow.log_metric() under "${experiment?.name || id}", then reload to see its runs, metric step charts, params, tags, and artifacts.`}
+                      title={lifecycle === 'DELETED_ONLY' ? 'No archived runs' : 'No runs for this experiment'}
+                      body={lifecycle === 'DELETED_ONLY'
+                        ? `No deleted/archived runs under "${experiment?.name || id}". Archive or delete a run from the Active view, then switch back here to restore it.`
+                        : `Log a run with mlflow.start_run() + mlflow.log_metric() under "${experiment?.name || id}", then reload to see its runs, metric step charts, params, tags, and artifacts.`}
                     />
                   ) : (
                     <div style={{ overflowX: 'auto' }}>
@@ -662,8 +681,14 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                               <TableCell>
                                 <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
                                   <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'clone')}>Clone</Button>
-                                  <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'archive')}>Archive</Button>
-                                  <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'delete')}>{actionBusy === `delete:${r.runId}` ? '…' : 'Delete'}</Button>
+                                  {lifecycle === 'DELETED_ONLY' ? (
+                                    <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'restore')}>{actionBusy === `restore:${r.runId}` ? '…' : 'Restore'}</Button>
+                                  ) : (
+                                    <>
+                                      <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'archive')}>Archive</Button>
+                                      <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'delete')}>{actionBusy === `delete:${r.runId}` ? '…' : 'Delete'}</Button>
+                                    </>
+                                  )}
                                 </div>
                               </TableCell>
                             </TableRow>

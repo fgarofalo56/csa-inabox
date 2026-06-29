@@ -418,7 +418,7 @@ export async function searchRuns(opts: {
  */
 export async function searchRunsByExperimentName(
   experimentName: string,
-  opts: { filter?: string; maxResults?: number } = {},
+  opts: { filter?: string; maxResults?: number; runViewType?: 'ACTIVE_ONLY' | 'DELETED_ONLY' | 'ALL' } = {},
 ): Promise<{ experiment: MlflowExperiment | null; runs: MlflowRun[] }> {
   const experiment = await getExperimentByName(experimentName);
   if (!experiment) return { experiment: null, runs: [] };
