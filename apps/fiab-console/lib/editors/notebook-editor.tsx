@@ -1481,6 +1481,15 @@ export function NotebookEditor({ item, id }: Props) {
           { label: 'To markdown cell', onClick: activeCellId ? () => convertCell(activeCellId, 'markdown') : undefined, disabled: !activeCellId },
         ]},
       ]},
+      { id: 'ai', label: 'AI tools', groups: [
+        { label: 'Copilot', actions: [
+          { label: copilotOpen ? 'Hide Copilot' : 'Open Copilot', onClick: () => setCopilotOpen(v => !v) },
+          { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
+        ]},
+        { label: 'Cells', actions: [
+          { label: '+ Code cell', onClick: () => insertCell(insertAfter, 'code') },
+        ]},
+      ]},
       { id: 'run', label: 'Run', groups: [
         { label: 'Execute', actions: [
           { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
@@ -1917,7 +1926,7 @@ export function NotebookEditor({ item, id }: Props) {
           {(ws.error || listErr) && (
             <MessageBar intent="error">
               <MessageBarBody>
-                <MessageBarTitle>Fabric not reachable</MessageBarTitle>
+                <MessageBarTitle>Couldn't load workspaces</MessageBarTitle>
                 {ws.error || listErr}
                 {(ws.hint || listHint) && <><br /><Caption1>{ws.hint || listHint}</Caption1></>}
               </MessageBarBody>
