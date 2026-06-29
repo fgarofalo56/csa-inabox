@@ -22,7 +22,7 @@
  */
 
 import {
-  Subtitle2, Caption1, Body1, Button, Badge, Spinner, Skeleton, SkeletonItem, Divider,
+  Subtitle2, Caption1, Body1, Button, Badge, Spinner, Skeleton, SkeletonItem, Divider, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
@@ -387,7 +387,9 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
                 )}
                 <Divider />
                 <div className={styles.toolbar}>
-                  <Button appearance="primary" onClick={run} disabled={!canRun}>Run now</Button>
+                  <Tooltip relationship="label" content={!configured ? 'Configure the source & destination connections first' : busy ? 'A copy run is already in progress…' : 'Materialize the ADF pipeline and trigger a copy run now'}>
+                    <Button appearance="primary" onClick={run} disabled={!canRun}>Run now</Button>
+                  </Tooltip>
                   {busy && <Spinner size="tiny" />}
                 </div>
               </>

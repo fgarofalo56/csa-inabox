@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, SkeletonItem, Input, Textarea, Field,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, SkeletonItem, Input, Textarea, Field, Tooltip,
   Tree, TreeItem, TreeItemLayout, Select,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -443,15 +443,19 @@ export function AirflowJobEditor({ item, id }: Props) {
                             <TableCell>{(d.owners || []).join(', ') || '—'}</TableCell>
                             <TableCell>
                               <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
-                                <Button size="small" appearance="primary" icon={<Play16Filled />}
-                                  disabled={busyDag === d.dag_id} onClick={() => triggerRun(d.dag_id)}>
-                                  {busyDag === d.dag_id ? '…' : 'Trigger'}
-                                </Button>
-                                <Button size="small" appearance="outline"
-                                  icon={d.is_paused ? <Play16Regular /> : <Pause16Regular />}
-                                  disabled={busyDag === d.dag_id} onClick={() => togglePause(d.dag_id, !d.is_paused)}>
-                                  {d.is_paused ? 'Unpause' : 'Pause'}
-                                </Button>
+                                <Tooltip relationship="label" content={d.is_paused ? 'This DAG is paused — unpause it to allow runs' : 'Start a manual run of this DAG now'}>
+                                  <Button size="small" appearance="primary" icon={<Play16Filled />}
+                                    disabled={busyDag === d.dag_id} onClick={() => triggerRun(d.dag_id)}>
+                                    {busyDag === d.dag_id ? '…' : 'Trigger'}
+                                  </Button>
+                                </Tooltip>
+                                <Tooltip relationship="label" content={d.is_paused ? 'Resume scheduled runs for this DAG' : 'Pause this DAG (prevents scheduled runs; manual triggers still work)'}>
+                                  <Button size="small" appearance="outline"
+                                    icon={d.is_paused ? <Play16Regular /> : <Pause16Regular />}
+                                    disabled={busyDag === d.dag_id} onClick={() => togglePause(d.dag_id, !d.is_paused)}>
+                                    {d.is_paused ? 'Unpause' : 'Pause'}
+                                  </Button>
+                                </Tooltip>
                               </div>
                             </TableCell>
                           </TableRow>
