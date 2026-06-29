@@ -54,8 +54,10 @@ export interface StorageAccountSummary {
   sku?: string;
 }
 
-async function armGet<T = any>(path: string): Promise<T> {
-  const t = await credential.getToken(ARM_SCOPE);
+type DataPlaneCred = { getToken(s: string): Promise<{ token: string } | null> };
+
+async function armGet<T = any>(path: string, cred: DataPlaneCred = credential): Promise<T> {
+  const t = await cred.getToken(ARM_SCOPE);
   if (!t?.token) throw new StorageDiscoveryError('Failed to acquire ARM token', 401);
   const res = await fetchWithTimeout(`${armBase()}${path}`, {
     headers: { authorization: `Bearer ${t.token}`, accept: 'application/json' }, cache: 'no-store',
@@ -70,20 +72,20 @@ async function armGet<T = any>(path: string): Promise<T> {
   return (json as T) ?? ({} as T);
 }
 
-async function armList<T = any>(firstPath: string): Promise<T[]> {
+async function armList<T = any>(firstPath: string, cred: DataPlaneCred = credential): Promise<T[]> {
   const out: T[] = [];
   let next: string | null = firstPath; let guard = 0;
   while (next && guard < 50) {
     guard += 1;
     const p = stripArmBase(next);
-    const page: { value?: T[]; nextLink?: string } = await armGet(p);
+    const page: { value?: T[]; nextLink?: string } = await armGet(p, cred);
     if (Array.isArray(page.value)) out.push(...page.value);
     next = page.nextLink || null;
   }
   return out;
 }
 
-async function subscriptionIds(): Promise<string[]> {
+async function subscriptionIds(cred: DataPlaneCred = credential): Promise<string[]> {
   // Prefer the explicit Loom scope (admin + DLZ + extras) so a multi-sub deploy
   // lists DLZ-sub storage accounts too — the live bug was that only
   // LOOM_SUBSCRIPTION_ID was queried, hiding DLZ ADLS accounts from the picker.
@@ -91,7 +93,7 @@ async function subscriptionIds(): Promise<string[]> {
   if (scope.length) return scope;
   // No explicit scope configured → enumerate every subscription the identity
   // can read (unchanged fallback behaviour).
-  const subs = await armList<{ subscriptionId: string }>(`/subscriptions?api-version=${SUBSCRIPTIONS_API}`);
+  const subs = await armList<{ subscriptionId: string }>(`/subscriptions?api-version=${SUBSCRIPTIONS_API}`, cred);
   return subs.map((s) => s.subscriptionId).filter(Boolean);
 }
 
@@ -111,13 +113,27 @@ function shape(raw: any, sub: string): StorageAccountSummary {
   };
 }
 
-/** Every storage account the Console identity can read across target subs. */
-export async function listStorageAccounts(): Promise<StorageAccountSummary[]> {
-  const subs = await subscriptionIds();
+/**
+ * Every storage account the Console identity can read across target subs.
+ *
+ * EH Phase-1 OBO pilot: when given a `session` this resolves its ARM credential
+ * through the DORMANT data-access-mode switchboard. With LOOM_OBO_DATA_PLANE
+ * unset (default `off`) `getDataPlaneCredential` returns the SAME shared UAMI
+ * `credential` used here, so behavior is byte-for-byte identical to before.
+ */
+export async function listStorageAccounts(
+  session?: { claims?: { oid?: string }; userAssertion?: string } | null,
+): Promise<StorageAccountSummary[]> {
+  let cred: DataPlaneCred = credential;
+  try {
+    const { getDataPlaneCredential } = await import('./data-access-mode');
+    cred = (await getDataPlaneCredential(session ?? null, ARM_SCOPE)) as DataPlaneCred;
+  } catch { cred = credential; }
+  const subs = await subscriptionIds(cred);
   const all: StorageAccountSummary[] = [];
   for (const sub of subs) {
     try {
-      const raws = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Storage/storageAccounts?api-version=${STORAGE_API}`);
+      const raws = await armList<any>(`/subscriptions/${sub}/providers/Microsoft.Storage/storageAccounts?api-version=${STORAGE_API}`, cred);
       for (const r of raws) all.push(shape(r, sub));
     } catch { /* skip inaccessible sub */ }
   }
