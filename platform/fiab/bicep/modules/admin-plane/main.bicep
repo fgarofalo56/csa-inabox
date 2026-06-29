@@ -2768,10 +2768,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_SUB',          value: !empty(existingAdxClusterName) ? byoAdxSub : ((adxEnabled) ? subscription().subscriptionId : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
-            // Per-DLZ ADX database is named loomdb-<domain>; the single-sub DLZ
-            // uses domain "default" → loomdb-default. For a reused cluster the real
-            // default DB is reconciled post-deploy by patch-navigator-env.sh.
-            { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
+            // Per-DLZ ADX database is named loomdb_<domain>; the single-sub DLZ
+            // uses domain "default" → loomdb_default. Underscore (not hyphen) so
+            // the name is a valid bare KQL identifier. For a reused cluster the
+            // real default DB is reconciled post-deploy by patch-navigator-env.sh.
+            { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb_default' : '' }
             // ----------------------------------------------------------------
             // Azure Analysis Services (AAS) — Azure-native semantic-model
             // backend (lib/azure/aas-client.ts). When set, the SemanticModel
