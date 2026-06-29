@@ -25,7 +25,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Subtitle2, Body1, Body1Strong, Caption1, Badge, Button, Spinner,
-  Tab, TabList,
+  Tab, TabList, Dropdown, Option, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
@@ -232,6 +232,9 @@ export function LogicAppEditor({ item, id }: Props) {
   const [tab, setTab] = useState('designer');
   const [running, setRunning] = useState(false);
   const [runRes, setRunRes] = useState<RunResponse | null>(null);
+  // Which trigger to fire — defaults to the first; a picker appears when the
+  // workflow has more than one trigger (the run route already accepts `trigger`).
+  const [selTrigger, setSelTrigger] = useState('');
 
   // Editable WDL code view — the real authoring surface. Persisted via PUT
   // (ARM Microsoft.Logic/workflows when bound, always to Cosmos state).
@@ -257,6 +260,10 @@ export function LogicAppEditor({ item, id }: Props) {
   const triggers = definition.triggers || {};
   const actions = definition.actions || {};
   const triggerNames = useMemo(() => Object.keys(triggers), [triggers]);
+  // Keep the selected trigger valid as the definition loads/changes.
+  useEffect(() => {
+    if (triggerNames.length && !triggerNames.includes(selTrigger)) setSelTrigger(triggerNames[0]);
+  }, [triggerNames, selTrigger]);
   const wdlParams = definition.parameters || {};
   const paramValues = detail?.parameters || {};
   const bound = !!detail?.logicApp?.bound;
@@ -295,13 +302,13 @@ export function LogicAppEditor({ item, id }: Props) {
     try {
       const r = await fetch(`/api/items/logic-app/${encodeURIComponent(id)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ trigger: triggerNames[0] }),
+        body: JSON.stringify({ trigger: selTrigger || triggerNames[0] }),
       });
       const j: RunResponse = await r.json();
       setRunRes(j);
     } catch (e: any) { setRunRes({ ok: false, error: e?.message || String(e) }); }
     finally { setRunning(false); }
-  }, [workspaceId, id, triggerNames]);
+  }, [workspaceId, id, triggerNames, selTrigger]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -340,6 +347,15 @@ export function LogicAppEditor({ item, id }: Props) {
               <Button appearance="primary" icon={<Play20Regular />} disabled={!workspaceId || running} onClick={runTrigger}>
                 {running ? 'Running…' : 'Run trigger'}
               </Button>
+              {triggerNames.length > 1 && (
+                <Tooltip relationship="label" content="Choose which trigger to fire — this workflow has more than one">
+                  <Dropdown size="small" aria-label="Trigger to run" style={{ minWidth: 160 }}
+                    value={selTrigger} selectedOptions={selTrigger ? [selTrigger] : []}
+                    onOptionSelect={(_, d) => { if (d.optionValue) setSelTrigger(d.optionValue); }}>
+                    {triggerNames.map((tn) => <Option key={tn} value={tn} text={tn}>{tn}</Option>)}
+                  </Dropdown>
+                </Tooltip>
+              )}
               <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
             </div>
 
