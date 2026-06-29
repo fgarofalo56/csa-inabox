@@ -9,8 +9,9 @@
 
 import { ReactNode, useState } from 'react';
 import { Badge, Button, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
-import { PanelLeftContract20Regular, PanelLeftExpand20Regular } from '@fluentui/react-icons';
+import { PanelLeftContract20Regular, PanelLeftExpand20Regular, Sparkle20Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { openCopilot } from '@/lib/components/copilot-pane';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
 import { useCollapsibleState, CollapsedRail, CollapseToggle, RAIL_WIDTH } from '@/lib/components/collapsible-side-panel';
@@ -132,6 +133,14 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
         <div className={styles.meta}>
           <Badge appearance="outline">{item.category}</Badge>
           {item.preview && <Badge appearance="outline" color="warning">Preview</Badge>}
+          {/* Discoverable per-editor Copilot — opens the context-aware Loom
+              Copilot (grounded on this item via the route) so help is one click
+              away in every editor, not just the ones with a dedicated pane. */}
+          <Tooltip content={`Ask Loom Copilot about this ${item.displayName.toLowerCase()} — configure it, explain options, or build it for you`} relationship="label">
+            <Button appearance="subtle" size="small" icon={<Sparkle20Regular />} onClick={() => openCopilot()}>
+              Copilot
+            </Button>
+          </Tooltip>
           {/* Loom Thread — weave this item into upstream/downstream Loom services. */}
           <ThreadMenu type={item.slug} id={id} name={title} />
           {/* OneLake item-to-item lineage drawer (upstream/downstream graph). */}

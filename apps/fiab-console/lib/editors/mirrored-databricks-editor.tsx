@@ -95,6 +95,20 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const [createOpen, setCreateOpen] = useState(false);
   const [cName, setCName] = useState('');
   const [cCatalog, setCCatalog] = useState('');
+  // Real Unity Catalog list for the picker (empty → honest freeform fallback).
+  const [ucCatalogs, setUcCatalogs] = useState<string[]>([]);
+  useEffect(() => {
+    if (!createOpen) return;
+    let live = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/items/mirrored-databricks/catalogs');
+        const j = await r.json();
+        if (live && j.ok && Array.isArray(j.catalogs)) setUcCatalogs(j.catalogs);
+      } catch { /* keep freeform fallback */ }
+    })();
+    return () => { live = false; };
+  }, [createOpen]);
   const [cHostname, setCHostname] = useState('');
   const [cDesc, setCDesc] = useState('');
   const [cBusy, setCBusy] = useState(false);
@@ -320,8 +334,16 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                     <DialogTitle>Mount a Databricks Unity Catalog</DialogTitle>
                     <DialogContent>
                       <Field label="Display name" required><Input value={cName} onChange={(_, d) => setCName(d.value)} /></Field>
-                      <Field label="Unity Catalog name" required hint="The UC catalog to mirror, e.g. main / sales / lakehouse_silver">
-                        <Input value={cCatalog} onChange={(_, d) => setCCatalog(d.value)} placeholder="main" />
+                      <Field label="Unity Catalog name" required hint={ucCatalogs.length > 0 ? 'Pick the Unity Catalog to mirror.' : 'The UC catalog to mirror, e.g. main / sales / lakehouse_silver'}>
+                        {ucCatalogs.length > 0 ? (
+                          <Dropdown placeholder="Select a catalog…" value={cCatalog}
+                            selectedOptions={cCatalog ? [cCatalog] : []}
+                            onOptionSelect={(_, d) => { if (d.optionValue) setCCatalog(d.optionValue); }}>
+                            {ucCatalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                          </Dropdown>
+                        ) : (
+                          <Input value={cCatalog} onChange={(_, d) => setCCatalog(d.value)} placeholder="main" />
+                        )}
                       </Field>
                       <Field label="Databricks hostname (optional override)" hint="Defaults to LOOM_DATABRICKS_HOSTNAME">
                         <Input value={cHostname} onChange={(_, d) => setCHostname(d.value)} placeholder="adb-xxxx.azuredatabricks.net" />
