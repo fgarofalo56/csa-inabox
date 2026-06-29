@@ -29,7 +29,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button, Tooltip, Badge, Spinner, Caption1, Subtitle2, Body1, Text,
-  Field, Input, Dropdown, Option, Switch, SpinButton,
+  Field, Input, Dropdown, Option, Switch, SpinButton, InfoLabel,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -483,9 +483,14 @@ function CatalogFieldControl({
   error?: string;
   onChange: (v: string | number | boolean) => void;
 }) {
+  // Hover info-icon on every IR config label (node count, TTL, timeout, etc.)
+  // surfaces the catalog's `help` text right where the user configures it.
+  const labelNode = (field.help && field.help.trim())
+    ? <InfoLabel info={field.help}>{field.label}</InfoLabel>
+    : field.label;
   if (field.type === 'boolean') {
     return (
-      <Field label={field.label} hint={field.help} validationMessage={error}>
+      <Field label={labelNode} hint={field.help} validationMessage={error}>
         <Switch checked={value === true} onChange={(_, d) => onChange(d.checked)} />
       </Field>
     );
@@ -493,7 +498,7 @@ function CatalogFieldControl({
   if (field.type === 'number') {
     const n = typeof value === 'number' ? value : Number(value);
     return (
-      <Field label={field.label} hint={field.help} required={field.required} validationMessage={error}>
+      <Field label={labelNode} hint={field.help} required={field.required} validationMessage={error}>
         <SpinButton
           value={Number.isFinite(n) ? n : (typeof field.default === 'number' ? field.default : 0)}
           min={field.min} max={field.max}
@@ -510,7 +515,7 @@ function CatalogFieldControl({
     const cur = value === undefined || value === null ? '' : String(value);
     const curLabel = opts.find((o) => o.value === cur)?.label || cur;
     return (
-      <Field label={field.label} hint={field.help} required={field.required} validationMessage={error}>
+      <Field label={labelNode} hint={field.help} required={field.required} validationMessage={error}>
         <Dropdown value={curLabel} selectedOptions={[cur]} onOptionSelect={(_, d) => { if (d.optionValue !== undefined) onChange(d.optionValue); }}>
           {opts.map((o) => <Option key={o.value} value={o.value} text={o.label}>{o.label}</Option>)}
         </Dropdown>
@@ -520,14 +525,14 @@ function CatalogFieldControl({
   // password (masked)
   if (field.type === 'password') {
     return (
-      <Field label={field.label} hint={field.help} required={field.required} validationMessage={error}>
+      <Field label={labelNode} hint={field.help} required={field.required} validationMessage={error}>
         <Input type="password" value={value === undefined || value === null ? '' : String(value)} placeholder={field.placeholder} onChange={(_, d) => onChange(d.value)} />
       </Field>
     );
   }
   // text
   return (
-    <Field label={field.label} hint={field.help} required={field.required} validationMessage={error}>
+    <Field label={labelNode} hint={field.help} required={field.required} validationMessage={error}>
       <Input value={value === undefined || value === null ? '' : String(value)} placeholder={field.placeholder} onChange={(_, d) => onChange(d.value)} />
     </Field>
   );

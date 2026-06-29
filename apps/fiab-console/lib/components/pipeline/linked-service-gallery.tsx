@@ -38,7 +38,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button, Tooltip, Badge, Spinner, Caption1, Subtitle2, Text,
-  Field, Input, Textarea, Switch, SpinButton, Dropdown, Option, SearchBox,
+  Field, Input, Textarea, Switch, SpinButton, Dropdown, Option, SearchBox, InfoLabel,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   TabList, Tab,
@@ -215,6 +215,13 @@ function CatalogFieldControl({
   const hint = field.hint
     + (field.supportsDynamic ? (field.hint ? ' ' : '') + 'Supports @{…} dynamic content.' : '');
 
+  // Label carries a hover info-icon (Fluent InfoLabel) explaining the field, so
+  // every connector setting is self-documenting on hover — no need to leave the
+  // form to learn what an endpoint / database / auth option means.
+  const labelNode = (hint && hint.trim())
+    ? <InfoLabel info={hint}>{field.label}</InfoLabel>
+    : field.label;
+
   // Dynamic-capable text / multiline field → the shared ExpressionField wrapper,
   // giving the portal's "Add dynamic content" + IntelliSense exactly where ADF
   // allows an @{…} expression on a connection setting (e.g. endpoint, database,
@@ -239,7 +246,7 @@ function CatalogFieldControl({
 
   if (field.kind === 'boolean') {
     return (
-      <Field label={field.label} hint={field.hint} validationMessage={error}>
+      <Field label={labelNode} hint={field.hint} validationMessage={error}>
         <Switch checked={value === true} onChange={(_, d) => onChange(d.checked)} />
       </Field>
     );
@@ -247,7 +254,7 @@ function CatalogFieldControl({
   if (field.kind === 'number') {
     const n = typeof value === 'number' ? value : Number(value);
     return (
-      <Field label={field.label} hint={hint || undefined} required={field.required} validationMessage={error}>
+      <Field label={labelNode} hint={hint || undefined} required={field.required} validationMessage={error}>
         <SpinButton
           value={Number.isFinite(n) ? n : 0}
           placeholder={field.placeholder}
@@ -264,7 +271,7 @@ function CatalogFieldControl({
     const cur = value === undefined || value === null ? '' : String(value);
     const curLabel = opts.find((o) => o.value === cur)?.label || cur;
     return (
-      <Field label={field.label} hint={hint || undefined} required={field.required} validationMessage={error}>
+      <Field label={labelNode} hint={hint || undefined} required={field.required} validationMessage={error}>
         <Dropdown
           placeholder="Select…"
           value={curLabel}
@@ -277,7 +284,7 @@ function CatalogFieldControl({
   }
   if (field.kind === 'multiline') {
     return (
-      <Field label={field.label} hint={hint || undefined} required={field.required} validationMessage={error}>
+      <Field label={labelNode} hint={hint || undefined} required={field.required} validationMessage={error}>
         <Textarea
           value={value === undefined || value === null ? '' : String(value)}
           placeholder={field.placeholder}
@@ -290,7 +297,7 @@ function CatalogFieldControl({
   }
   // text / password
   return (
-    <Field label={field.label} hint={hint || undefined} required={field.required} validationMessage={error}>
+    <Field label={labelNode} hint={hint || undefined} required={field.required} validationMessage={error}>
       <Input
         type={field.secret ? 'password' : 'text'}
         value={value === undefined || value === null ? '' : String(value)}
