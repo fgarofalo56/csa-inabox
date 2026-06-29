@@ -611,7 +611,9 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
 
   // ?view=edit switches the SAME route to the full owner edit form. Returning
   // (Back / "Done") drops the param and re-renders the read-first details view.
-  const editView = searchParams?.get('view') === 'edit';
+  // A brand-new item (/items/data-product/new) goes straight into the create
+  // form instead of a dead-end "open from the Marketplace" message.
+  const editView = searchParams?.get('view') === 'edit' || id === 'new';
   const gotoEdit = useCallback((tab?: string) => {
     const base = pathname || `/items/${item?.slug ?? 'data-product'}/${id}`;
     router.push(`${base}?view=edit${tab ? `&tab=${tab}` : ''}`);
