@@ -29,7 +29,7 @@
  * coordinates render the same data the Studio Metrics/Compare tabs do.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner, Checkbox,
   Tab, TabList,
@@ -233,12 +233,12 @@ function ArtifactTree({ runId }: { runId: string }) {
     });
   }, [children, fetchPath]);
 
-  const renderLevel = (path: string, depth: number): JSX.Element[] => {
+  const renderLevel = (path: string, depth: number): ReactElement[] => {
     const nodes = children[path];
     if (!nodes) return [];
     return nodes.flatMap((node) => {
       const isOpen = open.has(node.path);
-      const rows: JSX.Element[] = [
+      const rows: ReactElement[] = [
         <div key={node.path} className={s.treeRow} style={{ paddingLeft: depth * 18 }}>
           {node.isDir ? (
             <span
@@ -259,6 +259,12 @@ function ArtifactTree({ runId }: { runId: string }) {
           )}
           <span style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{node.path.split('/').pop() || node.path}</span>
           {!node.isDir && <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: tokens.spacingHorizontalS }}>{fmtBytes(node.fileSize)}</Caption1>}
+          {!node.isDir && (
+            <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalXS, marginLeft: tokens.spacingHorizontalS }}>
+              <a href={`/api/aml/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(node.path)}`} target="_blank" rel="noreferrer" aria-label={`Preview ${node.path}`}>preview</a>
+              <a href={`/api/aml/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(node.path)}&download=1`} aria-label={`Download ${node.path}`}>download</a>
+            </span>
+          )}
           {node.isDir && loading[node.path] && <Spinner size="extra-tiny" style={{ marginLeft: tokens.spacingHorizontalS }} />}
         </div>,
       ];
@@ -484,6 +490,22 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
   const openDetail = useCallback((runId: string) => { setDetailRunId(runId); setView('detail'); setDetailTab('metrics'); }, []);
 
+  // Run lifecycle actions (delete / clone / archive) — real MLflow REST.
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const runAction = useCallback(async (runId: string, action: 'delete' | 'clone' | 'archive') => {
+    setActionBusy(`${action}:${runId}`); setActionMsg(null);
+    try {
+      const r = await fetch(`/api/aml/runs/${encodeURIComponent(runId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) });
+      const j = await r.json();
+      if (!j.ok) { setActionMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      if (j.configured === false) { setActionMsg({ intent: 'error', text: j.hint || 'MLflow not configured' }); return; }
+      setActionMsg({ intent: 'success', text: j.message || `${action} done` });
+      await load();
+    } catch (e: any) { setActionMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setActionBusy(null); }
+  }, [load]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Experiment', actions: [
@@ -571,6 +593,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                       <Button appearance="subtle" onClick={() => { setServerFilter(''); load(); }} disabled={applying}>Clear</Button>
                     )}
                   </div>
+                  {actionMsg && <MessageBar intent={actionMsg.intent === 'success' ? 'success' : 'error'}><MessageBarBody>{actionMsg.text}</MessageBarBody></MessageBar>}
 
                   {runs.length === 0 ? (
                     <EmptyState
@@ -603,6 +626,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                                 p:{k} {sortIcon({ kind: 'param', field: k })}
                               </TableHeaderCell>
                             ))}
+                            <TableHeaderCell>Actions</TableHeaderCell>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -635,6 +659,13 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                                 const v = r.params.find((p) => p.key === k)?.value;
                                 return <TableCell key={`p-${r.runId}-${k}`} className={s.mono}>{v ?? '—'}</TableCell>;
                               })}
+                              <TableCell>
+                                <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+                                  <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'clone')}>Clone</Button>
+                                  <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'archive')}>Archive</Button>
+                                  <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'delete')}>{actionBusy === `delete:${r.runId}` ? '…' : 'Delete'}</Button>
+                                </div>
+                              </TableCell>
                             </TableRow>
                           ))}
                         </TableBody>

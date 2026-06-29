@@ -1333,7 +1333,7 @@ function AiSearchBindPicker({ id, onBound }: { id: string; onBound: () => void }
           <Dropdown value={pick} selectedOptions={pick ? [pick] : []}
             placeholder={state.loading ? 'Loading…' : (indexes.length ? 'Select an index' : 'No indexes on service')}
             onOptionSelect={(_, d) => d.optionValue && setPick(d.optionValue)}>
-            {indexes.map((i) => (<Option key={i.name} value={i.name}>{i.name} ({i.fieldCount} fields)</Option>))}
+            {indexes.map((i) => (<Option key={i.name} value={i.name}>{`${i.name} (${i.fieldCount} fields)`}</Option>))}
           </Dropdown>
         </Field>
         <Button appearance="primary" disabled={busy || !pick} onClick={bindExisting}>Bind</Button>
@@ -2899,7 +2899,11 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   const [form, setForm] = useState({ name: '', dataType: 'uri_folder', dataUri: '', version: '1', description: '' });
   const [msg, setMsg] = useState<string | null>(null);
   const [browseOpen, setBrowseOpen] = useState(false);
-  const [tab, setTab] = useState<'versions' | 'preview'>('versions');
+  const [tab, setTab] = useState<'versions' | 'preview' | 'lineage' | 'quality'>('versions');
+  const [diffA, setDiffA] = useState<string>('');
+  const [diffB, setDiffB] = useState<string>('');
+  const [lineage] = useApi<{ producers: any[]; consumers: any[]; jobsScanned: number }>(
+    isNew ? null : `/api/items/dataset/${encodeURIComponent(id)}/lineage${project ? `?project=${encodeURIComponent(project)}` : ''}`, [id, project]);
 
   const create = async () => {
     setMsg(null);
@@ -3000,8 +3004,34 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
             <Tab value="versions">Versions ({versions.length})</Tab>
             <Tab value="preview">Data &amp; schema</Tab>
+            <Tab value="lineage">Lineage</Tab>
+            <Tab value="quality">Quality &amp; drift</Tab>
           </TabList>
           {tab === 'versions' && (
+            <>
+            {versions.length >= 2 && (
+              <div className={s.toolbar} style={{ alignItems: 'flex-end' }}>
+                <Field label="Diff A">
+                  <Dropdown value={diffA || versions[0]?.version} selectedOptions={[diffA || versions[0]?.version]}
+                    onOptionSelect={(_, d) => setDiffA(d.optionValue || '')}>
+                    {versions.map((v: any) => <Option key={v.version} value={String(v.version)}>{`v${v.version}`}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Diff B">
+                  <Dropdown value={diffB || versions[1]?.version} selectedOptions={[diffB || versions[1]?.version]}
+                    onOptionSelect={(_, d) => setDiffB(d.optionValue || '')}>
+                    {versions.map((v: any) => <Option key={v.version} value={String(v.version)}>{`v${v.version}`}</Option>)}
+                  </Dropdown>
+                </Field>
+                {(() => {
+                  const a = versions.find((v: any) => String(v.version) === (diffA || String(versions[0]?.version)));
+                  const b = versions.find((v: any) => String(v.version) === (diffB || String(versions[1]?.version)));
+                  if (!a || !b) return null;
+                  const changed = a.dataUri !== b.dataUri || a.dataType !== b.dataType;
+                  return <Caption1>{changed ? `URI/type changed: ${a.dataType}→${b.dataType}` : 'No URI/type change between versions'}</Caption1>;
+                })()}
+              </div>
+            )}
             <div className={s.tableWrap}>
               <Table size="small">
                 <TableHeader><TableRow>
@@ -3020,8 +3050,30 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
                 </TableBody>
               </Table>
             </div>
+            </>
           )}
           {tab === 'preview' && <DatasetPreviewPanel uri={activeUri} />}
+          {tab === 'lineage' && (
+            lineage.loading ? <TableSkeleton rows={3} /> : lineage.error ? <ErrorBar msg={lineage.error} notDeployed={lineage.notDeployed} /> : (
+              (lineage.data?.producers?.length || lineage.data?.consumers?.length) ? (
+                <div className={s.tableWrap}>
+                  <Table size="small">
+                    <TableHeader><TableRow><TableHeaderCell>Role</TableHeaderCell><TableHeaderCell>Job</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell></TableRow></TableHeader>
+                    <TableBody>
+                      {(lineage.data?.producers || []).map((p: any) => <TableRow key={`pr-${p.name}`}><TableCell><Badge appearance="tint" color="brand">producer</Badge></TableCell><TableCell className={s.cell}>{p.displayName || p.name}</TableCell><TableCell className={s.cell}>{p.jobType}</TableCell><TableCell className={s.cell}>{p.status}</TableCell></TableRow>)}
+                      {(lineage.data?.consumers || []).map((c: any) => <TableRow key={`co-${c.name}`}><TableCell><Badge appearance="tint">consumer</Badge></TableCell><TableCell className={s.cell}>{c.displayName || c.name}</TableCell><TableCell className={s.cell}>{c.jobType}</TableCell><TableCell className={s.cell}>{c.status}</TableCell></TableRow>)}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : <EmptyState icon={<Database20Regular />} title="No lineage yet" body={`Scanned ${lineage.data?.jobsScanned ?? 0} AML jobs; none reference this asset's URI as input or output. Run a job consuming/producing this dataset to populate lineage.`} />
+            )
+          )}
+          {tab === 'quality' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              <MessageBarTitle>Data quality / drift requires a Data Drift monitor</MessageBarTitle>
+              Quality profiling + drift use an AML Data Drift monitor (or Synapse data quality scan) over this asset. Provision one and set <code>LOOM_DRIFT_MONITOR</code>; the Data &amp; schema tab already profiles the active version live.
+            </MessageBarBody></MessageBar>
+          )}
         </>
       )}
     </div>

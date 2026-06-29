@@ -81,7 +81,8 @@ interface MlflowVersionLite {
 }
 interface MlWorkspaceLite { name: string; kind?: string; isHub?: boolean }
 interface ModelBindingState { modelName: string; workspaceName?: string; version?: string }
-interface OnlineEndpointLite { id?: string; name: string; provisioningState?: string; scoringUri?: string; authMode?: string }
+interface OnlineEndpointLite { id?: string; name: string; provisioningState?: string; scoringUri?: string; authMode?: string; traffic?: Record<string, number> }
+interface OnlineDeploymentLite { name: string; endpointName: string; model?: string; instanceType?: string; instanceCount?: number; provisioningState?: string }
 
 type Stage = 'None' | 'Staging' | 'Production' | 'Archived';
 const STAGES: Stage[] = ['None', 'Staging', 'Production', 'Archived'];
@@ -160,9 +161,15 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
 
   // ---- Deploy ----
   const [instanceType, setInstanceType] = useState('Standard_DS3_v2');
+  const [instanceCount, setInstanceCount] = useState('1');
   const [deploying, setDeploying] = useState(false);
   const [endpointMsg, setEndpointMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   const [endpoints, setEndpoints] = useState<OnlineEndpointLite[]>([]);
+  const [deployments, setDeployments] = useState<OnlineDeploymentLite[]>([]);
+  // Blue-green traffic split + per-endpoint admin (scale / delete) ops.
+  const [trafficEp, setTrafficEp] = useState<string | null>(null);
+  const [bluePct, setBluePct] = useState(100);
+  const [opBusy, setOpBusy] = useState<string | null>(null);
 
   // ---- Register-version dialog ----
   const [regOpen, setRegOpen] = useState(false);
@@ -230,9 +237,36 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
     try {
       const res = await fetch(`${apiBase}/endpoint`);
       const j = await safeModelJson(res);
-      if (j.ok) setEndpoints(j.data?.endpoints || []);
+      if (j.ok) { setEndpoints(j.data?.endpoints || []); setDeployments(j.data?.deployments || []); }
     } catch { /* non-critical */ }
   }, [apiBase]);
+
+  // Blue-green: set the traffic split for an endpoint (blue=pct, green=100-pct).
+  const applyTraffic = useCallback(async () => {
+    if (!trafficEp) return;
+    const deps = deployments.filter((d) => d.endpointName === trafficEp);
+    const blue = deps[0]?.name || 'blue'; const green = deps[1]?.name;
+    const traffic: Record<string, number> = green ? { [blue]: bluePct, [green]: 100 - bluePct } : { [blue]: 100 };
+    setOpBusy(`traffic:${trafficEp}`); setEndpointMsg(null);
+    try {
+      const res = await fetch(`${apiBase}/endpoint`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpointName: trafficEp, traffic }) });
+      const j = await safeModelJson(res);
+      setEndpointMsg({ intent: j.ok ? 'success' : 'error', text: j.ok ? `Traffic: ${JSON.stringify(traffic)}` : (j.error || `HTTP ${j.status}`) });
+      if (j.ok) { setTrafficEp(null); loadEndpoints(); }
+    } catch (e: any) { setEndpointMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setOpBusy(null); }
+  }, [apiBase, trafficEp, bluePct, deployments, loadEndpoints]);
+
+  const deleteEndpoint = useCallback(async (name: string) => {
+    setOpBusy(`del:${name}`); setEndpointMsg(null);
+    try {
+      const res = await fetch(`${apiBase}/endpoint?endpoint=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await safeModelJson(res);
+      setEndpointMsg({ intent: j.ok ? 'success' : 'error', text: j.ok ? `Endpoint ${name} deletion started.` : (j.error || `HTTP ${j.status}`) });
+      if (j.ok) loadEndpoints();
+    } catch (e: any) { setEndpointMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setOpBusy(null); }
+  }, [apiBase, loadEndpoints]);
 
   useEffect(() => { loadBinding(); }, [loadBinding]);
   useEffect(() => {
@@ -261,7 +295,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
     try {
       const res = await fetch(`${apiBase}/endpoint`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ version: selected || undefined, instanceType }),
+        body: JSON.stringify({ version: selected || undefined, instanceType, instanceCount: Number(instanceCount) || 1 }),
       });
       const j = await safeModelJson(res);
       if (!j.ok) { setEndpointMsg({ intent: 'error', text: j.error || `HTTP ${j.status}` }); return; }
@@ -382,7 +416,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
             onOptionSelect={(_, d) => { const w = d.optionValue || ''; setPickWs(w); setPickModel(''); loadBinding(w); }}
           >
             <Option value="">Foundry hub (default)</Option>
-            {workspaces.map((w) => <Option key={w.name} value={w.name}>{w.name}{w.isHub ? ' (hub)' : w.kind ? ` (${w.kind})` : ''}</Option>)}
+            {workspaces.map((w) => <Option key={w.name} value={w.name}>{`${w.name}${w.isHub ? ' (hub)' : w.kind ? ` (${w.kind})` : ''}`}</Option>)}
           </Dropdown>
         </Field>
         <Field label="Registered model">
@@ -392,7 +426,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
             selectedOptions={pickModel ? [pickModel] : []}
             onOptionSelect={(_, d) => setPickModel(d.optionValue || '')}
           >
-            {models.map((m) => <Option key={m.name} value={m.name}>{m.name}{m.latestVersion ? ` (latest v${m.latestVersion})` : ''}</Option>)}
+            {models.map((m) => <Option key={m.name} value={m.name}>{`${m.name}${m.latestVersion ? ` (latest v${m.latestVersion})` : ''}`}</Option>)}
           </Dropdown>
         </Field>
         <Button appearance="primary" onClick={doBind} disabled={bindBusy || !pickModel}>
@@ -660,6 +694,9 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                         <Field label="Endpoint VM size">
                           <Input value={instanceType} onChange={(_, d) => setInstanceType(d.value)} placeholder="Standard_DS3_v2" />
                         </Field>
+                        <Field label="Instances (scale)">
+                          <Input type="number" value={instanceCount} onChange={(_, d) => setInstanceCount(d.value)} style={{ width: 96 }} />
+                        </Field>
                         <Button appearance="primary" disabled={deploying || !versions.length} onClick={createEndpoint}>
                           {deploying ? 'Deploying…' : `Deploy v${selected || model.latestVersion || '?'}`}
                         </Button>
@@ -678,22 +715,79 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                             <TableHeader><TableRow>
                               <TableHeaderCell>Endpoint</TableHeaderCell>
                               <TableHeaderCell>State</TableHeaderCell>
-                              <TableHeaderCell>Auth</TableHeaderCell>
+                              <TableHeaderCell>Traffic</TableHeaderCell>
                               <TableHeaderCell>Scoring URI</TableHeaderCell>
+                              <TableHeaderCell>Actions</TableHeaderCell>
                             </TableRow></TableHeader>
                             <TableBody>
-                              {endpoints.map((ep) => (
+                              {endpoints.map((ep) => {
+                                const traffic = ep.traffic && Object.keys(ep.traffic).length
+                                  ? Object.entries(ep.traffic).map(([d, p]) => `${d}:${p}%`).join(' / ') : '—';
+                                return (
                                 <TableRow key={ep.name}>
                                   <TableCell><strong>{ep.name}</strong></TableCell>
-                                  <TableCell>{ep.provisioningState || '—'}</TableCell>
-                                  <TableCell>{ep.authMode || '—'}</TableCell>
+                                  <TableCell><Badge appearance="tint" color={ep.provisioningState === 'Succeeded' ? 'success' : ep.provisioningState === 'Failed' ? 'danger' : 'warning'}>{ep.provisioningState || '—'}</Badge></TableCell>
+                                  <TableCell>{traffic}</TableCell>
                                   <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{ep.scoringUri || '—'}</TableCell>
+                                  <TableCell>
+                                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+                                      <Button size="small" appearance="subtle" onClick={() => { setTrafficEp(ep.name); setBluePct(50); }}>Traffic</Button>
+                                      <Button size="small" appearance="subtle" as="a" href={`/workspace/monitor?endpoint=${encodeURIComponent(ep.name)}`}>Monitor</Button>
+                                      <Button size="small" appearance="subtle" disabled={opBusy === `del:${ep.name}`} onClick={() => deleteEndpoint(ep.name)}>{opBusy === `del:${ep.name}` ? 'Deleting…' : 'Delete'}</Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                          </div>
+                        )}
+                      {/* Deploy history — blue/green deployments + their model + scale. */}
+                      {deployments.length > 0 && (
+                        <>
+                          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Deployments ({deployments.length})</Subtitle2>
+                          <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                          <Table aria-label="Deployment history" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Deployment</TableHeaderCell><TableHeaderCell>Endpoint</TableHeaderCell>
+                              <TableHeaderCell>Model</TableHeaderCell><TableHeaderCell>VM / count</TableHeaderCell><TableHeaderCell>State</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {deployments.map((d) => (
+                                <TableRow key={`${d.endpointName}/${d.name}`}>
+                                  <TableCell><strong>{d.name}</strong></TableCell>
+                                  <TableCell>{d.endpointName}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{d.model || '—'}</TableCell>
+                                  <TableCell>{d.instanceType || '—'} × {d.instanceCount ?? '—'}</TableCell>
+                                  <TableCell><Badge appearance="tint" color={d.provisioningState === 'Succeeded' ? 'success' : 'warning'}>{d.provisioningState || '—'}</Badge></TableCell>
                                 </TableRow>
                               ))}
                             </TableBody>
                           </Table>
                           </div>
-                        )}
+                        </>
+                      )}
+                      {/* Blue-green traffic split dialog */}
+                      <Dialog open={!!trafficEp} onOpenChange={(_, d) => { if (!d.open) setTrafficEp(null); }}>
+                        <DialogSurface>
+                          <DialogBody>
+                            <DialogTitle>Traffic split — {trafficEp}</DialogTitle>
+                            <DialogContent>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                                <Caption1>Blue/green split across deployments via a real ARM PUT to <code>onlineEndpoints/{trafficEp}</code> traffic. First deployment = blue, second = green.</Caption1>
+                                <Field label={`Blue ${bluePct}% / Green ${100 - bluePct}%`}>
+                                  <input type="range" min={0} max={100} step={5} value={bluePct} onChange={(e) => setBluePct(Number(e.target.value))} />
+                                </Field>
+                              </div>
+                            </DialogContent>
+                            <DialogActions>
+                              <Button onClick={() => setTrafficEp(null)}>Cancel</Button>
+                              <Button appearance="primary" disabled={!!opBusy} onClick={applyTraffic}>{opBusy?.startsWith('traffic') ? 'Applying…' : 'Apply split'}</Button>
+                            </DialogActions>
+                          </DialogBody>
+                        </DialogSurface>
+                      </Dialog>
                     </>
                   )}
                 </>

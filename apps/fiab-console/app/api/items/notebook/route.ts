@@ -83,7 +83,7 @@ export async function POST(req: NextRequest) {
       updatedAt: now,
     };
     const { resource } = await items.items.create(item);
-    if (resource) upsertLoomDoc(docForItem(resource, ws)).catch(() => {});
+    if (resource) upsertLoomDoc(docForItem(resource, ws.tenantId)).catch(() => {});
     return NextResponse.json({ ok: true, notebook: resource });
   } catch (e: any) { return err(e?.message || String(e), 500); }
 }

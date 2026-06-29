@@ -343,6 +343,7 @@ export interface FoundryDeployment {
   endpointName: string;
   model?: string;
   instanceType?: string;
+  instanceCount?: number;
   provisioningState?: string;
   appInsightsEnabled?: boolean;
 }
@@ -369,6 +370,7 @@ function shapeDeployment(raw: any, endpointName: string): FoundryDeployment {
     endpointName,
     model: p.model,
     instanceType: p.instanceType,
+    instanceCount: typeof raw?.sku?.capacity === 'number' ? raw.sku.capacity : (typeof p.scaleSettings?.instanceCount === 'number' ? p.scaleSettings.instanceCount : undefined),
     provisioningState: p.provisioningState,
     appInsightsEnabled: p.appInsightsEnabled,
   };
@@ -398,6 +400,41 @@ export async function listDeployments(): Promise<FoundryDeployment[]> {
     }
   }
   return all;
+}
+
+/** Deployments under ONE endpoint (deploy history per endpoint, ws-scoped). */
+export async function listEndpointDeployments(endpointName: string, workspaceName?: string): Promise<FoundryDeployment[]> {
+  if (!workspaceName) {
+    const rows = await pagedList(`/onlineEndpoints/${encodeURIComponent(endpointName)}/deployments`).catch((e) => {
+      if (e instanceof FoundryError && e.status === 404) return [];
+      throw e;
+    });
+    return rows.map((r) => shapeDeployment(r, endpointName));
+  }
+  const res = await armFetch(`${workspaceArmBase(workspaceName)}/onlineEndpoints/${encodeURIComponent(endpointName)}/deployments`, { apiVersion: ML_API });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((r) => shapeDeployment(r, endpointName));
+}
+
+/** Blue-green: set the traffic split (deployment → 0-100) on an endpoint. Real ARM PUT. */
+export async function setEndpointTraffic(endpointName: string, traffic: Record<string, number>, workspaceName?: string): Promise<FoundryEndpoint> {
+  const location = await workspaceLocation(workspaceName);
+  const path = `${workspaceArmBase(workspaceName)}/onlineEndpoints/${encodeURIComponent(endpointName)}`;
+  const armBody = { location, identity: { type: 'SystemAssigned' }, properties: { traffic } };
+  const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
+  if (res.status === 202) return { id: '', name: endpointName, provisioningState: 'Updating', traffic };
+  const j = await readJson<any>(res);
+  return shapeEndpoint(j);
+}
+
+/** Delete a managed online endpoint (and its deployments). Real ARM DELETE. */
+export async function deleteOnlineEndpoint(endpointName: string, workspaceName?: string): Promise<void> {
+  const res = await armFetch(`${workspaceArmBase(workspaceName)}/onlineEndpoints/${encodeURIComponent(endpointName)}`, { apiVersion: ML_API, method: 'DELETE' });
+  if (res.status !== 200 && res.status !== 202 && res.status !== 204) {
+    const t = await res.text().catch(() => '');
+    throw new FoundryError(res.status, t, `Endpoint delete failed: ${t.slice(0, 240)}`);
+  }
 }
 
 // ---------------- Computes ----------------
@@ -1894,6 +1931,23 @@ export async function getDataAsset(name: string, workspaceName?: string): Promis
       createdAt: v.systemData?.createdAt,
     })),
   };
+}
+
+/** Producers + consumers of a data asset, derived from real AML jobs that
+ *  reference it (inputs = consumers, outputs = producers). No mock data. */
+export async function getDataAssetLineage(name: string, workspaceName?: string): Promise<{ producers: any[]; consumers: any[]; jobsScanned: number }> {
+  const res = await armFetch(`${workspaceArmBase(workspaceName)}/jobs`, { apiVersion: ML_API });
+  const j = await readJson<{ value?: any[] }>(res);
+  const jobs = j?.value || [];
+  const producers: any[] = []; const consumers: any[] = [];
+  const matches = (o: any) => o && typeof o.uri === 'string' && o.uri.toLowerCase().includes(name.toLowerCase());
+  for (const job of jobs) {
+    const p = job?.properties || {};
+    const row = { name: job?.name, displayName: p.displayName, status: p.status, jobType: p.jobType };
+    if (Object.values(p.inputs || {}).some(matches)) consumers.push(row);
+    if (Object.values(p.outputs || {}).some(matches)) producers.push(row);
+  }
+  return { producers, consumers, jobsScanned: jobs.length };
 }
 
 export async function createDataAsset(name: string, body: {
