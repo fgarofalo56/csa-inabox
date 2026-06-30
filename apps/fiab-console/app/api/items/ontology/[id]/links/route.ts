@@ -16,7 +16,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
-import { parseOntologyHierarchy } from '@/lib/editors/_family-utils';
+import { objectTypeNames, normalizeLinkTypes } from '@/lib/editors/ontology-model';
 import { weaveGate, createLink } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
 
@@ -63,10 +63,23 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const onto = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
   if (!onto) return err('ontology not found', 404, 'not_found');
-  const source = String(((onto.state || {}) as Record<string, unknown>).source || '');
-  const types = new Set(parseOntologyHierarchy(source).map((c) => c.name));
+  const state = (onto.state || {}) as Record<string, unknown>;
+  const types = objectTypeNames(state);
   if (!types.has(fromObjectType)) return err(`"${fromObjectType}" is not a declared object type`, 409, 'undeclared_from');
   if (!types.has(toObjectType)) return err(`"${toObjectType}" is not a declared object type`, 409, 'undeclared_to');
+
+  // When the ontology declares link types, the edge must use one of them and its
+  // endpoints must match the link type's from/to object types (typed link
+  // instance). When no link types are declared (legacy), any safe label is
+  // accepted between two declared object types.
+  const linkTypes = normalizeLinkTypes(state.linkTypes);
+  if (linkTypes.length > 0) {
+    const lt = linkTypes.find((l) => l.apiName === linkType);
+    if (!lt) return err(`"${linkType}" is not a declared link type on this ontology`, 409, 'undeclared_link');
+    if (lt.fromType !== fromObjectType || lt.toType !== toObjectType) {
+      return err(`Link type "${linkType}" connects ${lt.fromType} → ${lt.toType}, not ${fromObjectType} → ${toObjectType}.`, 409, 'link_endpoint_mismatch');
+    }
+  }
 
   const gate = weaveGate();
   if (gate) {

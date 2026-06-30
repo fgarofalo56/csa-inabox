@@ -65,6 +65,17 @@ import {
   featurePropertyKeys, type AzureMapsView, type AzureMapsControls,
 } from '@/lib/components/graph/azure-maps-canvas';
 import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
+// Ontology typed-model (Foundry object/link/action types) — pure logic + types
+// shared with the BFF routes. The typed-modeling surface in OntologyEditor drives
+// this model; deriveSourceFromObjectTypes() keeps state.source in sync so the AGE
+// instance/link/action routes keep resolving the declared type names.
+import {
+  migrateOntologyState, deriveSourceFromObjectTypes, normalizeOntoActionTypes, isOntoIdent,
+  ONTO_BASE_TYPES, ONTO_BASE_TYPE_LABELS, ONTO_KEY_ELIGIBLE_TYPES, ONTO_STATUSES, ONTO_COLORS,
+  ONTO_CARDINALITIES, ONTO_CARDINALITY_LABELS, ONTO_PARAM_TYPES, ONTO_PARAM_TYPE_LABELS, ONTO_ACTION_KINDS,
+  type OntoObjectType, type OntoProperty, type OntoLinkType, type OntoActionType, type OntoActionParam,
+  type OntoBaseType, type OntoCardinality, type OntoParamType, type OntoStatus, type OntoColor, type OntoDatasource,
+} from './ontology-model';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
 import {
@@ -299,6 +310,32 @@ const useStyles = makeStyles({
   },
   ontoLoading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
   ontoStartBtn: { alignSelf: 'flex-start' },
+  /* ---- Typed modeling surface (object / link / action types) ---- */
+  tmTabPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM },
+  tmCardGrid: {
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 300px), 1fr))', gap: tokens.spacingHorizontalM,
+  },
+  tmCardMeta: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  tmPropRow: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr) auto auto auto',
+    gap: tokens.spacingHorizontalS, alignItems: 'flex-end',
+    '@media (max-width: 640px)': { gridTemplateColumns: 'minmax(0, 1fr)' },
+  },
+  tmParamRow: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1fr) auto auto',
+    gap: tokens.spacingHorizontalS, alignItems: 'flex-end',
+    '@media (max-width: 640px)': { gridTemplateColumns: 'minmax(0, 1fr)' },
+  },
+  tmDialogScroll: {
+    maxHeight: '62vh', overflowY: 'auto',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    paddingRight: tokens.spacingHorizontalS,
+  },
+  tmSubBlock: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
+  },
   /* Weave (Semantic Ontology) Phase 1 — object instances + write-back actions */
   ontoActionCard: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
@@ -1114,10 +1151,20 @@ interface OntoState {
   activatorId?: string;
   activatorWorkspaceId?: string;
   /**
+   * Typed object types (Foundry "object types") — the structured model that
+   * replaces the freeform DSL textarea as the source of truth. The typed-modeling
+   * surface persists these; deriveSourceFromObjectTypes() keeps `source` in sync.
+   */
+  objectTypes?: OntoObjectType[];
+  /** Typed link types between object types (Foundry "link types"). */
+  linkTypes?: OntoLinkType[];
+  /**
    * Weave (Semantic Ontology) Phase 1 — declared write-back action types. Each
    * runs create/update/delete cypher over the bound PG + Apache AGE graph store.
+   * Typed (OntoActionType); normalizeOntoActionTypes() is backward-compatible
+   * with the legacy { name, objectType, kind, params: string[] } shape.
    */
-  actionTypes?: WeaveActionTypeDecl[];
+  actionTypes?: OntoActionType[];
   [k: string]: unknown;
 }
 
@@ -1476,6 +1523,539 @@ function WeaveInstancePanel({
   );
 }
 
+/**
+ * Typed modeling surface (Foundry-class object / link / action types) layered over
+ * the structured ontology model (`lib/editors/ontology-model.ts`). It reads the
+ * typed model via migrateOntologyState(state) (migrating the legacy DSL on first
+ * load), lets the user author object types + their typed properties, primary/title
+ * keys, an Azure-native datasource backing (ADLS Delta lakehouse / Synapse SQL
+ * warehouse — never Fabric), link types between object types, and write-back action
+ * types with typed parameters. Every change persists to Cosmos via persistOnto and
+ * re-derives state.source so the AGE instance/link/action routes keep resolving the
+ * declared type names. No vaporware: real Cosmos persistence; honest gates where a
+ * datasource list is empty.
+ */
+function OntologyTypedModelPanel({
+  id, state, persistOnto, lakehouses, warehouses, saving,
+}: {
+  id: string;
+  state: OntoState;
+  persistOnto: (next: OntoState) => void;
+  lakehouses: { id: string; displayName: string }[];
+  warehouses: { id: string; displayName: string }[];
+  saving: boolean;
+}) {
+  const s = useStyles();
+  const model = useMemo(() => migrateOntologyState(state), [state]);
+  const { objectTypes, linkTypes, actionTypes } = model;
+  const objNames = useMemo(() => objectTypes.map((o) => o.apiName), [objectTypes]);
+  const [tab, setTab] = useState<'objects' | 'links' | 'actions'>('objects');
+
+  const commit = useCallback((patch: { objectTypes?: OntoObjectType[]; linkTypes?: OntoLinkType[]; actionTypes?: OntoActionType[] }) => {
+    const nextObj = patch.objectTypes ?? objectTypes;
+    const nextLink = patch.linkTypes ?? linkTypes;
+    const nextAct = patch.actionTypes ?? actionTypes;
+    persistOnto({ ...state, objectTypes: nextObj, linkTypes: nextLink, actionTypes: nextAct, source: deriveSourceFromObjectTypes(nextObj) });
+  }, [state, persistOnto, objectTypes, linkTypes, actionTypes]);
+
+  // ───────────────────────── Object-type dialog ─────────────────────────
+  interface OtDraft {
+    index: number | null;
+    apiName: string; displayName: string; pluralDisplayName: string; description: string;
+    status: OntoStatus; color: '' | OntoColor;
+    properties: OntoProperty[];
+    primaryKey: string; titleKey: string;
+    dsKind: '' | 'lakehouse' | 'warehouse'; dsSourceId: string; dsTable: string; dsPkColumn: string;
+  }
+  const blankOt = (): OtDraft => ({
+    index: null, apiName: '', displayName: '', pluralDisplayName: '', description: '',
+    status: 'active', color: '', properties: [], primaryKey: '', titleKey: '',
+    dsKind: '', dsSourceId: '', dsTable: '', dsPkColumn: '',
+  });
+  const [otOpen, setOtOpen] = useState(false);
+  const [ot, setOt] = useState<OtDraft>(blankOt);
+  const [otErr, setOtErr] = useState<string | null>(null);
+  const patchOt = (p: Partial<OtDraft>) => setOt((d) => ({ ...d, ...p }));
+
+  const openNewOt = () => { setOt(blankOt()); setOtErr(null); setOtOpen(true); };
+  const openEditOt = (i: number) => {
+    const o = objectTypes[i];
+    const ds = o.datasource;
+    setOt({
+      index: i, apiName: o.apiName, displayName: o.displayName || '', pluralDisplayName: o.pluralDisplayName || '',
+      description: o.description || '', status: o.status || 'active', color: o.color || '',
+      properties: o.properties.map((p) => ({ ...p })),
+      primaryKey: o.primaryKey || '', titleKey: o.titleKey || '',
+      dsKind: ds?.kind || '', dsSourceId: ds?.sourceItemId || '', dsTable: ds?.table || '', dsPkColumn: ds?.primaryKeyColumn || '',
+    });
+    setOtErr(null); setOtOpen(true);
+  };
+
+  const otKeyEligible = useMemo(() => ot.properties.filter((p) => isOntoIdent(p.apiName) && ONTO_KEY_ELIGIBLE_TYPES.has(p.baseType)), [ot.properties]);
+  const otAllNamed = useMemo(() => ot.properties.filter((p) => isOntoIdent(p.apiName)), [ot.properties]);
+
+  const saveOt = () => {
+    const apiName = ot.apiName.trim();
+    if (!isOntoIdent(apiName)) { setOtErr('API name must start with a letter/underscore (≤63 letters, digits, _).'); return; }
+    if (objectTypes.some((o, i) => o.apiName === apiName && i !== ot.index)) { setOtErr(`Object type "${apiName}" already exists.`); return; }
+    const seen = new Set<string>();
+    for (const p of ot.properties) {
+      if (!isOntoIdent(p.apiName.trim())) { setOtErr('Every property needs a valid API name (letter/underscore start).'); return; }
+      if (seen.has(p.apiName.trim())) { setOtErr(`Duplicate property "${p.apiName.trim()}".`); return; }
+      seen.add(p.apiName.trim());
+    }
+    if (ot.dsKind && !ot.dsSourceId) { setOtErr('Pick a source item for the datasource, or clear the datasource kind.'); return; }
+    const properties: OntoProperty[] = ot.properties.map((p) => ({
+      apiName: p.apiName.trim(),
+      ...(p.displayName ? { displayName: p.displayName } : {}),
+      baseType: p.baseType,
+      ...(p.arrayOf ? { arrayOf: true } : {}),
+      ...(p.required ? { required: true } : {}),
+      ...(p.description ? { description: p.description } : {}),
+    }));
+    let datasource: OntoDatasource | undefined;
+    if (ot.dsKind && ot.dsSourceId) {
+      const list = ot.dsKind === 'lakehouse' ? lakehouses : warehouses;
+      const disp = list.find((x) => x.id === ot.dsSourceId)?.displayName;
+      datasource = {
+        kind: ot.dsKind, sourceItemId: ot.dsSourceId,
+        ...(disp ? { sourceDisplayName: disp } : {}),
+        ...(ot.dsTable.trim() ? { table: ot.dsTable.trim() } : {}),
+        ...(ot.dsPkColumn.trim() ? { primaryKeyColumn: ot.dsPkColumn.trim() } : {}),
+        boundAt: new Date().toISOString(),
+      };
+    }
+    const base = ot.index === null ? ({} as Partial<OntoObjectType>) : objectTypes[ot.index];
+    const pk = seen.has(ot.primaryKey) && ONTO_KEY_ELIGIBLE_TYPES.has(properties.find((p) => p.apiName === ot.primaryKey)!.baseType) ? ot.primaryKey : undefined;
+    const title = seen.has(ot.titleKey) ? ot.titleKey : undefined;
+    const next: OntoObjectType = {
+      ...(base.parent ? { parent: base.parent } : {}),
+      ...(base.groups ? { groups: base.groups } : {}),
+      ...(base.icon ? { icon: base.icon } : {}),
+      ...(base.visibility ? { visibility: base.visibility } : {}),
+      apiName,
+      ...(ot.displayName.trim() ? { displayName: ot.displayName.trim() } : {}),
+      ...(ot.pluralDisplayName.trim() ? { pluralDisplayName: ot.pluralDisplayName.trim() } : {}),
+      ...(ot.description.trim() ? { description: ot.description.trim() } : {}),
+      ...(ot.color ? { color: ot.color } : {}),
+      status: ot.status,
+      properties,
+      ...(pk ? { primaryKey: pk } : {}),
+      ...(title ? { titleKey: title } : {}),
+      ...(datasource ? { datasource } : {}),
+    };
+    const arr2 = [...objectTypes];
+    if (ot.index === null) arr2.push(next); else arr2[ot.index] = next;
+    commit({ objectTypes: arr2 });
+    setOtOpen(false);
+  };
+
+  const removeOt = (i: number) => {
+    const removed = objectTypes[i].apiName;
+    commit({
+      objectTypes: objectTypes.filter((_, idx) => idx !== i),
+      linkTypes: linkTypes.filter((l) => l.fromType !== removed && l.toType !== removed),
+      actionTypes: actionTypes.filter((a) => a.objectType !== removed),
+    });
+  };
+
+  // ───────────────────────── Link-type dialog ─────────────────────────
+  interface LtDraft { index: number | null; apiName: string; displayName: string; fromType: string; toType: string; cardinality: OntoCardinality; foreignKeyProperty: string; description: string; }
+  const blankLt = (): LtDraft => ({ index: null, apiName: '', displayName: '', fromType: objNames[0] || '', toType: objNames[0] || '', cardinality: 'one-to-many', foreignKeyProperty: '', description: '' });
+  const [ltOpen, setLtOpen] = useState(false);
+  const [lt, setLt] = useState<LtDraft>(blankLt);
+  const [ltErr, setLtErr] = useState<string | null>(null);
+  const patchLt = (p: Partial<LtDraft>) => setLt((d) => ({ ...d, ...p }));
+  const openNewLt = () => { setLt(blankLt()); setLtErr(null); setLtOpen(true); };
+  const openEditLt = (i: number) => {
+    const l = linkTypes[i];
+    setLt({ index: i, apiName: l.apiName, displayName: l.displayName || '', fromType: l.fromType, toType: l.toType, cardinality: l.cardinality, foreignKeyProperty: l.foreignKeyProperty || '', description: l.description || '' });
+    setLtErr(null); setLtOpen(true);
+  };
+  const saveLt = () => {
+    const apiName = lt.apiName.trim();
+    if (!isOntoIdent(apiName)) { setLtErr('API name must start with a letter/underscore (≤63 letters, digits, _).'); return; }
+    if (linkTypes.some((l, i) => l.apiName === apiName && i !== lt.index)) { setLtErr(`Link type "${apiName}" already exists.`); return; }
+    if (!objNames.includes(lt.fromType) || !objNames.includes(lt.toType)) { setLtErr('Pick a from and to object type.'); return; }
+    if (lt.foreignKeyProperty.trim() && !isOntoIdent(lt.foreignKeyProperty.trim())) { setLtErr('Foreign-key property must be a valid API name.'); return; }
+    const next: OntoLinkType = {
+      apiName,
+      ...(lt.displayName.trim() ? { displayName: lt.displayName.trim() } : {}),
+      fromType: lt.fromType, toType: lt.toType, cardinality: lt.cardinality,
+      ...(lt.foreignKeyProperty.trim() ? { foreignKeyProperty: lt.foreignKeyProperty.trim() } : {}),
+      ...(lt.description.trim() ? { description: lt.description.trim() } : {}),
+    };
+    const arr2 = [...linkTypes];
+    if (lt.index === null) arr2.push(next); else arr2[lt.index] = next;
+    commit({ linkTypes: arr2 });
+    setLtOpen(false);
+  };
+  const removeLt = (i: number) => commit({ linkTypes: linkTypes.filter((_, idx) => idx !== i) });
+
+  // ───────────────────────── Action-type dialog ─────────────────────────
+  interface AtDraft { index: number | null; name: string; objectType: string; kind: OntoActionType['kind']; description: string; parameters: OntoActionParam[]; }
+  const blankAt = (): AtDraft => ({ index: null, name: '', objectType: objNames[0] || '', kind: 'create', description: '', parameters: [] });
+  const [atOpen, setAtOpen] = useState(false);
+  const [at, setAt] = useState<AtDraft>(blankAt);
+  const [atErr, setAtErr] = useState<string | null>(null);
+  const patchAt = (p: Partial<AtDraft>) => setAt((d) => ({ ...d, ...p }));
+  const openNewAt = () => { setAt(blankAt()); setAtErr(null); setAtOpen(true); };
+  const openEditAt = (i: number) => {
+    const a = actionTypes[i];
+    setAt({ index: i, name: a.name, objectType: a.objectType, kind: a.kind, description: a.description || '', parameters: a.parameters.map((p) => ({ ...p })) });
+    setAtErr(null); setAtOpen(true);
+  };
+  const saveAt = () => {
+    const name = at.name.trim();
+    if (!isOntoIdent(name)) { setAtErr('Action name must start with a letter/underscore (≤63 letters, digits, _).'); return; }
+    if (actionTypes.some((a, i) => a.name === name && i !== at.index)) { setAtErr(`Action "${name}" already exists.`); return; }
+    if (!objNames.includes(at.objectType)) { setAtErr('Pick a target object type.'); return; }
+    const seen = new Set<string>();
+    for (const p of at.parameters) {
+      if (!isOntoIdent(p.apiName.trim())) { setAtErr('Every parameter needs a valid API name (letter/underscore start).'); return; }
+      if (seen.has(p.apiName.trim())) { setAtErr(`Duplicate parameter "${p.apiName.trim()}".`); return; }
+      seen.add(p.apiName.trim());
+    }
+    const parameters: OntoActionParam[] = at.parameters.map((p) => ({
+      apiName: p.apiName.trim(), type: p.type, ...(p.required ? { required: true } : {}),
+      ...(p.prompt ? { prompt: p.prompt } : {}),
+    }));
+    const next: OntoActionType = { name, objectType: at.objectType, kind: at.kind, ...(at.description.trim() ? { description: at.description.trim() } : {}), parameters };
+    const arr2 = [...actionTypes];
+    if (at.index === null) arr2.push(next); else arr2[at.index] = next;
+    commit({ actionTypes: arr2 });
+    setAtOpen(false);
+  };
+  const removeAt = (i: number) => commit({ actionTypes: actionTypes.filter((_, idx) => idx !== i) });
+
+  const dsList = ot.dsKind === 'warehouse' ? warehouses : lakehouses;
+  const colorBadge: Record<OntoColor, 'brand' | 'success' | 'warning' | 'danger' | 'informative' | 'subtle'> = {
+    brand: 'brand', success: 'success', warning: 'warning', danger: 'danger', informative: 'informative', subtle: 'subtle',
+  };
+
+  return (
+    <div className={s.ontoSection}>
+      <div className={s.ontoSectionHead}>
+        <span className={s.ontoSectionIcon}><Cube20Regular /></span>
+        <div>
+          <Subtitle2>Typed model</Subtitle2>
+          <Caption1 as="p" block className={s.ontoSectionHint}>
+            Author object types, typed properties, primary / title keys, an Azure-native datasource backing
+            (ADLS Delta lakehouse / Synapse SQL warehouse — no Fabric), link types, and write-back action types.
+            Saved to Cosmos; the class DSL stays in sync automatically.
+          </Caption1>
+        </div>
+      </div>
+
+      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+        <Tab value="objects" icon={<Cube20Regular />}>Object types ({objectTypes.length})</Tab>
+        <Tab value="links" icon={<Link20Regular />}>Link types ({linkTypes.length})</Tab>
+        <Tab value="actions" icon={<Play20Regular />}>Actions ({actionTypes.length})</Tab>
+      </TabList>
+
+      {/* ── Object types ── */}
+      {tab === 'objects' && (
+        <div className={s.tmTabPanel}>
+          <Button appearance="primary" icon={<Add16Regular />} onClick={openNewOt} disabled={saving} className={s.ontoStartBtn}>Add object type</Button>
+          {objectTypes.length === 0 ? (
+            <EmptyState icon={<Cube20Regular />} title="No object types yet" body="Add an object type to model your domain — each becomes a node type backed by an Azure-native datasource." />
+          ) : (
+            <div className={s.tmCardGrid}>
+              {objectTypes.map((o, i) => (
+                <div key={o.apiName} className={s.ontoActionCard}>
+                  <div className={s.ontoActionHead}>
+                    <Cube20Regular />
+                    <Body1><strong>{o.displayName || o.apiName}</strong></Body1>
+                    {o.color && <Badge appearance="tint" color={colorBadge[o.color]}>{o.color}</Badge>}
+                    {o.status && <Badge appearance="outline" color={o.status === 'active' ? 'success' : o.status === 'deprecated' ? 'danger' : 'warning'}>{o.status}</Badge>}
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label={`Edit ${o.apiName}`} onClick={() => openEditOt(i)} />
+                    <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${o.apiName}`} onClick={() => removeOt(i)} />
+                  </div>
+                  <Caption1 className={s.ontoSectionHint}><code>{o.apiName}</code>{o.parent ? <> · is_a <code>{o.parent}</code></> : null}</Caption1>
+                  {o.description && <Caption1>{o.description}</Caption1>}
+                  <div className={s.tmCardMeta}>
+                    <Badge appearance="ghost" icon={<Table20Regular />}>{o.properties.length} prop{o.properties.length === 1 ? '' : 's'}</Badge>
+                    {o.primaryKey && <Badge appearance="ghost" color="brand">PK: {o.primaryKey}</Badge>}
+                    {o.titleKey && <Badge appearance="ghost">title: {o.titleKey}</Badge>}
+                    {o.datasource && <Badge appearance="tint" color={o.datasource.kind === 'lakehouse' ? 'brand' : 'success'} icon={<Database20Regular />}>{o.datasource.sourceDisplayName || o.datasource.kind}{o.datasource.table ? ` · ${o.datasource.table}` : ''}</Badge>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Link types ── */}
+      {tab === 'links' && (
+        <div className={s.tmTabPanel}>
+          <Button appearance="primary" icon={<Add16Regular />} onClick={openNewLt} disabled={saving || objNames.length === 0} title={objNames.length === 0 ? 'Add an object type first' : undefined} className={s.ontoStartBtn}>Add link type</Button>
+          {objNames.length === 0 ? (
+            <MessageBar intent="info"><MessageBarBody>Add at least one object type before declaring link types.</MessageBarBody></MessageBar>
+          ) : linkTypes.length === 0 ? (
+            <EmptyState icon={<Link20Regular />} title="No link types yet" body="Declare a relationship between two object types (one-to-one, one-to-many, or many-to-many)." />
+          ) : (
+            <div className={s.tmCardGrid}>
+              {linkTypes.map((l, i) => (
+                <div key={l.apiName} className={s.ontoActionCard}>
+                  <div className={s.ontoActionHead}>
+                    <Link20Regular />
+                    <Body1><strong>{l.displayName || l.apiName}</strong></Body1>
+                    <Badge appearance="tint" color="informative">{ONTO_CARDINALITY_LABELS[l.cardinality]}</Badge>
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label={`Edit ${l.apiName}`} onClick={() => openEditLt(i)} />
+                    <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${l.apiName}`} onClick={() => removeLt(i)} />
+                  </div>
+                  <Caption1 className={s.ontoSectionHint}><code>{l.fromType}</code> → <code>{l.toType}</code>{l.foreignKeyProperty ? <> · FK <code>{l.foreignKeyProperty}</code></> : null}</Caption1>
+                  {l.description && <Caption1>{l.description}</Caption1>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Action types ── */}
+      {tab === 'actions' && (
+        <div className={s.tmTabPanel}>
+          <Button appearance="primary" icon={<Add16Regular />} onClick={openNewAt} disabled={saving || objNames.length === 0} title={objNames.length === 0 ? 'Add an object type first' : undefined} className={s.ontoStartBtn}>Add action type</Button>
+          {objNames.length === 0 ? (
+            <MessageBar intent="info"><MessageBarBody>Add at least one object type before declaring actions.</MessageBarBody></MessageBar>
+          ) : actionTypes.length === 0 ? (
+            <EmptyState icon={<Play20Regular />} title="No action types yet" body="Declare a typed create / update / delete write-back action with parameters that run on the AGE graph store." />
+          ) : (
+            <div className={s.tmCardGrid}>
+              {actionTypes.map((a, i) => (
+                <div key={a.name} className={s.ontoActionCard}>
+                  <div className={s.ontoActionHead}>
+                    <Play20Regular />
+                    <Body1><strong>{a.name}</strong></Body1>
+                    <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label={`Edit ${a.name}`} onClick={() => openEditAt(i)} />
+                    <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${a.name}`} onClick={() => removeAt(i)} />
+                  </div>
+                  <Caption1 className={s.ontoSectionHint}>on <code>{a.objectType}</code> · {a.parameters.length} param{a.parameters.length === 1 ? '' : 's'}</Caption1>
+                  {a.parameters.length > 0 && (
+                    <div className={s.tmCardMeta}>
+                      {a.parameters.map((p) => <Badge key={p.apiName} appearance="ghost">{p.apiName}: {ONTO_PARAM_TYPE_LABELS[p.type]}{p.required ? '*' : ''}</Badge>)}
+                    </div>
+                  )}
+                  {a.description && <Caption1>{a.description}</Caption1>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Object-type dialog ── */}
+      <Dialog open={otOpen} onOpenChange={(_, d) => setOtOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{ot.index === null ? 'Add object type' : `Edit ${ot.apiName}`}</DialogTitle>
+            <DialogContent>
+              <div className={s.tmDialogScroll}>
+                <Field label="API name" required hint={ot.index === null ? 'Stable identifier (letter/underscore start). Cannot be changed after creation.' : 'Locked after creation to keep links/actions resolving.'}>
+                  <Input value={ot.apiName} disabled={ot.index !== null} onChange={(_, d) => patchOt({ apiName: d.value })} placeholder="Customer" />
+                </Field>
+                <Field label="Display name"><Input value={ot.displayName} onChange={(_, d) => patchOt({ displayName: d.value })} placeholder="Customer" /></Field>
+                <Field label="Plural display name"><Input value={ot.pluralDisplayName} onChange={(_, d) => patchOt({ pluralDisplayName: d.value })} placeholder="Customers" /></Field>
+                <Field label="Description"><Textarea value={ot.description} onChange={(_, d) => patchOt({ description: d.value })} placeholder="A buying party." /></Field>
+                <Field label="Status">
+                  <Dropdown value={ot.status} selectedOptions={[ot.status]} onOptionSelect={(_, d) => patchOt({ status: (d.optionValue as OntoStatus) || 'active' })}>
+                    {ONTO_STATUSES.map((st) => <Option key={st} value={st}>{st}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Accent color">
+                  <Dropdown value={ot.color || '(none)'} selectedOptions={ot.color ? [ot.color] : ['']} onOptionSelect={(_, d) => patchOt({ color: (d.optionValue as OntoColor) || '' })}>
+                    <Option value="">(none)</Option>
+                    {ONTO_COLORS.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                  </Dropdown>
+                </Field>
+
+                <div className={s.tmSubBlock}>
+                  <div className={s.ontoActionHead}>
+                    <Table20Regular />
+                    <Subtitle2>Properties</Subtitle2>
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" icon={<Add16Regular />} onClick={() => patchOt({ properties: [...ot.properties, { apiName: '', baseType: 'string' }] })}>Add property</Button>
+                  </div>
+                  {ot.properties.length === 0 ? (
+                    <Caption1 className={s.ontoSectionHint}>No properties yet. Add typed properties (string, integer, date, geopoint, …).</Caption1>
+                  ) : ot.properties.map((p, pi) => (
+                    <div key={pi} className={s.tmPropRow}>
+                      <Field label={pi === 0 ? 'API name' : undefined}>
+                        <Input value={p.apiName} onChange={(_, d) => patchOt({ properties: ot.properties.map((x, xi) => xi === pi ? { ...x, apiName: d.value } : x) })} placeholder="email" />
+                      </Field>
+                      <Field label={pi === 0 ? 'Base type' : undefined}>
+                        <Dropdown value={ONTO_BASE_TYPE_LABELS[p.baseType]} selectedOptions={[p.baseType]} onOptionSelect={(_, d) => patchOt({ properties: ot.properties.map((x, xi) => xi === pi ? { ...x, baseType: (d.optionValue as OntoBaseType) || 'string' } : x) })}>
+                          {ONTO_BASE_TYPES.map((bt) => <Option key={bt} value={bt}>{ONTO_BASE_TYPE_LABELS[bt]}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Switch checked={!!p.arrayOf} label="Array" onChange={(_, d) => patchOt({ properties: ot.properties.map((x, xi) => xi === pi ? { ...x, arrayOf: d.checked } : x) })} />
+                      <Switch checked={!!p.required} label="Required" onChange={(_, d) => patchOt({ properties: ot.properties.map((x, xi) => xi === pi ? { ...x, required: d.checked } : x) })} />
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove property ${p.apiName || pi + 1}`} onClick={() => patchOt({ properties: ot.properties.filter((_, xi) => xi !== pi) })} />
+                    </div>
+                  ))}
+                </div>
+
+                <Field label="Primary key" hint="Key-eligible scalar property uniquely identifying an instance.">
+                  <Dropdown value={ot.primaryKey || '(none)'} selectedOptions={ot.primaryKey ? [ot.primaryKey] : ['']} onOptionSelect={(_, d) => patchOt({ primaryKey: d.optionValue || '' })} disabled={otKeyEligible.length === 0} placeholder={otKeyEligible.length === 0 ? 'Add a key-eligible property first' : 'Select a property'}>
+                    <Option value="">(none)</Option>
+                    {otKeyEligible.map((p) => <Option key={p.apiName} value={p.apiName}>{p.apiName}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Title property" hint="The property used as the instance label.">
+                  <Dropdown value={ot.titleKey || '(none)'} selectedOptions={ot.titleKey ? [ot.titleKey] : ['']} onOptionSelect={(_, d) => patchOt({ titleKey: d.optionValue || '' })} disabled={otAllNamed.length === 0} placeholder={otAllNamed.length === 0 ? 'Add a property first' : 'Select a property'}>
+                    <Option value="">(none)</Option>
+                    {otAllNamed.map((p) => <Option key={p.apiName} value={p.apiName}>{p.apiName}</Option>)}
+                  </Dropdown>
+                </Field>
+
+                <div className={s.tmSubBlock}>
+                  <div className={s.ontoActionHead}>
+                    <Database20Regular />
+                    <Subtitle2>Datasource backing</Subtitle2>
+                    <Caption1 className={s.ontoSectionHint}>Azure-native — ADLS Delta lakehouse or Synapse SQL warehouse. No Fabric.</Caption1>
+                  </div>
+                  <Field label="Kind">
+                    <Dropdown value={ot.dsKind ? (ot.dsKind === 'lakehouse' ? 'Lakehouse' : 'Warehouse') : '(none)'} selectedOptions={ot.dsKind ? [ot.dsKind] : ['']} onOptionSelect={(_, d) => patchOt({ dsKind: (d.optionValue as 'lakehouse' | 'warehouse') || '', dsSourceId: '' })}>
+                      <Option value="">(none)</Option>
+                      <Option value="lakehouse">Lakehouse (ADLS Delta)</Option>
+                      <Option value="warehouse">Warehouse (Synapse SQL)</Option>
+                    </Dropdown>
+                  </Field>
+                  {ot.dsKind && (dsList.length === 0 ? (
+                    <MessageBar intent="warning"><MessageBarBody>No {ot.dsKind}s available in this workspace{id === 'new' ? ' — save the ontology first' : ''}. Create a {ot.dsKind} to bind instances.</MessageBarBody></MessageBar>
+                  ) : (
+                    <>
+                      <Field label="Source item" required>
+                        <Dropdown value={dsList.find((x) => x.id === ot.dsSourceId)?.displayName || ''} selectedOptions={ot.dsSourceId ? [ot.dsSourceId] : []} onOptionSelect={(_, d) => patchOt({ dsSourceId: d.optionValue || '' })} placeholder={`Select a ${ot.dsKind}`}>
+                          {dsList.map((x) => <Option key={x.id} value={x.id}>{x.displayName}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label="Table" hint="Backing table (e.g. dbo.Customer or a Delta table name).">
+                        <Input value={ot.dsTable} onChange={(_, d) => patchOt({ dsTable: d.value })} placeholder="dbo.Customer" />
+                      </Field>
+                      <Field label="Primary-key column" hint="Source column that is the object's primary key.">
+                        <Input value={ot.dsPkColumn} onChange={(_, d) => patchOt({ dsPkColumn: d.value })} placeholder="CustomerID" />
+                      </Field>
+                    </>
+                  ))}
+                </div>
+                {otErr && <MessageBar intent="error"><MessageBarBody>{otErr}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setOtOpen(false)}>Cancel</Button>
+              <Button appearance="primary" onClick={saveOt}>{ot.index === null ? 'Add object type' : 'Save'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* ── Link-type dialog ── */}
+      <Dialog open={ltOpen} onOpenChange={(_, d) => setLtOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{lt.index === null ? 'Add link type' : `Edit ${lt.apiName}`}</DialogTitle>
+            <DialogContent>
+              <div className={s.tmDialogScroll}>
+                <Field label="API name" required>
+                  <Input value={lt.apiName} onChange={(_, d) => patchLt({ apiName: d.value })} placeholder="placedBy" />
+                </Field>
+                <Field label="Display name"><Input value={lt.displayName} onChange={(_, d) => patchLt({ displayName: d.value })} placeholder="Placed by" /></Field>
+                <Field label="From object type" required>
+                  <Dropdown value={lt.fromType} selectedOptions={[lt.fromType]} onOptionSelect={(_, d) => patchLt({ fromType: d.optionValue || '' })}>
+                    {objNames.map((n) => <Option key={n} value={n}>{n}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="To object type" required>
+                  <Dropdown value={lt.toType} selectedOptions={[lt.toType]} onOptionSelect={(_, d) => patchLt({ toType: d.optionValue || '' })}>
+                    {objNames.map((n) => <Option key={n} value={n}>{n}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Cardinality" required>
+                  <Dropdown value={ONTO_CARDINALITY_LABELS[lt.cardinality]} selectedOptions={[lt.cardinality]} onOptionSelect={(_, d) => patchLt({ cardinality: (d.optionValue as OntoCardinality) || 'one-to-many' })}>
+                    {ONTO_CARDINALITIES.map((c) => <Option key={c} value={c}>{ONTO_CARDINALITY_LABELS[c]}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Foreign-key property" hint="Property on the FK-holding side that materializes the link (one-to-one / one-to-many).">
+                  <Input value={lt.foreignKeyProperty} onChange={(_, d) => patchLt({ foreignKeyProperty: d.value })} placeholder="customerId" />
+                </Field>
+                <Field label="Description"><Textarea value={lt.description} onChange={(_, d) => patchLt({ description: d.value })} /></Field>
+                {ltErr && <MessageBar intent="error"><MessageBarBody>{ltErr}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setLtOpen(false)}>Cancel</Button>
+              <Button appearance="primary" onClick={saveLt}>{lt.index === null ? 'Add link type' : 'Save'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* ── Action-type dialog ── */}
+      <Dialog open={atOpen} onOpenChange={(_, d) => setAtOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{at.index === null ? 'Add action type' : `Edit ${at.name}`}</DialogTitle>
+            <DialogContent>
+              <div className={s.tmDialogScroll}>
+                <Field label="Action name" required>
+                  <Input value={at.name} onChange={(_, d) => patchAt({ name: d.value })} placeholder="createOrder" />
+                </Field>
+                <Field label="Target object type" required>
+                  <Dropdown value={at.objectType} selectedOptions={[at.objectType]} onOptionSelect={(_, d) => patchAt({ objectType: d.optionValue || '' })}>
+                    {objNames.map((n) => <Option key={n} value={n}>{n}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Kind" required>
+                  <Dropdown value={at.kind} selectedOptions={[at.kind]} onOptionSelect={(_, d) => patchAt({ kind: (d.optionValue as OntoActionType['kind']) || 'create' })}>
+                    {ONTO_ACTION_KINDS.map((k) => <Option key={k} value={k}>{k}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Description"><Textarea value={at.description} onChange={(_, d) => patchAt({ description: d.value })} /></Field>
+                <div className={s.tmSubBlock}>
+                  <div className={s.ontoActionHead}>
+                    <Settings20Regular />
+                    <Subtitle2>Parameters</Subtitle2>
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" icon={<Add16Regular />} onClick={() => patchAt({ parameters: [...at.parameters, { apiName: '', type: 'string' }] })}>Add parameter</Button>
+                  </div>
+                  {at.parameters.length === 0 ? (
+                    <Caption1 className={s.ontoSectionHint}>No parameters yet. Add typed parameters the action accepts at run time.</Caption1>
+                  ) : at.parameters.map((p, pi) => (
+                    <div key={pi} className={s.tmParamRow}>
+                      <Field label={pi === 0 ? 'API name' : undefined}>
+                        <Input value={p.apiName} onChange={(_, d) => patchAt({ parameters: at.parameters.map((x, xi) => xi === pi ? { ...x, apiName: d.value } : x) })} placeholder="amount" />
+                      </Field>
+                      <Field label={pi === 0 ? 'Type' : undefined}>
+                        <Dropdown value={ONTO_PARAM_TYPE_LABELS[p.type]} selectedOptions={[p.type]} onOptionSelect={(_, d) => patchAt({ parameters: at.parameters.map((x, xi) => xi === pi ? { ...x, type: (d.optionValue as OntoParamType) || 'string' } : x) })}>
+                          {ONTO_PARAM_TYPES.map((pt) => <Option key={pt} value={pt}>{ONTO_PARAM_TYPE_LABELS[pt]}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Switch checked={!!p.required} label="Required" onChange={(_, d) => patchAt({ parameters: at.parameters.map((x, xi) => xi === pi ? { ...x, required: d.checked } : x) })} />
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove parameter ${p.apiName || pi + 1}`} onClick={() => patchAt({ parameters: at.parameters.filter((_, xi) => xi !== pi) })} />
+                    </div>
+                  ))}
+                </div>
+                {atErr && <MessageBar intent="error"><MessageBarBody>{atErr}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setAtOpen(false)}>Cancel</Button>
+              <Button appearance="primary" onClick={saveAt}>{at.index === null ? 'Add action type' : 'Save'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </div>
+  );
+}
+
 export function OntologyEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
@@ -1744,6 +2324,10 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
             <strong>Materialize as graph-model</strong> converts the parsed class hierarchy into a graph-model item (one node type per class, IS_A edge type for parent relationships) that can then be ADX-materialized to real KQL tables. Use <strong>Bind to data source</strong> (Home ribbon) to map Lakehouse / Warehouse tables onto entity types, then create <strong>Activator triggers</strong> below that fire on entity changes (real Azure Monitor alert rules — no Microsoft Fabric required).
           </MessageBarBody>
         </MessageBar>
+
+        {/* ── Typed modeling surface (object / link / action types) ── */}
+        <OntologyTypedModelPanel id={id} state={state} persistOnto={persistOnto} lakehouses={lakehouses} warehouses={warehouses} saving={saving} />
+
         <div className={s.ontoSourceGrid}>
           <div>
             <Subtitle2>Source ({classes.length} classes)</Subtitle2>
@@ -1870,7 +2454,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
           id={id}
           classes={classes}
           actionTypes={Array.isArray(state.actionTypes) ? state.actionTypes : []}
-          onActionTypesChange={(next) => persistOnto({ ...state, actionTypes: next })}
+          onActionTypesChange={(next) => persistOnto({ ...state, actionTypes: normalizeOntoActionTypes(next) })}
         />
 
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
