@@ -35,6 +35,7 @@ import {
   ArrowDownload20Regular,
   Organization20Regular,
   Tag20Regular,
+  CloudLink20Regular, PlugConnected20Regular,
   ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
@@ -1543,6 +1544,497 @@ function estimateDwuCostPerHr(sku: string): number {
   return DWU_COST_USD[sku] ?? 1.51;
 }
 
+// ============================================================
+// External locations + storage credentials (wave c2) — UC governs WHERE it
+// reads/writes external data. REST /api/databricks/unity-catalog/{external-
+// locations,storage-credentials}. Azure-native, secret-free credential path
+// (Databricks Access Connector managed identity).
+// ============================================================
+function ExternalLocationsDialog({ open, onOpenChange }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+}) {
+  const [tab, setTab] = useState<'locations' | 'credentials'>('locations');
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [locs, setLocs] = useState<any[]>([]);
+  const [creds, setCreds] = useState<any[]>([]);
+
+  // External-location create / edit form.
+  const [locName, setLocName] = useState('');
+  const [locUrl, setLocUrl] = useState('');
+  const [locCred, setLocCred] = useState('');
+  const [locComment, setLocComment] = useState('');
+  const [locRO, setLocRO] = useState(false);
+  const [editingLoc, setEditingLoc] = useState<string | null>(null);
+
+  // Storage-credential create form (Azure Access Connector managed identity).
+  const [credName, setCredName] = useState('');
+  const [credConnector, setCredConnector] = useState('');
+  const [credMi, setCredMi] = useState('');
+  const [credComment, setCredComment] = useState('');
+  const [credRO, setCredRO] = useState(false);
+
+  const LOC = '/api/databricks/unity-catalog/external-locations';
+  const CRED = '/api/databricks/unity-catalog/storage-credentials';
+
+  const reload = useCallback(async () => {
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      const [lr, cr] = await Promise.all([fetch(LOC), fetch(CRED)]);
+      const lj = await lr.json(); const cj = await cr.json();
+      if (lj.gated) { setGate(lj.error); setLocs([]); }
+      else if (lj.ok) setLocs(lj.externalLocations || []);
+      else setErr(lj.error || 'failed to list external locations');
+      if (cj.gated) { if (!lj.gated) setGate(cj.error); setCreds([]); }
+      else if (cj.ok) setCreds(cj.storageCredentials || []);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { if (open) void reload(); }, [open, reload]);
+
+  const resetLoc = () => { setLocName(''); setLocUrl(''); setLocCred(''); setLocComment(''); setLocRO(false); setEditingLoc(null); };
+  const resetCred = () => { setCredName(''); setCredConnector(''); setCredMi(''); setCredComment(''); setCredRO(false); };
+
+  const saveLoc = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const editing = !!editingLoc;
+      const r = await fetch(LOC, {
+        method: editing ? 'PATCH' : 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(editing
+          ? { name: editingLoc, comment: locComment, read_only: locRO, url: locUrl || undefined, credential_name: locCred || undefined }
+          : { name: locName.trim(), url: locUrl.trim(), credential_name: locCred, comment: locComment || undefined, read_only: locRO }),
+      });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'external-location operation failed'); return; }
+      resetLoc(); await reload();
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+  const deleteLoc = async (name: string) => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${LOC}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (!j.ok && !j.gated) { setErr(j.error || 'delete failed'); return; }
+      if (j.gated) { setGate(j.error); return; }
+      await reload();
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
+  };
+  const editLoc = (l: any) => { setTab('locations'); setEditingLoc(l.name); setLocName(l.name); setLocUrl(l.url || ''); setLocCred(l.credential_name || ''); setLocComment(l.comment || ''); setLocRO(!!l.read_only); };
+
+  const createCred = async () => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(CRED, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: credName.trim(), access_connector_id: credConnector.trim(), managed_identity_id: credMi.trim() || undefined, comment: credComment || undefined, read_only: credRO }),
+      });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'storage-credential create failed'); return; }
+      resetCred(); await reload();
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
+  };
+  const deleteCred = async (name: string) => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(`${CRED}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'delete failed'); return; }
+      await reload();
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '960px', width: '94vw' }}>
+        <DialogBody>
+          <DialogTitle>External locations &amp; storage credentials</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Unity Catalog governs access to cloud storage with two objects: a <b>storage credential</b> (an Azure
+                Databricks Access Connector managed identity — no secret) and an <b>external location</b> (a storage path +
+                the credential it authorizes through). Backed by real UC REST; the Console UAMI needs CREATE STORAGE
+                CREDENTIAL / CREATE EXTERNAL LOCATION on the metastore.
+              </Caption1>
+              {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+              {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Configuration required</MessageBarTitle>{gate}</MessageBarBody></MessageBar>}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Operation failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+
+              <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)} size="small">
+                <Tab value="locations" icon={<CloudLink20Regular />}>External locations ({locs.length})</Tab>
+                <Tab value="credentials" icon={<Key20Regular />}>Storage credentials ({creds.length})</Tab>
+              </TabList>
+
+              {tab === 'locations' && (
+                <>
+                  <div style={{ overflow: 'auto', maxHeight: '260px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                    <Table size="small" aria-label="External locations">
+                      <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>URL</TableHeaderCell><TableHeaderCell>Credential</TableHeaderCell><TableHeaderCell>Read-only</TableHeaderCell><TableHeaderCell> </TableHeaderCell></TableRow></TableHeader>
+                      <TableBody>
+                        {locs.length === 0 && <TableRow><TableCell colSpan={5}><Caption1>No external locations.</Caption1></TableCell></TableRow>}
+                        {locs.map((l) => (
+                          <TableRow key={l.name}>
+                            <TableCell>{l.name}</TableCell>
+                            <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{l.url}</span></TableCell>
+                            <TableCell>{l.credential_name || '—'}</TableCell>
+                            <TableCell>{l.read_only ? <Badge appearance="tint" color="warning">read-only</Badge> : '—'}</TableCell>
+                            <TableCell>
+                              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
+                                <Button size="small" appearance="subtle" disabled={busy} onClick={() => editLoc(l)}>Edit</Button>
+                                <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Delete external location" disabled={busy} onClick={() => deleteLoc(l.name)} />
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <Subtitle2>{editingLoc ? `Edit external location · ${editingLoc}` : 'Create external location'}</Subtitle2>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <Field label="Name" required style={{ minWidth: 160 }}><Input value={locName} disabled={!!editingLoc} onChange={(_, d) => setLocName(d.value)} placeholder="bronze_ext" /></Field>
+                    <Field label="Storage URL" required style={{ flex: 1, minWidth: 260 }}><Input value={locUrl} onChange={(_, d) => setLocUrl(d.value)} placeholder="abfss://container@account.dfs.core.windows.net/path" /></Field>
+                    <Field label="Storage credential" required style={{ minWidth: 180 }}>
+                      <Dropdown selectedOptions={locCred ? [locCred] : []} value={locCred} placeholder="Select credential" onOptionSelect={(_, d) => setLocCred(d.optionValue || '')}>
+                        {creds.map((c) => <Option key={c.name} value={c.name}>{c.name}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <Field label="Comment" style={{ flex: 1, minWidth: 240 }}><Input value={locComment} onChange={(_, d) => setLocComment(d.value)} placeholder="Bronze landing zone" /></Field>
+                    <Switch label="Read-only" checked={locRO} onChange={(_, d) => setLocRO(d.checked)} />
+                  </div>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+                    <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !locName.trim() || (!editingLoc && (!locUrl.trim() || !locCred))} onClick={saveLoc}>{editingLoc ? 'Save changes' : 'Create external location'}</Button>
+                    {editingLoc && <Button appearance="outline" disabled={busy} onClick={resetLoc}>Cancel edit</Button>}
+                  </div>
+                </>
+              )}
+
+              {tab === 'credentials' && (
+                <>
+                  <div style={{ overflow: 'auto', maxHeight: '260px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                    <Table size="small" aria-label="Storage credentials">
+                      <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Access connector</TableHeaderCell><TableHeaderCell>Comment</TableHeaderCell><TableHeaderCell> </TableHeaderCell></TableRow></TableHeader>
+                      <TableBody>
+                        {creds.length === 0 && <TableRow><TableCell colSpan={4}><Caption1>No storage credentials.</Caption1></TableCell></TableRow>}
+                        {creds.map((c) => (
+                          <TableRow key={c.name}>
+                            <TableCell>{c.name}</TableCell>
+                            <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{c.azure_managed_identity?.access_connector_id?.split('/').pop() || '—'}</span></TableCell>
+                            <TableCell>{c.comment || '—'}</TableCell>
+                            <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Delete storage credential" disabled={busy} onClick={() => deleteCred(c.name)} /></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                  <Subtitle2>Create storage credential (Azure Access Connector)</Subtitle2>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Azure-native, secret-free: paste the ARM resource id of your Azure Databricks <b>Access Connector</b>.
+                    For a user-assigned managed identity, also set the Managed identity id; leave it blank for system-assigned.
+                  </Caption1>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <Field label="Name" required style={{ minWidth: 160 }}><Input value={credName} onChange={(_, d) => setCredName(d.value)} placeholder="lake_access" /></Field>
+                    <Field label="Access connector ARM id" required style={{ flex: 1, minWidth: 320 }}><Input value={credConnector} onChange={(_, d) => setCredConnector(d.value)} placeholder="/subscriptions/…/providers/Microsoft.Databricks/accessConnectors/…" /></Field>
+                  </div>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <Field label="Managed identity id (optional, user-assigned)" style={{ flex: 1, minWidth: 280 }}><Input value={credMi} onChange={(_, d) => setCredMi(d.value)} placeholder="/subscriptions/…/userAssignedIdentities/…" /></Field>
+                    <Field label="Comment" style={{ minWidth: 180 }}><Input value={credComment} onChange={(_, d) => setCredComment(d.value)} /></Field>
+                    <Switch label="Read-only" checked={credRO} onChange={(_, d) => setCredRO(d.checked)} />
+                  </div>
+                  <div><Button appearance="primary" icon={<Add20Regular />} disabled={busy || !credName.trim() || !credConnector.trim()} onClick={createCred}>Create storage credential</Button></div>
+                </>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={loading} onClick={() => void reload()}>Refresh</Button>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// Connections + foreign catalogs (Lakehouse Federation, wave c2). list/delete
+// via REST; CREATE CONNECTION / CREATE FOREIGN CATALOG via SQL on the warehouse
+// (credential options use secret('scope','key')). Prefill from cross-sub ARG
+// connectables (/api/azure/connectables). REST /api/databricks/unity-catalog/connections.
+// ============================================================
+type UcConnTypeUI = 'SQLSERVER' | 'SQLDW' | 'POSTGRESQL' | 'MYSQL' | 'SNOWFLAKE' | 'REDSHIFT';
+const CONN_PRESETS: Record<UcConnTypeUI, { label: string; defaultPort: string; snowflake?: boolean }> = {
+  SQLSERVER: { label: 'SQL Server', defaultPort: '1433' },
+  SQLDW: { label: 'Azure Synapse (SQLDW)', defaultPort: '1433' },
+  POSTGRESQL: { label: 'PostgreSQL', defaultPort: '5432' },
+  MYSQL: { label: 'MySQL', defaultPort: '3306' },
+  SNOWFLAKE: { label: 'Snowflake', defaultPort: '443', snowflake: true },
+  REDSHIFT: { label: 'Amazon Redshift', defaultPort: '5439' },
+};
+// Map the ARG connectable connType → a federation connection type (only the
+// federatable DBMS sources; storage/cosmos/eventing aren't CREATE CONNECTION targets).
+const CONNECTABLE_TO_FED: Record<string, UcConnTypeUI> = {
+  'azure-sql': 'SQLSERVER',
+  'synapse-serverless': 'SQLDW',
+  'synapse-dedicated': 'SQLDW',
+  'postgres': 'POSTGRESQL',
+};
+
+function ConnectionsDialog({ open, onOpenChange, warehouseId }: {
+  open: boolean; onOpenChange: (v: boolean) => void; warehouseId: string;
+}) {
+  const [tab, setTab] = useState<'connections' | 'foreign'>('connections');
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState<string | null>(null);
+  const [conns, setConns] = useState<any[]>([]);
+
+  // Create-connection wizard.
+  const [cName, setCName] = useState('');
+  const [cType, setCType] = useState<UcConnTypeUI>('SQLSERVER');
+  const [cHost, setCHost] = useState('');
+  const [cPort, setCPort] = useState('1433');
+  const [cUser, setCUser] = useState('');
+  const [cSfWarehouse, setCSfWarehouse] = useState('');
+  const [cComment, setCComment] = useState('');
+  const [pwMode, setPwMode] = useState<'literal' | 'secret'>('secret');
+  const [cPassword, setCPassword] = useState('');
+  const [cSecretScope, setCSecretScope] = useState('');
+  const [cSecretKey, setCSecretKey] = useState('');
+
+  // Prefill from ARG connectables.
+  const [connectables, setConnectables] = useState<any[]>([]);
+  const [prefill, setPrefill] = useState('');
+
+  // Create-foreign-catalog form.
+  const [fcName, setFcName] = useState('');
+  const [fcConn, setFcConn] = useState('');
+  const [fcDb, setFcDb] = useState('');
+  const [fcComment, setFcComment] = useState('');
+
+  const BASE = '/api/databricks/unity-catalog/connections';
+
+  const reload = useCallback(async () => {
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      const r = await fetch(BASE);
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); setConns([]); return; }
+      if (!j.ok) { setErr(j.error || 'failed to list connections'); setConns([]); return; }
+      setConns(j.connections || []);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { if (open) void reload(); }, [open, reload]);
+
+  // Lazy-load connectables when the user opens the prefill dropdown.
+  const loadConnectables = useCallback(async () => {
+    if (connectables.length) return;
+    try {
+      const r = await fetch('/api/azure/connectables');
+      const j = await r.json();
+      if (j.ok && Array.isArray(j.resources)) {
+        setConnectables(j.resources.filter((x: any) => CONNECTABLE_TO_FED[x.connType]));
+      }
+    } catch { /* prefill is best-effort */ }
+  }, [connectables.length]);
+
+  const applyPrefill = (armId: string) => {
+    setPrefill(armId);
+    const res = connectables.find((x) => x.armResourceId === armId);
+    if (!res) return;
+    const fed = CONNECTABLE_TO_FED[res.connType];
+    if (fed) { setCType(fed); setCPort(CONN_PRESETS[fed].defaultPort); }
+    if (res.host) setCHost(res.host);
+    if (!cName.trim()) setCName((res.name || '').replace(/[^A-Za-z0-9_]/g, '_').toLowerCase());
+    if (res.database && !fcDb.trim()) setFcDb(res.database);
+  };
+
+  const onTypeChange = (t: UcConnTypeUI) => { setCType(t); setCPort(CONN_PRESETS[t].defaultPort); };
+
+  const resetConn = () => { setCName(''); setCHost(''); setCUser(''); setCSfWarehouse(''); setCComment(''); setCPassword(''); setCSecretScope(''); setCSecretKey(''); setPrefill(''); };
+
+  const createConn = async () => {
+    setBusy(true); setErr(null); setOk(null);
+    try {
+      const options: any[] = [
+        { key: 'host', value: { kind: 'string', value: cHost.trim() } },
+        { key: 'port', value: { kind: 'string', value: cPort.trim() } },
+        { key: 'user', value: { kind: 'string', value: cUser.trim() } },
+      ];
+      if (CONN_PRESETS[cType].snowflake && cSfWarehouse.trim()) options.push({ key: 'sfWarehouse', value: { kind: 'string', value: cSfWarehouse.trim() } });
+      options.push(pwMode === 'secret'
+        ? { key: 'password', value: { kind: 'secret', scope: cSecretScope.trim(), key: cSecretKey.trim() } }
+        : { key: 'password', value: { kind: 'string', value: cPassword } });
+      const r = await fetch(BASE, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'create-connection', name: cName.trim(), type: cType, options, comment: cComment || undefined, warehouseId: warehouseId || undefined }),
+      });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'connection create failed'); return; }
+      setOk(`Connection ${cName.trim()} created (${j.executionMs ?? 0} ms).`);
+      setCPassword(''); resetConn(); await reload();
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const deleteConn = async (name: string) => {
+    setBusy(true); setErr(null); setOk(null);
+    try {
+      const r = await fetch(`${BASE}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'delete failed'); return; }
+      await reload();
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
+  };
+
+  const createForeign = async () => {
+    setBusy(true); setErr(null); setOk(null);
+    try {
+      const r = await fetch(BASE, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'create-foreign-catalog', name: fcName.trim(), connection: fcConn, database: fcDb.trim(), comment: fcComment || undefined, warehouseId: warehouseId || undefined }),
+      });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'foreign-catalog create failed'); return; }
+      setOk(`Foreign catalog ${fcName.trim()} created — it now appears in the Catalogs tree.`);
+      setFcName(''); setFcDb('');
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setBusy(false); }
+  };
+
+  const pwValid = pwMode === 'secret' ? (cSecretScope.trim() && cSecretKey.trim()) : !!cPassword;
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '980px', width: '95vw' }}>
+        <DialogBody>
+          <DialogTitle>Connections — Lakehouse Federation</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Register a remote DBMS as a Unity Catalog <b>connection</b>, then mirror one of its databases as a
+                read-only <b>foreign catalog</b>. Real CREATE CONNECTION / CREATE FOREIGN CATALOG DDL on the SQL warehouse;
+                passwords use a Databricks <b>secret</b> reference (recommended) so the credential never appears in the SQL.
+              </Caption1>
+              {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+              {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Configuration required</MessageBarTitle>{gate}</MessageBarBody></MessageBar>}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Operation failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+              {ok && <MessageBar intent="success"><MessageBarBody>{ok}</MessageBarBody></MessageBar>}
+
+              <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)} size="small">
+                <Tab value="connections" icon={<PlugConnected20Regular />}>Connections ({conns.length})</Tab>
+                <Tab value="foreign" icon={<Database20Regular />}>Foreign catalog</Tab>
+              </TabList>
+
+              {tab === 'connections' && (
+                <>
+                  <div style={{ overflow: 'auto', maxHeight: '220px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                    <Table size="small" aria-label="Connections">
+                      <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Host</TableHeaderCell><TableHeaderCell>Comment</TableHeaderCell><TableHeaderCell> </TableHeaderCell></TableRow></TableHeader>
+                      <TableBody>
+                        {conns.length === 0 && <TableRow><TableCell colSpan={5}><Caption1>No connections.</Caption1></TableCell></TableRow>}
+                        {conns.map((c) => (
+                          <TableRow key={c.name}>
+                            <TableCell>{c.name}</TableCell>
+                            <TableCell><Badge appearance="tint">{c.connection_type}</Badge></TableCell>
+                            <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{c.options?.host || '—'}</span></TableCell>
+                            <TableCell>{c.comment || '—'}</TableCell>
+                            <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Delete connection" disabled={busy} onClick={() => deleteConn(c.name)} /></TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+
+                  <Subtitle2>Create connection</Subtitle2>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <Field label="Name" required style={{ minWidth: 150 }}><Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="prod_sqlserver" /></Field>
+                    <Field label="Type" required style={{ minWidth: 180 }}>
+                      <Dropdown value={CONN_PRESETS[cType].label} selectedOptions={[cType]} onOptionSelect={(_, d) => onTypeChange((d.optionValue as UcConnTypeUI) || 'SQLSERVER')}>
+                        {(Object.keys(CONN_PRESETS) as UcConnTypeUI[]).map((t) => <Option key={t} value={t}>{CONN_PRESETS[t].label}</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Prefill from my Azure resources" style={{ minWidth: 240 }}>
+                      <Dropdown placeholder="(optional) pick a resource" value={prefill ? (connectables.find((x) => x.armResourceId === prefill)?.name || '') : ''} selectedOptions={prefill ? [prefill] : []} onOpenChange={(_, d) => { if (d.open) void loadConnectables(); }} onOptionSelect={(_, d) => applyPrefill(d.optionValue || '')}>
+                        {connectables.length === 0 && <Option value="" disabled>No federatable resources found</Option>}
+                        {connectables.map((x) => <Option key={x.armResourceId} value={x.armResourceId}>{x.name} ({CONN_PRESETS[CONNECTABLE_TO_FED[x.connType]]?.label})</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <Field label="Host" required style={{ flex: 1, minWidth: 240 }}><Input value={cHost} onChange={(_, d) => setCHost(d.value)} placeholder="myserver.database.windows.net" /></Field>
+                    <Field label="Port" required style={{ minWidth: 90 }}><Input value={cPort} onChange={(_, d) => setCPort(d.value)} /></Field>
+                    {CONN_PRESETS[cType].snowflake && <Field label="sfWarehouse" style={{ minWidth: 150 }}><Input value={cSfWarehouse} onChange={(_, d) => setCSfWarehouse(d.value)} placeholder="COMPUTE_WH" /></Field>}
+                    <Field label="User" required style={{ minWidth: 160 }}><Input value={cUser} onChange={(_, d) => setCUser(d.value)} placeholder="loom_reader" /></Field>
+                  </div>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <Field label="Password" required style={{ minWidth: 220 }}>
+                      <Dropdown value={pwMode === 'secret' ? 'Databricks secret (recommended)' : 'Literal value'} selectedOptions={[pwMode]} onOptionSelect={(_, d) => setPwMode((d.optionValue as 'literal' | 'secret') || 'secret')}>
+                        <Option value="secret">Databricks secret (recommended)</Option>
+                        <Option value="literal">Literal value</Option>
+                      </Dropdown>
+                    </Field>
+                    {pwMode === 'secret' ? (
+                      <>
+                        <Field label="Secret scope" required style={{ minWidth: 160 }}><Input value={cSecretScope} onChange={(_, d) => setCSecretScope(d.value)} placeholder="loom" /></Field>
+                        <Field label="Secret key" required style={{ minWidth: 160 }}><Input value={cSecretKey} onChange={(_, d) => setCSecretKey(d.value)} placeholder="sqlserver-password" /></Field>
+                      </>
+                    ) : (
+                      <Field label="Password value" required style={{ flex: 1, minWidth: 220 }}><Input type="password" value={cPassword} onChange={(_, d) => setCPassword(d.value)} /></Field>
+                    )}
+                    <Field label="Comment" style={{ flex: 1, minWidth: 180 }}><Input value={cComment} onChange={(_, d) => setCComment(d.value)} /></Field>
+                  </div>
+                  <div><Button appearance="primary" icon={<Add20Regular />} disabled={busy || !cName.trim() || !cHost.trim() || !cUser.trim() || !pwValid} onClick={createConn}>Create connection</Button></div>
+                </>
+              )}
+
+              {tab === 'foreign' && (
+                <>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    A foreign catalog mirrors one database from a connection into Unity Catalog; it appears in the Catalogs
+                    tree and is governed like any UC catalog. Pick an existing connection and the remote database to mirror.
+                  </Caption1>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                    <Field label="Catalog name" required style={{ minWidth: 180 }}><Input value={fcName} onChange={(_, d) => setFcName(d.value)} placeholder="sqlserver_sales" /></Field>
+                    <Field label="Connection" required style={{ minWidth: 200 }}>
+                      <Dropdown placeholder="Select connection" value={fcConn} selectedOptions={fcConn ? [fcConn] : []} onOptionSelect={(_, d) => setFcConn(d.optionValue || '')}>
+                        {conns.length === 0 && <Option value="" disabled>Create a connection first</Option>}
+                        {conns.map((c) => <Option key={c.name} value={c.name}>{c.name} ({c.connection_type})</Option>)}
+                      </Dropdown>
+                    </Field>
+                    <Field label="Remote database" required style={{ minWidth: 180 }}><Input value={fcDb} onChange={(_, d) => setFcDb(d.value)} placeholder="SalesDB" /></Field>
+                    <Field label="Comment" style={{ flex: 1, minWidth: 180 }}><Input value={fcComment} onChange={(_, d) => setFcComment(d.value)} /></Field>
+                  </div>
+                  <div><Button appearance="primary" icon={<Add20Regular />} disabled={busy || !fcName.trim() || !fcConn || !fcDb.trim()} onClick={createForeign}>Create foreign catalog</Button></div>
+                </>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={loading} onClick={() => void reload()}>Refresh</Button>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // Unity Catalog WRITE dialog open-state (create catalog/schema/table + grants).
@@ -1560,6 +2052,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucTagsOpen, setUcTagsOpen] = useState(false);
   const [ucTagsTarget, setUcTagsTarget] = useState<{ catalog: string; schema: string; table: string } | null>(null);
   const [ucGovTagsOpen, setUcGovTagsOpen] = useState(false);
+  // UC storage + Lakehouse Federation (wave c2): external locations / storage
+  // credentials, and connections / foreign catalogs.
+  const [ucExtLocOpen, setUcExtLocOpen] = useState(false);
+  const [ucConnsOpen, setUcConnsOpen] = useState(false);
   // Lazy per-table tag cache for the UC tree chips (full_name → tag pairs).
   const [tagsByTable, setTagsByTable] = useState<Record<string, { key: string; value: string }[]>>({});
   // AI functions helper (sentiment/classify/translate/summarize/extract).
@@ -2357,6 +2853,12 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             </Tooltip>
             <Tooltip content="Governed tags (account-level tag policies)" relationship="label">
               <Button size="small" appearance="outline" icon={<Tag20Regular />} onClick={() => setUcGovTagsOpen(true)}>Governed tags</Button>
+            </Tooltip>
+            <Tooltip content="External locations & storage credentials (UC cloud-storage governance)" relationship="label">
+              <Button size="small" appearance="outline" icon={<CloudLink20Regular />} onClick={() => setUcExtLocOpen(true)}>Locations</Button>
+            </Tooltip>
+            <Tooltip content="Connections & foreign catalogs (Lakehouse Federation)" relationship="label">
+              <Button size="small" appearance="outline" icon={<PlugConnected20Regular />} onClick={() => setUcConnsOpen(true)}>Connections</Button>
             </Tooltip>
             <Tooltip content="Drop object (UC REST)" relationship="label">
               <Button size="small" appearance="outline" icon={<Delete20Regular />} onClick={() => setUcDropOpen(true)} aria-label="Drop object" />
@@ -3242,6 +3744,15 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
           <GovernedTagsDialog
             open={ucGovTagsOpen}
             onOpenChange={setUcGovTagsOpen}
+            warehouseId={warehouseId}
+          />
+          <ExternalLocationsDialog
+            open={ucExtLocOpen}
+            onOpenChange={setUcExtLocOpen}
+          />
+          <ConnectionsDialog
+            open={ucConnsOpen}
+            onOpenChange={setUcConnsOpen}
             warehouseId={warehouseId}
           />
 

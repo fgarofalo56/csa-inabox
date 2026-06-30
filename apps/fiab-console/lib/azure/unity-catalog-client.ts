@@ -42,8 +42,10 @@ import {
   buildCreateGovernedTag, buildAlterGovernedTagDescription, buildAlterGovernedTagValues,
   buildDropGovernedTag, ucShowGovernedTags, ucDescribeGovernedTag,
   buildCreatePolicy, buildDropPolicy, ucShowPolicies, ucDescribePolicy,
+  buildCreateConnection, buildCreateForeignCatalog,
   type UcTagKind, type UcTagPair, type GovernedTagSpec,
   type UcPolicyParams, type UcPolicySecurableType,
+  type UcCreateConnectionParams, type UcForeignCatalogParams,
 } from '@/lib/sql/uc-security-builders';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
@@ -1408,4 +1410,193 @@ export async function dropUcPolicy(
   const sql = buildDropPolicy(p);
   const r = await executeStatement(warehouseId, sql);
   return { sql, executionMs: r.executionMs };
+}
+
+// ============================================================
+// Storage + Lakehouse Federation (wave c2)
+//
+// External locations + storage credentials govern WHERE Unity Catalog reads/
+// writes external data; connections + foreign catalogs (Lakehouse Federation)
+// govern access to remote DBMSs (SQL Server / Synapse / PostgreSQL / Snowflake /
+// …). All real UC REST (/api/2.1/unity-catalog/{external-locations,storage-
+// credentials,connections}) for list/get/delete; the credential-carrying CREATE
+// flows (connection + foreign catalog) run as Learn-grounded DDL on the SQL
+// warehouse so the `secret()` function can replace plaintext passwords. No mocks.
+// ============================================================
+
+export interface UCExternalLocation {
+  name: string;
+  url: string;
+  credential_name?: string;
+  comment?: string;
+  read_only?: boolean;
+  owner?: string;
+  isolation_mode?: string;
+  created_at?: number;
+  updated_at?: number;
+  workspace_hostname?: string;
+}
+
+/** Azure Access Connector identity backing a storage credential (the Azure-
+ *  native, secret-free path — recommended per no-fabric-dependency.md). */
+export interface UCAzureManagedIdentity {
+  /** Full ARM id of the Databricks Access Connector. */
+  access_connector_id: string;
+  /** Optional user-assigned managed-identity id (omit for system-assigned). */
+  managed_identity_id?: string;
+  credential_id?: string;
+}
+
+export interface UCStorageCredential {
+  name: string;
+  comment?: string;
+  owner?: string;
+  read_only?: boolean;
+  azure_managed_identity?: UCAzureManagedIdentity;
+  used_for_managed_storage?: boolean;
+  isolation_mode?: string;
+  created_at?: number;
+  updated_at?: number;
+  workspace_hostname?: string;
+}
+
+export interface UCConnection {
+  name: string;
+  connection_type: string;
+  /** Non-secret connection options Databricks echoes back (host/port/user — the
+   *  password / token is NEVER returned). */
+  options?: Record<string, string>;
+  comment?: string;
+  owner?: string;
+  read_only?: boolean;
+  full_name?: string;
+  connection_id?: string;
+  created_at?: number;
+  updated_at?: number;
+  workspace_hostname?: string;
+}
+
+// ---- External locations ----------------------------------------------
+
+export async function listExternalLocations(host: string): Promise<UCExternalLocation[]> {
+  const j = await ucFetch<{ external_locations?: UCExternalLocation[] }>(host, '/api/2.1/unity-catalog/external-locations');
+  return (j.external_locations || []).map((e) => ({ ...e, workspace_hostname: host }));
+}
+
+export async function createExternalLocation(
+  host: string,
+  body: { name: string; url: string; credential_name: string; comment?: string; read_only?: boolean; skip_validation?: boolean },
+): Promise<UCExternalLocation> {
+  const j = await ucFetch<UCExternalLocation>(host, '/api/2.1/unity-catalog/external-locations', { method: 'POST', body });
+  return { ...j, workspace_hostname: host };
+}
+
+export async function updateExternalLocation(
+  host: string,
+  name: string,
+  body: { url?: string; credential_name?: string; comment?: string; read_only?: boolean; new_name?: string; owner?: string },
+): Promise<UCExternalLocation> {
+  const j = await ucFetch<UCExternalLocation>(host, `/api/2.1/unity-catalog/external-locations/${encodeURIComponent(name)}`, { method: 'PATCH', body });
+  return { ...j, workspace_hostname: host };
+}
+
+export async function deleteExternalLocation(host: string, name: string, force = false): Promise<void> {
+  await ucFetch(host, `/api/2.1/unity-catalog/external-locations/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    query: force ? { force: 'true' } : undefined,
+  });
+}
+
+// ---- Storage credentials ---------------------------------------------
+
+export async function listStorageCredentials(host: string): Promise<UCStorageCredential[]> {
+  const j = await ucFetch<{ storage_credentials?: UCStorageCredential[] }>(host, '/api/2.1/unity-catalog/storage-credentials');
+  return (j.storage_credentials || []).map((c) => ({ ...c, workspace_hostname: host }));
+}
+
+export async function createStorageCredential(
+  host: string,
+  body: { name: string; comment?: string; read_only?: boolean; skip_validation?: boolean; azure_managed_identity: UCAzureManagedIdentity },
+): Promise<UCStorageCredential> {
+  const j = await ucFetch<UCStorageCredential>(host, '/api/2.1/unity-catalog/storage-credentials', { method: 'POST', body });
+  return { ...j, workspace_hostname: host };
+}
+
+export async function updateStorageCredential(
+  host: string,
+  name: string,
+  body: { comment?: string; read_only?: boolean; new_name?: string; owner?: string },
+): Promise<UCStorageCredential> {
+  const j = await ucFetch<UCStorageCredential>(host, `/api/2.1/unity-catalog/storage-credentials/${encodeURIComponent(name)}`, { method: 'PATCH', body });
+  return { ...j, workspace_hostname: host };
+}
+
+export async function deleteStorageCredential(host: string, name: string, force = false): Promise<void> {
+  await ucFetch(host, `/api/2.1/unity-catalog/storage-credentials/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    query: force ? { force: 'true' } : undefined,
+  });
+}
+
+// ---- Connections (Lakehouse Federation) ------------------------------
+//
+// list/get/delete via REST; CREATE via SQL DDL on the warehouse so the
+// `secret()` function can replace plaintext passwords (createUcConnection).
+
+export async function listConnections(host: string): Promise<UCConnection[]> {
+  const j = await ucFetch<{ connections?: UCConnection[] }>(host, '/api/2.1/unity-catalog/connections');
+  return (j.connections || []).map((c) => ({ ...c, workspace_hostname: host }));
+}
+
+export async function getConnection(host: string, name: string): Promise<UCConnection> {
+  const j = await ucFetch<UCConnection>(host, `/api/2.1/unity-catalog/connections/${encodeURIComponent(name)}`);
+  return { ...j, workspace_hostname: host };
+}
+
+export async function deleteConnection(host: string, name: string): Promise<void> {
+  await ucFetch(host, `/api/2.1/unity-catalog/connections/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+/**
+ * Create a Lakehouse Federation connection over SQL (CREATE CONNECTION … TYPE …
+ * OPTIONS (…)). Runs on the SQL warehouse so credential options can use
+ * `secret('scope','key')` instead of plaintext. Returns ONLY executionMs — never
+ * the SQL text, which may contain a literal password (per the wave-c2 secret
+ * rule, the raw statement is never returned to the client or logged).
+ */
+export async function createUcConnection(
+  warehouseId: string,
+  params: UcCreateConnectionParams,
+): Promise<{ executionMs: number }> {
+  const sql = buildCreateConnection(params);
+  const r = await executeStatement(warehouseId, sql);
+  return { executionMs: r.executionMs };
+}
+
+/** Create a foreign catalog from an existing connection (CREATE FOREIGN CATALOG
+ *  … USING CONNECTION … OPTIONS (database '…')). No credentials in this DDL, so
+ *  the SQL is safe to return for the receipt/preview. */
+export async function createUcForeignCatalog(
+  warehouseId: string,
+  params: UcForeignCatalogParams,
+): Promise<{ sql: string; executionMs: number }> {
+  const sql = buildCreateForeignCatalog(params);
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, executionMs: r.executionMs };
+}
+
+/** Resolve the primary workspace host for REST calls (first federation host).
+ *  Throws the structured {@link UnityCatalogNotConfiguredError} when no
+ *  Databricks workspace is bound — the BFF surfaces it as an honest gate. */
+export async function primaryWorkspaceHost(): Promise<string> {
+  const hosts = await resolveWorkspaceHostnames();
+  if (!hosts.length) {
+    throw new UnityCatalogNotConfiguredError({
+      missingEnvVar: 'LOOM_DATABRICKS_HOSTNAMES (or LOOM_DATABRICKS_HOSTNAME)',
+      bicepModule: 'platform/fiab/bicep/modules/admin-plane/main.bicep (catalog dispatcher)',
+      bicepStatus: 'Databricks workspace must be deployed and bound to a Unity Catalog metastore.',
+      followUp: 'Set LOOM_DATABRICKS_HOSTNAMES on the Console Container App.',
+    });
+  }
+  return hosts[0];
 }
