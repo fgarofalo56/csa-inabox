@@ -502,7 +502,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/fabric/database/mirrored-database/azure-databricks-tutorial"
     } },
   { slug: 'mounted-adf', displayName: 'Mounted Data Factory', restType: 'MountedDataFactory', category: 'Data Factory',
-    description: 'Reference an existing Azure Data Factory and run its pipelines from Fabric.',
+    description: 'Reference an existing Azure Data Factory and run its pipelines from Loom — Azure-native, no Fabric required.',
     learnContent: {
       "overview": "A Mounted Data Factory is a read-only attachment of an existing Azure Data Factory. In Loom the run history and monitoring surface natively so you can run ADF pipelines without migrating them. Use it to fold existing ADF investments into Loom.",
       "steps": [
@@ -2374,7 +2374,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/azure-sql/database/logical-servers"
     } },
   { slug: 'azure-sql-database',          displayName: 'Azure SQL database',          restType: 'AzureSqlDatabase',          category: 'Azure SQL Database',
-    description: 'Per-database T-SQL editor (TDS + AAD), Fabric mirroring config, geo-replication, vector index.',
+    description: 'Per-database T-SQL editor (TDS + AAD), mirroring config, geo-replication, vector index.',
     createConfig: {
       runtimes: [
         { value: 'azure-sql', label: 'Azure SQL Database', desc: 'Azure-native default — fully-managed PaaS database; T-SQL over TDS+AAD, geo-replication, vector index.', default: true, slug: 'azure-sql-database' },
