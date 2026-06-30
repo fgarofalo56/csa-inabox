@@ -75,15 +75,42 @@ const useStyles = makeStyles({
 
 const TREE_EXPANDED_KEY = (wsId: string) => `loom.workspaces.${wsId}.tree-expanded.v1`;
 
-interface FolderNode {
+/**
+ * Folder tree node. Generic over the leaf item shape so the same builder backs
+ * both the workspace pane (full `WorkspaceItem`) and lighter callers (e.g. the
+ * notebook editor's `NotebookLite`). Defaults to `WorkspaceItem` for existing
+ * in-file usage.
+ */
+export interface FolderNode<T = WorkspaceItem> {
   folder: WorkspaceFolder | null; // null = root
-  childFolders: FolderNode[];
-  childItems: WorkspaceItem[];
+  childFolders: FolderNode<T>[];
+  childItems: T[];
 }
 
-function buildTree(folders: WorkspaceFolder[], items: WorkspaceItem[]): FolderNode {
-  const byId = new Map<string, FolderNode>();
-  const root: FolderNode = { folder: null, childFolders: [], childItems: [] };
+/** Leaf-item sort order for {@link buildTree}. */
+export type TreeItemSort = 'name' | 'updated';
+
+/** Minimal leaf shape the tree builder needs: id + displayName, optional
+ * folderId/updatedAt. `WorkspaceItem` and `NotebookLite` both satisfy it. */
+export interface TreeLeaf {
+  id: string;
+  displayName: string;
+  folderId?: string | null;
+  updatedAt?: string;
+}
+
+/**
+ * Build a folder/subfolder tree from flat folders + items. Items with no (or an
+ * unknown) folderId land at the root. Folders sort alphabetically; leaves sort
+ * by name (A–Z) or by `updatedAt` (most-recent first) per `sort`.
+ */
+export function buildTree<T extends TreeLeaf>(
+  folders: WorkspaceFolder[],
+  items: T[],
+  sort: TreeItemSort = 'name',
+): FolderNode<T> {
+  const byId = new Map<string, FolderNode<T>>();
+  const root: FolderNode<T> = { folder: null, childFolders: [], childItems: [] };
   for (const f of folders) byId.set(f.id, { folder: f, childFolders: [], childItems: [] });
   for (const f of folders) {
     const node = byId.get(f.id)!;
@@ -95,16 +122,19 @@ function buildTree(folders: WorkspaceFolder[], items: WorkspaceItem[]): FolderNo
     const target = fid && byId.has(fid) ? byId.get(fid)! : root;
     target.childItems.push(it);
   }
-  const sortNode = (n: FolderNode) => {
+  const cmpItems = sort === 'updated'
+    ? (a: T, b: T) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')
+    : (a: T, b: T) => a.displayName.localeCompare(b.displayName);
+  const sortNode = (n: FolderNode<T>) => {
     n.childFolders.sort((a, b) => (a.folder?.name ?? '').localeCompare(b.folder?.name ?? ''));
-    n.childItems.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    n.childItems.sort(cmpItems);
     n.childFolders.forEach(sortNode);
   };
   sortNode(root);
   return root;
 }
 
-function countDescendants(n: FolderNode): number {
+export function countDescendants<T>(n: FolderNode<T>): number {
   let c = n.childItems.length + n.childFolders.length;
   for (const cf of n.childFolders) c += countDescendants(cf);
   return c;

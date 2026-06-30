@@ -20,6 +20,7 @@ import {
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Menu, MenuTrigger, MenuList, MenuItem, MenuPopover, Field,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -28,8 +29,14 @@ import {
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
   Copy20Regular, Info16Regular, ChevronDown20Regular, ChevronUp20Regular, Server20Regular,
   Notebook16Regular, Database16Regular, History16Regular, Database24Regular, Stop20Regular,
+  FolderAdd20Regular, Folder20Filled, FolderArrowRight20Regular, ArrowSort20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
+import {
+  listFolders, createFolder, renameFolder, deleteFolder, patchWorkspaceItem,
+  type WorkspaceFolder,
+} from '@/lib/api/workspaces';
+import { buildTree, countDescendants, type FolderNode, type TreeItemSort } from '@/lib/panes/folders';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -79,6 +86,17 @@ const useStyles = makeStyles({
     resize: 'vertical',
   },
   treePad: { padding: tokens.spacingVerticalS },
+  // Notebooks-pane folder tree affordances (reuses the workspace folders engine).
+  nbPaneToolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  nbDragOver: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px', borderRadius: tokens.borderRadiusSmall },
+  nbRootDrop: {
+    marginTop: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusMedium, fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3, border: `1px dashed ${tokens.colorNeutralStroke2}`, textAlign: 'center',
+  },
+  nbRootDropActive: {
+    border: `1px dashed ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2Hover, color: tokens.colorBrandForeground1,
+  },
   tableWrap: { overflow: 'auto', maxHeight: '240px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   // Bottom-left session status badge — overlays the editor surface like the
@@ -104,7 +122,7 @@ const useStyles = makeStyles({
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
-interface NotebookLite { id: string; displayName: string; description?: string; }
+interface NotebookLite { id: string; displayName: string; description?: string; folderId?: string | null; updatedAt?: string; }
 interface JobLite {
   id: string; status?: string; jobType?: string; invokeType?: string;
   startTimeUtc?: string; endTimeUtc?: string;
@@ -268,6 +286,25 @@ export function NotebookEditor({ item, id }: Props) {
   const [computeId, setComputeId] = useState('');
   const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
   const [notebookId, setNotebookId] = useState('');
+  // ---- Notebooks-pane folders/subfolders + sort + move (reuses the workspace
+  // folders engine: lib/panes/folders.tsx buildTree + lib/api/workspaces folder
+  // wrappers → real Cosmos cascade). Folder organization is Loom-native; no
+  // Fabric dependency. ----
+  const [folders, setFolders] = useState<WorkspaceFolder[]>([]);
+  const [nbSort, setNbSort] = useState<TreeItemSort>('name');
+  const [nbExpanded, setNbExpanded] = useState<Set<string>>(new Set());
+  const [nbFolderDialog, setNbFolderDialog] = useState<
+    | { mode: 'create'; parent: string | null }
+    | { mode: 'rename'; folderId: string; current: string }
+    | null
+  >(null);
+  const [nbFolderName, setNbFolderName] = useState('');
+  const [nbConfirmFolderDelete, setNbConfirmFolderDelete] = useState<WorkspaceFolder | null>(null);
+  const [nbMoveTarget, setNbMoveTarget] = useState<NotebookLite | null>(null);
+  const [nbFolderBusy, setNbFolderBusy] = useState(false);
+  const [nbFolderErr, setNbFolderErr] = useState<string | null>(null);
+  const [nbDragId, setNbDragId] = useState<string | null>(null);
+  const [nbDropTarget, setNbDropTarget] = useState<string | 'root' | null>(null);
   // Pylance/pylsp WS bridge path + VS Code for Web deep-link, resolved from
   // /api/notebook/<id>/lsp (server-only env: LOOM_PYLSP_ENABLED, boundary, AML).
   const [lspWsUrl, setLspWsUrl] = useState<string | null>(null);
@@ -658,6 +695,152 @@ export function NotebookEditor({ item, id }: Props) {
   useEffect(() => {
     if (workspaceId && notebookId) { loadDetail(workspaceId, notebookId); loadJobs(workspaceId, notebookId); }
   }, [workspaceId, notebookId, loadDetail, loadJobs]);
+
+  // ---- Notebooks-pane folders: load + ops (real Cosmos folders engine) ----
+  const loadFolders = useCallback(async (wsId: string) => {
+    try { setFolders(await listFolders(wsId)); }
+    catch { setFolders([]); /* folders are optional — pane still lists notebooks */ }
+  }, []);
+  useEffect(() => { if (workspaceId) loadFolders(workspaceId); else setFolders([]); }, [workspaceId, loadFolders]);
+
+  const refreshNbPane = useCallback(() => {
+    if (!workspaceId) return;
+    void loadList(workspaceId);
+    void loadFolders(workspaceId);
+  }, [workspaceId, loadList, loadFolders]);
+
+  const nbTree = useMemo(() => buildTree(folders, notebooks ?? [], nbSort), [folders, notebooks, nbSort]);
+
+  function openNbCreateFolder(parent: string | null) { setNbFolderDialog({ mode: 'create', parent }); setNbFolderName(''); }
+  async function submitNbFolderDialog() {
+    if (!nbFolderDialog || !workspaceId) return;
+    const name = nbFolderName.trim();
+    if (!name) return;
+    setNbFolderBusy(true); setNbFolderErr(null);
+    try {
+      if (nbFolderDialog.mode === 'create') await createFolder(workspaceId, { name, parent: nbFolderDialog.parent });
+      else await renameFolder(workspaceId, nbFolderDialog.folderId, name);
+      setNbFolderDialog(null);
+      await loadFolders(workspaceId);
+    } catch (e: any) { setNbFolderErr(e?.message || String(e)); }
+    finally { setNbFolderBusy(false); }
+  }
+  async function deleteNbFolder(folderId: string) {
+    if (!workspaceId) return;
+    setNbFolderBusy(true); setNbFolderErr(null);
+    try { await deleteFolder(workspaceId, folderId); refreshNbPane(); }
+    catch (e: any) { setNbFolderErr(e?.message || String(e)); }
+    finally { setNbFolderBusy(false); }
+  }
+  async function moveNbToFolder(nbId: string, folderId: string | null) {
+    if (!workspaceId) return;
+    setNbFolderBusy(true); setNbFolderErr(null);
+    try { await patchWorkspaceItem(workspaceId, nbId, { folderId }); refreshNbPane(); }
+    catch (e: any) { setNbFolderErr(e?.message || String(e)); }
+    finally { setNbFolderBusy(false); }
+  }
+
+  // HTML5 drag-drop: drag a notebook leaf onto a folder branch (or the root
+  // drop strip) to re-file it — same affordance as the workspace folders pane.
+  function onNbDragStart(e: React.DragEvent, nbId: string) {
+    e.dataTransfer.setData('text/plain', `nb:${nbId}`);
+    e.dataTransfer.effectAllowed = 'move';
+    setNbDragId(nbId);
+  }
+  function onNbFolderDragOver(e: React.DragEvent, target: string | 'root') {
+    if (!nbDragId) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setNbDropTarget(target);
+  }
+  async function onNbFolderDrop(e: React.DragEvent, folderId: string | null) {
+    e.preventDefault();
+    const data = e.dataTransfer.getData('text/plain');
+    const dragged = nbDragId;
+    setNbDropTarget(null); setNbDragId(null);
+    const nbId = data?.startsWith('nb:') ? data.slice('nb:'.length) : dragged;
+    if (!nbId) return;
+    const nb = (notebooks || []).find((n) => n.id === nbId);
+    if (!nb || (nb.folderId || null) === folderId) return;
+    await moveNbToFolder(nbId, folderId);
+  }
+
+  // Recursive renderers — branch(folder) + leaf(notebook). Leaf click is an
+  // in-editor selection (setNotebookId), NOT a navigation.
+  const renderNbLeaf = (n: NotebookLite) => (
+    <Menu key={n.id} openOnContext>
+      <MenuTrigger disableButtonEnhancement>
+        <TreeItem itemType="leaf" value={`nb:${n.id}`}>
+          <TreeItemLayout
+            iconBefore={<Notebook20Regular />}
+            onClick={() => setNotebookId(n.id)}
+            {...{ draggable: true, onDragStart: (e: React.DragEvent) => onNbDragStart(e, n.id) } as any}
+          >
+            {notebookId === n.id ? <strong>{n.displayName}</strong> : n.displayName}
+          </TreeItemLayout>
+        </TreeItem>
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList>
+          <MenuItem onClick={() => setNotebookId(n.id)}>Open</MenuItem>
+          <MenuItem onClick={() => setNbMoveTarget(n)}>Move to folder…</MenuItem>
+        </MenuList>
+      </MenuPopover>
+    </Menu>
+  );
+
+  const renderNbFolder = (node: FolderNode<NotebookLite>): JSX.Element | null => {
+    if (!node.folder) return null;
+    const f = node.folder;
+    const count = countDescendants(node);
+    const isExpanded = nbExpanded.has(f.id);
+    const isDrop = nbDropTarget === f.id;
+    return (
+      <Menu key={f.id} openOnContext>
+        <MenuTrigger disableButtonEnhancement>
+          <TreeItem
+            itemType="branch"
+            value={`folder:${f.id}`}
+            open={isExpanded}
+            onOpenChange={(_e, d) => setNbExpanded((prev) => {
+              const nx = new Set(prev); if (d.open) nx.add(f.id); else nx.delete(f.id); return nx;
+            })}
+          >
+            <TreeItemLayout
+              iconBefore={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
+              className={isDrop ? s.nbDragOver : undefined}
+              {...{
+                onDragOver: (e: React.DragEvent) => onNbFolderDragOver(e, f.id),
+                onDragLeave: () => setNbDropTarget((cur) => (cur === f.id ? null : cur)),
+                onDrop: (e: React.DragEvent) => onNbFolderDrop(e, f.id),
+              } as any}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+                <span>{f.name}</span>
+                <Badge appearance="tint" color="informative" size="small">{count}</Badge>
+              </span>
+            </TreeItemLayout>
+            {isExpanded && (
+              <Tree>
+                {node.childFolders.map(renderNbFolder)}
+                {node.childItems.map(renderNbLeaf)}
+                {count === 0 && (
+                  <TreeItem itemType="leaf" value={`folder:${f.id}:empty`}>
+                    <TreeItemLayout><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>(empty)</Caption1></TreeItemLayout>
+                  </TreeItem>
+                )}
+              </Tree>
+            )}
+          </TreeItem>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem onClick={() => openNbCreateFolder(f.id)}>New subfolder…</MenuItem>
+            <MenuItem onClick={() => { setNbFolderDialog({ mode: 'rename', folderId: f.id, current: f.name }); setNbFolderName(f.name); }}>Rename</MenuItem>
+            <MenuItem onClick={() => setNbConfirmFolderDelete(f)}>Delete</MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    );
+  };
 
   // Probe the Pylance/pylsp bridge + VS Code for Web availability for this
   // notebook. Server route reads the gated env (boundary, LOOM_PYLSP_ENABLED,
@@ -1649,16 +1832,133 @@ export function NotebookEditor({ item, id }: Props) {
           </Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && notebooks === null && <Spinner size="tiny" label="Loading…" />}
-          {notebooks && notebooks.length === 0 && !listErr && <Caption1>No notebooks in this workspace.</Caption1>}
-          <Tree aria-label="Notebooks">
-            {(notebooks || []).map((n) => (
-              <TreeItem key={n.id} itemType="leaf" value={n.id} onClick={() => setNotebookId(n.id)}>
-                <TreeItemLayout iconBefore={<Notebook20Regular />}>
-                  {notebookId === n.id ? <strong>{n.displayName}</strong> : n.displayName}
-                </TreeItemLayout>
-              </TreeItem>
-            ))}
-          </Tree>
+          {workspaceId && notebooks && (
+            <>
+              <div className={s.nbPaneToolbar}>
+                <Tooltip content="New folder" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<FolderAdd20Regular />}
+                    onClick={() => openNbCreateFolder(null)} disabled={nbFolderBusy}>Folder</Button>
+                </Tooltip>
+                <div style={{ flex: 1 }} />
+                <Menu>
+                  <MenuTrigger disableButtonEnhancement>
+                    <Tooltip content="Sort notebooks" relationship="label">
+                      <Button size="small" appearance="subtle" icon={<ArrowSort20Regular />}>
+                        {nbSort === 'updated' ? 'Recent' : 'A–Z'}
+                      </Button>
+                    </Tooltip>
+                  </MenuTrigger>
+                  <MenuPopover>
+                    <MenuList>
+                      <MenuItem onClick={() => setNbSort('name')}>Name (A–Z)</MenuItem>
+                      <MenuItem onClick={() => setNbSort('updated')}>Recently updated</MenuItem>
+                    </MenuList>
+                  </MenuPopover>
+                </Menu>
+              </div>
+              {nbFolderErr && (
+                <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalS }}>
+                  <MessageBarBody>{nbFolderErr}</MessageBarBody>
+                </MessageBar>
+              )}
+              {notebooks.length === 0 && folders.length === 0 && !listErr ? (
+                <EmptyState
+                  icon={<Notebook20Regular />}
+                  title="No notebooks yet"
+                  body="Create a notebook, or add a folder to organize them."
+                  primaryAction={{ label: 'New folder', onClick: () => openNbCreateFolder(null) }}
+                />
+              ) : (
+                <>
+                  <Tree aria-label="Notebooks">
+                    {nbTree.childFolders.map(renderNbFolder)}
+                    {nbTree.childItems.map(renderNbLeaf)}
+                  </Tree>
+                  <div
+                    className={`${s.nbRootDrop} ${nbDropTarget === 'root' ? s.nbRootDropActive : ''}`}
+                    onDragOver={(e) => onNbFolderDragOver(e, 'root')}
+                    onDragLeave={() => setNbDropTarget((cur) => (cur === 'root' ? null : cur))}
+                    onDrop={(e) => onNbFolderDrop(e, null)}
+                  >
+                    Drop here to move to root
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {/* New / rename notebook folder */}
+          <Dialog open={!!nbFolderDialog} onOpenChange={(_e, d) => { if (!d.open) setNbFolderDialog(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>{nbFolderDialog?.mode === 'rename' ? 'Rename folder' : 'New folder'}</DialogTitle>
+                <DialogContent>
+                  <Field label="Folder name" required>
+                    <Input value={nbFolderName} onChange={(_e, d) => setNbFolderName(d.value)} placeholder="My folder"
+                      onKeyDown={(e) => { if (e.key === 'Enter') void submitNbFolderDialog(); }} autoFocus />
+                  </Field>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNbFolderDialog(null)}>Cancel</Button>
+                  <Button appearance="primary" disabled={!nbFolderName.trim() || nbFolderBusy} onClick={() => void submitNbFolderDialog()}>
+                    {nbFolderDialog?.mode === 'rename' ? 'Rename' : 'Create'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Confirm delete notebook folder (cascade reparents to root) */}
+          <Dialog open={!!nbConfirmFolderDelete} onOpenChange={(_e, d) => { if (!d.open) setNbConfirmFolderDelete(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Delete folder</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    Delete folder &quot;{nbConfirmFolderDelete?.name}&quot;? Notebooks inside move to the workspace root;
+                    subfolders reparent to the root.
+                  </Caption1>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNbConfirmFolderDelete(null)}>Cancel</Button>
+                  <Button appearance="primary" disabled={nbFolderBusy}
+                    onClick={async () => { if (nbConfirmFolderDelete) await deleteNbFolder(nbConfirmFolderDelete.id); setNbConfirmFolderDelete(null); }}>
+                    Delete
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Move notebook to folder */}
+          <Dialog open={!!nbMoveTarget} onOpenChange={(_e, d) => { if (!d.open) setNbMoveTarget(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Move notebook</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                    <Button appearance="subtle" icon={<FolderArrowRight20Regular />}
+                      onClick={async () => { if (nbMoveTarget) await moveNbToFolder(nbMoveTarget.id, null); setNbMoveTarget(null); }}>
+                      / Workspace root
+                    </Button>
+                    {folders.map((f) => (
+                      <Button key={f.id} appearance="subtle"
+                        icon={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
+                        onClick={async () => { if (nbMoveTarget) await moveNbToFolder(nbMoveTarget.id, f.id); setNbMoveTarget(null); }}>
+                        {f.name}
+                      </Button>
+                    ))}
+                    {folders.length === 0 && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No folders yet. Create one first.</Caption1>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNbMoveTarget(null)}>Cancel</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           {/* Phase 2: Data items pane — Fabric "Explorer" tab equivalent */}
           {notebookId && (

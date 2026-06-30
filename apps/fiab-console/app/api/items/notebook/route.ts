@@ -47,6 +47,10 @@ export async function GET(req: NextRequest) {
         id: r.id,
         displayName: r.displayName,
         description: r.description,
+        // Folder this notebook lives in (null = workspace root). Carried on the
+        // Cosmos doc; surfaced so the editor's Notebooks pane can render the
+        // folder/subfolder tree (reuses the workspace folders engine).
+        folderId: r.folderId ?? null,
         createdAt: r.createdAt,
         updatedAt: r.updatedAt,
         lang: (r.state as any)?.lang || 'python',
