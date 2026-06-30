@@ -996,6 +996,16 @@ export async function createAtlasGlossaryTerm(term: AtlasGlossaryTermPayload): P
       ...(term.glossaryGuid ? { anchor: { glossaryGuid: term.glossaryGuid } } : {}),
     }),
   });
+  // Idempotent: Atlas returns 409 when a term with this name already exists in
+  // the glossary. Resolve the existing term's GUID by name so create-then-apply
+  // (the BFF route's apply flow) and re-creating a known term both succeed
+  // instead of surfacing a spurious conflict.
+  if (res.status === 409) {
+    const hit = (await listGlossaryTerms(term.glossaryGuid)).find(
+      (t) => (t.name || '').toLowerCase() === term.name.toLowerCase(),
+    );
+    if (hit?.guid) return { guid: hit.guid, name: hit.name || term.name };
+  }
   const j = await readJson<any>(res);
   return { guid: j?.guid || j?.id, name: j?.name || term.name };
 }
@@ -1134,6 +1144,130 @@ export async function createGlossaryTerm(payload: {
     glossaryGuid: payload.glossaryGuid,
     raw,
   };
+}
+
+// ------------------------------------------------------------
+// Free-form custom tags via Atlas BUSINESS METADATA (a.k.a. managed
+// attributes — the classic Data Map's structured key/value bag).
+//   Typedef create : POST /datamap/api/atlas/v2/types/typedefs   (businessMetadataDefs)
+//   Typedef update : PUT  /datamap/api/atlas/v2/types/typedefs    (add attributes)
+//   Read def       : GET  /datamap/api/atlas/v2/types/businessmetadatadef/name/{name}
+//   Set on entity  : POST /datamap/api/atlas/v2/entity/guid/{guid}/businessmetadata/{bm}?isOverwrite=true
+//   https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+//
+// Atlas business metadata is schema'd: each key must exist as a string
+// attribute on the business-metadata typedef before a value can be set.
+// ensureBusinessMetadataDef creates the typedef and grows it with any missing
+// attribute keys (idempotent), so a free-form "Custom tags" key/value UI can
+// use arbitrary keys. Needs the Loom UAMI "Data Curator" on the root collection.
+// ------------------------------------------------------------
+
+/** Default business-metadata namespace Loom writes free-form custom tags into. */
+export const LOOM_BUSINESS_METADATA_NAME = 'LoomCustomTags';
+
+/** Normalize a free-form key into a valid Atlas attribute name (letters/digits/_). */
+function businessMetadataAttrName(key: string): string {
+  return (key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'tag';
+}
+
+function buildBmAttributeDef(name: string): Record<string, unknown> {
+  return {
+    name,
+    typeName: 'string',
+    isOptional: true,
+    cardinality: 'SINGLE',
+    valuesMinCount: 0,
+    valuesMaxCount: 1,
+    isUnique: false,
+    isIndexable: false,
+    options: { maxStrLength: '500', applicableEntityTypes: '["Referenceable"]' },
+  };
+}
+
+/** GET a business-metadata typedef by name, or null when it does not exist. */
+async function getBusinessMetadataDef(bmName: string): Promise<any | null> {
+  const res = await purviewFetch(
+    `/datamap/api/atlas/v2/types/businessmetadatadef/name/${encodeURIComponent(bmName)}`,
+  );
+  if (res.status === 404) return null;
+  return readJson<any>(res);
+}
+
+/**
+ * Ensure a business-metadata typedef named `bmName` exists and carries every
+ * requested attribute key (as an optional string). Creates the def when absent
+ * and PUTs an updated def to add missing attributes. Idempotent; swallows 409s.
+ */
+export async function ensureBusinessMetadataDef(
+  attributeKeys: string[],
+  bmName: string = LOOM_BUSINESS_METADATA_NAME,
+): Promise<void> {
+  purviewAccount();
+  const wantKeys = [...new Set((attributeKeys || []).map(businessMetadataAttrName).filter(Boolean))];
+  let existing: any = null;
+  try { existing = await getBusinessMetadataDef(bmName); } catch { /* treat as missing → create */ }
+
+  if (!existing) {
+    const attributeDefs = (wantKeys.length ? wantKeys : ['note']).map(buildBmAttributeDef);
+    const body = {
+      businessMetadataDefs: [
+        { category: 'BUSINESS_METADATA', name: bmName, typeVersion: '1.0', attributeDefs },
+      ],
+    };
+    try {
+      const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      if (res.status !== 409) await readJson(res);
+    } catch (e: any) {
+      if (!(e instanceof PurviewError && e.status === 409)) throw e;
+    }
+    return;
+  }
+
+  const have = new Set<string>((existing.attributeDefs || []).map((a: any) => a?.name));
+  const missing = wantKeys.filter((k) => !have.has(k));
+  if (!missing.length) return;
+  const updated = {
+    ...existing,
+    attributeDefs: [...(existing.attributeDefs || []), ...missing.map(buildBmAttributeDef)],
+  };
+  const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs', {
+    method: 'PUT',
+    body: JSON.stringify({ businessMetadataDefs: [updated] }),
+  });
+  await readJson(res);
+}
+
+/**
+ * Set free-form custom tags (business-metadata attributes) on a catalog asset
+ * (Atlas entity) by GUID. Ensures the typedef + attribute keys exist first, then
+ *   POST /datamap/api/atlas/v2/entity/guid/{guid}/businessmetadata/{bm}?isOverwrite=true
+ *   body: { <attr>: <value>, ... }
+ * Atlas returns 204 on success. Empty `tags` is a no-op.
+ */
+export async function setBusinessMetadata(
+  guid: string,
+  tags: Record<string, string>,
+  bmName: string = LOOM_BUSINESS_METADATA_NAME,
+): Promise<void> {
+  purviewAccount();
+  if (!guid) throw new PurviewError(400, null, 'guid is required');
+  const entries = Object.entries(tags || {})
+    .map(([k, v]) => [businessMetadataAttrName(k), String(v ?? '')] as const)
+    .filter(([k]) => !!k);
+  if (!entries.length) return;
+  await ensureBusinessMetadataDef(entries.map(([k]) => k), bmName);
+  const attributes: Record<string, string> = {};
+  for (const [k, v] of entries) attributes[k] = v;
+  const res = await purviewFetch(
+    `/datamap/api/atlas/v2/entity/guid/${encodeURIComponent(guid)}/businessmetadata/${encodeURIComponent(bmName)}`,
+    { method: 'POST', query: { isOverwrite: 'true' }, body: JSON.stringify(attributes) },
+  );
+  if (res.ok || res.status === 204) return;
+  const t = await res.text();
+  throw new PurviewError(res.status, t, `setBusinessMetadata failed: ${t || res.statusText}`);
 }
 
 // ============================================================

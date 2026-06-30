@@ -3,7 +3,7 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Spinner, Badge, Caption1, Input, Textarea, Button,
+  Spinner, Badge, Caption1, Subtitle2, Input, Textarea, Button,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Dropdown, Option,
@@ -39,6 +39,9 @@ interface PurviewSyncState {
 interface ScanSource { id: string; name: string; kind?: string }
 interface ScanDef { id: string; name: string; kind?: string }
 
+interface SystemClassification { name: string; classificationName: string; displayName: string; description?: string }
+interface SystemGroup { id: string; label: string; description: string; classifications: SystemClassification[] }
+
 const useStyles = makeStyles({
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   banner: { marginBottom: tokens.spacingVerticalL },
@@ -47,6 +50,11 @@ const useStyles = makeStyles({
   // MessageBars so they break onto the next line instead of forcing horizontal
   // overflow on narrow viewports.
   bannerBody: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  groupList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  group: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  groupHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  groupDesc: { color: tokens.colorNeutralForeground3 },
+  chipWrap: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
 });
 
 const CLASSIFICATION_OPTIONS = ['PII', 'PHI', 'PCI', 'Confidential', 'Internal', 'Public', 'Restricted', 'Other'];
@@ -77,6 +85,11 @@ export default function ClassificationsPage() {
   const [syncing, setSyncing] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
 
+  // Built-in (Purview system) classifications — read-only catalog + dropdown source.
+  const [systemGroups, setSystemGroups] = useState<SystemGroup[] | null>(null);
+  const [systemErr, setSystemErr] = useState<string | null>(null);
+  const [systemLoading, setSystemLoading] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -90,7 +103,25 @@ export default function ClassificationsPage() {
     finally { setLoading(false); }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  const loadSystem = useCallback(async () => {
+    setSystemLoading(true);
+    setSystemErr(null);
+    try {
+      const r = await clientFetch('/api/governance/classifications/system');
+      const j = await r.json();
+      if (!j.ok) { setSystemErr(j.error || `HTTP ${r.status}`); setSystemGroups([]); return; }
+      setSystemGroups(j.groups || []);
+    } catch (e: any) { setSystemErr(e?.message || String(e)); setSystemGroups([]); }
+    finally { setSystemLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); loadSystem(); }, [load, loadSystem]);
+
+  const systemFlat = useMemo(
+    () => (systemGroups || []).flatMap((g) => g.classifications),
+    [systemGroups],
+  );
+  const classDisplay = systemFlat.find((c) => c.classificationName === newClassification)?.displayName || newClassification;
 
   async function create() {
     if (!newName.trim() || !newMatchValue.trim()) { setActionErr('Name and match value required'); return; }
@@ -228,6 +259,46 @@ export default function ClassificationsPage() {
         {loading && !error ? <Spinner label='Loading rules...' /> : <LoomDataTable columns={columns} rows={filtered} getRowId={(r) => r.id} empty={q ? `No rules match "${q}".` : 'No classification rules defined yet. Click "Add rule" to create your first one.'} ariaLabel='Classification rules' />}
       </Section>
 
+      <Section
+        title='Built-in classifications'
+        actions={<Button icon={<ArrowSync24Regular />} onClick={loadSystem} disabled={systemLoading || !purviewConfigured}>Refresh</Button>}
+      >
+        <SectionExplainer>
+          Microsoft Purview ships ~200 built-in <strong>system classifications</strong> (sensitive-information types) — government IDs, financial, personal (PII), security and health. They are applied automatically when a scan runs, and are also selectable as the target when you author a custom rule above. This catalog is read-only.
+        </SectionExplainer>
+        {!purviewConfigured ? (
+          <MessageBar intent='warning'>
+            <MessageBarBody className={s.bannerBody}>
+              <MessageBarTitle>Microsoft Purview not provisioned</MessageBarTitle>
+              Built-in system classifications are read live from Microsoft Purview. Set <code>LOOM_PURVIEW_ACCOUNT</code> and grant the Console UAMI <strong>Data Source Administrator</strong> to view them.
+            </MessageBarBody>
+          </MessageBar>
+        ) : systemErr ? (
+          <MessageBar intent='error'><MessageBarBody className={s.bannerBody}><MessageBarTitle>Could not load built-in classifications</MessageBarTitle>{systemErr}</MessageBarBody></MessageBar>
+        ) : (systemGroups === null || systemLoading) ? (
+          <Spinner label='Loading built-in classifications…' />
+        ) : systemGroups.length === 0 ? (
+          <Caption1>No built-in classifications were returned by this Microsoft Purview account.</Caption1>
+        ) : (
+          <div className={s.groupList}>
+            {systemGroups.map((g) => (
+              <div key={g.id} className={s.group}>
+                <div className={s.groupHead}>
+                  <Subtitle2>{g.label}</Subtitle2>
+                  <Badge appearance='tint' color='informative' size='small'>{g.classifications.length}</Badge>
+                </div>
+                <Caption1 className={s.groupDesc}>{g.description}</Caption1>
+                <div className={s.chipWrap}>
+                  {g.classifications.map((c) => (
+                    <Badge key={c.name} appearance='outline' color='brand' title={c.description || c.classificationName}>{c.displayName}</Badge>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+
       <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
         <DialogSurface>
           <DialogBody>
@@ -237,7 +308,11 @@ export default function ClassificationsPage() {
                 <div><Caption1 className={a.fieldLabel}>Rule name</Caption1><Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder='e.g. Email columns' className={a.fullWidth} /></div>
                 <div><Caption1 className={a.fieldLabel}>Match strategy</Caption1><Dropdown value={MATCH_STRATEGY_OPTIONS.find((m) => m.value === newMatchStrategy)?.label || newMatchStrategy} selectedOptions={[newMatchStrategy]} onOptionSelect={(_, d) => setNewMatchStrategy(d.optionValue || 'column-name-regex')} className={a.fullWidth}>{MATCH_STRATEGY_OPTIONS.map((opt) => <Option key={opt.value} value={opt.value}>{opt.label}</Option>)}</Dropdown></div>
                 <div><Caption1 className={a.fieldLabel}>Pattern or value{newMatchStrategy === 'column-name-regex' && ' (regex for column names)'}{newMatchStrategy === 'data-regex' && ' (regex for data)'}{newMatchStrategy === 'dictionary' && ' (comma-separated words)'}</Caption1><Textarea value={newMatchValue} onChange={(_, d) => setNewMatchValue(d.value)} placeholder={newMatchStrategy === 'column-name-regex' ? '.*email.*' : newMatchStrategy === 'data-regex' ? '\\d{3}-\\d{2}-\\d{4}' : 'word1, word2, word3'} resize='vertical' className={a.fullWidth} /></div>
-                <div><Caption1 className={a.fieldLabel}>Classification</Caption1><Dropdown value={newClassification} selectedOptions={[newClassification]} onOptionSelect={(_, d) => setNewClassification(d.optionValue || 'PII')} className={a.fullWidth}>{CLASSIFICATION_OPTIONS.map((opt) => <Option key={opt} value={opt}>{opt}</Option>)}</Dropdown></div>
+                <div><Caption1 className={a.fieldLabel}>Classification</Caption1><Dropdown value={classDisplay} selectedOptions={[newClassification]} onOptionSelect={(_, d) => setNewClassification(d.optionValue || 'PII')} className={a.fullWidth}>
+                  {CLASSIFICATION_OPTIONS.map((opt) => <Option key={opt} value={opt}>{opt}</Option>)}
+                  {systemFlat.length > 0 && <Option key='__system_header' value='__system_header' disabled>— Built-in (Microsoft Purview system) —</Option>}
+                  {systemFlat.map((c) => <Option key={c.classificationName} value={c.classificationName} text={c.displayName}>{c.displayName}</Option>)}
+                </Dropdown></div>
               </div>
             </DialogContent>
             <DialogActions>

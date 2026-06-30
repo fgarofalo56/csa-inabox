@@ -33,6 +33,8 @@ interface Props { type: string; id: string; }
 
 interface TaxonomyEntry { name: string; sensitivity?: string; color?: string; description?: string; }
 
+interface GlossaryTerm { guid: string; name: string; glossaryGuid?: string; longDescription?: string; status?: string; }
+
 const useStyles = makeStyles({
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
   loading: { display: 'flex', justifyContent: 'center', padding: 'var(--loom-space-4, 16px)' },
@@ -54,6 +56,12 @@ const useStyles = makeStyles({
   optionDesc: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   link: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: 600, verticalAlign: 'middle' },
+  glossary: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM,
+    paddingTop: tokens.spacingVerticalM,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  glossaryHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
 });
 
 export function ClassificationPane({ type, id }: Props) {
@@ -67,6 +75,13 @@ export function ClassificationPane({ type, id }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+
+  // Glossary terms — attach standardized Purview business terms to this asset.
+  const [glossaryTerms, setGlossaryTerms] = useState<GlossaryTerm[] | null>(null);
+  const [selectedTerms, setSelectedTerms] = useState<string[]>([]); // term GUIDs
+  const [assetGuid, setAssetGuid] = useState<string | null>(null);
+  const [glossaryBusy, setGlossaryBusy] = useState(false);
+  const [glossaryMsg, setGlossaryMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -83,6 +98,22 @@ export function ClassificationPane({ type, id }: Props) {
       setSelected(data.classifications || []);
       setPurviewConfigured(!!data.purviewConfigured);
       setHasAsset(!!data.hasPurviewAsset);
+
+      // Best-effort glossary surface (never blocks the classifications pane).
+      // Only meaningful when Purview is configured; the apply call needs the
+      // item's Atlas entity GUID, resolved from the item record below.
+      if (data.purviewConfigured) {
+        try {
+          const gr = await fetch('/api/catalog/glossary');
+          const gj = await gr.json().catch(() => ({}));
+          setGlossaryTerms(gr.ok && gj?.ok ? (gj.terms || []) : []);
+        } catch { setGlossaryTerms([]); }
+        try {
+          const ir = await fetch(`/api/items/${type}/${id}`);
+          const ij = await ir.json().catch(() => ({}));
+          setAssetGuid(ir.ok ? (ij?.state?.purviewAssetGuid || ij?.state?.purviewGuid || null) : null);
+        } catch { /* leave assetGuid null → honest gate on apply */ }
+      }
     } catch (e: any) {
       setError(e?.message || 'Failed to load classifications');
     } finally {
@@ -123,6 +154,39 @@ export function ClassificationPane({ type, id }: Props) {
       setError(e?.message || 'Failed to save classifications');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const applyGlossary = async () => {
+    if (!assetGuid) {
+      setGlossaryMsg({ intent: 'warning', text: 'This item is not yet cataloged in Microsoft Purview, so terms cannot be attached. It is registered after the item is onboarded/scanned.' });
+      return;
+    }
+    const chosen = (glossaryTerms || []).filter((t) => selectedTerms.includes(t.guid));
+    if (!chosen.length) { setGlossaryMsg({ intent: 'warning', text: 'Select at least one glossary term.' }); return; }
+    setGlossaryBusy(true); setGlossaryMsg(null);
+    try {
+      let applied = 0;
+      for (const t of chosen) {
+        // Reuse the existing glossary BFF route: create-or-resolve the term by
+        // name (idempotent) and apply it to this asset's Atlas entity.
+        const res = await fetch('/api/catalog/glossary', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ term: { name: t.name, glossaryGuid: t.glossaryGuid }, applyTo: { entityGuid: assetGuid } }),
+        });
+        const j = await res.json().catch(() => ({}));
+        if (!res.ok || !j?.ok) {
+          setGlossaryMsg({ intent: 'error', text: j?.error || `Failed to apply "${t.name}" (${res.status})` });
+          return;
+        }
+        if (j.applied) applied += 1;
+      }
+      setGlossaryMsg({ intent: 'success', text: `Applied ${applied || chosen.length} glossary term${(applied || chosen.length) === 1 ? '' : 's'} to this asset in Microsoft Purview.` });
+    } catch (e: any) {
+      setGlossaryMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally {
+      setGlossaryBusy(false);
     }
   };
 
@@ -211,6 +275,51 @@ export function ClassificationPane({ type, id }: Props) {
             <Button appearance="subtle" onClick={() => setSelected([])} disabled={busy}>
               Clear all
             </Button>
+          )}
+        </div>
+      )}
+
+      {purviewConfigured && (
+        <div className={styles.glossary}>
+          <div className={styles.glossaryHead}>
+            <Caption1>Glossary terms</Caption1>
+          </div>
+          {glossaryMsg && (
+            <MessageBar intent={glossaryMsg.intent}><MessageBarBody>{glossaryMsg.text}</MessageBarBody></MessageBar>
+          )}
+          {glossaryTerms && glossaryTerms.length > 0 ? (
+            <>
+              <Field
+                hint={assetGuid
+                  ? 'Attach standardized Microsoft Purview business terms to this asset.'
+                  : 'Available once this item is cataloged in Microsoft Purview (after onboarding/scan).'}
+              >
+                <Dropdown
+                  multiselect
+                  placeholder="Select glossary terms…"
+                  value={glossaryTerms.filter((t) => selectedTerms.includes(t.guid)).map((t) => t.name).join(', ')}
+                  selectedOptions={selectedTerms}
+                  onOptionSelect={(_, d) => setSelectedTerms(d.selectedOptions || [])}
+                  disabled={!assetGuid || glossaryBusy}
+                >
+                  {glossaryTerms.map((t) => (
+                    <Option key={t.guid} value={t.guid} text={t.name} title={t.longDescription || undefined}>{t.name}</Option>
+                  ))}
+                </Dropdown>
+              </Field>
+              <div className={styles.actions}>
+                <Button appearance="primary" onClick={applyGlossary} disabled={glossaryBusy || !assetGuid || selectedTerms.length === 0}>
+                  {glossaryBusy ? 'Applying…' : 'Apply terms'}
+                </Button>
+                <a className={styles.link} href="/governance/glossary" target="_blank" rel="noreferrer">
+                  Manage glossary <Open16Regular />
+                </a>
+              </div>
+            </>
+          ) : (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              No glossary terms defined. Create them in <a className={styles.link} href="/governance/glossary" target="_blank" rel="noreferrer">Governance → Glossary <Open16Regular /></a>, then return here to attach them.
+            </Caption1>
           )}
         </div>
       )}
