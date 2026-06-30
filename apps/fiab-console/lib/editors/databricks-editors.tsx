@@ -38,6 +38,7 @@ import {
   CloudLink20Regular, PlugConnected20Regular,
   History20Regular, ShieldTask20Regular, Link20Regular,
   ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
+  BuildingShop20Regular, ShieldLock20Regular, People20Regular, Star20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -2541,6 +2542,370 @@ function ModelVersionsDialog({ open, onOpenChange, fullName, onGrants }: {
   );
 }
 
+// ============================================================
+// Databricks Marketplace (consumer) — wave c4 (completes UC feature coverage).
+// Read-mostly browse of listings + this consumer's installations over the
+// documented consumer REST (/api/databricks/unity-catalog/marketplace). An
+// installed listing materializes as a read-only shared catalog (Delta Sharing).
+// Installing is the consumer "Get instant access" acceptance flow — surfaced as
+// an honest note, not a half-working button (per no-vaporware.md).
+// ============================================================
+function fmtEpoch(v: unknown): string {
+  const n = typeof v === 'number' ? v : Number(v);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  try { return new Date(n).toLocaleString(); } catch { return ''; }
+}
+
+function MarketplaceDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  type MpTab = 'browse' | 'installed';
+  const [tab, setTab] = useState<MpTab>('browse');
+  const [loading, setLoading] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [listings, setListings] = useState<any[]>([]);
+  const [installations, setInstallations] = useState<any[]>([]);
+  const [q, setQ] = useState('');
+  const [onlyFree, setOnlyFree] = useState(false);
+  const [onlyStaffPick, setOnlyStaffPick] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      if (tab === 'installed') {
+        const r = await fetch('/api/databricks/unity-catalog/marketplace?installations=true');
+        const j = await r.json();
+        if (j.gated) { setGate(j.error); return; }
+        if (!j.ok) { setErr(j.error || 'failed to list installations'); return; }
+        setInstallations(Array.isArray(j.installations) ? j.installations : []);
+      } else {
+        const p = new URLSearchParams();
+        if (q.trim()) p.set('q', q.trim());
+        if (onlyFree) p.set('is_free', 'true');
+        if (onlyStaffPick) p.set('is_staff_pick', 'true');
+        const r = await fetch(`/api/databricks/unity-catalog/marketplace?${p.toString()}`);
+        const j = await r.json();
+        if (j.gated) { setGate(j.error); return; }
+        if (!j.ok) { setErr(j.error || 'failed to list listings'); return; }
+        setListings(Array.isArray(j.listings) ? j.listings : []);
+      }
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [tab, q, onlyFree, onlyStaffPick]);
+  useEffect(() => { if (open) void load(); }, [open, tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '1100px', width: '95vw' }}>
+        <DialogBody>
+          <DialogTitle>Databricks Marketplace</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Browse open Marketplace data products (real consumer REST). Installing a listing materializes it as a
+                read-only <b>shared catalog</b> via Delta Sharing. Browsing &amp; installing needs the
+                {' '}<code>USE MARKETPLACE ASSETS</code> privilege.
+              </Caption1>
+
+              <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as MpTab)} size="small">
+                <Tab value="browse" icon={<BuildingShop20Regular />}>Browse listings</Tab>
+                <Tab value="installed" icon={<ArrowDownload20Regular />}>Installed</Tab>
+              </TabList>
+
+              {tab === 'browse' && (
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  <Field label="Search listings" style={{ minWidth: 260, flex: 1 }}>
+                    <Input value={q} onChange={(_, d) => setQ(d.value)} placeholder="weather, retail, demographics…"
+                      onKeyDown={(e) => { if (e.key === 'Enter') void load(); }} contentBefore={<Eye20Regular />} />
+                  </Field>
+                  <Switch label="Free only" checked={onlyFree} onChange={(_, d) => setOnlyFree(d.checked)} />
+                  <Switch label="Staff picks" checked={onlyStaffPick} onChange={(_, d) => setOnlyStaffPick(d.checked)} />
+                  <Button appearance="primary" icon={<Eye20Regular />} disabled={loading} onClick={() => void load()}>Search</Button>
+                  {loading && <Spinner size="tiny" />}
+                  <Badge appearance="outline">{listings.length} listing(s)</Badge>
+                </div>
+              )}
+              {tab === 'installed' && (
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
+                  {loading && <Spinner size="tiny" />}
+                  <Badge appearance="outline">{installations.length} installation(s)</Badge>
+                </div>
+              )}
+
+              {gate && (
+                <MessageBar intent="warning"><MessageBarBody>
+                  <MessageBarTitle>Marketplace unavailable</MessageBarTitle>{gate}
+                </MessageBarBody></MessageBar>
+              )}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+
+              {tab === 'browse' && !gate && (
+                <div style={{ overflow: 'auto', maxHeight: '420px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                  <Table size="small" aria-label="Marketplace listings">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Listing</TableHeaderCell>
+                      <TableHeaderCell>Provider</TableHeaderCell>
+                      <TableHeaderCell>Categories</TableHeaderCell>
+                      <TableHeaderCell>Type</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {listings.length === 0 && <TableRow><TableCell colSpan={4}><Caption1>No listings visible to this consumer.</Caption1></TableCell></TableRow>}
+                      {listings.map((l, i) => (
+                        <TableRow key={l.id || i}>
+                          <TableCell>
+                            <div style={{ display: 'flex', flexDirection: 'column' }}>
+                              <span style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
+                                <b>{String(l.name || l.id || 'listing')}</b>
+                                {l.is_free && <Badge appearance="tint" color="success">Free</Badge>}
+                                {l.is_staff_pick && <Badge appearance="tint" color="brand" icon={<Star20Regular />}>Staff pick</Badge>}
+                              </span>
+                              {l.subtitle && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{String(l.subtitle)}</Caption1>}
+                            </div>
+                          </TableCell>
+                          <TableCell>{String(l.provider_name || '')}{l.provider_region ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}> · {String(l.provider_region)}</Caption1> : null}</TableCell>
+                          <TableCell>
+                            <span style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+                              {(Array.isArray(l.categories) ? l.categories : []).slice(0, 3).map((c: string) => <Badge key={c} appearance="outline">{c}</Badge>)}
+                            </span>
+                          </TableCell>
+                          <TableCell>{l.listing_type ? <Badge appearance="tint" color={String(l.listing_type).toUpperCase() === 'PERSONALIZED' ? 'warning' : 'informative'}>{String(l.listing_type)}</Badge> : ''}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              {tab === 'installed' && !gate && (
+                <div style={{ overflow: 'auto', maxHeight: '420px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                  <Table size="small" aria-label="Marketplace installations">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Listing</TableHeaderCell>
+                      <TableHeaderCell>Shared catalog</TableHeaderCell>
+                      <TableHeaderCell>Share</TableHeaderCell>
+                      <TableHeaderCell>Status</TableHeaderCell>
+                      <TableHeaderCell>Installed</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {installations.length === 0 && <TableRow><TableCell colSpan={5}><Caption1>No installed data products.</Caption1></TableCell></TableRow>}
+                      {installations.map((ins, i) => (
+                        <TableRow key={ins.id || i}>
+                          <TableCell><b>{String(ins.listing_name || ins.listing_id || '')}</b></TableCell>
+                          <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{String(ins.catalog_name || '')}</span></TableCell>
+                          <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{String(ins.share_name || '')}</span></TableCell>
+                          <TableCell>{ins.status ? <Badge appearance="filled" color={String(ins.status).toUpperCase().includes('INSTALL') ? 'success' : 'informative'}>{String(ins.status)}</Badge> : ''}</TableCell>
+                          <TableCell>{fmtEpoch(ins.installed_on)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              <MessageBar intent="info"><MessageBarBody>
+                Installing a listing is the consumer <b>“Get instant access”</b> acceptance flow
+                (<code>POST /api/2.1/marketplace-consumer/listings/&#123;id&#125;/installations</code> with the listing's accepted-terms
+                version). Once installed, the data product appears above as a read-only <b>shared catalog</b> and as a provider in the
+                Delta Sharing surface — query it like any other Unity Catalog catalog.
+              </MessageBarBody></MessageBar>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={loading} onClick={() => void load()}>Refresh</Button>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// Clean Rooms — wave c4 (completes UC feature coverage). Read surface: list
+// clean rooms + a detail view (collaborators + assets) over the documented
+// stable REST (/api/databricks/unity-catalog/clean-rooms). Create + CLEAN ROOM
+// TASK DDL are honest notes (Public-Preview / cross-org handshake flows).
+// ============================================================
+function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
+  const [loading, setLoading] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [rooms, setRooms] = useState<any[]>([]);
+  const [selected, setSelected] = useState<string | null>(null);
+  const [detail, setDetail] = useState<any>(null);
+  const [assets, setAssets] = useState<any[]>([]);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const loadList = useCallback(async () => {
+    setLoading(true); setErr(null); setGate(null); setDetail(null); setAssets([]); setSelected(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/clean-rooms');
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'failed to list clean rooms'); return; }
+      setRooms(Array.isArray(j.cleanRooms) ? j.cleanRooms : []);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { if (open) void loadList(); }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const openRoom = useCallback(async (name: string) => {
+    setSelected(name); setDetailLoading(true); setDetail(null); setAssets([]); setErr(null);
+    try {
+      const r = await fetch(`/api/databricks/unity-catalog/clean-rooms?name=${encodeURIComponent(name)}&assets=true`);
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'failed to load clean room'); return; }
+      setDetail(j.cleanRoom || null);
+      setAssets(Array.isArray(j.assets) ? j.assets : []);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setDetailLoading(false); }
+  }, []);
+
+  const statusColor = (st: string): 'success' | 'warning' | 'danger' | 'informative' => {
+    const s = (st || '').toUpperCase();
+    if (s === 'ACTIVE') return 'success';
+    if (s.includes('FAIL') || s === 'DELETED') return 'danger';
+    if (s.includes('PROVISION') || s.includes('PENDING')) return 'warning';
+    return 'informative';
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '1120px', width: '95vw' }}>
+        <DialogBody>
+          <DialogTitle>Clean rooms — Unity Catalog</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                A clean room is a secure, privacy-safe environment where collaborators run approved workloads on each other's data
+                without exposing the underlying rows. Real Clean Rooms REST — list + collaborators + shared assets.
+              </Caption1>
+
+              {gate && (
+                <MessageBar intent="warning"><MessageBarBody>
+                  <MessageBarTitle>Clean rooms unavailable</MessageBarTitle>{gate}
+                </MessageBarBody></MessageBar>
+              )}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+
+              {!gate && (
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'flex-start' }}>
+                  {/* Left: room list */}
+                  <div style={{ width: 320, flexShrink: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'auto', maxHeight: '440px' }}>
+                    <div style={{ padding: tokens.spacingVerticalS, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Clean rooms ({rooms.length})</Caption1>
+                      {loading && <Spinner size="tiny" />}
+                    </div>
+                    <Divider />
+                    {rooms.length === 0 && !loading && (
+                      <div style={{ padding: tokens.spacingVerticalM }}><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No clean rooms in this metastore.</Caption1></div>
+                    )}
+                    {rooms.map((r) => (
+                      <div key={r.name} role="button" tabIndex={0}
+                        onClick={() => void openRoom(r.name)}
+                        onKeyDown={(e) => { if (e.key === 'Enter') void openRoom(r.name); }}
+                        style={{
+                          padding: tokens.spacingVerticalS, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2,
+                          backgroundColor: selected === r.name ? tokens.colorNeutralBackground1Selected : 'transparent',
+                          borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
+                        }}>
+                        <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+                          <ShieldLock20Regular />
+                          <b style={{ fontSize: tokens.fontSizeBase200 }}>{String(r.name)}</b>
+                        </span>
+                        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' }}>
+                          {r.status && <Badge size="small" appearance="filled" color={statusColor(String(r.status))}>{String(r.status)}</Badge>}
+                          {Array.isArray(r.collaborators) && r.collaborators.length > 0 && (
+                            <Badge size="small" appearance="outline" icon={<People20Regular />}>{r.collaborators.length}</Badge>
+                          )}
+                          {r.region && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{String(r.region)}</Caption1>}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Right: detail */}
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {!selected && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Select a clean room to view its collaborators and shared assets.</Caption1>}
+                    {detailLoading && <Spinner size="tiny" label="Loading clean room…" />}
+                    {detail && !detailLoading && (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <Subtitle2>{String(detail.name)}</Subtitle2>
+                          {detail.status && <Badge appearance="filled" color={statusColor(String(detail.status))}>{String(detail.status)}</Badge>}
+                          {detail.owner && <Badge appearance="outline">owner: {String(detail.owner)}</Badge>}
+                          {detail.cloud_vendor && <Badge appearance="outline">{String(detail.cloud_vendor)}{detail.region ? ` · ${String(detail.region)}` : ''}</Badge>}
+                        </div>
+                        {detail.comment && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{String(detail.comment)}</Caption1>}
+                        {detail.created_at && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>created {fmtEpoch(detail.created_at)}{detail.creator ? ` by ${String(detail.creator)}` : ''}</Caption1>}
+
+                        <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Collaborators</Subtitle2>
+                        <div style={{ overflow: 'auto', maxHeight: '180px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                          <Table size="small" aria-label="Clean room collaborators">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Alias</TableHeaderCell>
+                              <TableHeaderCell>Organization</TableHeaderCell>
+                              <TableHeaderCell>Metastore / invite</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {(detail.collaborators || []).length === 0 && <TableRow><TableCell colSpan={3}><Caption1>No collaborators listed.</Caption1></TableCell></TableRow>}
+                              {(detail.collaborators || []).map((c: any, i: number) => (
+                                <TableRow key={c.collaborator_alias || c.global_metastore_id || i}>
+                                  <TableCell><b>{String(c.collaborator_alias || c.display_name || '')}</b></TableCell>
+                                  <TableCell>{String(c.organization_name || c.display_name || '')}</TableCell>
+                                  <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase100 }}>{String(c.global_metastore_id || c.invite_recipient_email || '')}</span></TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+
+                        <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Shared assets ({assets.length})</Subtitle2>
+                        <div style={{ overflow: 'auto', maxHeight: '200px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                          <Table size="small" aria-label="Clean room assets">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Asset</TableHeaderCell>
+                              <TableHeaderCell>Type</TableHeaderCell>
+                              <TableHeaderCell>Owner</TableHeaderCell>
+                              <TableHeaderCell>Status</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {assets.length === 0 && <TableRow><TableCell colSpan={4}><Caption1>No assets shared into this room (or not visible to this collaborator).</Caption1></TableCell></TableRow>}
+                              {assets.map((a, i) => (
+                                <TableRow key={a.name || i}>
+                                  <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{String(a.name || '')}</span></TableCell>
+                                  <TableCell>{a.asset_type ? <Badge appearance="tint" color="brand">{String(a.asset_type)}</Badge> : ''}</TableCell>
+                                  <TableCell>{String(a.owner_collaborator_alias || '')}</TableCell>
+                                  <TableCell>{a.status ? <Badge appearance="outline">{String(a.status)}</Badge> : ''}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <MessageBar intent="info"><MessageBarBody>
+                Creating a clean room (<code>POST /api/2.0/clean-rooms</code>) needs each collaborator's
+                {' '}<code>global_metastore_id</code> (a cross-organization handshake), and running workloads uses
+                {' '}<b>clean-room tasks</b> (<code>CREATE / MODIFY / EXECUTE CLEAN ROOM TASK</code> — SQL DDL run as notebook jobs on
+                clean-room-scoped compute). Both are Public-Preview flows; Loom surfaces clean rooms, collaborators &amp; assets read-only.
+              </MessageBarBody></MessageBar>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={loading} onClick={() => void loadList()}>Refresh</Button>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // Unity Catalog WRITE dialog open-state (create catalog/schema/table + grants).
@@ -2571,6 +2936,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [ucModelOpen, setUcModelOpen] = useState(false);
   const [ucModelTarget, setUcModelTarget] = useState<string | null>(null);
   const [ucGrantSeed, setUcGrantSeed] = useState<{ securable: UcSecurable; fullName: string } | null>(null);
+  // UC feature coverage (wave c4): Databricks Marketplace (consumer browse +
+  // installations) and Clean Rooms (list + collaborators + assets).
+  const [ucMarketplaceOpen, setUcMarketplaceOpen] = useState(false);
+  const [ucCleanRoomsOpen, setUcCleanRoomsOpen] = useState(false);
   // Lazy per-table tag cache for the UC tree chips (full_name → tag pairs).
   const [tagsByTable, setTagsByTable] = useState<Record<string, { key: string; value: string }[]>>({});
   // AI functions helper (sentiment/classify/translate/summarize/extract).
@@ -3408,6 +3777,12 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             </Tooltip>
             <Tooltip content="Audit & system tables (access audit · query history · billing · data classification · data quality)" relationship="label">
               <Button size="small" appearance="outline" icon={<ShieldTask20Regular />} onClick={() => setUcAuditOpen(true)}>Audit &amp; system</Button>
+            </Tooltip>
+            <Tooltip content="Databricks Marketplace (browse listings · installed shared catalogs)" relationship="label">
+              <Button size="small" appearance="outline" icon={<BuildingShop20Regular />} onClick={() => setUcMarketplaceOpen(true)}>Marketplace</Button>
+            </Tooltip>
+            <Tooltip content="Clean rooms (privacy-safe collaboration · collaborators · shared assets)" relationship="label">
+              <Button size="small" appearance="outline" icon={<ShieldLock20Regular />} onClick={() => setUcCleanRoomsOpen(true)}>Clean rooms</Button>
             </Tooltip>
             <Tooltip content="Drop object (UC REST)" relationship="label">
               <Button size="small" appearance="outline" icon={<Delete20Regular />} onClick={() => setUcDropOpen(true)} aria-label="Drop object" />
@@ -4358,6 +4733,15 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             warehouseId={warehouseId}
             catalog={activeCatalog}
             schema={activeSchema}
+          />
+
+          <MarketplaceDialog
+            open={ucMarketplaceOpen}
+            onOpenChange={setUcMarketplaceOpen}
+          />
+          <CleanRoomsDialog
+            open={ucCleanRoomsOpen}
+            onOpenChange={setUcCleanRoomsOpen}
           />
 
           <AiFunctionsHelper

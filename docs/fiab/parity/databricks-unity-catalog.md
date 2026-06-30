@@ -128,6 +128,8 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 | F5 | Delta Sharing (shares / recipients / providers) | ❌ MISSING | not surfaced |
 | F6 | Workspace-catalog bindings management | ❌ MISSING | not surfaced |
 | F7 | Insights / monitoring / quality (Lakehouse Monitoring) | ❌ MISSING | not surfaced |
+| F8 | **Databricks Marketplace** (browse listings · installed shared catalogs) | ✅ built | `MarketplaceDialog` (toolbar **Marketplace**) → `GET /api/databricks/unity-catalog/marketplace` → `listMarketplaceListings` / `searchMarketplaceListings` / `listMarketplaceInstallations` (`/api/2.1/marketplace-consumer/{listings,search-listings,installations}`). Install = honest note (consumer "Get instant access" accepted-terms flow); installed listing surfaces as a Delta-Sharing shared catalog. Privilege `USE MARKETPLACE ASSETS`. |
+| F9 | **Clean rooms** (list · collaborators · shared assets) | ✅ built | `CleanRoomsDialog` (toolbar **Clean rooms**) → `GET /api/databricks/unity-catalog/clean-rooms` → `listCleanRooms` / `getCleanRoom` / `listCleanRoomAssets` (`/api/2.0/clean-rooms[/{name}[/assets]]`). Create + `CLEAN ROOM TASK` DDL = honest notes (Public-Preview cross-org handshake). |
 
 ---
 

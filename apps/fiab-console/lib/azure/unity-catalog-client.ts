@@ -2024,3 +2024,274 @@ export async function readDataQualityMonitorResults(
     LIMIT ${limit}`;
   return runSystemTableRead(warehouseId, 'system.data_quality_monitoring.table_results', 'data_quality_monitoring', sql, params.length ? params : undefined);
 }
+
+// ============================================================
+// Databricks Marketplace (consumer) — wave c4 (completes UC feature coverage)
+//
+// Read-mostly consumer surface over the documented stable Marketplace consumer
+// REST (/api/2.1/marketplace-consumer/*):
+//   GET  /listings                              list listings the consumer can see
+//   GET  /listings/{id}                         a single listing (summary + detail)
+//   GET  /search-listings?query=                keyword search across listings
+//   GET  /installations                         this consumer's installations
+//   GET  /listings/{listing_id}/installations   installations of one listing
+//
+// An installation is the entity that lets a consumer interact with a listing;
+// installing a (Delta-Sharing) data product materializes it as a **provider +
+// read-only shared catalog** in this metastore (visible in the Delta Sharing /
+// Marketplace data-shares surface). The privilege to browse + install is
+// `USE MARKETPLACE ASSETS`.
+//
+// Installing (POST /listings/{id}/installations) requires an
+// `accepted_consumer_terms` payload whose `version` must match the listing's
+// CURRENT terms — which the list/get reads don't reliably echo — so the install
+// itself is surfaced as an honest note (the consumer "Get instant access"
+// acceptance flow) rather than a half-working button (per no-vaporware.md). The
+// list/browse reads below are the solid, real-backend surface.
+//   https://learn.microsoft.com/azure/databricks/marketplace/
+//
+// CAVEAT: /api/2.1/marketplace-consumer/* is data-plane; list/get/search/
+// installations are the documented stable reads (mirroring the
+// `databricks consumer-listings|consumer-installations` CLI groups). Listing
+// payloads nest most fields under `summary`/`detail` and mix snake/camel case,
+// so the normalizer below reads several key spellings best-effort.
+// ============================================================
+
+export interface UCMarketplaceListing {
+  id: string;
+  name?: string;
+  subtitle?: string;
+  /** STANDARD | PERSONALIZED — personalized listings require a request flow. */
+  listing_type?: string;
+  categories?: string[];
+  provider_name?: string;
+  provider_region?: string;
+  description?: string;
+  is_free?: boolean;
+  is_staff_pick?: boolean;
+  workspace_hostname?: string;
+}
+
+export interface UCMarketplaceInstallation {
+  id?: string;
+  listing_id?: string;
+  listing_name?: string;
+  /** The read-only catalog the installed share was mounted as. */
+  catalog_name?: string;
+  share_name?: string;
+  /** INSTALLED | … */
+  status?: string;
+  /** DELTA_SHARING_RECIPIENT_TYPE_DATABRICKS | DELTA_SHARING_RECIPIENT_TYPE_OPEN */
+  recipient_type?: string;
+  repo_name?: string;
+  installed_on?: number;
+  workspace_hostname?: string;
+}
+
+const firstStr = (...vals: unknown[]): string | undefined => {
+  for (const v of vals) {
+    if (typeof v === 'string' && v.trim()) return v;
+    if (typeof v === 'number' && Number.isFinite(v)) return String(v);
+  }
+  return undefined;
+};
+
+function normalizeMarketplaceListing(l: any, host: string): UCMarketplaceListing {
+  const summary = l?.summary || {};
+  const detail = l?.detail || {};
+  const prov = summary.provider_summary || summary.providerSummary || summary.provider || {};
+  const categories = summary.categories || summary.category || detail.categories;
+  return {
+    id: firstStr(l?.id, summary.id) || '',
+    name: firstStr(summary.name, l?.name, detail.name),
+    subtitle: firstStr(summary.subtitle, detail.subtitle),
+    listing_type: firstStr(summary.listingType, summary.listing_type, l?.listing_type),
+    categories: Array.isArray(categories) ? categories.map((c: unknown) => String(c)) : undefined,
+    provider_name: firstStr(prov.name, summary.provider_name, summary.providerId, summary.provider_id),
+    provider_region: firstStr(summary.provider_region, summary.providerRegion, prov.term_of_service),
+    description: firstStr(detail.description, summary.description),
+    is_free: typeof summary.is_free === 'boolean' ? summary.is_free
+      : typeof summary.isFree === 'boolean' ? summary.isFree : undefined,
+    is_staff_pick: typeof summary.is_staff_pick === 'boolean' ? summary.is_staff_pick
+      : typeof summary.isStaffPick === 'boolean' ? summary.isStaffPick : undefined,
+    workspace_hostname: host,
+  };
+}
+
+function normalizeMarketplaceInstallation(raw: any, host: string): UCMarketplaceInstallation {
+  // Installation rows are returned flat (InstallationDetail), but some shapes
+  // wrap the detail under an `installation` key — flatten either form.
+  const i = raw?.installation && typeof raw.installation === 'object' ? raw.installation : raw;
+  return {
+    id: firstStr(i?.id, i?.installation_id),
+    listing_id: firstStr(i?.listing_id),
+    listing_name: firstStr(i?.listing_name),
+    catalog_name: firstStr(i?.catalog_name),
+    share_name: firstStr(i?.share_name),
+    status: firstStr(i?.status),
+    recipient_type: firstStr(i?.recipient_type),
+    repo_name: firstStr(i?.repo_name),
+    installed_on: typeof i?.installed_on === 'number' ? i.installed_on : undefined,
+    workspace_hostname: host,
+  };
+}
+
+/** List published Marketplace listings the consumer can access. Optional
+ *  filters mirror the consumer-listings CLI (`--is-free`, `--is-staff-pick`,
+ *  `--is-private-exchange`). */
+export async function listMarketplaceListings(
+  host: string,
+  opts: { isFree?: boolean; isStaffPick?: boolean; isPrivateExchange?: boolean; pageSize?: number } = {},
+): Promise<UCMarketplaceListing[]> {
+  const query: Record<string, string> = {};
+  if (opts.isFree) query.is_free = 'true';
+  if (opts.isStaffPick) query.is_staff_pick = 'true';
+  if (opts.isPrivateExchange) query.is_private_exchange = 'true';
+  if (opts.pageSize) query.page_size = String(clampInt(opts.pageSize, 50, 1, 200));
+  const j = await ucFetch<{ listings?: any[] }>(host, '/api/2.1/marketplace-consumer/listings', {
+    query: Object.keys(query).length ? query : undefined,
+  });
+  return (j.listings || []).map((l) => normalizeMarketplaceListing(l, host));
+}
+
+/** Keyword search across Marketplace listings (consumer-listings search). */
+export async function searchMarketplaceListings(host: string, queryText: string, pageSize = 50): Promise<UCMarketplaceListing[]> {
+  const j = await ucFetch<{ listings?: any[] }>(host, '/api/2.1/marketplace-consumer/search-listings', {
+    query: { query: queryText, page_size: String(clampInt(pageSize, 50, 1, 200)) },
+  });
+  return (j.listings || []).map((l) => normalizeMarketplaceListing(l, host));
+}
+
+/** Get a single Marketplace listing (summary + detail). */
+export async function getMarketplaceListing(host: string, id: string): Promise<UCMarketplaceListing> {
+  const j = await ucFetch<{ listing?: any }>(host, `/api/2.1/marketplace-consumer/listings/${encodeURIComponent(id)}`);
+  return normalizeMarketplaceListing(j?.listing ?? j, host);
+}
+
+/** This consumer's installations across all listings (installed listings become
+ *  read-only shared catalogs). */
+export async function listMarketplaceInstallations(host: string): Promise<UCMarketplaceInstallation[]> {
+  const j = await ucFetch<{ installations?: any[] }>(host, '/api/2.1/marketplace-consumer/installations');
+  return (j.installations || []).map((i) => normalizeMarketplaceInstallation(i, host));
+}
+
+// ============================================================
+// Clean Rooms — wave c4 (completes UC feature coverage)
+//
+// A Databricks Clean Room is a secure, privacy-safe collaboration environment
+// where multiple parties run approved workloads on each other's data WITHOUT
+// exposing the underlying rows. Read surface over the documented stable REST:
+//   GET  /api/2.0/clean-rooms                          list clean rooms
+//   GET  /api/2.0/clean-rooms/{name}                   a single clean room (+ collaborators)
+//   GET  /api/2.0/clean-rooms/{clean_room_name}/assets shared tables/views/volumes/notebooks
+//
+// Creating a clean room (POST /api/2.0/clean-rooms) and running clean-room TASKS
+// (CREATE / MODIFY / EXECUTE CLEAN ROOM TASK — SQL DDL run as notebook jobs
+// inside the room) are surfaced as honest notes: creation requires each
+// collaborator's `global_metastore_id` (a cross-org handshake) and task DDL runs
+// on a clean-room-scoped compute — both are niche/preview flows, so list + view
+// is the solid surface (per no-vaporware.md). Privilege: a clean room is a UC
+// securable owned by an account-level group; collaborators are invited by
+// metastore id / email.
+//   https://learn.microsoft.com/azure/databricks/clean-rooms/
+//
+// CAVEAT: /api/2.0/clean-rooms* is data-plane (Public Preview); list/get/assets
+// are the documented stable reads (mirroring the `databricks clean-rooms` and
+// `clean-room-assets` CLI groups). Collaborators + cloud/region live under
+// `remote_detailed_info`; the normalizer hoists them to the top level.
+// ============================================================
+
+export interface UCCleanRoomCollaborator {
+  collaborator_alias?: string;
+  display_name?: string;
+  organization_name?: string;
+  global_metastore_id?: string;
+  invite_recipient_email?: string;
+  invite_recipient_workspace_id?: number;
+}
+
+export interface UCCleanRoom {
+  name: string;
+  owner?: string;
+  /** ACTIVE | PROVISIONING | DELETED | FAILED | … */
+  status?: string;
+  comment?: string;
+  /** RESTRICTED | UNRESTRICTED — whether this workspace can act on the room. */
+  access_restricted?: string;
+  central_clean_room_id?: string;
+  creator?: string;
+  cloud_vendor?: string;
+  region?: string;
+  collaborators?: UCCleanRoomCollaborator[];
+  created_at?: number;
+  updated_at?: number;
+  workspace_hostname?: string;
+}
+
+export interface UCCleanRoomAsset {
+  name?: string;
+  /** TABLE | VIEW | VOLUME | NOTEBOOK_FILE | FOREIGN_TABLE | … */
+  asset_type?: string;
+  owner_collaborator_alias?: string;
+  /** ACTIVE | PENDING | PERMISSION_DENIED | … */
+  status?: string;
+  added_at?: number;
+  workspace_hostname?: string;
+}
+
+function normalizeCleanRoomCollaborator(c: any): UCCleanRoomCollaborator {
+  return {
+    collaborator_alias: firstStr(c?.collaborator_alias),
+    display_name: firstStr(c?.display_name),
+    organization_name: firstStr(c?.organization_name),
+    global_metastore_id: firstStr(c?.global_metastore_id),
+    invite_recipient_email: firstStr(c?.invite_recipient_email),
+    invite_recipient_workspace_id: typeof c?.invite_recipient_workspace_id === 'number' ? c.invite_recipient_workspace_id : undefined,
+  };
+}
+
+function normalizeCleanRoom(cr: any, host: string): UCCleanRoom {
+  const rdi = cr?.remote_detailed_info || {};
+  const creator = rdi.creator || {};
+  const collaborators = Array.isArray(rdi.collaborators) ? rdi.collaborators : [];
+  return {
+    name: firstStr(cr?.name) || '',
+    owner: firstStr(cr?.owner),
+    status: firstStr(cr?.status),
+    comment: firstStr(cr?.comment),
+    access_restricted: firstStr(cr?.access_restricted),
+    central_clean_room_id: firstStr(rdi.central_clean_room_id, cr?.central_clean_room_id),
+    creator: firstStr(creator.display_name, creator.collaborator_alias),
+    cloud_vendor: firstStr(rdi.cloud_vendor),
+    region: firstStr(rdi.region),
+    collaborators: collaborators.map(normalizeCleanRoomCollaborator),
+    created_at: typeof cr?.created_at === 'number' ? cr.created_at : undefined,
+    updated_at: typeof cr?.updated_at === 'number' ? cr.updated_at : undefined,
+    workspace_hostname: host,
+  };
+}
+
+/** List clean rooms in the metastore. */
+export async function listCleanRooms(host: string): Promise<UCCleanRoom[]> {
+  const j = await ucFetch<{ clean_rooms?: any[] }>(host, '/api/2.0/clean-rooms');
+  return (j.clean_rooms || []).map((cr) => normalizeCleanRoom(cr, host));
+}
+
+/** Get a single clean room (carries `remote_detailed_info.collaborators`). */
+export async function getCleanRoom(host: string, name: string): Promise<UCCleanRoom> {
+  const j = await ucFetch<any>(host, `/api/2.0/clean-rooms/${encodeURIComponent(name)}`);
+  return normalizeCleanRoom(j, host);
+}
+
+/** List the assets (shared tables/views/volumes/notebooks) of a clean room. */
+export async function listCleanRoomAssets(host: string, name: string): Promise<UCCleanRoomAsset[]> {
+  const j = await ucFetch<{ assets?: any[] }>(host, `/api/2.0/clean-rooms/${encodeURIComponent(name)}/assets`);
+  return (j.assets || []).map((a: any) => ({
+    name: firstStr(a?.name),
+    asset_type: firstStr(a?.asset_type),
+    owner_collaborator_alias: firstStr(a?.owner_collaborator_alias),
+    status: firstStr(a?.status, a?.status_error?.status),
+    added_at: typeof a?.added_at === 'number' ? a.added_at : undefined,
+    workspace_hostname: host,
+  }));
+}
