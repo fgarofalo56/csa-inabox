@@ -21,13 +21,15 @@
  * (NO free-text fallback).
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
-  Button, Spinner, Badge, Dropdown, Option, Field,
+  Button, Spinner, Badge, Dropdown, Option, Field, Input,
   MessageBar, MessageBarBody, MessageBarTitle, Caption1,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Tag24Regular, Open16Regular } from '@fluentui/react-icons';
+import {
+  Tag24Regular, Open16Regular, TagMultiple16Regular, Add16Regular, Delete16Regular,
+} from '@fluentui/react-icons';
 
 interface Props { type: string; id: string; }
 
@@ -62,6 +64,10 @@ const useStyles = makeStyles({
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   glossaryHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  tagRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  tagRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  tagKey: { flexBasis: '40%', flexShrink: 0, minWidth: 0 },
+  tagVal: { flexGrow: 1, flexShrink: 1, minWidth: 0 },
 });
 
 export function ClassificationPane({ type, id }: Props) {
@@ -82,6 +88,86 @@ export function ClassificationPane({ type, id }: Props) {
   const [assetGuid, setAssetGuid] = useState<string | null>(null);
   const [glossaryBusy, setGlossaryBusy] = useState(false);
   const [glossaryMsg, setGlossaryMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  // Custom tags — free-form key/value pairs stored on the asset as Microsoft
+  // Purview Atlas business metadata (LoomCustomTags). Loaded/saved via the
+  // per-item business-metadata BFF route.
+  const ridRef = useRef(0);
+  const newRid = () => `r${ridRef.current++}`;
+  const [tagsConfigured, setTagsConfigured] = useState(false);
+  const [tagsHasAsset, setTagsHasAsset] = useState(false);
+  const [tagsHint, setTagsHint] = useState<string | null>(null);
+  const [tagRows, setTagRows] = useState<Array<{ rid: string; k: string; v: string }>>([]);
+  const [savedTags, setSavedTags] = useState<Record<string, string>>({});
+  const [tagsLoading, setTagsLoading] = useState(true);
+  const [tagsBusy, setTagsBusy] = useState(false);
+  const [tagsMsg, setTagsMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  const rowsFromAttrs = (attrs: Record<string, string>) =>
+    Object.entries(attrs).map(([k, v]) => ({ rid: newRid(), k, v: String(v ?? '') }));
+
+  const loadTags = async () => {
+    setTagsLoading(true); setTagsMsg(null);
+    try {
+      const res = await fetch(`/api/items/${type}/${id}/business-metadata`);
+      const data = await res.json().catch(() => ({}));
+      setTagsConfigured(!!data?.configured);
+      setTagsHasAsset(!!data?.hasAsset);
+      setTagsHint(typeof data?.hint === 'string' ? data.hint : null);
+      const attrs = (data && typeof data.attributes === 'object' && data.attributes) || {};
+      setSavedTags(attrs);
+      setTagRows(rowsFromAttrs(attrs));
+      if (data?.warning) setTagsMsg({ intent: 'warning', text: String(data.warning) });
+    } catch (e: any) {
+      setTagsMsg({ intent: 'error', text: e?.message || 'Failed to load custom tags' });
+    } finally {
+      setTagsLoading(false);
+    }
+  };
+
+  useEffect(() => { loadTags(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [type, id]);
+
+  const setRow = (rid: string, patch: Partial<{ k: string; v: string }>) =>
+    setTagRows((rows) => rows.map((r) => (r.rid === rid ? { ...r, ...patch } : r)));
+  const addRow = () => setTagRows((rows) => [...rows, { rid: newRid(), k: '', v: '' }]);
+  const removeRow = (rid: string) => setTagRows((rows) => rows.filter((r) => r.rid !== rid));
+
+  const tagsFromRows = (): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const r of tagRows) { const k = r.k.trim(); if (k) out[k] = r.v; }
+    return out;
+  };
+  const tagsDirty = (() => {
+    const cur = tagsFromRows();
+    const a = Object.keys(cur);
+    const b = Object.keys(savedTags);
+    if (a.length !== b.length) return true;
+    return a.some((k) => cur[k] !== savedTags[k]);
+  })();
+
+  const saveTags = async () => {
+    setTagsBusy(true); setTagsMsg(null);
+    try {
+      const res = await fetch(`/api/items/${type}/${id}/business-metadata`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ attributes: tagsFromRows() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) {
+        setTagsMsg({ intent: 'error', text: data?.error || data?.hint || `Failed to save custom tags (${res.status})` });
+        return;
+      }
+      const attrs = (data && typeof data.attributes === 'object' && data.attributes) || {};
+      setSavedTags(attrs);
+      setTagRows(rowsFromAttrs(attrs));
+      setTagsMsg({ intent: 'success', text: 'Custom tags saved on the asset in Microsoft Purview.' });
+    } catch (e: any) {
+      setTagsMsg({ intent: 'error', text: e?.message || 'Failed to save custom tags' });
+    } finally {
+      setTagsBusy(false);
+    }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -323,6 +409,83 @@ export function ClassificationPane({ type, id }: Props) {
           )}
         </div>
       )}
+
+      <div className={styles.glossary}>
+        <div className={styles.glossaryHead}>
+          <TagMultiple16Regular />
+          <Caption1>Custom tags</Caption1>
+        </div>
+        {tagsLoading ? (
+          <Spinner size="tiny" label="Loading custom tags…" />
+        ) : !tagsConfigured ? (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Microsoft Purview not configured</MessageBarTitle>
+              {tagsHint ||
+                'Custom tags are stored on the asset as Microsoft Purview business metadata. ' +
+                  'Set LOOM_PURVIEW_ACCOUNT and grant the Console UAMI “Data Curator” to enable them.'}
+            </MessageBarBody>
+          </MessageBar>
+        ) : !tagsHasAsset ? (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Not yet cataloged in Microsoft Purview</MessageBarTitle>
+              Custom tags attach to this item’s Data Map asset, which is registered after the
+              item is onboarded/scanned. They become editable once the asset exists.
+            </MessageBarBody>
+          </MessageBar>
+        ) : (
+          <>
+            {tagsMsg && (
+              <MessageBar intent={tagsMsg.intent}><MessageBarBody>{tagsMsg.text}</MessageBarBody></MessageBar>
+            )}
+            {tagRows.length === 0 ? (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                No custom tags yet. Add a key/value pair to tag this asset (stored as business
+                metadata in Microsoft Purview).
+              </Caption1>
+            ) : (
+              <div className={styles.tagRows}>
+                {tagRows.map((r) => (
+                  <div key={r.rid} className={styles.tagRow}>
+                    <Input
+                      className={styles.tagKey}
+                      value={r.k}
+                      placeholder="Key"
+                      aria-label="Tag key"
+                      disabled={tagsBusy}
+                      onChange={(_, d) => setRow(r.rid, { k: d.value })}
+                    />
+                    <Input
+                      className={styles.tagVal}
+                      value={r.v}
+                      placeholder="Value"
+                      aria-label="Tag value"
+                      disabled={tagsBusy}
+                      onChange={(_, d) => setRow(r.rid, { v: d.value })}
+                    />
+                    <Button
+                      appearance="subtle"
+                      icon={<Delete16Regular />}
+                      aria-label="Remove tag"
+                      disabled={tagsBusy}
+                      onClick={() => removeRow(r.rid)}
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className={styles.actions}>
+              <Button appearance="secondary" icon={<Add16Regular />} onClick={addRow} disabled={tagsBusy}>
+                Add tag
+              </Button>
+              <Button appearance="primary" onClick={saveTags} disabled={tagsBusy || !tagsDirty}>
+                {tagsBusy ? 'Saving…' : 'Save custom tags'}
+              </Button>
+            </div>
+          </>
+        )}
+      </div>
 
       <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>
         Classifications are stored in the Loom governance catalog and feed the
