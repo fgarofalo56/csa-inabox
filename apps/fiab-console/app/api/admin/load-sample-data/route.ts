@@ -177,7 +177,18 @@ function parseTable(create: string, ingest: string): { name: string; schema: str
   const m = create.match(/\.create(?:-merge|-or-alter)?\s+table\s+(\S+)\s*\(([\s\S]*?)\)/);
   if (!m) throw new Error(`load-sample: cannot parse create command: ${create.slice(0, 80)}`);
   const name = m[1];
-  const schema = m[2].replace(/\s+/g, ' ').replace(/\s*:\s*/g, ':').replace(/\s*,\s*/g, ', ').trim();
+  // Bracket every column name so KQL reserved keywords used as columns (e.g.
+  // `kind` on Node_Org) parse correctly — `.create table T (['kind']:string)`.
+  // Bracketing a non-keyword identifier is also always valid, so this is safe
+  // for all columns. (geo/graph have no reserved names; investigation's `kind`
+  // triggered SYN0002 as a bare identifier.)
+  const schema = m[2]
+    .split(',')
+    .map((c) => {
+      const [col, type] = c.split(':').map((x) => x.trim());
+      return `['${col.replace(/'/g, "\\'")}']:${(type || 'string').toLowerCase()}`;
+    })
+    .join(', ');
   const lines = ingest.split('\n');
   const sepIdx = lines.findIndex((l) => l.includes('<|'));
   const rows = lines.slice(sepIdx + 1).map((l) => l.trim()).filter(Boolean).map((l) => l.split(','));
