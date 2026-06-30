@@ -1,96 +1,166 @@
-# data-agent — parity with Fabric Data Agent
+# data-agent — parity with Microsoft Fabric Data Agent (NL-to-query AI data agent)
 
-**Source UI:** Microsoft Fabric → Data Science → **Data agent** (preview).
-Grounded in Microsoft Learn:
+**Source UI:** Microsoft Fabric → Data Science → **Data agent**. Grounded in Microsoft Learn:
 
-- https://learn.microsoft.com/fabric/data-science/how-to-create-data-agent
 - https://learn.microsoft.com/fabric/data-science/concept-data-agent
+- https://learn.microsoft.com/fabric/data-science/how-to-create-data-agent
 - https://learn.microsoft.com/fabric/data-science/data-agent-add-datasources
-- https://learn.microsoft.com/fabric/data-science/data-agent-example-queries
 - https://learn.microsoft.com/fabric/data-science/data-agent-configurations
+- https://learn.microsoft.com/fabric/data-science/data-agent-configuration-best-practices
 - https://learn.microsoft.com/fabric/data-science/data-agent-end-to-end-tutorial
+- https://learn.microsoft.com/fabric/data-science/evaluate-data-agent
 
-Loom surface: `lib/editors/phase4-editors.tsx` → `DataAgentEditor`
-(registered as `data-agent` in `lib/editors/registry.ts`). Pure logic in
-`lib/editors/_family-utils.ts`; runtime in `lib/azure/data-agent-client.ts`.
+Loom surface: `apps/fiab-console/lib/editors/phase4-editors.tsx` → `DataAgentEditor`
+(registered for `data-agent` in `lib/editors/registry.ts`). Lifecycle pane
+`lib/panes/data-agent.tsx`; Config-Copilot `lib/editors/data-agent-config-copilot.tsx`;
+result-viz `lib/editors/data-agent-result-viz.tsx`. Runtime
+`lib/azure/data-agent-client.ts` (grounded chat) + `lib/azure/data-agent-execute.ts`
+(real read-only per-source query execution). Routes under
+`app/api/items/data-agent/[id]/*` (chat / conversations / copilot / publish /
+m365-copilot / deploy).
 
-> **Management surface (audit-T122):** the `/data-agent` page
-> (`lib/panes/data-agent.tsx`) is now a full **lifecycle-management** surface,
-> not a deprecated chat-only pane. Its left rail lists the operator's **real
-> data agents** from the backing store (`GET /api/items/data-agent`, Cosmos,
-> tenant-scoped) — each row shows name, a status badge (Draft / Published /
-> M365 Copilot), bound-source count, and last-updated, plus a `…` overflow
-> menu: **Open · Configure & enhance · Publish… · Rename · Duplicate ·
-> Delete**. "New data agent" creates a real item (workspace picker → `POST
-> /api/items/data-agent`) and routes into the editor. The right pane runs a
-> **live test-chat against the selected real agent**
-> (`POST /api/items/data-agent/[id]/chat`, Azure-native grounded). Composer is
-> pinned. Open/Configure/Publish deep-link into the editor tabs via `?tab=`.
+Azure-native by default (no Microsoft Fabric dependency): a data agent is a Cosmos
+item; grounded chat runs on the Azure OpenAI deployment the cross-item Copilot
+resolves; sources execute against Synapse (T-SQL), ADLS/Spark (lakehouse), ADX (KQL),
+Azure AI Search, ADX graph. Publishing to Foundry Agent Service / M365 Copilot is
+strictly opt-in.
 
-## Fabric feature inventory (every capability, grounded in Learn)
+---
 
-| # | Fabric capability | Detail |
-|---|---|---|
-| 1 | **Add up to 5 data sources** | Any combination of lakehouse, warehouse, KQL/Eventhouse, Power BI semantic model, ontology, Microsoft Graph (max 5 total). |
-| 2 | **Schema / table selection** | Per source: pick Tables / Views / Functions (SQL), Tables / MVs / Functions / Shortcuts (KQL), model tables (semantic). Graph & ontology are queried whole (no scoping). |
-| 3 | **Data agent instructions (global)** | Up to 15,000 chars, plain English; routes question types to sources, defines terminology. |
-| 4 | **Data source description (per source)** | Routing hint — helps the agent decide whether a source is relevant to a question. (Not supported for semantic model in Fabric.) |
-| 5 | **Data source instructions (per source)** | Table descriptions / join logic / business terms passed to NL2SQL/NL2KQL/NL2GQL. (For semantic models, managed via Power BI Prep for AI.) |
-| 6 | **Example queries (few-shot)** | Question → query pairs. Supported: lakehouse, warehouse, KQL, graph (GQL), AI Search. **Not** supported: semantic model, ontology. |
-| 7 | **Test / chat pane** | Ask a question, get a grounded NL answer + the generated query, see which source was used. |
-| 8 | **Publish** | Publishes the agent (instructions + sources as tools) so Foundry / Copilot Studio can consume it via a workspace-id + artifact-id pair. |
-| 9 | **Run-steps / debug view** | Inspect which example queries were retrieved for a turn. |
+## Real feature inventory (every capability, grounded in Learn)
+
+### A. Data sources (left "explorer" rail)
+1. Add up to **5 data sources** in any combination.
+2. Source types: **Lakehouse**, **Warehouse / SQL DB**, **KQL database / Eventhouse**,
+   **Power BI semantic model**, **Ontology (preview)**, **GQL graph model (preview)**,
+   **Microsoft Graph**, **Azure AI Search index / unstructured (preview)**.
+3. **Schema selection** — a browsable schema tree to check specific **Tables / Views /
+   Functions** (SQL), **Tables / Materialized views / Functions / Shortcuts** (KQL),
+   **Tables** (lakehouse), model tables (semantic). Graph/ontology = whole (no scope).
+4. **Data source description** — high-level routing context per source.
+5. **Data source instructions** — table/column descriptions, join logic, value formats,
+   "when asked about X use table Y" routing logic.
+6. **Example queries (few-shot)** — NL→SQL/KQL/GQL pairs per source; **only valid,
+   schema-matching queries are used** (Fabric validates and ignores invalid ones);
+   top-3 retrieved by vector similarity at query time.
+7. **AI Search unstructured config** — Display Name, **Search Type** (full-text / hybrid
+   / semantic), **Number of Documents** (3–20), Context/Description, Agent Instructions;
+   **citations** (URL / file-path fields) returned automatically.
+8. **Semantic-model "Prep for AI"** — AI Data Schemas, AI Instructions, Verified Answers
+   on the Power BI side; the agent honors them.
+
+### B. Agent-level configuration
+9. **Agent instructions** — up to **15,000 chars**, plain-English cross-source routing
+   + term definitions.
+10. **Agent name / description** — shown to consuming orchestrators for routing.
+
+### C. Build / test loop
+11. **NL chat test pane** (right side) — ask, get grounded answers.
+12. **Generated-query transparency** — the exact SQL/KQL/DAX run, which source was
+    picked, and (for AI Search) cited documents.
+13. **Multi-source routing** — agent picks among sources; trace shows which.
+14. **Conversation thread** with history.
+
+### D. Evaluation
+15. **Data agent evaluation** — supply a **ground-truth set** of question/expected-answer
+    (or expected-query) pairs, run the agent over all, get an **accuracy score +
+    per-question pass/fail**, the generated query, and the thread link per row; iterate.
+
+### E. Guardrails / governance
+16. Agent answers **only from attached sources** (scope limiting).
+17. Queries run **read-only under the caller's identity** (RLS/CLS honored).
+18. Content safety on the model; sensitivity-aware (Purview labels on sources).
+
+### F. Publish / consume
+19. **Publish** a versioned agent; draft vs published version.
+20. **Consume programmatically** — published agent reachable as a REST endpoint
+    (OpenAI-compatible) + Python SDK; consumable from **AI Foundry** and **Copilot Studio**.
+21. **Version history** — published versions; see/restore current published version.
+22. **Conversation starters / suggested prompts** surfaced to consumers.
+
+---
 
 ## Loom coverage (built ✅ / honest-gate ⚠️ / MISSING ❌)
 
-| # | Capability | Status | Notes |
-|---|---|---|---|
-| 1 | Up to 5 typed sources | ✅ | Build tab; `DA_SOURCE_TYPES` now covers warehouse, lakehouse, KQL, semantic-model, AI Search, **ontology**, **graph-model**. Picker enforces the 5-source cap. Sources are **real Loom items** listed via `GET /api/items/by-type` (Cosmos). |
-| 2 | Schema / table selection | ✅ | Per-source comma-separated tables/views/functions input with a type-aware label (`DA_SCHEMA_LABEL`). Ontology & graph correctly show "queried whole — no scoping" instead of a misleading box. (A live checkbox tree over the source's schema is a future enhancement; the scope is honestly captured and flows into the grounded prompt today.) |
-| 3 | Global agent instructions (≤15k) | ✅ | `instructions` textarea, `maxLength=15000` with live counter. |
-| 4 | Data source description | ✅ | **New** per-source `description` field, persisted, fed into the system prompt as "When to use this source:". |
-| 5 | Data source instructions | ✅ | Per-source `instructions` textarea pre-seeded with the Fabric template. |
-| 6 | Example queries (few-shot) | ✅ | Per-source add/edit/delete pairs, **gated by `daSupportsExampleQueries`** — hidden for semantic-model & ontology with the exact Fabric explanation (Prep for AI / unsupported), matching Learn. |
-| 7 | Test / chat pane | ✅ (live, executes + visualizes) / ⚠️ (infra-gate) | Test tab runs against the **live AOAI deployment**. The generated per-source query is **EXECUTED read-only on the real backend** — warehouse → Synapse dedicated SQL/TDS, lakehouse → Synapse serverless SQL, KQL → ADX, **AI Search → `docs/search` REST** — and the model is **re-prompted with the real rows**. The prompt now **forbids hedging** ("would you like me to run it?" / "imagine…"): the agent always emits the query and the platform runs it automatically. Results render as a **modern mini-BI card** (`DataAgentResultViz`): KPI tile for single values, bar/time **chart** (`KqlChart`) for label/numeric or time series, or a styled **table** — with a Table/Chart/KPI toggle. Honest ⚠ gate per unreachable source (semantic-model DAX needs an XMLA endpoint → gated). Queries hard-gated read-only (SELECT/WITH only; KQL mgmt/ingest blocked), capped to 25 rows. No model deployed → honest 503 naming `LOOM_AOAI_ENDPOINT`/`LOOM_AOAI_DEPLOYMENT`. Logic: `lib/azure/data-agent-execute.ts` + `lib/editors/data-agent-result-viz.tsx`. |
-| 8 | Publish | ✅ / ⚠️ | Publishes to the **Foundry Agent Service** (`createOrUpdateAgent`). Not configured → honest 501 MessageBar naming `LOOM_FOUNDRY_PROJECT_ENDPOINT` / `LOOM_FOUNDRY_PROJECT_ID`. Returns the workspace-id + artifact-id pair. **Publish now surfaces the REAL pre-save error** (e.g. 404/400 from the item PATCH) instead of a generic "Save failed before publish", and only re-saves when there are unsaved edits. |
-| 8b | Custom name / alias | ✅ | New **"Agent name / alias"** field on the Build tab (`state.alias`, persisted) — shown to the operator and passed to publish as `loomAlias` metadata. |
-| 8c | Delete agent | ✅ | **"Delete agent"** in the editor SaveBar AND a **Delete** action (with confirm dialog) in the `/data-agent` pane row menu → `DELETE /api/items/data-agent/[id]`. The route now **de-provisions the opt-in published backing too**: it best-effort deletes the published Azure AI Foundry assistant (`state.foundryAgentId`) and the Microsoft 365 / Copilot Studio agent (`state.m365Copilot`) before removing the Cosmos item + its search/catalog mirrors. A missing endpoint or an already-deleted remote agent never blocks the local delete (reported in `deprovisioned`). |
-| 8d | Duplicate agent | ✅ | **Duplicate** in the pane row menu → `POST /api/items/data-agent {from}`: clones the typed config (sources + instructions + grounding) MINUS publish-only leaves (`publishedAt` / `foundryAgentId` / `foundryProjectId` / `m365Copilot` / `status`) so the copy starts as an unpublished Draft. |
-| 8e | Lifecycle list + status | ✅ | `/data-agent` left rail lists real items with a derived status badge (Draft / Published / M365), bound-source count (`normalizeDaSources`), and relative last-updated. Real loading / empty / error states; keyboard-navigable `role=listbox`/`option` rows + Fluent `Menu`. |
-| 9 | Run-steps / debug view | ✅ (editor) / ❌ (per-turn example retrieval) | The editor's **Run inspector** tab runs the Foundry Agent Service run-steps surface (thread → run → steps, the real SQL/KQL tool calls). The pane test-chat also surfaces every source + query it ran per turn. Fabric's per-turn *example-retrieval* inspector specifically is still deferred. |
+| # | Capability | Status | Notes / backend |
+|---|------------|--------|-----------------|
+| 1 | Up to 5 typed sources | ✅ | `addSource` caps at 5; sources are real Loom items via `GET /api/items/by-type` |
+| 2 | Source types | ⚠️ | warehouse / lakehouse / kql / semantic-model / ai-search / ontology / graph built; **Microsoft Graph ❌** |
+| 3 | Schema selection | ❌ | only a **comma-separated `tables` text Input** + type-aware label — no schema tree picker (violates `no-freeform-config`) |
+| 4 | Data source description | ✅ | per-source `description`, fed into the grounded prompt |
+| 5 | Data source instructions | ✅ | per-source `instructions` textarea, seeded with the Fabric template |
+| 6 | Example queries (few-shot) | ⚠️ | authored + Config-Copilot-generated; gated correctly per type; **no schema validation of examples** |
+| 7 | AI Search unstructured config | ❌ | ai-search treated as a generic source; no search-type / doc-count / citations |
+| 8 | Semantic-model Prep-for-AI | ⚠️ | honest MessageBar points at Power BI Prep for AI |
+| 9 | Agent instructions (15k) | ✅ | `maxLength=15000` + live counter + template |
+| 10 | Agent name / description | ✅ | `alias` + `description` |
+| 11 | NL chat test pane | ✅ | `/chat` → live AOAI grounded turn, composer pinned |
+| 12 | Generated-query transparency | ✅ | tools-used trace + executed rows (`DataAgentResultViz` KPI/chart/table toggle) |
+| 13 | Multi-source routing trace | ✅ | `tools[]` per turn |
+| 14 | Conversation history | ✅ | `/conversations` (Cosmos), History menu |
+| 15 | **Evaluation** | ❌ | no ground-truth set, no accuracy score, no `/evaluate` route |
+| 16 | Answer only from sources | ✅ | system prompt scope-limits |
+| 17 | Read-only under identity | ✅ | `data-agent-execute` SELECT/WITH-only, KQL mgmt/ingest blocked, 25-row cap |
+| 18 | Content safety / sensitivity | ⚠️ | DSPM labels emitted post-hoc (`resolveAgentSourceLabels`); **no guardrails config UI** |
+| 19 | Publish (Foundry / M365) | ✅ / ⚠️ | `/publish` (Foundry Agent Service) + `/m365-copilot` (Copilot Studio); honest infra-gates |
+| 20 | **Consume / REST endpoint + snippets** | ❌ | no consume tab, no cURL/Python/JS snippet, no API/APIM exposure |
+| 21 | Version history | ❌ | `publishedSnapshot` stored but no versions UI / restore |
+| 22 | Conversation starters | ❌ | no authoring of suggested prompts |
+| — | Run-steps inspector (published Foundry agent) | ✅ | extra-vs-Fabric: `/data-agent/run-steps` trace |
+| — | Monitoring (Azure Monitor alert rules) | ✅ | extra-vs-Fabric: reuses activator rules route |
 
-## Backend per control
+**Grade: B (functional, real backend) — not A.** The build/test/publish loop is real
+and grounded, but Evaluation, a real schema picker, AI Search / Microsoft Graph source
+config, a Guardrails surface, a Consume/endpoint surface, version history, and
+conversation starters are missing — exactly what makes it read as "basic."
 
-| Control | Route | Backend |
-|---|---|---|
-| List real agents (lifecycle rail) | `GET /api/items/data-agent` | `listOwnedItems('data-agent')` — Cosmos `items`, tenant-scoped by workspace ownership. Real items only; `state` returned for status/source-count derivation. |
-| New data agent | `POST /api/items/data-agent` | `createOwnedItem('data-agent', {workspaceId, displayName, state:{sources:[],instructions:''}})` — Cosmos create + AI Search/catalog mirror. |
-| Duplicate | `POST /api/items/data-agent {from}` | `loadOwnedItem` → `createOwnedItem` with sanitized clone (publish-only leaves stripped). |
-| Rename | `PATCH /api/items/data-agent/[id] {displayName}` | `updateOwnedItem` — Cosmos replace + mirror refresh. |
-| Source picker (list real items per type) | `GET /api/items/by-type?types=<itemType>` | Cosmos `items` container, tenant-scoped by workspace ownership. Real items only. |
-| Save draft (instructions + sources + descriptions + examples) | `PATCH /api/items/data-agent/[id]` (`useItemState`) | Cosmos `items` upsert + AI Search mirror. |
-| Test chat turn | `POST /api/items/data-agent/[id]/chat` | Loads Cosmos config → `chatGrounded()`: (1) AOAI chat/completions proposes an answer + per-source query, (2) `executeSourceQuery()` runs each query **read-only on the real backend** (Synapse SQL / ADX), (3) AOAI is re-prompted with the real rows for a grounded final answer. Tools carry `{executed, rowCount, columns, rows, gate}`. 503 + remediation when no model; per-source honest gate when a backend is unreachable. |
-| Delete (+ de-provision) | `DELETE /api/items/data-agent/[id]` | `deleteOwnedItem` + best-effort `foundry-agent-client.deleteAgent` (when `state.foundryAgentId`) + `copilot-studio-client.deleteAgent` (when `state.m365Copilot`). |
-| Publish | `POST /api/items/data-agent/[id]/publish` | `createOrUpdateAgent()` → Azure AI Foundry **Agent Service** (real REST). Snapshots published config in Cosmos. 501 + hint when Foundry not configured. |
-| Deploy (legacy alt entry) | `POST /api/items/data-agent/[id]/deploy` | Same Foundry Agent Service path from the legacy free-text bag. |
+---
 
-## Grade
+## Build plan (prioritized)
 
-**A (lifecycle).** With audit-T122 the `/data-agent` page is a complete
-management surface — list (real items), create, open, configure/enhance,
-rename, duplicate, publish, and real delete with backing de-provision, all on
-real BFF routes, plus a live test-chat. Every Fabric inventory row is built ✅
-or honest-gated ⚠️; the only remaining ❌ is Fabric's per-turn
-example-retrieval inspector (the editor Run-inspector covers run-steps
-debugging). Pure logic (`daSupportsExampleQueries`, ontology/graph typing,
-per-source description normalization) is unit-tested in
-`lib/editors/__tests__/family-utils.test.ts`; the lifecycle routes
-(create/duplicate/delete-deprovision) are covered in
-`app/api/items/data-agent/__tests__/routes.test.ts`.
+### P0 — visible parity uplift
+- **Evaluation tab.** New `Evaluate` tab + `POST /api/items/data-agent/[id]/evaluate`.
+  Author/import a ground-truth set (question + expected answer/query) into a Cosmos
+  `data-agent-eval` doc; "Run evaluation" iterates each question through `chatGrounded`,
+  judges with an AOAI LLM-as-judge (correctness + query-match), persists a run with
+  per-question pass/fail + generated query + thread link, shows an aggregate accuracy
+  ring + a results `DataGrid`. Web5: `TileGrid` of past runs, `EmptyState`, status badges.
+- **Schema-tree source picker.** Replace the comma-separated `tables` `Input` with a real
+  checkbox **schema browser** (`Tree`/`TreeItem` of Tables/Views/Functions; KQL adds MVs/
+  Functions/Shortcuts) fed by a new `GET /api/items/data-agent/[id]/source-schema?sourceId=`
+  route introspecting the real backend (Synapse `INFORMATION_SCHEMA`, ADX `.show
+  tables/functions`, ADLS/Delta catalog, AI Search fields) — much of the introspection
+  already exists in `data-agent-execute` / Config Copilot. Persist selected objects typed.
+- **Microsoft Graph + AI Search source config.** Add a `microsoft-graph` source type
+  (honest-gate on Graph perms) and an AI Search config block (Display Name, Search Type
+  `Combobox`, Number of Documents `SpinButton` 3–20, Context). Surface AI Search
+  **citations** (doc title + link) in the chat trace.
+
+### P1
+- **Guardrails panel** (sub-section/tab). Typed controls (no JSON): max rows returned
+  (`SpinButton`), allowed/blocked topics (`TagPicker`), "answer only from sources"
+  `Switch`, PII/sensitivity redaction `Switch` (wires to `resolveAgentSourceLabels` /
+  Purview), AOAI content-safety `Switch`. Enforced in `data-agent-execute` (row cap) +
+  `chatGrounded` (scope/topics) + the chat route.
+- **Consume tab.** Stable Loom REST endpoint + copy-paste **cURL / Python / JS** snippets
+  (OpenAI-compatible against the existing `/chat` route), Entra/API-key auth note, optional
+  "Expose via APIM" action (real APIM import). `CodeBlock` with copy per language.
+- **Example-query validation.** On blur / "Validate", dry-run each few-shot example's
+  SQL/KQL against the picked schema via `data-agent-execute` (parse/EXPLAIN, no data
+  movement); badge each pair valid/invalid and warn invalid pairs are ignored (Fabric behavior).
+
+### P2
+- **Version history.** List `publishedSnapshot` versions (timestamp + diff vs draft +
+  restore); `GET/POST /api/items/data-agent/[id]/versions`.
+- **Per-agent model + temperature settings** (Settings sub-panel) overriding the cross-item
+  AOAI default; `Dropdown` of deployed models + `Slider` temperature.
+- **Conversation starters authoring** — list of suggested prompts persisted to state,
+  emitted on publish (Foundry/M365) + shown in the test-pane empty state.
 
 ## Bicep sync
 
-No new Azure resource, env var, role, or Cosmos container introduced by this
-change — it extends an existing Cosmos-backed item type and reuses the already
--wired AOAI (`LOOM_AOAI_*`) and Foundry (`LOOM_FOUNDRY_*`) env contracts. No
-bicep diff required.
+P0/P1/P2 extend an existing Cosmos-backed item type and reuse already-wired AOAI
+(`LOOM_AOAI_*`), Foundry (`LOOM_FOUNDRY_*`), Synapse/ADX, AI Search, and Purview env
+contracts. The eval ground-truth set persists in the existing Cosmos `items`/agent state
+(or a `data-agent-eval` doc in the same container — `createIfNotExists`); no new Azure
+resource. APIM exposure (P1 Consume) reuses the existing APIM module if the operator opts in.
