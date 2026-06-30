@@ -412,6 +412,15 @@ var deShirEnabled = byoExisting.?deShir ?? true
 // editor honest-gates. SUB/RG fall back to the deployment sub / LOOM_DLZ_RG.
 var loomServiceBusNamespace = byoExisting.?serviceBusNamespace ?? ''
 
+// Always-on default AML Compute Instance (LOOM_AML_DEFAULT_COMPUTE) + its idle
+// TTL (LOOM_AML_COMPUTE_IDLE_TTL). Carried on byoExisting — NOT new scalar
+// params — to stay under admin-plane's 256-param ceiling. main.bicep sets the
+// name to ml-workspace.bicep's deterministic defaultCiName (ci-loom-<hash>) when
+// the AML workspace is provisioned, else '' so the notebook editor auto-select
+// is a no-op and the AML compute gate honest-gates as before.
+var loomAmlDefaultCompute = byoExisting.?amlDefaultCompute ?? ''
+var loomAmlComputeIdleTtl = byoExisting.?amlComputeIdleTtl ?? 'PT30M'
+
 @description('Deploy the SHARED admin-zone Purview self-hosted IR VMSS (scale-to-zero). A Purview SHIR cannot be the DLZ ADF SHIR (Microsoft constraint — separate machine), so this is its own VMSS. Honest-gated: only deploys when purviewEnabled AND purviewIrAuthKey AND purviewShirAdminPassword are all set.')
 param purviewShirEnabled bool = true
 
@@ -3529,6 +3538,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Falls back to LOOM_FOUNDRY_NAME/_RG in code when empty. No Fabric dep.
             { name: 'LOOM_AML_WORKSPACE', value: !empty(amlWorkspaceName) ? amlWorkspaceName : (!empty(loomAmlWorkspace) ? loomAmlWorkspace : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '')) }
             { name: 'LOOM_AML_RG', value: !empty(amlWorkspaceRg) ? amlWorkspaceRg : (!empty(loomAmlRg) ? loomAmlRg : byoFoundryRg) }
+            // Always-on default AML Compute Instance the deploy-planner provisions
+            // (ml-workspace.bicep defaultCiName). The notebook editor auto-selects
+            // this CI when workspaceType==='aml' and no compute is chosen, so the
+            // "No Azure ML Compute Instance is available" gate clears with zero
+            // post-deploy steps. Empty when the AML workspace isn't provisioned →
+            // the editor honest-gates as before. IDLE_TTL surfaces the configured
+            // auto-shutdown for the compute UI.
+            { name: 'LOOM_AML_DEFAULT_COMPUTE', value: loomAmlDefaultCompute }
+            { name: 'LOOM_AML_COMPUTE_IDLE_TTL', value: loomAmlComputeIdleTtl }
             { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).

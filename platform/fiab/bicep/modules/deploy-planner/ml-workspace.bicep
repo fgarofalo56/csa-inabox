@@ -41,6 +41,11 @@ param richDisplayComputeInstanceName string = ''
 @description('VM size for the rich-display compute instance.')
 param richDisplayComputeVmSize string = 'Standard_DS3_v2'
 
+@description('''Idle time before the always-on default Compute Instance auto-shuts-down (ISO 8601 duration,
+e.g. PT30M, PT1H, PT3H). Idle shutdown requires the workspace's SystemAssigned managed identity to hold
+Contributor on the workspace (granted below) — see Microsoft Learn: Compute instance idle shutdown.''')
+param mlComputeIdleTtl string = 'PT30M'
+
 @description('Compliance tags applied to every resource.')
 param complianceTags object
 
@@ -50,6 +55,10 @@ var saName = take('saamlloom${suffix}', 24)
 var lawName = take('law-aml-loom-${suffix}', 63)
 var aiName = take('appi-aml-loom-${suffix}', 255)
 var wsName = take('aml-loom-${suffix}', 33)
+// Always-on default Compute Instance — deterministic over the RG (matches the
+// LOOM_AML_DEFAULT_COMPUTE env wired by admin-plane/main.bicep). 3-24 chars,
+// starts with a letter, alphanumeric + hyphens.
+var defaultCiName = take('ci-loom-${suffix}', 24)
 
 // --- AML dependency 1: Key Vault ---
 resource kv 'Microsoft.KeyVault/vaults@2024-04-01-preview' = {
@@ -134,6 +143,49 @@ resource amlDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' =
   }
 }
 
+// --- Workspace SystemAssigned MI → Contributor on the workspace ---
+// REQUIRED for the always-on Compute Instance's idle-shutdown (and any
+// scheduled start/stop) to fire: the workspace's own managed identity performs
+// the stop, and Microsoft Learn requires it to hold Contributor on the
+// workspace. Without this grant the CI never auto-shuts-down. Gated only on
+// skipRoleGrants (the principalId always exists — SystemAssigned identity).
+// Microsoft Learn: Azure Machine Learning compute instance idle shutdown.
+resource workspaceMiContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!skipRoleGrants) {
+  scope: workspace
+  name: guid(workspace.id, workspace.id, 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')
+    principalId: workspace.identity.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
+
+// --- Always-on default Compute Instance ---
+// Provisioned on EVERY deploy (not gated on the opt-in richDisplay* params), so
+// the notebook "Azure ML" compute path has a ready CI out of the box — the
+// notebook editor's "No Azure ML Compute Instance is available" gate clears with
+// zero post-deploy steps. idleTimeBeforeShutdown auto-stops the VM after the
+// idle TTL to cap cost (fires once the workspace MI Contributor grant above is
+// effective). Name is deterministic (defaultCiName) and matches the
+// LOOM_AML_DEFAULT_COMPUTE env the Console reads to auto-select it.
+// Microsoft Learn: Microsoft.MachineLearningServices/workspaces/computes (ComputeInstance).
+resource defaultComputeInstance 'Microsoft.MachineLearningServices/workspaces/computes@2024-10-01' = {
+  parent: workspace
+  name: defaultCiName
+  location: location
+  tags: complianceTags
+  properties: {
+    computeType: 'ComputeInstance'
+    properties: {
+      vmSize: richDisplayComputeVmSize
+      idleTimeBeforeShutdown: mlComputeIdleTtl
+    }
+  }
+  dependsOn: [
+    workspaceMiContributor
+  ]
+}
+
 // Rich display() — opt-in AML compute instance whose startup script installs the
 // ai-display.py helper into the IPython startup dir, so display(df) renders the
 // Loom interactive grid + chart recommendations in AML Jupyter (parity with the
@@ -141,7 +193,7 @@ resource amlDataScientist 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 // base64 command) — the supported AML setup-script mechanism. Gated on both the
 // name and the script being supplied, so default deploys are unaffected and the
 // Synapse Livy path (which injects the same helper at session start) is unchanged.
-resource displayComputeInstance 'Microsoft.MachineLearningServices/workspaces/computes@2023-04-01' = if (!empty(richDisplayComputeInstanceName) && !empty(richDisplayStartupScriptBase64)) {
+resource displayComputeInstance 'Microsoft.MachineLearningServices/workspaces/computes@2024-10-01' = if (!empty(richDisplayComputeInstanceName) && !empty(richDisplayStartupScriptBase64)) {
   parent: workspace
   name: richDisplayComputeInstanceName
   location: location
@@ -179,6 +231,7 @@ resource amlComputeOperator 'Microsoft.Authorization/roleAssignments@2022-04-01'
 
 output workspaceId string = workspace.id
 output workspaceName string = workspace.name
+output defaultComputeInstanceName string = defaultCiName
 output richDisplayComputeInstanceName string = (!empty(richDisplayComputeInstanceName) && !empty(richDisplayStartupScriptBase64)) ? richDisplayComputeInstanceName : ''
 
 // --- Curated AML Environment: Pylance-grade Python IntelliSense ---

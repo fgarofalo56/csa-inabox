@@ -581,8 +581,8 @@ param speechServicesEnabled bool = false
 @description('Deploy a single-kind Language (CognitiveServices TextAnalytics) account, Entra-only.')
 param languageServicesEnabled bool = false
 
-@description('Deploy an Azure Machine Learning workspace + its KV/Storage/AppInsights dependencies.')
-param mlWorkspaceEnabled bool = false
+@description('Deploy an Azure Machine Learning workspace + its KV/Storage/AppInsights dependencies. Default ON (zero-gate notebook AML path) — opt OUT for GCC-High/DoD or cost-sensitive deploys.')
+param mlWorkspaceEnabled bool = true
 
 @description('Enable Microsoft Defender for Cloud Standard pricing tiers on the subscription.')
 param defenderCloudEnabled bool = false
@@ -678,6 +678,10 @@ param containerInstancesMemoryInGB int = 1
 @description('Azure Machine Learning rich-display compute instance VM size (deploy-planner).')
 @allowed(['Standard_DS3_v2', 'Standard_DS4_v2', 'Standard_D4s_v3', 'Standard_E4s_v3'])
 param mlComputeVmSize string = 'Standard_DS3_v2'
+
+@description('Idle time before the always-on default AML Compute Instance auto-shuts-down (ISO 8601 duration). Caps cost on the zero-gate notebook AML path.')
+@allowed(['PT15M', 'PT30M', 'PT1H', 'PT3H'])
+param mlComputeIdleTtl string = 'PT30M'
 
 @description('Azure AI Search tier (deploy-planner). Free = dev/test (3 indexes); Basic = low-volume production; Standard S1/S2/S3 = progressively more capacity. Replica + partition counts scale the unit cost.')
 @allowed(['free', 'basic', 'standard', 'standard2', 'standard3'])
@@ -1025,6 +1029,14 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // is disabled → the editor honest-gates. Carried here (not a scalar param) to
       // stay under admin-plane's 256-param ceiling.
       serviceBusNamespace: (useSingleDlz && deployServiceBus) ? 'sbns-loom-default-${location}' : ''
+      // Always-on default AML Compute Instance name (LOOM_AML_DEFAULT_COMPUTE) +
+      // its idle TTL (LOOM_AML_COMPUTE_IDLE_TTL). Name is derived the SAME way as
+      // ml-workspace.bicep's defaultCiName (take('ci-loom-<uniqueString(rg.id)>',24))
+      // so the Console auto-selects the real CI and the notebook "No Compute
+      // Instance available" gate clears with zero post-deploy steps. Carried on
+      // byoExisting (not scalar params) to stay under admin-plane's 256-param ceiling.
+      amlDefaultCompute: (useSingleDlz && mlWorkspaceEnabled) ? take('ci-loom-${uniqueString(singleDlzRg.id)}', 24) : ''
+      amlComputeIdleTtl: mlComputeIdleTtl
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
@@ -2029,6 +2041,7 @@ module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingle
   params: {
     location: location
     richDisplayComputeVmSize: mlComputeVmSize
+    mlComputeIdleTtl: mlComputeIdleTtl
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags
