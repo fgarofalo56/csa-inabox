@@ -79,46 +79,46 @@ Every capability the three source UIs expose for a release/deployment-environmen
 
 | # | Capability | Status | Notes |
 |---|------------|--------|-------|
-| 1 | Named environments as objects | ⚠️ partial | "Stages" = name + optional workspace string only |
-| 2 | Env metadata (type/sub/identity/region/RG/tags) | ❌ MISSING | no fields beyond name + workspace |
-| 3 | Map env → workspace / slot / ADE type | ⚠️ partial | only free-text workspace |
-| 4 | Env status (state/version/health/drift) | ❌ MISSING | |
-| 5 | Promotion sequence ordering | ❌ MISSING | flat unordered list |
+| 1 | Named environments as objects | ✅ built | rich `environments[]` (name+type+order+target+metadata) in Cosmos state |
+| 2 | Env metadata (type/sub/identity/region/RG/tags) | ✅ built | type, subscription, region, RG, deployment identity, tags on each env card |
+| 3 | Map env → workspace / slot / ADE type | ✅ built | `targetKind` = Loom workspace · App Service+slot · Deployment env |
+| 4 | Env status (state/version/health/drift) | ⚠️ partial | installed-version per env; live provisioning/health/drift TODO |
+| 5 | Promotion sequence ordering | ✅ built | `order` field + Up/Down reorder; pipeline lane renders the sequence |
 | 6 | Browse ADE catalog of definitions | ❌ MISSING | definition is a free-text input |
 | 7 | Sync catalog | ❌ MISSING | |
 | 8 | Per-definition parameter form | ❌ MISSING | |
 | 9 | Definition + runner selection | ❌ MISSING | |
-| 10 | Promotion-pipeline **graph** | ❌ MISSING | no graph; two dropdowns |
-| 11 | Edit promotion edges | ❌ MISSING | |
-| 12 | Per-edge manual/auto mode | ❌ MISSING | |
-| 13 | Per-edge version constraints | ❌ MISSING | |
+| 10 | Promotion-pipeline **graph** | ✅ built | staged pipeline lane (cards + connectors w/ mode + gate badges) |
+| 11 | Edit promotion edges | ✅ built | add/remove directed edges in the Pipeline tab (Cosmos state) |
+| 12 | Per-edge manual/auto mode | ✅ built | mode badge per edge |
+| 13 | Per-edge version constraints | ❌ MISSING | versions exist but constraints not enforced |
 | 14 | Schedules / maintenance windows | ❌ MISSING | |
-| 15 | Approval gate per edge | ❌ MISSING | |
-| 16 | Pending-approvals queue | ❌ MISSING | |
-| 17 | Gate policy by env type | ❌ MISSING | |
-| 18 | Release/artifact versions | ❌ MISSING | promotion has a free-text note only |
-| 19 | "What version is where" matrix | ❌ MISSING | |
-| 20 | Release notes / version diff | ❌ MISSING | |
-| 21 | Promote execution | ⚠️ partial | records a promotion in Cosmos; only deploys if ADE definition named |
-| 22 | Slot swap | ❌ MISSING | |
-| 23 | Swap-with-preview (multi-phase) | ❌ MISSING | |
+| 15 | Approval gate per edge | ✅ built | `approvalsRequired` + approvers per edge; enforced in promote BFF |
+| 16 | Pending-approvals queue | ✅ built | Approvals tab — approve/reject + comment + audit; new `/approve` route |
+| 17 | Gate policy by env type | ⚠️ partial | per-edge gate (not auto-derived from env type) |
+| 18 | Release/artifact versions | ✅ built | Versions tab — version/build/commit/container-tag/notes in Cosmos state |
+| 19 | "What version is where" matrix | ✅ built | env × installed-version matrix; updated on promotion completion |
+| 20 | Release notes / version diff | ⚠️ partial | per-version notes; diff TODO |
+| 21 | Promote execution | ✅ built | records + gate + real ADE deploy + sets target currentVersion |
+| 22 | Slot swap | ✅ built | `app-service-slots-client` real `slotsswap` ARM REST + `/swap` route (honest gate) |
+| 23 | Swap-with-preview (multi-phase) | ✅ built | apply / complete / cancel actions (applySlotConfig + slotsswap + resetSlotConfig) |
 | 24 | Auto-swap config | ❌ MISSING | |
 | 25 | Warm-up ping config | ❌ MISSING | |
 | 26 | Create real ADE environment | ✅ built | `createDeploymentEnvironment` via DevCenter data-plane (honest gate) |
 | 27 | Traffic % routing | ❌ MISSING | |
-| 28 | One-click rollback | ❌ MISSING | |
+| 28 | One-click rollback | ⚠️ partial | re-swap (source↔target) supported via the swap action; dedicated button TODO |
 | 29 | Last-known-good indicator | ❌ MISSING | |
 | 30 | Per-env app settings + conn strings | ❌ MISSING | |
 | 31 | Sticky vs swappable flag | ❌ MISSING | |
 | 32 | Key Vault reference secrets | ❌ MISSING | |
-| 33 | Per-env status dashboard tiles | ❌ MISSING | |
-| 34 | Promotion history drill-in | ⚠️ partial | flat table (from/to/when/by/note); no detail/logs |
+| 33 | Per-env status dashboard tiles | ⚠️ partial | env cards show type + installed version; live provisioning/health TODO |
+| 34 | Promotion history drill-in | ⚠️ partial | history table w/ status + version; ARM/operation log drill-in TODO |
 | 35 | Environment Resources view | ❌ MISSING | |
 | 36 | Redeploy / delete / expiration | ❌ MISSING | |
 | 37 | Promotion RBAC by env type | ❌ MISSING | |
 | — | ARM deployment history (read) | ✅ built | `listArmDeployments` across Loom RGs (honest gate) |
 
-**Grade today: D/C — three thin sections (Stages, Promote, ARM history) on one scroll page, no tabs, no graph, no versions, no approvals, no slot swap, no per-env config/status.** Two real backends are wired (ADE create + ARM history read), so the bones are Azure-native and no-Fabric-clean — but feature completeness is far from the source UIs.
+**Grade today: B — tabbed surface (Environments · Pipeline · Promote/Swap · Approvals · Versions · History) on Fluent v9 + Loom tokens.** Rich environment registry, an ordered promotion pipeline with per-edge manual/auto mode + approval gates, a pending-approvals queue (approve/reject + audit), release versions with a "what's where" matrix, and **real Azure execution** — App Service slot swaps (incl. swap-with-preview apply/complete/cancel) via `app-service-slots-client`, plus the existing ADE create + ARM history. All Azure-native, no-Fabric-clean; honest infra-gates name the exact env var/role. Remaining ❌ rows (ADE catalog browser + param form, schedules, traffic %, auto-swap, warm-up, per-env config/secrets, env-resources view, redeploy/delete/expiration, RBAC, version diff) are the next waves.
 
 ---
 

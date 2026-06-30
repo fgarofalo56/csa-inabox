@@ -1,20 +1,20 @@
 /**
  * GET  /api/items/release-environment/[id]/promote → { ok, stages, promotions, devCenterConfigured }
- * POST /api/items/release-environment/[id]/promote { fromStage, toStage, note?, environmentDefinition? }
- *   → { ok, promotion, promotions }
+ * POST /api/items/release-environment/[id]/promote { fromStage, toStage, note?, version?, environmentDefinition? }
+ *   → { ok, promotion, promotions, pending?, deployedEnvironment? }
  *
  * Records a promotion between two stages on the release-environment item's
- * state (real Cosmos persistence). When LOOM_DEVCENTER_PROJECT is set the body
- * may name an Azure Deployment Environments definition to target. Azure-native;
- * no Fabric required.
+ * state (real Cosmos persistence). If a pipeline edge from→to declares an
+ * approval gate (approvalsRequired > 0) the promotion is recorded as `pending`
+ * and NOT deployed until the approvals queue clears it (see ./approve). When no
+ * gate applies and a definition is named, the real Azure Deployment Environment
+ * is created. On completion the target environment's currentVersion is updated
+ * (the "what's where" matrix). Azure-native; no Fabric required.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
-import {
-  createDeploymentEnvironment, devCenterConfigured, readDevCenterConfig,
-  DevCenterError, DevCenterNotConfiguredError,
-} from '@/lib/azure/devcenter-client';
+import { deployForPromotion, type DeployedEnv } from '../../_shared';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -23,15 +23,16 @@ function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
 }
 
-interface DeployedEnv {
-  name: string; provisioningState: string; environmentType: string;
-  environmentDefinitionName: string; resourceGroupId?: string; operationLocation?: string;
-}
+interface ApprovalRecord { by: string; at: string; decision: 'approve' | 'reject'; comment?: string }
+interface PipelineEdge { id: string; from: string; to: string; mode?: 'manual' | 'auto'; approvalsRequired?: number; approvers?: string }
+interface ReleaseEnv { id: string; name: string; currentVersion?: string; [k: string]: unknown }
 
 interface Promotion {
   id: string; fromStage: string; toStage: string; note?: string;
-  environmentDefinition?: string; promotedAt: string; promotedBy?: string;
-  /** Real Azure Deployment Environments result when DevCenter is configured. */
+  environmentDefinition?: string; version?: string;
+  status?: 'completed' | 'pending' | 'rejected';
+  approvalsRequired?: number; approvals?: ApprovalRecord[];
+  promotedAt: string; promotedBy?: string;
   deployedEnvironment?: DeployedEnv;
 }
 
@@ -67,60 +68,45 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   const state = { ...((env.state || {}) as Record<string, unknown>) };
   const promotions: Promotion[] = Array.isArray(state.promotions) ? (state.promotions as Promotion[]) : [];
+  const pipeline: PipelineEdge[] = Array.isArray(state.pipeline) ? (state.pipeline as PipelineEdge[]) : [];
+  const environments: ReleaseEnv[] = Array.isArray(state.environments) ? (state.environments as ReleaseEnv[]) : [];
   const environmentDefinition = String(body?.environmentDefinition || '').trim() || undefined;
+  const version = String(body?.version || '').trim() || undefined;
+  const note = String(body?.note || '').trim() || undefined;
+  const promotedBy = s.claims.upn || s.claims.email || s.claims.oid;
 
-  // When a DevCenter project is configured AND the promotion names an
-  // environment definition, create the REAL Azure Deployment Environment.
-  let deployedEnvironment: DeployedEnv | undefined;
-  if (environmentDefinition) {
-    if (!devCenterConfigured()) {
-      return NextResponse.json({
-        ok: false,
-        code: 'devcenter_gate',
-        gate: {
-          reason: 'An environment definition was named, but Azure Deployment Environments is not configured.',
-          remediation: 'Set LOOM_DEVCENTER_PROJECT, LOOM_DEVCENTER_URI, and LOOM_DEVCENTER_CATALOG on the Console, and grant the Console UAMI the "Deployment Environments User" role on the project. No Microsoft Fabric required.',
-          link: 'https://learn.microsoft.com/azure/deployment-environments/',
-        },
-        error: 'Azure Deployment Environments not configured (LOOM_DEVCENTER_PROJECT).',
-      }, { status: 409 });
-    }
-    try {
-      const r = await createDeploymentEnvironment({
-        environmentName: `${env.displayName || id}-${toStage}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 63),
-        environmentDefinitionName: environmentDefinition,
-        environmentType: toStage,
-      });
-      deployedEnvironment = r;
-    } catch (e) {
-      if (e instanceof DevCenterNotConfiguredError) {
-        try { readDevCenterConfig(); } catch { /* surfaced below */ }
-        return NextResponse.json({
-          ok: false,
-          code: 'devcenter_gate',
-          gate: {
-            reason: 'Azure Deployment Environments is partially configured.',
-            remediation: `Set the missing env var(s): ${e.missing.join(', ')} on the Console. No Microsoft Fabric required.`,
-            link: 'https://learn.microsoft.com/azure/deployment-environments/',
-          },
-          error: e.message,
-        }, { status: 409 });
-      }
-      const status = e instanceof DevCenterError ? e.status : 502;
-      return err(`Azure Deployment Environments create failed: ${(e as Error).message}`, status, 'devcenter_error');
-    }
+  // Approval gate: a matching pipeline edge with approvalsRequired > 0 records
+  // the promotion as pending; the approvals queue (./approve) deploys on clear.
+  const edge = pipeline.find((e) => e.from === fromStage && e.to === toStage);
+  const approvalsRequired = Math.max(0, Number(edge?.approvalsRequired) || 0);
+
+  if (approvalsRequired > 0) {
+    const promotion: Promotion = {
+      id: `promo_${Date.now()}`, fromStage, toStage, note, environmentDefinition, version,
+      status: 'pending', approvalsRequired, approvals: [],
+      promotedAt: new Date().toISOString(), promotedBy,
+    };
+    state.promotions = [promotion, ...promotions].slice(0, 200);
+    await updateOwnedItem(id, ITEM_TYPE, s.claims.oid, { state });
+    return NextResponse.json({ ok: true, promotion, promotions: state.promotions, pending: true });
   }
 
+  // No gate → run the real deploy (when a definition is named) and complete.
+  const outcome = await deployForPromotion({ displayName: env.displayName, id, toStage, environmentDefinition });
+  if (outcome.gate) {
+    return NextResponse.json({ ok: false, code: 'devcenter_gate', gate: outcome.gate, error: outcome.error }, { status: outcome.status || 409 });
+  }
+  if (outcome.error) return err(outcome.error, outcome.status || 502, 'devcenter_error');
+
   const promotion: Promotion = {
-    id: `promo_${Date.now()}`,
-    fromStage, toStage,
-    note: String(body?.note || '').trim() || undefined,
-    environmentDefinition,
-    promotedAt: new Date().toISOString(),
-    promotedBy: s.claims.upn || s.claims.email || s.claims.oid,
-    ...(deployedEnvironment ? { deployedEnvironment } : {}),
+    id: `promo_${Date.now()}`, fromStage, toStage, note, environmentDefinition, version,
+    status: 'completed', promotedAt: new Date().toISOString(), promotedBy,
+    ...(outcome.deployedEnvironment ? { deployedEnvironment: outcome.deployedEnvironment } : {}),
   };
   state.promotions = [promotion, ...promotions].slice(0, 200);
+  if (version && environments.length) {
+    state.environments = environments.map((e) => (e.name === toStage ? { ...e, currentVersion: version } : e));
+  }
   await updateOwnedItem(id, ITEM_TYPE, s.claims.oid, { state });
-  return NextResponse.json({ ok: true, promotion, promotions: state.promotions, deployedEnvironment });
+  return NextResponse.json({ ok: true, promotion, promotions: state.promotions, deployedEnvironment: outcome.deployedEnvironment });
 }
