@@ -26,7 +26,7 @@ import {
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
-  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
+  Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -38,6 +38,9 @@ import {
   Table20Regular, ChartMultiple20Regular,
   ArrowDownload16Regular, ArrowSortUp16Regular, ArrowSortDown16Regular,
   Save16Regular, DataTrending20Regular, Play20Regular, Pulse20Regular,
+  Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
+  ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
+  Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -53,6 +56,8 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { KeyValueRows } from '@/lib/components/ui/key-value-rows';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
 import { type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
 import {
@@ -85,10 +90,18 @@ import {
   flattenPlanCells, filterPlanRows, sortPlanRows,
   periodSeries, forecastPeriods, linearFit, ganttLayout, planInsights,
   applyMappingsToActuals,
+  // EPM core — cube model, member hierarchies, roll-ups, guided formulas.
+  emptyPlanModel, defaultPlanModel, orderMembers,
+  orderedLineItems, lineItemValueAt, lineItemRowTotal, leafInputItems,
+  evalFormula, formulaToText, validateModel, validateFormulaRows,
+  qfSum, qfAverage, qfDifference, qfRatioPct, qfGrowthPct,
   type PlanScenario, type PlanScenarioKind,
   type PlanningSheet, type PlanSemanticModelRef, type PlanBackingDb,
   type PlanCellRow, type PlanRowSortKey, type PeriodPoint, type GanttBar,
-  type PlanSourceMapping,
+  type PlanSourceMapping, type PlanLineItem,
+  type PlanModel, type PlanDimension, type PlanMember, type PlanMeasure,
+  type PlanAggKind, type PlanDimensionAxis, type PlanFormulaToken,
+  type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from './_plan-model';
 
 /**
@@ -124,6 +137,40 @@ const useStyles = makeStyles({
   /* Icon + title section header for icon-less Subtitle2 sections. */
   secHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   secHeadIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
+
+  /* ---- Plan Model (cube) tab — dimension / measure cards (web3 elevation) ---- */
+  planModelCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderLeftWidth: '4px', borderLeftColor: tokens.colorBrandStroke1,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationFaster,
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  planModelCardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  planModelCardIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  planMemberRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS,
+  },
+  planIndent: { width: tokens.spacingHorizontalL, flexShrink: 0 },
+  planFormulaPreview: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, wordBreak: 'break-word',
+  },
+  planTokenChip: {
+    display: 'inline-flex', alignItems: 'center',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground3,
+    fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1,
+  },
 
   /* ---- Data-agent build tab — sectioned, card-based, web-3.0 ---- */
   daSection: {
@@ -2192,6 +2239,8 @@ interface PlanState {
   activeScenarioId?: string;
   semanticModelRef?: PlanSemanticModelRef;
   backingDb?: PlanBackingDb;
+  // EPM core — the multidimensional cube model (dimensions + measures).
+  model?: PlanModel;
   // audit-T64 finish — InfoBridge source-system → line-item mappings.
   infoBridge?: PlanSourceMapping[];
   // Intelligence forecast horizon (periods to project); persisted per plan.
@@ -2421,6 +2470,14 @@ function ensureScenarios(prev: PlanState): PlanScenario[] {
   const cur = arr<PlanScenario>(prev.scenarios);
   return cur.length ? cur : defaultScenarios();
 }
+/** Seed the cube model so a legacy plan (no model) still renders the Model tab. */
+function ensureModel(prev: PlanState): PlanModel {
+  const m = prev.model;
+  if (m && typeof m === 'object' && (Array.isArray(m.dimensions) || Array.isArray(m.measures))) {
+    return { dimensions: arr<PlanDimension>(m.dimensions), measures: arr<PlanMeasure>(m.measures) };
+  }
+  return emptyPlanModel();
+}
 const fmtNum = (n: number) =>
   (Number.isFinite(n) ? n : 0).toLocaleString(undefined, { maximumFractionDigits: 0 });
 
@@ -2567,6 +2624,14 @@ function PlanningSheetPanel({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  // Hierarchy drill-down (collapsed parent ids) + Formula builder target row.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [formulaEdit, setFormulaEdit] = useState<string | null>(null);
+  const toggleCollapse = (liId: string) => setCollapsed((prev) => {
+    const next = new Set(prev);
+    if (next.has(liId)) next.delete(liId); else next.add(liId);
+    return next;
+  });
 
   // All sheet mutations funnel through here so the seeded defaults persist.
   const mutateSheet = (sheetId: string, mut: (s: PlanningSheet) => PlanningSheet) =>
@@ -2593,6 +2658,40 @@ function PlanningSheetPanel({
   const addPeriod = () => mutateSheet(sheet.id, (s) => ({ ...s, periods: [...s.periods, { id: newId('p'), label: `P${s.periods.length + 1}` }] }));
   const renamePeriod = (pId: string, label: string) => mutateSheet(sheet.id, (s) => ({ ...s, periods: s.periods.map((p) => (p.id === pId ? { ...p, label } : p)) }));
   const removePeriod = (pId: string) => mutateSheet(sheet.id, (s) => ({ ...s, periods: s.periods.filter((p) => p.id !== pId) }));
+
+  // ----- Formula rows + member hierarchy (roll-up / drill-down) -----
+  const addFormulaRow = () => {
+    const fid = newId('li');
+    mutateSheet(sheet.id, (s) => ({ ...s, lineItems: [...s.lineItems, { id: fid, name: 'New formula', kind: 'formula', formula: [] }] }));
+    setFormulaEdit(fid); // open the builder immediately
+  };
+  const setLineItemFormula = (liId: string, formula: PlanFormulaToken[]) =>
+    mutateSheet(sheet.id, (s) => ({ ...s, lineItems: s.lineItems.map((li) => (li.id === liId ? { ...li, kind: 'formula', formula } : li)) }));
+  // Indent a row under the nearest preceding sibling (same depth) → makes a hierarchy.
+  const indentRow = (liId: string) => mutateSheet(sheet.id, (s) => {
+    const ordered = orderedLineItems(s.lineItems);
+    const idx = ordered.findIndex((o) => o.item.id === liId);
+    if (idx <= 0) return s;
+    const me = ordered[idx];
+    for (let i = idx - 1; i >= 0; i--) {
+      if (ordered[i].depth === me.depth) {
+        return { ...s, lineItems: s.lineItems.map((li) => (li.id === liId ? { ...li, parentId: ordered[i].item.id } : li)) };
+      }
+      if (ordered[i].depth < me.depth) break;
+    }
+    return s;
+  });
+  const outdentRow = (liId: string) => mutateSheet(sheet.id, (s) => {
+    const me = s.lineItems.find((li) => li.id === liId);
+    if (!me?.parentId) return s;
+    const grand = s.lineItems.find((li) => li.id === me.parentId)?.parentId ?? null;
+    return { ...s, lineItems: s.lineItems.map((li) => (li.id === liId ? { ...li, parentId: grand } : li)) };
+  });
+  // Apply a quick formula directly to a row (no dialog) — converts it to formula.
+  const applyQuickFormula = (liId: string, tokens: PlanFormulaToken[]) => {
+    setLineItemFormula(liId, tokens);
+    setMsg({ intent: 'success', text: 'Quick formula applied. Open the formula to refine it.' });
+  };
 
   const addSheet = () => {
     const ns = { ...defaultPlanningSheet(), id: newId('sheet'), name: `Sheet ${sheets.length + 1}`, cells: {}, actuals: {} };
@@ -2627,10 +2726,16 @@ function PlanningSheetPanel({
   // Writeback the active sheet's cells (all scenarios) into Azure SQL.
   const writeback = async () => {
     if (!id || id === 'new') { setMsg({ intent: 'warning', text: 'Save the plan first.' }); return; }
-    const cells = Object.entries(sheet.cells).map(([k, value]) => {
-      const [lineItemId, periodId, scenarioId] = k.split('|');
-      return { lineItemId, periodId, scenarioId, value };
-    });
+    // Only leaf-input cells are persisted — roll-up parents + formula rows are
+    // computed, never stored (so a row converted to a parent/formula can't push
+    // stale numbers). Mirrors flattenPlanCells / the SQL round-trip.
+    const leafIds = new Set(leafInputItems(sheet.lineItems).map((li) => li.id));
+    const cells = Object.entries(sheet.cells)
+      .map(([k, value]) => {
+        const [lineItemId, periodId, scenarioId] = k.split('|');
+        return { lineItemId, periodId, scenarioId, value };
+      })
+      .filter((c) => leafIds.has(c.lineItemId));
     if (cells.length === 0) { setMsg({ intent: 'warning', text: 'No cells to write back yet.' }); return; }
     setBusy(true); setMsg(null);
     try {
@@ -2650,7 +2755,21 @@ function PlanningSheetPanel({
   };
 
   const variance = computeVariance(sheet, activeScenarioId, sheet.actuals || {});
-  const inputItems = sheet.lineItems.filter((li) => li.kind === 'input');
+  // Hierarchy-ordered rows (parents before children). A row is hidden when any
+  // ancestor is collapsed (drill-down). Roll-up parents + formula rows render
+  // read-only computed values; only leaf inputs are editable.
+  const ordered = orderedLineItems(sheet.lineItems);
+  const byId = new Map(sheet.lineItems.map((li) => [li.id, li]));
+  const isHidden = (li: PlanLineItem) => {
+    let pid = li.parentId;
+    while (pid) { if (collapsed.has(pid)) return true; pid = byId.get(pid)?.parentId ?? null; }
+    return false;
+  };
+  const visibleRows = ordered.filter((o) => !isHidden(o.item));
+  // Candidate rows a formula can reference (every row in the sheet except itself).
+  const formulaCandidates = sheet.lineItems.map((li) => ({ id: li.id, name: li.name }));
+  const editingFormulaItem = formulaEdit ? byId.get(formulaEdit) : undefined;
+  const varColspan = sheet.periods.length + (showVariance ? 6 : 3);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
@@ -2679,6 +2798,7 @@ function PlanningSheetPanel({
         <Button icon={<BranchFork20Regular />} onClick={branchScenario}>Branch scenario</Button>
         <Switch label="Variance vs actuals" checked={showVariance} onChange={(_, d) => setShowVariance(d.checked)} />
         <div style={{ flex: 1 }} />
+        <Button icon={<Calculator20Regular />} onClick={addFormulaRow}>Add formula row</Button>
         <Button icon={busy ? <Spinner size="tiny" /> : <ArrowUpload16Regular />} onClick={writeback} disabled={busy}>Write back</Button>
         <Button icon={<Settings20Regular />} onClick={() => setSettingsOpen(true)}>Settings</Button>
       </div>
@@ -2717,9 +2837,9 @@ function PlanningSheetPanel({
             </TableRow>
           </TableHeader>
           <TableBody>
-            {inputItems.length === 0 && (
+            {ordered.length === 0 && (
               <TableRow>
-                <TableCell colSpan={sheet.periods.length + (showVariance ? 6 : 3)}>
+                <TableCell colSpan={varColspan}>
                   <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 }}>
                     <Money20Regular />
                     <Body1>No line items yet</Body1>
@@ -2729,37 +2849,92 @@ function PlanningSheetPanel({
                 </TableCell>
               </TableRow>
             )}
-            {inputItems.map((li) => {
+            {visibleRows.map(({ item: li, depth, hasChildren }) => {
               const v = variance.find((x) => x.lineItemId === li.id);
+              const isFormula = li.kind === 'formula';
+              const isRollup = hasChildren; // any row with children = read-only roll-up
+              const computed = isFormula || isRollup;
+              const formulaText = isFormula && Array.isArray(li.formula) && li.formula.length
+                ? formulaToText(li.formula, (ref) => byId.get(ref)?.name || ref) : '';
               return (
                 <TableRow key={li.id}>
-                  <TableCell><Input value={li.name} onChange={(_, d) => renameLineItem(li.id, d.value)} aria-label="Line item name" /></TableCell>
-                  {sheet.periods.map((p) => (
+                  <TableCell>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, minWidth: 0 }}>
+                      {Array.from({ length: depth }).map((_, i) => <span key={i} style={{ width: tokens.spacingHorizontalL, flexShrink: 0 }} />)}
+                      {hasChildren ? (
+                        <Button size="small" appearance="transparent" aria-label={collapsed.has(li.id) ? 'Expand' : 'Collapse'}
+                          icon={collapsed.has(li.id) ? <ChevronRight16Regular /> : <ChevronDown16Regular />} onClick={() => toggleCollapse(li.id)} />
+                      ) : isFormula ? (
+                        <Calculator20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+                      ) : <span style={{ width: tokens.spacingHorizontalL, flexShrink: 0 }} />}
+                      <Input value={li.name} onChange={(_, d) => renameLineItem(li.id, d.value)} aria-label="Line item name" style={{ minWidth: 0, fontWeight: isRollup ? tokens.fontWeightSemibold : undefined } as any} />
+                    </span>
+                    {formulaText && <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, fontFamily: 'monospace', marginLeft: tokens.spacingHorizontalL }}>= {formulaText}</Caption1>}
+                  </TableCell>
+                  {sheet.periods.map((p, pIdx) => (
                     <TableCell key={p.id}>
-                      <Input
-                        type="number"
-                        value={String(getCell(sheet.cells, li.id, p.id, activeScenarioId) || '')}
-                        onChange={(_, d) => setCell(li.id, p.id, d.value)}
-                        style={{ maxWidth: 80 }}
-                        aria-label={`${li.name} ${p.label}`}
-                      />
+                      {computed ? (
+                        <span style={{ display: 'inline-block', minWidth: 60, color: tokens.colorNeutralForeground2 }}>
+                          {fmtNum(lineItemValueAt(sheet, activeScenarioId, li.id, pIdx))}
+                        </span>
+                      ) : (
+                        <Input
+                          type="number"
+                          value={String(getCell(sheet.cells, li.id, p.id, activeScenarioId) || '')}
+                          onChange={(_, d) => setCell(li.id, p.id, d.value)}
+                          style={{ maxWidth: 80 }}
+                          aria-label={`${li.name} ${p.label}`}
+                        />
+                      )}
                     </TableCell>
                   ))}
-                  <TableCell><strong>{fmtNum(rowTotal(sheet, activeScenarioId, li.id))}</strong></TableCell>
+                  <TableCell><strong>{fmtNum(computed ? lineItemRowTotal(sheet, activeScenarioId, li.id) : rowTotal(sheet, activeScenarioId, li.id))}</strong></TableCell>
                   {showVariance && (
                     <TableCell>
-                      <Input type="number" value={String((sheet.actuals || {})[li.id] || '')} onChange={(_, d) => setActual(li.id, d.value)} style={{ maxWidth: 90 }} aria-label={`Actual ${li.name}`} />
+                      {computed ? <span style={{ color: tokens.colorNeutralForeground4 }}>—</span> : (
+                        <Input type="number" value={String((sheet.actuals || {})[li.id] || '')} onChange={(_, d) => setActual(li.id, d.value)} style={{ maxWidth: 90 }} aria-label={`Actual ${li.name}`} />
+                      )}
                     </TableCell>
                   )}
                   {showVariance && (
-                    <TableCell style={{ color: (v?.delta || 0) < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>
-                      {fmtNum(v?.delta || 0)}
+                    <TableCell style={{ color: computed ? undefined : ((v?.delta || 0) < 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1) }}>
+                      {computed ? '—' : fmtNum(v?.delta || 0)}
                     </TableCell>
                   )}
                   {showVariance && (
-                    <TableCell>{v?.pct == null ? '—' : `${Math.round(v.pct * 100)}%`}</TableCell>
+                    <TableCell>{computed || v?.pct == null ? '—' : `${Math.round(v.pct * 100)}%`}</TableCell>
                   )}
-                  <TableCell><Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => removeLineItem(li.id)} aria-label="Remove line item" /></TableCell>
+                  <TableCell>
+                    <Menu>
+                      <MenuTrigger disableButtonEnhancement>
+                        <Button size="small" appearance="subtle" aria-label="Row actions" icon={<ChevronDown16Regular />} />
+                      </MenuTrigger>
+                      <MenuPopover>
+                        <MenuList>
+                          {isFormula && <MenuItem icon={<Edit16Regular />} onClick={() => setFormulaEdit(li.id)}>Edit formula…</MenuItem>}
+                          {!isFormula && !isRollup && (
+                            <Menu>
+                              <MenuTrigger disableButtonEnhancement>
+                                <MenuItem icon={<Calculator20Regular />}>Quick formula</MenuItem>
+                              </MenuTrigger>
+                              <MenuPopover>
+                                <MenuList>
+                                  <MenuItem onClick={() => setFormulaEdit(li.id)}>Open builder…</MenuItem>
+                                  <MenuDivider />
+                                  <MenuItem onClick={() => applyQuickFormula(li.id, qfGrowthPct(li.id, -1))}>Growth % vs previous</MenuItem>
+                                  <MenuItem onClick={() => applyQuickFormula(li.id, qfGrowthPct(li.id, -4))}>Growth % vs year ago</MenuItem>
+                                </MenuList>
+                              </MenuPopover>
+                            </Menu>
+                          )}
+                          <MenuItem icon={<ChevronRight16Regular />} onClick={() => indentRow(li.id)}>Indent (nest)</MenuItem>
+                          <MenuItem icon={<ChevronLeft16Regular />} onClick={() => outdentRow(li.id)} disabled={!li.parentId}>Outdent</MenuItem>
+                          <MenuDivider />
+                          <MenuItem icon={<Dismiss16Regular />} onClick={() => removeLineItem(li.id)}>Delete row</MenuItem>
+                        </MenuList>
+                      </MenuPopover>
+                    </Menu>
+                  </TableCell>
                 </TableRow>
               );
             })}
@@ -2781,9 +2956,16 @@ function PlanningSheetPanel({
 
       <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
         <Button icon={<Add20Regular />} onClick={addLineItem}>Add line item</Button>
+        <Button icon={<Calculator20Regular />} onClick={addFormulaRow}>Add formula row</Button>
         <Button icon={<Add20Regular />} onClick={addPeriod}>Add period</Button>
         <Button appearance="primary" onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : 'Save plan'}</Button>
       </div>
+
+      {(sheet.lineItems.some((li) => li.parentId) || sheet.lineItems.some((li) => li.kind === 'formula')) && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          <Layer20Regular style={{ verticalAlign: 'middle' }} /> Roll-up parents and formula rows are computed (read-only); only leaf inputs hold entered values.
+        </Caption1>
+      )}
 
       {state.semanticModelRef && (
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
@@ -2798,6 +2980,13 @@ function PlanningSheetPanel({
       )}
 
       <PlanSettingsFlyout id={id} state={state} setState={setState} open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+      <FormulaBuilderDialog
+        open={!!formulaEdit}
+        onClose={() => setFormulaEdit(null)}
+        initial={(editingFormulaItem?.formula as PlanFormulaToken[]) || []}
+        rows={formulaCandidates.filter((r) => r.id !== formulaEdit)}
+        onApply={(toks) => { if (formulaEdit) setLineItemFormula(formulaEdit, toks); }}
+      />
     </div>
   );
 }
@@ -3358,12 +3547,502 @@ function PlanInfoBridgePanel({
   );
 }
 
+// ===================================================================
+// EPM core UI — guided Formula builder + Model (cube) tab.
+//
+// Parity with Microsoft Fabric IQ Plan's user formulas + multidimensional cube
+// (Anaplan-style). The Formula builder is fully GUIDED (function palette + row
+// picker + operator buttons + number field) — there is NO freeform expression
+// box (.claude/rules loom_no_freeform_config). The Model tab defines dimensions
+// (member hierarchies) + measures and validates them against a real backend
+// (POST /api/items/plan/[id]/model). Azure-native; no Microsoft Fabric.
+// ===================================================================
+
+const FORMULA_OFFSETS: { value: string; label: string; offset: number }[] = [
+  { value: '0', label: 'this period', offset: 0 },
+  { value: '-1', label: 'previous period', offset: -1 },
+  { value: '-4', label: 'year ago (−4)', offset: -4 },
+];
+const FORMULA_FNS: PlanFormulaFn[] = ['SUM', 'AVG', 'MIN', 'MAX', 'ABS'];
+type FormulaPreset = 'custom' | 'sum' | 'avg' | 'diff' | 'ratio' | 'growthPrev' | 'growthYoY';
+
+/**
+ * Guided Formula builder — assemble a {@link PlanFormulaToken} AST from presets
+ * + a function/operator/row palette. No freeform text; the only text inputs are
+ * numeric. Live preview + structural validity gate before Apply.
+ */
+function FormulaBuilderDialog({
+  open, onClose, initial, rows, onApply,
+}: {
+  open: boolean;
+  onClose: () => void;
+  initial: PlanFormulaToken[];
+  rows: { id: string; name: string }[];
+  onApply: (tokens: PlanFormulaToken[]) => void;
+}) {
+  const s = useStyles();
+  const [tokens, setTokens] = useState<PlanFormulaToken[]>(initial);
+  const [preset, setPreset] = useState<FormulaPreset>('custom');
+  const [presetRows, setPresetRows] = useState<string[]>([]);
+  const [presetA, setPresetA] = useState('');
+  const [presetB, setPresetB] = useState('');
+  const [insRow, setInsRow] = useState(rows[0]?.id || '');
+  const [insOffset, setInsOffset] = useState('0');
+  const [insNum, setInsNum] = useState('');
+
+  useEffect(() => {
+    if (open) {
+      setTokens(Array.isArray(initial) ? initial : []);
+      setPreset('custom'); setPresetRows([]); setPresetA(''); setPresetB('');
+      setInsRow(rows[0]?.id || ''); setInsOffset('0'); setInsNum('');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const labelFor = useCallback((ref: string) => rows.find((r) => r.id === ref)?.name || ref, [rows]);
+  const preview = formulaToText(tokens, labelFor);
+  // Structural validity probe — resolve every ref to 1 so only the *shape* is checked.
+  const check = evalFormula(tokens, () => 1);
+
+  const push = (t: PlanFormulaToken) => setTokens((p) => [...p, t]);
+  const undo = () => setTokens((p) => p.slice(0, -1));
+  const clear = () => setTokens([]);
+
+  const generatePreset = () => {
+    if (preset === 'sum' && presetRows.length) setTokens(qfSum(presetRows));
+    else if (preset === 'avg' && presetRows.length) setTokens(qfAverage(presetRows));
+    else if (preset === 'diff' && presetA && presetB) setTokens(qfDifference(presetA, presetB));
+    else if (preset === 'ratio' && presetA && presetB) setTokens(qfRatioPct(presetA, presetB));
+    else if (preset === 'growthPrev' && presetA) setTokens(qfGrowthPct(presetA, -1));
+    else if (preset === 'growthYoY' && presetA) setTokens(qfGrowthPct(presetA, -4));
+  };
+
+  const presetNeedsMulti = preset === 'sum' || preset === 'avg';
+  const presetNeedsTwo = preset === 'diff' || preset === 'ratio';
+  const presetNeedsOne = preset === 'growthPrev' || preset === 'growthYoY';
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 680 }}>
+        <DialogBody>
+          <DialogTitle>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+              <Calculator20Regular style={{ color: tokens.colorBrandForeground1 }} /> Formula builder
+            </span>
+          </DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Build a calculation from rows, operators, and functions — no typing of expressions. Row references resolve per
+                period; pick &quot;previous period&quot; or &quot;year ago&quot; for growth calcs.
+              </Caption1>
+
+              {/* Quick presets */}
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap', padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground2 }}>
+                <Field label="Quick formula">
+                  <Dropdown
+                    value={{
+                      custom: 'Custom', sum: 'Sum of rows', avg: 'Average of rows',
+                      diff: 'Difference (a − b)', ratio: 'Ratio % (a ÷ b × 100)',
+                      growthPrev: 'Growth % vs previous', growthYoY: 'Growth % vs year ago',
+                    }[preset]}
+                    selectedOptions={[preset]}
+                    onOptionSelect={(_, d) => { setPreset((d.optionValue as FormulaPreset) || 'custom'); setPresetRows([]); setPresetA(''); setPresetB(''); }}
+                    style={{ minWidth: 200 }}
+                  >
+                    <Option value="custom">Custom</Option>
+                    <Option value="sum">Sum of rows</Option>
+                    <Option value="avg">Average of rows</Option>
+                    <Option value="diff">Difference (a − b)</Option>
+                    <Option value="ratio">Ratio % (a ÷ b × 100)</Option>
+                    <Option value="growthPrev">Growth % vs previous</Option>
+                    <Option value="growthYoY">Growth % vs year ago</Option>
+                  </Dropdown>
+                </Field>
+                {presetNeedsMulti && (
+                  <Field label="Rows">
+                    <Dropdown multiselect placeholder="Pick rows…" selectedOptions={presetRows}
+                      value={presetRows.map(labelFor).join(', ')}
+                      onOptionSelect={(_, d) => setPresetRows(d.selectedOptions)} style={{ minWidth: 220 }}>
+                      {rows.map((r) => <Option key={r.id} value={r.id}>{r.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                )}
+                {(presetNeedsTwo || presetNeedsOne) && (
+                  <Field label={presetNeedsTwo ? 'Row a' : 'Row'}>
+                    <Dropdown placeholder="Pick a row…" value={labelFor(presetA)} selectedOptions={presetA ? [presetA] : []}
+                      onOptionSelect={(_, d) => setPresetA(d.optionValue || '')} style={{ minWidth: 160 }}>
+                      {rows.map((r) => <Option key={r.id} value={r.id}>{r.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                )}
+                {presetNeedsTwo && (
+                  <Field label="Row b">
+                    <Dropdown placeholder="Pick a row…" value={labelFor(presetB)} selectedOptions={presetB ? [presetB] : []}
+                      onOptionSelect={(_, d) => setPresetB(d.optionValue || '')} style={{ minWidth: 160 }}>
+                      {rows.map((r) => <Option key={r.id} value={r.id}>{r.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                )}
+                {preset !== 'custom' && (
+                  <Button appearance="primary" icon={<Sparkle20Regular />} onClick={generatePreset}
+                    disabled={(presetNeedsMulti && presetRows.length === 0) || (presetNeedsTwo && (!presetA || !presetB)) || (presetNeedsOne && !presetA)}>
+                    Generate
+                  </Button>
+                )}
+              </div>
+
+              {/* Manual palette */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                <Subtitle2>Build / refine</Subtitle2>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <Field label="Row">
+                    <Dropdown value={labelFor(insRow)} selectedOptions={insRow ? [insRow] : []}
+                      onOptionSelect={(_, d) => setInsRow(d.optionValue || '')} style={{ minWidth: 150 }} disabled={rows.length === 0}>
+                      {rows.map((r) => <Option key={r.id} value={r.id}>{r.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Field label="Period">
+                    <Dropdown value={FORMULA_OFFSETS.find((o) => o.value === insOffset)?.label || 'this period'}
+                      selectedOptions={[insOffset]} onOptionSelect={(_, d) => setInsOffset(d.optionValue || '0')} style={{ minWidth: 140 }}>
+                      {FORMULA_OFFSETS.map((o) => <Option key={o.value} value={o.value}>{o.label}</Option>)}
+                    </Dropdown>
+                  </Field>
+                  <Button icon={<Add16Regular />} onClick={() => insRow && push({ k: 'row', ref: insRow, offset: Number(insOffset) || 0 })} disabled={!insRow}>Add row</Button>
+                </div>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <Field label="Number">
+                    <Input type="number" value={insNum} onChange={(_, d) => setInsNum(d.value)} style={{ maxWidth: 120 }} placeholder="0" />
+                  </Field>
+                  <Button icon={<Add16Regular />} onClick={() => { const v = Number(insNum); if (Number.isFinite(v)) { push({ k: 'num', value: v }); setInsNum(''); } }} disabled={insNum === ''}>Add number</Button>
+                  <div style={{ flex: 1 }} />
+                  <Button appearance="subtle" icon={<ArrowUndo16Regular />} onClick={undo} disabled={tokens.length === 0}>Undo</Button>
+                  <Button appearance="subtle" onClick={clear} disabled={tokens.length === 0}>Clear</Button>
+                </div>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+                  {(['+', '-', '*', '/'] as PlanFormulaOp[]).map((op) => (
+                    <Button key={op} appearance="secondary" size="small" onClick={() => push({ k: 'op', op })}>
+                      {op === '*' ? '×' : op === '/' ? '÷' : op}
+                    </Button>
+                  ))}
+                  <Button appearance="secondary" size="small" onClick={() => push({ k: 'lp' })}>(</Button>
+                  <Button appearance="secondary" size="small" onClick={() => push({ k: 'rp' })}>)</Button>
+                  <Button appearance="secondary" size="small" onClick={() => push({ k: 'comma' })}>,</Button>
+                  {FORMULA_FNS.map((fn) => (
+                    <Button key={fn} appearance="secondary" size="small" onClick={() => { push({ k: 'fn', fn }); push({ k: 'lp' }); }}>{fn}()</Button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Live preview + validity */}
+              <Field label="Preview">
+                <div className={s.planFormulaPreview} aria-live="polite">{preview}</div>
+              </Field>
+              {tokens.length > 0 && !check.ok && (
+                <MessageBar intent="warning"><MessageBarBody>{check.error || 'Formula is incomplete.'}</MessageBarBody></MessageBar>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={tokens.length === 0 || !check.ok} onClick={() => { onApply(tokens); onClose(); }}>
+              Apply formula
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/**
+ * Member-hierarchy editor for one dimension — add/rename/indent/outdent/remove
+ * members with parent/child nesting + roll-up semantics. Depth-first ordered.
+ */
+function DimensionMembersEditor({
+  dimension, onChange,
+}: {
+  dimension: PlanDimension;
+  onChange: (members: PlanMember[]) => void;
+}) {
+  const s = useStyles();
+  const ordered = orderMembers(dimension.members);
+  const byId = new Map(dimension.members.map((m) => [m.id, m]));
+
+  const addMember = () => onChange([...dimension.members, { id: newId('mem'), label: 'New member' }]);
+  const rename = (mid: string, label: string) => onChange(dimension.members.map((m) => (m.id === mid ? { ...m, label } : m)));
+  const remove = (mid: string) => onChange(dimension.members
+    .filter((m) => m.id !== mid)
+    .map((m) => (m.parentId === mid ? { ...m, parentId: byId.get(mid)?.parentId ?? null } : m)));
+  const indent = (mid: string) => {
+    const idx = ordered.findIndex((o) => o.member.id === mid);
+    if (idx <= 0) return;
+    const me = ordered[idx];
+    // Nearest preceding member at the SAME depth = a valid new parent (prev sibling).
+    for (let i = idx - 1; i >= 0; i--) {
+      if (ordered[i].depth === me.depth) { onChange(dimension.members.map((m) => (m.id === mid ? { ...m, parentId: ordered[i].member.id } : m))); return; }
+      if (ordered[i].depth < me.depth) break;
+    }
+  };
+  const outdent = (mid: string) => {
+    const cur = byId.get(mid);
+    if (!cur?.parentId) return;
+    const grand = byId.get(cur.parentId)?.parentId ?? null;
+    onChange(dimension.members.map((m) => (m.id === mid ? { ...m, parentId: grand } : m)));
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+      {ordered.length === 0 && (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No members yet.</Caption1>
+      )}
+      {ordered.map(({ member, depth, hasChildren }) => (
+        <div key={member.id} className={s.planMemberRow}>
+          {Array.from({ length: depth }).map((_, i) => <span key={i} className={s.planIndent} />)}
+          {hasChildren ? <Layer20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+            : <span style={{ width: tokens.spacingHorizontalL, flexShrink: 0, color: tokens.colorNeutralForeground4, textAlign: 'center' }}>•</span>}
+          <Input size="small" value={member.label} onChange={(_, d) => rename(member.id, d.value)} aria-label="Member label" style={{ flex: 1, minWidth: 100 }} />
+          <Button size="small" appearance="subtle" icon={<ChevronRight16Regular />} onClick={() => indent(member.id)} aria-label="Indent member" title="Indent (nest under previous sibling)" />
+          <Button size="small" appearance="subtle" icon={<ChevronLeft16Regular />} onClick={() => outdent(member.id)} aria-label="Outdent member" title="Outdent" disabled={!member.parentId} />
+          <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => remove(member.id)} aria-label="Remove member" />
+        </div>
+      ))}
+      <Button size="small" appearance="subtle" icon={<Add16Regular />} onClick={addMember} style={{ alignSelf: 'flex-start', marginTop: tokens.spacingVerticalXS }}>Add member</Button>
+    </div>
+  );
+}
+
+const AGG_OPTIONS: { value: PlanAggKind; label: string }[] = [
+  { value: 'sum', label: 'Sum' }, { value: 'avg', label: 'Average' }, { value: 'count', label: 'Count' },
+  { value: 'min', label: 'Min' }, { value: 'max', label: 'Max' },
+];
+
+/**
+ * Model (cube) tab — define dimensions (member hierarchies) + measures, then
+ * validate against the real backend. The structural foundation the planning
+ * grid + formulas build on. Azure-native (Cosmos state); no Microsoft Fabric.
+ */
+function PlanModelPanel({
+  id, state, setState, save, saving,
+}: {
+  id: string;
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  save: (next?: PlanState) => Promise<boolean>;
+  saving: boolean;
+}) {
+  const s = useStyles();
+  const model = ensureModel(state);
+  const sheets = ensureSheets(state);
+  const lineItemIds = useMemo(() => sheets.flatMap((sh) => sh.lineItems.map((li) => li.id)), [sheets]);
+  const allLineItems = useMemo(() => sheets.flatMap((sh) => sh.lineItems.map((li) => ({ id: li.id, name: `${sh.name} · ${li.name}` }))), [sheets]);
+
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ valid: boolean; issues: ModelIssue[]; message: string } | null>(null);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  const setModel = (mut: (m: PlanModel) => PlanModel) =>
+    setState((prev) => ({ ...prev, model: mut(ensureModel(prev)) }));
+
+  const addDimension = () => setModel((m) => ({ ...m, dimensions: [...m.dimensions, { id: newId('dim'), name: `Dimension ${m.dimensions.length + 1}`, axis: 'row', members: [] }] }));
+  const seedStarter = () => setState((prev) => ({ ...prev, model: defaultPlanModel() }));
+  const removeDimension = (did: string) => setModel((m) => ({ ...m, dimensions: m.dimensions.filter((d) => d.id !== did) }));
+  const patchDimension = (did: string, patch: Partial<PlanDimension>) => setModel((m) => ({ ...m, dimensions: m.dimensions.map((d) => (d.id === did ? { ...d, ...patch } : d)) }));
+
+  const addMeasure = () => setModel((m) => ({ ...m, measures: [...m.measures, { id: newId('meas'), name: `Measure ${m.measures.length + 1}`, agg: 'sum' }] }));
+  const removeMeasure = (mid: string) => setModel((m) => ({ ...m, measures: m.measures.filter((x) => x.id !== mid) }));
+  const patchMeasure = (mid: string, patch: Partial<PlanMeasure>) => setModel((m) => ({ ...m, measures: m.measures.map((x) => (x.id === mid ? { ...x, ...patch } : x)) }));
+
+  // "Add members as rows" — push a dimension's members (with parent mapping) onto
+  // the active sheet as hierarchical line items, connecting the model to the grid.
+  const addMembersToSheet = (dim: PlanDimension) => {
+    const activeId = sheets.some((sh) => sh.id === state.activeSheetId) ? state.activeSheetId : sheets[0].id;
+    setState((prev) => {
+      const cur = ensureSheets(prev);
+      const idMap = new Map<string, string>();
+      dim.members.forEach((mem) => idMap.set(mem.id, newId('li')));
+      const newItems: PlanLineItem[] = orderMembers(dim.members).map(({ member }) => ({
+        id: idMap.get(member.id)!,
+        name: member.label,
+        kind: 'input',
+        parentId: member.parentId ? (idMap.get(member.parentId) || null) : null,
+      }));
+      return {
+        ...prev,
+        sheets: cur.map((sh) => (sh.id === activeId ? { ...sh, lineItems: [...sh.lineItems, ...newItems] } : sh)),
+      };
+    });
+    setMsg({ intent: 'success', text: `Added ${dim.members.length} member row(s) from "${dim.name}" to the planning sheet.` });
+  };
+
+  const validate = async () => {
+    setBusy(true); setMsg(null); setResult(null);
+    // Always run the pure validation locally so the surface works even pre-save.
+    const local = validateModel(model, lineItemIds);
+    const formulaIssues: ModelIssue[] = [];
+    for (const sh of sheets) formulaIssues.push(...validateFormulaRows(sh).issues.map((iss) => ({ ...iss, message: sheets.length > 1 ? `[${sh.name}] ${iss.message}` : iss.message })));
+    const localIssues = [...local.issues, ...formulaIssues];
+    const localValid = localIssues.every((x) => x.level !== 'error');
+
+    if (!id || id === 'new') {
+      setResult({ valid: localValid, issues: localIssues, message: localValid ? 'Model valid (save the plan to persist).' : `${localIssues.filter((x) => x.level === 'error').length} error(s) found.` });
+      setBusy(false);
+      return;
+    }
+    try {
+      await save(); // persist what we're validating
+      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/model`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, sheets }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) { setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setResult({ valid: !!j.valid, issues: arr<ModelIssue>(j.issues), message: j.message || (j.valid ? 'Model valid.' : 'Model has errors.') });
+    } catch (e: any) {
+      // Backend unreachable → fall back to the local pure validation (still real).
+      setResult({ valid: localValid, issues: localIssues, message: localValid ? 'Model valid (validated locally).' : `${localIssues.filter((x) => x.level === 'error').length} error(s) found.` });
+    } finally { setBusy(false); }
+  };
+
+  const hasModel = model.dimensions.length > 0 || model.measures.length > 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Model (cube)</MessageBarTitle>
+          Define the plan&apos;s <strong>dimensions</strong> (member hierarchies — Region → Country → Store) and reusable
+          <strong> measures</strong>. This is the structural foundation: members roll up on the planning grid, and formulas
+          compute over these rows. Azure-native — the model persists to Cosmos; no Microsoft Fabric capacity required.
+        </MessageBarBody>
+      </MessageBar>
+
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Badge appearance="filled" color="brand">{model.dimensions.length} dimension{model.dimensions.length === 1 ? '' : 's'}</Badge>
+        <Badge appearance="outline">{model.measures.length} measure{model.measures.length === 1 ? '' : 's'}</Badge>
+        <div style={{ flex: 1 }} />
+        <Button icon={<Cube20Regular />} onClick={addDimension}>Add dimension</Button>
+        <Button icon={<Ruler20Regular />} onClick={addMeasure}>Add measure</Button>
+        <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <CheckmarkCircle20Regular />} onClick={validate} disabled={busy}>
+          {busy ? 'Validating…' : 'Validate model'}
+        </Button>
+      </div>
+
+      {!hasModel && (
+        <EmptyState
+          icon={<Cube20Regular />}
+          title="No cube defined yet"
+          body="Add dimensions (member hierarchies) and measures to give this plan a multidimensional structure — or start from a sample Account hierarchy."
+          primaryAction={{ label: 'Add dimension', onClick: addDimension }}
+          secondaryAction={{ label: 'Start from sample', onClick: seedStarter }}
+        />
+      )}
+
+      {hasModel && (
+        <>
+          {model.dimensions.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+              <div className={s.secHead}><Cube20Regular className={s.secHeadIcon} /><Subtitle2>Dimensions</Subtitle2></div>
+              <TileGrid minTileWidth={320}>
+                {model.dimensions.map((d) => (
+                  <div key={d.id} className={s.planModelCard}>
+                    <div className={s.planModelCardHead}>
+                      <span className={s.planModelCardIcon}><Cube20Regular /></span>
+                      <Input value={d.name} onChange={(_, v) => patchDimension(d.id, { name: v.value })} aria-label="Dimension name" style={{ flex: 1, minWidth: 0 }} />
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => removeDimension(d.id)} aria-label="Remove dimension" />
+                    </div>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
+                      <Field label="Axis" orientation="horizontal">
+                        <Dropdown value={d.axis === 'row' ? 'Rows' : 'Columns'} selectedOptions={[d.axis]}
+                          onOptionSelect={(_, v) => patchDimension(d.id, { axis: (v.optionValue as PlanDimensionAxis) || 'row' })} style={{ minWidth: 110 }}>
+                          <Option value="row">Rows</Option>
+                          <Option value="column">Columns</Option>
+                        </Dropdown>
+                      </Field>
+                      <Badge appearance="outline">{d.members.length} member{d.members.length === 1 ? '' : 's'}</Badge>
+                    </div>
+                    <div style={{ height: 1, background: tokens.colorNeutralStroke2 }} />
+                    <DimensionMembersEditor dimension={d} onChange={(members) => patchDimension(d.id, { members })} />
+                    {d.axis === 'row' && d.members.length > 0 && (
+                      <Button size="small" appearance="secondary" icon={<Layer20Regular />} onClick={() => addMembersToSheet(d)} style={{ alignSelf: 'flex-start' }}>
+                        Add members as planning rows
+                      </Button>
+                    )}
+                  </div>
+                ))}
+              </TileGrid>
+            </div>
+          )}
+
+          {model.measures.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+              <div className={s.secHead}><Ruler20Regular className={s.secHeadIcon} /><Subtitle2>Measures</Subtitle2></div>
+              <TileGrid minTileWidth={280}>
+                {model.measures.map((ms) => (
+                  <div key={ms.id} className={s.planModelCard}>
+                    <div className={s.planModelCardHead}>
+                      <span className={s.planModelCardIcon}><Ruler20Regular /></span>
+                      <Input value={ms.name} onChange={(_, v) => patchMeasure(ms.id, { name: v.value })} aria-label="Measure name" style={{ flex: 1, minWidth: 0 }} />
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => removeMeasure(ms.id)} aria-label="Remove measure" />
+                    </div>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <Field label="Aggregation">
+                        <Dropdown value={AGG_OPTIONS.find((a) => a.value === ms.agg)?.label || 'Sum'} selectedOptions={[ms.agg]}
+                          onOptionSelect={(_, v) => patchMeasure(ms.id, { agg: (v.optionValue as PlanAggKind) || 'sum' })} style={{ minWidth: 120 }}>
+                          {AGG_OPTIONS.map((a) => <Option key={a.value} value={a.value}>{a.label}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Field label="Unit">
+                        <Input value={ms.unit || ''} onChange={(_, v) => patchMeasure(ms.id, { unit: v.value })} placeholder="USD / % / FTE" style={{ maxWidth: 110 }} />
+                      </Field>
+                    </div>
+                    <Field label="Scope (line item)" hint="Optional — restrict the measure to one line item.">
+                      <Dropdown placeholder="Whole sheet" value={allLineItems.find((li) => li.id === ms.scopeLineItemId)?.name || ''}
+                        selectedOptions={ms.scopeLineItemId ? [ms.scopeLineItemId] : []}
+                        onOptionSelect={(_, v) => patchMeasure(ms.id, { scopeLineItemId: v.optionValue || undefined })} style={{ minWidth: 160 }}>
+                        <Option value="">Whole sheet</Option>
+                        {allLineItems.map((li) => <Option key={li.id} value={li.id}>{li.name}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  </div>
+                ))}
+              </TileGrid>
+            </div>
+          )}
+        </>
+      )}
+
+      {result && (
+        <MessageBar intent={result.valid ? (result.issues.some((x) => x.level === 'warning') ? 'warning' : 'success') : 'error'}>
+          <MessageBarBody>
+            <MessageBarTitle>{result.valid ? 'Model valid' : 'Model has errors'}</MessageBarTitle>
+            {result.message}
+            {result.issues.length > 0 && (
+              <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalL }}>
+                {result.issues.map((iss, i) => (
+                  <li key={i} style={{ color: iss.level === 'error' ? tokens.colorPaletteRedForeground1 : tokens.colorStatusWarningForeground1 }}>
+                    {iss.level === 'error' ? '✕ ' : '⚠ '}{iss.message}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+        <Button appearance="primary" onClick={() => save()} disabled={saving}>{saving ? 'Saving…' : 'Save model'}</Button>
+      </div>
+    </div>
+  );
+}
+
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<PlanState>('plan', id, {
     tasks: [{ title: 'Define semantic model', owner: '', due: '', status: 'todo' }],
   });
-  const [tab, setTab] = useState<'planning' | 'tasks' | 'powertable' | 'intelligence' | 'infobridge'>('planning');
+  const [tab, setTab] = useState<'planning' | 'model' | 'tasks' | 'powertable' | 'intelligence' | 'infobridge'>('planning');
 
   // ----- Project-tasks helpers (audit-T13 surface, preserved) -----
   const update = (idx: number, patch: Partial<PlanTask>) => {
@@ -3419,6 +4098,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
           <Tab value="planning" icon={<Money20Regular />}>Planning</Tab>
+          <Tab value="model" icon={<Cube20Regular />}>Model</Tab>
           <Tab value="tasks" icon={<ShieldCheckmark20Regular />}>Project tasks</Tab>
           <Tab value="powertable" icon={<Table20Regular />}>PowerTable</Tab>
           <Tab value="intelligence" icon={<ChartMultiple20Regular />}>Intelligence</Tab>
@@ -3427,6 +4107,10 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
 
         {tab === 'planning' && (
           <PlanningSheetPanel id={id} state={state} setState={setState} save={save} saving={saving} />
+        )}
+
+        {tab === 'model' && (
+          <PlanModelPanel id={id} state={state} setState={setState} save={save} saving={saving} />
         )}
 
         {tab === 'tasks' && (

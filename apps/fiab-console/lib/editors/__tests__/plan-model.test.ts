@@ -14,6 +14,11 @@ import {
   flattenPlanCells, filterPlanRows, sortPlanRows,
   periodSeries, linearFit, forecastPeriods, ganttLayout,
   planInsights, applyMappingsToActuals, type PlanSourceMapping,
+  // EPM core under test
+  leafInputItems, orderMembers, orderedLineItems, lineItemValueAt, lineItemRowTotal,
+  evalFormula, formulaToText, formulaRefs, validateModel, validateFormulaRows,
+  qfSum, qfAverage, qfDifference, qfRatioPct, qfGrowthPct,
+  type PlanLineItem, type PlanMember, type PlanModel, type PlanFormulaToken,
 } from '../_plan-model';
 
 function seeded(): PlanningSheet {
@@ -188,5 +193,168 @@ describe('_plan-model InfoBridge mappings', () => {
     const lines = planInsights(s, 'baseline', v);
     expect(lines.length).toBeGreaterThan(1);
     expect(lines.join(' ')).toMatch(/variance|period/i);
+  });
+});
+
+// ===================================================================
+// EPM core — cube model, hierarchies, roll-ups, guided formulas, validation.
+// ===================================================================
+
+/** A seeded sheet with a Revenue→{Product A, Product B} roll-up hierarchy. */
+function hierSheet(): PlanningSheet {
+  const s = defaultPlanningSheet();
+  // Make "revenue" a roll-up parent of two new leaf inputs.
+  s.lineItems = [
+    { id: 'revenue', name: 'Revenue', kind: 'input' },
+    { id: 'pa', name: 'Product A', kind: 'input', parentId: 'revenue' },
+    { id: 'pb', name: 'Product B', kind: 'input', parentId: 'revenue' },
+  ];
+  for (const p of s.periods) {
+    s.cells[cellKey('pa', p.id, 'baseline')] = 30;
+    s.cells[cellKey('pb', p.id, 'baseline')] = 20;
+  }
+  return s;
+}
+
+describe('_plan-model hierarchy + roll-up', () => {
+  it('leafInputItems excludes roll-up parents', () => {
+    const s = hierSheet();
+    expect(leafInputItems(s.lineItems).map((li) => li.id).sort()).toEqual(['pa', 'pb']);
+  });
+  it('orderedLineItems nests children under parents with depth + hasChildren', () => {
+    const ord = orderedLineItems(hierSheet().lineItems);
+    expect(ord.map((o) => o.item.id)).toEqual(['revenue', 'pa', 'pb']);
+    expect(ord[0]).toMatchObject({ depth: 0, hasChildren: true });
+    expect(ord[1]).toMatchObject({ depth: 1, hasChildren: false });
+  });
+  it('lineItemValueAt rolls children up into the parent per period', () => {
+    const s = hierSheet();
+    expect(lineItemValueAt(s, 'baseline', 'revenue', 0)).toBe(50); // 30 + 20
+    expect(lineItemValueAt(s, 'baseline', 'pa', 0)).toBe(30);
+    expect(lineItemRowTotal(s, 'baseline', 'revenue')).toBe(200); // 50 × 4 periods
+  });
+  it('periodTotal counts only leaf inputs (no double-count of the parent)', () => {
+    const s = hierSheet();
+    expect(periodTotal(s, 'baseline', 'q1')).toBe(50); // pa+pb, not revenue too
+  });
+  it('flattenPlanCells emits only leaf inputs', () => {
+    const rows = flattenPlanCells([hierSheet()], defaultScenarios());
+    expect(rows.every((r) => r.lineItemId === 'pa' || r.lineItemId === 'pb')).toBe(true);
+  });
+});
+
+describe('_plan-model member ordering', () => {
+  it('orderMembers depth-first with depth + hasChildren', () => {
+    const members: PlanMember[] = [
+      { id: 'r', label: 'Region' },
+      { id: 'us', label: 'US', parentId: 'r' },
+      { id: 'wa', label: 'WA', parentId: 'us' },
+      { id: 'eu', label: 'EU', parentId: 'r' },
+    ];
+    const ord = orderMembers(members);
+    expect(ord.map((o) => o.member.id)).toEqual(['r', 'us', 'wa', 'eu']);
+    expect(ord.find((o) => o.member.id === 'us')!.depth).toBe(1);
+    expect(ord.find((o) => o.member.id === 'wa')!.depth).toBe(2);
+    expect(ord.find((o) => o.member.id === 'r')!.hasChildren).toBe(true);
+  });
+  it('surfaces orphan members at top level rather than dropping them', () => {
+    const ord = orderMembers([{ id: 'a', label: 'A', parentId: 'ghost' }]);
+    expect(ord.map((o) => o.member.id)).toEqual(['a']);
+  });
+});
+
+describe('_plan-model guided formula evaluator', () => {
+  const resolve = (ref: string, offset: number) => {
+    const base: Record<string, number> = { rev: 100, cost: 40 };
+    // previous period = ×0.9 for the test
+    return (base[ref] ?? 0) * (offset === -1 ? 0.9 : 1);
+  };
+  it('evaluates arithmetic with precedence + parens', () => {
+    const tk: PlanFormulaToken[] = [
+      { k: 'row', ref: 'rev' }, { k: 'op', op: '-' }, { k: 'row', ref: 'cost' },
+      { k: 'op', op: '*' }, { k: 'num', value: 2 },
+    ];
+    expect(evalFormula(tk, resolve)).toMatchObject({ ok: true, value: 20 }); // 100 - 40*2
+  });
+  it('evaluates functions (SUM/AVG/MIN/MAX/ABS)', () => {
+    const sum: PlanFormulaToken[] = [{ k: 'fn', fn: 'SUM' }, { k: 'lp' }, { k: 'row', ref: 'rev' }, { k: 'comma' }, { k: 'row', ref: 'cost' }, { k: 'rp' }];
+    expect(evalFormula(sum, resolve).value).toBe(140);
+    const avg: PlanFormulaToken[] = [{ k: 'fn', fn: 'AVG' }, { k: 'lp' }, { k: 'row', ref: 'rev' }, { k: 'comma' }, { k: 'row', ref: 'cost' }, { k: 'rp' }];
+    expect(evalFormula(avg, resolve).value).toBe(70);
+  });
+  it('honours period offsets (growth-style refs)', () => {
+    const tk: PlanFormulaToken[] = [{ k: 'row', ref: 'rev', offset: -1 }];
+    expect(evalFormula(tk, resolve).value).toBe(90);
+  });
+  it('flags divide-by-zero and malformed input without throwing', () => {
+    expect(evalFormula([{ k: 'num', value: 1 }, { k: 'op', op: '/' }, { k: 'num', value: 0 }], resolve).ok).toBe(false);
+    expect(evalFormula([{ k: 'op', op: '+' }], resolve).ok).toBe(false);
+    expect(evalFormula([], resolve).ok).toBe(false);
+  });
+  it('formulaRefs + formulaToText render the structure', () => {
+    const tk = qfGrowthPct('rev', -1);
+    expect(formulaRefs(tk)).toEqual(['rev']);
+    expect(formulaToText(tk, (r) => (r === 'rev' ? 'Revenue' : r))).toMatch(/Revenue/);
+  });
+});
+
+describe('_plan-model quick formulas', () => {
+  const resolve = (ref: string) => ({ a: 120, b: 100 } as Record<string, number>)[ref] ?? 0;
+  it('qfSum / qfAverage / qfDifference / qfRatioPct compute correctly', () => {
+    expect(evalFormula(qfSum(['a', 'b']), resolve).value).toBe(220);
+    expect(evalFormula(qfAverage(['a', 'b']), resolve).value).toBe(110);
+    expect(evalFormula(qfDifference('a', 'b'), resolve).value).toBe(20);
+    expect(evalFormula(qfRatioPct('a', 'b'), resolve).value).toBe(120); // 120/100*100
+  });
+  it('qfGrowthPct uses the previous-period offset', () => {
+    const r = (ref: string, off: number) => (ref === 'a' ? (off === -1 ? 100 : 120) : 0);
+    expect(evalFormula(qfGrowthPct('a', -1), r).value).toBe(20); // (120-100)/100*100
+  });
+});
+
+describe('_plan-model formula rows in a sheet', () => {
+  it('lineItemValueAt evaluates a formula row referencing other rows', () => {
+    const s = defaultPlanningSheet();
+    s.cells[cellKey('revenue', 'q1', 'baseline')] = 100;
+    s.cells[cellKey('cogs', 'q1', 'baseline')] = 40;
+    s.lineItems.push({ id: 'gm', name: 'Gross margin', kind: 'formula', formula: qfDifference('revenue', 'cogs') });
+    expect(lineItemValueAt(s, 'baseline', 'gm', 0)).toBe(60);
+  });
+});
+
+describe('_plan-model validation', () => {
+  it('validateModel flags missing parent, cycle, and duplicate names', () => {
+    const model: PlanModel = {
+      dimensions: [
+        { id: 'd1', name: 'Account', axis: 'row', members: [{ id: 'm1', label: 'A', parentId: 'ghost' }] },
+        { id: 'd2', name: 'account', axis: 'row', members: [] }, // dup name (case-insensitive)
+      ],
+      measures: [{ id: 'x', name: '', agg: 'sum' }], // missing name
+    };
+    const res = validateModel(model);
+    expect(res.ok).toBe(false);
+    const msgs = res.issues.map((i) => i.message).join(' | ');
+    expect(msgs).toMatch(/missing parent/i);
+    expect(msgs).toMatch(/duplicate dimension/i);
+    expect(msgs).toMatch(/measure has no name/i);
+  });
+  it('validateModel passes a clean cube', () => {
+    const model: PlanModel = {
+      dimensions: [{ id: 'd', name: 'Region', axis: 'row', members: [{ id: 'r', label: 'Root' }, { id: 'c', label: 'Child', parentId: 'r' }] }],
+      measures: [{ id: 'm', name: 'Total', agg: 'sum' }],
+    };
+    expect(validateModel(model).ok).toBe(true);
+  });
+  it('validateFormulaRows flags missing refs, self-refs, and cycles', () => {
+    const s = defaultPlanningSheet();
+    s.lineItems = [
+      { id: 'a', name: 'A', kind: 'formula', formula: [{ k: 'row', ref: 'b' }] },
+      { id: 'b', name: 'B', kind: 'formula', formula: [{ k: 'row', ref: 'a' }] }, // a↔b cycle
+      { id: 'c', name: 'C', kind: 'formula', formula: [{ k: 'row', ref: 'ghost' }] }, // missing
+    ];
+    const res = validateFormulaRows(s);
+    expect(res.ok).toBe(false);
+    const msgs = res.issues.map((i) => i.message).join(' | ');
+    expect(msgs).toMatch(/missing row|cycle/i);
   });
 });
