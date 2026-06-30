@@ -36,6 +36,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef } from './slate/slate-app-builder';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -688,9 +689,8 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ───────────────────────── Slate app ─────────────────────────
-interface SlateWidgetDef { id: string; title: string; kind: 'table' | 'chart' | 'metric'; query: string }
 interface SlateState {
-  apiBaseUrl?: string; widgets?: SlateWidgetDef[]; lastGeneratedAt?: string;
+  apiBaseUrl?: string; widgets?: SlateWidgetDef[]; queries?: SlateQueryDef[]; lastGeneratedAt?: string;
   // Set by the rayfin-azure-stack demote-to-template scaffold: the backing
   // Azure Functions API item this SWA web tier calls (apiBaseUrl is seeded to
   // its route). Proves the template wired a REAL Functions sibling.
@@ -701,34 +701,40 @@ interface SlateState {
 export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<SlateState>('slate-app', id, { apiBaseUrl: '/api', widgets: [] });
-  const [wTitle, setWTitle] = useState('');
-  const [wKind, setWKind] = useState<'table' | 'chart' | 'metric'>('table');
-  const [wQuery, setWQuery] = useState('');
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<SlateState>('slate-app', id, { apiBaseUrl: '/api', widgets: [], queries: [] });
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState<string | null>(null);
   const [files, setFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [fileTab, setFileTab] = useState('index.html');
 
   const widgets = Array.isArray(state.widgets) ? state.widgets : [];
+  const queries = Array.isArray(state.queries) ? state.queries : [];
 
-  const addWidget = useCallback(() => {
-    const title = wTitle.trim(); const query = wQuery.trim();
-    if (!title || !query) return;
-    setState((p) => ({ ...p, widgets: [...(Array.isArray(p.widgets) ? p.widgets : []), { id: `w_${Date.now()}`, title, kind: wKind, query }] }));
-    setWTitle(''); setWQuery('');
-  }, [wTitle, wKind, wQuery, setState]);
+  // Map the builder's typed widgets back onto the static-SWA codegen contract
+  // ({id,title,kind,query}). REST-bound widgets carry a real path so the
+  // generated bundle stays deployable; KQL/SQL/text/container widgets (which a
+  // static SWA can't execute) are simply omitted from the bundle.
+  const widgetsForCodegen = useMemo(() => {
+    const byId = new Map(queries.map((q) => [q.id, q]));
+    return widgets.map((w) => {
+      let query = '';
+      if (w.queryId) { const q = byId.get(w.queryId); if (q?.type === 'rest-dab') query = q.path || ''; }
+      else if (w.query) query = w.query;
+      const kind: 'table' | 'chart' | 'metric' = w.kind === 'chart' || w.kind === 'metric' ? w.kind : 'table';
+      return { id: w.id, title: w.title, kind, query };
+    }).filter((w) => w.query);
+  }, [widgets, queries]);
 
-  const removeWidget = useCallback((wid: string) => {
-    setState((p) => ({ ...p, widgets: (Array.isArray(p.widgets) ? p.widgets : []).filter((w) => w.id !== wid) }));
-  }, [setState]);
+  const setApiBaseUrl = useCallback((v: string) => setState((p) => ({ ...p, apiBaseUrl: v })), [setState]);
+  const onQueriesChange = useCallback((next: SlateQueryDef[]) => setState((p) => ({ ...p, queries: next })), [setState]);
+  const onWidgetsChange = useCallback((next: SlateWidgetDef[]) => setState((p) => ({ ...p, widgets: next })), [setState]);
 
   const generate = useCallback(async () => {
     setGenBusy(true); setGenErr(null);
     try {
       const r = await fetch(`/api/items/slate-app/${encodeURIComponent(id)}/generate`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ apiBaseUrl: state.apiBaseUrl || '/api', widgets }),
+        body: JSON.stringify({ apiBaseUrl: state.apiBaseUrl || '/api', widgets: widgetsForCodegen }),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setGenErr(j?.error || `HTTP ${r.status}`); return; }
@@ -736,18 +742,18 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
       setFileTab((j.files?.[0]?.name) || 'index.html');
     } catch (e: any) { setGenErr(e?.message || String(e)); }
     finally { setGenBusy(false); }
-  }, [id, state.apiBaseUrl, widgets]);
+  }, [id, state.apiBaseUrl, widgetsForCodegen]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'App', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || !dirty },
-        { label: genBusy ? 'Generating…' : 'Generate bundle', onClick: generate, disabled: genBusy || widgets.length === 0 },
+        { label: genBusy ? 'Generating…' : 'Generate bundle', onClick: generate, disabled: genBusy || widgetsForCodegen.length === 0 },
       ]},
     ]},
-  ], [save, saving, dirty, generate, genBusy, widgets.length]);
+  ], [save, saving, dirty, generate, genBusy, widgetsForCodegen.length]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Slate app" intro="A custom HTML/JS dashboard app over an Ontology Data API. Loom generates a deployable Azure Static Web Apps bundle — no Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Slate app" intro="A live dashboard / app builder over Azure-native data (ADX, Synapse serverless, DAB REST). Compose queries + widgets on a drag-resize canvas, preview them live, then generate a deployable Azure Static Web Apps bundle — no Fabric required." />;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -755,12 +761,12 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
           <MessageBarTitle>Slate app (Palantir Slate)</MessageBarTitle>
-          Compose widgets over an Ontology Data API endpoint, then generate a deployable Azure Static Web Apps bundle (index.html + app.js + config). No Microsoft Fabric required.
+          Build a live app: define queries (REST / KQL / SQL over Azure-native backends), place widgets on the drag-resize canvas, and preview them bound to real data. Generate a deployable Azure Static Web Apps bundle when ready. No Microsoft Fabric required.
         </MessageBarBody></MessageBar>
 
         <div className={s.section}>
-          <SectionHead icon={<Database20Regular />} title="Data API base" hint="The DAB / Ontology-SDK REST base the generated app calls (e.g. /api or an APIM URL)." />
-          <Field label="API base URL"><Input value={String(state.apiBaseUrl || '/api')} onChange={(_, d) => setState((p) => ({ ...p, apiBaseUrl: d.value }))} placeholder="/api" /></Field>
+          <SectionHead icon={<Database20Regular />} title="Data API base" hint="The DAB / Ontology-SDK REST base that REST queries resolve against (e.g. /api or an APIM URL). KQL / SQL queries hit ADX / Synapse directly." />
+          <Field label="API base URL"><Input value={String(state.apiBaseUrl || '/api')} onChange={(_, d) => setApiBaseUrl(d.value)} placeholder="/api" /></Field>
           {state.functionItemId && (
             <Caption1 className={s.hint}>
               Backed by an Azure Functions API scaffolded with this app — the base URL above points at its route.
@@ -772,31 +778,20 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
           )}
         </div>
 
-        <div className={s.section}>
-          <SectionHead icon={<Add20Regular />} title="Widgets" hint="Each widget binds a title to a REST query path (e.g. customer)." />
-          <div className={s.addBar}>
-            <Field label="Title"><Input value={wTitle} onChange={(_, d) => setWTitle(d.value)} placeholder="Open orders" /></Field>
-            <Field label="Kind"><Dropdown value={wKind} selectedOptions={[wKind]} onOptionSelect={(_, d) => setWKind((d.optionValue as 'table' | 'chart' | 'metric') || 'table')}>
-              <Option value="table">table</Option><Option value="metric">metric</Option><Option value="chart">chart</Option>
-            </Dropdown></Field>
-            <Field label="Query path" className={s.fieldMed}><Input value={wQuery} onChange={(_, d) => setWQuery(d.value)} placeholder="order" /></Field>
-            <Button appearance="primary" icon={<Add20Regular />} disabled={!wTitle.trim() || !wQuery.trim()} onClick={addWidget}>Add widget</Button>
-          </div>
-          {widgets.length === 0 ? <div className={s.empty}><Caption1>No widgets yet.</Caption1></div> : widgets.map((w) => (
-            <div key={w.id} className={s.row}>
-              <Badge appearance="tint">{w.kind}</Badge>
-              <Body1><strong>{w.title}</strong></Body1>
-              <Caption1 className={s.hint}>→ {w.query}</Caption1>
-              <span className={s.spacer} />
-              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${w.title}`} onClick={() => removeWidget(w.id)}>Remove</Button>
-            </div>
-          ))}
-          {genErr && <MessageBar intent="error"><MessageBarBody>{genErr}</MessageBarBody></MessageBar>}
-        </div>
+        <SlateAppBuilder
+          id={id}
+          apiBaseUrl={String(state.apiBaseUrl || '/api')}
+          queries={queries}
+          widgets={widgets}
+          onQueriesChange={onQueriesChange}
+          onWidgetsChange={onWidgetsChange}
+        />
+
+        {genErr && <MessageBar intent="error"><MessageBarBody>{genErr}</MessageBarBody></MessageBar>}
 
         {files.length > 0 && (
           <div className={s.section}>
-            <SectionHead icon={<Code20Regular />} title="Generated Static Web Apps bundle" hint="Copy these files into your SWA repo, or wire them through a release-environment promotion." />
+            <SectionHead icon={<Code20Regular />} title="Generated Static Web Apps bundle" hint="Copy these files into your SWA repo, or wire them through a release-environment promotion. REST-bound widgets are embedded; KQL / SQL widgets run live in Preview but aren't part of the static bundle." />
             <TabList selectedValue={fileTab} onTabSelect={(_, d) => setFileTab(d.value as string)}>
               {files.map((f) => <Tab key={f.name} value={f.name}>{f.name}</Tab>)}
             </TabList>
