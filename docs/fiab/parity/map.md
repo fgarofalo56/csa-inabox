@@ -72,37 +72,48 @@ Every capability the real product (Azure Maps PBI visual + Web SDK + Foundry/Fab
 
 | # | Real capability | Status | Notes |
 |---|---|---|---|
-| A | Interactive pan/zoom/rotate/pitch | ❌ MISSING | static SVG + static raster image only; no interaction |
-| A | Map settings (center/zoom/heading/pitch, auto-zoom) | ❌ MISSING | auto-derives bbox only; nothing editable/persisted |
-| A | Controls (zoom/compass/pitch/style/fullscreen/scale) | ❌ MISSING | none |
-| B | Basemap style picker | ❌ MISSING | one hard-coded static `style=main` raster; no switch |
-| C | Marker/symbol layer (icons, rotation, per-category) | ❌ MISSING | only a generic dot in SVG |
-| C | Bubble layer (size+color by metric) | ⚠️ partial | `point` layer colors by weight; no size-by-metric, no popup |
-| C | 3D column layer | ❌ MISSING | — |
-| C | Heat-map layer | ⚠️ partial | SVG radial gradient; no zoom-scaling/intensity/ramp UI |
-| C | Filled map / choropleth | ⚠️ partial | SVG polygon shade; no conditional-format UI, no border ctrls |
-| C | Cluster bubbles (zoom aggregation) | ⚠️ partial | static count glyph; not zoom-aggregated, not clickable |
-| C | Path / line layer | ❌ MISSING | — |
-| C | Pie-chart layer | ❌ MISSING | — |
+| A | Interactive pan/zoom/rotate/pitch | ✅ built | real Azure Maps Web SDK canvas (`azure-maps-canvas.tsx`); pan/scroll-zoom/right-drag rotate+tilt |
+| A | Map settings (center/zoom/heading/pitch, auto-zoom) | ✅ built | `Auto-zoom to data` Switch; off → persisted `state.view` (center/zoom/bearing/pitch) restored on load |
+| A | Controls (zoom/compass/pitch/style/fullscreen/scale) | ✅ built | built-in Zoom/Compass/Pitch/Scale toggles + Fullscreen button; style via the basemap picker |
+| B | Basemap style picker | ✅ built | Fluent `Dropdown` of the 10 atlas styles; live `map.setStyle` switch, persisted in `state.basemap` |
+| C | Marker/symbol layer (icons, rotation, per-category) | ⚠️ partial | bubbles + name labels (`SymbolLayer`); icon picker / rotation field / per-category icon still ❌ |
+| C | Bubble layer (size+color by metric) | ✅ built | `BubbleLayer` size-by-metric (min/max px) + value color ramp + hover/click popup |
+| C | 3D column layer | ❌ MISSING | — (P2) |
+| C | Heat-map layer | ✅ built | real `HeatMapLayer` — weight field, radius, zoom-scaled, color gradient |
+| C | Filled map / choropleth | ✅ built | `PolygonLayer` value-shaded (low/high ramp) + border `LineLayer` + opacity + zoom band; per-category palette still ❌ |
+| C | Cluster bubbles (zoom aggregation) | ✅ built | real clustered `DataSource`; sized/colored by count, count labels, click-to-expand |
+| C | Path / line layer | ❌ MISSING | — (P2) |
+| C | Pie-chart layer | ❌ MISSING | — (P2) |
 | C | Reference layer (upload GeoJSON) | ⚠️ partial | manual GeoJSON paste tab; no upload, no conditional format |
-| C | Tile layer (custom XYZ) | ❌ MISSING | — |
-| C | Traffic layer | ❌ MISSING | — |
-| D | Symbology panel (color/size/opacity/border/icon/rotation/zoom band) | ❌ MISSING | per-layer = enable + weightProp + radius only |
-| E | Tooltips / popups (templates) | ❌ MISSING | none in `map` editor (report visual has hover popups) |
-| E | Selection tools / cross-filter | ❌ MISSING | — |
-| E | Legend | ❌ MISSING | — |
-| F | Drawing toolbar | ❌ MISSING | — |
-| F | Measure distance/area | ❌ MISSING | — |
-| G | Attribute filters | ❌ MISSING | — |
-| G | Time slider / animation | ❌ MISSING | — |
-| H | Geofencing + alert | ❌ MISSING | — |
-| H | Spatial search (radius/within) | ❌ MISSING | — |
-| I | Lakehouse / KQL / Ontology binding | ✅ built | real backend (Synapse Serverless / ADX / Weave) — strong |
+| C | Tile layer (custom XYZ) | ❌ MISSING | — (P2) |
+| C | Traffic layer | ❌ MISSING | — (P2) |
+| D | Symbology panel (color/size/opacity/border/icon/rotation/zoom band) | ⚠️ partial | per-layer color (solid + low/high ramp), size-by-metric, opacity, min/max-zoom band, tooltip fields built; icon picker + rotation field still ❌ |
+| E | Tooltips / popups (templates) | ✅ built | field-driven `atlas.Popup` on hover **and** click; per-layer "Tooltip fields" multiselect |
+| E | Selection tools / cross-filter | ❌ MISSING | — (P1 #7) |
+| E | Legend | ✅ built | auto legend (size/color ramp + categorical swatch) Loom-token card pinned bottom-right |
+| F | Drawing toolbar | ❌ MISSING | — (P1 #6) |
+| F | Measure distance/area | ❌ MISSING | — (P1 #6) |
+| G | Attribute filters | ❌ MISSING | — (P1 #7) |
+| G | Time slider / animation | ❌ MISSING | — (P2 #9) |
+| H | Geofencing + alert | ❌ MISSING | — (P2 #10) |
+| H | Spatial search (radius/within) | ❌ MISSING | — (P2) |
+| I | Lakehouse / KQL / Ontology binding | ✅ built | real backend (Synapse Serverless / ADX / Weave) — unchanged, strong |
 | I | Geometry-column (WKT/WKB) binding | ⚠️ partial | lat/lon only; `geo-editors` detects WKT/WKB but `map` doesn't |
-| I | Geocoding (address → lat/lon) | ❌ MISSING | requires raw lat/lon today |
+| I | Geocoding (address → lat/lon) | ❌ MISSING | requires raw lat/lon today (P1 #8) |
 
-Score today: 1 row ✅, 7 ⚠️ partial, 18 ❌ MISSING. Grade ≈ **D** — it renders and binds real data, but the
-map surface is a static picture and the entire styling / interaction / analytics surface is absent.
+Score after the interactive-canvas retarget: **12 rows ✅, 4 ⚠️ partial, 11 ❌**. Grade ≈ **B** — a real
+interactive Azure Maps surface with live BubbleLayer/HeatMapLayer/PolygonLayer/clusters, basemap switching,
+controls, persisted view, field-driven popups and a legend, all over the unchanged real data backend.
+Remaining ❌/⚠️ are the analyst/Foundry-class tools (drawing+measure, filters+cross-filter, geocoding,
+time slider, geofencing, extra layer types) tracked as P1/P2 below.
+
+> **Status — this PR (interactive-canvas retarget):** P0 1–4 + P1 #5 (legend) landed. The `MapEditor`
+> (`phase4-editors.tsx`) now renders on the shared `lib/components/graph/azure-maps-canvas.tsx` (real Azure
+> Maps Web SDK) instead of the static `GeoJsonMap`, brokered by the new `GET /api/items/map/[id]/map-token`
+> route (`resolveMapsBackend` → Console-UAMI AAD token, or `LOOM_AZURE_MAPS_KEY` /
+> `NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY`). When no Maps account is configured the canvas shows an honest Fluent
+> MessageBar naming the env var + bicep AND still draws the bound features on the offline `GeoJsonMap`
+> overlay (never blank). The `…/data` binding path (Lakehouse/KQL/Ontology) is untouched.
 
 ## Build plan
 

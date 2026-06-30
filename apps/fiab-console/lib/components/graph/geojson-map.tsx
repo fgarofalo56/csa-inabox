@@ -35,6 +35,21 @@ export interface MapLayer {
   /** Color ramp endpoints (CSS colors) for value-driven layers. */
   colorLow?: string;
   colorHigh?: string;
+  // ── Interactive-canvas symbology (azure-maps-canvas.tsx). All optional and
+  //    ignored by the offline SVG renderer above — additive, back-compat. ──────
+  /** Solid color when no weightProp ramp is used (point/cluster fill). */
+  color?: string;
+  /** Layer opacity 0..1 (default ~0.85 for bubbles, ~0.8 for fills). */
+  opacity?: number;
+  /** Scale the bubble radius by `weightProp` between sizeMin..sizeMax px. */
+  sizeByMetric?: boolean;
+  sizeMin?: number;
+  sizeMax?: number;
+  /** Per-layer visibility band (Azure Maps zoom 0..22). */
+  minZoom?: number;
+  maxZoom?: number;
+  /** Feature property names surfaced in the hover/click popup template. */
+  tooltipFields?: string[];
 }
 
 export interface GeoJsonMapProps {

@@ -54,7 +54,11 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { KeyValueRows } from '@/lib/components/ui/key-value-rows';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
-import { GeoJsonMap, type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
+import { type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
+import {
+  AzureMapsCanvas, AZURE_MAPS_STYLES, DEFAULT_BASEMAP, DEFAULT_CONTROLS,
+  featurePropertyKeys, type AzureMapsView, type AzureMapsControls,
+} from '@/lib/components/graph/azure-maps-canvas';
 import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
@@ -3521,6 +3525,12 @@ interface MapState {
   geojson: string;
   binding?: MapBinding;
   layers?: MapLayer[];
+  /** Persisted interactive-canvas basemap style (one of AZURE_MAPS_STYLES). */
+  basemap?: string;
+  /** Persisted built-in map controls. */
+  controls?: AzureMapsControls;
+  /** Persisted camera view (center/zoom/bearing/pitch + auto-zoom). */
+  view?: AzureMapsView;
   [k: string]: unknown;
 }
 
@@ -3588,14 +3598,44 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     bbox = computeGeoBbox(j);
   } catch (e: any) { parseErr = e?.message || String(e); }
 
-  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY;
-  const configuredMapsAccount = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT || '';
-  const centerLon = bbox ? (bbox.minLon + bbox.maxLon) / 2 : -122.33;
-  const centerLat = bbox ? (bbox.minLat + bbox.maxLat) / 2 : 47.61;
-  const zoom = bboxToZoom(bbox);
-  const tileUrl = mapsKey
-    ? `https://atlas.microsoft.com/map/static?api-version=2024-04-01&style=main&zoom=${zoom}&center=${centerLon},${centerLat}&width=640&height=320&subscription-key=${mapsKey}`
-    : null;
+  // Client-side subscription-key fallback: when the BFF token route gates but a
+  // public key is present, the interactive canvas still lights up the basemap.
+  const mapsKey = process.env.NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY || undefined;
+
+  // ── Interactive Azure Maps canvas config (persisted in item state) ───────────
+  const basemap = state.basemap || DEFAULT_BASEMAP;
+  const mapControls: AzureMapsControls = state.controls || DEFAULT_CONTROLS;
+  const view: AzureMapsView = state.view || { autoZoom: true };
+  const tooltipFieldKeys = useMemo(() => featurePropertyKeys(parsedGeo), [parsedGeo]);
+
+  const setView = useCallback((v: AzureMapsView) => {
+    setState((p) => ({ ...p, view: { ...(p.view || { autoZoom: true }), ...v } }));
+  }, [setState]);
+  const setBasemap = useCallback((style: string) => {
+    setState((p) => ({ ...p, basemap: style }));
+  }, [setState]);
+  const setControl = useCallback((patch: Partial<AzureMapsControls>) => {
+    setState((p) => ({ ...p, controls: { ...DEFAULT_CONTROLS, ...(p.controls || {}), ...patch } }));
+  }, [setState]);
+  const setAutoZoom = useCallback((on: boolean) => {
+    setState((p) => ({ ...p, view: { ...(p.view || {}), autoZoom: on } }));
+  }, [setState]);
+
+  // Fullscreen the live map (Fullscreen API on the wrapper; the canvas fills it).
+  const mapWrapRef = useRef<HTMLDivElement | null>(null);
+  const [isFs, setIsFs] = useState(false);
+  useEffect(() => {
+    const h = () => setIsFs(typeof document !== 'undefined' && !!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', h);
+    return () => document.removeEventListener('fullscreenchange', h);
+  }, []);
+  const toggleFullscreen = useCallback(() => {
+    const el = mapWrapRef.current;
+    if (!el) return;
+    if (document.fullscreenElement) { document.exitFullscreen().catch(() => {}); }
+    else { el.requestFullscreen?.().catch(() => {}); }
+  }, []);
+  const mapHeight = isFs ? Math.max(480, (typeof window !== 'undefined' ? window.innerHeight : 900) - 8) : 460;
 
   const runValidate = useCallback(() => {
     try {
@@ -3767,22 +3807,83 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
             )}
             {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
 
-            <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Layers</Subtitle2>
+            <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Layers &amp; symbology</Subtitle2>
             {layers.map((l) => (
-              <div key={l.id} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS }}>
-                <Switch checked={l.enabled !== false} onChange={(_, d) => setLayer(l.id, { enabled: d.checked })} label={l.type} />
-                {(l.type === 'heatmap' || l.type === 'cluster' || l.type === 'choropleth' || l.type === 'point') && (
-                  <Field label="Weight property" style={{ minWidth: 140 }}>
-                    <Input value={l.weightProp || ''} onChange={(_, d) => setLayer(l.id, { weightProp: d.value })} placeholder="value" />
+              <div key={l.id} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, boxShadow: tokens.shadow2 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                  <Switch checked={l.enabled !== false} onChange={(_, d) => setLayer(l.id, { enabled: d.checked })} />
+                  <Badge appearance="tint" color="brand">{l.type}</Badge>
+                  <div style={{ flex: 1 }} />
+                  <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => removeLayer(l.id)}>Remove</Button>
+                </div>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  <Field label="Weight / value property" style={{ minWidth: 160 }}>
+                    <Input value={l.weightProp || ''} onChange={(_, d) => setLayer(l.id, { weightProp: d.value || undefined })} placeholder="value" />
                   </Field>
-                )}
-                <Field label="Radius (px)" style={{ minWidth: 90 }}>
-                  <Input type="number" value={String(l.radius ?? '')} onChange={(_, d) => setLayer(l.id, { radius: Number(d.value) || undefined })} />
-                </Field>
-                <Button size="small" appearance="subtle" onClick={() => removeLayer(l.id)}>Remove</Button>
+                  {l.type === 'point' && (
+                    <Field label="Size by metric">
+                      <Switch checked={!!l.sizeByMetric} onChange={(_, d) => setLayer(l.id, { sizeByMetric: d.checked })} label={l.sizeByMetric ? 'On' : 'Off'} />
+                    </Field>
+                  )}
+                  {l.type === 'point' && l.sizeByMetric ? (
+                    <>
+                      <Field label="Min px" style={{ minWidth: 80 }}>
+                        <Input type="number" value={String(l.sizeMin ?? '')} onChange={(_, d) => setLayer(l.id, { sizeMin: Number(d.value) || undefined })} placeholder="6" />
+                      </Field>
+                      <Field label="Max px" style={{ minWidth: 80 }}>
+                        <Input type="number" value={String(l.sizeMax ?? '')} onChange={(_, d) => setLayer(l.id, { sizeMax: Number(d.value) || undefined })} placeholder="28" />
+                      </Field>
+                    </>
+                  ) : (l.type !== 'choropleth' && (
+                    <Field label="Radius (px)" style={{ minWidth: 90 }}>
+                      <Input type="number" value={String(l.radius ?? '')} onChange={(_, d) => setLayer(l.id, { radius: Number(d.value) || undefined })} placeholder={l.type === 'heatmap' ? '26' : '7'} />
+                    </Field>
+                  ))}
+                  <Field label="Opacity" style={{ minWidth: 90 }}>
+                    <Input type="number" min={0} max={1} step={0.05} value={String(l.opacity ?? '')} onChange={(_, d) => setLayer(l.id, { opacity: d.value === '' ? undefined : Math.max(0, Math.min(1, Number(d.value))) })} placeholder="0.85" />
+                  </Field>
+                  <Field label="Min zoom" style={{ minWidth: 80 }}>
+                    <Input type="number" value={String(l.minZoom ?? '')} onChange={(_, d) => setLayer(l.id, { minZoom: d.value === '' ? undefined : Number(d.value) })} placeholder="0" />
+                  </Field>
+                  <Field label="Max zoom" style={{ minWidth: 80 }}>
+                    <Input type="number" value={String(l.maxZoom ?? '')} onChange={(_, d) => setLayer(l.id, { maxZoom: d.value === '' ? undefined : Number(d.value) })} placeholder="22" />
+                  </Field>
+                </div>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                  {l.weightProp ? (
+                    <>
+                      <Field label="Color low" style={{ minWidth: 130 }}>
+                        <Input value={l.colorLow || ''} onChange={(_, d) => setLayer(l.id, { colorLow: d.value || undefined })} placeholder="#cfe4fa"
+                          contentBefore={<span style={{ width: 12, height: 12, borderRadius: 3, display: 'inline-block', backgroundColor: l.colorLow || '#cfe4fa' }} />} />
+                      </Field>
+                      <Field label="Color high" style={{ minWidth: 130 }}>
+                        <Input value={l.colorHigh || ''} onChange={(_, d) => setLayer(l.id, { colorHigh: d.value || undefined })} placeholder="#0f6cbd"
+                          contentBefore={<span style={{ width: 12, height: 12, borderRadius: 3, display: 'inline-block', backgroundColor: l.colorHigh || '#0f6cbd' }} />} />
+                      </Field>
+                    </>
+                  ) : (
+                    <Field label="Color" style={{ minWidth: 130 }}>
+                      <Input value={l.color || ''} onChange={(_, d) => setLayer(l.id, { color: d.value || undefined })} placeholder="#0f6cbd"
+                        contentBefore={<span style={{ width: 12, height: 12, borderRadius: 3, display: 'inline-block', backgroundColor: l.color || '#0f6cbd' }} />} />
+                    </Field>
+                  )}
+                  {l.type !== 'heatmap' && (
+                    <Field label="Tooltip fields" style={{ minWidth: 220 }}>
+                      <Dropdown
+                        multiselect
+                        placeholder={tooltipFieldKeys.length ? 'All fields' : 'Run binding to populate'}
+                        selectedOptions={l.tooltipFields || []}
+                        value={(l.tooltipFields || []).join(', ')}
+                        onOptionSelect={(_, d) => setLayer(l.id, { tooltipFields: d.selectedOptions })}
+                      >
+                        {tooltipFieldKeys.map((k) => <Option key={k} value={k} text={k}>{k}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  )}
+                </div>
               </div>
             ))}
-            <Caption1>Add more from the ribbon (Point / Heatmap / Cluster / Choropleth). Choropleth shades Polygon features by weight; the others place glyphs at point geometry.</Caption1>
+            <Caption1>Add more from the ribbon (Point / Heatmap / Cluster / Choropleth). Choropleth shades Polygon features by weight; the others place glyphs at point geometry. Symbology persists with the map.</Caption1>
           </div>
         )}
 
@@ -3796,20 +3897,49 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
           </>
         )}
 
-        {!mapsKey && (
-          <MessageBar intent="info">
-            <MessageBarBody>
-              <MessageBarTitle>Vector overlay rendered offline</MessageBarTitle>
-              The bound data + layers render as a live SVG overlay below — no Azure Maps account required. To layer an
-              Azure Maps raster basemap <em>behind</em> the overlay, set <code>NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY</code> in
-              the Container App env to a key from a <code>Microsoft.Maps/accounts</code> resource.
-            </MessageBarBody>
-          </MessageBar>
-        )}
-        {!parseErr && (
+        {parseErr ? (
+          <MessageBar intent="error"><MessageBarBody>Cannot render the map — invalid GeoJSON: {parseErr}</MessageBarBody></MessageBar>
+        ) : (
           <>
-            <Subtitle2>Map{tileUrl ? ` (Azure Maps basemap${configuredMapsAccount ? ` · ${configuredMapsAccount}` : ''} · zoom ${zoom}, center ${centerLat.toFixed(3)}, ${centerLon.toFixed(3)})` : ' (vector overlay)'}</Subtitle2>
-            <GeoJsonMap geojson={parsedGeo} rasterUrl={tileUrl} layers={layers} />
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
+              <Subtitle2 style={{ marginRight: tokens.spacingHorizontalS }}>Map</Subtitle2>
+              <Field label="Basemap" orientation="horizontal">
+                <Dropdown
+                  value={AZURE_MAPS_STYLES.find((o) => o.value === basemap)?.label || basemap}
+                  selectedOptions={[basemap]}
+                  onOptionSelect={(_, d) => d.optionValue && setBasemap(d.optionValue)}
+                  style={{ minWidth: 180 }}
+                >
+                  {AZURE_MAPS_STYLES.map((o) => <Option key={o.value} value={o.value} text={o.label}>{o.label}</Option>)}
+                </Dropdown>
+              </Field>
+              <Switch checked={view.autoZoom !== false} onChange={(_, d) => setAutoZoom(d.checked)} label="Auto-zoom to data" />
+              <div style={{ flex: 1 }} />
+              <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Controls:</Caption1>
+                <Switch checked={mapControls.zoom !== false} onChange={(_, d) => setControl({ zoom: d.checked })} label="Zoom" />
+                <Switch checked={mapControls.compass !== false} onChange={(_, d) => setControl({ compass: d.checked })} label="Compass" />
+                <Switch checked={mapControls.pitch !== false} onChange={(_, d) => setControl({ pitch: d.checked })} label="Pitch" />
+                <Switch checked={mapControls.scale !== false} onChange={(_, d) => setControl({ scale: d.checked })} label="Scale" />
+                <Button size="small" appearance="subtle" onClick={toggleFullscreen}>{isFs ? 'Exit full screen' : 'Full screen'}</Button>
+              </span>
+            </div>
+            <div ref={mapWrapRef} style={{ width: '100%', backgroundColor: tokens.colorNeutralBackground1 }}>
+              <AzureMapsCanvas
+                tokenUrl={`/api/items/map/${encodeURIComponent(id)}/map-token`}
+                fallbackSubscriptionKey={mapsKey}
+                geojson={parsedGeo}
+                layers={layers}
+                style={basemap}
+                controls={mapControls}
+                view={view}
+                onViewChange={setView}
+                height={mapHeight}
+              />
+            </div>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Pan, scroll to zoom, right-drag to rotate/tilt. Turn off Auto-zoom to pin a custom center/zoom (saved with the map). Hover or click a feature for its tooltip. The basemap uses Azure Maps (no Power BI / Fabric); without an account a vector overlay still renders.
+            </Caption1>
           </>
         )}
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
