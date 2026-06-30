@@ -24,6 +24,7 @@ import {
   listDataSources, registerDataSource, deleteDataSource,
   listScansForSource, listScanRuns, triggerScanRun, upsertScan,
 } from '@/lib/azure/purview-client';
+import { prewarmPurviewShirForScan } from '@/lib/azure/shir-autoscale';
 import { handleSecurityError } from '@/app/api/admin/security/_lib/error-handling';
 
 export const runtime = 'nodejs';
@@ -75,15 +76,19 @@ export async function POST(req: NextRequest) {
       });
       // Chain a run when asked, so "define + run now" is a single call.
       if (body?.run) {
+        // Scale the shared Purview SHIR VMSS up first if this scan runs on a
+        // SelfHosted IR (fail-open — never blocks the scan).
+        const shir = await prewarmPurviewShirForScan(body.source, body.scan);
         const run = await triggerScanRun(body.source, body.scan);
-        return NextResponse.json({ ok: true, scan, ...run }, { status: 202 });
+        return NextResponse.json({ ok: true, scan, ...run, ...(shir || {}) }, { status: 202 });
       }
       return NextResponse.json({ ok: true, scan }, { status: 201 });
     }
     // Trigger a scan run: { source, scan, run: true }
     if (body?.run && body?.source && body?.scan) {
+      const shir = await prewarmPurviewShirForScan(body.source, body.scan);
       const result = await triggerScanRun(body.source, body.scan);
-      return NextResponse.json({ ok: true, ...result }, { status: 202 });
+      return NextResponse.json({ ok: true, ...result, ...(shir || {}) }, { status: 202 });
     }
     // Register a new source: { name, kind, properties }
     if (!body?.name || !body?.kind || !body?.properties) {

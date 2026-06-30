@@ -1538,6 +1538,89 @@ export async function scanUsesSelfHostedIr(sourceName: string, scanName: string)
   }
 }
 
+// ------------------------------------------------------------
+// Self-hosted integration runtime (scanning data plane).
+//   PUT  /scan/integrationruntimes/{name}              — create/update an IR
+//   POST /scan/integrationruntimes/{name}/listAuthKeys — read its auth keys
+//   GET  /scan/integrationruntimes/{name}              — read one IR
+//   https://learn.microsoft.com/rest/api/purview/scanningdataplane/integration-runtimes
+//
+// This automates the previously-manual Purview SHIR bootstrap: instead of an
+// operator hand-creating the IR in the portal and pasting an @secure auth key
+// into bicep, the Console PUTs a `SelfHosted` IR and reads its auth key here.
+// The key is handed to the Purview SHIR VMSS node installer (the extension that
+// downloads + registers the gateway) to bind the machine to this account. The
+// key is a node-registration secret — it is NEVER logged or persisted by Loom;
+// callers pass it straight to the VMSS custom-script extension.
+//
+// NOTE (deferred — follow-up wave, do NOT assume built): a Purview *managed
+// VNet* IR + managed private endpoints (scanningdataplane managed-virtual-
+// networks / managed-private-endpoints) is the no-SHIR path for PE-locked
+// sources and is not wired here yet.
+// ------------------------------------------------------------
+
+export interface PurviewIntegrationRuntime {
+  name?: string;
+  kind?: string;
+  description?: string;
+  state?: string;
+  raw?: unknown;
+}
+
+export interface PurviewIrAuthKeys {
+  authKey1?: string;
+  authKey2?: string;
+}
+
+/**
+ * Create or update a SELF-HOSTED Purview integration runtime (PUT — idempotent).
+ * Returns the IR resource (no keys — read those separately via
+ * {@link listPurviewIrAuthKeys}). Throws PurviewNotConfiguredError when
+ * LOOM_PURVIEW_ACCOUNT is unset and PurviewError on a non-2xx.
+ */
+export async function upsertPurviewIntegrationRuntime(
+  name: string,
+  opts: { description?: string } = {},
+): Promise<PurviewIntegrationRuntime> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'integration runtime name is required');
+  const body = {
+    name,
+    kind: 'SelfHosted',
+    properties: { description: opts.description || 'Loom-managed Purview self-hosted integration runtime' },
+  };
+  const res = await purviewFetch(
+    `/scan/integrationruntimes/${encodeURIComponent(name)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify(body) },
+  );
+  const raw = await readJson<any>(res);
+  return {
+    name: raw?.name || name,
+    kind: raw?.kind || 'SelfHosted',
+    description: raw?.properties?.description,
+    state: raw?.properties?.state || raw?.properties?.provisioningState,
+    raw,
+  };
+}
+
+/**
+ * Read the auth keys for a self-hosted Purview integration runtime
+ * (POST .../integrationruntimes/{name}/listAuthKeys). `authKey1`/`authKey2` are
+ * node-registration secrets — hand them to the SHIR node installer; do NOT log
+ * or persist them. The IR must already exist (create it first via
+ * {@link upsertPurviewIntegrationRuntime}).
+ */
+export async function listPurviewIrAuthKeys(name: string): Promise<PurviewIrAuthKeys> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'integration runtime name is required');
+  const res = await purviewFetch(
+    `/scan/integrationruntimes/${encodeURIComponent(name)}/listAuthKeys`,
+    { method: 'POST', apiVersion: SCAN_API_VERSION },
+  );
+  const raw = await readJson<any>(res);
+  return { authKey1: raw?.authKey1, authKey2: raw?.authKey2 };
+}
+
 /** GET /scan/datasources/{name}/scans/{scan}/runs — last N scan runs. */
 export async function listScanRuns(sourceName: string, scanName: string): Promise<PurviewScanRun[]> {
   purviewAccount();

@@ -8,6 +8,10 @@
  *   - ADX cluster        → change SKU (+ implicit capacity) via a dropdown
  *   - Synapse SQL pool    → Pause / Resume
  *   - Self-hosted IR VMSS → Start (scale to 4) / Stop (scale to 0)
+ *   - Purview self-hosted IR (shared) → Start/Stop + "Register Purview SHIR"
+ *       (PUT the scanning-dataplane IR + read its auth key — automates the
+ *        previously-manual portal bootstrap; server-side honest-gates when
+ *        Purview / the VMSS are absent)
  *
  * GET lists only the resources present in this deployment (honest — unconfigured
  * ones are simply absent). Every action POSTs real ARM through the route; the
@@ -21,6 +25,7 @@ import {
 } from '@fluentui/react-components';
 import {
   Play16Regular, Pause16Regular, ArrowSync16Regular, ArrowUp16Regular,
+  CloudArrowUp16Regular,
   DatabasePerson24Regular, Server24Regular, Flash24Regular,
 } from '@fluentui/react-icons';
 
@@ -102,6 +107,23 @@ export function ScaleManagePanel() {
     finally { setBusy(null); }
   }, [load]);
 
+  // Automate the Purview self-hosted IR bootstrap: PUT the scanning-dataplane IR
+  // + read its auth key (real REST), so the operator no longer hand-creates it in
+  // the portal. Honest-gates server-side when Purview / the VMSS are absent.
+  const registerPurviewShir = useCallback(async (it: Scalable) => {
+    const id = it.kind + it.name;
+    setBusy(id); setMsg(null);
+    try {
+      const r = await fetch('/api/admin/scaling/compute/register-purview-shir', {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+      });
+      const j = await r.json();
+      setMsg({ id, text: j.ok ? (j.message || 'Purview SHIR registered.') : (j.error || 'failed'), ok: !!j.ok });
+      if (j.ok) setTimeout(() => { void load(); }, 1500);
+    } catch (e: any) { setMsg({ id, text: e?.message || String(e), ok: false }); }
+    finally { setBusy(null); }
+  }, [load]);
+
   if (items === null) return <Spinner size="tiny" label="Reading Azure-native compute…" />;
   if (error) return <MessageBar intent="warning"><MessageBarBody>Couldn’t read scalable compute: {error}. The Console UAMI needs Contributor on the ADX / Synapse / VMSS resources.</MessageBarBody></MessageBar>;
   if (items.length === 0) {
@@ -172,6 +194,13 @@ export function ScaleManagePanel() {
                     {isBusy ? 'Scaling…' : (nodes === 0 ? 'Stop' : 'Set nodes')}
                   </Button>
                 </>
+              )}
+              {it.kind === 'purview-shir-vmss' && (
+                <Button size="small" appearance="outline" icon={<CloudArrowUp16Regular />} disabled={isBusy}
+                  onClick={() => registerPurviewShir(it)}
+                  title="Register the Purview self-hosted integration runtime and retrieve its auth key (real scanning-dataplane REST)">
+                  {isBusy ? 'Working…' : 'Register Purview SHIR'}
+                </Button>
               )}
               <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={isBusy} title="Refresh state" aria-label={`Refresh ${it.name}`} />
             </div>
