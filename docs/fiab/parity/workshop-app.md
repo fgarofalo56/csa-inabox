@@ -74,18 +74,28 @@ Source UI:
 | – | Writes constrained to ontology shape; SQL-injection-safe | ✅ built | `safeSqlIdent` + `writableColumns`/`keyColumns` |
 | – | Lineage on write-back | ✅ built | `recordThreadEdge` |
 | A1 | Multi-page app | ❌ MISSING | — |
-| A2/A3 | Visual layout designer + sections (rows/cols, drop zones) | ❌ MISSING | — |
+| A2 | Visual layout designer (drag-resize widget canvas) | ✅ built | `WorkshopAppBuilder` canvas (layout JSON → Cosmos via PATCH) |
+| A3 | Sections (rows/cols, drop zones) | ❌ MISSING (free-form absolute canvas only) | — |
 | A4/A5 | Tabs + overlays (drawer/modal) | ❌ MISSING | — |
 | A6 | Loop/flow layouts | ❌ MISSING | — |
-| A8 | **Preview / run mode** (live app distinct from editor) | ❌ MISSING | — |
+| A8 | **Preview / run mode** (live app distinct from editor) | ✅ built | Run-mode tab; widgets read real Synapse via `run-action` `list`/`aggregate`/`distinct` |
 | A9 | **Publish / share** the app | ⚠️ partial (Data-API-Builder wiring banner only) | needs ACA/DAB/APIM publish |
-| B | **Widget library** (table/form already real; chart/KPI/map/filter/markdown/object-view/links/tabs/button) | ❌ MISSING (only an implicit table + action form) | — |
-| C10–C12 | **Variables + state**; object-set filter variables | ❌ MISSING | — |
-| D13/D14 | **Event → effect wiring** (row-select, page-load, set-var, navigate, open overlay) | ❌ MISSING | — |
-| D15 | Typed Actions w/ parameter form + validation | ⚠️ partial (free column form, no typed params/validation rules) | `run-action` |
+| B | **Widget library** (core set: Object Table, Chart, Metric/KPI, Filter, Form, Button, Text) | ✅ built | reads `run-action` `list`/`aggregate`; charts reuse `loom-chart`; Form = real CRUD |
+| B+ | Object View / Links / Map / Pivot / Gantt / Timeline / AIP / scenario / media | ❌ MISSING | — |
+| C10–C12 | **Variables + state**; object-set-filter variables | ✅ built | typed Variables panel (object-set-filter / string / number / boolean / date); object-set-filter → parameterised `WHERE` in `run-action` |
+| D13/D14 | **Event → effect wiring** (button click / table row-select / page-load → set-var / clear-var / run-action / refresh) | ✅ built | per-widget event editor; executed live in Preview; run-action → `run-action` CRUD |
+| D15 | Typed Actions w/ parameter form + validation | ⚠️ partial (column-derived form, no typed-param validation rules) | `run-action` |
 | D16 | Conditional visibility / formatting | ❌ MISSING | — |
 | B-AIP | AIP-equivalent copilot widget | ❌ MISSING | (Azure OpenAI available) |
 | B-scenario | Scenario / what-if | ❌ MISSING | — |
+
+> **Wave status (2026-06-30).** P0 items 1–5 of the build plan are landed: a
+> real drag-resize widget/layout canvas, the core widget library, typed
+> variables with object-set-filter→server-`WHERE` bindings, button/table/page
+> event wiring, and a live Preview that reads real Synapse rows. The editor is
+> now an app builder, not a CRUD console. Still open (tracked above): multi-page
+> (A1), sections/tabs/overlays (A3–A5), publish (A9), map/object-view/links and
+> the AIP/scenario widgets (B+), conditional visibility (D16).
 
 **Honest assessment:** the current editor is a single scrolling config form
 (bind ontology → toggle which entities list → add CRUD actions → run a dialog).

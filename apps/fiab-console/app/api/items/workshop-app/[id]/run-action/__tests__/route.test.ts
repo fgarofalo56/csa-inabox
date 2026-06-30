@@ -111,6 +111,14 @@ describe('POST /run-action — READ ops (Azure-native default)', () => {
     expect(j.ok).toBe(true); expect(j.op).toBe('list'); expect(j.columns).toEqual(['Id', 'Status']);
     expect(executeQueryMock.mock.calls[0][1]).toContain('SELECT TOP (10) * FROM [Order]');
   });
+  it('list applies object-set-filter predicates as a parameterised WHERE', async () => {
+    const r = await post({ entityType: 'Order', op: 'list', top: 10, filters: [{ column: 'Status', op: 'eq', value: 'open' }] });
+    expect(r.status).toBe(200);
+    const sql = executeQueryMock.mock.calls[0][1];
+    const params = executeQueryMock.mock.calls[0][3];
+    expect(sql).toContain('SELECT TOP (10) * FROM [Order] WHERE [Status] = @f0');
+    expect(params).toEqual([{ name: 'f0', value: 'open' }]);
+  });
   it('get keys on the binding keyColumn with a bound param', async () => {
     const r = await post({ entityType: 'Order', op: 'get', key: '42' });
     expect(r.status).toBe(200);
@@ -123,6 +131,55 @@ describe('POST /run-action — READ ops (Azure-native default)', () => {
     const r = await post({ entityType: 'Order', op: 'get' });
     expect(r.status).toBe(400);
     expect((await r.json()).code).toBe('no_key');
+  });
+});
+
+describe('POST /run-action — aggregate op (chart / KPI)', () => {
+  it('count with a groupBy emits GROUP BY + COUNT(*) and orders by the measure', async () => {
+    executeQueryMock.mockResolvedValueOnce({ rows: [['open', 3]], columns: ['Status', 'value'], rowCount: 1, recordsAffected: 0 });
+    const r = await post({ entityType: 'Order', op: 'aggregate', groupBy: 'Status', aggFn: 'count', top: 50 });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true); expect(j.op).toBe('aggregate'); expect(j.columns).toEqual(['Status', 'value']);
+    const sql = executeQueryMock.mock.calls[0][1];
+    expect(sql).toContain('SELECT TOP (50) [Status] AS [Status], COUNT(*) AS [value] FROM [Order]');
+    expect(sql).toContain('GROUP BY [Status] ORDER BY COUNT(*) DESC');
+  });
+  it('sum/avg require a measure column (400 when missing)', async () => {
+    const r = await post({ entityType: 'Order', op: 'aggregate', aggFn: 'sum' });
+    expect(r.status).toBe(400);
+    expect((await r.json()).code).toBe('no_agg_column');
+  });
+  it('scalar aggregate (no groupBy) emits a single bound, filtered value', async () => {
+    executeQueryMock.mockResolvedValueOnce({ rows: [[1234]], columns: ['value'], rowCount: 1, recordsAffected: 0 });
+    const r = await post({ entityType: 'Order', op: 'aggregate', aggFn: 'sum', aggColumn: 'Amount', filters: [{ column: 'Status', op: 'eq', value: 'open' }] });
+    expect(r.status).toBe(200);
+    const sql = executeQueryMock.mock.calls[0][1];
+    const params = executeQueryMock.mock.calls[0][3];
+    expect(sql).toBe('SELECT SUM([Amount]) AS [value] FROM [Order] WHERE [Status] = @f0');
+    expect(params).toEqual([{ name: 'f0', value: 'open' }]);
+  });
+  it('rejects an unsupported aggFn', async () => {
+    const r = await post({ entityType: 'Order', op: 'aggregate', aggFn: 'median' });
+    expect(r.status).toBe(400);
+    expect((await r.json()).code).toBe('bad_agg_fn');
+  });
+});
+
+describe('POST /run-action — distinct op (filter value list)', () => {
+  it('returns distinct non-null values for a column, ordered', async () => {
+    executeQueryMock.mockResolvedValueOnce({ rows: [['closed'], ['open']], columns: ['value'], rowCount: 2, recordsAffected: 0 });
+    const r = await post({ entityType: 'Order', op: 'distinct', column: 'Status', top: 200 });
+    expect(r.status).toBe(200);
+    const j = await r.json();
+    expect(j.ok).toBe(true); expect(j.op).toBe('distinct'); expect(j.column).toBe('Status');
+    const sql = executeQueryMock.mock.calls[0][1];
+    expect(sql).toContain('SELECT DISTINCT TOP (200) [Status] AS [value] FROM [Order] WHERE [Status] IS NOT NULL ORDER BY [Status]');
+  });
+  it('400 when no column', async () => {
+    const r = await post({ entityType: 'Order', op: 'distinct' });
+    expect(r.status).toBe(400);
+    expect((await r.json()).code).toBe('no_column');
   });
 });
 

@@ -189,6 +189,68 @@ export function buildDeleteSql(table: string, keyColumn: string, keyValue: strin
   return { sql: `DELETE FROM [${table}] WHERE [${keyColumn}] = @k`, params: [{ name: 'k', value: keyValue }] };
 }
 
+/** Comparison operators a Workshop (Atelier) filter / object-set-filter variable can emit. */
+export type AtelierFilterOp = 'eq' | 'ne' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'startsWith';
+
+/** A single column predicate carried by a Workshop object-set-filter variable. */
+export interface AtelierFilter {
+  /** Column to filter on (validated as a safe identifier before use). */
+  column: string;
+  /** Comparison operator. */
+  op: AtelierFilterOp;
+  /** The value to compare against (bound via TDS — never concatenated). */
+  value: string;
+}
+
+/** The clause + bound params produced from a list of Atelier filters. */
+export interface AtelierWhere {
+  /** Either '' (no predicates) or ` WHERE [a] = @f0 AND [b] LIKE @f1` (leading space included). */
+  clause: string;
+  params: Array<{ name: string; value: string | null }>;
+}
+
+const ATELIER_FILTER_SQL_OP: Record<Exclude<AtelierFilterOp, 'contains' | 'startsWith'>, string> = {
+  eq: '=', ne: '<>', gt: '>', lt: '<', gte: '>=', lte: '<=',
+};
+
+/**
+ * Build a parameterised, injection-safe WHERE clause for a Workshop read
+ * (`list` / `aggregate` / `distinct`) from a list of object-set-filter
+ * predicates. Each column is validated with {@link safeSqlIdent} and
+ * bracket-quoted; every value is bound (`@f0`, `@f1`, …) — never spliced into
+ * the SQL. Predicates with an invalid column / operator, or an empty value, are
+ * skipped (an empty filter is "no constraint", the Workshop runtime semantics).
+ *
+ * `startIndex` lets a caller reserve earlier `@f<i>` names if it composes
+ * multiple clauses; defaults to 0. Pure + side-effect-free → vitest-coverable.
+ */
+export function buildAtelierWhere(filters: AtelierFilter[] | undefined, startIndex = 0): AtelierWhere {
+  const clauses: string[] = [];
+  const params: Array<{ name: string; value: string | null }> = [];
+  let i = startIndex;
+  for (const f of Array.isArray(filters) ? filters : []) {
+    const col = safeSqlIdent(String(f?.column || ''));
+    if (!col) continue;
+    const raw = f?.value;
+    if (raw === undefined || raw === null || String(raw) === '') continue; // empty ⇒ no constraint
+    const value = String(raw);
+    const name = `f${i++}`;
+    if (f.op === 'contains') {
+      clauses.push(`[${col}] LIKE @${name}`);
+      params.push({ name, value: `%${value}%` });
+    } else if (f.op === 'startsWith') {
+      clauses.push(`[${col}] LIKE @${name}`);
+      params.push({ name, value: `${value}%` });
+    } else {
+      const sqlOp = ATELIER_FILTER_SQL_OP[f.op];
+      if (!sqlOp) continue;
+      clauses.push(`[${col}] ${sqlOp} @${name}`);
+      params.push({ name, value });
+    }
+  }
+  return { clause: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', params };
+}
+
 /**
  * Given a parsed ontology class list and a list of physical table names from a
  * Lakehouse/Warehouse schema, return the classes whose names match a table name

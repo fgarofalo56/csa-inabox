@@ -33,8 +33,8 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { dedicatedTarget, executeQuery, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import {
-  safeSqlIdent, buildInsertSql, buildUpdateSql, buildDeleteSql,
-  type OntologyEntityBinding, type AtelierColumnValue,
+  safeSqlIdent, buildInsertSql, buildUpdateSql, buildDeleteSql, buildAtelierWhere,
+  type OntologyEntityBinding, type AtelierColumnValue, type AtelierFilter,
 } from '@/lib/editors/_family-utils';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -44,7 +44,8 @@ export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'workshop-app';
 const WRITE_OPS = new Set(['create', 'update', 'delete']);
-const ALL_OPS = new Set(['list', 'get', 'create', 'update', 'delete']);
+const ALL_OPS = new Set(['list', 'get', 'aggregate', 'distinct', 'create', 'update', 'delete']);
+const AGG_FNS = new Set(['count', 'sum', 'avg', 'min', 'max']);
 
 function err(error: string, status: number, code?: string, gate?: Record<string, unknown>) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}), ...(gate ? { gate } : {}) }, { status });
@@ -57,6 +58,16 @@ interface RunBody {
   key?: string;
   keyColumn?: string;
   values?: Record<string, unknown>;
+  /** Object-set-filter predicates applied (server-side WHERE) to read ops. */
+  filters?: AtelierFilter[];
+  /** aggregate: GROUP BY category column (omit for a single scalar value). */
+  groupBy?: string;
+  /** aggregate: aggregation function over the measure column. */
+  aggFn?: string;
+  /** aggregate: measure column (required for sum/avg/min/max; ignored by count). */
+  aggColumn?: string;
+  /** distinct: the column whose distinct non-null values to return. */
+  column?: string;
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -114,9 +125,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   // ── READ ops ────────────────────────────────────────────────────────────
+  // Object-set-filter predicates (from Workshop filter widgets / row-select
+  // events) are compiled into a parameterised, injection-safe WHERE clause —
+  // each column validated via safeSqlIdent, each value bound via TDS (@f0…).
+  const filters = Array.isArray(body?.filters) ? body.filters : [];
+
   if (op === 'list') {
+    const where = buildAtelierWhere(filters);
     try {
-      const result = await executeQuery(target, `SELECT TOP (${top}) * FROM [${table}]`, 60_000);
+      const result = await executeQuery(target, `SELECT TOP (${top}) * FROM [${table}]${where.clause}`, 60_000, where.params.length ? where.params : undefined);
       return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length });
     } catch (e: unknown) {
       return err(`Query failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'query_failed');
@@ -133,6 +150,55 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length });
     } catch (e: unknown) {
       return err(`Query failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'query_failed');
+    }
+  }
+
+  // aggregate: powers Workshop chart + metric/KPI widgets. With a groupBy it
+  // returns [category, value] rows (GROUP BY); without one it returns a single
+  // scalar `value` row. count ⇒ COUNT(*); sum/avg/min/max require a measure
+  // column. All identifiers validated; filter values bound.
+  if (op === 'aggregate') {
+    const aggFn = String(body?.aggFn || 'count').toLowerCase();
+    if (!AGG_FNS.has(aggFn)) return err(`unsupported aggFn "${aggFn}"`, 400, 'bad_agg_fn');
+    let measureExpr: string;
+    if (aggFn === 'count') {
+      measureExpr = 'COUNT(*)';
+    } else {
+      const aggCol = safeSqlIdent(String(body?.aggColumn || '').trim());
+      if (!aggCol) return err(`aggregate "${aggFn}" requires a valid aggColumn`, 400, 'no_agg_column');
+      measureExpr = `${aggFn.toUpperCase()}([${aggCol}])`;
+    }
+    const where = buildAtelierWhere(filters);
+    const groupByRaw = String(body?.groupBy || '').trim();
+    let sql: string;
+    if (groupByRaw) {
+      const groupBy = safeSqlIdent(groupByRaw);
+      if (!groupBy) return err('groupBy is not a safe SQL identifier', 400, 'bad_group_by');
+      sql = `SELECT TOP (${top}) [${groupBy}] AS [${groupBy}], ${measureExpr} AS [value] FROM [${table}]${where.clause} GROUP BY [${groupBy}] ORDER BY ${measureExpr} DESC`;
+    } else {
+      sql = `SELECT ${measureExpr} AS [value] FROM [${table}]${where.clause}`;
+    }
+    try {
+      const result = await executeQuery(target, sql, 60_000, where.params.length ? where.params : undefined);
+      return NextResponse.json({ ok: true, op, entityType, columns: result.columns, rows: result.rows, rowCount: result.rows.length });
+    } catch (e: unknown) {
+      return err(`Aggregate failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'query_failed');
+    }
+  }
+
+  // distinct: populates a Workshop filter control's value list (the distinct,
+  // non-null values of one column). Filter predicates narrow the candidate set.
+  if (op === 'distinct') {
+    const col = safeSqlIdent(String(body?.column || '').trim());
+    if (!col) return err('distinct requires a valid column', 400, 'no_column');
+    const where = buildAtelierWhere(filters);
+    const nullPredicate = where.clause ? `${where.clause} AND [${col}] IS NOT NULL` : ` WHERE [${col}] IS NOT NULL`;
+    const sql = `SELECT DISTINCT TOP (${top}) [${col}] AS [value] FROM [${table}]${nullPredicate} ORDER BY [${col}]`;
+    try {
+      const result = await executeQuery(target, sql, 60_000, where.params.length ? where.params : undefined);
+      return NextResponse.json({ ok: true, op, entityType, column: col, columns: result.columns, rows: result.rows, rowCount: result.rows.length });
+    } catch (e: unknown) {
+      return err(`Distinct failed: ${e instanceof Error ? e.message : String(e)}`, 502, 'query_failed');
     }
   }
 
