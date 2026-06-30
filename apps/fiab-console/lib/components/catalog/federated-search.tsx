@@ -69,6 +69,10 @@ interface FederatedHit {
 
 interface SourceResult { ok: boolean; count: number; error?: string; hint?: unknown; durationMs: number; }
 
+/** One Purview facet bucket: a classification / glossary-term value + its asset count. */
+interface FacetBucket { value: string; count: number; }
+interface SearchFacets { classification: FacetBucket[]; term: FacetBucket[]; }
+
 const SOURCES = ['purview', 'unity-catalog', 'onelake'] as const;
 type SourceKey = (typeof SOURCES)[number];
 
@@ -279,11 +283,30 @@ function FilterChip({
   );
 }
 
+/**
+ * Humanize a Purview classification name for the facet chip. System
+ * classifications are dotted identifiers
+ * (MICROSOFT.GOVERNMENT.US.SOCIAL_SECURITY_NUMBER); we show the last segment,
+ * spaced + title-cased ("Social Security Number"). Custom (plain) names pass
+ * through. The full identifier stays available via the chip's title.
+ */
+function prettyClassification(v: string): string {
+  const seg = v.split('.').pop() || v;
+  return seg
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export function FederatedSearch() {
   const s = useStyles();
   const [q, setQ] = useState('');
   const [sourceFilter, setSourceFilter] = useState<Set<string>>(new Set());
   const [typeFilter, setTypeFilter] = useState('');
+  // Purview facet filters — surface assets by sensitive-info type / glossary term.
+  const [classification, setClassification] = useState('');
+  const [term, setTerm] = useState('');
+  const [facets, setFacets] = useState<SearchFacets>({ classification: [], term: [] });
   const [hits, setHits] = useState<FederatedHit[]>([]);
   const [sources, setSources] = useState<Record<string, SourceResult>>({});
   const [loading, setLoading] = useState(false);
@@ -297,15 +320,18 @@ export function FederatedSearch() {
       const params = new URLSearchParams();
       if (q) params.set('q', q);
       if (sourceFilter.size) params.set('source', Array.from(sourceFilter).join(','));
+      if (classification) params.set('classification', classification);
+      if (term) params.set('term', term);
       const r = await fetch(`/api/catalog/search?${params.toString()}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setHits(j.hits || []);
       setSources(j.sources || {});
+      setFacets(j.facets || { classification: [], term: [] });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : String(e));
     } finally { setLoading(false); }
-  }, [q, sourceFilter]);
+  }, [q, sourceFilter, classification, term]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -329,6 +355,15 @@ export function FederatedSearch() {
     if (next.has(src)) next.delete(src); else next.add(src);
     setSourceFilter(next);
   }
+
+  function toggleClassification(v: string) { setClassification((p) => (p === v ? '' : v)); }
+  function toggleTerm(v: string) { setTerm((p) => (p === v ? '' : v)); }
+
+  // The facet rail shows whenever Purview is contributing, or a facet filter is
+  // active (so it can be cleared). When Purview is unconfigured the rail stays
+  // hidden — the per-source MessageBar already explains the remediation.
+  const purviewOk = sources.purview?.ok === true;
+  const showFacets = purviewOk || Boolean(classification) || Boolean(term);
 
   const columns: LoomColumn<FederatedHit>[] = useMemo(() => [
     {
@@ -519,6 +554,54 @@ export function FederatedSearch() {
           </MessageBar>
         ))}
       </Section>
+
+      {/* ── Classification + glossary facets (Purview) ─────────────── */}
+      {showFacets && (
+        <Section title="Find by sensitive-info type">
+          <div className={s.chipRow}>
+            <Caption1 className={s.chipLabel}>Classification</Caption1>
+            {facets.classification.length ? (
+              facets.classification.map((b) => (
+                <FilterChip
+                  key={b.value}
+                  active={classification === b.value}
+                  color={tokens.colorPaletteRedForeground1}
+                  onToggle={() => toggleClassification(b.value)}
+                  testId={`facet-classification-${b.value}`}
+                >
+                  <span title={b.value}>{prettyClassification(b.value)}</span>
+                  <span className={s.chipCount}>· {b.count}</span>
+                </FilterChip>
+              ))
+            ) : (
+              <Caption1 className={s.muted}>
+                No classifications detected yet — scan assets in Governance to surface SSNs,
+                addresses, and other sensitive-info types.
+              </Caption1>
+            )}
+          </div>
+
+          <div className={mergeClasses(s.chipRow, s.chipRowSpaced)}>
+            <Caption1 className={s.chipLabel}>Glossary term</Caption1>
+            {facets.term.length ? (
+              facets.term.map((b) => (
+                <FilterChip
+                  key={b.value}
+                  active={term === b.value}
+                  color={tokens.colorBrandForeground1}
+                  onToggle={() => toggleTerm(b.value)}
+                  testId={`facet-term-${b.value}`}
+                >
+                  {b.value}
+                  <span className={s.chipCount}>· {b.count}</span>
+                </FilterChip>
+              ))
+            ) : (
+              <Caption1 className={s.muted}>No glossary terms applied to catalog assets yet.</Caption1>
+            )}
+          </div>
+        </Section>
+      )}
 
       {/* ── Results ────────────────────────────────────────────────── */}
       <Section title="Results">

@@ -487,58 +487,42 @@ export interface DataMapSearchOpts {
   collectionName?: string;
   /** Atlas typeName list for type-chip filtering. Empty/unset = all types. */
   entityTypes?: string[];
+  /**
+   * Filter to assets carrying this Purview classification (system or custom),
+   * e.g. "MICROSOFT.GOVERNMENT.US.SOCIAL_SECURITY_NUMBER" or "MICROSOFT.PERSONAL.US.PHYSICAL_ADDRESS".
+   * Maps to the leaf filter `{ classification }`. Unset = all classifications.
+   */
+  classification?: string;
+  /**
+   * Filter to assets a glossary term is applied to (the term's name). Maps to
+   * the leaf filter `{ term }`. Unset = all terms.
+   */
+  term?: string;
+  /**
+   * Facet fields to compute server-side (e.g. ['classification', 'term']).
+   * Only honored by searchDataMapWithFacets; ignored by searchDataMapAssets.
+   */
+  facets?: string[];
   limit?: number;
   offset?: number;
 }
 
-/**
- * Domain-scoped + type-filtered asset search for the F9 "Add data assets"
- * panel. Same Discovery endpoint as searchPurview, but builds the structured
- * `filter` the Data Map search supports so results can be constrained to a
- * single collection (the classic equivalent of a governance domain) and to a
- * set of Atlas entity types (the Table/View/File chips).
- *
- *   POST {base}/datamap/api/search/query?api-version=2023-09-01
- *   body: {
- *     keywords, limit, offset,
- *     filter: { and: [ { collectionId: "<ref>" }, { or: [ { entityType: "azure_sql_table" }, ... ] } ] }
- *   }
- *
- * The `filter` grammar is the recursive Data Map search filter: leaf terms
- * `{ collectionId }` / `{ entityType }` combined with `and` / `or` / `not`.
- *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
- *
- * The Loom UAMI needs at minimum a Data Map READ role (Data Reader or Data
- * Curator) on the target collection — see consolePurviewRoleGrant in
- * platform/fiab/bicep/modules/admin-plane/catalog.bicep, applied by
- * scripts/csa-loom/grant-purview-datamap-role.sh.
- */
-export async function searchDataMapAssets(opts: DataMapSearchOpts): Promise<PurviewAssetHit[]> {
-  purviewAccount();
-  const { q, collectionName, entityTypes, limit = 20, offset = 0 } = opts;
-  const andClauses: Record<string, unknown>[] = [];
-  if (collectionName) andClauses.push({ collectionId: collectionName });
-  if (entityTypes && entityTypes.length > 0) {
-    andClauses.push(
-      entityTypes.length === 1
-        ? { entityType: entityTypes[0] }
-        : { or: entityTypes.map((t) => ({ entityType: t })) },
-    );
-  }
-  const body: Record<string, unknown> = {
-    keywords: q && q.trim() ? q.trim() : '*',
-    limit,
-    offset,
-  };
-  if (andClauses.length === 1) body.filter = andClauses[0];
-  else if (andClauses.length > 1) body.filter = { and: andClauses };
+/** A single facet bucket from `@search.facets` — a classification/term + its asset count. */
+export interface PurviewFacetBucket {
+  value: string;
+  count: number;
+}
 
-  const res = await purviewFetch('/datamap/api/search/query', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  const j = await readJson<{ value?: any[] }>(res);
-  return (j?.value || []).map((v: any) => ({
+/** Parsed `@search.facets` — the classification + glossary-term buckets the catalog rail renders. */
+export interface PurviewSearchFacets {
+  classification: PurviewFacetBucket[];
+  term: PurviewFacetBucket[];
+  [field: string]: PurviewFacetBucket[];
+}
+
+/** Map one raw Discovery `value[]` row to the shared PurviewAssetHit shape. */
+function mapPurviewAssetHit(v: any): PurviewAssetHit {
+  return {
     source: 'purview' as const,
     id: v.id || v.guid,
     name: v.name || v.qualifiedName || v.id,
@@ -549,7 +533,110 @@ export async function searchDataMapAssets(opts: DataMapSearchOpts): Promise<Purv
     owner: v.owner || (Array.isArray(v.contact) ? v.contact[0]?.id : undefined),
     domain: v.domain,
     updatedAt: v.updateTime || v.modifiedTime,
-  }));
+  };
+}
+
+/**
+ * Build the Discovery `POST /datamap/api/search/query` request body from the
+ * structured opts. Leaf filter terms `{ collectionId }` / `{ entityType }` /
+ * `{ classification }` / `{ term }` are combined under `and`; `facets` (when
+ * present) requests server-side facet buckets sorted by count desc.
+ *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+ */
+function buildDataMapSearchBody(opts: DataMapSearchOpts): Record<string, unknown> {
+  const { q, collectionName, entityTypes, classification, term, facets, limit = 20, offset = 0 } = opts;
+  const andClauses: Record<string, unknown>[] = [];
+  if (collectionName) andClauses.push({ collectionId: collectionName });
+  if (entityTypes && entityTypes.length > 0) {
+    andClauses.push(
+      entityTypes.length === 1
+        ? { entityType: entityTypes[0] }
+        : { or: entityTypes.map((t) => ({ entityType: t })) },
+    );
+  }
+  if (classification) andClauses.push({ classification });
+  if (term) andClauses.push({ term });
+  const body: Record<string, unknown> = {
+    keywords: q && q.trim() ? q.trim() : '*',
+    limit,
+    offset,
+  };
+  if (andClauses.length === 1) body.filter = andClauses[0];
+  else if (andClauses.length > 1) body.filter = { and: andClauses };
+  if (facets && facets.length > 0) {
+    body.facets = facets.map((f) => ({ count: 25, facet: f, sort: { count: 'desc' } }));
+  }
+  return body;
+}
+
+/**
+ * Domain-scoped + type-filtered asset search for the F9 "Add data assets"
+ * panel. Same Discovery endpoint as searchPurview, but builds the structured
+ * `filter` the Data Map search supports so results can be constrained to a
+ * single collection (the classic equivalent of a governance domain), a set of
+ * Atlas entity types (the Table/View/File chips), and — additively — a
+ * classification or glossary term.
+ *
+ *   POST {base}/datamap/api/search/query?api-version=2023-09-01
+ *   body: {
+ *     keywords, limit, offset,
+ *     filter: { and: [ { collectionId: "<ref>" }, { or: [ { entityType: "azure_sql_table" }, ... ] } ] }
+ *   }
+ *
+ * The `filter` grammar is the recursive Data Map search filter: leaf terms
+ * `{ collectionId }` / `{ entityType }` / `{ classification }` / `{ term }`
+ * combined with `and` / `or` / `not`.
+ *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+ *
+ * The Loom UAMI needs at minimum a Data Map READ role (Data Reader or Data
+ * Curator) on the target collection — see consolePurviewRoleGrant in
+ * platform/fiab/bicep/modules/admin-plane/catalog.bicep, applied by
+ * scripts/csa-loom/grant-purview-datamap-role.sh.
+ */
+export async function searchDataMapAssets(opts: DataMapSearchOpts): Promise<PurviewAssetHit[]> {
+  purviewAccount();
+  const res = await purviewFetch('/datamap/api/search/query', {
+    method: 'POST',
+    body: JSON.stringify(buildDataMapSearchBody(opts)),
+  });
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map(mapPurviewAssetHit);
+}
+
+/**
+ * Faceted Data Map search — same Discovery endpoint as searchDataMapAssets but
+ * additionally requests `facets` and returns the parsed `@search.facets`
+ * buckets alongside the hits. Powers the catalog-search "find assets by
+ * sensitive-info type" rail: classification facets (SSN / physical-address /
+ * credit-card / …, detected by Purview scans) + glossary-term facets.
+ *
+ *   body.facets = [{ count, facet: "classification", sort: { count: "desc" } }, …]
+ *   response["@search.facets"] = { classification: [{ value, count }], term: […] }
+ *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+ *
+ * Defaults to faceting on classification + term when opts.facets is unset.
+ * Throws PurviewNotConfiguredError (via purviewAccount) when LOOM_PURVIEW_ACCOUNT
+ * is unset — callers translate that into an honest empty-facet gate.
+ */
+export async function searchDataMapWithFacets(
+  opts: DataMapSearchOpts,
+): Promise<{ hits: PurviewAssetHit[]; facets: PurviewSearchFacets }> {
+  purviewAccount();
+  const facetFields = opts.facets && opts.facets.length ? opts.facets : ['classification', 'term'];
+  const res = await purviewFetch('/datamap/api/search/query', {
+    method: 'POST',
+    body: JSON.stringify(buildDataMapSearchBody({ ...opts, facets: facetFields })),
+  });
+  const j = await readJson<{ value?: any[]; '@search.facets'?: Record<string, any[]> }>(res);
+  const rawFacets = j?.['@search.facets'] || {};
+  const pick = (field: string): PurviewFacetBucket[] =>
+    (rawFacets[field] || [])
+      .map((b: any) => ({ value: String(b?.value ?? ''), count: Number(b?.count ?? 0) }))
+      .filter((b: PurviewFacetBucket) => b.value);
+  return {
+    hits: (j?.value || []).map(mapPurviewAssetHit),
+    facets: { classification: pick('classification'), term: pick('term') },
+  };
 }
 //   GET {base}/collections?api-version=2019-11-01-preview
 //   https://learn.microsoft.com/rest/api/purview/accountdataplane/collections/list-collections

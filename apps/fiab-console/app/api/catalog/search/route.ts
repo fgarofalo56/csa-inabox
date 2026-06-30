@@ -20,7 +20,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { searchPurview, PurviewNotConfiguredError } from '@/lib/azure/purview-client';
+import { searchDataMapWithFacets, PurviewNotConfiguredError, type PurviewSearchFacets } from '@/lib/azure/purview-client';
 import { searchUnity, UnityCatalogNotConfiguredError } from '@/lib/azure/unity-catalog-client';
 import { searchOneLake } from '@/lib/azure/onelake-catalog-client';
 
@@ -60,17 +60,36 @@ export async function GET(req: NextRequest) {
   const q = (req.nextUrl.searchParams.get('q') || '').trim();
   const sourceFilter = (req.nextUrl.searchParams.get('source') || '').split(',').map((x) => x.trim()).filter(Boolean);
   const limit = Math.min(parseInt(req.nextUrl.searchParams.get('limit') || '30', 10) || 30, 100);
+  // Optional Purview facet filters — surface assets by sensitive-info type
+  // (classification, e.g. SSN/physical-address) or by applied glossary term.
+  const classification = (req.nextUrl.searchParams.get('classification') || '').trim() || undefined;
+  const term = (req.nextUrl.searchParams.get('term') || '').trim() || undefined;
 
   const sources: Record<string, SourceResult> = {};
   const hits: FederatedHit[] = [];
+  // Purview classification + glossary-term facet buckets (counts) for the rail.
+  // Empty by default — stays empty (no error) when Purview is unconfigured.
+  let facets: PurviewSearchFacets = { classification: [], term: [] };
 
   // ---------- Purview ----------
   if (!sourceFilter.length || sourceFilter.includes('purview')) {
     const t0 = Date.now();
     try {
-      const rows = await searchPurview(q, limit);
-      sources.purview = { ok: true, count: rows.length, durationMs: Date.now() - t0 };
-      for (const r of rows) {
+      // Hits are narrowed by any selected classification/term; the facet rail is
+      // computed by the same call. When a facet filter is active we recompute the
+      // rail from the unfiltered query so users can switch sensitive-info types
+      // without first clearing the active filter (the real Purview-portal behavior).
+      const facetFilterActive = Boolean(classification || term);
+      const primary = await searchDataMapWithFacets({ q, limit, classification, term });
+      facets = primary.facets;
+      if (facetFilterActive) {
+        try {
+          const base = await searchDataMapWithFacets({ q, limit: 1 });
+          facets = base.facets;
+        } catch { /* keep the filtered facets if the rail recompute fails */ }
+      }
+      sources.purview = { ok: true, count: primary.hits.length, durationMs: Date.now() - t0 };
+      for (const r of primary.hits) {
         hits.push({
           source: 'purview',
           id: r.id,
@@ -172,5 +191,8 @@ export async function GET(req: NextRequest) {
     total: hits.length,
     hits,
     sources,
+    // Classification + glossary-term facet buckets (Purview). Empty when Purview
+    // is unconfigured — the UI renders an honest empty-facet state, not an error.
+    facets,
   });
 }
