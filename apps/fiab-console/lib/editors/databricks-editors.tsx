@@ -36,6 +36,7 @@ import {
   Organization20Regular,
   Tag20Regular,
   CloudLink20Regular, PlugConnected20Regular,
+  History20Regular, ShieldTask20Regular, Link20Regular,
   ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
@@ -2035,6 +2036,354 @@ function ConnectionsDialog({ open, onOpenChange, warehouseId }: {
   );
 }
 
+// ============================================================
+// Workspace-catalog binding (catalog isolation) — wave c3.
+// A binding restricts which workspaces can access a catalog and SUPERSEDES
+// explicit grants, but only when the catalog is ISOLATED (OPEN ⇒ any workspace).
+// Real UC REST via /api/databricks/unity-catalog/bindings.
+// ============================================================
+function WorkspaceBindingsDialog({ open, onOpenChange, catalog, catalogs }: {
+  open: boolean; onOpenChange: (v: boolean) => void; catalog: string | null; catalogs: string[];
+}) {
+  const [sel, setSel] = useState<string>(catalog || '');
+  const [bindings, setBindings] = useState<{ workspace_id: number; binding_type?: string }[]>([]);
+  const [isolationMode, setIsolationMode] = useState<string | undefined>();
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [wsId, setWsId] = useState('');
+  const [bindType, setBindType] = useState<'BINDING_TYPE_READ_WRITE' | 'BINDING_TYPE_READ_ONLY'>('BINDING_TYPE_READ_WRITE');
+
+  const BASE = '/api/databricks/unity-catalog/bindings';
+
+  useEffect(() => { if (open && catalog && !sel) setSel(catalog); }, [open, catalog, sel]);
+
+  const load = useCallback(async () => {
+    if (!sel) { setBindings([]); setIsolationMode(undefined); return; }
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      const r = await fetch(`${BASE}?securable_type=catalog&securable_name=${encodeURIComponent(sel)}`);
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); setBindings([]); return; }
+      if (!j.ok) { setErr(j.error || 'failed to load bindings'); setBindings([]); return; }
+      setBindings(j.bindings || []);
+      setIsolationMode(j.isolationMode);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [sel]);
+  useEffect(() => { if (open) void load(); }, [open, load]);
+
+  const patch = async (change: 'add' | 'remove', workspaceId: number, binding_type?: string) => {
+    setBusy(true); setErr(null); setGate(null);
+    try {
+      const r = await fetch(BASE, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ securable_type: 'catalog', securable_name: sel, [change]: [{ workspace_id: workspaceId, binding_type: binding_type || 'BINDING_TYPE_READ_WRITE' }] }),
+      });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'binding update failed'); return; }
+      setBindings(j.bindings || []);
+      if (change === 'add') setWsId('');
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
+  };
+  const setIsolation = async (mode: 'OPEN' | 'ISOLATED') => {
+    setBusy(true); setErr(null); setGate(null);
+    try {
+      const r = await fetch(BASE, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ securable_name: sel, isolation_mode: mode }),
+      });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'isolation update failed'); return; }
+      setIsolationMode(j.catalog?.isolation_mode || mode);
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
+  };
+
+  const isolated = (isolationMode || '').toUpperCase() === 'ISOLATED';
+  const addId = Number(wsId);
+  const addValid = Number.isFinite(addId) && addId > 0;
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '860px', width: '92vw' }}>
+        <DialogBody>
+          <DialogTitle>Workspace-catalog binding &amp; isolation</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                A workspace binding restricts which workspaces can access a catalog. A binding <b>supersedes explicit
+                grants</b> — a real security boundary — but is only enforced when the catalog is <b>ISOLATED</b>
+                (an <b>OPEN</b> catalog is reachable from any workspace). Backed by real UC REST; the Console UAMI must be a
+                metastore admin or the catalog owner.
+              </Caption1>
+
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <Field label="Catalog" required style={{ minWidth: 220 }}>
+                  <Dropdown placeholder="Pick a catalog" value={sel} selectedOptions={sel ? [sel] : []} onOptionSelect={(_, d) => setSel(d.optionValue || '')}>
+                    {catalogs.map((c) => <Option key={c} value={c}>{c}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Isolation mode">
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
+                    <Badge appearance="filled" color={isolated ? 'danger' : 'subtle'}>{isolationMode || '—'}</Badge>
+                    <Button size="small" appearance={isolated ? 'outline' : 'primary'} disabled={!sel || busy || !isolated} onClick={() => setIsolation('OPEN')}>Set OPEN</Button>
+                    <Button size="small" appearance={isolated ? 'primary' : 'outline'} disabled={!sel || busy || isolated} onClick={() => setIsolation('ISOLATED')}>Set ISOLATED</Button>
+                  </div>
+                </Field>
+                <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={loading || !sel} onClick={() => void load()}>Refresh</Button>
+                {loading && <Spinner size="tiny" />}
+              </div>
+
+              {!isolated && sel && (
+                <MessageBar intent="info"><MessageBarBody>
+                  <MessageBarTitle>Catalog is OPEN</MessageBarTitle>
+                  Bindings below are recorded but NOT enforced until you set the catalog ISOLATED.
+                </MessageBarBody></MessageBar>
+              )}
+              {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Configuration required</MessageBarTitle>{gate}</MessageBarBody></MessageBar>}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Operation failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+
+              <div style={{ overflow: 'auto', maxHeight: '260px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                <Table size="small" aria-label="Workspace bindings">
+                  <TableHeader><TableRow><TableHeaderCell>Workspace id</TableHeaderCell><TableHeaderCell>Binding type</TableHeaderCell><TableHeaderCell> </TableHeaderCell></TableRow></TableHeader>
+                  <TableBody>
+                    {bindings.length === 0 && <TableRow><TableCell colSpan={3}><Caption1>{sel ? 'No workspaces bound (catalog reachable per its isolation mode).' : 'Pick a catalog.'}</Caption1></TableCell></TableRow>}
+                    {bindings.map((b) => (
+                      <TableRow key={b.workspace_id}>
+                        <TableCell><span style={{ fontFamily: 'monospace' }}>{b.workspace_id}</span></TableCell>
+                        <TableCell><Badge appearance="tint" color={(b.binding_type || '').includes('READ_ONLY') ? 'warning' : 'brand'}>{(b.binding_type || 'BINDING_TYPE_READ_WRITE').replace('BINDING_TYPE_', '')}</Badge></TableCell>
+                        <TableCell><Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Unbind workspace" disabled={busy} onClick={() => patch('remove', b.workspace_id, b.binding_type)} /></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <Subtitle2>Bind a workspace</Subtitle2>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Enter the numeric Databricks workspace id (the workspace deployment id) to grant it access to this catalog.
+              </Caption1>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <Field label="Workspace id" required style={{ minWidth: 200 }}><Input value={wsId} onChange={(_, d) => setWsId(d.value.replace(/[^0-9]/g, ''))} placeholder="1234567890123456" /></Field>
+                <Field label="Access" style={{ minWidth: 180 }}>
+                  <Dropdown value={bindType.replace('BINDING_TYPE_', '')} selectedOptions={[bindType]} onOptionSelect={(_, d) => setBindType((d.optionValue as any) || 'BINDING_TYPE_READ_WRITE')}>
+                    <Option value="BINDING_TYPE_READ_WRITE" text="READ_WRITE">Read &amp; write</Option>
+                    <Option value="BINDING_TYPE_READ_ONLY" text="READ_ONLY">Read only</Option>
+                  </Dropdown>
+                </Field>
+                <Button appearance="primary" icon={<Add20Regular />} disabled={!sel || !addValid || busy} onClick={() => patch('add', addId, bindType)}>Bind workspace</Button>
+              </div>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// Audit & system tables (wave c3) — read-only reads of system.access.audit,
+// system.query.history, system.billing.usage, and UC-native data classification
+// (system.data_classification.results). Honest-gated when a system schema isn't
+// enabled. Real SQL over /api/databricks/unity-catalog/{system-tables,data-classification}.
+// ============================================================
+function SysRows({ columns, rows, classify }: { columns: string[]; rows: Record<string, unknown>[]; classify?: boolean }) {
+  const cell = (v: unknown): string => {
+    if (v == null) return '';
+    if (typeof v === 'object') { try { return JSON.stringify(v); } catch { return String(v); } }
+    const s = String(v);
+    return s.length > 200 ? `${s.slice(0, 200)}…` : s;
+  };
+  return (
+    <div style={{ overflow: 'auto', maxHeight: '380px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+      <Table size="small" aria-label="System table results">
+        <TableHeader><TableRow>{columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+        <TableBody>
+          {rows.length === 0 && <TableRow><TableCell colSpan={Math.max(1, columns.length)}><Caption1>No rows.</Caption1></TableCell></TableRow>}
+          {rows.map((row, i) => (
+            <TableRow key={i}>
+              {columns.map((c) => {
+                if (classify && c === 'class_tag') return <TableCell key={c}><Badge appearance="tint" color="important">{cell(row[c])}</Badge></TableCell>;
+                if (classify && c === 'confidence') {
+                  const hi = String(row[c] || '').toUpperCase() === 'HIGH';
+                  return <TableCell key={c}><Badge appearance="filled" color={hi ? 'danger' : 'warning'}>{cell(row[c])}</Badge></TableCell>;
+                }
+                return <TableCell key={c}><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{cell(row[c])}</span></TableCell>;
+              })}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }: {
+  open: boolean; onOpenChange: (v: boolean) => void; warehouseId?: string; catalog: string | null; schema: string | null;
+}) {
+  type AuditTab = 'audit' | 'query' | 'billing' | 'classification';
+  const [tab, setTab] = useState<AuditTab>('audit');
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [columns, setColumns] = useState<string[]>([]);
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [execMs, setExecMs] = useState<number | null>(null);
+  // shared filters
+  const [days, setDays] = useState('7');
+  const [limit, setLimit] = useState('100');
+  const [service, setService] = useState('');
+  const [action, setAction] = useState('');
+  const [status, setStatus] = useState('');
+  const [clCatalog, setClCatalog] = useState(catalog || '');
+  const [clSchema, setClSchema] = useState(schema || '');
+  const [clConfidence, setClConfidence] = useState('');
+
+  useEffect(() => { if (open) { setClCatalog(catalog || ''); setClSchema(schema || ''); } }, [open, catalog, schema]);
+
+  const wq = warehouseId ? `&warehouseId=${encodeURIComponent(warehouseId)}` : '';
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr(null); setGate(null); setColumns([]); setRows([]); setExecMs(null);
+    try {
+      let url: string;
+      if (tab === 'classification') {
+        const p = new URLSearchParams();
+        if (clCatalog.trim()) p.set('catalog', clCatalog.trim());
+        if (clSchema.trim()) p.set('schema', clSchema.trim());
+        if (clConfidence.trim()) p.set('confidence', clConfidence.trim());
+        if (limit.trim()) p.set('limit', limit.trim());
+        url = `/api/databricks/unity-catalog/data-classification?${p.toString()}${wq}`;
+      } else {
+        const tableParam = tab === 'audit' ? 'audit' : tab === 'query' ? 'query-history' : 'billing';
+        const p = new URLSearchParams({ table: tableParam });
+        if (days.trim()) p.set('days', days.trim());
+        if (limit.trim()) p.set('limit', limit.trim());
+        if (tab === 'audit') { if (service.trim()) p.set('service', service.trim()); if (action.trim()) p.set('action', action.trim()); }
+        if (tab === 'query' && status.trim()) p.set('status', status.trim());
+        url = `/api/databricks/unity-catalog/system-tables?${p.toString()}${wq}`;
+      }
+      const r = await fetch(url);
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'failed to read system table'); return; }
+      setColumns(j.columns || []);
+      setRows(j.rows || []);
+      setExecMs(typeof j.executionMs === 'number' ? j.executionMs : null);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [tab, days, limit, service, action, status, clCatalog, clSchema, clConfidence, wq]);
+  useEffect(() => { if (open) void load(); }, [open, tab]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const tryEnable = async (sch: string) => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch('/api/databricks/unity-catalog/system-tables', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'enable-schema', schema: sch }),
+      });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'enable failed'); return; }
+      await load();
+    } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
+  };
+  const enableSchema = tab === 'audit' ? 'access' : tab === 'query' ? 'query' : tab === 'billing' ? 'billing' : 'data_classification';
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '1100px', width: '95vw' }}>
+        <DialogBody>
+          <DialogTitle>Audit &amp; system tables — Unity Catalog</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Read-only over the Databricks <b>system tables</b> (real SQL on the SQL warehouse). The Console UAMI needs
+                USE CATALOG on <code>system</code> + USE SCHEMA + SELECT on each system schema; account/metastore admin to enable a schema.
+              </Caption1>
+
+              <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as AuditTab)} size="small">
+                <Tab value="audit" icon={<ShieldTask20Regular />}>Access audit</Tab>
+                <Tab value="query" icon={<History20Regular />}>Query history</Tab>
+                <Tab value="billing" icon={<DataBarVertical20Regular />}>Billing usage</Tab>
+                <Tab value="classification" icon={<Tag20Regular />}>Data classification</Tab>
+              </TabList>
+
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                {tab !== 'classification' && (
+                  <Field label="Window (days)" style={{ minWidth: 110 }}><Input value={days} onChange={(_, d) => setDays(d.value.replace(/[^0-9]/g, ''))} placeholder="7" /></Field>
+                )}
+                <Field label="Row limit" style={{ minWidth: 110 }}><Input value={limit} onChange={(_, d) => setLimit(d.value.replace(/[^0-9]/g, ''))} placeholder="100" /></Field>
+                {tab === 'audit' && <>
+                  <Field label="Service (optional)" style={{ minWidth: 150 }}><Input value={service} onChange={(_, d) => setService(d.value)} placeholder="unityCatalog" /></Field>
+                  <Field label="Action (optional)" style={{ minWidth: 150 }}><Input value={action} onChange={(_, d) => setAction(d.value)} placeholder="getTable" /></Field>
+                </>}
+                {tab === 'query' && (
+                  <Field label="Status (optional)" style={{ minWidth: 160 }}>
+                    <Dropdown value={status} selectedOptions={status ? [status] : []} placeholder="Any" onOptionSelect={(_, d) => setStatus(d.optionValue || '')}>
+                      <Option value="">Any</Option>
+                      <Option value="FINISHED">FINISHED</Option>
+                      <Option value="FAILED">FAILED</Option>
+                      <Option value="CANCELED">CANCELED</Option>
+                    </Dropdown>
+                  </Field>
+                )}
+                {tab === 'classification' && <>
+                  <Field label="Catalog (optional)" style={{ minWidth: 150 }}><Input value={clCatalog} onChange={(_, d) => setClCatalog(d.value)} placeholder="main" /></Field>
+                  <Field label="Schema (optional)" style={{ minWidth: 150 }}><Input value={clSchema} onChange={(_, d) => setClSchema(d.value)} placeholder="public" /></Field>
+                  <Field label="Confidence" style={{ minWidth: 130 }}>
+                    <Dropdown value={clConfidence} selectedOptions={clConfidence ? [clConfidence] : []} placeholder="Any" onOptionSelect={(_, d) => setClConfidence(d.optionValue || '')}>
+                      <Option value="">Any</Option>
+                      <Option value="HIGH">HIGH</Option>
+                      <Option value="LOW">LOW</Option>
+                    </Dropdown>
+                  </Field>
+                </>}
+                <Button appearance="primary" icon={<Eye20Regular />} disabled={loading} onClick={() => void load()}>Run</Button>
+                {loading && <Spinner size="tiny" />}
+                {execMs != null && <Badge appearance="outline">{rows.length} row(s) · {execMs} ms</Badge>}
+              </div>
+
+              {gate && (
+                <MessageBar intent="warning"><MessageBarBody>
+                  <MessageBarTitle>System schema not available</MessageBarTitle>
+                  {gate}
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
+                    <Button size="small" appearance="outline" disabled={busy} onClick={() => void tryEnable(enableSchema)}>
+                      Attempt to enable system.{enableSchema}
+                    </Button>
+                  </div>
+                </MessageBarBody></MessageBar>
+              )}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Read failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+
+              {tab === 'classification' && !gate && !err && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Column-level sensitive-class detections from <code>system.data_classification.results</code> — complements the
+                  Microsoft Purview scan path. <code>class_tag</code> is the detected sensitive class; <code>confidence</code> is HIGH or LOW.
+                </Caption1>
+              )}
+
+              <SysRows columns={columns} rows={rows} classify={tab === 'classification'} />
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={loading} onClick={() => void load()}>Refresh</Button>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
 export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   // Unity Catalog WRITE dialog open-state (create catalog/schema/table + grants).
@@ -2056,6 +2405,10 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   // credentials, and connections / foreign catalogs.
   const [ucExtLocOpen, setUcExtLocOpen] = useState(false);
   const [ucConnsOpen, setUcConnsOpen] = useState(false);
+  // UC governance depth (wave c3): workspace-catalog binding (catalog isolation)
+  // + system tables / audit surface + UC-native data classification.
+  const [ucBindingsOpen, setUcBindingsOpen] = useState(false);
+  const [ucAuditOpen, setUcAuditOpen] = useState(false);
   // Lazy per-table tag cache for the UC tree chips (full_name → tag pairs).
   const [tagsByTable, setTagsByTable] = useState<Record<string, { key: string; value: string }[]>>({});
   // AI functions helper (sentiment/classify/translate/summarize/extract).
@@ -2859,6 +3212,12 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             </Tooltip>
             <Tooltip content="Connections & foreign catalogs (Lakehouse Federation)" relationship="label">
               <Button size="small" appearance="outline" icon={<PlugConnected20Regular />} onClick={() => setUcConnsOpen(true)}>Connections</Button>
+            </Tooltip>
+            <Tooltip content="Workspace-catalog binding & catalog isolation (a binding supersedes grants)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Link20Regular />} onClick={() => setUcBindingsOpen(true)}>Bindings</Button>
+            </Tooltip>
+            <Tooltip content="Audit & system tables (access audit · query history · billing · data classification)" relationship="label">
+              <Button size="small" appearance="outline" icon={<ShieldTask20Regular />} onClick={() => setUcAuditOpen(true)}>Audit &amp; system</Button>
             </Tooltip>
             <Tooltip content="Drop object (UC REST)" relationship="label">
               <Button size="small" appearance="outline" icon={<Delete20Regular />} onClick={() => setUcDropOpen(true)} aria-label="Drop object" />
@@ -3754,6 +4113,19 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             open={ucConnsOpen}
             onOpenChange={setUcConnsOpen}
             warehouseId={warehouseId}
+          />
+          <WorkspaceBindingsDialog
+            open={ucBindingsOpen}
+            onOpenChange={setUcBindingsOpen}
+            catalog={activeCatalog}
+            catalogs={catalogs}
+          />
+          <AuditSystemDialog
+            open={ucAuditOpen}
+            onOpenChange={setUcAuditOpen}
+            warehouseId={warehouseId}
+            catalog={activeCatalog}
+            schema={activeSchema}
           />
 
           <AiFunctionsHelper

@@ -35,7 +35,7 @@ import {
   ManagedIdentityCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { executeStatement, type QueryResult } from './databricks-client';
+import { executeStatement, type QueryResult, type DbxQueryParam } from './databricks-client';
 import {
   buildUcSetObjectTags, buildUcUnsetObjectTags, buildUcSetColumnTags, buildUcUnsetColumnTags,
   ucListTableTags, ucListColumnTags, ucListSchemaTags, ucListCatalogTags, ucListVolumeTags,
@@ -171,7 +171,7 @@ async function dbxToken(): Promise<string> {
 async function ucFetch<T = any>(
   host: string,
   path: string,
-  init?: { method?: 'GET' | 'POST' | 'PATCH' | 'DELETE'; body?: unknown; query?: Record<string, string> },
+  init?: { method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE'; body?: unknown; query?: Record<string, string> },
 ): Promise<T> {
   const token = await dbxToken();
   let url = `https://${host}${path}`;
@@ -222,6 +222,9 @@ export interface UCCatalog {
   owner?: string;
   metastore_id?: string;
   catalog_type?: string;
+  /** OPEN (any workspace) | ISOLATED (only bound workspaces) — the catalog
+   *  isolation boundary that makes workspace-catalog bindings enforced. */
+  isolation_mode?: string;
   created_at?: number;
   updated_at?: number;
   workspace_hostname?: string;
@@ -1599,4 +1602,263 @@ export async function primaryWorkspaceHost(): Promise<string> {
     });
   }
   return hosts[0];
+}
+
+// ============================================================
+// Governance depth (wave c3)
+//
+//   1. Workspace-catalog binding (catalog isolation) — a binding supersedes
+//      explicit grants and is a real security boundary. A catalog must be set
+//      ISOLATED for its bindings to be enforced (OPEN ⇒ any workspace).
+//   2. System tables / audit surface — read-only reads of system.access.audit,
+//      system.billing.usage, system.query.history (+ enablement confirmation via
+//      the systemschemas REST). Real SQL over the Statement Execution path.
+//   3. UC-native data classification — system.data_classification.results
+//      (column-level sensitive-class detections). Complements the Purview scan.
+//
+// Bindings + systemschemas are real UC REST (/api/2.1/unity-catalog/{bindings,
+// metastores/{id}/systemschemas}); the system.* reads are Learn-grounded SQL on
+// the SQL warehouse. Honest gate when a system schema isn't enabled (or the UAMI
+// lacks USE CATALOG/USE SCHEMA/SELECT on it) — never a silent empty result.
+//
+// CAVEAT: /api/2.1/unity-catalog/bindings/{securable_type}/{name} is data-plane;
+// the GET/PATCH (add/remove) shape mirrors the documented `workspace-bindings
+// get-bindings / update-bindings` CLI. systemschemas + system.* schemas are
+// Learn-grounded (learn.microsoft.com/azure/databricks/admin/system-tables).
+// ============================================================
+
+// ---- 1. Workspace-catalog binding (catalog isolation) ----------------
+
+export type UCBindingSecurableType =
+  | 'catalog'
+  | 'external_location'
+  | 'storage_credential'
+  | 'credential';
+
+export interface UCWorkspaceBinding {
+  workspace_id: number;
+  /** BINDING_TYPE_READ_WRITE (default) | BINDING_TYPE_READ_ONLY. */
+  binding_type?: 'BINDING_TYPE_READ_WRITE' | 'BINDING_TYPE_READ_ONLY' | string;
+}
+
+/** GET /api/2.1/unity-catalog/bindings/{securable_type}/{name} — the workspaces
+ *  a securable (catalog / external location / storage credential) is bound to.
+ *  Caller must be a metastore admin or the securable owner. */
+export async function listWorkspaceBindings(
+  host: string,
+  securableType: UCBindingSecurableType,
+  securableName: string,
+): Promise<UCWorkspaceBinding[]> {
+  const j = await ucFetch<{ bindings?: UCWorkspaceBinding[]; workspaces?: number[] }>(
+    host,
+    `/api/2.1/unity-catalog/bindings/${securableType}/${encodeURIComponent(securableName)}`,
+  );
+  if (Array.isArray(j.bindings)) return j.bindings;
+  // Older metastores echo a bare `workspaces` id array (READ_WRITE implied).
+  if (Array.isArray(j.workspaces)) return j.workspaces.map((id) => ({ workspace_id: id }));
+  return [];
+}
+
+/** PATCH /api/2.1/unity-catalog/bindings/{securable_type}/{name} with add/remove
+ *  — mirrors `databricks workspace-bindings update-bindings`. Returns the new
+ *  binding set. */
+export async function updateWorkspaceBindings(
+  host: string,
+  securableType: UCBindingSecurableType,
+  securableName: string,
+  changes: { add?: UCWorkspaceBinding[]; remove?: UCWorkspaceBinding[] },
+): Promise<UCWorkspaceBinding[]> {
+  const j = await ucFetch<{ bindings?: UCWorkspaceBinding[] }>(
+    host,
+    `/api/2.1/unity-catalog/bindings/${securableType}/${encodeURIComponent(securableName)}`,
+    { method: 'PATCH', body: { add: changes.add || [], remove: changes.remove || [] } },
+  );
+  return j.bindings || [];
+}
+
+/** GET a single catalog (carries `isolation_mode`, unlike the list rows we cache). */
+export async function getCatalog(host: string, name: string): Promise<UCCatalog> {
+  const j = await ucFetch<UCCatalog>(host, `/api/2.1/unity-catalog/catalogs/${encodeURIComponent(name)}`);
+  return { ...j, workspace_hostname: host };
+}
+
+/** PATCH the catalog's isolation mode. ISOLATED makes its workspace bindings a
+ *  hard boundary (only bound workspaces can access it); OPEN reverts to "any
+ *  workspace". This is the toggle that turns a binding into a security boundary. */
+export async function setCatalogIsolationMode(
+  host: string,
+  name: string,
+  isolationMode: 'OPEN' | 'ISOLATED',
+): Promise<UCCatalog> {
+  const j = await ucFetch<UCCatalog>(host, `/api/2.1/unity-catalog/catalogs/${encodeURIComponent(name)}`, {
+    method: 'PATCH', body: { isolation_mode: isolationMode },
+  });
+  return { ...j, workspace_hostname: host };
+}
+
+// ---- 2. System schemas (enablement) ----------------------------------
+
+export interface UCSystemSchema {
+  schema: string;
+  /** ENABLE_COMPLETED | ENABLE_INITIALIZED | AVAILABLE | DISABLE_INITIALIZED | UNAVAILABLE … */
+  state?: string;
+}
+
+/** The metastore summary (id + name + delta-sharing scope) for the calling
+ *  workspace — used to address the systemschemas REST and label the audit pane. */
+export async function getMetastoreSummary(
+  host: string,
+): Promise<{ metastoreId?: string; name?: string; deltaSharingScope?: string }> {
+  const j = await ucFetch<any>(host, '/api/2.1/unity-catalog/metastore_summary');
+  return { metastoreId: j?.metastore_id, name: j?.name, deltaSharingScope: j?.delta_sharing_scope };
+}
+
+/** GET /api/2.1/unity-catalog/metastores/{id}/systemschemas — the enablement
+ *  state of each system schema (access / billing / query / data_classification …).
+ *  Caller must be an account or metastore admin. */
+export async function listSystemSchemas(host: string, metastoreId: string): Promise<UCSystemSchema[]> {
+  const j = await ucFetch<{ schemas?: UCSystemSchema[] }>(
+    host,
+    `/api/2.1/unity-catalog/metastores/${encodeURIComponent(metastoreId)}/systemschemas`,
+  );
+  return j.schemas || [];
+}
+
+/** PUT …/systemschemas/{schema} — enable a system schema (adds it to the system
+ *  catalog). Requires metastore/account admin; a 403 is surfaced as an honest
+ *  gate by the BFF. `schema` is the short name (access / billing / query / …). */
+export async function enableSystemSchema(host: string, metastoreId: string, schema: string): Promise<void> {
+  await ucFetch(
+    host,
+    `/api/2.1/unity-catalog/metastores/${encodeURIComponent(metastoreId)}/systemschemas/${encodeURIComponent(schema)}`,
+    { method: 'PUT' },
+  );
+}
+
+// ---- 2b. System table reads (audit / billing / query history) --------
+
+export interface SystemReadResult {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  rowCount: number;
+  executionMs: number;
+}
+
+const clampInt = (v: number | undefined, def: number, min: number, max: number): number => {
+  const n = Number.isFinite(v as number) ? Math.trunc(v as number) : def;
+  return Math.min(max, Math.max(min, n));
+};
+
+/**
+ * Run a `system.*` read and convert a "schema not enabled / not authorized"
+ * failure into a typed {@link UnityCatalogError} that names the exact remediation
+ * (enable the system schema + grant the UAMI USE CATALOG/USE SCHEMA/SELECT),
+ * rather than returning a silent empty result (per no-vaporware.md).
+ */
+async function runSystemTableRead(
+  warehouseId: string,
+  fullTable: string,     // e.g. system.access.audit
+  systemSchema: string,  // e.g. access
+  sql: string,
+  params?: DbxQueryParam[],
+): Promise<SystemReadResult> {
+  try {
+    const r = await executeStatement(warehouseId, sql, undefined, undefined, params);
+    return { columns: r.columns, rows: ucRows(r), rowCount: r.rowCount, executionMs: r.executionMs };
+  } catch (e: any) {
+    const msg = String(e?.message || e);
+    if (/TABLE_OR_VIEW_NOT_FOUND|PERMISSION_DENIED|does not exist|cannot be found|UNRESOLVED|INSUFFICIENT_PERMISSIONS|SCHEMA_NOT_FOUND|REQUIRES_SINGLE_PART_NAMESPACE|system\./i.test(msg)) {
+      throw new UnityCatalogError(
+        `The Databricks system table ${fullTable} is unavailable: ${msg}. Enable the ` +
+          `system.${systemSchema} schema (as a metastore admin: PUT /api/2.1/unity-catalog/` +
+          `metastores/{metastore_id}/systemschemas/${systemSchema}) and grant the Loom UAMI ` +
+          `USE CATALOG on \`system\` + USE SCHEMA on system.${systemSchema} + SELECT (see ` +
+          `scripts/csa-loom/grant-databricks-system-tables-role.sh).`,
+        typeof e?.status === 'number' ? e.status : 403,
+        e?.body,
+        fullTable,
+      );
+    }
+    throw e;
+  }
+}
+
+/** Recent rows from `system.access.audit` (the UC audit log). Filter on
+ *  `event_date` (partition) for performance. */
+export async function readAccessAudit(
+  warehouseId: string,
+  opts: { days?: number; limit?: number; service?: string; action?: string } = {},
+): Promise<SystemReadResult> {
+  const days = clampInt(opts.days, 7, 1, 365);
+  const limit = clampInt(opts.limit, 100, 1, 1000);
+  const params: DbxQueryParam[] = [];
+  const filters = [`event_date >= current_date() - INTERVAL ${days} DAYS`];
+  if (opts.service?.trim()) { filters.push('service_name = :service'); params.push({ name: 'service', value: opts.service.trim(), type: 'STRING' }); }
+  if (opts.action?.trim()) { filters.push('action_name = :action'); params.push({ name: 'action', value: opts.action.trim(), type: 'STRING' }); }
+  const sql = `SELECT event_time, workspace_id, service_name, action_name, user_identity.email AS user_email, source_ip_address, request_id
+    FROM system.access.audit
+    WHERE ${filters.join(' AND ')}
+    ORDER BY event_time DESC
+    LIMIT ${limit}`;
+  return runSystemTableRead(warehouseId, 'system.access.audit', 'access', sql, params.length ? params : undefined);
+}
+
+/** Billable-usage summary from `system.billing.usage`, aggregated by product +
+ *  SKU over a recent window (the audit pane's "spend" tab). */
+export async function readBillingUsage(
+  warehouseId: string,
+  opts: { days?: number; limit?: number } = {},
+): Promise<SystemReadResult> {
+  const days = clampInt(opts.days, 30, 1, 365);
+  const limit = clampInt(opts.limit, 100, 1, 1000);
+  const sql = `SELECT billing_origin_product, sku_name, usage_unit, ROUND(SUM(usage_quantity), 4) AS usage_quantity, COUNT(*) AS records
+    FROM system.billing.usage
+    WHERE usage_date >= current_date() - INTERVAL ${days} DAYS
+    GROUP BY billing_origin_product, sku_name, usage_unit
+    ORDER BY usage_quantity DESC
+    LIMIT ${limit}`;
+  return runSystemTableRead(warehouseId, 'system.billing.usage', 'billing', sql);
+}
+
+/** Recent statements from `system.query.history`. `statement_text` may be
+ *  `<Redacted>` for non-admins (Databricks-side redaction) — surfaced as-is. */
+export async function readQueryHistory(
+  warehouseId: string,
+  opts: { days?: number; limit?: number; status?: string } = {},
+): Promise<SystemReadResult> {
+  const days = clampInt(opts.days, 7, 1, 365);
+  const limit = clampInt(opts.limit, 100, 1, 1000);
+  const params: DbxQueryParam[] = [];
+  const filters = [`start_time >= current_timestamp() - INTERVAL ${days} DAYS`];
+  if (opts.status?.trim()) { filters.push('execution_status = :status'); params.push({ name: 'status', value: opts.status.trim().toUpperCase(), type: 'STRING' }); }
+  const sql = `SELECT start_time, executed_by, statement_type, execution_status, total_duration_ms, produced_rows, statement_text
+    FROM system.query.history
+    WHERE ${filters.join(' AND ')}
+    ORDER BY start_time DESC
+    LIMIT ${limit}`;
+  return runSystemTableRead(warehouseId, 'system.query.history', 'query', sql, params.length ? params : undefined);
+}
+
+// ---- 3. UC-native data classification (auto-PII) ---------------------
+
+/** Column-level sensitive-class detections from `system.data_classification.results`
+ *  (HIGH/LOW confidence per `class_tag`). Honest-gated when the
+ *  `data_classification` system schema isn't enabled. */
+export async function readDataClassification(
+  warehouseId: string,
+  opts: { catalog?: string; schema?: string; table?: string; confidence?: string; limit?: number } = {},
+): Promise<SystemReadResult> {
+  const limit = clampInt(opts.limit, 200, 1, 1000);
+  const params: DbxQueryParam[] = [];
+  const filters = ['class_tag IS NOT NULL'];
+  if (opts.catalog?.trim()) { filters.push('catalog_name = :catalog'); params.push({ name: 'catalog', value: opts.catalog.trim(), type: 'STRING' }); }
+  if (opts.schema?.trim()) { filters.push('schema_name = :schema'); params.push({ name: 'schema', value: opts.schema.trim(), type: 'STRING' }); }
+  if (opts.table?.trim()) { filters.push('table_name = :table'); params.push({ name: 'table', value: opts.table.trim(), type: 'STRING' }); }
+  if (opts.confidence?.trim()) { filters.push('confidence = :confidence'); params.push({ name: 'confidence', value: opts.confidence.trim().toUpperCase(), type: 'STRING' }); }
+  const sql = `SELECT catalog_name, schema_name, table_name, column_name, class_tag, confidence, frequency, latest_detected_time
+    FROM system.data_classification.results
+    WHERE ${filters.join(' AND ')}
+    ORDER BY confidence DESC, latest_detected_time DESC
+    LIMIT ${limit}`;
+  return runSystemTableRead(warehouseId, 'system.data_classification.results', 'data_classification', sql, params.length ? params : undefined);
 }
