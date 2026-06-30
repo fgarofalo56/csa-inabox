@@ -1862,3 +1862,165 @@ export async function readDataClassification(
     LIMIT ${limit}`;
   return runSystemTableRead(warehouseId, 'system.data_classification.results', 'data_classification', sql, params.length ? params : undefined);
 }
+
+// ============================================================
+// Registered models as UC securables (wave c3 finish)
+//
+// Registered models are a SUBTYPE of the FUNCTION securable in Unity Catalog
+// ("In Unity Catalog, registered models are implemented as a type of function").
+// They are BROWSED via the dedicated UC REST surface
+// (/api/2.1/unity-catalog/models[/{full_name}[/versions]]) but GOVERNED through
+// the FUNCTION permissions path (PATCH /permissions/function/{full_name}) — so
+// the existing UC grant dialog's FUNCTION securable type already applies (EXECUTE
+// / APPLY TAG / MANAGE / ALL PRIVILEGES). Read-only here (list + get + versions);
+// CREATE / registration is an MLflow-side flow
+// (POST /api/2.0/mlflow/registered-models/create), surfaced as an honest note.
+//   https://learn.microsoft.com/azure/databricks/machine-learning/manage-model-lifecycle/
+//   https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/securable-objects#model
+//
+// CAVEAT: /api/2.1/unity-catalog/models* is the documented stable UC Models REST
+// (Databricks workspace API "Registered models" / "Model versions").
+// ============================================================
+
+export interface UCRegisteredModel {
+  name: string;
+  catalog_name: string;
+  schema_name: string;
+  full_name: string;
+  owner?: string;
+  comment?: string;
+  storage_location?: string;
+  /** ACTIVE | … (model availability). */
+  securable_kind?: string;
+  created_at?: number;
+  updated_at?: number;
+  workspace_hostname?: string;
+}
+
+export interface UCModelVersion {
+  model_name: string;
+  catalog_name?: string;
+  schema_name?: string;
+  version: number;
+  /** PENDING_REGISTRATION | FAILED_REGISTRATION | READY. */
+  status?: string;
+  comment?: string;
+  /** The MLflow run artifact URI the version was created from. */
+  source?: string;
+  run_id?: string;
+  run_workspace_id?: number;
+  created_at?: number;
+  updated_at?: number;
+  created_by?: string;
+}
+
+/** List the registered models in a schema (GET /api/2.1/unity-catalog/models). */
+export async function listRegisteredModels(
+  host: string,
+  catalogName: string,
+  schemaName: string,
+): Promise<UCRegisteredModel[]> {
+  const j = await ucFetch<{ registered_models?: UCRegisteredModel[] }>(host, '/api/2.1/unity-catalog/models', {
+    query: { catalog_name: catalogName, schema_name: schemaName },
+  });
+  return (j.registered_models || []).map((m) => ({ ...m, workspace_hostname: host }));
+}
+
+/** Get a single registered model by full name (catalog.schema.model). */
+export async function getRegisteredModel(host: string, fullName: string): Promise<UCRegisteredModel> {
+  const j = await ucFetch<UCRegisteredModel>(host, `/api/2.1/unity-catalog/models/${encodeURIComponent(fullName)}`);
+  return { ...j, workspace_hostname: host };
+}
+
+/** List the versions of a registered model
+ *  (GET /api/2.1/unity-catalog/models/{full_name}/versions). */
+export async function listModelVersions(host: string, fullName: string): Promise<UCModelVersion[]> {
+  const j = await ucFetch<{ model_versions?: UCModelVersion[] }>(
+    host,
+    `/api/2.1/unity-catalog/models/${encodeURIComponent(fullName)}/versions`,
+  );
+  return j.model_versions || [];
+}
+
+// ============================================================
+// Lakehouse / data-quality monitoring (wave c3 finish)
+//
+// Two surfaces:
+//   1. Per-table monitor CONFIG — GET /api/2.1/unity-catalog/quality-monitors/
+//      {table_full_name} (the classic Lakehouse Monitoring REST; returns the
+//      monitor attached to a table, or a 404 when the table has no monitor).
+//   2. Monitor RESULTS / STATUS — read from the documented system table
+//      system.data_quality_monitoring.table_results (latest row per table) over
+//      the SQL Statement Execution path. This is the "list monitors + their
+//      latest status" surface. Honest-gated (runSystemTableRead) when the
+//      data_quality_monitoring system schema isn't enabled / the UAMI lacks
+//      SELECT — only account admins can read it by default.
+//   https://learn.microsoft.com/azure/databricks/admin/system-tables/data-quality-monitoring
+//   https://learn.microsoft.com/azure/databricks/lakehouse-monitoring/
+//
+// CAVEAT: /api/2.1/unity-catalog/quality-monitors/{table} is data-plane; the
+// classic per-table shape is stable. CREATE / run-refresh is intentionally NOT
+// wired here (a notebook / dashboards-side flow) — surfaced as an honest note.
+// ============================================================
+
+export interface UCQualityMonitor {
+  table_name?: string;
+  /** MONITOR_STATUS_ACTIVE | MONITOR_STATUS_PENDING | MONITOR_STATUS_ERROR | … */
+  status?: string;
+  monitor_version?: string | number;
+  output_schema_name?: string;
+  assets_dir?: string;
+  dashboard_id?: string;
+  latest_monitor_failure_msg?: string;
+  drift_metrics_table_name?: string;
+  profile_metrics_table_name?: string;
+  workspace_hostname?: string;
+  [k: string]: unknown;
+}
+
+/** Get the classic Lakehouse-Monitoring config attached to a table (or a typed
+ *  404 when the table has no monitor). */
+export async function getQualityMonitor(host: string, tableFullName: string): Promise<UCQualityMonitor> {
+  const j = await ucFetch<UCQualityMonitor>(
+    host,
+    `/api/2.1/unity-catalog/quality-monitors/${encodeURIComponent(tableFullName)}`,
+  );
+  return { ...j, workspace_hostname: host };
+}
+
+/**
+ * "List monitors + their latest status" over the documented data-quality system
+ * table. Returns the LATEST row per monitored table (ROW_NUMBER window per the
+ * Learn example), projecting the consolidated table-level `status` plus the
+ * freshness / completeness sub-statuses. Unhealthy tables are ordered first.
+ * Honest-gated via {@link runSystemTableRead} when the system schema isn't
+ * enabled or the UAMI lacks SELECT.
+ */
+export async function readDataQualityMonitorResults(
+  warehouseId: string,
+  opts: { catalog?: string; schema?: string; table?: string; status?: string; limit?: number } = {},
+): Promise<SystemReadResult> {
+  const limit = clampInt(opts.limit, 200, 1, 1000);
+  const params: DbxQueryParam[] = [];
+  const innerFilters: string[] = [];
+  if (opts.catalog?.trim()) { innerFilters.push('catalog_name = :catalog'); params.push({ name: 'catalog', value: opts.catalog.trim(), type: 'STRING' }); }
+  if (opts.schema?.trim()) { innerFilters.push('schema_name = :schema'); params.push({ name: 'schema', value: opts.schema.trim(), type: 'STRING' }); }
+  if (opts.table?.trim()) { innerFilters.push('table_name = :table'); params.push({ name: 'table', value: opts.table.trim(), type: 'STRING' }); }
+  const inner = innerFilters.length ? `WHERE ${innerFilters.join(' AND ')}` : '';
+  let outer = 'WHERE rn = 1';
+  if (opts.status?.trim()) { outer += ' AND status = :status'; params.push({ name: 'status', value: opts.status.trim(), type: 'STRING' }); }
+  const sql = `WITH latest_rows AS (
+      SELECT *, ROW_NUMBER() OVER (PARTITION BY table_id ORDER BY event_time DESC) AS rn
+      FROM system.data_quality_monitoring.table_results
+      ${inner}
+    )
+    SELECT catalog_name, schema_name, table_name, status,
+           freshness.status AS freshness_status,
+           completeness.status AS completeness_status,
+           event_time
+    FROM latest_rows
+    ${outer}
+    ORDER BY CASE WHEN status = 'Unhealthy' THEN 0 WHEN status = 'Unknown' THEN 1 ELSE 2 END, event_time DESC
+    LIMIT ${limit}`;
+  return runSystemTableRead(warehouseId, 'system.data_quality_monitoring.table_results', 'data_quality_monitoring', sql, params.length ? params : undefined);
+}

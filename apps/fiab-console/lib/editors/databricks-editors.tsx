@@ -350,6 +350,10 @@ interface UcWriteDialogsProps {
   grantsOpen: boolean; setGrantsOpen: (v: boolean) => void;
   createVolumeOpen: boolean; setCreateVolumeOpen: (v: boolean) => void;
   dropOpen: boolean; setDropOpen: (v: boolean) => void;
+  /** When set as the grant dialog opens, pre-selects this securable type + full
+   *  name (e.g. FUNCTION + a registered-model full name) instead of the tree
+   *  context default. */
+  grantSeed?: { securable: UcSecurable; fullName: string } | null;
 }
 
 interface NewColumn { name: string; type_name: string; nullable: boolean; comment: string }
@@ -403,6 +407,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     grantsOpen, setGrantsOpen,
     createVolumeOpen, setCreateVolumeOpen,
     dropOpen, setDropOpen,
+    grantSeed,
   } = props;
 
   // ---- Create catalog ----
@@ -664,9 +669,12 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   // Seed full_name from the current tree context when the dialog opens.
   useEffect(() => {
     if (!grantsOpen) return;
+    // An explicit grant-seed (e.g. a registered model → FUNCTION securable) wins
+    // over the tree-context default.
+    if (grantSeed && grantSeed.fullName) { setGrSecurable(grantSeed.securable); setGrFullName(grantSeed.fullName); return; }
     if (activeSchema && activeCatalog) { setGrSecurable('SCHEMA'); setGrFullName(`${activeCatalog}.${activeSchema}`); }
     else if (activeCatalog) { setGrSecurable('CATALOG'); setGrFullName(activeCatalog); }
-  }, [grantsOpen, activeCatalog, activeSchema]);
+  }, [grantsOpen, activeCatalog, activeSchema, grantSeed]);
 
   // A prior "owner is now…" confirmation describes one specific object — drop it
   // (and the new-owner draft) whenever the target securable/full-name changes so
@@ -2227,7 +2235,7 @@ function SysRows({ columns, rows, classify }: { columns: string[]; rows: Record<
 function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }: {
   open: boolean; onOpenChange: (v: boolean) => void; warehouseId?: string; catalog: string | null; schema: string | null;
 }) {
-  type AuditTab = 'audit' | 'query' | 'billing' | 'classification';
+  type AuditTab = 'audit' | 'query' | 'billing' | 'classification' | 'quality';
   const [tab, setTab] = useState<AuditTab>('audit');
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -2245,6 +2253,8 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
   const [clCatalog, setClCatalog] = useState(catalog || '');
   const [clSchema, setClSchema] = useState(schema || '');
   const [clConfidence, setClConfidence] = useState('');
+  // Data-quality monitor status filter (Healthy / Unhealthy / Unknown).
+  const [qStatus, setQStatus] = useState('');
 
   useEffect(() => { if (open) { setClCatalog(catalog || ''); setClSchema(schema || ''); } }, [open, catalog, schema]);
 
@@ -2261,6 +2271,13 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
         if (clConfidence.trim()) p.set('confidence', clConfidence.trim());
         if (limit.trim()) p.set('limit', limit.trim());
         url = `/api/databricks/unity-catalog/data-classification?${p.toString()}${wq}`;
+      } else if (tab === 'quality') {
+        const p = new URLSearchParams();
+        if (clCatalog.trim()) p.set('catalog', clCatalog.trim());
+        if (clSchema.trim()) p.set('schema', clSchema.trim());
+        if (qStatus.trim()) p.set('status', qStatus.trim());
+        if (limit.trim()) p.set('limit', limit.trim());
+        url = `/api/databricks/unity-catalog/quality-monitors?${p.toString()}${wq}`;
       } else {
         const tableParam = tab === 'audit' ? 'audit' : tab === 'query' ? 'query-history' : 'billing';
         const p = new URLSearchParams({ table: tableParam });
@@ -2279,7 +2296,7 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
       setExecMs(typeof j.executionMs === 'number' ? j.executionMs : null);
     } catch (e: any) { setErr(e?.message || String(e)); }
     finally { setLoading(false); }
-  }, [tab, days, limit, service, action, status, clCatalog, clSchema, clConfidence, wq]);
+  }, [tab, days, limit, service, action, status, clCatalog, clSchema, clConfidence, qStatus, wq]);
   useEffect(() => { if (open) void load(); }, [open, tab]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const tryEnable = async (sch: string) => {
@@ -2295,7 +2312,7 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
       await load();
     } catch (e: any) { setErr(e?.message || String(e)); } finally { setBusy(false); }
   };
-  const enableSchema = tab === 'audit' ? 'access' : tab === 'query' ? 'query' : tab === 'billing' ? 'billing' : 'data_classification';
+  const enableSchema = tab === 'audit' ? 'access' : tab === 'query' ? 'query' : tab === 'billing' ? 'billing' : tab === 'quality' ? 'data_quality_monitoring' : 'data_classification';
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
@@ -2314,10 +2331,11 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
                 <Tab value="query" icon={<History20Regular />}>Query history</Tab>
                 <Tab value="billing" icon={<DataBarVertical20Regular />}>Billing usage</Tab>
                 <Tab value="classification" icon={<Tag20Regular />}>Data classification</Tab>
+                <Tab value="quality" icon={<DataBarVertical20Regular />}>Data quality</Tab>
               </TabList>
 
               <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-                {tab !== 'classification' && (
+                {tab !== 'classification' && tab !== 'quality' && (
                   <Field label="Window (days)" style={{ minWidth: 110 }}><Input value={days} onChange={(_, d) => setDays(d.value.replace(/[^0-9]/g, ''))} placeholder="7" /></Field>
                 )}
                 <Field label="Row limit" style={{ minWidth: 110 }}><Input value={limit} onChange={(_, d) => setLimit(d.value.replace(/[^0-9]/g, ''))} placeholder="100" /></Field>
@@ -2346,6 +2364,18 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
                     </Dropdown>
                   </Field>
                 </>}
+                {tab === 'quality' && <>
+                  <Field label="Catalog (optional)" style={{ minWidth: 150 }}><Input value={clCatalog} onChange={(_, d) => setClCatalog(d.value)} placeholder="main" /></Field>
+                  <Field label="Schema (optional)" style={{ minWidth: 150 }}><Input value={clSchema} onChange={(_, d) => setClSchema(d.value)} placeholder="public" /></Field>
+                  <Field label="Status" style={{ minWidth: 140 }}>
+                    <Dropdown value={qStatus} selectedOptions={qStatus ? [qStatus] : []} placeholder="Any" onOptionSelect={(_, d) => setQStatus(d.optionValue || '')}>
+                      <Option value="">Any</Option>
+                      <Option value="Unhealthy">Unhealthy</Option>
+                      <Option value="Healthy">Healthy</Option>
+                      <Option value="Unknown">Unknown</Option>
+                    </Dropdown>
+                  </Field>
+                </>}
                 <Button appearance="primary" icon={<Eye20Regular />} disabled={loading} onClick={() => void load()}>Run</Button>
                 {loading && <Spinner size="tiny" />}
                 {execMs != null && <Badge appearance="outline">{rows.length} row(s) · {execMs} ms</Badge>}
@@ -2371,10 +2401,137 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
                 </Caption1>
               )}
 
+              {tab === 'quality' && !gate && !err && (
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Latest data-quality status per monitored table from <code>system.data_quality_monitoring.table_results</code> —
+                  <code>status</code> is the consolidated health (Healthy / Unhealthy / Unknown), with freshness &amp; completeness sub-status.
+                  Creating / refreshing a Lakehouse Monitor is a notebook or Catalog-Explorer "Quality" flow; Loom surfaces the results read-only.
+                </Caption1>
+              )}
+
               <SysRows columns={columns} rows={rows} classify={tab === 'classification'} />
             </div>
           </DialogContent>
           <DialogActions>
+            <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={loading} onClick={() => void load()}>Refresh</Button>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+// ============================================================
+// Registered models as UC securables (wave c3 finish) — read-only versions
+// browser. Registered models are a SUBTYPE of the FUNCTION securable; they are
+// governed via the FUNCTION permissions path, so "Manage grants" seeds the UC
+// grant dialog with FUNCTION + the model full name. CREATE / registration is an
+// MLflow-side flow (honest note). Real UC REST via /api/databricks/unity-catalog/models.
+// ============================================================
+function ModelVersionsDialog({ open, onOpenChange, fullName, onGrants }: {
+  open: boolean; onOpenChange: (v: boolean) => void; fullName: string | null;
+  onGrants: (fullName: string) => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [model, setModel] = useState<any>(null);
+  const [versions, setVersions] = useState<any[]>([]);
+
+  const load = useCallback(async () => {
+    if (!fullName) return;
+    setLoading(true); setErr(null); setGate(null); setModel(null); setVersions([]);
+    try {
+      const r = await fetch(`/api/databricks/unity-catalog/models?full_name=${encodeURIComponent(fullName)}&versions=true`);
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'failed to load model'); return; }
+      setModel(j.model || null);
+      setVersions(Array.isArray(j.versions) ? j.versions : []);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [fullName]);
+  useEffect(() => { if (open && fullName) void load(); }, [open, fullName]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fmtTime = (v: unknown): string => {
+    const n = typeof v === 'number' ? v : Number(v);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    try { return new Date(n).toLocaleString(); } catch { return ''; }
+  };
+  const statusColor = (st: string): 'success' | 'warning' | 'danger' | 'informative' => {
+    const s = (st || '').toUpperCase();
+    if (s === 'READY') return 'success';
+    if (s.includes('FAILED')) return 'danger';
+    if (s.includes('PENDING')) return 'warning';
+    return 'informative';
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '900px', width: '94vw' }}>
+        <DialogBody>
+          <DialogTitle>Registered model — {fullName || ''}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                A registered model is a Unity Catalog securable (a subtype of <b>FUNCTION</b>). Versions are read-only here;
+                governance uses the FUNCTION permissions path — use <b>Manage grants</b> for <code>EXECUTE</code> / <code>APPLY TAG</code> / <code>MANAGE</code>.
+              </Caption1>
+
+              {gate && (
+                <MessageBar intent="warning"><MessageBarBody>
+                  <MessageBarTitle>Registered models unavailable</MessageBarTitle>{gate}
+                </MessageBarBody></MessageBar>
+              )}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Load failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+
+              {model && (
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'center' }}>
+                  {model.owner && <Badge appearance="outline">owner: {String(model.owner)}</Badge>}
+                  {model.comment && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{String(model.comment)}</Caption1>}
+                  {model.updated_at && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>updated {fmtTime(model.updated_at)}</Caption1>}
+                </div>
+              )}
+
+              {loading && <Spinner size="tiny" label="Loading versions…" />}
+              {!loading && (
+                <div style={{ overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                  <Table size="small" aria-label="Model versions">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Version</TableHeaderCell>
+                      <TableHeaderCell>Status</TableHeaderCell>
+                      <TableHeaderCell>Source / run</TableHeaderCell>
+                      <TableHeaderCell>Created by</TableHeaderCell>
+                      <TableHeaderCell>Created</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {versions.length === 0 && <TableRow><TableCell colSpan={5}><Caption1>No versions registered.</Caption1></TableCell></TableRow>}
+                      {versions.map((v) => (
+                        <TableRow key={String(v.version)}>
+                          <TableCell><Badge appearance="tint" color="brand">v{String(v.version)}</Badge></TableCell>
+                          <TableCell>{v.status ? <Badge appearance="filled" color={statusColor(String(v.status))}>{String(v.status)}</Badge> : ''}</TableCell>
+                          <TableCell><span style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{String(v.source || v.run_id || '')}</span></TableCell>
+                          <TableCell>{String(v.created_by || '')}</TableCell>
+                          <TableCell>{fmtTime(v.created_at)}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+
+              <MessageBar intent="info"><MessageBarBody>
+                Registering a new model or version is an MLflow-side flow
+                (<code>POST /api/2.0/mlflow/registered-models/create</code> · <code>mlflow.register_model</code> from a notebook or job).
+                Loom surfaces models read-only as governed securables.
+              </MessageBarBody></MessageBar>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="primary" icon={<Key20Regular />} disabled={!fullName} onClick={() => { if (fullName) { onGrants(fullName); onOpenChange(false); } }}>
+              Manage grants (FUNCTION)
+            </Button>
             <Button appearance="outline" icon={<ArrowSync20Regular />} disabled={loading} onClick={() => void load()}>Refresh</Button>
             <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
           </DialogActions>
@@ -2409,6 +2566,11 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   // + system tables / audit surface + UC-native data classification.
   const [ucBindingsOpen, setUcBindingsOpen] = useState(false);
   const [ucAuditOpen, setUcAuditOpen] = useState(false);
+  // Registered models as UC securables: a versions browser + a grant-seed that
+  // pre-selects the FUNCTION securable + the model full name in the grant dialog.
+  const [ucModelOpen, setUcModelOpen] = useState(false);
+  const [ucModelTarget, setUcModelTarget] = useState<string | null>(null);
+  const [ucGrantSeed, setUcGrantSeed] = useState<{ securable: UcSecurable; fullName: string } | null>(null);
   // Lazy per-table tag cache for the UC tree chips (full_name → tag pairs).
   const [tagsByTable, setTagsByTable] = useState<Record<string, { key: string; value: string }[]>>({});
   // AI functions helper (sentiment/classify/translate/summarize/extract).
@@ -2447,6 +2609,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [tables, setTables] = useState<string[]>([]);
   const [views, setViews] = useState<string[]>([]);
   const [functions, setFunctions] = useState<string[]>([]);
+  // Registered models — a UC securable subtype of FUNCTION (browsed via the UC
+  // Models REST, governed via the FUNCTION permissions path).
+  const [models, setModels] = useState<string[]>([]);
   // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
   const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
   const [showViz, setShowViz] = useState(false);
@@ -2571,6 +2736,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setTables([]);
     setViews([]);
     setFunctions([]);
+    setModels([]);
     refreshState().then((st) => { if (st?.state === 'RUNNING') refreshCatalogs(); });
   }, [warehouseId, refreshState, refreshCatalogs]);
 
@@ -2583,6 +2749,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setTables([]);
     setViews([]);
     setFunctions([]);
+    setModels([]);
     const r = await fetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}`,
     );
@@ -2599,6 +2766,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setTables([]);
     setViews([]);
     setFunctions([]);
+    setModels([]);
     const r = await fetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
     );
@@ -2609,6 +2777,16 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       setViews(j.views || []);
       setFunctions(j.functions || []);
     }
+    // Registered models (UC securable subtype of FUNCTION) — best-effort; the
+    // models REST is a separate UC surface from the schema browse and is honest-
+    // gated on Gov, so a miss never blocks the rest of the tree.
+    try {
+      const mr = await fetch(
+        `/api/databricks/unity-catalog/models?catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
+      );
+      const mj = await mr.json();
+      if (mj.ok && Array.isArray(mj.models)) setModels(mj.models.map((m: any) => String(m.name)).filter(Boolean));
+    } catch { /* models are best-effort */ }
   }, [id, warehouseId]);
 
   // Fetch a table's columns (DESCRIBE TABLE) into the IntelliSense cache so
@@ -3052,6 +3230,18 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     void refreshCatalogs();
   }, [activeCatalog, activeSchema, openCatalog, openSchema, refreshCatalogs]);
 
+  // Registered-model securable actions: open the versions browser, and seed the
+  // UC grant dialog with the FUNCTION securable + model full name (registered
+  // models are governed through the FUNCTION permissions path).
+  const openModelVersions = useCallback((fullName: string) => {
+    setUcModelTarget(fullName);
+    setUcModelOpen(true);
+  }, []);
+  const openModelGrants = useCallback((fullName: string) => {
+    setUcGrantSeed({ securable: 'FUNCTION', fullName });
+    setUcGrantsOpen(true);
+  }, []);
+
   // Tables drilled-down in the UC tree → {schema, table} for the visual-query
   // Add-table picker. (Spark SQL session catalog/schema come from props.)
   const vqSourceTables = useMemo<VqSourceTable[]>(
@@ -3158,7 +3348,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               ? `${activeCatalog}.${activeSchema}.${tables[0]}`
               : '',
           ) : undefined, disabled: !canRun, title: !canRun ? 'Start the warehouse first' : 'SHALLOW (zero-copy) or DEEP CLONE a Delta table' },
-        { label: 'Manage grants', onClick: () => setUcGrantsOpen(true), title: 'View / grant / revoke UC privileges' },
+        { label: 'Manage grants', onClick: () => { setUcGrantSeed(null); setUcGrantsOpen(true); }, title: 'View / grant / revoke UC privileges' },
         { label: 'Column & row security', onClick: () => setUcSecOpen(true), title: 'Unity Catalog column masks + row filters (Commercial / GCC)' },
       ]},
       { label: 'Modeling', actions: [
@@ -3202,7 +3392,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setUcCreateVolumeOpen(true)}>Volume</Button>
             </Tooltip>
             <Tooltip content="Manage grants (UC permissions)" relationship="label">
-              <Button size="small" appearance="outline" icon={<Key20Regular />} onClick={() => setUcGrantsOpen(true)} aria-label="Manage grants" />
+              <Button size="small" appearance="outline" icon={<Key20Regular />} onClick={() => { setUcGrantSeed(null); setUcGrantsOpen(true); }} aria-label="Manage grants" />
             </Tooltip>
             <Tooltip content="Governed tags (account-level tag policies)" relationship="label">
               <Button size="small" appearance="outline" icon={<Tag20Regular />} onClick={() => setUcGovTagsOpen(true)}>Governed tags</Button>
@@ -3216,7 +3406,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             <Tooltip content="Workspace-catalog binding & catalog isolation (a binding supersedes grants)" relationship="label">
               <Button size="small" appearance="outline" icon={<Link20Regular />} onClick={() => setUcBindingsOpen(true)}>Bindings</Button>
             </Tooltip>
-            <Tooltip content="Audit & system tables (access audit · query history · billing · data classification)" relationship="label">
+            <Tooltip content="Audit & system tables (access audit · query history · billing · data classification · data quality)" relationship="label">
               <Button size="small" appearance="outline" icon={<ShieldTask20Regular />} onClick={() => setUcAuditOpen(true)}>Audit &amp; system</Button>
             </Tooltip>
             <Tooltip content="Drop object (UC REST)" relationship="label">
@@ -3368,6 +3558,40 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                     onScriptCreate={() => dbxLoadScript(c, sch, f, 'function', 'create')}
                                     onScriptDrop={() => dbxLoadScript(c, sch, f, 'function', 'drop')} />}>
                                   {f}
+                                </TreeItemLayout>
+                              </TreeItem>
+                            ))}
+                            {/* Registered models (UC securable subtype of FUNCTION) */}
+                            {activeSchema === sch && models.map((m) => (
+                              <TreeItem
+                                key={`m-${c}.${sch}.${m}`}
+                                itemType="leaf"
+                                value={`m-${c}.${sch}.${m}`}
+                                onClick={(e) => { e.stopPropagation(); openModelVersions(`${c}.${sch}.${m}`); }}
+                              >
+                                <TreeItemLayout
+                                  iconBefore={<Sparkle20Regular />}
+                                  actions={
+                                    <>
+                                      <Tooltip content={`Model versions: ${m}`} relationship="label">
+                                        <Button
+                                          size="small" appearance="subtle" icon={<History20Regular />}
+                                          aria-label={`Model versions ${m}`}
+                                          onClick={(e) => { e.stopPropagation(); openModelVersions(`${c}.${sch}.${m}`); }}
+                                        />
+                                      </Tooltip>
+                                      <Tooltip content={`Grants on model: ${m}`} relationship="label">
+                                        <Button
+                                          size="small" appearance="subtle" icon={<Key20Regular />}
+                                          aria-label={`Grants ${m}`}
+                                          onClick={(e) => { e.stopPropagation(); openModelGrants(`${c}.${sch}.${m}`); }}
+                                        />
+                                      </Tooltip>
+                                    </>
+                                  }
+                                >
+                                  {m}
+                                  <Badge appearance="ghost" color="brand" size="small" style={{ marginLeft: tokens.spacingHorizontalXXS }}>model</Badge>
                                 </TreeItemLayout>
                               </TreeItem>
                             ))}
@@ -4053,6 +4277,14 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             createSchemaOpen={ucCreateSchemaOpen} setCreateSchemaOpen={setUcCreateSchemaOpen}
             createTableOpen={ucCreateTableOpen} setCreateTableOpen={setUcCreateTableOpen}
             grantsOpen={ucGrantsOpen} setGrantsOpen={setUcGrantsOpen}
+            grantSeed={ucGrantSeed}
+          />
+
+          <ModelVersionsDialog
+            open={ucModelOpen}
+            onOpenChange={setUcModelOpen}
+            fullName={ucModelTarget}
+            onGrants={openModelGrants}
           />
 
           {statsTarget && (
