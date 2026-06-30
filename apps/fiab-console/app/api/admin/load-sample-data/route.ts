@@ -23,7 +23,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { executeMgmtCommand, KustoError, defaultDatabase } from '@/lib/azure/kusto-client';
+import { createTable, ingestInline, dropTable, KustoError, defaultDatabase } from '@/lib/azure/kusto-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -162,53 +162,38 @@ p-frank,e-meet1,2026-02-18T16:50:00Z`,
 ];
 
 /**
- * Convert a `.create-merge table X (schema)` + `.ingest inline into table X <| <csv>`
- * pair into a `.set-or-replace X <| datatable(schema)[typed values]` command.
- * Inline ingestion (`<|` CSV) is rejected by the ADX engine /v1/rest/mgmt REST
- * endpoint; a datatable-backed set-or-replace is REST-friendly AND idempotent
- * (re-running replaces the sample rows rather than duplicating them).
+ * Parse a `.create-merge table X (schema)` + `.ingest inline into table X <| <csv>`
+ * pair into the structured pieces the PROVEN kusto-client helpers want:
+ *   - `name`   : bare table name
+ *   - `schema` : `col:type, col:type` CSL string for `createTable()`
+ *   - `rows`   : `string[][]` of CSV cell values for `ingestInline()`
+ *
+ * The earlier hand-rolled `.set-or-replace … datatable(…)` approach kept hitting
+ * SYN0002; instead we drive the table create + data load through the same client
+ * functions the eventhouse Get-Data wizard uses (`createTable` + `ingestInline`),
+ * which are the documented real end-to-end ADX path.
  */
-function buildSetOrReplace(create: string, ingest: string): string {
+function parseTable(create: string, ingest: string): { name: string; schema: string; rows: string[][] } {
   const m = create.match(/\.create(?:-merge|-or-alter)?\s+table\s+(\S+)\s*\(([\s\S]*?)\)/);
   if (!m) throw new Error(`load-sample: cannot parse create command: ${create.slice(0, 80)}`);
   const name = m[1];
-  // KQL datatable()/create-table schemas want `col:type` with NO space after the
-  // colon ("id: string" → SYN0002 at the *next* column). Strip whitespace around
-  // colons; keep ", " between columns for readability. Values are built separately
-  // below so datetime literals like datetime(2026-01-12T03:14:00Z) keep their colons.
-  const schema = m[2]
-    .replace(/\s+/g, ' ')
-    .replace(/\s*:\s*/g, ':')
-    .replace(/\s*,\s*/g, ', ')
-    .trim(); // "id:string, name:string, ..."
-  const cols = schema.split(',').map((c) => {
-    const [col, type] = c.split(':').map((x) => x.trim());
-    return { col, type: (type || 'string').toLowerCase() };
-  });
+  const schema = m[2].replace(/\s+/g, ' ').replace(/\s*:\s*/g, ':').replace(/\s*,\s*/g, ', ').trim();
   const lines = ingest.split('\n');
   const sepIdx = lines.findIndex((l) => l.includes('<|'));
-  const rows = lines.slice(sepIdx + 1).map((l) => l.trim()).filter(Boolean);
-  const flat: string[] = [];
-  for (const row of rows) {
-    const vals = row.split(',');
-    cols.forEach((c, i) => {
-      const v = (vals[i] ?? '').trim();
-      if (c.type === 'string') flat.push(JSON.stringify(v));
-      else if (c.type === 'datetime') flat.push(`datetime(${v})`);
-      else if (c.type === 'bool' || c.type === 'boolean') flat.push(v.toLowerCase());
-      else flat.push(v); // real / long / int / decimal — bare numeric literal
-    });
-  }
-  return `.set-or-replace ${name} <| datatable(${schema})[\n${flat.join(', ')}\n]`;
+  const rows = lines.slice(sepIdx + 1).map((l) => l.trim()).filter(Boolean).map((l) => l.split(','));
+  return { name, schema, rows };
 }
 
 /**
- * Strip the space after the colon in a create/alter table schema so KQL
- * parses `(id:string, …)` not `(id: string, …)` (the latter triggers SYN0002).
- * Safe because create/alter commands carry no value literals (no datetime colons).
+ * Drop → create → ingest one sample table via the proven kusto-client helpers.
+ * Drop-first makes re-running idempotent (overwrites rather than appending).
  */
-function normCreate(create: string): string {
-  return create.replace(/\s*:\s*/g, ':');
+async function loadTable(db: string, create: string, ingest: string): Promise<string> {
+  const { name, schema, rows } = parseTable(create, ingest);
+  await dropTable(db, name);             // .drop table ["name"] ifexists  (idempotent)
+  await createTable(db, name, schema);   // .create table ["name"] (col:type, …)
+  await ingestInline(db, name, rows);    // .ingest inline into table ["name"] <| csv
+  return name;
 }
 
 export async function POST(req: NextRequest) {
@@ -224,19 +209,14 @@ export async function POST(req: NextRequest) {
 
   try {
     if (kind === 'investigation') {
-      // Materialize every Node_*/Edge_* table Tapestry discovers.
-      for (const t of INV_TABLES) {
-        await executeMgmtCommand(db, normCreate(t.create));
-        await executeMgmtCommand(db, buildSetOrReplace(t.create, t.ingest));
-      }
-      return NextResponse.json({ ok: true, db, kind, tables: INV_TABLES.map((t) => t.name) });
+      const tables: string[] = [];
+      for (const t of INV_TABLES) tables.push(await loadTable(db, t.create, t.ingest));
+      return NextResponse.json({ ok: true, db, kind, tables });
     }
 
     const create = kind === 'geo' ? GEO_KQL : GRAPH_KQL;
     const ingest = kind === 'geo' ? GEO_INGEST : GRAPH_INGEST;
-    const table = kind === 'geo' ? 'SampleEarthquakes' : 'SampleSocialGraph';
-    await executeMgmtCommand(db, normCreate(create));
-    await executeMgmtCommand(db, buildSetOrReplace(create, ingest));
+    const table = await loadTable(db, create, ingest);
     return NextResponse.json({ ok: true, db, table, kind });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 502;
