@@ -60,6 +60,13 @@ import {
 
 /** Stable GA api-version for Microsoft.MachineLearningServices control plane. */
 const ML_API = '2024-10-01';
+/**
+ * api-version that ships the Compute Instance `updateIdleShutdownSetting`
+ * control-plane action (it isn't exposed under the 2024-10-01 GA compute
+ * surface). Used ONLY for that one POST.
+ * https://learn.microsoft.com/rest/api/azureml/compute-instances
+ */
+const ML_IDLE_SHUTDOWN_API = '2021-07-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -153,14 +160,14 @@ export function amlConfigGate(): { missing: string } | null {
  */
 async function amlFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string>; target?: AmlTarget } = {},
+  init: RequestInit & { query?: Record<string, string>; target?: AmlTarget; apiVersion?: string } = {},
 ): Promise<Response> {
   const token = await credential.getToken(armScope());
   if (!token?.token) throw new AmlError(401, undefined, 'Failed to acquire ARM token for Azure ML');
-  const { query, target, ...rest } = init;
+  const { query, target, apiVersion, ...rest } = init;
   const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
   const extra = query ? '&' + new URLSearchParams(query).toString() : '';
-  const url = `${armBase()}${wsPath}${path}?api-version=${ML_API}${extra}`;
+  const url = `${armBase()}${wsPath}${path}?api-version=${apiVersion ?? ML_API}${extra}`;
   return fetchWithTimeout(url, {
     ...rest,
     headers: {
@@ -299,6 +306,85 @@ export async function getCI(name: string): Promise<AmlComputeInstance | null> {
   const res = await amlFetch(`/computes/${encodeURIComponent(name)}`);
   const j = await readAmlJson<any>(res, 'getCI');
   return j ? shapeCompute(j) : null;
+}
+
+/**
+ * The workspace's region (= the ARM `location` a new compute is created in).
+ * Resolved from env via `resolveAmlTarget()` so create requests don't re-read
+ * `LOOM_AML_REGION` in every caller.
+ */
+export function amlRegion(target: AmlTarget = resolveAmlTarget()): string {
+  return target.region;
+}
+
+/**
+ * Stop a running Compute Instance.
+ *   POST {base}/computes/{name}/stop?api-version=2024-10-01  → 202 Accepted
+ * A 4xx that says "already stopped / not running" is swallowed so a redundant
+ * Stop click doesn't surface a scary error (mirrors startCI's idempotence).
+ */
+export async function stopCI(name: string): Promise<void> {
+  const res = await amlFetch(`/computes/${encodeURIComponent(name)}/stop`, { method: 'POST' });
+  if (res.ok || res.status === 202 || res.status === 204) return;
+  const t = await res.text().catch(() => '');
+  if (res.status === 409 || /already|not.*running|stopped|deallocat/i.test(t)) return;
+  throw new AmlError(res.status, t, `Compute Instance stop failed: ${t.slice(0, 240)}`);
+}
+
+/**
+ * Create a Compute Instance.
+ *   PUT {base}/computes/{name}?api-version=2024-10-01
+ *   body { location, properties: { computeType:'ComputeInstance',
+ *          properties: { vmSize, idleTimeBeforeShutdown? } } }
+ * Provisioning is async — ARM answers 202 (returns a 'Creating' placeholder) or
+ * 200/201 with the resource body. A non-202 failure (e.g. 404 workspace) throws
+ * AmlError so the route surfaces an honest error — never a faked success.
+ */
+export async function createCI(
+  name: string,
+  opts: { vmSize: string; idleTimeBeforeShutdown?: string },
+): Promise<AmlComputeInstance> {
+  const target = resolveAmlTarget();
+  const inner: Record<string, unknown> = { vmSize: opts.vmSize };
+  if (opts.idleTimeBeforeShutdown) inner.idleTimeBeforeShutdown = opts.idleTimeBeforeShutdown;
+  const armBody = {
+    location: amlRegion(target),
+    properties: {
+      computeType: 'ComputeInstance',
+      properties: inner,
+    },
+  };
+  const res = await amlFetch(`/computes/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(armBody),
+    target,
+  });
+  if (res.status === 202) {
+    return { id: '', name, computeType: 'ComputeInstance', provisioningState: 'Creating', state: 'Creating', vmSize: opts.vmSize };
+  }
+  const j = await readAmlJson<any>(res, 'createCI');
+  return j
+    ? shapeCompute(j)
+    : { id: '', name, computeType: 'ComputeInstance', provisioningState: 'Creating', state: 'Creating', vmSize: opts.vmSize };
+}
+
+/**
+ * Update a Compute Instance's idle-shutdown TTL (auto-stop after N idle time).
+ *   POST {base}/computes/{name}/updateIdleShutdownSetting?api-version=2021-07-01
+ *   body { idleTimeBeforeShutdown: "PT30M" }   (ISO-8601 duration)
+ * This action lives only on the 2021-07-01 compute surface, so it overrides the
+ * default ML_API. The workspace's own MI must hold Contributor on itself or the
+ * idle timer won't fire (durable bicep grant; see the AML impl plan A3).
+ */
+export async function updateCiIdleShutdown(name: string, idleTimeBeforeShutdown: string): Promise<void> {
+  const res = await amlFetch(`/computes/${encodeURIComponent(name)}/updateIdleShutdownSetting`, {
+    method: 'POST',
+    apiVersion: ML_IDLE_SHUTDOWN_API,
+    body: JSON.stringify({ idleTimeBeforeShutdown }),
+  });
+  if (res.ok || res.status === 202 || res.status === 204) return;
+  const t = await res.text().catch(() => '');
+  throw new AmlError(res.status, t, `Update idle-shutdown failed: ${t.slice(0, 240)}`);
 }
 
 // ============================================================

@@ -27,7 +27,7 @@ import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
   Copy20Regular, Info16Regular, ChevronDown20Regular, ChevronUp20Regular, Server20Regular,
-  Notebook16Regular, Database16Regular, History16Regular, Database24Regular,
+  Notebook16Regular, Database16Regular, History16Regular, Database24Regular, Stop20Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
@@ -211,27 +211,56 @@ function isCiStopped(state?: string): boolean {
   return CI_STOPPED.includes(state || '');
 }
 
-/** Detect whether the AML notebook path is wired (LOOM_AML_WORKSPACE set). */
+/**
+ * Idle auto-shutdown TTL options (ISO-8601 duration → label) offered in the
+ * Configure / New Compute Instance dialogs. Dropdown only — no freeform input
+ * (loom_no_freeform_config). Backs both the create body and the
+ * updateIdleShutdownSetting route.
+ */
+const IDLE_TTL_OPTIONS: { value: string; label: string }[] = [
+  { value: 'PT15M', label: '15 minutes' },
+  { value: 'PT30M', label: '30 minutes' },
+  { value: 'PT1H', label: '1 hour' },
+  { value: 'PT3H', label: '3 hours' },
+];
+const TTL_LABEL: Record<string, string> = Object.fromEntries(IDLE_TTL_OPTIONS.map((o) => [o.value, o.label]));
+
+/** Compute Instance VM sizes offered in the New Compute Instance dialog. */
+const AML_CI_VM_SIZES: { value: string; label: string }[] = [
+  { value: 'Standard_DS3_v2', label: 'Standard_DS3_v2 · 4 vCPU · 14 GB' },
+  { value: 'Standard_DS11_v2', label: 'Standard_DS11_v2 · 2 vCPU · 14 GB' },
+  { value: 'Standard_DS12_v2', label: 'Standard_DS12_v2 · 4 vCPU · 28 GB' },
+  { value: 'Standard_E4ds_v4', label: 'Standard_E4ds_v4 · 4 vCPU · 32 GB' },
+  { value: 'Standard_NC6s_v3', label: 'Standard_NC6s_v3 · 6 vCPU · 112 GB · 1×V100 GPU' },
+];
+
+/** Detect whether the AML notebook path is wired (LOOM_AML_WORKSPACE set), and
+ *  surface the bicep default Compute Instance name (LOOM_AML_DEFAULT_COMPUTE)
+ *  so the editor can auto-select it the moment that CI exists. */
 function useAmlConfigured() {
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [defaultCompute, setDefaultCompute] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const j = await (await fetch('/api/aml/compute-instances')).json();
-        if (!cancelled) setConfigured(j.ok === true || j.configured === true);
+        if (!cancelled) {
+          setConfigured(j.ok === true || j.configured === true);
+          setDefaultCompute(typeof j.defaultCompute === 'string' && j.defaultCompute ? j.defaultCompute : null);
+        }
       } catch { if (!cancelled) setConfigured(false); }
     })();
     return () => { cancelled = true; };
   }, []);
-  return configured;
+  return { configured, defaultCompute };
 }
 
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
   const cp = useComputes();
-  const amlConfigured = useAmlConfigured();
+  const { configured: amlConfigured, defaultCompute: amlDefaultCompute } = useAmlConfigured();
   // Notebook compute backend toggle. Defaults to Loom-native Spark/Databricks;
   // the user flips to Azure ML when they want a Compute Instance + datastores.
   const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('loom');
@@ -347,10 +376,17 @@ export function NotebookEditor({ item, id }: Props) {
       return;
     }
     if (!computeId && cp.computes.length) {
+      // In Azure ML mode, prefer the bicep default Compute Instance
+      // (LOOM_AML_DEFAULT_COMPUTE) so the "no CI" gate clears the moment that CI
+      // exists — falling back to the first runnable CI otherwise.
+      if (workspaceType === 'aml' && amlDefaultCompute) {
+        const def = cp.computes.find(c => c.kind === 'aml-ci' && c.name === amlDefaultCompute);
+        if (def) { setComputeId(def.id); return; }
+      }
       const first = cp.computes.find(computeMatchesType);
       if (first) setComputeId(first.id);
     }
-  }, [cp.computes, computeId, computeMatchesType]);
+  }, [cp.computes, computeId, computeMatchesType, workspaceType, amlDefaultCompute]);
 
   // Pre-warm session on compute selection: if a Synapse Spark compute is picked,
   // immediately POST to /run with no code to initialize the Livy session in the background.
@@ -422,6 +458,95 @@ export function NotebookEditor({ item, id }: Props) {
       setRunMsg(`Could not start compute: ${e?.message || String(e)}`);
     } finally { setStartingCompute(false); }
   }, [computeId, cp]);
+
+  // ---- AML Compute Instance lifecycle (Azure ML path only) ----
+  // Stop a running CI right from the notebook so it stops billing. Mirrors
+  // startCompute's poll-to-state. computeId is `aml-ci:<name>`.
+  const [stoppingCompute, setStoppingCompute] = useState(false);
+  const stopComputeCi = useCallback(async () => {
+    if (!computeId.startsWith('aml-ci:')) return;
+    const ciName = computeId.slice('aml-ci:'.length);
+    setStoppingCompute(true); setRunMsg('Stopping compute…');
+    try {
+      const r = await fetch(`/api/aml/compute-instances/${encodeURIComponent(ciName)}/stop`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) {
+        setRunMsg(`Could not stop compute: ${j?.error || j?.hint || `HTTP ${r.status}`}`);
+        return;
+      }
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 5 * 60 * 1000) {
+        await new Promise(res => setTimeout(res, 5000));
+        await cp.refresh();
+        const cur = cp.computes.find(c => c.id === computeId);
+        if (cur && isCiStopped(cur.state)) { setRunMsg('Compute stopped.'); break; }
+        setRunMsg(`Stopping compute… (${cur?.state || 'pending'})`);
+      }
+    } catch (e: any) {
+      setRunMsg(`Could not stop compute: ${e?.message || String(e)}`);
+    } finally { setStoppingCompute(false); }
+  }, [computeId, cp]);
+
+  // Configure compute — idle auto-shutdown TTL dialog (POST .../idle-shutdown).
+  const [configCiOpen, setConfigCiOpen] = useState(false);
+  const [configCiTtl, setConfigCiTtl] = useState('PT30M');
+  const [configCiBusy, setConfigCiBusy] = useState(false);
+  const [configCiErr, setConfigCiErr] = useState<string | null>(null);
+  const saveCiIdleShutdown = useCallback(async () => {
+    if (!computeId.startsWith('aml-ci:')) return;
+    const ciName = computeId.slice('aml-ci:'.length);
+    setConfigCiBusy(true); setConfigCiErr(null);
+    try {
+      const r = await fetch(`/api/aml/compute-instances/${encodeURIComponent(ciName)}/idle-shutdown`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ idleTtl: configCiTtl }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) {
+        setConfigCiErr(j?.error || j?.hint || `HTTP ${r.status}`);
+        return;
+      }
+      setConfigCiOpen(false);
+      setRunMsg(`Idle shutdown set to ${TTL_LABEL[configCiTtl] || configCiTtl}.`);
+      void cp.refresh();
+    } catch (e: any) {
+      setConfigCiErr(e?.message || String(e));
+    } finally { setConfigCiBusy(false); }
+  }, [computeId, configCiTtl, cp]);
+
+  // New Compute Instance — create dialog (name + VM size + idle TTL), then
+  // refresh the compute list and select the freshly-created CI.
+  const [newCiOpen, setNewCiOpen] = useState(false);
+  const [newCiName, setNewCiName] = useState('');
+  const [newCiVmSize, setNewCiVmSize] = useState(AML_CI_VM_SIZES[0].value);
+  const [newCiTtl, setNewCiTtl] = useState('PT30M');
+  const [newCiBusy, setNewCiBusy] = useState(false);
+  const [newCiErr, setNewCiErr] = useState<string | null>(null);
+  const createCiInstance = useCallback(async () => {
+    const name = newCiName.trim();
+    if (!name) return;
+    setNewCiBusy(true); setNewCiErr(null);
+    try {
+      const r = await fetch('/api/aml/compute-instances', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, vmSize: newCiVmSize, idleTtl: newCiTtl }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if ((!r.ok && r.status !== 202) || j?.ok === false) {
+        setNewCiErr(j?.error || j?.hint || `HTTP ${r.status}`);
+        return;
+      }
+      setNewCiOpen(false);
+      setNewCiName('');
+      await cp.refresh();
+      setComputeId(`aml-ci:${name}`);
+      setRunMsg(`Compute Instance "${name}" is being created — it appears as Creating, then Running.`);
+    } catch (e: any) {
+      setNewCiErr(e?.message || String(e));
+    } finally { setNewCiBusy(false); }
+  }, [newCiName, newCiVmSize, newCiTtl, cp]);
 
   // Auto-start a stopped AML Compute Instance when it's selected in AML mode.
   // Debounced 1.5s so flipping through the picker doesn't fire a start per
@@ -1732,7 +1857,41 @@ export function NotebookEditor({ item, id }: Props) {
                     {startingCompute ? 'Starting…' : 'Start compute'}
                   </Button>
                 )}
+                {/* Stop a running AML Compute Instance (deallocates → stops billing). */}
+                {computeId && selectedCompute && selectedCompute.kind === 'aml-ci' && isComputeRunning(selectedCompute.state) && (
+                  <Button
+                    appearance="outline"
+                    size="small"
+                    icon={<Stop20Regular />}
+                    disabled={stoppingCompute}
+                    onClick={stopComputeCi}
+                  >
+                    {stoppingCompute ? 'Stopping…' : 'Stop compute'}
+                  </Button>
+                )}
+                {/* Configure the selected CI's idle auto-shutdown TTL. */}
+                {computeId && selectedCompute && selectedCompute.kind === 'aml-ci' && (
+                  <Button
+                    appearance="outline"
+                    size="small"
+                    icon={<Settings20Regular />}
+                    onClick={() => { setConfigCiErr(null); setConfigCiOpen(true); }}
+                    title="Set the idle auto-shutdown time for this Compute Instance"
+                  >Configure compute</Button>
+                )}
               </div>
+              {/* Create a new Azure ML Compute Instance — clears the "no CI" gate. */}
+              {workspaceType === 'aml' && (
+                <Button
+                  appearance="outline"
+                  size="small"
+                  icon={<Add20Regular />}
+                  disabled={amlConfigured === false}
+                  onClick={() => { setNewCiErr(null); setNewCiOpen(true); }}
+                  title={amlConfigured === false ? 'Azure ML workspace not configured' : 'Create a new Azure ML Compute Instance'}
+                  style={{ alignSelf: 'flex-start', marginTop: tokens.spacingVerticalXS }}
+                >New compute instance</Button>
+              )}
             </div>
             <Divider vertical className={s.toolDivider} />
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
@@ -1802,6 +1961,68 @@ export function NotebookEditor({ item, id }: Props) {
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
                     <Button appearance="primary" disabled={createBusy || !createName.trim()} onClick={create}>{createBusy ? 'Creating…' : 'Create'}</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+            {/* Configure compute — idle auto-shutdown TTL for the selected CI.
+                Dropdown only (loom_no_freeform_config). POST .../idle-shutdown. */}
+            <Dialog open={configCiOpen} onOpenChange={(_, d) => setConfigCiOpen(d.open)}>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Configure compute</DialogTitle>
+                  <DialogContent>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                      <Caption1>
+                        Auto-stop {selectedCompute?.name ? <strong>{selectedCompute.name}</strong> : 'this Compute Instance'} after it sits idle, so it stops billing.
+                      </Caption1>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                        <Caption1>Idle shutdown</Caption1>
+                        <Select aria-label="Idle shutdown" value={configCiTtl} onChange={(_, d) => setConfigCiTtl(d.value)}>
+                          {IDLE_TTL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </Select>
+                      </div>
+                      {configCiErr && <MessageBar intent="error"><MessageBarBody>{configCiErr}</MessageBarBody></MessageBar>}
+                    </div>
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setConfigCiOpen(false)}>Cancel</Button>
+                    <Button appearance="primary" disabled={configCiBusy} onClick={saveCiIdleShutdown}>{configCiBusy ? 'Saving…' : 'Save'}</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+            {/* New Compute Instance — name + VM size + idle TTL (dropdowns only).
+                POST /api/aml/compute-instances → createCI. */}
+            <Dialog open={newCiOpen} onOpenChange={(_, d) => setNewCiOpen(d.open)}>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>New compute instance</DialogTitle>
+                  <DialogContent>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                        <Caption1>Name</Caption1>
+                        <Input placeholder="my-compute" value={newCiName} onChange={(_, d) => setNewCiName(d.value)} style={{ width: '100%' }} />
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>3-24 chars · start with a letter · letters, numbers, and hyphens.</Caption1>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                        <Caption1>Virtual machine size</Caption1>
+                        <Select aria-label="VM size" value={newCiVmSize} onChange={(_, d) => setNewCiVmSize(d.value)}>
+                          {AML_CI_VM_SIZES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </Select>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                        <Caption1>Idle shutdown</Caption1>
+                        <Select aria-label="Idle shutdown" value={newCiTtl} onChange={(_, d) => setNewCiTtl(d.value)}>
+                          {IDLE_TTL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </Select>
+                      </div>
+                      {newCiErr && <MessageBar intent="error"><MessageBarBody>{newCiErr}</MessageBarBody></MessageBar>}
+                    </div>
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setNewCiOpen(false)}>Cancel</Button>
+                    <Button appearance="primary" disabled={newCiBusy || !newCiName.trim()} onClick={createCiInstance}>{newCiBusy ? 'Creating…' : 'Create'}</Button>
                   </DialogActions>
                 </DialogBody>
               </DialogSurface>
