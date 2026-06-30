@@ -21,7 +21,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Button, Input, Dropdown, Option, Badge, Spinner, Caption1, Body1, Checkbox, Divider,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -38,6 +38,12 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   search: { flex: 1, minWidth: '220px' },
   statusRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  loadingPane: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalS, textAlign: 'center',
+    paddingTop: tokens.spacingVerticalXXL, paddingBottom: tokens.spacingVerticalXXL,
+    minHeight: '180px',
+  },
   list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxHeight: '46vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
   group: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   subHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXXS },
@@ -93,6 +99,17 @@ function shortSub(sub: string): string {
   return sub && sub.length > 14 ? `${sub.slice(0, 8)}…${sub.slice(-4)}` : sub || 'unknown';
 }
 
+/**
+ * Per-call client timeout for the cross-subscription ARG browse (40s), passed
+ * as a scoped override to `clientFetch` so ONLY this call gets the longer
+ * ceiling — the shared 6s default still applies to every other caller. A
+ * Resource Graph query that spans many subscriptions (plus the proven ARM
+ * control-plane fallback) legitimately takes 20-35s, so the old 6s default
+ * always timed out before the backend could answer. Kept in step with the
+ * server's ARM-fallback budget in app/api/azure/connectables/route.ts.
+ */
+const CONNECTABLES_TIMEOUT_MS = 40_000;
+
 export function RegisterExistingSourceDialog({
   open, onClose, onRegistered,
 }: {
@@ -116,7 +133,7 @@ export function RegisterExistingSourceDialog({
   const load = useCallback(async () => {
     setLoading(true); setGate(null); setError(null);
     try {
-      const res = await clientFetch('/api/azure/connectables');
+      const res = await clientFetch('/api/azure/connectables', undefined, CONNECTABLES_TIMEOUT_MS);
       const j: ApiResponse = await res.json();
       if (j.ok && Array.isArray(j.resources)) {
         setResources(j.resources);
@@ -236,7 +253,6 @@ export function RegisterExistingSourceDialog({
               </div>
 
               <div className={s.statusRow}>
-                {loading && <Spinner size="tiny" label="Querying Azure Resource Graph…" />}
                 {!loading && via && (
                   <Badge appearance="tint" color={via === 'user' || via === 'user-arm' ? 'brand' : 'informative'} size="small"
                     title={via.startsWith('user') ? 'Resolved with your Azure RBAC + ABAC' : 'Resolved with the Loom managed identity'}>
@@ -270,7 +286,25 @@ export function RegisterExistingSourceDialog({
                     <MessageBarTitle>Could not list / register</MessageBarTitle>
                     {error}
                   </MessageBarBody>
+                  <MessageBarActions>
+                    <Button
+                      size="small" appearance="primary" icon={<ArrowSync16Regular />}
+                      disabled={loading} onClick={load}
+                    >
+                      Retry
+                    </Button>
+                  </MessageBarActions>
                 </MessageBar>
+              )}
+
+              {loading && (
+                <div className={s.loadingPane}>
+                  <Spinner size="large" label="Scanning your subscriptions…" />
+                  <Caption1 className={s.meta}>
+                    This can take 30–40s across many subscriptions — a cross-subscription Resource Graph
+                    browse is heavier than a single-subscription query. Hang tight.
+                  </Caption1>
+                </div>
               )}
 
               {!loading && !gate && (
