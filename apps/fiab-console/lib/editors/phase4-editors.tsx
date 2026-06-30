@@ -5499,12 +5499,30 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
 //   POST  /api/items/data-agent/[id]/chat       (live AOAI grounded chat)
 //   POST  /api/items/data-agent/[id]/publish    (Foundry Agent Service)
 //   GET   /api/items/by-type?types=...          (typed source picker)
+// ----- Evaluation (Fabric "Evaluate a data agent" parity) -----
+interface DaEvalCase { question: string; expectedAnswer?: string; expectedQuery?: string }
+interface DaEvalResult {
+  question: string; expectedAnswer?: string; expectedQuery?: string;
+  answer: string; query?: string; sourceUsed?: string;
+  pass: boolean; score: number; queryMatch?: boolean; rationale: string; error?: string;
+}
+interface DaEvalRun {
+  id: string; ranAt: string; ranBy?: string; model?: string;
+  total: number; passed: number; accuracy: number; results: DaEvalResult[];
+}
+
 interface DataAgentState {
   instructions: string;
   sources: DaSource[];
   description?: string;
   /** Optional custom display name / alias for the agent (shown in chat + on publish). */
   alias?: string;
+  /** Ground-truth set for evaluation (question + expected answer / query). */
+  evalSet?: DaEvalCase[];
+  /** Persisted evaluation runs (newest first), written by the /evaluate route. */
+  evalRuns?: DaEvalRun[];
+  /** Suggested prompts surfaced to consumers + in the test-pane empty state. */
+  conversationStarters?: string[];
   // Back-compat with the legacy free-text bag (read-only on load).
   systemPrompt?: string; model?: string;
   foundryAgentId?: string; foundryProjectId?: string; publishedAt?: string;
@@ -5558,10 +5576,10 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   });
   // Initial tab honors a ?tab= deep-link (the /data-agent pane's "Configure"
   // and "Publish…" actions route here with ?tab=copilot / ?tab=publish).
-  const [tab, setTab] = useState<'build' | 'copilot' | 'test' | 'publish' | 'inspect' | 'monitor'>(() => {
+  const [tab, setTab] = useState<'build' | 'copilot' | 'test' | 'evaluate' | 'consume' | 'publish' | 'inspect' | 'monitor'>(() => {
     if (typeof window === 'undefined') return 'build';
     const t = new URLSearchParams(window.location.search).get('tab');
-    return (t === 'copilot' || t === 'test' || t === 'publish' || t === 'inspect' || t === 'monitor') ? t : 'build';
+    return (t === 'copilot' || t === 'test' || t === 'evaluate' || t === 'consume' || t === 'publish' || t === 'inspect' || t === 'monitor') ? t : 'build';
   });
 
   // ---- source picker data (real Loom items) ----
@@ -5825,6 +5843,81 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
 
   const sources = normalizeDaSources(state.sources);
   const instrLen = (typeof state.instructions === 'string' ? state.instructions : '').length;
+
+  // ---- evaluation (ground-truth set + runs) ----
+  const evalSet = arr<DaEvalCase>(state.evalSet);
+  const evalRuns = arr<DaEvalRun>(state.evalRuns);
+  const [evaluating, setEvaluating] = useState(false);
+  const [evalGate, setEvalGate] = useState<string | null>(null);
+  const [evalError, setEvalError] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const addEvalCase = () => setState((p) => ({ ...p, evalSet: [...arr<DaEvalCase>(p.evalSet), { question: '', expectedAnswer: '', expectedQuery: '' }] }));
+  const updateEvalCase = (i: number, patch: Partial<DaEvalCase>) =>
+    setState((p) => ({ ...p, evalSet: arr<DaEvalCase>(p.evalSet).map((c, j) => j === i ? { ...c, ...patch } : c) }));
+  const removeEvalCase = (i: number) => setState((p) => ({ ...p, evalSet: arr<DaEvalCase>(p.evalSet).filter((_, j) => j !== i) }));
+  const runEval = useCallback(async () => {
+    const questions = arr<DaEvalCase>(state.evalSet).filter((c) => (c.question || '').trim());
+    if (!questions.length || evaluating) return;
+    setEvaluating(true); setEvalGate(null); setEvalError(null);
+    try {
+      if (dirty) await save();
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/evaluate`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ questions }),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      if (r.status === 503 || j?.notDeployed) { setEvalGate(j?.hint || j?.error || 'No AOAI model deployed.'); return; }
+      if (!j?.ok) { setEvalError(j?.error || `HTTP ${r.status}`); return; }
+      // The route persisted the run server-side; reload to pull evalRuns, then select it.
+      await reload();
+      if (j.run?.id) setSelectedRunId(j.run.id);
+    } catch (e: any) { setEvalError(e?.message || String(e)); }
+    finally { setEvaluating(false); }
+  }, [id, state.evalSet, evaluating, dirty, save, reload]);
+
+  // ---- conversation starters (suggested prompts) ----
+  const starters = arr<string>(state.conversationStarters);
+  const addStarter = () => setState((p) => ({ ...p, conversationStarters: [...arr<string>(p.conversationStarters), ''] }));
+  const updateStarter = (i: number, v: string) => setState((p) => ({ ...p, conversationStarters: arr<string>(p.conversationStarters).map((x, j) => j === i ? v : x) }));
+  const removeStarter = (i: number) => setState((p) => ({ ...p, conversationStarters: arr<string>(p.conversationStarters).filter((_, j) => j !== i) }));
+
+  // ---- consume (programmatic REST endpoint) ----
+  const [snippetLang, setSnippetLang] = useState<'curl' | 'python' | 'js'>('curl');
+  const [copied, setCopied] = useState(false);
+  const consumeOrigin = typeof window !== 'undefined' ? window.location.origin : 'https://<your-loom-host>';
+  const consumePath = `/api/items/data-agent/${id}/chat`;
+  const consumeUrl = `${consumeOrigin}${consumePath}`;
+  const consumeSnippets: Record<'curl' | 'python' | 'js', string> = {
+    curl:
+      `curl -X POST '${consumeUrl}' \\\n` +
+      `  -H 'content-type: application/json' \\\n` +
+      `  -H 'cookie: loom_session=<your-session-cookie>' \\\n` +
+      `  -d '{ "question": "What was total revenue by region last quarter?" }'`,
+    python:
+      `import requests\n\n` +
+      `resp = requests.post(\n` +
+      `    "${consumeUrl}",\n` +
+      `    headers={"content-type": "application/json", "cookie": "loom_session=<your-session-cookie>"},\n` +
+      `    json={"question": "What was total revenue by region last quarter?"},\n` +
+      `)\n` +
+      `data = resp.json()\n` +
+      `print(data["answer"])          # grounded answer\n` +
+      `print(data.get("query"))       # generated SQL / KQL\n` +
+      `print(data.get("tools"))       # per-source trace`,
+    js:
+      `const resp = await fetch("${consumeUrl}", {\n` +
+      `  method: "POST",\n` +
+      `  headers: { "content-type": "application/json" },\n` +
+      `  credentials: "include", // sends the Loom session cookie\n` +
+      `  body: JSON.stringify({ question: "What was total revenue by region last quarter?" }),\n` +
+      `});\n` +
+      `const data = await resp.json();\n` +
+      `console.log(data.answer, data.query, data.tools);`,
+  };
+  const copySnippet = useCallback(() => {
+    try { navigator.clipboard?.writeText(consumeSnippets[snippetLang]); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked */ }
+  }, [snippetLang, consumeSnippets]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Agent', actions: [
@@ -5832,7 +5925,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         { label: 'Build', onClick: () => setTab('build') },
         { label: 'Config Copilot', onClick: () => setTab('copilot') },
         { label: 'Test chat', onClick: () => setTab('test') },
+        { label: 'Evaluate', onClick: () => setTab('evaluate') },
         { label: 'Publish', onClick: () => setTab('publish') },
+        { label: 'Consume', onClick: () => setTab('consume') },
         { label: 'Run inspector', onClick: () => setTab('inspect') },
         { label: 'Monitoring', onClick: () => setTab('monitor') },
       ]},
@@ -5847,7 +5942,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
             <Tab value="build">Build ({sources.length}/5 sources)</Tab>
             <Tab value="copilot">Config Copilot</Tab>
             <Tab value="test">Test chat</Tab>
+            <Tab value="evaluate">Evaluate</Tab>
             <Tab value="publish">Publish</Tab>
+            <Tab value="consume">Consume</Tab>
             <Tab value="inspect">Run inspector</Tab>
             <Tab value="monitor">Monitoring</Tab>
           </TabList>
@@ -6025,7 +6122,16 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 {chat.length === 0 && !asking && (
                   <div style={{ margin: 'auto', textAlign: 'center', color: tokens.colorNeutralForeground3 }}>
                     <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Ask the agent a question to start a thread.</Body1>
-                    <Caption1>e.g. “What was total revenue by region last quarter?”</Caption1>
+                    {starters.filter((p) => p.trim()).length > 0 ? (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, justifyContent: 'center', marginTop: tokens.spacingVerticalS }}>
+                        {starters.filter((p) => p.trim()).slice(0, 6).map((p, i) => (
+                          <Button key={i} size="small" appearance="outline" icon={<Sparkle20Regular />}
+                            onClick={() => setQuestion(p)}>{p}</Button>
+                        ))}
+                      </div>
+                    ) : (
+                      <Caption1>e.g. “What was total revenue by region last quarter?”</Caption1>
+                    )}
                   </div>
                 )}
                 {chat.map((m, i) => {
@@ -6289,6 +6395,180 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                 <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{inspectResult.error || 'Run failed'}</MessageBarBody></MessageBar>
               )}
             </>
+          )}
+
+          {tab === 'evaluate' && (() => {
+            const selectedRun = evalRuns.find((r) => r.id === selectedRunId) || evalRuns[0] || null;
+            const validCases = evalSet.filter((c) => (c.question || '').trim()).length;
+            return (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <div className={s.daSection}>
+                <div className={s.daSectionHead}>
+                  <span className={s.daSectionIcon}><CheckmarkCircle20Regular /></span>
+                  <Subtitle2>Evaluation</Subtitle2>
+                  <Badge appearance="tint" color="brand">live · grounded · AOAI judge</Badge>
+                </div>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  Author a ground-truth set, then run every question through the live grounded agent and score each answer with an AOAI judge (correctness + query match). Runs persist to this agent.
+                </Caption1>
+                <Table aria-label="Ground-truth set" size="small">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Question</TableHeaderCell>
+                    <TableHeaderCell>Expected answer (optional)</TableHeaderCell>
+                    <TableHeaderCell>Expected query (optional)</TableHeaderCell>
+                    <TableHeaderCell />
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {evalSet.map((c, i) => (
+                      <TableRow key={i}>
+                        <TableCell><Textarea value={c.question} rows={2} onChange={(_, d) => updateEvalCase(i, { question: d.value })} placeholder="What was total revenue by region last quarter?" /></TableCell>
+                        <TableCell><Textarea value={c.expectedAnswer || ''} rows={2} onChange={(_, d) => updateEvalCase(i, { expectedAnswer: d.value })} placeholder="(optional) gold answer" /></TableCell>
+                        <TableCell><Textarea value={c.expectedQuery || ''} rows={2} onChange={(_, d) => updateEvalCase(i, { expectedQuery: d.value })} placeholder="(optional) gold SQL / KQL" /></TableCell>
+                        <TableCell><Button size="small" appearance="subtle" onClick={() => removeEvalCase(i)}>×</Button></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' }}>
+                  <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addEvalCase}>Add question</Button>
+                  <div style={{ flex: 1 }} />
+                  <Button appearance="primary" icon={<Play20Regular />} onClick={runEval}
+                    disabled={evaluating || validCases === 0 || sources.length === 0}>
+                    {evaluating ? `Evaluating ${validCases}…` : `Run evaluation (${validCases})`}
+                  </Button>
+                </div>
+                {sources.length === 0 && (
+                  <MessageBar intent="warning"><MessageBarBody>Attach at least one data source on the <strong>Build</strong> tab before evaluating.</MessageBarBody></MessageBar>
+                )}
+                {evalGate && (
+                  <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>No AOAI model deployed</MessageBarTitle><div>{evalGate}</div></MessageBarBody></MessageBar>
+                )}
+                {evalError && (
+                  <MessageBar intent="error"><MessageBarBody>{evalError}</MessageBarBody></MessageBar>
+                )}
+              </div>
+
+              {selectedRun ? (
+                <div className={s.daSection}>
+                  <div className={s.daSectionHead}>
+                    <span className={s.daSectionIcon}><DataTrending20Regular /></span>
+                    <Subtitle2>Results</Subtitle2>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{new Date(selectedRun.ranAt).toLocaleString()}{selectedRun.model ? ` · ${selectedRun.model}` : ''}</Caption1>
+                  </div>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ width: 96, height: 96, borderRadius: '50%', background: `conic-gradient(${tokens.colorBrandStroke1} ${selectedRun.accuracy * 3.6}deg, ${tokens.colorNeutralBackground3} 0deg)`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                      <div style={{ width: 70, height: 70, borderRadius: '50%', background: tokens.colorNeutralBackground1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                        <Subtitle2>{selectedRun.accuracy}%</Subtitle2>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>accuracy</Caption1>
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                      <Badge appearance="filled" color="success">{selectedRun.passed} passed</Badge>
+                      <Badge appearance="filled" color="danger">{selectedRun.total - selectedRun.passed} failed</Badge>
+                      <Badge appearance="outline">{selectedRun.total} total</Badge>
+                    </div>
+                  </div>
+                  <Table aria-label="Evaluation results" size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Question</TableHeaderCell>
+                      <TableHeaderCell>Verdict</TableHeaderCell>
+                      <TableHeaderCell>Agent answer</TableHeaderCell>
+                      <TableHeaderCell>Generated query</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {selectedRun.results.map((r, i) => (
+                        <TableRow key={i}>
+                          <TableCell><div style={{ maxWidth: 220, overflowWrap: 'anywhere' }}>{r.question}</div></TableCell>
+                          <TableCell>
+                            <Badge appearance="filled" color={r.pass ? 'success' : 'danger'}>{r.pass ? 'pass' : 'fail'} · {Math.round(r.score * 100)}%</Badge>
+                            {r.rationale && <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS }}>{r.rationale}</Caption1>}
+                          </TableCell>
+                          <TableCell><div style={{ maxWidth: 280, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{r.error ? `⚠ ${r.error}` : r.answer}</div></TableCell>
+                          <TableCell>{r.query ? <pre className={s.chatSource}>{r.query}</pre> : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                  {evalRuns.length > 1 && (
+                    <>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Run history</Caption1>
+                      <TileGrid minTileWidth={200}>
+                        {evalRuns.map((run) => (
+                          <Card key={run.id} onClick={() => setSelectedRunId(run.id)}
+                            style={{ cursor: 'pointer', borderColor: run.id === selectedRun.id ? tokens.colorBrandStroke1 : undefined }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                                <Subtitle2>{run.accuracy}%</Subtitle2>
+                                <Badge appearance="tint" color={run.accuracy >= 80 ? 'success' : run.accuracy >= 50 ? 'warning' : 'danger'}>{run.passed}/{run.total}</Badge>
+                              </div>
+                              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{new Date(run.ranAt).toLocaleString()}</Caption1>
+                            </div>
+                          </Card>
+                        ))}
+                      </TileGrid>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <EmptyState icon={<CheckmarkCircle20Regular />} title="No evaluation runs yet"
+                  body="Add ground-truth questions above and run an evaluation to score the agent's grounded answers against the live backend."
+                  primaryAction={{ label: evaluating ? 'Evaluating…' : 'Run evaluation', onClick: runEval }} />
+              )}
+              <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+            </div>
+            );
+          })()}
+
+          {tab === 'consume' && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <div className={s.daSection}>
+                <div className={s.daSectionHead}>
+                  <span className={s.daSectionIcon}><Link20Regular /></span>
+                  <Subtitle2>Consume programmatically</Subtitle2>
+                  <Badge appearance="tint" color="brand">grounded REST</Badge>
+                </div>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                  This agent is reachable as a stable Loom REST endpoint. POST a question; get the grounded answer, the generated query, and the per-source trace — the same backend the Test chat uses. Calls run read-only under the caller&apos;s Entra identity (RBAC honored).
+                </Caption1>
+                <Field label="Endpoint">
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <Badge appearance="filled" color="brand">POST</Badge>
+                    <code style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all', color: tokens.colorNeutralForeground1 }}>{consumePath}</code>
+                  </div>
+                </Field>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Dropdown value={snippetLang === 'curl' ? 'cURL' : snippetLang === 'python' ? 'Python' : 'JavaScript'} selectedOptions={[snippetLang]}
+                    onOptionSelect={(_, d) => d.optionValue && setSnippetLang(d.optionValue as 'curl' | 'python' | 'js')} style={{ minWidth: 160 }}>
+                    <Option value="curl">cURL</Option>
+                    <Option value="python">Python</Option>
+                    <Option value="js">JavaScript</Option>
+                  </Dropdown>
+                  <div style={{ flex: 1 }} />
+                  <Button size="small" appearance="outline" onClick={copySnippet}>{copied ? 'Copied ✓' : 'Copy'}</Button>
+                </div>
+                <pre className={s.chatSource} style={{ whiteSpace: 'pre', maxHeight: 280, overflow: 'auto' }}>{consumeSnippets[snippetLang]}</pre>
+                <MessageBar intent="info"><MessageBarBody>
+                  For cross-tenant / external consumers (AI Foundry, Copilot Studio, M365 Copilot), publish the agent on the <strong>Publish</strong> tab — that exposes a managed Foundry Agent Service / Copilot Studio endpoint with its own auth.
+                </MessageBarBody></MessageBar>
+              </div>
+
+              <div className={s.daSection}>
+                <div className={s.daSectionHead}>
+                  <span className={s.daSectionIcon}><Sparkle20Regular /></span>
+                  <Subtitle2>Conversation starters</Subtitle2>
+                </div>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Suggested prompts shown to consumers and in the Test chat empty state. Saved with the agent.</Caption1>
+                {starters.map((p, i) => (
+                  <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
+                    <Input value={p} style={{ flex: 1 }} onChange={(_, d) => updateStarter(i, d.value)} placeholder="e.g. Which region grew fastest last quarter?" />
+                    <Button size="small" appearance="subtle" onClick={() => removeStarter(i)}>×</Button>
+                  </div>
+                ))}
+                <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addStarter} style={{ alignSelf: 'flex-start' }}>Add starter</Button>
+              </div>
+
+              <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+            </div>
           )}
 
           {tab === 'monitor' && <DataAgentMonitoringPanel id={id} />}
