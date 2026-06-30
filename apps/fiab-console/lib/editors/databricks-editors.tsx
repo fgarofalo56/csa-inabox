@@ -34,6 +34,7 @@ import {
   Eye20Regular, MathFormula20Regular,
   ArrowDownload20Regular,
   Organization20Regular,
+  Tag20Regular,
   ArrowUpload20Regular, CloudArrowUp24Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from './components/model-view-canvas';
@@ -1240,6 +1241,275 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
   );
 }
 
+// ============================================================
+// UC tag governance dialogs (wave c1) — object/column tags + governed tags.
+// Real Databricks SQL DDL via /api/databricks/unity-catalog/{tags,governed-tags}.
+// ============================================================
+
+interface TagPair { key: string; value: string }
+
+function TagChips({ tags, onRemove, busy }: { tags: TagPair[]; onRemove: (key: string) => void; busy: boolean }) {
+  if (!tags.length) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No tags.</Caption1>;
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS }}>
+      {tags.map((t) => (
+        <span key={t.key} style={{
+          display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
+          padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
+          borderRadius: tokens.borderRadiusMedium,
+          backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground2,
+          border: `1px solid ${tokens.colorBrandStroke2}`,
+        }}>
+          <Tag20Regular style={{ fontSize: '14px' }} />
+          <Caption1>{t.key}{t.value ? `=${t.value}` : ''}</Caption1>
+          <Button size="small" appearance="transparent" icon={<Dismiss16Regular />} aria-label={`Remove tag ${t.key}`} disabled={busy} onClick={() => onRemove(t.key)} />
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function UcTagsDialog({ open, onOpenChange, target, warehouseId, onChanged }: {
+  open: boolean; onOpenChange: (v: boolean) => void;
+  target: { catalog: string; schema: string; table: string } | null;
+  warehouseId: string; onChanged: () => void;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [tableTags, setTableTags] = useState<TagPair[]>([]);
+  const [colTags, setColTags] = useState<Record<string, TagPair[]>>({});
+  const [columns, setColumns] = useState<string[]>([]);
+  const [col, setCol] = useState('');
+  const [newTbl, setNewTbl] = useState<KvRow[]>([{ key: '', value: '' }]);
+  const [newCol, setNewCol] = useState<KvRow[]>([{ key: '', value: '' }]);
+
+  const base = '/api/databricks/unity-catalog/tags';
+
+  const reload = useCallback(async () => {
+    if (!target) return;
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      const p = new URLSearchParams({ catalog: target.catalog, schema: target.schema, table: target.table });
+      if (warehouseId) p.set('warehouseId', warehouseId);
+      const r = await fetch(`${base}?${p.toString()}`);
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return; }
+      if (!j.ok) { setErr(j.error || 'failed to read tags'); return; }
+      setTableTags((j.tableTags || []).map((t: any) => ({ key: String(t.tag_name), value: String(t.tag_value ?? '') })));
+      const byCol: Record<string, TagPair[]> = {};
+      for (const t of (j.columnTags || [])) {
+        const cn = String(t.column_name);
+        (byCol[cn] ||= []).push({ key: String(t.tag_name), value: String(t.tag_value ?? '') });
+      }
+      setColTags(byCol);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [target, warehouseId]);
+
+  const loadColumns = useCallback(async () => {
+    if (!target) return;
+    try {
+      const r = await fetch(`/api/databricks/unity-catalog/tables?full_name=${encodeURIComponent(`${target.catalog}.${target.schema}.${target.table}`)}`);
+      const j = await r.json();
+      if (j.ok && j.table?.columns) setColumns(j.table.columns.map((c: any) => String(c.name)));
+    } catch { /* best-effort */ }
+  }, [target]);
+
+  useEffect(() => {
+    if (open && target) {
+      void reload(); void loadColumns();
+      setNewTbl([{ key: '', value: '' }]); setNewCol([{ key: '', value: '' }]); setCol('');
+    }
+  }, [open, target, reload, loadColumns]);
+
+  const run = async (payload: any): Promise<boolean> => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(base, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...payload, warehouseId }) });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return false; }
+      if (!j.ok) { setErr(j.error || 'tag operation failed'); return false; }
+      await reload(); onChanged(); return true;
+    } catch (e: any) { setErr(e?.message || String(e)); return false; }
+    finally { setBusy(false); }
+  };
+
+  const applyTableTags = async () => {
+    if (!target) return;
+    const tags = newTbl.filter((r) => r.key.trim()).map((r) => ({ key: r.key.trim(), value: r.value }));
+    if (!tags.length) return;
+    if (await run({ action: 'set', catalog: target.catalog, schema: target.schema, name: target.table, kind: 'TABLE', tags })) setNewTbl([{ key: '', value: '' }]);
+  };
+  const removeTableTag = (key: string) => { if (target) void run({ action: 'unset', catalog: target.catalog, schema: target.schema, name: target.table, kind: 'TABLE', keys: [key] }); };
+
+  const applyColTags = async () => {
+    if (!target || !col) return;
+    const tags = newCol.filter((r) => r.key.trim()).map((r) => ({ key: r.key.trim(), value: r.value }));
+    if (!tags.length) return;
+    if (await run({ action: 'set', catalog: target.catalog, schema: target.schema, name: target.table, column: col, tags })) setNewCol([{ key: '', value: '' }]);
+  };
+  const removeColTag = (key: string) => { if (target && col) void run({ action: 'unset', catalog: target.catalog, schema: target.schema, name: target.table, column: col, keys: [key] }); };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '760px', width: '92vw' }}>
+        <DialogBody>
+          <DialogTitle>Tags — {target ? `${target.catalog}.${target.schema}.${target.table}` : ''}</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              {loading && <Spinner size="tiny" label="Reading information_schema…" labelPosition="after" />}
+              {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Configuration required</MessageBarTitle>{gate}</MessageBarBody></MessageBar>}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Tag operation failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                <Subtitle2>Table tags</Subtitle2>
+                <TagChips tags={tableTags} onRemove={removeTableTag} busy={busy} />
+                <KvTagEditor rows={newTbl} setRows={setNewTbl} />
+                <div><Button appearance="primary" icon={<Add20Regular />} disabled={busy || !newTbl.some((r) => r.key.trim())} onClick={applyTableTags}>Apply table tags</Button></div>
+              </div>
+
+              <Divider />
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                <Subtitle2>Column tags</Subtitle2>
+                <Field label="Column">
+                  <Dropdown placeholder="Pick a column" value={col} selectedOptions={col ? [col] : []} onOptionSelect={(_, d) => setCol(d.optionValue || '')}>
+                    {columns.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                  </Dropdown>
+                </Field>
+                {col && <TagChips tags={colTags[col] || []} onRemove={removeColTag} busy={busy} />}
+                {col && <KvTagEditor rows={newCol} setRows={setNewCol} />}
+                {col && <div><Button appearance="primary" icon={<Add20Regular />} disabled={busy || !newCol.some((r) => r.key.trim())} onClick={applyColTags}>Apply column tags</Button></div>}
+              </div>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+function GovernedTagsDialog({ open, onOpenChange, warehouseId }: {
+  open: boolean; onOpenChange: (v: boolean) => void; warehouseId: string;
+}) {
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [rows, setRows] = useState<Record<string, unknown>[]>([]);
+  const [cols, setCols] = useState<string[]>(['Tag Key', 'Description', 'Values', 'Id']);
+  const [key, setKey] = useState('');
+  const [desc, setDesc] = useState('');
+  const [valsCsv, setValsCsv] = useState('');
+
+  const base = '/api/databricks/unity-catalog/governed-tags';
+
+  const reload = useCallback(async () => {
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      const p = new URLSearchParams();
+      if (warehouseId) p.set('warehouseId', warehouseId);
+      const r = await fetch(`${base}?${p.toString()}`);
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); setRows([]); return; }
+      if (!j.ok) { setErr(j.error || 'failed to list governed tags'); setRows([]); return; }
+      const gt: Record<string, unknown>[] = j.governedTags || [];
+      setRows(gt);
+      if (gt.length) setCols(Object.keys(gt[0]));
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [warehouseId]);
+
+  useEffect(() => { if (open) void reload(); }, [open, reload]);
+
+  const csvVals = () => valsCsv.split(',').map((x) => x.trim()).filter(Boolean);
+  const run = async (payload: any): Promise<boolean> => {
+    setBusy(true); setErr(null);
+    try {
+      const r = await fetch(base, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...payload, warehouseId }) });
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); return false; }
+      if (!j.ok) { setErr(j.error || 'governed-tag operation failed'); return false; }
+      await reload(); return true;
+    } catch (e: any) { setErr(e?.message || String(e)); return false; }
+    finally { setBusy(false); }
+  };
+
+  const create = async () => { if (key.trim() && await run({ action: 'create', key: key.trim(), description: desc.trim() || undefined, values: csvVals() })) { setKey(''); setDesc(''); setValsCsv(''); } };
+  const setValues = () => { if (key.trim()) void run({ action: 'alter-values', key: key.trim(), values: csvVals() }); };
+  const setDescription = () => { if (key.trim()) void run({ action: 'alter-description', key: key.trim(), description: desc }); };
+  const drop = (k: string) => { if (k) void run({ action: 'drop', key: k }); };
+  const loadRow = (r: Record<string, unknown>) => {
+    setKey(String(r['Tag Key'] ?? r['tag_key'] ?? ''));
+    setDesc(String(r['Description'] ?? ''));
+    const v = String(r['Values'] ?? '');
+    setValsCsv(v.replace(/[[\]]/g, '').split(/[,\s]+/).filter(Boolean).join(', '));
+  };
+  const keyCol = cols.includes('Tag Key') ? 'Tag Key' : cols[0];
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => onOpenChange(d.open)}>
+      <DialogSurface style={{ maxWidth: '860px', width: '94vw' }}>
+        <DialogBody>
+          <DialogTitle>Governed tags</DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Account-level governed tags enforce an allowed key + value set (the tag policy): members with
+                ASSIGN can apply them, and only from the allowed list. Backed by CREATE / ALTER / DROP GOVERNED TAG
+                · SHOW GOVERNED TAGS on the SQL warehouse.
+              </Caption1>
+              {loading && <Spinner size="tiny" label="SHOW GOVERNED TAGS…" labelPosition="after" />}
+              {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Configuration required</MessageBarTitle>{gate}</MessageBarBody></MessageBar>}
+              {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Operation failed</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+
+              <div style={{ overflow: 'auto', maxHeight: '300px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                <Table size="small" aria-label="Governed tags">
+                  <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}<TableHeaderCell> </TableHeaderCell></TableRow></TableHeader>
+                  <TableBody>
+                    {rows.length === 0 && <TableRow><TableCell colSpan={cols.length + 1}><Caption1>No governed tags in this account.</Caption1></TableCell></TableRow>}
+                    {rows.map((r, i) => (
+                      <TableRow key={i}>
+                        {cols.map((c) => <TableCell key={c}>{String(r[c] ?? '')}</TableCell>)}
+                        <TableCell>
+                          <div style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
+                            <Button size="small" appearance="subtle" onClick={() => loadRow(r)} disabled={busy}>Load</Button>
+                            <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Drop governed tag" disabled={busy} onClick={() => drop(String(r[keyCol] ?? ''))} />
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              <Subtitle2>Create / edit governed tag</Subtitle2>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+                <Field label="Tag key" required style={{ minWidth: 160 }}><Input value={key} onChange={(_, d) => setKey(d.value)} placeholder="pii" /></Field>
+                <Field label="Description" style={{ flex: 1, minWidth: 200 }}><Input value={desc} onChange={(_, d) => setDesc(d.value)} placeholder="Personally identifiable information" /></Field>
+                <Field label="Allowed values (comma-separated; empty = key-only)" style={{ flex: 1, minWidth: 200 }}><Input value={valsCsv} onChange={(_, d) => setValsCsv(d.value)} placeholder="ssn, ccn, dob" /></Field>
+              </div>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !key.trim()} onClick={create}>Create governed tag</Button>
+                <Button appearance="outline" disabled={busy || !key.trim()} onClick={setValues}>Set values</Button>
+                <Button appearance="outline" disabled={busy || !key.trim()} onClick={setDescription}>Set description</Button>
+              </div>
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={() => onOpenChange(false)}>Close</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
 // ---- $/hr estimate (client-side, no extra backend call) --------------------
 // DBU consumption per cluster by warehouse size (Databricks SQL Warehouse sizing
 // table, Microsoft Learn). The autoscaler runs `min_num_clusters` of these.
@@ -1286,6 +1556,12 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const [alertsOpen, setAlertsOpen] = useState(false);
   // UC column-mask + row-filter wizards (granular security beyond object grants).
   const [ucSecOpen, setUcSecOpen] = useState(false);
+  // UC tag governance (wave c1) — object/column tags + governed tags.
+  const [ucTagsOpen, setUcTagsOpen] = useState(false);
+  const [ucTagsTarget, setUcTagsTarget] = useState<{ catalog: string; schema: string; table: string } | null>(null);
+  const [ucGovTagsOpen, setUcGovTagsOpen] = useState(false);
+  // Lazy per-table tag cache for the UC tree chips (full_name → tag pairs).
+  const [tagsByTable, setTagsByTable] = useState<Record<string, { key: string; value: string }[]>>({});
   // AI functions helper (sentiment/classify/translate/summarize/extract).
   const [aiFnOpen, setAiFnOpen] = useState(false);
   // Last table the user clicked in the tree — context for the AI functions SQL.
@@ -1498,6 +1774,20 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       if (j.ok && j.columns) schemaCacheRef.current.columns.set(`${cat}.${sch}.${tbl}`, j.columns);
     } catch { /* completions are best-effort */ }
   }, [id, warehouseId]);
+
+  // Lazy-load a table's Unity Catalog tags for the tree chips (information_schema).
+  const loadTableTags = useCallback(async (cat: string, sch: string, tbl: string) => {
+    try {
+      const p = new URLSearchParams({ catalog: cat, schema: sch, table: tbl });
+      if (warehouseId) p.set('warehouseId', warehouseId);
+      const r = await fetch(`/api/databricks/unity-catalog/tags?${p.toString()}`);
+      const j = await r.json();
+      if (j.ok && Array.isArray(j.tableTags)) {
+        const pairs = j.tableTags.map((t: any) => ({ key: String(t.tag_name), value: String(t.tag_value ?? '') }));
+        setTagsByTable((prev) => ({ ...prev, [`${cat}.${sch}.${tbl}`]: pairs }));
+      }
+    } catch { /* tag chips are best-effort */ }
+  }, [warehouseId]);
 
   // Script-out (Databricks): load CREATE (SHOW CREATE …) / DROP into the editor.
   const dbxLoadScript = useCallback(async (
@@ -2065,6 +2355,9 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
             <Tooltip content="Manage grants (UC permissions)" relationship="label">
               <Button size="small" appearance="outline" icon={<Key20Regular />} onClick={() => setUcGrantsOpen(true)} aria-label="Manage grants" />
             </Tooltip>
+            <Tooltip content="Governed tags (account-level tag policies)" relationship="label">
+              <Button size="small" appearance="outline" icon={<Tag20Regular />} onClick={() => setUcGovTagsOpen(true)}>Governed tags</Button>
+            </Tooltip>
             <Tooltip content="Drop object (UC REST)" relationship="label">
               <Button size="small" appearance="outline" icon={<Delete20Regular />} onClick={() => setUcDropOpen(true)} aria-label="Drop object" />
             </Tooltip>
@@ -2128,12 +2421,24 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                   setAiTable(`\`${c}\`.\`${sch}\`.\`${t}\``);
                                   setSqlText(`SELECT * FROM \`${c}\`.\`${sch}\`.\`${t}\` LIMIT 100;`);
                                   void cacheColumns(c, sch, t);
+                                  void loadTableTags(c, sch, t);
                                 }}
                               >
                                 <TreeItemLayout
                                   iconBefore={<DocumentTable20Regular />}
                                   actions={
                                     <>
+                                      <Tooltip content={`Edit tags: ${t}`} relationship="label">
+                                        <Button
+                                          size="small" appearance="subtle" icon={<Tag20Regular />}
+                                          aria-label={`Edit tags ${t}`}
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setUcTagsTarget({ catalog: c, schema: sch, table: t });
+                                            setUcTagsOpen(true);
+                                          }}
+                                        />
+                                      </Tooltip>
                                       <Tooltip content={`Lineage: ${t}`} relationship="label">
                                         <Button
                                           size="small" appearance="subtle" icon={<Organization20Regular />}
@@ -2152,6 +2457,17 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                                   }
                                 >
                                   {t}
+                                  {(tagsByTable[`${c}.${sch}.${t}`] || []).slice(0, 3).map((tg, ti) => (
+                                    <Badge key={ti} appearance="tint" color="brand" size="small" icon={<Tag20Regular />}
+                                      style={{ marginLeft: tokens.spacingHorizontalXXS }}>
+                                      {tg.key}{tg.value ? `=${tg.value}` : ''}
+                                    </Badge>
+                                  ))}
+                                  {(tagsByTable[`${c}.${sch}.${t}`]?.length || 0) > 3 && (
+                                    <Badge appearance="ghost" size="small" style={{ marginLeft: tokens.spacingHorizontalXXS }}>
+                                      +{(tagsByTable[`${c}.${sch}.${t}`]?.length || 0) - 3}
+                                    </Badge>
+                                  )}
                                 </TreeItemLayout>
                               </TreeItem>
                             ))}
@@ -2915,6 +3231,19 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          <UcTagsDialog
+            open={ucTagsOpen}
+            onOpenChange={setUcTagsOpen}
+            target={ucTagsTarget}
+            warehouseId={warehouseId}
+            onChanged={() => { if (ucTagsTarget) void loadTableTags(ucTagsTarget.catalog, ucTagsTarget.schema, ucTagsTarget.table); }}
+          />
+          <GovernedTagsDialog
+            open={ucGovTagsOpen}
+            onOpenChange={setUcGovTagsOpen}
+            warehouseId={warehouseId}
+          />
 
           <AiFunctionsHelper
             open={aiFnOpen}

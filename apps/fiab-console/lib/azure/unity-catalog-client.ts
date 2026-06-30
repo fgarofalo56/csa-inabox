@@ -36,6 +36,15 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { executeStatement, type QueryResult } from './databricks-client';
+import {
+  buildUcSetObjectTags, buildUcUnsetObjectTags, buildUcSetColumnTags, buildUcUnsetColumnTags,
+  ucListTableTags, ucListColumnTags, ucListSchemaTags, ucListCatalogTags, ucListVolumeTags,
+  buildCreateGovernedTag, buildAlterGovernedTagDescription, buildAlterGovernedTagValues,
+  buildDropGovernedTag, ucShowGovernedTags, ucDescribeGovernedTag,
+  buildCreatePolicy, buildDropPolicy, ucShowPolicies, ucDescribePolicy,
+  type UcTagKind, type UcTagPair, type GovernedTagSpec,
+  type UcPolicyParams, type UcPolicySecurableType,
+} from '@/lib/sql/uc-security-builders';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
@@ -1226,4 +1235,177 @@ export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
     isMetastoreAdmin: isAdmin, privileges: priv, canConsumeInbound, canPublish,
     reason, message,
   };
+}
+
+// ============================================================
+// Tag governance (wave c1) — object/column tags, governed tags, ABAC policies.
+//
+// All driven through the SQL Warehouse Statement Execution path
+// ({@link executeStatement}) with Learn-grounded DDL built by the pure,
+// injection-safe generators in `lib/sql/uc-security-builders.ts`. The data-plane
+// REST surfaces (/api/2.1/unity-catalog/{tag-policies,policies}) exist but are
+// preview; SQL DDL is the reliable cross-workspace path. The caller (BFF route)
+// resolves a running warehouse id and handles config / Gov-boundary gates.
+// ============================================================
+
+/** QueryResult rows → array of column-keyed objects. */
+function ucRows(r: QueryResult): Record<string, unknown>[] {
+  return r.rows.map((row) => Object.fromEntries(r.columns.map((c, i) => [c, row[i]])));
+}
+
+export interface UcTagRow {
+  catalog_name?: string;
+  schema_name?: string;
+  table_name?: string;
+  column_name?: string;
+  tag_name: string;
+  tag_value: string;
+}
+
+/** Live object + column tags for a (catalog[, schema[, table]]) scope, read from
+ *  `information_schema.{table_tags,column_tags}`. */
+export async function readUcObjectTags(
+  warehouseId: string,
+  catalog: string,
+  opts?: { schema?: string; table?: string },
+): Promise<{ tableTags: UcTagRow[]; columnTags: UcTagRow[] }> {
+  const [t, c] = await Promise.all([
+    executeStatement(warehouseId, ucListTableTags(catalog, opts?.schema, opts?.table)),
+    executeStatement(warehouseId, ucListColumnTags(catalog, opts?.schema, opts?.table)),
+  ]);
+  return { tableTags: ucRows(t) as unknown as UcTagRow[], columnTags: ucRows(c) as unknown as UcTagRow[] };
+}
+
+/** Live schema / catalog / volume tags (less common — surfaced for completeness). */
+export async function readUcContainerTags(
+  warehouseId: string,
+  catalog: string,
+  opts?: { schema?: string; volume?: string },
+): Promise<{ catalogTags: UcTagRow[]; schemaTags: UcTagRow[]; volumeTags: UcTagRow[] }> {
+  const [cat, sch, vol] = await Promise.all([
+    executeStatement(warehouseId, ucListCatalogTags(catalog)).then(ucRows).catch(() => []),
+    executeStatement(warehouseId, ucListSchemaTags(catalog, opts?.schema)).then(ucRows).catch(() => []),
+    executeStatement(warehouseId, ucListVolumeTags(catalog, opts?.schema, opts?.volume)).then(ucRows).catch(() => []),
+  ]);
+  return {
+    catalogTags: cat as unknown as UcTagRow[],
+    schemaTags: sch as unknown as UcTagRow[],
+    volumeTags: vol as unknown as UcTagRow[],
+  };
+}
+
+export interface ApplyTagsRequest {
+  action: 'set' | 'unset';
+  /** Object kind for securable tags; ignored when `column` is set. */
+  kind?: UcTagKind;
+  catalog: string;
+  schema?: string;
+  /** Object name (table/view/volume/schema/catalog). For column tags this is the table. */
+  name: string;
+  /** When present the operation targets a column tag on `name` (the table). */
+  column?: string;
+  tags?: UcTagPair[];
+  keys?: string[];
+}
+
+/** Build + execute a SET/UNSET TAGS statement for an object or column. */
+export async function applyUcTags(
+  warehouseId: string,
+  p: ApplyTagsRequest,
+): Promise<{ sql: string; executionMs: number }> {
+  let sql: string;
+  if (p.column) {
+    if (!p.schema) throw new UnityCatalogError('schema is required for column tags', 400);
+    sql = p.action === 'set'
+      ? buildUcSetColumnTags({ catalog: p.catalog, schema: p.schema, tableName: p.name, columnName: p.column, tags: p.tags || [] })
+      : buildUcUnsetColumnTags({ catalog: p.catalog, schema: p.schema, tableName: p.name, columnName: p.column, keys: p.keys || [] });
+  } else {
+    const kind = (p.kind || 'TABLE') as UcTagKind;
+    sql = p.action === 'set'
+      ? buildUcSetObjectTags({ kind, catalog: p.catalog, schema: p.schema, name: p.name, tags: p.tags || [] })
+      : buildUcUnsetObjectTags({ kind, catalog: p.catalog, schema: p.schema, name: p.name, keys: p.keys || [] });
+  }
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, executionMs: r.executionMs };
+}
+
+// ---- Governed tags ----------------------------------------------------
+
+/** `SHOW GOVERNED TAGS [LIKE pattern]` → account-level governed-tag rows. */
+export async function listUcGovernedTags(warehouseId: string, pattern?: string): Promise<Record<string, unknown>[]> {
+  const r = await executeStatement(warehouseId, ucShowGovernedTags(pattern));
+  return ucRows(r);
+}
+
+export async function describeUcGovernedTag(warehouseId: string, key: string): Promise<Record<string, unknown>[]> {
+  const r = await executeStatement(warehouseId, ucDescribeGovernedTag(key));
+  return ucRows(r);
+}
+
+export type GovernedTagAction = 'create' | 'alter-description' | 'alter-values' | 'drop';
+
+export async function mutateUcGovernedTag(
+  warehouseId: string,
+  p: { action: GovernedTagAction } & GovernedTagSpec,
+): Promise<{ sql: string; executionMs: number }> {
+  let sql: string;
+  switch (p.action) {
+    case 'create':
+      sql = buildCreateGovernedTag({ key: p.key, description: p.description, values: p.values });
+      break;
+    case 'alter-description':
+      sql = buildAlterGovernedTagDescription({ key: p.key, description: p.description || '' });
+      break;
+    case 'alter-values':
+      sql = buildAlterGovernedTagValues({ key: p.key, values: p.values || [] });
+      break;
+    case 'drop':
+      sql = buildDropGovernedTag(p.key);
+      break;
+    default:
+      throw new UnityCatalogError(`unknown governed-tag action: ${p.action}`, 400);
+  }
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, executionMs: r.executionMs };
+}
+
+// ---- ABAC policies ----------------------------------------------------
+
+/** `SHOW [EFFECTIVE] POLICIES ON …` → the policies attached to (or inherited by)
+ *  a catalog / schema / table. */
+export async function listUcPolicies(
+  warehouseId: string,
+  p: { securableType: UcPolicySecurableType; securableName: string; effective?: boolean },
+): Promise<Record<string, unknown>[]> {
+  const r = await executeStatement(warehouseId, ucShowPolicies(p));
+  return ucRows(r);
+}
+
+export async function describeUcPolicy(
+  warehouseId: string,
+  p: { name: string; securableType: UcPolicySecurableType; securableName: string },
+): Promise<Record<string, unknown>[]> {
+  const r = await executeStatement(warehouseId, ucDescribePolicy(p));
+  return ucRows(r);
+}
+
+/** Build (preview) or build+execute a `CREATE [OR REPLACE] POLICY …`. */
+export async function createUcPolicy(
+  warehouseId: string,
+  params: UcPolicyParams,
+  preview = false,
+): Promise<{ sql: string; executionMs?: number }> {
+  const sql = buildCreatePolicy(params);
+  if (preview) return { sql };
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, executionMs: r.executionMs };
+}
+
+export async function dropUcPolicy(
+  warehouseId: string,
+  p: { name: string; securableType: UcPolicySecurableType; securableName: string },
+): Promise<{ sql: string; executionMs: number }> {
+  const sql = buildDropPolicy(p);
+  const r = await executeStatement(warehouseId, sql);
+  return { sql, executionMs: r.executionMs };
 }
