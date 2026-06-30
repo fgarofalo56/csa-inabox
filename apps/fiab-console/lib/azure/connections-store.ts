@@ -143,7 +143,108 @@ export async function createConnection(session: SessionPayload, input: CreateCon
   };
   const c = await connectionsContainer();
   const { resource } = await c.items.create(doc);
+
+  // Best-effort: surface the new connection in Microsoft Purview (Data Map scan
+  // source + a lightweight Atlas catalog entity). NON-BLOCKING — it never throws
+  // and is a silent no-op when LOOM_PURVIEW_ACCOUNT is unset, so it can never
+  // break connection create (no-vaporware.md: real registration or honest skip).
+  try { await registerConnectionInPurview((resource as LoomConnection) ?? doc); } catch { /* never break create */ }
+
   return toView((resource as LoomConnection) ?? doc);
+}
+
+/** Outcome of a best-effort Connection → Purview registration. */
+export interface ConnectionPurviewResult {
+  ok: boolean;
+  registered?: boolean;
+  scanned?: boolean;
+  sourceName?: string;
+  kind?: string;
+  /** Why nothing was registered (when registered === false). */
+  skipped?: 'not_configured' | 'unsupported';
+  reason?: string;
+  error?: string;
+  scanError?: string;
+}
+
+/** Purview source name for a connection (letters/digits/-/_; ≤ 63 chars). */
+function connectionSourceName(conn: { name: string; id: string }): string {
+  const slug = (conn.name || conn.id || 'connection')
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 52) || 'connection';
+  return `loom-conn-${slug}`;
+}
+
+/**
+ * Best-effort: register a Loom Connection as a Microsoft Purview CLASSIC Data
+ * Map scan source (real PUT /scan/datasources) and a lightweight Atlas catalog
+ * entity, so connections discovered/imported in Loom also show up in Purview.
+ *
+ * NEVER throws — every failure is folded into the returned result so callers
+ * (createConnection's hook AND the per-connection "Register in Purview / Scan
+ * now" action) can use it without try/catch. Silent no-op when
+ * LOOM_PURVIEW_ACCOUNT is unset; honest skip for connection types Purview's Data
+ * Map can't scan (Event Hubs / Service Bus / Key Vault). Purview-client and the
+ * source mapper are imported lazily so the Connections create path carries no
+ * static dependency on the Azure-identity credential chain.
+ */
+export async function registerConnectionInPurview(
+  conn: LoomConnection,
+  opts?: { defineScan?: boolean },
+): Promise<ConnectionPurviewResult> {
+  if (!process.env.LOOM_PURVIEW_ACCOUNT) {
+    return { ok: true, registered: false, skipped: 'not_configured' };
+  }
+  try {
+    const { purviewSourceForConnectable, isUnsupportedPurviewSource } = await import('./purview-source-map');
+    const mapped = purviewSourceForConnectable({
+      connType: conn.type,
+      host: conn.host,
+      database: conn.database,
+      subscriptionId: conn.subscriptionId,
+      resourceGroup: conn.resourceGroup,
+      location: conn.location,
+    });
+    if (isUnsupportedPurviewSource(mapped)) {
+      return { ok: true, registered: false, skipped: 'unsupported', reason: mapped.reason };
+    }
+
+    const { registerDataSource, registerAtlasEntity, upsertScan } = await import('./purview-client');
+    const sourceName = connectionSourceName(conn);
+    await registerDataSource({ name: sourceName, kind: mapped.kind, properties: mapped.properties });
+
+    // Lightweight Atlas catalog node for the connection (built-in DataSet
+    // supertype always exists → the upsert is valid for any source kind).
+    try {
+      await registerAtlasEntity({
+        typeName: 'DataSet',
+        qualifiedName: conn.armResourceId || `${mapped.endpoint || conn.host || sourceName}#loom-connection`,
+        displayName: conn.name,
+        comment: `Loom Connection (${conn.type}) registered as a Purview source.`,
+        owner: conn.createdBy,
+      });
+    } catch { /* catalog node is a bonus — scan source is the primary outcome */ }
+
+    let scanned = false;
+    let scanError: string | undefined;
+    if (opts?.defineScan) {
+      try {
+        await upsertScan({
+          sourceName, scanName: `${sourceName}-scan`, kind: mapped.kind,
+          scanRulesetName: mapped.scanRulesetName, scanRulesetType: 'System',
+        });
+        scanned = true;
+      } catch (e: any) {
+        scanError = e?.message || String(e);
+      }
+    }
+
+    return { ok: true, registered: true, scanned, sourceName, kind: mapped.kind, scanError };
+  } catch (e: any) {
+    return { ok: false, registered: false, error: e?.message || String(e) };
+  }
 }
 
 export async function deleteConnection(session: SessionPayload, id: string): Promise<void> {

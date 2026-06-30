@@ -24,11 +24,12 @@ import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Add24Regular, ArrowSync24Regular, Delete20Regular, Play20Regular, Dismiss24Regular } from '@fluentui/react-icons';
+import { Add24Regular, ArrowSync24Regular, Delete20Regular, Play20Regular, Dismiss24Regular, DatabaseSearch24Regular } from '@fluentui/react-icons';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
 import { Section, Toolbar } from '@/lib/components/ui/section';
+import { RegisterExistingSourceDialog } from '@/lib/components/governance/register-existing-source-dialog';
 
 interface Source { id: string; name: string; kind?: string; endpoint?: string; collectionId?: string; }
 interface Scan { id: string; name: string; kind?: string; }
@@ -69,6 +70,9 @@ export default function GovernanceScansPage() {
   const [name, setName] = useState('');
   const [kind, setKind] = useState('AdlsGen2');
   const [endpoint, setEndpoint] = useState('');
+
+  // "Add existing (browse subscriptions)" dialog — cross-sub ARG → register.
+  const [existingOpen, setExistingOpen] = useState(false);
 
   // scans drawer
   const [drawerSource, setDrawerSource] = useState<Source | null>(null);
@@ -172,6 +176,7 @@ export default function GovernanceScansPage() {
       <Toolbar actions={
         <>
           <Button icon={<ArrowSync24Regular />} onClick={() => { reloadStatus(); loadSources(); }} disabled={loading}>Refresh</Button>
+          <Button icon={<DatabaseSearch24Regular />} disabled={!live} onClick={() => setExistingOpen(true)}>Add existing (browse subscriptions)</Button>
           <Button appearance="primary" icon={<Add24Regular />} disabled={!live} onClick={() => setOpen(true)}>Register source</Button>
         </>
       } />
@@ -265,6 +270,13 @@ export default function GovernanceScansPage() {
           ))}
         </DrawerBody>
       </Drawer>
+
+      {/* Add existing — cross-subscription Resource Graph → Purview register */}
+      <RegisterExistingSourceDialog
+        open={existingOpen}
+        onClose={() => setExistingOpen(false)}
+        onRegistered={loadSources}
+      />
     </GovernanceShell>
   );
 }
