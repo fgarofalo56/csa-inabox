@@ -25,6 +25,7 @@ import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
   Tab, TabList, Field, Dropdown, Option, Checkbox, SearchBox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
+  Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -32,6 +33,7 @@ import {
   Add20Regular, Dismiss16Regular, Link20Regular, Code20Regular,
   Flash20Regular, Rocket20Regular, Play20Regular, Database20Regular,
   Copy16Regular, Checkmark16Regular, BrainCircuit20Regular,
+  History20Regular, Bug20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
@@ -81,6 +83,7 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
+  traceHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
   codeWrap: {
     display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0,
     borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -1102,21 +1105,51 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ───────────────────────── AIP Logic function (Spindle Studio) ─────────────────────────
-interface AipInputDef { id: string; name: string; type: 'string' | 'number' | 'boolean' }
+// AIP Logic typed-input system (Palantir parity): full type set, with object*
+// types bound to a Weave ontology entity type. Values are coerced client-side
+// before they hit the real Azure OpenAI invoke route.
+const AIP_INPUT_TYPES = [
+  'string', 'integer', 'long', 'double', 'float', 'boolean', 'date', 'timestamp',
+  'array', 'struct', 'object', 'object list', 'object set', 'model', 'media reference',
+] as const;
+const AIP_NUMERIC = new Set(['integer', 'long', 'double', 'float', 'number']);
+const AIP_OBJECT = new Set(['object', 'object list', 'object set']);
+const AIP_JSON = new Set(['array', 'struct']);
+function coerceAipValue(type: string, raw: string): unknown {
+  if (AIP_NUMERIC.has(type)) return raw.trim() === '' ? null : Number(raw);
+  if (type === 'boolean') return /^(true|1|yes|on)$/i.test(raw.trim());
+  if (AIP_JSON.has(type)) { try { return raw.trim() ? JSON.parse(raw) : (type === 'array' ? [] : {}); } catch { return raw; } }
+  return raw;
+}
+interface RunStepLite { kind?: string; type?: string; name?: string; callId?: string; content?: string; error?: string; result?: unknown; status?: string; elapsedMs?: number; prompt?: string; model?: string }
+function trimStep(st: RunStepLite): RunStepLite {
+  const { kind, type, name, callId, content, error, status, elapsedMs } = st;
+  return { kind, type, name, callId, content: typeof content === 'string' ? content.slice(0, 600) : content, error, status, elapsedMs };
+}
+interface AipInputDef { id: string; name: string; type: string; objectType?: string; description?: string; required?: boolean }
 interface AipStepDef { id: string; kind: 'llm-prompt' | 'extract' | 'branch'; name: string; prompt: string }
+interface AipUsageLite { promptTokens?: number; completionTokens?: number; totalTokens?: number; [k: string]: unknown }
+interface AipRunRecord {
+  id: string; ts: string; mode: 'logic' | 'agent'; model?: string;
+  inputs?: Record<string, unknown>; output?: string; sources?: string[];
+  steps?: RunStepLite[]; usage?: AipUsageLite; ok: boolean;
+}
 interface AipState {
   inputs?: AipInputDef[]; steps?: AipStepDef[]; outputType?: string; outputDescription?: string;
   boundOntologyId?: string; boundOntologyName?: string; ontologyEntityTypes?: string[];
   foundryAgentId?: string; foundryModel?: string; lastDeployedAt?: string;
+  runs?: AipRunRecord[];
   [k: string]: unknown;
 }
-interface RunStepLite { kind?: string; type?: string; name?: string; callId?: string; content?: string; error?: string; result?: unknown; status?: string }
 
 export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<AipState>('aip-logic', id, { inputs: [], steps: [], outputType: 'string' });
   const [inName, setInName] = useState('');
-  const [inType, setInType] = useState<'string' | 'number' | 'boolean'>('string');
+  const [inType, setInType] = useState<string>('string');
+  const [inObjType, setInObjType] = useState('');
+  const [inDesc, setInDesc] = useState('');
+  const [inReq, setInReq] = useState(false);
   const [stepKind, setStepKind] = useState<'llm-prompt' | 'extract' | 'branch'>('llm-prompt');
   const [stepName, setStepName] = useState('');
   const [stepPrompt, setStepPrompt] = useState('');
@@ -1138,6 +1171,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
   const inputs = Array.isArray(state.inputs) ? state.inputs : [];
   const steps = Array.isArray(state.steps) ? state.steps : [];
+  const runs = Array.isArray(state.runs) ? state.runs : [];
 
   // Mirror the hook's bound surface into persisted item state so Invoke / Deploy
   // can read boundOntologyId + ontologyEntityTypes from the saved doc.
@@ -1156,10 +1190,36 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
   const addInput = useCallback(() => {
     const nm = inName.trim(); if (!/^[A-Za-z_][\w]*$/.test(nm)) return;
-    setState((p) => ({ ...p, inputs: [...(Array.isArray(p.inputs) ? p.inputs : []), { id: `in_${Date.now()}`, name: nm, type: inType }] }));
-    setInName('');
-  }, [inName, inType, setState]);
+    const def: AipInputDef = { id: `in_${Date.now()}`, name: nm, type: inType };
+    if (AIP_OBJECT.has(inType) && inObjType) def.objectType = inObjType;
+    if (inDesc.trim()) def.description = inDesc.trim();
+    if (inReq) def.required = true;
+    setState((p) => ({ ...p, inputs: [...(Array.isArray(p.inputs) ? p.inputs : []), def] }));
+    setInName(''); setInDesc(''); setInReq(false);
+  }, [inName, inType, inObjType, inDesc, inReq, setState]);
   const removeInput = useCallback((iid: string) => setState((p) => ({ ...p, inputs: (Array.isArray(p.inputs) ? p.inputs : []).filter((x) => x.id !== iid) })), [setState]);
+
+  // Coerce the raw invoke-form strings into typed values per the input schema.
+  const buildTyped = useCallback(() => {
+    const typed: Record<string, unknown> = {};
+    for (const i of inputs) typed[i.name] = coerceAipValue(i.type, invokeVals[i.name] ?? '');
+    return typed;
+  }, [inputs, invokeVals]);
+
+  // Run history — persisted to Cosmos through the existing item PATCH (state.runs).
+  const persistRun = useCallback((rec: AipRunRecord) => {
+    const prev = Array.isArray(state.runs) ? state.runs : [];
+    const ns: AipState = { ...state, runs: [rec, ...prev].slice(0, 12) };
+    setState(() => ns);
+    void save(ns);
+  }, [state, setState, save]);
+  const loadRun = useCallback((rec: AipRunRecord) => {
+    setInvokeOut(rec.output ?? '');
+    setRunSteps(Array.isArray(rec.steps) ? rec.steps : []);
+    setSourcesUsed(Array.isArray(rec.sources) ? rec.sources : []);
+    setAgentMode(rec.mode === 'agent');
+    setInvokeMsg(null);
+  }, []);
 
   const addStep = useCallback(() => {
     const nm = stepName.trim() || stepKind;
@@ -1170,11 +1230,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
   const invoke = useCallback(async () => {
     setInvokeBusy(true); setInvokeMsg(null); setInvokeOut(null); setRunSteps([]); setSourcesUsed([]);
-    const typed: Record<string, unknown> = {};
-    for (const i of inputs) {
-      const raw = invokeVals[i.name] ?? '';
-      typed[i.name] = i.type === 'number' ? Number(raw) : i.type === 'boolean' ? /^(true|1|yes)$/i.test(raw) : raw;
-    }
+    const typed = buildTyped();
     try {
       const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/invoke`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1190,9 +1246,16 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
       setInvokeOut(String(j.output ?? ''));
       if (Array.isArray(j?.steps)) setRunSteps(j.steps);
       if (Array.isArray(j?.sourcesUsed)) setSourcesUsed(j.sourcesUsed);
+      persistRun({
+        id: `run_${Date.now()}`, ts: new Date().toISOString(), mode: agentMode ? 'agent' : 'logic',
+        model: j.model, inputs: typed, output: String(j.output ?? '').slice(0, 4000),
+        sources: Array.isArray(j.sourcesUsed) ? j.sourcesUsed : undefined,
+        steps: Array.isArray(j.steps) ? (j.steps as RunStepLite[]).slice(0, 30).map(trimStep) : undefined,
+        usage: (j.usage && typeof j.usage === 'object') ? j.usage : undefined, ok: true,
+      });
     } catch (e: any) { setInvokeMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setInvokeBusy(false); }
-  }, [id, inputs, invokeVals, agentMode]);
+  }, [id, buildTyped, agentMode, persistRun]);
 
   const deploy = useCallback(async () => {
     setDeployBusy(true); setDeployMsg(null);
@@ -1212,11 +1275,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
   const runDeployedAgent = useCallback(async () => {
     setInvokeBusy(true); setInvokeMsg(null); setInvokeOut(null); setRunSteps([]);
-    const typed: Record<string, unknown> = {};
-    for (const i of inputs) {
-      const raw = invokeVals[i.name] ?? '';
-      typed[i.name] = i.type === 'number' ? Number(raw) : i.type === 'boolean' ? /^(true|1|yes)$/i.test(raw) : raw;
-    }
+    const typed = buildTyped();
     try {
       const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/run-agent`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inputs: typed }),
@@ -1229,9 +1288,15 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
         return;
       }
       setInvokeOut(String(j.answer ?? ''));
+      persistRun({
+        id: `run_${Date.now()}`, ts: new Date().toISOString(), mode: 'agent',
+        model: j.model || state.foundryModel, inputs: typed, output: String(j.answer ?? '').slice(0, 4000),
+        steps: Array.isArray(j.steps) ? (j.steps as RunStepLite[]).slice(0, 30).map(trimStep) : undefined,
+        usage: (j.usage && typeof j.usage === 'object') ? j.usage : undefined, ok: true,
+      });
     } catch (e: any) { setInvokeMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setInvokeBusy(false); }
-  }, [id, inputs, invokeVals]);
+  }, [id, buildTyped, persistRun, state.foundryModel]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -1283,16 +1348,36 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
         <div className={s.grid2}>
           <div className={s.section}>
-            <SectionHead icon={<Add20Regular />} title="Typed inputs" hint="Named parameters with a type." />
+            <SectionHead icon={<Add20Regular />} title="Typed inputs" hint="Named parameters with an AIP Logic type — object types bind to the Weave ontology." />
             <div className={s.addBar}>
               <Field label="Name"><Input value={inName} onChange={(_, d) => setInName(d.value)} placeholder="customerId" /></Field>
-              <Field label="Type"><Dropdown value={inType} selectedOptions={[inType]} onOptionSelect={(_, d) => setInType((d.optionValue as 'string' | 'number' | 'boolean') || 'string')}>
-                <Option value="string">string</Option><Option value="number">number</Option><Option value="boolean">boolean</Option>
+              <Field label="Type" className={s.fieldMed}><Dropdown value={inType} selectedOptions={[inType]} onOptionSelect={(_, d) => { const v = String(d.optionValue || 'string'); setInType(v); if (!AIP_OBJECT.has(v)) setInObjType(''); }}>
+                {AIP_INPUT_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
               </Dropdown></Field>
-              <Button appearance="primary" icon={<Add20Regular />} disabled={!/^[A-Za-z_][\w]*$/.test(inName.trim())} onClick={addInput}>Add</Button>
+              {AIP_OBJECT.has(inType) && (
+                <Field label="Object type" className={s.fieldMed}>
+                  <Dropdown
+                    value={inObjType || (state.ontologyEntityTypes && state.ontologyEntityTypes.length ? 'Pick entity type' : 'Bind an ontology first')}
+                    selectedOptions={[inObjType]}
+                    disabled={!(state.ontologyEntityTypes && state.ontologyEntityTypes.length)}
+                    onOptionSelect={(_, d) => setInObjType(String(d.optionValue || ''))}>
+                    {(state.ontologyEntityTypes || []).map((t) => <Option key={t} value={t}>{t}</Option>)}
+                  </Dropdown>
+                </Field>
+              )}
+              <Field label="Description" className={s.fieldStep}><Input value={inDesc} onChange={(_, d) => setInDesc(d.value)} placeholder="The customer to assess" /></Field>
+              <Checkbox label="Required" checked={inReq} onChange={(_, d) => setInReq(!!d.checked)} />
+              <Button appearance="primary" icon={<Add20Regular />} disabled={!/^[A-Za-z_][\w]*$/.test(inName.trim()) || (AIP_OBJECT.has(inType) && !inObjType)} onClick={addInput}>Add</Button>
             </div>
             {inputs.length === 0 ? <div className={s.empty}><Caption1>No inputs yet.</Caption1></div> : inputs.map((i) => (
-              <div key={i.id} className={s.row}><Body1><strong>{i.name}</strong></Body1><Badge appearance="tint">{i.type}</Badge><span className={s.spacer} /><Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${i.name}`} onClick={() => removeInput(i.id)}>Remove</Button></div>
+              <div key={i.id} className={s.row}>
+                <Body1><strong>{i.name}</strong></Body1>
+                <Badge appearance="tint">{i.type}{i.objectType ? `: ${i.objectType}` : ''}</Badge>
+                {i.required && <Badge appearance="outline" color="danger">required</Badge>}
+                {i.description && <Caption1 className={s.hint}>{i.description}</Caption1>}
+                <span className={s.spacer} />
+                <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${i.name}`} onClick={() => removeInput(i.id)}>Remove</Button>
+              </div>
             ))}
           </div>
 
@@ -1328,7 +1413,12 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
             <Badge appearance="tint" color={agentMode ? 'brand' : 'informative'} icon={agentMode ? <BrainCircuit20Regular /> : <Flash20Regular />}>{agentMode ? 'Agent' : 'Logic'}</Badge>
           </div>
           {inputs.length === 0 ? <Caption1 className={s.hint}>Add typed inputs to provide values.</Caption1> : inputs.map((i) => (
-            <Field key={i.id} label={`${i.name} (${i.type})`}><Input value={invokeVals[i.name] || ''} onChange={(_, d) => setInvokeVals((p) => ({ ...p, [i.name]: d.value }))} /></Field>
+            <Field key={i.id} label={`${i.name} (${i.type}${i.objectType ? `: ${i.objectType}` : ''})${i.required ? ' *' : ''}`} hint={i.description || undefined}>
+              <Input
+                value={invokeVals[i.name] || ''}
+                onChange={(_, d) => setInvokeVals((p) => ({ ...p, [i.name]: d.value }))}
+                placeholder={AIP_JSON.has(i.type) ? (i.type === 'array' ? '["a","b"]' : '{"k":"v"}') : AIP_OBJECT.has(i.type) ? 'object id / primary key' : i.type === 'boolean' ? 'true / false' : ''} />
+            </Field>
           ))}
           <Button appearance="primary" icon={<Play20Regular />} disabled={invokeBusy || steps.length === 0} onClick={invoke}>{invokeBusy ? 'Running…' : agentMode ? 'Run agent' : 'Invoke function'}</Button>
           {invokeMsg && <MessageBar intent={invokeMsg.intent}><MessageBarBody>{invokeMsg.text}</MessageBarBody></MessageBar>}
@@ -1337,25 +1427,73 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
           {runSteps.length > 0 && (
             <>
               <Divider />
-              <Caption1 className={s.hint}>Run trace ({runSteps.length} step{runSteps.length === 1 ? '' : 's'})</Caption1>
-              <div className={s.trace} role="list" aria-label="Agent run trace">
+              <div className={s.sectionHead}>
+                <span className={s.sectionIcon}><Bug20Regular /></span>
+                <div>
+                  <Subtitle2>Debugger</Subtitle2>
+                  <Caption1 as="p" block className={s.hint}>{runSteps.length} step{runSteps.length === 1 ? '' : 's'} — expand a card to inspect the prompt, tool calls, output, and timing.</Caption1>
+                </div>
+              </div>
+              <Accordion multiple collapsible>
                 {runSteps.map((st, n) => {
                   const label = st.kind || st.type || st.name || 'step';
-                  const detail = st.kind === 'tool_call' ? st.name
-                    : st.kind === 'tool_result' ? `${st.name}${st.error ? ` — error: ${st.error}` : ''}`
-                    : st.kind === 'final' ? 'final answer'
-                    : st.kind === 'error' ? (st.error || 'error')
-                    : st.content || st.name || JSON.stringify(st.result ?? '').slice(0, 120);
+                  const isErr = st.kind === 'error' || !!st.error;
+                  const isFinal = st.kind === 'final';
+                  const head = st.kind === 'tool_call' ? `tool · ${st.name || ''}`
+                    : st.kind === 'tool_result' ? `result · ${st.name || ''}`
+                    : label;
+                  const detail = st.error || st.prompt || st.content
+                    || (st.result !== undefined ? JSON.stringify(st.result, null, 2) : '')
+                    || st.name || '';
+                  const key = st.callId || `${label}-${n}`;
                   return (
-                    <div key={st.callId || `${label}-${n}`} className={s.row} role="listitem">
-                      <Badge appearance="filled" color={st.kind === 'error' || st.error ? 'danger' : st.kind === 'final' ? 'success' : 'brand'}>{n + 1}</Badge>
-                      <Badge appearance="tint">{label}</Badge>
-                      <Caption1 className={s.hint}>{String(detail || '').slice(0, 160)}</Caption1>
-                    </div>
+                    <AccordionItem key={key} value={key}>
+                      <AccordionHeader>
+                        <div className={s.traceHead}>
+                          <Badge appearance="filled" color={isErr ? 'danger' : isFinal ? 'success' : 'brand'}>{n + 1}</Badge>
+                          <Badge appearance="tint" color={isErr ? 'danger' : isFinal ? 'success' : 'informative'}>{head}</Badge>
+                          {typeof st.elapsedMs === 'number' && <Caption1 className={s.hint}>{st.elapsedMs} ms</Caption1>}
+                          {st.status && <Badge appearance="outline">{st.status}</Badge>}
+                        </div>
+                      </AccordionHeader>
+                      <AccordionPanel>
+                        {detail ? <CodeBlock ariaLabel={`Step ${n + 1} detail`} content={String(detail).slice(0, 4000)} /> : <Caption1 className={s.hint}>No additional detail for this step.</Caption1>}
+                      </AccordionPanel>
+                    </AccordionItem>
                   );
                 })}
-              </div>
+              </Accordion>
             </>
+          )}
+        </div>
+
+        <div className={s.section}>
+          <SectionHead icon={<History20Regular />} title="Run history" hint="Recent invocations persisted to Cosmos with this function — open a run to rehydrate its output and debugger trace." />
+          {runs.length === 0 ? <div className={s.empty}><Caption1>No runs yet — Invoke the function to record a run.</Caption1></div> : (
+            <div className={s.tableWrap}>
+              <Table aria-label="Run history" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>When</TableHeaderCell>
+                  <TableHeaderCell>Mode</TableHeaderCell>
+                  <TableHeaderCell>Model</TableHeaderCell>
+                  <TableHeaderCell>Tokens</TableHeaderCell>
+                  <TableHeaderCell>Output</TableHeaderCell>
+                  <TableHeaderCell aria-label="actions" />
+                </TableRow></TableHeader>
+                <TableBody>
+                  {runs.map((rec) => (
+                    <TableRow key={rec.id}>
+                      <TableCell><Caption1>{new Date(rec.ts).toLocaleString()}</Caption1></TableCell>
+                      <TableCell><Badge appearance="tint" color={rec.mode === 'agent' ? 'brand' : 'informative'}>{rec.mode}</Badge></TableCell>
+                      <TableCell><Caption1 className={s.hint}>{rec.model || '—'}</Caption1></TableCell>
+                      <TableCell><Caption1 className={s.hint}>{rec.usage?.totalTokens ?? '—'}</Caption1></TableCell>
+                      <TableCell><Caption1 className={s.hint}>{String(rec.output || '').slice(0, 60) || '—'}</Caption1></TableCell>
+                      <TableCell><Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => loadRun(rec)}>Open</Button></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </div>
 

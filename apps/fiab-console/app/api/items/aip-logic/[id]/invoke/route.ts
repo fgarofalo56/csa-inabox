@@ -36,7 +36,7 @@ function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
 }
 
-interface AipInput { name: string; type: string; description?: string }
+interface AipInput { name: string; type: string; objectType?: string; description?: string; required?: boolean }
 interface AipStep { kind: string; name?: string; prompt?: string }
 
 /** Compose the function definition into a strict system prompt. */
@@ -49,7 +49,7 @@ function composePrompt(state: Record<string, unknown>): string {
   lines.push('You are a deterministic typed function (Palantir AIP-Logic equivalent). Execute the ordered steps below and return ONLY the typed output.');
   lines.push('');
   lines.push('Typed inputs:');
-  for (const i of inputs) lines.push(`- ${i.name} (${i.type})${i.description ? `: ${i.description}` : ''}`);
+  for (const i of inputs) lines.push(`- ${i.name} (${i.type}${i.objectType ? ` of ${i.objectType}` : ''})${i.required ? ' [required]' : ''}${i.description ? `: ${i.description}` : ''}`);
   lines.push('');
   lines.push('Ordered steps:');
   steps.forEach((st, n) => lines.push(`${n + 1}. [${st.kind}] ${st.name || ''}${st.prompt ? ` — ${st.prompt}` : ''}`));
