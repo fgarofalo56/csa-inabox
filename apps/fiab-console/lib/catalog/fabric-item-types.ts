@@ -189,7 +189,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
     } },
   // Data Engineering
   { slug: 'lakehouse', displayName: 'Lakehouse', restType: 'Lakehouse', category: 'Data Engineering',
-    description: 'A unified store for files, folders, and Delta tables in OneLake.',
+    description: 'A unified store for files, folders, and Delta tables in ADLS Gen2 (Delta) — Azure-native, no Fabric required.',
     learnContent: {
       "overview": "A Lakehouse is the unified store for files and Delta tables in OneLake. In Loom it rides on ADLS Gen2 for storage with the Fabric/Synapse SQL analytics endpoint and Spark for query. Use it as the bronze/silver/gold landing zone for any analytics workload.",
       "steps": [
@@ -454,9 +454,9 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/fabric/data-factory/what-is-copy-job"
     } },
   { slug: 'mirrored-database', displayName: 'Mirrored database', restType: 'MirroredDatabase', category: 'Data Factory',
-    description: 'Near-real-time replica of Snowflake / SQL DB / Postgres / Cosmos / MSSQL into OneLake.',
+    description: 'Near-real-time replica of Snowflake / SQL DB / Postgres / Cosmos / MSSQL into ADLS Bronze (Delta) — Azure-native CDC, no Fabric required.',
     learnContent: {
-      "overview": "A Mirrored database is a near-real-time replica of an external source (Azure SQL, Snowflake, Cosmos, Databricks, Postgres) into OneLake. Queries hit the mirror, never the source. Use it to join external data with lakehouses without re-ingesting.",
+      "overview": "A Mirrored database is a near-real-time replica of an external source (Azure SQL, Snowflake, Cosmos, Databricks, Postgres) into ADLS Bronze as Delta — Azure-native CDC (ADF / Synapse Link), no Fabric or OneLake required. Queries hit the mirror, never the source. Use it to join external data with lakehouses without re-ingesting.",
       "steps": [
         {
           "title": "Pick a source connector",
@@ -478,7 +478,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/fabric/database/mirrored-database/overview"
     } },
   { slug: 'mirrored-databricks', displayName: 'Mirrored Databricks catalog', restType: 'MirroredAzureDatabricksCatalog', category: 'Data Factory',
-    description: 'Mount a Databricks Unity Catalog as a read-only mirror in OneLake.',
+    description: 'Mount a Databricks Unity Catalog as a read-only mirror to ADLS Gen2 Delta — Azure-native, no Fabric required.',
     learnContent: {
       "overview": "A Mirrored Databricks catalog mounts a Databricks Unity Catalog as a read-only mirror in OneLake. In Loom you query the Delta tables from Fabric without re-ingesting. Use it to bring governed Databricks data into Fabric analytics.",
       "steps": [
@@ -751,7 +751,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/azure-monitor/logs/logs-data-export"
     } },
   { slug: 'kql-database', displayName: 'KQL database', restType: 'KQLDatabase', category: 'Real-Time Intelligence',
-    description: 'Kusto database for high-volume, low-latency analytics with OneLake availability.',
+    description: 'Kusto database (Azure Data Explorer) for high-volume, low-latency analytics with ADLS Delta export — Azure-native, no Fabric required.',
     learnContent: {
       "overview": "A KQL database is a Kusto store for high-volume, low-latency analytics over time-series, telemetry, and logs, with OneLake availability. In Loom it runs on the shared Loom ADX cluster and is queried with KQL.",
       "steps": [
@@ -1355,7 +1355,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/fabric/data-engineering/api-graphql-overview"
     } },
   { slug: 'user-data-function', displayName: 'User data function', restType: 'UserDataFunction', category: 'APIs and functions',
-    description: 'Python functions with bindings to Fabric items and external connections.',
+    description: 'Python functions (Azure Functions) with bindings to Azure data sources and external connections.',
     learnContent: {
       "overview": "A User data function is Python (or C#) server-side compute with bindings to Fabric items and external connections, callable from notebooks, pipelines, and Power BI. In Loom it runs serverless with per-call billing.",
       "steps": [
