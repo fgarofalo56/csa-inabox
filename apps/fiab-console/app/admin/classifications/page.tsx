@@ -4,7 +4,7 @@ import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Spinner, Badge, Caption1, Subtitle2, Input, Textarea, Button,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Dropdown, Option,
   makeStyles, tokens,
@@ -85,16 +85,25 @@ export default function ClassificationsPage() {
   const [syncing, setSyncing] = useState(false);
   const [scanOpen, setScanOpen] = useState(false);
 
-  // Built-in (Purview system) classifications — read-only catalog + dropdown source.
+  // Built-in (Purview system) classifications — read-only STATIC catalog +
+  // dropdown source. Served from a no-network reference list, so this load
+  // never times out and is the RELIABLE provisioned signal for the page.
   const [systemGroups, setSystemGroups] = useState<SystemGroup[] | null>(null);
   const [systemErr, setSystemErr] = useState<string | null>(null);
   const [systemLoading, setSystemLoading] = useState(false);
+  const [systemConfigured, setSystemConfigured] = useState<boolean | null>(null);
+  const [systemAccount, setSystemAccount] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const r = await clientFetch('/api/admin/classifications');
+      // The custom-rules load reads Cosmos (and can be cold) — give the
+      // browser→BFF hop a generous ceiling (25s) so a slow-but-healthy backend
+      // doesn't surface as a 6s "timed out". A timeout here is now an honest,
+      // retryable "could not load rules" — it NO LONGER implies "not
+      // provisioned" because the provisioned signal comes from loadSystem().
+      const r = await clientFetch('/api/admin/classifications', undefined, 25000);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setRules(j.rules || []);
@@ -111,6 +120,11 @@ export default function ClassificationsPage() {
       const j = await r.json();
       if (!j.ok) { setSystemErr(j.error || `HTTP ${r.status}`); setSystemGroups([]); return; }
       setSystemGroups(j.groups || []);
+      // Reliable, no-network provisioned signal (env-var presence) used by the
+      // top banner so a slow custom-rules load can't show a false "not
+      // provisioned" warning when LOOM_PURVIEW_ACCOUNT IS set.
+      setSystemConfigured(!!j.configured);
+      setSystemAccount(j.account || null);
     } catch (e: any) { setSystemErr(e?.message || String(e)); setSystemGroups([]); }
     finally { setSystemLoading(false); }
   }, []);
@@ -195,7 +209,16 @@ export default function ClassificationsPage() {
     { key: 'actions', label: '', width: 110, sortable: false, filterable: false, render: (r) => <Button size='small' appearance='subtle' icon={<Delete20Regular />} onClick={(e) => { e.stopPropagation(); remove(r.id); }} aria-label={`Delete rule ${r.name}`}>Delete</Button> },
   ], [a]);
 
-  const purviewConfigured = purview?.configured ?? false;
+  // Provisioned signal — prefer the custom-rules GET's purview state, but fall
+  // back to the STATIC system route's `configured` (a pure env-var check that
+  // never times out). This is what fixes the false "Purview not provisioned"
+  // banner: a slow/timed-out custom-rules load leaves `purview` null, but
+  // `systemConfigured` still reflects LOOM_PURVIEW_ACCOUNT correctly.
+  const purviewConfigured = (purview?.configured ?? systemConfigured) ?? false;
+  const purviewAccount = purview?.account ?? systemAccount;
+  // Only render the provisioned banner once we have a definitive signal, so the
+  // alarming "not provisioned" warning never flashes during initial load.
+  const purviewKnown = purview !== null || systemConfigured !== null;
 
   return (
     <AdminShell sectionTitle='Classifications'>
@@ -211,7 +234,7 @@ export default function ClassificationsPage() {
       </Section>
 
       {/* Live Purview sync state — replaces the old static "applied on next scan" banner. */}
-      {!purviewConfigured ? (
+      {purviewKnown && (!purviewConfigured ? (
         <MessageBar intent='warning' className={s.banner}>
           <MessageBarBody className={s.bannerBody}>
             <MessageBarTitle>Microsoft Purview not provisioned</MessageBarTitle>
@@ -222,7 +245,7 @@ export default function ClassificationsPage() {
         <MessageBar intent='error' className={s.banner}>
           <MessageBarBody className={s.bannerBody}>
             <MessageBarTitle>Purview sync failed</MessageBarTitle>
-            {sync.error} — verify the Console UAMI holds <strong>Data Source Administrator</strong> on <code>{purview?.account}</code> (root collection). Rules are still saved in the Loom catalog.
+            {sync.error} — verify the Console UAMI holds <strong>Data Source Administrator</strong> on <code>{purviewAccount}</code> (root collection). Rules are still saved in the Loom catalog.
           </MessageBarBody>
         </MessageBar>
       ) : sync?.synced ? (
@@ -236,12 +259,12 @@ export default function ClassificationsPage() {
         <MessageBar intent='info' className={s.banner}>
           <MessageBarBody className={s.bannerBody}>
             <MessageBarTitle>Connected to Microsoft Purview</MessageBarTitle>
-            Account <code>{purview?.account}</code>. Adding or deleting a rule syncs it to Purview automatically; use <strong>Sync to Purview</strong> to re-push the full taxonomy, then <strong>Run scan now</strong>.
+            Account <code>{purviewAccount}</code>. Adding or deleting a rule syncs it to Purview automatically; use <strong>Sync to Purview</strong> to re-push the full taxonomy, then <strong>Run scan now</strong>.
           </MessageBarBody>
         </MessageBar>
-      )}
+      ))}
 
-      {error && <MessageBar intent='error' className={s.banner}><MessageBarBody className={s.bannerBody}><MessageBarTitle>Could not load rules</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent='error' className={s.banner}><MessageBarBody className={s.bannerBody}><MessageBarTitle>Could not load rules</MessageBarTitle>{error} The built-in classification catalog below is unaffected.</MessageBarBody><MessageBarActions><Button size='small' icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Retry</Button></MessageBarActions></MessageBar>}
       {actionErr && <MessageBar intent='error' className={s.banner}><MessageBarBody className={s.bannerBody}>{actionErr}</MessageBarBody></MessageBar>}
 
       <Section
@@ -261,24 +284,17 @@ export default function ClassificationsPage() {
 
       <Section
         title='Built-in classifications'
-        actions={<Button icon={<ArrowSync24Regular />} onClick={loadSystem} disabled={systemLoading || !purviewConfigured}>Refresh</Button>}
+        actions={<Button icon={<ArrowSync24Regular />} onClick={loadSystem} disabled={systemLoading}>Refresh</Button>}
       >
         <SectionExplainer>
-          Microsoft Purview ships ~200 built-in <strong>system classifications</strong> (sensitive-information types) — government IDs, financial, personal (PII), security and health. They are applied automatically when a scan runs, and are also selectable as the target when you author a custom rule above. This catalog is read-only.
+          Microsoft Purview ships 200+ built-in <strong>system classifications</strong> (sensitive-information types) — government IDs, financial, personal (PII), security credentials and health. This is a curated, read-only reference catalog of the real Microsoft classification names; the types are applied automatically when a Purview scan runs, and are also selectable as the target when you author a custom rule above.
         </SectionExplainer>
-        {!purviewConfigured ? (
-          <MessageBar intent='warning'>
-            <MessageBarBody className={s.bannerBody}>
-              <MessageBarTitle>Microsoft Purview not provisioned</MessageBarTitle>
-              Built-in system classifications are read live from Microsoft Purview. Set <code>LOOM_PURVIEW_ACCOUNT</code> and grant the Console UAMI <strong>Data Source Administrator</strong> to view them.
-            </MessageBarBody>
-          </MessageBar>
-        ) : systemErr ? (
+        {systemErr ? (
           <MessageBar intent='error'><MessageBarBody className={s.bannerBody}><MessageBarTitle>Could not load built-in classifications</MessageBarTitle>{systemErr}</MessageBarBody></MessageBar>
         ) : (systemGroups === null || systemLoading) ? (
           <Spinner label='Loading built-in classifications…' />
         ) : systemGroups.length === 0 ? (
-          <Caption1>No built-in classifications were returned by this Microsoft Purview account.</Caption1>
+          <Caption1>No built-in classifications available.</Caption1>
         ) : (
           <div className={s.groupList}>
             {systemGroups.map((g) => (
@@ -323,7 +339,7 @@ export default function ClassificationsPage() {
         </DialogSurface>
       </Dialog>
 
-      <RunScanDialog open={scanOpen} onClose={() => setScanOpen(false)} account={purview?.account || null} />
+      <RunScanDialog open={scanOpen} onClose={() => setScanOpen(false)} account={purviewAccount || null} />
     </AdminShell>
   );
 }
