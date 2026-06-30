@@ -65,6 +65,7 @@ import {
   featurePropertyKeys, type AzureMapsView, type AzureMapsControls,
 } from '@/lib/components/graph/azure-maps-canvas';
 import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
+import { GraphSourceBinding, type SourceBindable } from '@/lib/components/graph/graph-source-binding';
 // Ontology typed-model (Foundry object/link/action types) — pure logic + types
 // shared with the BFF routes. The typed-modeling surface in OntologyEditor drives
 // this model; deriveSourceFromObjectTypes() keeps state.source in sync so the AGE
@@ -2568,7 +2569,17 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
 }
 
 // ----- Graph Model (Cosmos config + real ADX materialize) -----
-interface GraphDecl { name: string; properties: { name: string; type: string }[] }
+interface GraphProp { name: string; type: string; sourceColumn?: string }
+interface GraphDecl {
+  name: string;
+  properties: GraphProp[];
+  // P0 source-table binding — what /materialize uses to `.set-or-append` rows.
+  sourceDatabase?: string;
+  sourceTable?: string;
+  keyColumns?: string[];        // node identity (compound keys allowed)
+  originKeyColumns?: string[];  // edge src → origin node key
+  targetKeyColumns?: string[];  // edge dst → target node key
+}
 interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string; lastMaterializedAt?: string; [k: string]: unknown }
 
 // Derive a force-directed graph from the graph-model schema: one node per
@@ -2602,6 +2613,54 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
   });
   const [materializing, setMaterializing] = useState(false);
   const [matResult, setMatResult] = useState<any>(null);
+
+  // Query surface — run GQL/openCypher (translated to ADX `make-graph` +
+  // `graph-match`) or raw KQL over the materialized Node_*/Edge_* tables.
+  const [gql, setGql] = useState('MATCH (a)-[e]->(b)\nRETURN a.id, b.id');
+  const [qRunning, setQRunning] = useState(false);
+  const [qResult, setQResult] = useState<any>(null);
+  const [qView, setQView] = useState<'table' | 'card' | 'diagram'>('table');
+
+  const safeT = (prefix: string, n: string) => `${prefix}${String(n).replace(/[^A-Za-z0-9_]/g, '_')}`;
+
+  // Patch a single node/edge type in place (used by the per-type source binding).
+  const patchType = useCallback((kind: 'node' | 'edge', index: number, patch: Partial<GraphDecl>) => {
+    setState((p) => {
+      const key = kind === 'node' ? 'nodes' : 'edges';
+      const list = arr<GraphDecl>(p[key]).map((t, i) => (i === index ? { ...t, ...patch } : t));
+      return { ...p, [key]: list };
+    });
+  }, [setState]);
+
+  const runQuery = useCallback(async () => {
+    setQRunning(true); setQResult(null);
+    try {
+      const r = await fetch(`/api/items/graph-model/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          database: state.database, gql,
+          nodeTables: arr<GraphDecl>(state.nodes).map((n) => safeT('Node_', n.name)),
+          edgeTables: arr<GraphDecl>(state.edges).map((e) => safeT('Edge_', e.name)),
+        }),
+      });
+      setQResult(await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` })));
+    } catch (e: any) { setQResult({ ok: false, error: e?.message || String(e) }); }
+    finally { setQRunning(false); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, state.database, state.nodes, state.edges, gql]);
+
+  // Diagram view — when a graph-match projection returns ≥2 columns, draw the
+  // first two as source → target vertices (a real, honest edge picture).
+  const qDiagram = useMemo(() => {
+    if (!qResult?.ok || !Array.isArray(qResult.rows) || (qResult.columns || []).length < 2) return null;
+    const ids = new Set<string>();
+    const edges = qResult.rows.slice(0, 200).map((row: any[]) => {
+      const sN = String(row[0]); const tN = String(row[1]);
+      ids.add(sN); ids.add(tN);
+      return { source: sN, target: tN, label: (qResult.columns || []).length > 2 ? String(row[2]) : undefined };
+    });
+    return { nodes: Array.from(ids).map((nid) => ({ id: nid, label: nid })), edges };
+  }, [qResult]);
 
   // Add entity / Add relationship dialogs — append a typed declaration to
   // state.nodes[] / state.edges[]. The edit flows the dirty flag so SaveBar
@@ -2692,7 +2751,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
       ]},
       { label: 'Bind', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || dirty === false },
-        { label: materializing ? 'Materializing…' : 'Materialize', onClick: materialize, disabled: materializing || saving },
+        { label: materializing ? 'Building…' : 'Build graph', onClick: materialize, disabled: materializing || saving },
       ]},
     ]},
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2705,15 +2764,29 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         <Caption1>Target ADX database</Caption1>
         <Input value={state.database} onChange={(_, d) => setState((p) => ({ ...p, database: d.value }))} />
         <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM }}>
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
             <div className={s.secHead}><BranchFork20Regular className={s.secHeadIcon} /><Subtitle2>Node types</Subtitle2></div>
             <GraphTypeEditor kind="node" types={arr(state.nodes)}
               onChange={(next) => setState((p) => ({ ...p, nodes: next }))} />
+            {arr<GraphDecl>(state.nodes).map((n, i) => (
+              <Card key={`ns-${i}`} style={{ padding: tokens.spacingVerticalS }}>
+                <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>{n.name || `(node ${i + 1})`}</Caption1>
+                <GraphSourceBinding itemId={id} kind="node" type={n as SourceBindable}
+                  onChange={(patch) => patchType('node', i, patch as Partial<GraphDecl>)} />
+              </Card>
+            ))}
           </div>
-          <div style={{ minWidth: 0 }}>
+          <div style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
             <div className={s.secHead}><Link20Regular className={s.secHeadIcon} /><Subtitle2>Edge types</Subtitle2></div>
             <GraphTypeEditor kind="edge" types={arr(state.edges)}
               onChange={(next) => setState((p) => ({ ...p, edges: next }))} />
+            {arr<GraphDecl>(state.edges).map((e, i) => (
+              <Card key={`es-${i}`} style={{ padding: tokens.spacingVerticalS }}>
+                <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>{e.name || `(edge ${i + 1})`}</Caption1>
+                <GraphSourceBinding itemId={id} kind="edge" type={e as SourceBindable}
+                  onChange={(patch) => patchType('edge', i, patch as Partial<GraphDecl>)} />
+              </Card>
+            ))}
           </div>
         </div>
         <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><ChartMultiple20Regular className={s.secHeadIcon} /><Subtitle2>Schema graph</Subtitle2></div>
@@ -2722,28 +2795,116 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         </Caption1>
         <GraphModelSchemaViz nodes={arr(state.nodes)} edges={arr(state.edges)} />
         {state.lastMaterializedAt && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Last materialized {new Date(state.lastMaterializedAt).toLocaleString()}</Caption1>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Last built {new Date(state.lastMaterializedAt).toLocaleString()}</Caption1>
         )}
-        {matResult && (
+        {matResult && matResult.gate && (
+          <MessageBar intent="warning">
+            <MessageBarBody><MessageBarTitle>Build graph unavailable</MessageBarTitle>{matResult.gate.remediation}</MessageBarBody>
+          </MessageBar>
+        )}
+        {matResult && !matResult.gate && (
           <MessageBar intent={matResult.ok ? 'success' : 'error'}>
             <MessageBarBody>
-              <MessageBarTitle>{matResult.ok ? `Materialized to ${matResult.database}` : 'Materialize failed'}</MessageBarTitle>
-              {matResult.created && (
-                <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
-                  {matResult.created.map((c: any, i: number) => (
-                    <li key={i} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere' }}>
-                      {c.ok ? '[ok]' : '[err]'} {c.kind}:{c.name}{c.error ? ` — ${c.error}` : ''}
+              <MessageBarTitle>
+                {matResult.ok
+                  ? (Array.isArray(matResult.loaded) && matResult.loaded.some((l: any) => l.ok) ? 'Data load completed' : `Graph built in ${matResult.database}`)
+                  : 'Build graph failed'}
+              </MessageBarTitle>
+              {Array.isArray(matResult.created) && matResult.created.length > 0 && (
+                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0 ${tokens.spacingHorizontalL}`, padding: 0 }}>
+                  {matResult.created.map((c: any, i: number) => {
+                    const tbl = `${c.kind === 'node' ? 'Node_' : 'Edge_'}${c.name}`;
+                    const rows = matResult.counts && (tbl in matResult.counts) ? matResult.counts[tbl] : undefined;
+                    return (
+                      <li key={i} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere' }}>
+                        {c.ok ? '[ok]' : '[err]'} {tbl}{rows !== undefined ? ` — ${rows} rows` : ''}{c.error ? ` — ${c.error}` : ''}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              {Array.isArray(matResult.loaded) && matResult.loaded.some((l: any) => !l.ok) && (
+                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0 ${tokens.spacingHorizontalL}`, padding: 0 }}>
+                  {matResult.loaded.filter((l: any) => !l.ok).map((l: any, i: number) => (
+                    <li key={i} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', color: tokens.colorPaletteRedForeground1 }}>
+                      load {l.table} failed — {l.error}
                     </li>
                   ))}
                 </ul>
+              )}
+              {matResult.graph && (
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>
+                  Verified with <code>make-graph</code>: {matResult.graph.relationships} relationship(s) traversable.
+                </Caption1>
               )}
               {matResult.error && <span>{matResult.error}</span>}
             </MessageBarBody>
           </MessageBar>
         )}
+
+        {/* ── Query (make-graph / graph-match) ── */}
+        <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalM }}><Play20Regular className={s.secHeadIcon} /><Subtitle2>Query graph</Subtitle2></div>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Write <strong>GQL / openCypher</strong> — translated to ADX <code>make-graph</code> + <code>graph-match</code> over the built tables and run live. Build the graph first so the tables have data.
+        </Caption1>
+        <MonacoTextarea value={gql} onChange={setGql} language="graphql" height={120} minHeight={90} ariaLabel="Graph query (GQL / openCypher)" />
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
+          <Button appearance="primary" icon={<Play20Regular />} onClick={runQuery} disabled={qRunning || !gql.trim()}>{qRunning ? 'Running…' : 'Run query'}</Button>
+          {qRunning && <Spinner size="extra-tiny" />}
+        </div>
+        {qResult && qResult.kql && (
+          <Caption1 style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{qResult.kql}</Caption1>
+        )}
+        {qResult && !qResult.ok && (
+          <MessageBar intent={qResult.gate ? 'warning' : 'error'}>
+            <MessageBarBody><MessageBarTitle>{qResult.gate ? 'Query unavailable' : 'Query failed'}</MessageBarTitle>{qResult.gate ? qResult.gate.remediation : qResult.error}</MessageBarBody>
+          </MessageBar>
+        )}
+        {qResult && qResult.ok && (
+          <>
+            <TabList selectedValue={qView} onTabSelect={(_, d) => setQView(d.value as 'table' | 'card' | 'diagram')} size="small">
+              <Tab value="table" icon={<Table20Regular />}>Table</Tab>
+              <Tab value="card" icon={<DataUsage20Regular />}>Card</Tab>
+              <Tab value="diagram" icon={<ChartMultiple20Regular />}>Diagram</Tab>
+            </TabList>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{qResult.rowCount} row(s){qResult.truncated ? ' (truncated)' : ''} in {qResult.executionMs} ms</Caption1>
+            {(qResult.rows || []).length === 0 && <EmptyState title="No matches" body="The graph-match returned no rows. Build the graph (load data) or adjust the pattern." />}
+            {qView === 'table' && (qResult.rows || []).length > 0 && (
+              <div style={{ overflowX: 'auto' }}>
+                <Table size="small">
+                  <TableHeader><TableRow>{(qResult.columns || []).map((c: string) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+                  <TableBody>
+                    {(qResult.rows || []).map((row: any[], ri: number) => (
+                      <TableRow key={ri}>{row.map((cell, ci) => <TableCell key={ci}>{typeof cell === 'object' && cell !== null ? JSON.stringify(cell) : String(cell ?? '')}</TableCell>)}</TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+            {qView === 'card' && (qResult.rows || []).length > 0 && (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingHorizontalS }}>
+                {(qResult.rows || []).slice(0, 60).map((row: any[], ri: number) => (
+                  <Card key={ri} style={{ padding: tokens.spacingVerticalS }}>
+                    {(qResult.columns || []).map((c: string, ci: number) => (
+                      <div key={ci} style={{ display: 'flex', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, minWidth: 0 }}>
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{c}</Caption1>
+                        <Caption1 style={{ overflowWrap: 'anywhere' }}>{typeof row[ci] === 'object' && row[ci] !== null ? JSON.stringify(row[ci]) : String(row[ci] ?? '')}</Caption1>
+                      </div>
+                    ))}
+                  </Card>
+                ))}
+              </div>
+            )}
+            {qView === 'diagram' && (qResult.rows || []).length > 0 && (
+              qDiagram ? <ForceDirectedGraph nodes={qDiagram.nodes} edges={qDiagram.edges} height={320} />
+                : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Diagram needs a projection of at least two columns (source, target) — e.g. <code>RETURN a.id, b.id</code>.</Caption1>
+            )}
+          </>
+        )}
+
         <SaveBar
           saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()}
-          extraRight={<Button onClick={materialize} disabled={materializing || saving}>{materializing ? 'Materializing…' : 'Materialize to ADX'}</Button>}
+          extraRight={<Button appearance="primary" onClick={materialize} disabled={materializing || saving}>{materializing ? 'Building…' : 'Build graph'}</Button>}
         />
 
         <Dialog open={nodeDlgOpen} onOpenChange={(_, d) => setNodeDlgOpen(d.open)}>
