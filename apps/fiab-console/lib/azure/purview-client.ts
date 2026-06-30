@@ -1640,10 +1640,9 @@ export async function scanUsesSelfHostedIr(sourceName: string, scanName: string)
 // key is a node-registration secret — it is NEVER logged or persisted by Loom;
 // callers pass it straight to the VMSS custom-script extension.
 //
-// NOTE (deferred — follow-up wave, do NOT assume built): a Purview *managed
-// VNet* IR + managed private endpoints (scanningdataplane managed-virtual-
-// networks / managed-private-endpoints) is the no-SHIR path for PE-locked
-// sources and is not wired here yet.
+// NOTE: the Purview *managed VNet* IR + managed private endpoints (the no-SHIR
+// path for PE-locked sources) is wired below — see
+// {@link upsertPurviewManagedVnetIr} / {@link upsertPurviewManagedPrivateEndpoint}.
 // ------------------------------------------------------------
 
 export interface PurviewIntegrationRuntime {
@@ -1706,6 +1705,192 @@ export async function listPurviewIrAuthKeys(name: string): Promise<PurviewIrAuth
   );
   const raw = await readJson<any>(res);
   return { authKey1: raw?.authKey1, authKey2: raw?.authKey2 };
+}
+
+/** GET /scan/integrationruntimes — every IR registered on this account (any kind). */
+export async function listPurviewIntegrationRuntimes(): Promise<PurviewIntegrationRuntime[]> {
+  purviewAccount();
+  const res = await purviewFetch('/scan/integrationruntimes', { apiVersion: SCAN_API_VERSION });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewIntegrationRuntime => ({
+    name: raw?.name,
+    kind: raw?.kind || raw?.properties?.type,
+    description: raw?.properties?.description,
+    state: raw?.properties?.state || raw?.properties?.provisioningState,
+    raw,
+  }));
+}
+
+// ------------------------------------------------------------
+// Managed Virtual Network IR + managed private endpoints (scanning data plane).
+//   PUT  /scan/integrationruntimes/{name}                                    — kind 'Managed' (managed-VNet IR)
+//   GET  /scan/managedvirtualnetworks                                        — list managed virtual networks
+//   PUT  /scan/managedvirtualnetworks/{mvnet}                                — create/replace a managed virtual network
+//   GET  /scan/managedvirtualnetworks/{mvnet}/managedprivateendpoints        — list managed private endpoints
+//   PUT  /scan/managedvirtualnetworks/{mvnet}/managedprivateendpoints/{name} — create/replace a managed private endpoint
+//
+//   https://learn.microsoft.com/purview/data-governance-private-endpoints-managed-virtual-network
+//   https://learn.microsoft.com/rest/api/purview/scanningdataplane/managed-virtual-networks
+//   https://learn.microsoft.com/rest/api/purview/scanningdataplane/managed-private-endpoints
+//
+// This is the SERVERLESS, no-SHIR path for scanning PE-locked Azure sources:
+// Microsoft Purview deploys + manages the virtual network and the private
+// endpoints itself — there is no self-hosted IR VMSS for the operator to run,
+// patch, or scale. A managed VNet IR is created against a managed virtual
+// network (auto-created on first IR), and a managed private endpoint is created
+// per data source (e.g. the DLZ lake's storage account, groupId `dfs`/`blob`).
+//
+// IMPORTANT (surfaced to the operator, not auto-performed): a managed private
+// endpoint lands in a "Pending" state. The private-link resource OWNER must
+// APPROVE it (an ARM `privateEndpointConnections` approve on the target
+// resource) before scan traffic can traverse it. That approval is a SEPARATE
+// ARM action against the source resource — Loom surfaces it as a clear next step.
+// ------------------------------------------------------------
+
+export interface PurviewManagedVnet {
+  name?: string;
+  state?: string;
+  raw?: unknown;
+}
+
+export interface PurviewManagedPrivateEndpoint {
+  name?: string;
+  /** ARM resource id of the private-link resource (e.g. the storage account). */
+  privateLinkResourceId?: string;
+  /** Sub-resource group id (e.g. `dfs`/`blob` for ADLS Gen2, `sqlServer` for Azure SQL). */
+  groupId?: string;
+  provisioningState?: string;
+  /** Connection approval status reported by the resource owner: Pending | Approved | Rejected. */
+  connectionState?: string;
+  raw?: unknown;
+}
+
+function mapManagedPrivateEndpoint(raw: any): PurviewManagedPrivateEndpoint {
+  return {
+    name: raw?.name,
+    privateLinkResourceId: raw?.properties?.privateLinkResourceId,
+    groupId: raw?.properties?.groupId,
+    provisioningState: raw?.properties?.provisioningState,
+    connectionState:
+      raw?.properties?.connectionState?.status ??
+      raw?.properties?.privateLinkServiceConnectionState?.status,
+    raw,
+  };
+}
+
+/**
+ * Create or update a MANAGED-VNet Purview integration runtime (PUT — idempotent).
+ * `kind: 'Managed'`, bound to a managed virtual network (created on first use via
+ * {@link upsertPurviewManagedVnet}). This is the no-SHIR path: Purview runs the
+ * scan compute inside its own managed VNet and reaches PE-locked sources through
+ * managed private endpoints — no self-hosted IR VMSS required. Throws
+ * PurviewNotConfiguredError when LOOM_PURVIEW_ACCOUNT is unset, PurviewError on a
+ * non-2xx.
+ */
+export async function upsertPurviewManagedVnetIr(
+  name: string,
+  opts: { managedVnetName?: string; description?: string } = {},
+): Promise<PurviewIntegrationRuntime> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'integration runtime name is required');
+  const properties: Record<string, unknown> = {
+    description: opts.description || 'Loom-managed Purview managed-VNet integration runtime',
+  };
+  if (opts.managedVnetName) {
+    properties.managedVirtualNetworkReference = {
+      referenceName: opts.managedVnetName,
+      type: 'ManagedVirtualNetworkReference',
+    };
+  }
+  const body = { name, kind: 'Managed', properties };
+  const res = await purviewFetch(
+    `/scan/integrationruntimes/${encodeURIComponent(name)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify(body) },
+  );
+  const raw = await readJson<any>(res);
+  return {
+    name: raw?.name || name,
+    kind: raw?.kind || 'Managed',
+    description: raw?.properties?.description,
+    state: raw?.properties?.state || raw?.properties?.provisioningState,
+    raw,
+  };
+}
+
+/** GET /scan/managedvirtualnetworks — managed virtual networks on this account. */
+export async function listPurviewManagedVnets(): Promise<PurviewManagedVnet[]> {
+  purviewAccount();
+  const res = await purviewFetch('/scan/managedvirtualnetworks', { apiVersion: SCAN_API_VERSION });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewManagedVnet => ({
+    name: raw?.name,
+    state: raw?.properties?.provisioningState || raw?.properties?.state,
+    raw,
+  }));
+}
+
+/**
+ * Create or update a managed virtual network (PUT — idempotent). Purview owns the
+ * VNet's address space + subnets; the body is effectively just the name. Creating
+ * the managed VNet first makes {@link upsertPurviewManagedVnetIr}'s reference resolve.
+ */
+export async function upsertPurviewManagedVnet(name: string): Promise<PurviewManagedVnet> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'managed virtual network name is required');
+  const res = await purviewFetch(
+    `/scan/managedvirtualnetworks/${encodeURIComponent(name)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify({ name, properties: {} }) },
+  );
+  const raw = await readJson<any>(res);
+  return { name: raw?.name || name, state: raw?.properties?.provisioningState || raw?.properties?.state, raw };
+}
+
+/** GET /scan/managedvirtualnetworks/{mvnet}/managedprivateendpoints — managed PEs in a managed VNet. */
+export async function listPurviewManagedPrivateEndpoints(
+  managedVnetName: string,
+): Promise<PurviewManagedPrivateEndpoint[]> {
+  purviewAccount();
+  if (!managedVnetName) throw new PurviewError(400, null, 'managed virtual network name is required');
+  const res = await purviewFetch(
+    `/scan/managedvirtualnetworks/${encodeURIComponent(managedVnetName)}/managedprivateendpoints`,
+    { apiVersion: SCAN_API_VERSION },
+  );
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map(mapManagedPrivateEndpoint);
+}
+
+/**
+ * Create or update a managed private endpoint for a data source (PUT — idempotent).
+ * `resourceId` is the ARM id of the private-link resource (e.g. the DLZ lake's
+ * storage account) and `groupId` is its sub-resource (`dfs`/`blob` for ADLS Gen2,
+ * `sqlServer` for Azure SQL, etc.). The PE is created in a **Pending** state — the
+ * resource owner must approve it (ARM `privateEndpointConnections` approve on the
+ * target) before scans can use it; that approval is a separate action the caller
+ * surfaces as a next step.
+ */
+export async function upsertPurviewManagedPrivateEndpoint(
+  managedVnetName: string,
+  name: string,
+  opts: { resourceId: string; groupId: string },
+): Promise<PurviewManagedPrivateEndpoint> {
+  purviewAccount();
+  if (!managedVnetName) throw new PurviewError(400, null, 'managed virtual network name is required');
+  if (!name) throw new PurviewError(400, null, 'managed private endpoint name is required');
+  if (!opts?.resourceId) throw new PurviewError(400, null, 'resourceId is required');
+  if (!opts?.groupId) throw new PurviewError(400, null, 'groupId is required');
+  const body = {
+    name,
+    properties: { privateLinkResourceId: opts.resourceId, groupId: opts.groupId },
+  };
+  const res = await purviewFetch(
+    `/scan/managedvirtualnetworks/${encodeURIComponent(managedVnetName)}/managedprivateendpoints/${encodeURIComponent(name)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify(body) },
+  );
+  const raw = await readJson<any>(res);
+  return mapManagedPrivateEndpoint(raw);
 }
 
 /** GET /scan/datasources/{name}/scans/{scan}/runs — last N scan runs. */
