@@ -79,12 +79,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!query) return err('a custom check requires a KQL condition', 400, 'no_query');
   const name = String(body?.name || `${body?.checkType || 'freshness'}-check`).trim();
   const email = String(body?.email || '').trim();
+  const sevRaw = Number(body?.severity);
+  const severity = Number.isFinite(sevRaw) && sevRaw >= 0 && sevRaw <= 4 ? Math.round(sevRaw) : undefined;
 
   let rule: MonitorRuleRecord;
   try {
     rule = await createMonitorActivatorRule(hc.displayName || 'Health check', {
       name,
       query,
+      severity,
       evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : 'PT5M',
       windowSize: typeof body?.windowSize === 'string' ? body.windowSize : 'PT15M',
       action: email ? { target: email } : undefined,

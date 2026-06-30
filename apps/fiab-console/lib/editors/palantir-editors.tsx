@@ -22,7 +22,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
+  Title2, Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
   Tab, TabList, Field, Dropdown, Option, Checkbox, SearchBox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Accordion, AccordionItem, AccordionHeader, AccordionPanel,
@@ -36,6 +36,7 @@ import {
   History20Regular, Bug20Regular,
   ArrowSwap20Regular, People20Regular, Tag20Regular, ChevronRight20Regular,
   CheckmarkCircle20Regular, DismissCircle20Regular, Cloud20Regular, Branch20Regular,
+  Settings20Regular, Warning20Regular, Pulse20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
@@ -141,6 +142,25 @@ const useStyles = makeStyles({
   cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, flexWrap: 'wrap' },
   cardActions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center' },
   kv: { display: 'flex', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  statGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: tokens.spacingHorizontalM, minWidth: 0 },
+  statTile: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform', transitionDuration: tokens.durationNormal, transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
+  statHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3 },
+  cTotal: { color: tokens.colorBrandForeground1 },
+  cHealthy: { color: tokens.colorPaletteGreenForeground1 },
+  cFiring: { color: tokens.colorPaletteRedForeground1 },
+  cDisabled: { color: tokens.colorNeutralForeground3 },
+  runPanel: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  rowActions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' },
 });
 
 /** Code/output viewer with a working copy-to-clipboard control. */
@@ -1462,12 +1482,32 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
 }
 
 // ───────────────────────── Health check (Checks) ─────────────────────────
-interface MonitorRule { id: string; name: string; query: string; azureRuleName?: string; evaluationFrequency?: string; windowSize?: string; state?: string; checkType?: string }
+interface MonitorRule { id: string; name: string; query: string; azureRuleName?: string; evaluationFrequency?: string; windowSize?: string; state?: string; checkType?: string; severity?: number; updatedAt?: string; note?: string }
+interface HistoryEvent { id: string; alertRule: string; monitorCondition?: string; alertState?: string; severity?: string; startDateTime?: string; monitorConditionResolvedDateTime?: string; targetResourceName?: string; payload?: { matchingRowsCount?: number; operator?: string; threshold?: string } }
+interface RunResult { ruleId: string; ruleName: string; fired: boolean; count: number; columns: string[]; rows: unknown[][] }
+type RuleStatus = 'Healthy' | 'Firing' | 'Disabled';
+const HC_SEVERITY_OPTS: { v: number; label: string }[] = [
+  { v: 0, label: 'Sev 0 · Critical' },
+  { v: 1, label: 'Sev 1 · Error' },
+  { v: 2, label: 'Sev 2 · Warning' },
+  { v: 3, label: 'Sev 3 · Informational' },
+  { v: 4, label: 'Sev 4 · Verbose' },
+];
+function hcSeverityColor(sev?: number): 'danger' | 'warning' | 'informative' {
+  if (sev == null) return 'informative';
+  if (sev <= 1) return 'danger';
+  if (sev === 2) return 'warning';
+  return 'informative';
+}
+function hcSeverityLabel(sev?: number): string {
+  return (HC_SEVERITY_OPTS.find((o) => o.v === sev) || HC_SEVERITY_OPTS[3]).label;
+}
 interface HealthState { rules?: MonitorRule[]; [k: string]: unknown }
 
 export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { loading } = useItemState<HealthState>('health-check', id, { rules: [] });
+  const [tab, setTab] = useState<'checks' | 'status' | 'history' | 'settings'>('checks');
   const [rules, setRules] = useState<MonitorRule[]>([]);
   const [checkType, setCheckType] = useState<'freshness' | 'rowcount' | 'custom'>('freshness');
   const [name, setName] = useState('');
@@ -1477,9 +1517,18 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   const [customKql, setCustomKql] = useState('');
   const [evalFreq, setEvalFreq] = useState('PT5M');
   const [windowSize, setWindowSize] = useState('PT15M');
+  const [severity, setSeverity] = useState('3');
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  // Per-rule lifecycle (Run / Enable / Disable / Delete).
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
+  const [run, setRun] = useState<RunResult | null>(null);
+  // Fired-alert history (Azure Monitor AlertsManagement).
+  const [history, setHistory] = useState<HistoryEvent[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyMsg, setHistoryMsg] = useState<{ intent: 'warning' | 'error'; text: string } | null>(null);
 
   const loadRules = useCallback(async () => {
     try {
@@ -1490,6 +1539,24 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   }, [id]);
   useEffect(() => { void loadRules(); }, [loadRules]);
 
+  const loadHistory = useCallback(async () => {
+    setHistoryBusy(true); setHistoryMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/history?days=14`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setHistoryMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setHistory(Array.isArray(j.events) ? j.events : []);
+    } catch (e: any) { setHistoryMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setHistoryBusy(false); setHistoryLoaded(true); }
+  }, [id]);
+  useEffect(() => {
+    if ((tab === 'status' || tab === 'history') && !historyLoaded && rules.length > 0) void loadHistory();
+  }, [tab, historyLoaded, rules.length, loadHistory]);
+
   const createRule = useCallback(async () => {
     setBusy(true); setMsg(null);
     try {
@@ -1498,7 +1565,8 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
         body: JSON.stringify({
           checkType, name: name.trim() || undefined, table: table.trim() || undefined,
           thresholdMinutes: Number(thresholdMinutes) || undefined, minRows: Number(minRows) || undefined,
-          customKql: customKql.trim() || undefined, evaluationFrequency: evalFreq, windowSize, email: email.trim() || undefined,
+          customKql: customKql.trim() || undefined, evaluationFrequency: evalFreq, windowSize,
+          severity: Number(severity), email: email.trim() || undefined,
         }),
       });
       const j = await r.json().catch(() => ({}));
@@ -1508,74 +1576,272 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
         return;
       }
       setMsg({ intent: 'success', text: `Created Azure Monitor rule "${j.rule?.name}" (${j.rule?.azureRuleName}).` });
+      setName(''); setHistoryLoaded(false);
       void loadRules();
     } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setBusy(false); }
-  }, [id, checkType, name, table, thresholdMinutes, minRows, customKql, evalFreq, windowSize, email, loadRules]);
+  }, [id, checkType, name, table, thresholdMinutes, minRows, customKql, evalFreq, windowSize, severity, email, loadRules]);
+
+  const toggleRule = useCallback(async (rl: MonitorRule, enabled: boolean) => {
+    setRowBusy(rl.id); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setMsg({ intent: 'success', text: `Check "${rl.name}" ${enabled ? 'enabled' : 'disabled'}.` });
+      void loadRules();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRowBusy(null); }
+  }, [id, loadRules]);
+
+  const deleteRule = useCallback(async (rl: MonitorRule) => {
+    setRowBusy(rl.id); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setMsg({ intent: 'success', text: `Deleted check "${rl.name}".` });
+      setRun((p) => (p?.ruleId === rl.id ? null : p));
+      void loadRules();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRowBusy(null); }
+  }, [id, loadRules]);
+
+  const runRule = useCallback(async (rl: MonitorRule) => {
+    setRowBusy(rl.id); setMsg(null); setRun(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}/run`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setRun({ ruleId: rl.id, ruleName: rl.name, fired: !!j.fired, count: Number(j.count) || 0, columns: Array.isArray(j.columns) ? j.columns : [], rows: Array.isArray(j.rows) ? j.rows : [] });
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRowBusy(null); }
+  }, [id]);
+
+  // Derived status — a rule is Firing when it has a fired, unresolved Azure
+  // Monitor alert; Disabled when paused; otherwise Healthy.
+  const firingByRule = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of history) {
+      if (e.monitorCondition === 'Fired' && e.alertState !== 'Closed') m.set(e.alertRule, (m.get(e.alertRule) || 0) + 1);
+    }
+    return m;
+  }, [history]);
+  const ruleStatus = useCallback((rl: MonitorRule): RuleStatus => {
+    if ((rl.state || 'Active') === 'Disabled') return 'Disabled';
+    return (firingByRule.get(rl.azureRuleName || '') || 0) > 0 ? 'Firing' : 'Healthy';
+  }, [firingByRule]);
+  const counts = useMemo(() => {
+    let healthy = 0, firing = 0, disabled = 0;
+    for (const rl of rules) { const st = ruleStatus(rl); if (st === 'Disabled') disabled++; else if (st === 'Firing') firing++; else healthy++; }
+    return { total: rules.length, healthy, firing, disabled };
+  }, [rules, ruleStatus]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Check', actions: [
         { label: busy ? 'Creating…' : 'Create rule', onClick: createRule, disabled: busy },
       ]},
+      { label: 'View', actions: [
+        { label: historyBusy ? 'Refreshing…' : 'Refresh', onClick: () => { void loadRules(); setHistoryLoaded(false); void loadHistory(); }, disabled: historyBusy },
+      ]},
     ]},
-  ], [createRule, busy]);
+  ], [createRule, busy, loadRules, loadHistory, historyBusy]);
 
   if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create health check" intro="Data-freshness / SLA monitoring backed by real Azure Monitor scheduled-query alert rules. Azure-native default — no Fabric required." />;
+
+  const statusBadge = (st: RuleStatus) => <Badge appearance="tint" color={st === 'Firing' ? 'danger' : st === 'Disabled' ? 'warning' : 'success'}>{st}</Badge>;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>Health check (Palantir Foundry Health Checks)</MessageBarTitle>
-          Create real Azure Monitor scheduled-query alert rules for data freshness, row-count, or a custom KQL condition over Log Analytics. Azure-native default (Fabric Reflex is opt-in via LOOM_ACTIVATOR_BACKEND=fabric).
+          <MessageBarTitle>Health check (Palantir Foundry Health Checks · Azure Monitor)</MessageBarTitle>
+          Define checks (data freshness, row-count, or a custom KQL condition) over Log Analytics, run them on demand or on a schedule, watch status &amp; fired-alert history, and alert via action groups. Every check is a real Azure Monitor scheduledQueryRule — Azure-native default (Fabric Reflex is opt-in via LOOM_ACTIVATOR_BACKEND=fabric).
         </MessageBarBody></MessageBar>
 
-        <div className={s.section}>
-          <SectionHead icon={<Flash20Regular />} title="New check rule" hint="Pick a check type; Loom creates a real scheduledQueryRule." />
-          <div className={s.addBar}>
-            <Field label="Check type"><Dropdown value={checkType} selectedOptions={[checkType]} onOptionSelect={(_, d) => setCheckType((d.optionValue as 'freshness' | 'rowcount' | 'custom') || 'freshness')}>
-              <Option value="freshness">freshness</Option><Option value="rowcount">row count</Option><Option value="custom">custom KQL</Option>
-            </Dropdown></Field>
-            <Field label="Rule name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="orders-freshness" /></Field>
-            {checkType !== 'custom' && <Field label="Table (Log Analytics)"><Input value={table} onChange={(_, d) => setTable(d.value)} placeholder="AppEvents" /></Field>}
-            {checkType === 'freshness' && <Field label="Stale after (minutes)"><Input type="number" value={thresholdMinutes} onChange={(_, d) => setThresholdMinutes(d.value)} /></Field>}
-            {checkType === 'rowcount' && <Field label="Min rows in window"><Input type="number" value={minRows} onChange={(_, d) => setMinRows(d.value)} /></Field>}
-          </div>
-          {checkType === 'custom' && <Field label="KQL condition (fires when it returns rows)"><Textarea value={customKql} onChange={(_, d) => setCustomKql(d.value)} placeholder={'MyTable\n| where TimeGenerated > ago(1h)\n| summarize n=count()\n| where n == 0'} rows={4} resize="vertical" /></Field>}
-          <div className={s.addBar}>
-            <Field label="Evaluate every"><Dropdown value={evalFreq} selectedOptions={[evalFreq]} onOptionSelect={(_, d) => setEvalFreq(d.optionValue || 'PT5M')}>
-              <Option value="PT5M">5 minutes</Option><Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option>
-            </Dropdown></Field>
-            <Field label="Look-back window"><Dropdown value={windowSize} selectedOptions={[windowSize]} onOptionSelect={(_, d) => setWindowSize(d.optionValue || 'PT15M')}>
-              <Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option><Option value="P1D">1 day</Option>
-            </Dropdown></Field>
-            <Field label="Notify email (optional)"><Input value={email} onChange={(_, d) => setEmail(d.value)} placeholder="oncall@contoso.com" /></Field>
-            <Button appearance="primary" icon={<Flash20Regular />} disabled={busy} onClick={createRule}>{busy ? 'Creating…' : 'Create rule'}</Button>
-          </div>
-          {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
-        </div>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)} className={s.tabStrip}>
+          <Tab value="checks" icon={<Flash20Regular />}>Checks{rules.length ? ` (${rules.length})` : ''}</Tab>
+          <Tab value="status" icon={<Pulse20Regular />}>Status</Tab>
+          <Tab value="history" icon={<History20Regular />}>History</Tab>
+          <Tab value="settings" icon={<Settings20Regular />}>Settings</Tab>
+        </TabList>
 
-        <div className={s.section}>
-          <SectionHead icon={<Database20Regular />} title="Active rules" hint="Scheduled-query alert rules backing this health check." />
-          {rules.length === 0 ? <div className={s.empty}><Caption1>No rules yet.</Caption1></div> : (
-            <div className={s.tableWrap}>
-            <Table size="small" aria-label="Rules">
-              <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Azure rule</TableHeaderCell><TableHeaderCell>Frequency</TableHeaderCell><TableHeaderCell>State</TableHeaderCell></TableRow></TableHeader>
-              <TableBody>
-                {rules.map((rl) => (
-                  <TableRow key={rl.id}>
-                    <TableCell>{rl.name}</TableCell><TableCell>{rl.checkType || '—'}</TableCell>
-                    <TableCell>{rl.azureRuleName || '—'}</TableCell><TableCell>{rl.evaluationFrequency || '—'}</TableCell>
-                    <TableCell><Badge appearance="tint" color={rl.state === 'Active' ? 'success' : 'warning'}>{rl.state || 'Active'}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+        {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+
+        {/* ───────── Checks ───────── */}
+        {tab === 'checks' && <>
+          <div className={s.section}>
+            <SectionHead icon={<Flash20Regular />} title="New check rule" hint="Pick a check type; Loom creates a real scheduledQueryRule over Log Analytics." />
+            <div className={s.addBar}>
+              <Field label="Check type"><Dropdown value={checkType} selectedOptions={[checkType]} onOptionSelect={(_, d) => setCheckType((d.optionValue as 'freshness' | 'rowcount' | 'custom') || 'freshness')}>
+                <Option value="freshness">freshness</Option><Option value="rowcount">row count</Option><Option value="custom">custom KQL</Option>
+              </Dropdown></Field>
+              <Field label="Rule name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="orders-freshness" /></Field>
+              {checkType !== 'custom' && <Field label="Table (Log Analytics)"><Input value={table} onChange={(_, d) => setTable(d.value)} placeholder="AppEvents" /></Field>}
+              {checkType === 'freshness' && <Field label="Stale after (minutes)"><Input type="number" value={thresholdMinutes} onChange={(_, d) => setThresholdMinutes(d.value)} /></Field>}
+              {checkType === 'rowcount' && <Field label="Min rows in window"><Input type="number" value={minRows} onChange={(_, d) => setMinRows(d.value)} /></Field>}
             </div>
-          )}
-        </div>
+            {checkType === 'custom' && <Field label="KQL condition (fires when it returns rows)"><Textarea value={customKql} onChange={(_, d) => setCustomKql(d.value)} placeholder={'MyTable\n| where TimeGenerated > ago(1h)\n| summarize n=count()\n| where n == 0'} rows={4} resize="vertical" /></Field>}
+            <div className={s.addBar}>
+              <Field label="Evaluate every"><Dropdown value={evalFreq} selectedOptions={[evalFreq]} onOptionSelect={(_, d) => setEvalFreq(d.optionValue || 'PT5M')}>
+                <Option value="PT5M">5 minutes</Option><Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option>
+              </Dropdown></Field>
+              <Field label="Look-back window"><Dropdown value={windowSize} selectedOptions={[windowSize]} onOptionSelect={(_, d) => setWindowSize(d.optionValue || 'PT15M')}>
+                <Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option><Option value="P1D">1 day</Option>
+              </Dropdown></Field>
+              <Field label="Severity"><Dropdown value={hcSeverityLabel(Number(severity))} selectedOptions={[severity]} onOptionSelect={(_, d) => setSeverity(d.optionValue || '3')}>
+                {HC_SEVERITY_OPTS.map((o) => <Option key={o.v} value={String(o.v)} text={o.label}>{o.label}</Option>)}
+              </Dropdown></Field>
+              <Field label="Notify email (optional)"><Input value={email} onChange={(_, d) => setEmail(d.value)} placeholder="oncall@contoso.com" /></Field>
+              <Button appearance="primary" icon={<Flash20Regular />} disabled={busy} onClick={createRule}>{busy ? 'Creating…' : 'Create rule'}</Button>
+            </div>
+          </div>
+
+          <div className={s.section}>
+            <SectionHead icon={<Database20Regular />} title="Active checks" hint="Each row is a real scheduledQueryRule. Run now, enable/disable, or delete — all hit Azure Monitor." />
+            {rules.length === 0 ? <div className={s.empty}><Caption1>No checks yet — define one above.</Caption1></div> : (
+              <div className={s.tableWrap}>
+              <Table size="small" aria-label="Checks">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Severity</TableHeaderCell><TableHeaderCell>Frequency</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {rules.map((rl) => { const st = ruleStatus(rl); const isDisabled = (rl.state || 'Active') === 'Disabled'; const rb = rowBusy === rl.id; return (
+                    <TableRow key={rl.id}>
+                      <TableCell>{rl.name}</TableCell>
+                      <TableCell>{rl.checkType || '—'}</TableCell>
+                      <TableCell><Badge appearance="tint" color={hcSeverityColor(rl.severity)}>{hcSeverityLabel(rl.severity)}</Badge></TableCell>
+                      <TableCell>{rl.evaluationFrequency || '—'}</TableCell>
+                      <TableCell>{statusBadge(st)}</TableCell>
+                      <TableCell>
+                        <div className={s.rowActions}>
+                          <Button size="small" appearance="subtle" icon={<Play20Regular />} disabled={rb} onClick={() => runRule(rl)}>Run</Button>
+                          {isDisabled
+                            ? <Button size="small" appearance="subtle" icon={<CheckmarkCircle20Regular />} disabled={rb} onClick={() => toggleRule(rl, true)}>Enable</Button>
+                            : <Button size="small" appearance="subtle" icon={<Warning20Regular />} disabled={rb} onClick={() => toggleRule(rl, false)}>Disable</Button>}
+                          <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} disabled={rb} onClick={() => deleteRule(rl)}>Delete</Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ); })}
+                </TableBody>
+              </Table>
+              </div>
+            )}
+            {run && (
+              <div className={s.runPanel}>
+                <div className={s.cardHead}>
+                  {run.fired ? <DismissCircle20Regular className={s.cFiring} /> : <CheckmarkCircle20Regular className={s.cHealthy} />}
+                  <Subtitle2>Run “{run.ruleName}”</Subtitle2>
+                  <Badge appearance="tint" color={run.fired ? 'danger' : 'success'}>{run.fired ? 'Would fire' : 'Pass'}</Badge>
+                  <span className={s.spacer} />
+                  <Caption1 className={s.hint}>{run.count} matching row{run.count === 1 ? '' : 's'} in the last hour</Caption1>
+                </div>
+                {run.columns.length > 0 && <CodeBlock ariaLabel="Run result" content={JSON.stringify({ columns: run.columns, rows: run.rows }, null, 2)} />}
+              </div>
+            )}
+          </div>
+        </>}
+
+        {/* ───────── Status ───────── */}
+        {tab === 'status' && (
+          <div className={s.section}>
+            <SectionHead icon={<Pulse20Regular />} title="Status dashboard" hint="Live health of every check — derived from rule state and fired/unresolved Azure Monitor alerts." />
+            {historyBusy && <Spinner size="tiny" label="Loading status…" labelPosition="after" />}
+            {historyMsg && <MessageBar intent={historyMsg.intent}><MessageBarBody>{historyMsg.text}</MessageBarBody></MessageBar>}
+            {rules.length === 0 ? <div className={s.empty}><Caption1>No checks to report on yet.</Caption1></div> : <>
+              <div className={s.statGrid}>
+                <div className={s.statTile}><div className={s.statHead}><Database20Regular /><Caption1>Total checks</Caption1></div><Title2 className={s.cTotal}>{counts.total}</Title2></div>
+                <div className={s.statTile}><div className={s.statHead}><CheckmarkCircle20Regular /><Caption1>Healthy</Caption1></div><Title2 className={s.cHealthy}>{counts.healthy}</Title2></div>
+                <div className={s.statTile}><div className={s.statHead}><DismissCircle20Regular /><Caption1>Firing</Caption1></div><Title2 className={s.cFiring}>{counts.firing}</Title2></div>
+                <div className={s.statTile}><div className={s.statHead}><Warning20Regular /><Caption1>Disabled</Caption1></div><Title2 className={s.cDisabled}>{counts.disabled}</Title2></div>
+              </div>
+              <div className={s.tableWrap}>
+              <Table size="small" aria-label="Status">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Check</TableHeaderCell><TableHeaderCell>Severity</TableHeaderCell>
+                  <TableHeaderCell>Open alerts</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {rules.map((rl) => (
+                    <TableRow key={rl.id}>
+                      <TableCell>{rl.name}</TableCell>
+                      <TableCell><Badge appearance="tint" color={hcSeverityColor(rl.severity)}>{hcSeverityLabel(rl.severity)}</Badge></TableCell>
+                      <TableCell>{firingByRule.get(rl.azureRuleName || '') || 0}</TableCell>
+                      <TableCell>{statusBadge(ruleStatus(rl))}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              </div>
+            </>}
+          </div>
+        )}
+
+        {/* ───────── History ───────── */}
+        {tab === 'history' && (
+          <div className={s.section}>
+            <SectionHead icon={<History20Regular />} title="Fired-alert history" hint="Fired / resolved alert instances from Azure Monitor (Microsoft.AlertsManagement) for this check's rules — last 14 days." />
+            {historyBusy && <Spinner size="tiny" label="Loading history…" labelPosition="after" />}
+            {historyMsg && <MessageBar intent={historyMsg.intent}><MessageBarBody>{historyMsg.text}</MessageBarBody></MessageBar>}
+            {!historyBusy && history.length === 0 ? <div className={s.empty}><Caption1>{rules.length ? 'No alerts fired in the window.' : 'Add a check to start collecting history.'}</Caption1></div> : (
+              <div className={s.tableWrap}>
+              <Table size="small" aria-label="History">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Fired</TableHeaderCell><TableHeaderCell>Rule</TableHeaderCell>
+                  <TableHeaderCell>Condition</TableHeaderCell><TableHeaderCell>Severity</TableHeaderCell>
+                  <TableHeaderCell>Matched rows</TableHeaderCell><TableHeaderCell>Resolved</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {history.map((e) => (
+                    <TableRow key={e.id}>
+                      <TableCell>{e.startDateTime ? new Date(e.startDateTime).toLocaleString() : '—'}</TableCell>
+                      <TableCell>{e.alertRule || '—'}</TableCell>
+                      <TableCell><Badge appearance="tint" color={e.monitorCondition === 'Resolved' ? 'success' : 'danger'}>{e.monitorCondition || '—'}</Badge></TableCell>
+                      <TableCell>{e.severity || '—'}</TableCell>
+                      <TableCell>{e.payload?.matchingRowsCount ?? '—'}</TableCell>
+                      <TableCell>{e.monitorConditionResolvedDateTime ? new Date(e.monitorConditionResolvedDateTime).toLocaleString() : '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ───────── Settings ───────── */}
+        {tab === 'settings' && (
+          <div className={s.section}>
+            <SectionHead icon={<Settings20Regular />} title="Backend & infrastructure" hint="What this health check runs on, and the Azure prerequisites." />
+            <MessageBar intent="info"><MessageBarBody>
+              <MessageBarTitle>Azure-native default — no Microsoft Fabric</MessageBarTitle>
+              Checks are real Azure Monitor scheduled-query alert rules over Log Analytics. Creating / running / scheduling requires <b>LOOM_LOG_ANALYTICS_WORKSPACE_ID</b> (run KQL), <b>LOOM_LOG_ANALYTICS_RESOURCE_ID</b> + <b>LOOM_ALERT_RG</b> (create rules), and the Console UAMI granted <b>Monitoring Contributor</b> on the alert resource group (plus <b>Monitoring Reader</b> at subscription scope for fired-alert history). A Fabric Reflex backend is opt-in only via LOOM_ACTIVATOR_BACKEND=fabric.
+            </MessageBarBody></MessageBar>
+            <MessageBar intent="warning"><MessageBarBody>
+              <MessageBarTitle>Planned (tracked in docs/fiab/parity/health-check.md)</MessageBarTitle>
+              The full Foundry check-type library (Time / Size / Content / Schema families), action-group channel management with test-fire, dynamic thresholds + KQL preview, Monitoring Views, and incident/issue management are not built yet. Today: freshness / row-count / custom-KQL checks with severity, on-demand run, enable / disable / delete, a status dashboard, and fired-alert history.
+            </MessageBarBody></MessageBar>
+          </div>
+        )}
       </div>
     } />
   );
