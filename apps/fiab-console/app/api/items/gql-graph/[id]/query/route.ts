@@ -38,9 +38,10 @@ function buildGraphPrelude(nodeTables: string[], edgeTables: string[]): string {
     .map((t) => `(${t} | extend edgeLabel='${t.slice(5)}')`)
     .join(', ');
   return [
-    `let __nodes = union ${nodeUnion};`,
-    `let __edges = union ${edgeUnion};`,
-    `let G = __edges | make-graph src --> dst with __nodes on id;`,
+    // KQL reserves identifiers that start/end with `__` → SEM0041. Use plain names.
+    `let LoomNodes = union ${nodeUnion};`,
+    `let LoomEdges = union ${edgeUnion};`,
+    `let G = LoomEdges | make-graph src --> dst with LoomNodes on id;`,
   ].join('\n');
 }
 

@@ -75,7 +75,7 @@ carol,frank,follows,1.0,2026-01-10T00:00:00Z
 // Node tables carry `id` (the make-graph node key) + entity properties; the
 // located entities (Person, Org, Location) carry name + lat/lon so the geo pane
 // can plot them. Edge tables carry `src`/`dst` (matching the prelude's
-// `make-graph src --> dst with __nodes on id`) + a `timestamp` so the timeline
+// `make-graph src --> dst with LoomNodes on id`) + a `timestamp` so the timeline
 // pane can bin them. This is a small, real, self-consistent investigation:
 // people who know each other, belong to orgs, are located in cities, and attend
 // events — exactly the link/geo/timeline shape Gotham-class analysis works on.
