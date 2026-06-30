@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
-  Tab, TabList, Field, Dropdown, Option,
+  Tab, TabList, Field, Dropdown, Option, Checkbox, SearchBox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -37,6 +37,8 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef } from './slate/slate-app-builder';
+import { deriveObjectProperties } from './_palantir-codegen';
+import type { OntologyEntityBinding } from './_family-utils';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -113,6 +115,13 @@ const useStyles = makeStyles({
   errorCaption: { color: tokens.colorPaletteRedForeground1 },
   dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 'min(420px, 100%)', maxWidth: '100%' },
   dialogScroll: { maxHeight: '52vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
+  scopeBar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
+  scopeScroll: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    maxHeight: '40vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS, minWidth: 0,
+  },
+  chipBar: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, alignItems: 'center', minWidth: 0 },
+  rowText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
 });
 
 /** Code/output viewer with a working copy-to-clipboard control. */
@@ -235,7 +244,13 @@ function SectionHead({ icon, title, hint }: { icon: ReactNode; title: string; hi
 
 interface OntologySummary { id: string; displayName: string; workspaceId: string; classCount: number }
 interface OntologyClassLite { name: string; parent?: string; description?: string }
-interface OntologySurface { id: string; displayName: string; classes: OntologyClassLite[]; links: Array<{ from: string; to: string; kind: string }>; bindings: unknown[] }
+interface OntologyActionLite { name: string; objectType: string; kind: 'create' | 'update' | 'delete'; params?: string[] }
+interface OntologySurface {
+  id: string; displayName: string; classes: OntologyClassLite[];
+  links: Array<{ from: string; to: string; kind: string }>;
+  bindings: OntologyEntityBinding[];
+  actionTypes?: OntologyActionLite[];
+}
 
 /** Shared hook: load the bind-ontology surface for an ontology-bound item type. */
 function useOntologyBinding(slug: string, id: string) {
@@ -584,30 +599,95 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ───────────────────────── Ontology SDK (OSDK) ─────────────────────────
-interface OsdkState { boundOntologyId?: string; boundOntologyName?: string; objectCount?: number; lastGeneratedAt?: string; [k: string]: unknown }
+interface OsdkState {
+  boundOntologyId?: string; boundOntologyName?: string;
+  objectCount?: number; linkCount?: number; actionCount?: number; lastGeneratedAt?: string;
+  selectedObjectTypes?: string[]; selectedLinkTypes?: string[]; selectedActionTypes?: string[];
+  [k: string]: unknown;
+}
+interface GeneratedSdk { typescript: string; python: string; dabConfig: unknown; actions: string; objectCount: number; linkCount: number; actionCount: number; propertyCount: number }
+
+/** Stable identity for a link in the scope selector (kind + endpoints). */
+function osdkLinkKey(l: { from: string; to: string; kind: string }): string { return `${l.kind}:${l.from}->${l.to}`; }
+function osdkLinkLabel(l: { from: string; to: string; kind: string }): string { return `${l.from} —${l.kind}→ ${l.to}`; }
 
 export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { loading } = useItemState<OsdkState>('ontology-sdk', id, {});
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<OsdkState>('ontology-sdk', id, {});
   const onto = useOntologyBinding('ontology-sdk', id);
   const [pickOnto, setPickOnto] = useState('');
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState<string | null>(null);
-  const [gen, setGen] = useState<{ typescript: string; python: string; dabConfig: unknown; objectCount: number } | null>(null);
-  const [tab, setTab] = useState<'ts' | 'py' | 'dab'>('ts');
+  const [gen, setGen] = useState<GeneratedSdk | null>(null);
+  const [tab, setTab] = useState<'ts' | 'py' | 'actions' | 'dab'>('ts');
   const [pubBusy, setPubBusy] = useState(false);
   const [pubMsg, setPubMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  // Scope selector state.
+  const [scopeTab, setScopeTab] = useState<'objects' | 'links' | 'actions'>('objects');
+  const [filter, setFilter] = useState('');
+  const [selObj, setSelObj] = useState<Set<string>>(new Set());
+  const [selLink, setSelLink] = useState<Set<string>>(new Set());
+  const [selAct, setSelAct] = useState<Set<string>>(new Set());
+  const seededFor = useRef<string>('');
+
+  const classes = onto.surface?.classes || [];
+  const links = onto.surface?.links || [];
+  const actionTypes = onto.surface?.actionTypes || [];
+  const bindings = onto.surface?.bindings || [];
+  const surfaceId = onto.surface?.id || '';
+
+  // Real typed-property derivation (same pure fn the codegen route uses) so the
+  // selector can show each object type's declared members.
+  const propsByType = useMemo(
+    () => deriveObjectProperties(classes, bindings, actionTypes.map((a) => ({ name: a.name, objectType: a.objectType, kind: a.kind, params: a.params }))),
+    [classes, bindings, actionTypes],
+  );
+
+  // Seed the selection from persisted state (else "all") whenever the bound
+  // surface changes. Guarded by surface id so binding a new ontology re-seeds.
+  useEffect(() => {
+    if (!onto.loaded || loading || !onto.surface) return;
+    if (seededFor.current === surfaceId) return;
+    const allObj = classes.map((c) => c.name);
+    const allLink = links.map(osdkLinkKey);
+    const allAct = actionTypes.map((a) => a.name);
+    const so = Array.isArray(state.selectedObjectTypes) ? state.selectedObjectTypes.filter((n) => allObj.includes(n)) : allObj;
+    const sl = Array.isArray(state.selectedLinkTypes) ? state.selectedLinkTypes.filter((n) => allLink.includes(n)) : allLink;
+    const sa = Array.isArray(state.selectedActionTypes) ? state.selectedActionTypes.filter((n) => allAct.includes(n)) : allAct;
+    setSelObj(new Set(so)); setSelLink(new Set(sl)); setSelAct(new Set(sa));
+    seededFor.current = surfaceId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surfaceId, onto.loaded, loading]);
+
+  // Mirror a selection change into persisted item state (deferred out of the set
+  // updater) so Save (Ctrl+S) persists the chosen scope to Cosmos.
+  const persist = useCallback((patch: Partial<OsdkState>) => {
+    queueMicrotask(() => setState((p) => ({ ...p, ...patch })));
+  }, [setState]);
+  const applyObj = useCallback((next: Set<string>) => { setSelObj(next); persist({ selectedObjectTypes: [...next] }); }, [persist]);
+  const applyLink = useCallback((next: Set<string>) => { setSelLink(next); persist({ selectedLinkTypes: [...next] }); }, [persist]);
+  const applyAct = useCallback((next: Set<string>) => { setSelAct(next); persist({ selectedActionTypes: [...next] }); }, [persist]);
+  const toggle = (set: Set<string>, key: string) => { const n = new Set(set); n.has(key) ? n.delete(key) : n.add(key); return n; };
 
   const generate = useCallback(async () => {
     setGenBusy(true); setGenErr(null);
     try {
-      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/generate`, { method: 'POST' });
+      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/generate`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ selectedObjectTypes: [...selObj], selectedLinkTypes: [...selLink], selectedActionTypes: [...selAct] }),
+      });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setGenErr(j?.error || `HTTP ${r.status}`); return; }
-      setGen({ typescript: j.typescript, python: j.python, dabConfig: j.dabConfig, objectCount: j.objectCount });
+      const next: GeneratedSdk = {
+        typescript: j.typescript, python: j.python, dabConfig: j.dabConfig, actions: j.actions || '',
+        objectCount: j.objectCount || 0, linkCount: j.linkCount || 0, actionCount: j.actionCount || 0, propertyCount: j.propertyCount || 0,
+      };
+      setGen(next);
+      setTab((t) => (t === 'actions' && !next.actions) ? 'ts' : t);
     } catch (e: any) { setGenErr(e?.message || String(e)); }
     finally { setGenBusy(false); }
-  }, [id]);
+  }, [id, selObj, selLink, selAct]);
 
   const publish = useCallback(async () => {
     setPubBusy(true); setPubMsg(null);
@@ -626,16 +706,36 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
     finally { setPubBusy(false); }
   }, [id]);
 
+  const canGenerate = !!onto.boundOntologyId && selObj.size > 0;
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'SDK', actions: [
-        { label: genBusy ? 'Generating…' : 'Generate SDK', onClick: generate, disabled: genBusy || !onto.boundOntologyId },
+        { label: saving ? 'Saving…' : 'Save scope', onClick: () => save(), disabled: saving || !dirty },
+        { label: genBusy ? 'Generating…' : 'Generate SDK', onClick: generate, disabled: genBusy || !canGenerate },
         { label: pubBusy ? 'Publishing…' : 'Publish to APIM', onClick: publish, disabled: pubBusy || !onto.boundOntologyId },
       ]},
     ]},
-  ], [generate, genBusy, onto.boundOntologyId, publish, pubBusy]);
+  ], [save, saving, dirty, generate, genBusy, canGenerate, onto.boundOntologyId, publish, pubBusy]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Ontology SDK" intro="A typed TypeScript / Python client + REST Data API over an Ontology's object, link, and action types. Generated via Microsoft Data API Builder on Azure Container Apps — no Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Ontology SDK" intro="A typed TypeScript / Python client + REST Data API over an Ontology's object, link, and action types. Scope it to the types you need, generate typed write-back actions, and publish through APIM — via Microsoft Data API Builder on Azure Container Apps. No Fabric required." />;
+
+  // Filtered rows for the active scope tab.
+  const f = filter.trim().toLowerCase();
+  const objRows = classes.filter((c) => !f || c.name.toLowerCase().includes(f) || (c.description || '').toLowerCase().includes(f));
+  const linkRows = links.filter((l) => !f || osdkLinkLabel(l).toLowerCase().includes(f));
+  const actRows = actionTypes.filter((a) => !f || a.name.toLowerCase().includes(f) || a.objectType.toLowerCase().includes(f));
+
+  const selectAllCurrent = () => {
+    if (scopeTab === 'objects') applyObj(new Set(classes.map((c) => c.name)));
+    else if (scopeTab === 'links') applyLink(new Set(links.map(osdkLinkKey)));
+    else applyAct(new Set(actionTypes.map((a) => a.name)));
+  };
+  const clearCurrent = () => {
+    if (scopeTab === 'objects') applyObj(new Set());
+    else if (scopeTab === 'links') applyLink(new Set());
+    else applyAct(new Set());
+  };
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -643,7 +743,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
           <MessageBarTitle>Ontology SDK (Palantir OSDK)</MessageBarTitle>
-          Bind an Ontology, then generate a typed TypeScript + Python client and a real dab-config.json over its object / link types. The Data API runs on Microsoft Data API Builder (Azure Container Apps) and publishes through APIM — no Fabric required.
+          Bind an Ontology, scope the SDK to the object / link / action types you need, then generate typed TypeScript + Python clients (with <strong>applyCreate / applyUpdate / applyDelete</strong> write-back methods) and a real dab-config.json. The Data API runs on Microsoft Data API Builder (Azure Container Apps) and publishes through APIM — no Fabric required.
         </MessageBarBody></MessageBar>
 
         <div className={s.section}>
@@ -661,7 +761,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
               <Button appearance="primary" icon={<Database20Regular />} disabled={onto.busy || !(pickOnto || onto.boundOntologyId)} onClick={() => onto.bind(pickOnto || onto.boundOntologyId)}>
                 {onto.busy ? 'Binding…' : 'Bind ontology'}
               </Button>
-              <Button appearance="outline" icon={<Code20Regular />} disabled={genBusy || !onto.boundOntologyId} onClick={generate}>
+              <Button appearance="outline" icon={<Code20Regular />} disabled={genBusy || !canGenerate} onClick={generate}>
                 {genBusy ? 'Generating…' : 'Generate SDK'}
               </Button>
               <Button appearance="outline" icon={<Rocket20Regular />} disabled={pubBusy || !onto.boundOntologyId} onClick={publish}>
@@ -674,13 +774,121 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
           {pubMsg && <MessageBar intent={pubMsg.intent}><MessageBarBody>{pubMsg.text}</MessageBarBody></MessageBar>}
         </div>
 
+        {/* Ontology scope selector — choose which object / link / action types the
+            SDK includes. Persisted to Cosmos; the /generate route filters by it. */}
+        <div className={s.section}>
+          <SectionHead icon={<Database20Regular />} title="SDK scope" hint="Choose which object, link, and action types the generated SDK includes. The token and generated client are scoped to exactly these entities." />
+          {!onto.boundOntologyId ? (
+            <div className={s.empty}><Caption1>Bind an ontology to choose the SDK scope.</Caption1></div>
+          ) : classes.length === 0 ? (
+            <MessageBar intent="warning"><MessageBarBody>The bound ontology has no object types yet. Add entities to it, then re-bind.</MessageBarBody></MessageBar>
+          ) : (
+            <>
+              <TabList selectedValue={scopeTab} onTabSelect={(_, d) => { setScopeTab(d.value as 'objects' | 'links' | 'actions'); setFilter(''); }}>
+                <Tab value="objects">Objects · {selObj.size}/{classes.length}</Tab>
+                <Tab value="links">Links · {selLink.size}/{links.length}</Tab>
+                <Tab value="actions">Actions · {selAct.size}/{actionTypes.length}</Tab>
+              </TabList>
+              <div className={s.scopeBar}>
+                <SearchBox value={filter} onChange={(_, d) => setFilter(d.value)} placeholder={`Filter ${scopeTab}…`} className={s.fieldMed} />
+                <span className={s.spacer} />
+                <Button size="small" appearance="subtle" onClick={selectAllCurrent}>Select all</Button>
+                <Button size="small" appearance="subtle" onClick={clearCurrent}>Clear</Button>
+              </div>
+
+              {scopeTab === 'objects' && (
+                <div className={s.scopeScroll}>
+                  {objRows.length === 0 ? <div className={s.empty}><Caption1>No matching object types.</Caption1></div> : objRows.map((c) => {
+                    const props = propsByType[c.name];
+                    const keyProp = props?.find((p) => p.isKey);
+                    return (
+                      <div key={c.name} className={s.row}>
+                        <Checkbox checked={selObj.has(c.name)} onChange={() => applyObj(toggle(selObj, c.name))} aria-label={`Include ${c.name}`} />
+                        <div className={s.rowText}>
+                          <Body1><strong>{c.name}</strong>{c.parent ? <Caption1 as="span" className={s.hint}> : {c.parent}</Caption1> : null}</Body1>
+                          {c.description && <Caption1 className={s.hint}>{c.description}</Caption1>}
+                          <div className={s.chipBar}>
+                            {keyProp && <Badge appearance="tint" color="brand">key: {keyProp.name}</Badge>}
+                            {props ? props.filter((p) => !p.isKey).slice(0, 10).map((p) => <Badge key={p.name} appearance="outline">{p.name}: {p.tsType}</Badge>)
+                              : <Caption1 className={s.mutedCaption}>untyped (no column bindings)</Caption1>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {scopeTab === 'links' && (
+                <div className={s.scopeScroll}>
+                  {links.length === 0 ? <div className={s.empty}><Caption1>This ontology declares no link types.</Caption1></div>
+                    : linkRows.length === 0 ? <div className={s.empty}><Caption1>No matching link types.</Caption1></div>
+                    : linkRows.map((l) => {
+                      const k = osdkLinkKey(l); const endpointsIncluded = selObj.has(l.from) && selObj.has(l.to);
+                      return (
+                        <div key={k} className={s.row}>
+                          <Checkbox checked={selLink.has(k)} onChange={() => applyLink(toggle(selLink, k))} aria-label={`Include ${osdkLinkLabel(l)}`} />
+                          <Body1>{l.from} <Badge appearance="tint">{l.kind}</Badge> {l.to}</Body1>
+                          <span className={s.spacer} />
+                          {!endpointsIncluded && <Badge appearance="tint" color="warning">endpoint excluded</Badge>}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+
+              {scopeTab === 'actions' && (
+                <div className={s.scopeScroll}>
+                  {actionTypes.length === 0 ? (
+                    <MessageBar intent="info"><MessageBarBody>This ontology declares no write-back action types. Add create / update / delete actions on the Ontology to generate typed applyAction methods here.</MessageBarBody></MessageBar>
+                  ) : actRows.length === 0 ? <div className={s.empty}><Caption1>No matching action types.</Caption1></div> : actRows.map((a) => {
+                    const targetIncluded = selObj.has(a.objectType);
+                    return (
+                      <div key={a.name} className={s.row}>
+                        <Checkbox checked={selAct.has(a.name)} onChange={() => applyAct(toggle(selAct, a.name))} aria-label={`Include ${a.name}`} />
+                        <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
+                        <div className={s.rowText}>
+                          <Body1><strong>{a.name}</strong> <Caption1 as="span" className={s.hint}>→ {a.objectType}</Caption1></Body1>
+                          {a.params && a.params.length > 0 && <Caption1 className={s.hint}>params: {a.params.join(', ')}</Caption1>}
+                        </div>
+                        <span className={s.spacer} />
+                        {!targetIncluded && <Badge appearance="tint" color="warning">object excluded</Badge>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <Caption1 className={s.mutedCaption}>
+                Generating includes <strong>{selObj.size}</strong> object type{selObj.size === 1 ? '' : 's'}
+                {selLink.size > 0 ? <>, {selLink.size} link{selLink.size === 1 ? '' : 's'}</> : null}
+                {selAct.size > 0 ? <>, {selAct.size} action{selAct.size === 1 ? '' : 's'}</> : null}. Links / actions to excluded object types are skipped.
+              </Caption1>
+            </>
+          )}
+          <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+        </div>
+
         {gen && (
           <div className={s.section}>
-            <SectionHead icon={<Code20Regular />} title={`Generated SDK (${gen.objectCount} object types)`} hint="Real typed clients + dab-config.json. Copy into your project." />
-            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'ts' | 'py' | 'dab')}>
-              <Tab value="ts">TypeScript</Tab><Tab value="py">Python</Tab><Tab value="dab">dab-config.json</Tab>
+            <SectionHead icon={<Code20Regular />} title="Generated SDK" hint={`${gen.objectCount} object type${gen.objectCount === 1 ? '' : 's'} · ${gen.actionCount} action${gen.actionCount === 1 ? '' : 's'} · ${gen.propertyCount} typed propert${gen.propertyCount === 1 ? 'y' : 'ies'}. Real typed clients + dab-config.json — copy into your project.`} />
+            {gen.propertyCount === 0 && (
+              <MessageBar intent="info"><MessageBarBody>
+                <MessageBarTitle>Untyped object properties</MessageBarTitle>
+                No column bindings are declared on this ontology yet, so the interfaces use an untyped property bag. Bind a Lakehouse / Warehouse source on the Ontology (with key + writable columns) to emit typed members. Precise scalar typing (int / decimal / datetime / bool) is introspected from the source schema in a later pass.
+              </MessageBarBody></MessageBar>
+            )}
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'ts' | 'py' | 'actions' | 'dab')}>
+              <Tab value="ts">TypeScript</Tab>
+              <Tab value="py">Python</Tab>
+              {gen.actions ? <Tab value="actions">Actions</Tab> : null}
+              <Tab value="dab">dab-config.json</Tab>
             </TabList>
-            <CodeBlock ariaLabel="Generated SDK source" content={tab === 'ts' ? gen.typescript : tab === 'py' ? gen.python : JSON.stringify(gen.dabConfig, null, 2)} />
+            <CodeBlock ariaLabel="Generated SDK source" content={
+              tab === 'ts' ? gen.typescript
+                : tab === 'py' ? gen.python
+                : tab === 'actions' ? gen.actions
+                : JSON.stringify(gen.dabConfig, null, 2)
+            } />
           </div>
         )}
       </div>

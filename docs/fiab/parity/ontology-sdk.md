@@ -61,25 +61,27 @@ Developer Console exposes these for an OSDK application:
 | # | Real capability | Loom today | Grade |
 |---|---|---|---|
 | 1 | App creation / management | `new`-gate + Cosmos item; bind dropdown | ✅ built |
-| 2 | **Ontology scope selection (objects/links/actions subset)** | none — `/generate` runs over **all** classes | ❌ MISSING |
-| 3 | Object-type code-gen | TS interface + Python dataclass per class, **but `[property: string]: unknown`** (untyped) | ⚠️ partial |
-| 4 | Link-type code-gen | TS emits `kind_to?: T` fields; **no navigation methods**; Python omits links | ⚠️ partial |
-| 5 | **Action-type code-gen** | surface carries `actionTypes` but codegen emits **only list/get** — no `applyAction` | ❌ MISSING |
+| 2 | **Ontology scope selection (objects/links/actions subset)** | Objects / Links / Actions tabs with checkbox + search + select-all; persisted to Cosmos; `/generate` + `/publish` filter by it | ✅ built |
+| 3 | Object-type code-gen | TS interface + Python dataclass per class with **real named members** (key + writable columns + action params) from `entityBindings`; untyped bag only for unbound types | ✅ built (scalar typing pending) |
+| 4 | Link-type code-gen | TS emits `kind_to?: T` fields (scope-filtered to included types); **no navigation methods**; Python omits links | ⚠️ partial |
+| 5 | **Action-type code-gen** | typed `apply<Action>` create→POST / update→PATCH / delete→DELETE methods (TS + Python) over the DAB REST mutation surface + typed `*Input` shapes + Actions reference tab; dab-config permissions emit create/update/delete to match | ✅ built |
 | 6 | Language targets | TS + Python only; **no Java, no OpenAPI export download** | ⚠️ partial |
-| 7 | Generated client preview | static 3-tab CodeBlock (TS / Python / dab-config) | ⚠️ read-only |
+| 7 | Generated client preview | dynamic tabs TypeScript / Python / Actions / dab-config.json (read-only) | ⚠️ read-only |
 | 8 | **Query / "try it" playground** | none — code is text only, never executed | ❌ MISSING |
 | 9 | Subscriptions (change feed) | none | ❌ MISSING |
 | 10 | **OAuth client setup** | none | ❌ MISSING |
-| 11 | **SDK versioning & release** | `lastGeneratedAt` only; no versions/release history | ❌ MISSING |
-| 12 | **Package download / install** | Copy-to-clipboard only; no zip, no install commands | ❌ MISSING |
-| 13 | API reference docs | none (raw source only) | ❌ MISSING |
-| 14 | APIM publish | `/publish` imports OpenAPI to APIM (real ARM) | ✅ built |
+| 11 | **SDK versioning & release** | `lastGeneratedAt` + object/link/action counts only; no versions/release history | ❌ MISSING |
+| 12 | **Package download / install** | Copy-to-clipboard per tab; no zip, no install commands | ❌ MISSING |
+| 13 | API reference docs | Actions reference tab (deterministic, from surface); no per-object reference page yet | ⚠️ partial |
+| 14 | APIM publish | `/publish` imports OpenAPI to APIM (real ARM), now scope-filtered | ✅ built |
 | 14b | APIM product / subscription keys | none (publish only — no consumer onboarding) | ❌ MISSING |
 
-**Today the editor is one bind dropdown, a "Generate SDK" button that dumps three
-read-only code tabs, and a "Publish to APIM" button.** Real backends exist
-(deterministic DAB codegen + real APIM import) but the surface is roughly 15% of the
-Developer Console.
+**The editor now leads with an Ontology scope selector (Objects / Links / Actions),
+generates typed clients with named properties + `applyCreate/Update/Delete`
+write-back methods, and shows a dynamic 3–4 tab preview.** Real backends
+(deterministic DAB codegen + real APIM import) drive it; the scope selection +
+typed/action codegen close the three P0 gaps. Remaining gaps (Try-it playground,
+GraphQL tab, Java/OpenAPI targets, versioning, OAuth, packaging) are P1/P2.
 
 ---
 
@@ -87,20 +89,32 @@ Developer Console.
 
 ### P0 — visible parity, biggest lift
 
-- **Ontology scope selector** (cap 2). A `TileGrid` of the bound ontology's object
-  types with checkboxes, plus tabs **Objects / Links / Actions**, search box, and
-  "select all". Persist `selectedObjectTypes[] / selectedLinkTypes[] /
-  selectedActionTypes[]` to item state; `/generate` filters `surface` by selection.
-- **Action-type code-gen** (cap 5). Extend `_palantir-codegen.ts` with
-  `generateActionMethods` → typed `applyCreateX/applyUpdateX/applyDeleteX(params)`
-  in TS + Python, POSTing to the DAB/ACA action endpoint (same `/run-action` path
-  Atelier uses against Synapse). Surface in an **Actions** code tab.
-- **Live API Explorer / "Try it"** (cap 8). New panel: pick an included object type
+- **Ontology scope selector** (cap 2). ✅ **DONE.** Objects / Links / Actions tabs
+  with per-type checkboxes, a search box, and select-all / clear. Selection is
+  persisted to `state.selectedObjectTypes[] / selectedLinkTypes[] /
+  selectedActionTypes[]` (Cosmos) and `/generate` + `/publish` filter the surface
+  by it; links / actions to excluded object types are skipped.
+- **Action-type code-gen** (cap 5). ✅ **DONE.** `_palantir-codegen.ts` emits typed
+  `apply<Action>` methods — create→`POST /entity`, update→`PATCH /entity/<key>/<id>`,
+  delete→`DELETE /entity/<key>/<id>` — over the **DAB REST mutation surface** on
+  Container Apps, in TS + Python, with typed `<Type>Input` shapes and an **Actions**
+  reference tab. `generateDabConfig` now grants create/update/delete permissions
+  exactly where an action declares them (config ↔ client in lock-step).
+- **Typed object properties** (cap 3). ✅ **DONE (named members).** `deriveObjectProperties`
+  builds each type's property list from the ontology `entityBindings`
+  (`keyColumns` + `writableColumns`) and action params; the generated interfaces /
+  dataclasses emit real named members (key first) instead of `[property: string]:
+  unknown`. **Honest note:** precise scalar typing (int/decimal/datetime/bool) still
+  awaits a live `INFORMATION_SCHEMA.COLUMNS` introspection — all bound columns are
+  surfaced as `string` for now (DAB returns JSON scalars; the Atelier write path
+  binds NVARCHAR). Unbound types keep the untyped bag with an in-UI MessageBar
+  explaining the remediation.
+- **Live API Explorer / "Try it"** (cap 8). ⏳ TODO. New panel: pick an included object type
   → **Run** → render rows in a `Table`; show the request URL. Backend: a
   `/api/items/ontology-sdk/[id]/query` proxy to the **DAB REST runtime on ACA**
   (`serviceUrl`) with Entra auth; honest `MessageBar` gate when DAB serviceUrl/ACA
   isn't set.
-- **GraphQL Data API tab + playground** (cap 8). DAB already enables `/graphql`.
+- **GraphQL Data API tab + playground** (cap 8). ⏳ TODO. DAB already enables `/graphql`.
   Add a **GraphQL** tab with a Monaco query editor + Run; backend proxies to the DAB
   GraphQL endpoint. Reuse the same ACA serviceUrl gate.
 
@@ -110,10 +124,10 @@ Developer Console.
   typed POJOs + client) and an **Export OpenAPI** action that downloads the same
   OpenAPI 3.0 doc the `/publish` route already builds. Language tab strip:
   TypeScript / Python / Java / GraphQL / OpenAPI / dab-config.
-- **Typed properties** (cap 3). Replace `[property: string]: unknown` with real
-  typed fields. Introspect the bound source columns via **Synapse
-  `INFORMATION_SCHEMA.COLUMNS`** (or DAB `$openapi`) keyed by `entityBindings`;
-  show a property list per object type and emit typed members.
+- **Typed properties** (cap 3). ✅ **Named members DONE** (see P0). Remaining: replace
+  the conservative `string` typing with real scalar types by introspecting the bound
+  source columns via **Synapse `INFORMATION_SCHEMA.COLUMNS`** (or DAB `$openapi`) keyed
+  by `entityBindings`, and show a per-type property panel with the resolved types.
 - **SDK versioning & release history** (cap 11). `semver` field + **Release** button
   → append `{version, generatedAt, notes, objectCount, artifactHash}` to
   `state.versions[]` in Cosmos; render a version-history `Table` with re-download
