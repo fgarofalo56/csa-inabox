@@ -448,7 +448,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="New eventstream"
-        intro="An Eventstream is a streaming topology: sources (Event Hubs, IoT Hub, Kafka, sample data) → operators (filter, aggregate, group-by, join) → destinations (Eventhouse/KQL, Lakehouse, Activator, custom endpoint). Create it, then design the topology on the visual canvas and Publish to Fabric to create the live Eventstream item via the Fabric definition REST API." />
+        intro="An Eventstream is a streaming topology: sources (Event Hubs, IoT Hub, Kafka, sample data) → operators (filter, aggregate, group-by, join) → destinations (Eventhouse/KQL, Lakehouse, Activator, custom endpoint). Create it, then design the topology on the visual canvas and Provision to Azure to stand up a real Event Hub (transport) + Stream Analytics job (transform) — Azure-native, no Fabric required. Publishing to Microsoft Fabric is available as an opt-in alternative." />
     );
   }
 
@@ -473,10 +473,12 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       <div className={s.pad}>
         <MessageBar intent="info">
           <MessageBarBody>
-            <MessageBarTitle>Design here, publish to Fabric</MessageBarTitle>
-            Design the topology below — it is saved to Cosmos as you edit. <strong>Publish to Fabric</strong>
-            {' '}creates (or updates) a real Fabric Eventstream item via the Fabric definition REST API
-            ({' '}<code>POST /workspaces/&#123;ws&#125;/eventstreams</code>). After publishing, activate the
+            <MessageBarTitle>Design here, provision to Azure (Fabric optional)</MessageBarTitle>
+            Design the topology below — it is saved to Cosmos as you edit. <strong>Provision to Azure</strong>
+            {' '}stands up the Azure-native backend — a real Event Hub (transport) + Stream Analytics job
+            (transform) from the canvas — no Fabric required. <strong>Publish to Fabric</strong> is an opt-in
+            alternative that creates (or updates) a Fabric Eventstream item via the Fabric definition REST API
+            ({' '}<code>POST /workspaces/&#123;ws&#125;/eventstreams</code>); after publishing, activate the
             stream&apos;s nodes in the Fabric portal (the per-node Activate/Deactivate toggle is portal-only —
             it is not exposed in the public Fabric REST surface).
           </MessageBarBody>
