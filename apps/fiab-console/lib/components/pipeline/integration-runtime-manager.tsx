@@ -144,10 +144,14 @@ export function IntegrationRuntimeManager({
   itemId, workspaceId, factoryScoped, engine = 'adf', onSelect, selectedName,
 }: IntegrationRuntimeManagerProps) {
   const s = useStyles();
-  // Factory-scoped: the deployment-default ADF route (no item/workspace). Otherwise
-  // the item-scoped route (resolves the factory behind a data-pipeline item).
+  // Honest-gate / copy label for the backing service (ADF factory vs Synapse workspace).
+  const backendLabel = engine === 'synapse' ? 'Synapse workspace' : 'Data Factory';
+  // Factory/workspace-scoped: the deployment-default route (no item/workspace).
+  // Synapse pipelines manage workspace-level IRs via the Synapse management ARM
+  // route; ADF pipelines via the factory route. Otherwise the item-scoped route
+  // (resolves the factory behind a data-pipeline item — ADF only).
   const base = factoryScoped
-    ? `/api/adf/integration-runtimes`
+    ? (engine === 'synapse' ? `/api/synapse/integration-runtimes` : `/api/adf/integration-runtimes`)
     : `/api/items/data-pipeline/${encodeURIComponent(itemId || '')}/integration-runtimes?workspaceId=${encodeURIComponent(workspaceId || '')}`;
   // The DELETE adds `name` as a query param; pick the right separator since the
   // factory route has no existing query string.
@@ -349,8 +353,8 @@ export function IntegrationRuntimeManager({
       {gate && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>Data Factory not configured</MessageBarTitle>
-            Set the <code>{gate.missing}</code> environment variable on the Console so it can reach the backing Azure Data Factory. Until then, integration runtimes can&apos;t be listed or created.
+            <MessageBarTitle>{backendLabel} not configured</MessageBarTitle>
+            Set the <code>{gate.missing}</code> environment variable on the Console so it can reach the backing {engine === 'synapse' ? 'Azure Synapse workspace' : 'Azure Data Factory'}. Until then, integration runtimes can&apos;t be listed or created.
           </MessageBarBody>
         </MessageBar>
       )}

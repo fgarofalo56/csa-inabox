@@ -1160,3 +1160,140 @@ export async function deleteDedicatedSqlPool(name: string): Promise<void> {
   throw new Error(`deleteDedicatedSqlPool(${name}) failed ${r.status}: ${await r.text()}`);
 }
 
+// ============================================================
+// Integration runtimes (ARM)
+//
+// Synapse pipelines run on Integration Runtimes exactly like ADF — the
+// difference is only the ARM resource provider and api-version:
+//   Microsoft.Synapse/workspaces/{ws}/integrationRuntimes  (2021-06-01)
+//   vs ADF's Microsoft.DataFactory/factories/{f}/integrationruntimes (2018-06-01).
+//
+// The IR property shape (Managed | SelfHosted + typeProperties) is identical,
+// so the engine-agnostic spec builder in
+// `lib/pipeline/integration-runtime-catalog.ts` feeds both. These functions
+// mirror adf-client's IR surface (list / getStatus / upsert / start / stop /
+// delete / listAuthKeys) so the same IntegrationRuntimeManager UI drives the
+// Synapse backend. Real ARM REST, no mocks (no-vaporware); the DLZ self-heal in
+// `callArm` covers the multi-sub dlz-attach topology automatically.
+//
+// Grounded in @azure/arm-synapse IntegrationRuntimes (beginCreate / beginStart /
+// beginStop / get / listByWorkspace) + Microsoft.Synapse/workspaces/
+// integrationRuntimes 2021-06-01 template reference.
+// ============================================================
+
+export interface SynapseIntegrationRuntime {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    type: 'Managed' | 'SelfHosted' | string;
+    description?: string;
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export interface SynapseIntegrationRuntimeStatus {
+  name?: string;
+  properties?: {
+    type?: string;
+    state?:
+      | 'Initial' | 'Stopped' | 'Started' | 'Starting' | 'Stopping'
+      | 'NeedRegistration' | 'Online' | 'Limited' | 'Offline' | 'AccessDenied'
+      | string;
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export interface SynapseIntegrationRuntimeAuthKeys { authKey1?: string; authKey2?: string }
+
+/**
+ * Honest config gate for the workspace-level Synapse IR routes. Returns the
+ * exact missing env var so the BFF can 503 with a precise MessageBar (matching
+ * adfConfigGate). `sub()` accepts LOOM_SYNAPSE_SUB or LOOM_SUBSCRIPTION_ID,
+ * `rg()` needs LOOM_DLZ_RG, `ws()` needs LOOM_SYNAPSE_WORKSPACE. Null when
+ * fully configured.
+ */
+export function synapseConfigGate(): { missing: string } | null {
+  if (!process.env.LOOM_SYNAPSE_SUB && !process.env.LOOM_SUBSCRIPTION_ID) return { missing: 'LOOM_SUBSCRIPTION_ID' };
+  if (!process.env.LOOM_DLZ_RG) return { missing: 'LOOM_DLZ_RG' };
+  if (!process.env.LOOM_SYNAPSE_WORKSPACE) return { missing: 'LOOM_SYNAPSE_WORKSPACE' };
+  return null;
+}
+
+export async function listSynapseIntegrationRuntimes(): Promise<SynapseIntegrationRuntime[]> {
+  const r = await callArm(`${armBase()}/integrationRuntimes?api-version=${ARM_API}`);
+  const body = await jsonOrThrow<{ value: SynapseIntegrationRuntime[] }>(r, 'listSynapseIntegrationRuntimes');
+  return body.value || [];
+}
+
+export async function getSynapseIntegrationRuntimeStatus(name: string): Promise<SynapseIntegrationRuntimeStatus> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}/getStatus?api-version=${ARM_API}`,
+    { method: 'POST' },
+  );
+  return jsonOrThrow<SynapseIntegrationRuntimeStatus>(r, `getSynapseIntegrationRuntimeStatus(${name})`);
+}
+
+export async function upsertSynapseIntegrationRuntime(
+  name: string,
+  spec: SynapseIntegrationRuntime,
+): Promise<SynapseIntegrationRuntime> {
+  const body = { properties: spec.properties };
+  const r = await callArm(`${armBase()}/integrationRuntimes/${encodeURIComponent(name)}?api-version=${ARM_API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SynapseIntegrationRuntime>(r, `upsertSynapseIntegrationRuntime(${name})`);
+}
+
+export async function startSynapseIr(name: string): Promise<void> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}/start?api-version=${ARM_API}`,
+    { method: 'POST' },
+  );
+  // Start is a long-running operation (202 + Location). The 202 means accepted —
+  // the node set comes online asynchronously; the manager re-reads status.
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`startSynapseIr failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function stopSynapseIr(name: string): Promise<void> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}/stop?api-version=${ARM_API}`,
+    { method: 'POST' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`stopSynapseIr failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function deleteSynapseIr(name: string): Promise<void> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}?api-version=${ARM_API}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
+    throw new Error(`deleteSynapseIr failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/**
+ * Retrieve the registration ("install") keys for a Self-Hosted Synapse IR — the
+ * keys an operator pastes into the Microsoft Integration Runtime gateway to
+ * register a node with this workspace.
+ *
+ * Synapse management action: POST .../integrationRuntimes/{name}/listAuthKeys
+ * (grounded in @azure/arm-synapse IntegrationRuntimeAuthKeys_List →
+ * { authKey1, authKey2 }). The keys are secrets — the BFF returns them only to
+ * an authenticated session and never persists them.
+ */
+export async function listSynapseIrAuthKeys(name: string): Promise<SynapseIntegrationRuntimeAuthKeys> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}/listAuthKeys?api-version=${ARM_API}`,
+    { method: 'POST' },
+  );
+  return jsonOrThrow<SynapseIntegrationRuntimeAuthKeys>(r, `listSynapseIrAuthKeys(${name})`);
+}
+

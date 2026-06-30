@@ -218,12 +218,13 @@ export function PipelineManageHub({
   const s = useStyles();
   const [tab, setTab] = useState<HubTab>(initialTab);
 
-  // The IR tab is ALWAYS present (ADF + Synapse). For ADF, the full
-  // IntegrationRuntimeManager renders against the deployment-default factory
-  // (factory-scoped — no item/workspace binding needed; IRs are factory-scoped).
-  // For Synapse (workspace-level IRs not yet wired in Loom) the tab renders an
-  // honest gate rather than disappearing.
-  const irManageable = engine === 'adf';
+  // The IR tab is ALWAYS present, and now manageable for BOTH engines. ADF IRs
+  // are factory-scoped (Microsoft.DataFactory/factories/integrationruntimes);
+  // Synapse IRs are workspace-scoped (Microsoft.Synapse/workspaces/
+  // integrationRuntimes) — the IntegrationRuntimeManager points at the right
+  // backend route via its `engine` prop. Both render the full Azure / Self-Hosted
+  // wizard + lifecycle + auth keys against real ARM (no item/workspace binding —
+  // each is scoped to the deployment-default factory/workspace).
   const backendLabel = engine === 'synapse' ? 'Synapse workspace' : 'Data Factory';
 
   // Honor the requested tab each time the dialog is (re)opened.
@@ -261,18 +262,7 @@ export function PipelineManageHub({
 
             {tab === 'integration-runtimes' && (
               <div className={s.body}>
-                {irManageable ? (
-                  <IntegrationRuntimeManager factoryScoped engine={engine} />
-                ) : (
-                  <MessageBar intent="warning">
-                    <MessageBarBody>
-                      <MessageBarTitle>Workspace-level integration runtimes</MessageBarTitle>
-                      Synapse integration runtimes are managed at the workspace level (Synapse Studio → Manage →
-                      Integration runtimes). Loom doesn&apos;t yet wire a Synapse IR backend, so create or manage them
-                      in the Synapse workspace directly. Azure Data Factory pipelines manage their IRs here.
-                    </MessageBarBody>
-                  </MessageBar>
-                )}
+                <IntegrationRuntimeManager factoryScoped engine={engine} />
               </div>
             )}
           </DialogContent>
