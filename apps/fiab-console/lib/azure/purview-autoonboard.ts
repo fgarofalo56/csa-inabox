@@ -15,7 +15,18 @@
  * matches. Scan-based classification/tagging is a deeper follow-up; this
  * establishes the asset + ownership so it surfaces immediately.
  */
-import { registerAtlasEntity, ensureClassificationDefs, deleteAtlasEntityByQualifiedName } from './purview-client';
+import {
+  registerAtlasEntity,
+  ensureClassificationDefs,
+  deleteAtlasEntityByQualifiedName,
+  registerDataSource,
+  registerDatabricksUnityCatalogSource,
+  upsertScan,
+  triggerScanRun,
+  deleteDataSource,
+} from './purview-client';
+import { scanRulesetName } from './purview-classification-sync';
+import { dfsSuffix } from './cloud-endpoints';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 /**
@@ -79,6 +90,215 @@ export function loomTypeToAtlasTypeName(itemType: string): string {
   }
 }
 
+// ============================================================================
+// Scan-source registration — so built-in classifications auto-detect.
+//
+// Registering the Atlas entity (above) surfaces the item in the catalog, but
+// classifications (SSN / credit-card / address) only land once Purview *scans*
+// the backing store. The block below additionally registers the item's real
+// backing store (ADLS Gen2 / Azure SQL / Databricks Unity Catalog) as a Purview
+// SCAN source, defines a scan bound to the tenant's custom ruleset (so system +
+// Loom-custom classifications both apply), and — only when LOOM_PURVIEW_AUTOSCAN
+// is enabled — triggers a run. Everything is best-effort and never blocks
+// item creation.
+// ============================================================================
+
+/** A Purview scan-source mapping derived from a Loom item's backing store. */
+export interface LoomScanSource {
+  /** Stable, Loom-owned Purview data-source name (so offboard deletes only ours). */
+  name: string;
+  /** Purview connector kind. */
+  kind: 'AdlsGen2' | 'AzureSqlDatabase' | 'AzureDatabricksUnityCatalog';
+  /** Source `properties` (endpoint / serverEndpoint / metastoreId). */
+  properties: Record<string, unknown>;
+}
+
+/** Sanitised, stable Purview data-source name Loom owns for an item. */
+function loomSourceName(item: WorkspaceItem): string {
+  const base = `loom-${item.itemType}-${item.id}`
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  return base || `loom-${item.id}`.slice(0, 60);
+}
+
+/**
+ * Build an ADLS Gen2 source endpoint (`https://<account>.dfs.<suffix>/`) from
+ * an `abfss://…` URI or any `<account>.dfs.<suffix>` host string. Returns
+ * undefined when no `<account>.dfs.…` host can be parsed.
+ */
+function adlsEndpointFrom(s: string): string | undefined {
+  const m = s.match(/([a-z0-9]+)\.(dfs\.[a-z0-9.]+?)(?:[/:?]|$)/i);
+  if (!m) return undefined;
+  return `https://${m[1].toLowerCase()}.${m[2].replace(/\.$/, '')}/`;
+}
+
+/**
+ * Map a Loom item to its Purview scan source, or null for item types with no
+ * scannable backing (notebooks, pipelines, reports, apps, …) — caller skips
+ * those silently. Detection is value-driven (not a type allowlist), reading the
+ * endpoints the provisioners stamp into item state / `provisioning.secondaryIds`:
+ *   • an `abfss://` URI or `<account>.dfs.<suffix>` host → AdlsGen2
+ *   • a UC `metastoreId`                                 → AzureDatabricksUnityCatalog
+ *   • a `<server>.database.<suffix>` FQDN                → AzureSqlDatabase
+ */
+export function loomItemToScanSource(item: WorkspaceItem): LoomScanSource | null {
+  const state = (item.state || {}) as Record<string, any>;
+  const sec = (state.provisioning?.secondaryIds || {}) as Record<string, any>;
+  const name = loomSourceName(item);
+
+  // Candidate strings where backing endpoints are stamped (state + secondaryIds).
+  const candidates: string[] = [];
+  for (const v of Object.values(state)) if (typeof v === 'string') candidates.push(v);
+  for (const v of Object.values(sec)) if (typeof v === 'string') candidates.push(v);
+
+  // 1. ADLS Gen2 — an abfss:// URI or a *.dfs.<suffix> host.
+  const adlsHint = candidates.find((s) => /^abfss:\/\//i.test(s) || /\.dfs\.[a-z0-9.]+/i.test(s));
+  if (adlsHint) {
+    const endpoint = adlsEndpointFrom(adlsHint);
+    if (endpoint) return { name, kind: 'AdlsGen2', properties: { endpoint } };
+  }
+  // 1b. Lakehouse bound to an explicit external storage account name.
+  if (typeof state.storageAccount === 'string' && state.storageAccount.trim()) {
+    const acct = state.storageAccount.trim().replace(/[^a-z0-9]/gi, '').toLowerCase();
+    if (acct) return { name, kind: 'AdlsGen2', properties: { endpoint: `https://${acct}.${dfsSuffix()}/` } };
+  }
+
+  // 2. Azure Databricks Unity Catalog — a metastore id.
+  const metastoreId =
+    (typeof state.metastoreId === 'string' && state.metastoreId.trim()) ||
+    (typeof sec.metastoreId === 'string' && sec.metastoreId.trim()) ||
+    '';
+  if (metastoreId) {
+    return { name, kind: 'AzureDatabricksUnityCatalog', properties: { metastoreId } };
+  }
+
+  // 3. Azure SQL Database — a *.database.<suffix> FQDN.
+  const sqlFqdn = candidates
+    .map((s) => s.match(/([a-z0-9-]+\.database\.(?:windows\.net|usgovcloudapi\.net))/i)?.[1])
+    .find(Boolean);
+  if (sqlFqdn) {
+    return { name, kind: 'AzureSqlDatabase', properties: { endpoint: sqlFqdn, serverEndpoint: sqlFqdn } };
+  }
+
+  return null; // no scannable backing — skip silently
+}
+
+/** LOOM_PURVIEW_AUTOSCAN gate — default OFF (scan-cost control). */
+function autoscanEnabled(): boolean {
+  const v = (process.env.LOOM_PURVIEW_AUTOSCAN || '').trim().toLowerCase();
+  return v === '1' || v === 'true' || v === 'yes' || v === 'on';
+}
+
+/**
+ * Best-effort read→merge→replace of extra `state.*` keys onto the just-created
+ * Cosmos item (mirror of the GUID write-back). Re-reads current state so it
+ * preserves `purviewGuid` written moments earlier. Never throws.
+ */
+async function stampItemState(item: WorkspaceItem, patch: Record<string, unknown>): Promise<void> {
+  if (!item.id || !item.workspaceId) return;
+  try {
+    const { itemsContainer } = await import('@/lib/azure/cosmos-client');
+    const container = await itemsContainer();
+    const { resource: current } = await container.item(item.id, item.workspaceId).read<WorkspaceItem>();
+    if (!current) return;
+    const next: WorkspaceItem = {
+      ...current,
+      state: { ...(current.state || {}), ...patch },
+      updatedAt: new Date().toISOString(),
+    };
+    await container.item(item.id, item.workspaceId).replace<WorkspaceItem>(next);
+  } catch {
+    /* best-effort state stamp — never block or surface an error */
+  }
+}
+
+/**
+ * Register the item's backing store as a Purview scan source + define a scan so
+ * built-in + Loom-custom classifications auto-detect. Best-effort + non-blocking
+ * (own try/catch — never throws into the create path). The scan trigger is gated
+ * on LOOM_PURVIEW_AUTOSCAN (default OFF); when off the source is registered and
+ * the scan defined, but no run is started.
+ */
+async function registerLoomItemAsScanSource(item: WorkspaceItem, tenantId: string): Promise<void> {
+  try {
+    const src = loomItemToScanSource(item);
+    if (!src) return; // no scannable backing — silent skip
+
+    // 1. Register the source (UC uses the dedicated helper; others the generic PUT).
+    if (src.kind === 'AzureDatabricksUnityCatalog') {
+      await registerDatabricksUnityCatalogSource({ name: src.name, metastoreId: String(src.properties.metastoreId) });
+    } else {
+      await registerDataSource({ name: src.name, kind: src.kind, properties: src.properties });
+    }
+
+    // Accumulate state stamps (source name always; scan name once defined) and
+    // write them in a single read→merge→replace at the end.
+    const patch: Record<string, unknown> = { purviewSourceName: src.name };
+
+    // 2. Define + optionally trigger a scan. Only ruleset-driven kinds (ADLS
+    //    Gen2 / Azure SQL) take the generic upsertScan — a UC scan additionally
+    //    needs a SQL Warehouse HTTP path that can't be inferred at create time
+    //    (the catalog/metastores flow owns UC scan-define), so UC registers the
+    //    source only here.
+    if (src.kind === 'AdlsGen2' || src.kind === 'AzureSqlDatabase') {
+      const scanName = `${src.name}-scan`;
+      const scanKind = `${src.kind}Msi`; // AdlsGen2Msi / AzureSqlDatabaseMsi (MI-first)
+      let defined = false;
+      try {
+        // Bind the tenant's custom ruleset so Loom-custom + system classifications
+        // both apply.
+        await upsertScan({
+          sourceName: src.name,
+          scanName,
+          kind: scanKind,
+          scanRulesetName: scanRulesetName(tenantId, src.kind),
+          scanRulesetType: 'Custom',
+        });
+        defined = true;
+      } catch {
+        // No tenant-custom ruleset synced yet → fall back to the built-in System
+        // ruleset so the ~200 system classifications (SSN/credit-card/address)
+        // still apply.
+        try {
+          await upsertScan({
+            sourceName: src.name,
+            scanName,
+            kind: scanKind,
+            scanRulesetName: src.kind,
+            scanRulesetType: 'System',
+          });
+          defined = true;
+        } catch {
+          /* scan-define best-effort */
+        }
+      }
+      if (defined) {
+        patch.purviewScanName = scanName;
+        // 3. Trigger only when autoscan is explicitly enabled (cost control).
+        if (autoscanEnabled()) {
+          try {
+            // Scale the shared Purview SHIR VMSS up first if the scan runs on a
+            // SelfHosted IR (no-op otherwise — prewarm guards internally).
+            const { prewarmPurviewShirForScan } = await import('./shir-autoscale');
+            await prewarmPurviewShirForScan(src.name, scanName);
+            await triggerScanRun(src.name, scanName);
+          } catch {
+            /* scan-trigger best-effort */
+          }
+        }
+      }
+    }
+
+    // 4. Persist the Loom-owned source (+ scan) name so offboard deletes only
+    //    sources we registered.
+    await stampItemState(item, patch);
+  } catch {
+    /* best-effort scan-source registration — never block or fail item creation */
+  }
+}
+
 export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string): Promise<void> {
   if (!process.env.LOOM_PURVIEW_ACCOUNT) return; // not configured → silent no-op
   try {
@@ -134,6 +354,11 @@ export async function autoOnboardToPurview(item: WorkspaceItem, tenantId: string
         /* GUID write-back is best-effort — never block or surface an error */
       }
     }
+
+    // Register the item's backing store as a Purview scan source + define a scan
+    // so built-in classifications (SSN/credit-card/address) auto-detect. Best-
+    // effort + non-blocking; the scan trigger is gated on LOOM_PURVIEW_AUTOSCAN.
+    await registerLoomItemAsScanSource(item, tenantId);
   } catch {
     /* best-effort auto-onboard — never block or fail item creation */
   }
@@ -162,5 +387,15 @@ export async function offboardFromPurview(item: WorkspaceItem, tenantId: string)
     await deleteAtlasEntityByQualifiedName(typeName, itemQualifiedName(item, tenantId));
   } catch {
     /* best-effort offboard — never block or fail item deletion */
+  }
+  // Also retire the Loom-owned Purview scan source, if we registered one on
+  // create (state.purviewSourceName stamped by registerLoomItemAsScanSource).
+  // Separate try/catch so an Atlas-delete failure never skips the source delete.
+  try {
+    const state = (item.state || {}) as Record<string, unknown>;
+    const sourceName = typeof state.purviewSourceName === 'string' ? state.purviewSourceName.trim() : '';
+    if (sourceName) await deleteDataSource(sourceName);
+  } catch {
+    /* best-effort source delete — never block or fail item deletion */
   }
 }
