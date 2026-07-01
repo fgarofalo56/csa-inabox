@@ -26,7 +26,14 @@ function logoutUrl(req: NextRequest): string {
 
 export async function GET(req: NextRequest) {
   const target = logoutUrl(req);
-  const body = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${target}"><title>Signing out…</title></head><body><script>window.location.replace(${JSON.stringify(target)});</script></body></html>`;
+  // The strict CSP (middleware.ts) forbids un-nonced inline scripts. This is a
+  // raw route-handler Response, so Next does NOT auto-stamp the nonce — we read
+  // it from the `x-nonce` request header the middleware set and stamp it here.
+  // (A <meta http-equiv="refresh"> fallback below still redirects if the script
+  // is ever blocked, e.g. a request that bypassed middleware.)
+  const nonce = req.headers.get('x-nonce');
+  const nonceAttr = nonce ? ` nonce="${nonce}"` : '';
+  const body = `<!DOCTYPE html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="0;url=${target}"><title>Signing out…</title></head><body><script${nonceAttr}>window.location.replace(${JSON.stringify(target)});</script></body></html>`;
   return new Response(body, {
     status: 200,
     headers: {
