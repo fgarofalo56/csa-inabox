@@ -1355,16 +1355,42 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
 }
 
 // ============================================================
-// Managed Instance editor (list-only in v3)
+// Managed Instance editor — registry + live T-SQL query execution
 // ============================================================
+// Lists managed instances (ARM) AND runs live T-SQL over the SELECTED
+// instance's private-endpoint FQDN. Query execution reuses the exact same
+// TDS path the Azure SQL Database editor uses: the jobs-store startSqlQuery →
+// POST /api/items/azure-sql-database/[id]/query → executeQueryBatch (AAD-token
+// TDS). getPool uses the FQDN as-is (MI FQDNs contain dots), so the MI's
+// `<mi>.<zone>.database.<suffix>` connection works without a Fabric dependency.
+// The left-pane SqlDbTree gives the real sys.* schema navigator against the
+// same connection. If the Console cannot reach the instance over its private
+// endpoint, the real TDS connection error surfaces (honest gate, no fake data).
 export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [instances, setInstances] = useState<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  // Selected instance → drives the schema navigator (real reads over the PE).
+  // Selected instance → drives the schema navigator + live TDS query editor.
   const [selectedFqdn, setSelectedFqdn] = useState('');
   const [navDb, setNavDb] = useState('master');
+  const [tab, setTab] = useState<'instances' | 'query'>('instances');
+  const [browserRefreshKey, setBrowserRefreshKey] = useState(0);
+
+  // ── Live T-SQL query surface (same execution path as the Azure SQL DB editor) ──
+  const [sqlText, setSqlText] = useState<string>(
+    `-- Azure SQL Managed Instance — TDS over AAD MI from the Loom Console BFF.\n`
+    + `-- Same execution path as the Azure SQL Database editor, pointed at the\n`
+    + `-- selected instance's private-endpoint FQDN.\n`
+    + `SELECT @@VERSION AS version, DB_NAME() AS db, SUSER_SNAME() AS login_name;`,
+  );
+  const [result, setResult] = useState<QueryResponse | null>(null);
+  const [running, setRunning] = useState(false);
+  // Background-job continuity + TDS cancel token (see jobs-store.startSqlQuery).
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const startSqlQuery = useJobsStore((st) => st.startSqlQuery);
+  const jobs = useJobsStore((st) => st.jobs);
 
   const refresh = useCallback(() => {
     setLoading(true); setErr(null);
@@ -1377,13 +1403,98 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const selectInstance = useCallback((fqdn: string) => {
+    if (!fqdn) return;
+    setSelectedFqdn(fqdn);
+    setResult(null);
+    setTab('query');
+  }, []);
+
+  // Run T-SQL over the selected instance's FQDN, reusing the Azure SQL DB
+  // /query route (executeQueryBatch). The route resolves the connection purely
+  // from the body server/database, so pointing `server` at the MI FQDN reuses
+  // the identical TDS backend — no MI-specific backend needed.
+  const run = useCallback(() => {
+    if (!selectedFqdn) { setResult({ ok: false, error: 'select a managed instance first' }); return; }
+    if (!navDb.trim()) { setResult({ ok: false, error: 'database is required' }); return; }
+    const reqId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setActiveRequestId(reqId);
+    setRunning(true); setResult(null);
+    const jobId = startSqlQuery({
+      databaseName: navDb.trim(),
+      server: selectedFqdn,
+      sqlLabel: sqlText.slice(0, 80),
+      sqlText,
+      queryUrl: `/api/items/azure-sql-database/${encodeURIComponent(id)}/query`,
+      requestId: reqId,
+      onDone: ({ ok, queryResult, error, code }) => {
+        setRunning(false); setActiveJobId(null); setActiveRequestId(null);
+        setResult(ok && queryResult
+          ? { ok: true, ...queryResult }
+          : { ok: false, error: error || 'query failed', code });
+      },
+    });
+    setActiveJobId(jobId);
+  }, [id, selectedFqdn, navDb, sqlText, startSqlQuery]);
+
+  // Cancel via a real TDS ATTENTION packet (same cancel route as Azure SQL DB).
+  const cancelQuery = useCallback(async () => {
+    if (!activeRequestId) return;
+    try {
+      await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ requestId: activeRequestId }),
+      });
+    } catch { /* best-effort; the query promise still settles */ }
+  }, [id, activeRequestId]);
+
+  // Recover a result for a query that finished while this editor was unmounted.
+  useEffect(() => {
+    if (!activeJobId) return;
+    const job = jobs.find((j) => j.id === activeJobId);
+    if (!job || job.status === 'running') return;
+    setRunning(false);
+    setResult(job.status === 'success' && job.queryResult
+      ? { ok: true, ...job.queryResult }
+      : { ok: false, error: job.error || 'query failed' });
+    setActiveJobId(null);
+    setActiveRequestId(null);
+  }, [jobs, activeJobId]);
+
+  const newTsql = useCallback(() => {
+    setSqlText('-- New T-SQL.\nSELECT 1;');
+    setResult(null);
+    setTab('query');
+  }, []);
+
+  const canRun = !!selectedFqdn && !!navDb.trim() && !running;
+
+  // Ctrl+S / Cmd+S = Run on the Query tab (SSMS / Azure Data Studio muscle memory).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (tab === 'query' && canRun) run();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tab, canRun, run]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Instances', actions: [
         { label: loading ? 'Refreshing…' : 'Refresh list', onClick: loading ? undefined : refresh, disabled: loading },
       ]},
+      { label: 'Query', actions: [
+        { label: 'New T-SQL', onClick: newTsql },
+        { label: running ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun, title: !selectedFqdn ? 'Select a managed instance first' : undefined },
+      ]},
     ]},
-  ], [loading, refresh]);
+  ], [loading, refresh, running, canRun, run, newTsql, selectedFqdn]);
 
   return (
     <ItemEditorChrome
@@ -1391,13 +1502,37 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
       ribbon={ribbon}
       leftPanel={
         selectedFqdn
-          ? <SqlDbTree workspaceId="" itemId="new" server={selectedFqdn} database={navDb} />
+          ? (
+            <div className={s.sqlLeftPane}>
+              <div className={s.schemaBrowserHeader}>
+                <Caption1 className={s.schemaBrowserTitle}>Schema · <code>{selectedFqdn}</code></Caption1>
+                <Tooltip content="Reload objects from sys.* catalog" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => setBrowserRefreshKey((k) => k + 1)} aria-label="Refresh schema browser" />
+                </Tooltip>
+                <Tooltip content="Clear the selected instance" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setSelectedFqdn('')} aria-label="Clear selected instance" />
+                </Tooltip>
+              </div>
+              <div className={s.formRow}>
+                <Label htmlFor="mi-nav-db">Database</Label>
+                <Input id="mi-nav-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} placeholder="master" />
+              </div>
+              <div className={s.schemaBrowserBox}>
+                <SqlDbTree
+                  workspaceId="" itemId={id}
+                  server={selectedFqdn} database={navDb}
+                  refreshKey={browserRefreshKey}
+                  onOpenQuery={(sql) => { setSqlText(sql); setTab('query'); }}
+                />
+              </div>
+            </div>
+          )
           : (
             <div className={s.treePad}>
               <EmptyState
                 icon={<Database20Regular />}
                 title="No instance selected"
-                body="Select a managed instance below to browse its schemas, tables, and views over the private endpoint."
+                body="Select a managed instance to browse its schemas, tables, and views and run live T-SQL over the private endpoint."
               />
             </div>
           )
@@ -1408,82 +1543,120 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>Managed Instances are provisioned out-of-band</MessageBarTitle>
-                Create via bicep <code>Microsoft.Sql/managedInstances</code> (45+ min deploy) or the Azure portal.
-                This is a read-only registry view.
+                Create via bicep <code>Microsoft.Sql/managedInstances</code> (45+ min deploy) or the Azure portal, then
+                select the instance here to browse its schema and run T-SQL.
               </MessageBarBody>
             </MessageBar>
           )}
-          {/* Real schema reads are attempted over the PE via the navigator; this
-              note names the infra/role the reads need (honest fallback per
-              no-vaporware.md — the navigator surfaces the real TDS error if the
-              PE isn't reachable). */}
-          <MessageBar intent="info">
-            <MessageBarBody>
-              <MessageBarTitle>Browsing an instance reads its schema over the private endpoint</MessageBarTitle>
-              Select an instance to load its schemas/tables/views in the navigator (real
-              <code> sys.*</code> over TDS — the same path the Azure SQL DB editor uses). The
-              Console must reach the instance over a private endpoint in the MI delegated subnet
-              and the UAMI must be an Entra admin (or have <code>db_datareader</code> + <code>VIEW DEFINITION</code>);
-              the navigator shows the real connection error otherwise.
-            </MessageBarBody>
-          </MessageBar>
-          <div className={s.toolbar}>
-            <Button size="small" appearance="outline" onClick={refresh} disabled={loading}>Refresh list</Button>
-            {selectedFqdn && (
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
+            <Tab value="instances" icon={<DatabaseMultiple20Regular />}>Instances</Tab>
+            <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+          </TabList>
+
+          {tab === 'instances' && (
+            <>
+              {/* Honest gate: schema reads + queries run over the PE; this names
+                  the infra/role they need (per no-vaporware.md — the real TDS
+                  error surfaces if the PE isn't reachable). */}
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Select an instance to browse its schema and run T-SQL</MessageBarTitle>
+                  Selecting an instance loads its schemas/tables/views in the navigator and enables the
+                  <strong> Query</strong> tab — real <code>sys.*</code> reads and live T-SQL over TDS, the same
+                  execution path the Azure SQL Database editor uses. The Console must reach the instance over a
+                  private endpoint in the MI delegated subnet and the UAMI must be a
+                  <strong> Microsoft Entra admin</strong> on the instance (or have <code>db_datareader</code> +
+                  <code> VIEW DEFINITION</code>); the connection error is shown verbatim otherwise.
+                </MessageBarBody>
+              </MessageBar>
+              <div className={s.toolbar}>
+                <Button size="small" appearance="outline" onClick={refresh} disabled={loading}>Refresh list</Button>
+                {selectedFqdn && (
+                  <>
+                    <Caption1>Selected: <strong>{selectedFqdn}</strong></Caption1>
+                    <Button size="small" appearance="subtle" onClick={() => setTab('query')}>Open Query</Button>
+                    <Button size="small" appearance="subtle" onClick={() => setSelectedFqdn('')}>Clear</Button>
+                  </>
+                )}
+                {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+              </div>
+              {err && <BackendStateBar error={err} title="Azure SQL" />}
+              <Subtitle2 className={s.sectionHeader}>
+                <span className={s.sectionHeaderIcon}><DatabaseMultiple20Regular /></span>
+                Managed Instances ({instances.length})
+              </Subtitle2>
+              {loading ? (
+                <div className={s.tableWrap}>
+                  <Skeleton aria-label="Loading managed instances…" style={{ padding: tokens.spacingVerticalXL }}>
+                    <SkeletonItem size={16} style={{ width: '30%' }} />
+                    <SkeletonItem size={12} />
+                    <SkeletonItem size={12} style={{ width: '90%' }} />
+                    <SkeletonItem size={12} style={{ width: '70%' }} />
+                  </Skeleton>
+                </div>
+              ) : instances.length === 0 && !err ? (
+                <EmptyState
+                  icon={<Database20Regular />}
+                  title="No managed instances found"
+                  body="Provision one with `Microsoft.Sql/managedInstances` via bicep or the Azure portal, then Refresh to see it listed here."
+                />
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Name</TableHeaderCell>
+                      <TableHeaderCell>State</TableHeaderCell>
+                      <TableHeaderCell>Location</TableHeaderCell>
+                      <TableHeaderCell>SKU</TableHeaderCell>
+                      <TableHeaderCell>FQDN</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {instances.map((i: any) => (
+                        <TableRow key={i.id}
+                          onClick={() => i.fqdn && selectInstance(i.fqdn)}
+                          style={{ cursor: i.fqdn ? 'pointer' : 'default', background: i.fqdn && i.fqdn === selectedFqdn ? tokens.colorNeutralBackground1Selected : undefined }}>
+                          <TableCell><strong>{i.name}</strong></TableCell>
+                          <TableCell>{i.state}</TableCell>
+                          <TableCell>{i.location}</TableCell>
+                          <TableCell>{i.sku?.name}</TableCell>
+                          <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{i.fqdn}</code></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === 'query' && (
+            !selectedFqdn ? (
+              <EmptyState
+                icon={<Play20Regular />}
+                title="No instance selected"
+                body="Pick a managed instance on the Instances tab, then write T-SQL here and Run it over AAD-authenticated TDS."
+              />
+            ) : (
               <>
-                <Caption1>Browsing: <strong>{selectedFqdn}</strong></Caption1>
-                <Label htmlFor="mi-nav-db">DB</Label>
-                <Input id="mi-nav-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} style={{ width: '140px' }} />
-                <Button size="small" appearance="subtle" onClick={() => setSelectedFqdn('')}>Clear</Button>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">SQL MI</Badge>
+                  <Caption1>instance: <strong>{selectedFqdn}</strong>, db: <strong>{navDb || 'not set'}</strong></Caption1>
+                  <Label htmlFor="mi-query-db">DB</Label>
+                  <Input id="mi-query-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} style={{ width: '160px' }} />
+                  <Button appearance="primary" icon={<Play20Regular />} disabled={!canRun} onClick={run} style={{ marginLeft: 'auto' }}>Run</Button>
+                  {running && (
+                    <Button appearance="secondary" icon={<Stop20Regular />} onClick={cancelQuery} disabled={!activeRequestId} title="Send a TDS ATTENTION packet — cancels the running query on the server">Cancel</Button>
+                  )}
+                </div>
+                {running && (
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Running in background — switch tabs or close this editor freely; a toast fires when the query completes.
+                  </Caption1>
+                )}
+                <MonacoTextarea value={sqlText} onChange={setSqlText} language="tsql" height={240} minHeight={200} ariaLabel="T-SQL editor" />
+                <ResultsPanel result={result} loading={running} />
               </>
-            )}
-            {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
-          </div>
-          {err && <BackendStateBar error={err} title="Azure SQL" />}
-          <Subtitle2 className={s.sectionHeader}>
-            <span className={s.sectionHeaderIcon}><DatabaseMultiple20Regular /></span>
-            Managed Instances ({instances.length})
-          </Subtitle2>
-          {loading ? (
-            <div className={s.tableWrap}>
-              <Skeleton aria-label="Loading managed instances…" style={{ padding: tokens.spacingVerticalXL }}>
-                <SkeletonItem size={16} style={{ width: '30%' }} />
-                <SkeletonItem size={12} />
-                <SkeletonItem size={12} style={{ width: '90%' }} />
-                <SkeletonItem size={12} style={{ width: '70%' }} />
-              </Skeleton>
-            </div>
-          ) : instances.length === 0 && !err ? (
-            <EmptyState
-              icon={<Database20Regular />}
-              title="No managed instances found"
-              body="Provision one with `Microsoft.Sql/managedInstances` via bicep or the Azure portal, then Refresh to see it listed here."
-            />
-          ) : (
-            <div className={s.tableWrap}>
-              <Table size="small">
-                <TableHeader><TableRow>
-                  <TableHeaderCell>Name</TableHeaderCell>
-                  <TableHeaderCell>State</TableHeaderCell>
-                  <TableHeaderCell>Location</TableHeaderCell>
-                  <TableHeaderCell>SKU</TableHeaderCell>
-                  <TableHeaderCell>FQDN</TableHeaderCell>
-                </TableRow></TableHeader>
-                <TableBody>
-                  {instances.map((i: any) => (
-                    <TableRow key={i.id}
-                      onClick={() => i.fqdn && setSelectedFqdn(i.fqdn)}
-                      style={{ cursor: i.fqdn ? 'pointer' : 'default', background: i.fqdn && i.fqdn === selectedFqdn ? tokens.colorNeutralBackground1Selected : undefined }}>
-                      <TableCell><strong>{i.name}</strong></TableCell>
-                      <TableCell>{i.state}</TableCell>
-                      <TableCell>{i.location}</TableCell>
-                      <TableCell>{i.sku?.name}</TableCell>
-                      <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{i.fqdn}</code></TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+            )
           )}
         </div>
       }
