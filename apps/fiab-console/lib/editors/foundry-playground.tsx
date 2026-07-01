@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle1, Subtitle2, Body1Strong, Caption1, Badge, Spinner, Button,
   SearchBox, Dropdown, Option, Slider, Label, Field, Input, Textarea, Tooltip,
-  Card, Avatar, Divider, Tag,
+  Card, Avatar, Divider, Tag, Radio, RadioGroup,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, shorthands,
@@ -36,7 +36,7 @@ import {
   MicRecord24Regular, Speaker224Regular, Send24Filled, Delete20Regular,
   Code20Regular, ChevronLeft20Regular, Trophy20Regular, ArrowSwap20Regular,
   Apps24Regular, Options24Regular, Grid24Regular, DocumentText24Regular,
-  Open16Regular,
+  Database24Regular, Add16Regular, Dismiss16Regular, DocumentText16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '../components/empty-state';
 import { TileGrid } from '../components/ui/tile-grid';
@@ -470,9 +470,29 @@ const useChatStyles = makeStyles({
   sliderHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' },
   centerHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, flexWrap: 'wrap' },
   empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', maxWidth: '420px' },
+  // Add-your-data (On-Your-Data grounding) — active source rows + citations.
+  dsList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  dsRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  dsRowName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  citations: {
+    marginTop: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalXS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+  },
+  citationItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  citationLink: { color: tokens.colorBrandForeground1, textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
 });
 
-interface ChatMsg { role: 'user' | 'assistant'; content: string; pending?: boolean; error?: boolean }
+interface ChatCitation { content?: string; title?: string; url?: string; filepath?: string; chunkId?: string }
+interface ChatMsg { role: 'user' | 'assistant'; content: string; pending?: boolean; error?: boolean; citations?: ChatCitation[] }
+
+/** An active On-Your-Data grounding source selected in the playground. */
+interface ActiveDataSource { indexName: string; authType: 'system_assigned_managed_identity' | 'api_key'; apiKey?: string }
 
 export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
   const s = useChatStyles();
@@ -489,6 +509,35 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
   const [sending, setSending] = useState(false);
   const [showCode, setShowCode] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
+
+  // ---- On-Your-Data grounding (Add your data) ----
+  const [dsAvail, setDsAvail] = useState<{
+    loading: boolean; loaded: boolean; configured: boolean;
+    service?: string; indexes: { name: string; vectorEnabled?: boolean }[]; missing?: string; hint?: string;
+  }>({ loading: false, loaded: false, configured: false, indexes: [] });
+  const [dataSources, setDataSources] = useState<ActiveDataSource[]>([]);
+  const [dsDialogOpen, setDsDialogOpen] = useState(false);
+  const [dsIndex, setDsIndex] = useState('');
+  const [dsAuth, setDsAuth] = useState<'system_assigned_managed_identity' | 'api_key'>('system_assigned_managed_identity');
+  const [dsKey, setDsKey] = useState('');
+
+  const loadDataSources = useCallback(async () => {
+    setDsAvail((p) => ({ ...p, loading: true }));
+    try {
+      const r = await fetch('/api/foundry/data-sources');
+      const j = await r.json();
+      if (j.ok) {
+        setDsAvail({
+          loading: false, loaded: true, configured: !!j.configured, service: j.service,
+          indexes: Array.isArray(j.indexes) ? j.indexes : [], missing: j.missing, hint: j.hint,
+        });
+      } else {
+        setDsAvail({ loading: false, loaded: true, configured: false, indexes: [], missing: j.missing, hint: j.error || j.hint });
+      }
+    } catch (e: any) {
+      setDsAvail({ loading: false, loaded: true, configured: false, indexes: [], hint: e?.message || String(e) });
+    }
+  }, []);
 
   const loadDeps = useCallback(async () => {
     setDeps({ loading: true, list: null });
@@ -511,6 +560,10 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
   // Reset deployments + selection when the selected account changes.
   useEffect(() => { setDeps({ loading: false, list: null }); setDeployment(''); }, [acct]);
   useEffect(() => { if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight; }, [thread]);
+  // Load AI Search grounding sources (independent of the AOAI account — the
+  // search service is env-pinned via LOOM_AI_SEARCH_SERVICE).
+  useEffect(() => { if (active && !dsAvail.loaded && !dsAvail.loading) loadDataSources(); }, [active, dsAvail.loaded, dsAvail.loading, loadDataSources]);
+  useEffect(() => { if (nonce > 0) setDsAvail({ loading: false, loaded: false, configured: false, indexes: [] }); }, [nonce]);
 
   const deployments = deps.list || [];
 
@@ -532,6 +585,13 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
           deployment, messages,
           temperature, maxTokens, topP,
           stop: stopSeq.split(',').map((x) => x.trim()).filter(Boolean),
+          ...(dataSources.length ? {
+            dataSources: dataSources.map((d) => ({
+              indexName: d.indexName,
+              authType: d.authType,
+              ...(d.authType === 'api_key' ? { apiKey: d.apiKey } : {}),
+            })),
+          } : {}),
           ...acctBody(acct),
         }),
       });
@@ -539,14 +599,51 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
       if (!j.ok) {
         setThread([...next, { role: 'assistant', content: `${j.error}${j.hint ? `\n\n${j.hint}` : ''}`, error: true }]);
       } else {
-        setThread([...next, { role: 'assistant', content: j.result.content || '(empty response)' }]);
+        setThread([...next, { role: 'assistant', content: j.result.content || '(empty response)', citations: j.result.citations }]);
       }
     } catch (e: any) {
       setThread([...next, { role: 'assistant', content: e?.message || String(e), error: true }]);
     } finally { setSending(false); }
   };
 
-  const codeSnippet = useMemo(() => `from openai import AzureOpenAI
+  // Add / remove active grounding sources.
+  const openDsDialog = () => {
+    setDsIndex(dsAvail.indexes[0]?.name || '');
+    setDsAuth('system_assigned_managed_identity');
+    setDsKey('');
+    setDsDialogOpen(true);
+  };
+  const addDataSource = () => {
+    if (!dsIndex) return;
+    if (dsAuth === 'api_key' && !dsKey.trim()) return;
+    setDataSources((prev) => (
+      prev.some((p) => p.indexName === dsIndex && p.authType === dsAuth)
+        ? prev
+        : [...prev, { indexName: dsIndex, authType: dsAuth, apiKey: dsAuth === 'api_key' ? dsKey.trim() : undefined }]
+    ));
+    setDsDialogOpen(false);
+  };
+  const removeDataSource = (idx: number) => setDataSources((prev) => prev.filter((_, i) => i !== idx));
+
+  const codeSnippet = useMemo(() => {
+    const grounding = dataSources.length
+      ? {
+          data_sources: dataSources.map((d) => ({
+            type: 'azure_search',
+            parameters: {
+              endpoint: `https://${dsAvail.service || '<search-service>'}.search.windows.net`,
+              index_name: d.indexName,
+              authentication: d.authType === 'api_key'
+                ? { type: 'api_key', key: '<search-key>' }
+                : { type: 'system_assigned_managed_identity' },
+            },
+          })),
+        }
+      : null;
+    const extraBody = grounding
+      ? `\n    extra_body=${JSON.stringify(grounding, null, 4).split('\n').join('\n    ')},`
+      : '';
+    return `from openai import AzureOpenAI
 
 client = AzureOpenAI(
     azure_endpoint="https://<your-account>.openai.azure.com",
@@ -562,9 +659,10 @@ response = client.chat.completions.create(
     ],
     temperature=${temperature},
     max_tokens=${maxTokens},
-    top_p=${topP},${stopSeq ? `\n    stop=${JSON.stringify(stopSeq.split(',').map((x) => x.trim()).filter(Boolean))},` : ''}
+    top_p=${topP},${stopSeq ? `\n    stop=${JSON.stringify(stopSeq.split(',').map((x) => x.trim()).filter(Boolean))},` : ''}${extraBody}
 )
-print(response.choices[0].message.content)`, [deployment, system, temperature, maxTokens, topP, stopSeq]);
+print(response.choices[0].message.content)${grounding ? '\n# response.choices[0].message.context["citations"] holds the grounded sources' : ''}`;
+  }, [deployment, system, temperature, maxTokens, topP, stopSeq, dataSources, dsAvail.service]);
 
   if (!active) return null;
   if (deps.loading) return <div style={{ padding: tokens.spacingVerticalL }}><Spinner size="small" label="Loading deployments…" labelPosition="after" /></div>;
@@ -581,22 +679,61 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
             placeholder="You are an AI assistant that helps people find information." />
         </Field>
         <Divider />
-        <Body1Strong>Add your data</Body1Strong>
-        {/*
-         * Honest external hand-off (no-vaporware §"allowed with disclosure").
-         * In-product "On Your Data" grounding (a data-source picker that threads a
-         * `data_sources` array through /api/foundry/chat → chatCompletion as the
-         * Azure OpenAI extra_body.data_sources) is not wired yet — chat/route.ts +
-         * foundry-cs-client accept only deployment/messages/temperature/maxTokens/
-         * topP/stop. Until that lands this control is labelled + iconned as an
-         * explicit hand-off to the Foundry portal, not an implied in-product action.
-         * TODO(parity): build the in-playground AI Search/Blob grounding flow.
-         */}
-        <Caption1>Ground answers in Azure AI Search or Blob. Configure a data connection on the Connections tab, then wire grounding in the Foundry portal.</Caption1>
-        <Button size="small" appearance="transparent" icon={<Open16Regular />} iconPosition="after"
-          onClick={() => window.open('https://ai.azure.com/resource/playground/chat', '_blank', 'noopener,noreferrer')}>
-          Configure data grounding in Foundry
-        </Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <Database24Regular />
+          <Body1Strong>Add your data</Body1Strong>
+        </div>
+        <Caption1>
+          Ground answers in your Azure AI Search index (Azure OpenAI &ldquo;On Your Data&rdquo;). Replies
+          cite the source documents. Supported on GPT-4o / GPT-4o-mini deployments.
+        </Caption1>
+
+        {dsAvail.loading && <Spinner size="tiny" label="Loading data sources…" labelPosition="after" />}
+
+        {dsAvail.loaded && !dsAvail.configured && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Azure AI Search not configured</MessageBarTitle>
+              {dsAvail.hint || `Set ${dsAvail.missing || 'LOOM_AI_SEARCH_SERVICE'} to ground answers on your data.`}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {dsAvail.loaded && dsAvail.configured && (
+          <>
+            {dataSources.length > 0 && (
+              <div className={s.dsList}>
+                {dataSources.map((d, i) => (
+                  <div key={`${d.indexName}-${d.authType}-${i}`} className={s.dsRow}>
+                    <Search24Regular style={{ fontSize: 16, flexShrink: 0 }} />
+                    <Caption1 className={s.dsRowName}>{d.indexName}</Caption1>
+                    <Badge size="small" appearance="tint" color={d.authType === 'api_key' ? 'warning' : 'brand'}>
+                      {d.authType === 'api_key' ? 'API key' : 'Managed identity'}
+                    </Badge>
+                    <Tooltip content={`Remove ${d.indexName}`} relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${d.indexName}`} onClick={() => removeDataSource(i)} />
+                    </Tooltip>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button size="small" appearance={dataSources.length ? 'secondary' : 'primary'} icon={<Add16Regular />}
+              disabled={dsAvail.indexes.length === 0} onClick={openDsDialog}>
+              {dataSources.length ? 'Add another data source' : 'Add data source'}
+            </Button>
+            {dsAvail.indexes.length === 0 && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                No indexes on <strong>{dsAvail.service}</strong> yet. Create one from the AI Search index editor, then it appears here.
+              </Caption1>
+            )}
+            {dsAvail.service && dsAvail.indexes.length > 0 && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Search service: <strong>{dsAvail.service}</strong>. Managed-identity auth requires the Azure OpenAI account&rsquo;s identity to
+                hold &ldquo;Search Index Data Reader&rdquo; on the service.
+              </Caption1>
+            )}
+          </>
+        )}
         <Divider />
         <Body1Strong>Tools</Body1Strong>
         <Caption1>Function tools and the code interpreter attach per-deployment in the Foundry agent surface.</Caption1>
@@ -638,6 +775,29 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
               <Avatar size={28} color={m.role === 'user' ? 'brand' : 'colorful'} name={m.role === 'user' ? 'You' : 'Assistant'} aria-hidden />
               <div className={`${s.bubble} ${m.role === 'user' ? s.bubbleUser : ''}`} style={m.error ? { color: tokens.colorPaletteRedForeground1 } : undefined}>
                 {m.pending ? <Spinner size="tiny" label="Thinking…" labelPosition="after" /> : m.content}
+                {!m.pending && m.role === 'assistant' && m.citations && m.citations.length > 0 && (
+                  <div className={s.citations}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      <DocumentText16Regular style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+                      Citations ({m.citations.length})
+                    </Caption1>
+                    {m.citations.map((c, ci) => (
+                      <Tooltip key={ci} relationship="description" withArrow
+                        content={(c.content || c.filepath || c.title || 'Source document').slice(0, 600)}>
+                        <div className={s.citationItem}>
+                          <Badge size="small" appearance="tint" color="brand">{ci + 1}</Badge>
+                          {c.url ? (
+                            <a className={s.citationLink} href={c.url} target="_blank" rel="noopener noreferrer">
+                              {c.title || c.filepath || c.url}
+                            </a>
+                          ) : (
+                            <Caption1 className={s.dsRowName}>{c.title || c.filepath || `Document ${ci + 1}`}</Caption1>
+                          )}
+                        </div>
+                      </Tooltip>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -689,6 +849,59 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
             onClick={() => window.open('https://ai.azure.com/resource/deployments', '_blank', 'noopener,noreferrer')}>Deploy</Button>
         </div>
       </div>
+
+      <Dialog open={dsDialogOpen} onOpenChange={(_, d) => { if (!d.open) setDsDialogOpen(false); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Add data source</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                <Caption1>
+                  Ground the model in an Azure AI Search index (Azure OpenAI &ldquo;On Your Data&rdquo;) on
+                  {dsAvail.service ? <> <strong>{dsAvail.service}</strong></> : ' the configured search service'}.
+                </Caption1>
+                <Field label="Azure AI Search index" required>
+                  <Dropdown value={dsIndex} selectedOptions={dsIndex ? [dsIndex] : []}
+                    placeholder={dsAvail.indexes.length ? 'Select an index' : 'No indexes available'}
+                    onOptionSelect={(_, d) => d.optionValue && setDsIndex(d.optionValue)}>
+                    {dsAvail.indexes.map((ix) => (
+                      <Option key={ix.name} value={ix.name} text={ix.name}>
+                        {ix.name}{ix.vectorEnabled ? '  (vector)' : ''}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <Field label="Authentication">
+                  <RadioGroup value={dsAuth} onChange={(_, d) => setDsAuth(d.value as ActiveDataSource['authType'])}>
+                    <Radio value="system_assigned_managed_identity" label="System-assigned managed identity (recommended)" />
+                    <Radio value="api_key" label="API key" />
+                  </RadioGroup>
+                </Field>
+                {dsAuth === 'api_key' ? (
+                  <Field label="Search admin / query key" required>
+                    <Input type="password" value={dsKey} onChange={(_, d) => setDsKey(d.value)} placeholder="Paste an AI Search key" />
+                  </Field>
+                ) : (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      The Azure OpenAI account&rsquo;s managed identity must hold <strong>Search Index Data Reader</strong> +
+                      <strong> Search Service Contributor</strong> on the search service. If grounding returns an auth error,
+                      grant those roles or switch to API-key auth.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDsDialogOpen(false)}>Cancel</Button>
+              <Button appearance="primary" icon={<Add16Regular />}
+                disabled={!dsIndex || (dsAuth === 'api_key' && !dsKey.trim())} onClick={addDataSource}>
+                Add
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
 
       <Dialog open={showCode} onOpenChange={(_, d) => { if (!d.open) setShowCode(false); }}>
         <DialogSurface>

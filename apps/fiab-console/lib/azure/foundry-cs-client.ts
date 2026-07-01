@@ -518,12 +518,31 @@ export async function listCatalogModels(selector?: AccountSelector): Promise<{ a
 // ---------------- Chat playground (data-plane chat completions) ----------------
 
 export interface ChatMessage { role: 'system' | 'user' | 'assistant'; content: string }
-export interface ChatParams { temperature?: number; maxTokens?: number; topP?: number; stop?: string[] }
+
+/**
+ * A single Azure OpenAI "On Your Data" grounding source, already in the exact
+ * wire shape the chat/completions body expects (top-level `data_sources[]`).
+ * Currently the Azure AI Search source; `parameters` carries `endpoint`,
+ * `index_name` and an `authentication` block (system-assigned managed identity
+ * or api_key). Built by the BFF route from the playground's data-source picker.
+ * Ref: https://learn.microsoft.com/azure/ai-services/openai/references/azure-search
+ */
+export interface OnYourDataSource { type: 'azure_search'; parameters: Record<string, unknown> }
+
+export interface ChatParams { temperature?: number; maxTokens?: number; topP?: number; stop?: string[]; dataSources?: OnYourDataSource[] }
+
+/** A citation returned by On-Your-Data grounding (`message.context.citations`). */
+export interface ChatCitation { content?: string; title?: string; url?: string; filepath?: string; chunkId?: string }
+
 export interface ChatResult {
   content: string;
   finishReason?: string;
   usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
   model?: string;
+  /** Source citations when the completion was grounded via On-Your-Data. */
+  citations?: ChatCitation[];
+  /** The model's retrieval intent (On-Your-Data), when present. */
+  intent?: string;
 }
 
 const AOAI_DATA_API = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
@@ -578,6 +597,10 @@ export async function chatCompletion(
   };
   if (params.topP !== undefined) body.top_p = params.topP;
   if (params.stop && params.stop.length) body.stop = params.stop;
+  // On-Your-Data grounding — the REST chat/completions endpoint accepts a
+  // top-level `data_sources` array (the Python SDK passes the same via
+  // extra_body). When present the response carries `message.context.citations`.
+  if (params.dataSources && params.dataSources.length) body.data_sources = params.dataSources;
   const res = await fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
@@ -591,6 +614,16 @@ export async function chatCompletion(
     throw new CsError(res.status, parsed, msg);
   }
   const choice = parsed?.choices?.[0];
+  const ctx = choice?.message?.context;
+  const citations: ChatCitation[] | undefined = Array.isArray(ctx?.citations)
+    ? ctx.citations.map((c: any) => ({
+        content: c?.content,
+        title: c?.title,
+        url: c?.url,
+        filepath: c?.filepath,
+        chunkId: c?.chunk_id,
+      }))
+    : undefined;
   return {
     content: choice?.message?.content ?? '',
     finishReason: choice?.finish_reason,
@@ -598,6 +631,8 @@ export async function chatCompletion(
       ? { promptTokens: parsed.usage.prompt_tokens, completionTokens: parsed.usage.completion_tokens, totalTokens: parsed.usage.total_tokens }
       : undefined,
     model: parsed?.model,
+    ...(citations && citations.length ? { citations } : {}),
+    ...(ctx?.intent ? { intent: typeof ctx.intent === 'string' ? ctx.intent : JSON.stringify(ctx.intent) } : {}),
   };
 }
 
