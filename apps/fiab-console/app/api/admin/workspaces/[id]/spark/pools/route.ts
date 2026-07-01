@@ -19,7 +19,9 @@
  * gate when LOOM_DATABRICKS_HOSTNAME is unset or the cloud has no Databricks.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import {
   sparkConfigGate,
   getSparkConfig,
@@ -37,6 +39,28 @@ function unauth() {
   return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 }
 
+/** Point-read the workspace on (id, ownerOid) — owner check, mirrors git/route.ts. */
+async function assertOwner(workspaceId: string, tenantId: string) {
+  const ws = await workspacesContainer();
+  try {
+    const { resource } = await ws.item(workspaceId, tenantId).read<any>();
+    if (!resource || resource.tenantId !== tenantId) return null;
+    return resource;
+  } catch (e: any) {
+    if (e?.code === 404) return null;
+    throw e;
+  }
+}
+
+/** Owner (self-service) OR tenant admin (org-wide) may configure this
+ * workspace's Spark pools. Blocks cross-workspace read/write by id. Returns a
+ * 404 when neither holds, else null. */
+async function authorizeWorkspace(s: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (isTenantAdmin(s)) return null;
+  if (await assertOwner(workspaceId, s.claims.oid)) return null;
+  return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+}
+
 function gated() {
   const g = sparkConfigGate();
   if (!g) return null;
@@ -52,6 +76,8 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   const g = gated();
   if (g) return g;
   const { id } = await ctx.params;
+  const denied = await authorizeWorkspace(s, id);
+  if (denied) return denied;
   try {
     const [pools, config] = await Promise.all([listPools(), getSparkConfig(id)]);
     return NextResponse.json({ ok: true, pools, config: config.pool });
@@ -66,6 +92,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const g = gated();
   if (g) return g;
   const { id } = await ctx.params;
+  const denied = await authorizeWorkspace(s, id);
+  if (denied) return denied;
   const body = (await req.json().catch(() => ({}))) as {
     action?: 'create' | 'select' | 'starter';
     spec?: InstancePoolCreateSpec;
@@ -141,6 +169,8 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   const g = gated();
   if (g) return g;
   const { id } = await ctx.params;
+  const denied = await authorizeWorkspace(s, id);
+  if (denied) return denied;
   const poolId = req.nextUrl.searchParams.get('poolId');
   if (!poolId) return NextResponse.json({ ok: false, error: 'poolId required' }, { status: 400 });
   try {
