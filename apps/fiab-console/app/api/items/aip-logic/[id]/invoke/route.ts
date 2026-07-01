@@ -28,34 +28,13 @@ import { loadOwnedItem } from '../../../_lib/item-crud';
 import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig } from '@/lib/azure/data-agent-client';
 import { orchestrate, buildDefaultRegistry, type OrchestratorStep, type OrchestratorUsage } from '@/lib/azure/copilot-orchestrator';
 import { resolveSpindleGrounding } from '../_spindle-grounding';
+import { runBlockGraph, composeGraphPrompt } from '../_block-graph';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'aip-logic';
 function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
-}
-
-interface AipInput { name: string; type: string; objectType?: string; description?: string; required?: boolean }
-interface AipStep { kind: string; name?: string; prompt?: string }
-
-/** Compose the function definition into a strict system prompt. */
-function composePrompt(state: Record<string, unknown>): string {
-  const inputs = Array.isArray(state.inputs) ? (state.inputs as AipInput[]) : [];
-  const steps = Array.isArray(state.steps) ? (state.steps as AipStep[]) : [];
-  const outputType = String(state.outputType || 'string');
-  const outputDesc = String(state.outputDescription || '');
-  const lines: string[] = [];
-  lines.push('You are a deterministic typed function (Palantir AIP-Logic equivalent). Execute the ordered steps below and return ONLY the typed output.');
-  lines.push('');
-  lines.push('Typed inputs:');
-  for (const i of inputs) lines.push(`- ${i.name} (${i.type}${i.objectType ? ` of ${i.objectType}` : ''})${i.required ? ' [required]' : ''}${i.description ? `: ${i.description}` : ''}`);
-  lines.push('');
-  lines.push('Ordered steps:');
-  steps.forEach((st, n) => lines.push(`${n + 1}. [${st.kind}] ${st.name || ''}${st.prompt ? ` — ${st.prompt}` : ''}`));
-  lines.push('');
-  lines.push(`Return a single ${outputType} value as the output${outputDesc ? ` (${outputDesc})` : ''}. Do not include explanations.`);
-  return lines.join('\n');
 }
 
 const NO_AOAI_GATE = {
@@ -75,14 +54,30 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const mode: 'logic' | 'agent' = body?.mode === 'agent' ? 'agent' : 'logic';
 
   const state = (fn.state || {}) as Record<string, unknown>;
+  const blocks = Array.isArray(state.blocks) ? state.blocks : [];
   const steps = Array.isArray(state.steps) ? state.steps : [];
-  if (steps.length === 0) return err('add at least one step before invoking', 400, 'no_steps');
+  if (blocks.length === 0 && steps.length === 0) return err('add at least one block before invoking', 400, 'no_blocks');
+
+  // ── Logic mode with a typed block graph: run the deterministic engine ──
+  // Each block executes in order against a REAL backend (Azure OpenAI /
+  // Synapse dedicated pool / in-process sibling recursion), threading a typed
+  // variable bag; per-block resolved outputs power the Debugger.
+  if (mode === 'logic' && blocks.length > 0) {
+    const res = await runBlockGraph(state, inputs, s.claims.oid);
+    if (!res.ok) {
+      if (res.notDeployed || res.gate) {
+        return NextResponse.json({ ok: false, notDeployed: res.notDeployed, error: res.error || 'blocked on an infra gate', gate: res.gate || NO_AOAI_GATE, steps: res.steps }, { status: 503 });
+      }
+      return NextResponse.json({ ok: false, error: res.error || 'block graph failed', steps: res.steps }, { status: 502 });
+    }
+    return NextResponse.json({ ok: true, output: res.output, model: res.model, usage: res.usage, sourcesUsed: res.sourcesUsed, steps: res.steps });
+  }
 
   // Ground on the bound Weave ontology (entity types + Lakehouse/Warehouse data
   // bindings). Empty when no ontology is bound → ungrounded single-turn path.
   const boundOntologyId = (state.boundOntologyId as string | undefined) || undefined;
   const grounding = await resolveSpindleGrounding(boundOntologyId, s.claims.oid).catch(() => ({ sources: [], surface: null, entityTypes: [] }));
-  const systemPrompt = composePrompt(state);
+  const systemPrompt = composeGraphPrompt(state);
   const userMsg = `Inputs:\n${JSON.stringify(inputs, null, 2)}`;
 
   // ── Agent mode: multi-step tool-calling over the ontology + Loom tools ──

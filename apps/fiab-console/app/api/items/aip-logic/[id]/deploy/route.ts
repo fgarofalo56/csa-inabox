@@ -30,33 +30,13 @@ import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-or
 import { sourcesToFoundryTools } from '@/lib/azure/data-agent-client';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { resolveSpindleGrounding } from '../_spindle-grounding';
+import { composeGraphPrompt } from '../_block-graph';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ITEM_TYPE = 'aip-logic';
-
-interface AipInput { name: string; type: string; description?: string }
-interface AipStep { kind: string; name?: string; prompt?: string }
-
-function composeAgentInstructions(state: Record<string, unknown>): string {
-  const inputs = Array.isArray(state.inputs) ? (state.inputs as AipInput[]) : [];
-  const steps = Array.isArray(state.steps) ? (state.steps as AipStep[]) : [];
-  const outputType = String(state.outputType || 'string');
-  const outputDesc = String(state.outputDescription || '');
-  const lines: string[] = [];
-  lines.push('You are a Spindle typed logic agent (Palantir AIP-Logic equivalent). Execute the ordered steps and return ONLY the typed output.');
-  lines.push('');
-  lines.push('Typed inputs:');
-  for (const i of inputs) lines.push(`- ${i.name} (${i.type})${i.description ? `: ${i.description}` : ''}`);
-  lines.push('');
-  lines.push('Ordered steps:');
-  steps.forEach((st, n) => lines.push(`${n + 1}. [${st.kind}] ${st.name || ''}${st.prompt ? ` — ${st.prompt}` : ''}`));
-  lines.push('');
-  lines.push(`Return a single ${outputType} value${outputDesc ? ` (${outputDesc})` : ''}.`);
-  return lines.join('\n');
-}
 
 /** Build a Foundry-Agent-Service-compatible name from a Loom item id. */
 function foundryAgentName(itemId: string): string {
@@ -78,9 +58,10 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   if (!item) return NextResponse.json({ ok: false, error: 'aip-logic function not found' }, { status: 404 });
 
   const state = (item.state || {}) as Record<string, unknown>;
+  const blocks = Array.isArray(state.blocks) ? state.blocks : [];
   const steps = Array.isArray(state.steps) ? state.steps : [];
-  if (steps.length === 0) {
-    return NextResponse.json({ ok: false, error: 'add at least one step before deploying' }, { status: 400 });
+  if (blocks.length === 0 && steps.length === 0) {
+    return NextResponse.json({ ok: false, error: 'add at least one block before deploying' }, { status: 400 });
   }
 
   // Resolve the live AOAI deployment as the agent model (Azure-native default).
@@ -119,7 +100,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   const agentBody: FoundryAgentBody = {
     name: agentName,
     model,
-    instructions: composeAgentInstructions(state),
+    instructions: composeGraphPrompt(state),
     tools,
     description: `Loom Spindle logic: ${item.displayName}`.slice(0, 512),
     metadata,
