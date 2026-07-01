@@ -13,20 +13,19 @@
  * Azure-native — NO Fabric dependency. Honest gates per _gate.ts.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import {
   getPrivateEndpoint, createPrivateEndpoint, deletePrivateEndpoint,
   createPrivateDnsZoneGroup, inboundPeName, readNetworkingConfig,
 } from '@/lib/clients/networking-client';
-import { networkingErrorResponse } from '../_gate';
+import { networkingErrorResponse, authorizeNetworking } from '../_gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+  const g = await authorizeNetworking(ctx);
+  if (g.resp) return g.resp;
+  const { id } = g;
   try {
     const cfg = readNetworkingConfig();
     const pe = await getPrivateEndpoint(inboundPeName(id));
@@ -42,9 +41,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+  const g = await authorizeNetworking(ctx);
+  if (g.resp) return g.resp;
+  const { id } = g;
   const body = await req.json().catch(() => ({}));
   const enable = body?.enable !== false;
   const peName = inboundPeName(id);
