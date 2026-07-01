@@ -191,7 +191,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'lakehouse', displayName: 'Lakehouse', restType: 'Lakehouse', category: 'Data Engineering',
     description: 'A unified store for files, folders, and Delta tables in ADLS Gen2 (Delta) — Azure-native, no Fabric required.',
     learnContent: {
-      "overview": "A Lakehouse is the unified store for files and Delta tables in OneLake. In Loom it rides on ADLS Gen2 for storage with the Fabric/Synapse SQL analytics endpoint and Spark for query. Use it as the bronze/silver/gold landing zone for any analytics workload.",
+      "overview": "A Lakehouse is the unified store for files and Delta tables. In Loom it is Azure-native: storage rides on ADLS Gen2 (Delta) with a Synapse serverless SQL analytics endpoint and Spark for query — no Microsoft Fabric or OneLake required. Use it as the bronze/silver/gold landing zone for any analytics workload. (An OneLake-backed lakehouse is opt-in only, never the default.)",
       "steps": [
         {
           "title": "Browse Files vs Tables",
@@ -464,7 +464,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         },
         {
           "title": "Connect and select tables",
-          "body": "Provide a connection and pick tables; Fabric starts and maintains the replica automatically."
+          "body": "Provide a connection and pick tables; Loom's ADF CDC / Synapse Link replicator starts and maintains the replica into ADLS Bronze Delta automatically."
         },
         {
           "title": "Query the mirror",
@@ -480,7 +480,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'mirrored-databricks', displayName: 'Mirrored Databricks catalog', restType: 'MirroredAzureDatabricksCatalog', category: 'Data Factory',
     description: 'Mount a Databricks Unity Catalog as a read-only mirror to ADLS Gen2 Delta — Azure-native, no Fabric required.',
     learnContent: {
-      "overview": "A Mirrored Databricks catalog mounts a Databricks Unity Catalog as a read-only mirror in OneLake. In Loom you query the Delta tables from Fabric without re-ingesting. Use it to bring governed Databricks data into Fabric analytics.",
+      "overview": "A Mirrored Databricks catalog brings a Databricks Unity Catalog into Loom analytics as a read-only mirror — Azure-native, no Fabric or OneLake required. In Loom the UC Delta tables are mirrored into ADLS Bronze (ADF CDC / Synapse Link) and queried via the Synapse serverless SQL analytics endpoint, without re-ingesting or copying governed data. (Fabric mirroring into OneLake is opt-in only, never the default.)",
       "steps": [
         {
           "title": "Provide the workspace",
@@ -488,11 +488,11 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         },
         {
           "title": "Select the catalog/schema",
-          "body": "Choose which catalog and schemas to expose as a read-only OneLake mirror."
+          "body": "Choose which catalog and schemas to expose as a read-only mirror in ADLS Bronze Delta."
         },
         {
-          "title": "Query from Fabric",
-          "body": "Read the mirrored Delta tables via the SQL analytics endpoint or Spark — no copy required."
+          "title": "Query via Synapse SQL",
+          "body": "Read the mirrored Delta tables via the Synapse serverless SQL analytics endpoint or Spark — no copy required."
         },
         {
           "title": "Respect source governance",
@@ -602,26 +602,26 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'warehouse', displayName: 'Warehouse', restType: 'Warehouse', category: 'Data Warehouse',
     description: 'Lakehouse-native T-SQL warehouse with separated compute and storage.',
     learnContent: {
-      "overview": "A Warehouse is a lakehouse-native T-SQL warehouse with separated compute and storage. In Loom storage lives on OneLake as Parquet and compute auto-scales. Use it for full T-SQL DDL/DML and DirectLake-mode Power BI.",
+      "overview": "A Warehouse is a full T-SQL data warehouse with separated compute and storage. In Loom it is Azure-native by default: a provisioned MPP T-SQL warehouse backed by a Synapse dedicated SQL pool, with data stored as Parquet/Delta in ADLS Gen2; the pool auto-pauses and resumes to control cost. Use it for full T-SQL DDL/DML. (A Fabric Warehouse backend is opt-in only — LOOM_WAREHOUSE_BACKEND=fabric plus a bound workspace — never the default.)",
       "steps": [
         {
           "title": "Create tables in T-SQL",
-          "body": "Run CREATE TABLE and INSERT like any T-SQL warehouse — no infrastructure to manage."
+          "body": "Run CREATE TABLE and INSERT like any T-SQL warehouse against the Synapse dedicated SQL pool."
         },
         {
           "title": "Cross-database query",
           "body": "Query any lakehouse SQL endpoint or mirrored database in the same workspace from one connection."
         },
         {
-          "title": "Serve Power BI",
-          "body": "Connect a semantic model in DirectLake mode for sub-second refresh over warehouse tables."
+          "title": "Serve a semantic model",
+          "body": "Build a semantic model over the warehouse with Loom's native tabular layer (Azure Analysis Services optional) — no Power BI or Fabric capacity required."
         },
         {
           "title": "Load via pipelines",
           "body": "Land data with a Copy activity or dataflow, then transform with stored procedures."
         }
       ],
-      "docsUrl": "https://learn.microsoft.com/fabric/data-warehouse/data-warehousing"
+      "docsUrl": "https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/sql-data-warehouse-overview-what-is"
     } },
   { slug: 'sql-analytics-endpoint', displayName: 'SQL analytics endpoint', restType: 'SQLEndpoint', category: 'Data Warehouse',
     description: 'Read-only T-SQL analyst surface auto-attachable to a lakehouse / warehouse / mirror — Synapse serverless SQL over the Delta in ADLS. SELECT, CREATE VIEW / PROC, and object / row-level grants.',
@@ -720,8 +720,8 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
           "body": "Open a KQL queryset to run interactive Kusto queries across the databases."
         },
         {
-          "title": "Enable OneLake availability",
-          "body": "Turn on OneLake availability so the KQL data is also queryable as Delta from Fabric."
+          "title": "Make data available as Delta",
+          "body": "Configure ADX continuous export (or an external table) to land the KQL data as Delta in ADLS Gen2, so it's queryable alongside lakehouses — no Fabric or OneLake needed."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/real-time-intelligence/eventhouse"
@@ -753,7 +753,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'kql-database', displayName: 'KQL database', restType: 'KQLDatabase', category: 'Real-Time Intelligence',
     description: 'Kusto database (Azure Data Explorer) for high-volume, low-latency analytics with ADLS Delta export — Azure-native, no Fabric required.',
     learnContent: {
-      "overview": "A KQL database is a Kusto store for high-volume, low-latency analytics over time-series, telemetry, and logs, with OneLake availability. In Loom it runs on the shared Loom ADX cluster and is queried with KQL.",
+      "overview": "A KQL database is a Kusto store for high-volume, low-latency analytics over time-series, telemetry, and logs. In Loom it is Azure-native: it runs on the shared Loom Azure Data Explorer (ADX) cluster and is queried with KQL — no Microsoft Fabric or OneLake required.",
       "steps": [
         {
           "title": "Ingest data",
@@ -768,8 +768,8 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
           "body": "Attach an Activator on a KQL query to fire on a threshold breach such as failure rate over 5 percent."
         },
         {
-          "title": "Expose to Fabric",
-          "body": "Enable OneLake availability so the same data is queryable as Delta alongside lakehouses."
+          "title": "Make data available as Delta",
+          "body": "Configure ADX continuous export (or an external table) to land the same data as Delta in ADLS Gen2, so it's queryable alongside lakehouses — no OneLake needed."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-explorer/data-explorer-overview"
@@ -1357,11 +1357,11 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'user-data-function', displayName: 'User data function', restType: 'UserDataFunction', category: 'APIs and functions',
     description: 'Python functions (Azure Functions) with bindings to Azure data sources and external connections.',
     learnContent: {
-      "overview": "A User data function is Python (or C#) server-side compute with bindings to Fabric items and external connections, callable from notebooks, pipelines, and Power BI. In Loom it runs serverless with per-call billing.",
+      "overview": "A User data function is Python (or C#) server-side compute — Azure-native on Azure Functions — with bindings to Loom items and external connections, callable from notebooks, pipelines, and reports. In Loom it runs serverless with per-call billing; no Microsoft Fabric required.",
       "steps": [
         {
           "title": "Write the function",
-          "body": "Author a Python function with input/output bindings to Fabric items."
+          "body": "Author a Python function with input/output bindings to Loom items (lakehouses, warehouses, SQL) via Azure Functions bindings."
         },
         {
           "title": "Add connections",
@@ -1373,7 +1373,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         },
         {
           "title": "Call from items",
-          "body": "Invoke it from notebooks, pipelines, or Power BI; billing is serverless per call."
+          "body": "Invoke it from notebooks, pipelines, or reports; billing is serverless per call."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-engineering/user-data-functions/user-data-functions-overview"
@@ -1806,7 +1806,7 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         },
         {
           "title": "List in the marketplace",
-          "body": "The product surfaces in the OneLake catalog and API marketplace for discovery."
+          "body": "The product surfaces in the Purview / Loom catalog and the API marketplace for discovery."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/purview/concept-data-products"
@@ -2384,15 +2384,15 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       ],
     },
     learnContent: {
-      "overview": "An Azure SQL database is a fully-managed PaaS database. In Loom you get a per-database T-SQL editor (TDS + AAD), Fabric mirroring config, geo-replication, and vector index — wired via ARM and TDS through the azure-sql-client.",
+      "overview": "An Azure SQL database is a fully-managed PaaS database. In Loom you get a per-database T-SQL editor (TDS + AAD), geo-replication, and a native vector index — wired via ARM and TDS through the azure-sql-client. (Mirroring the database into Fabric/OneLake is opt-in only, never the default.)",
       "steps": [
         {
           "title": "Run T-SQL",
           "body": "Query the database over TDS with AAD auth from the editor."
         },
         {
-          "title": "Configure Fabric mirroring",
-          "body": "Toggle mirroring to OneLake; runtime is deferred by default and disclosed if not enabled."
+          "title": "Build a vector index",
+          "body": "Create a native vector column + index for similarity search over embeddings, all in T-SQL. (Mirroring the database into Fabric/OneLake is available as an opt-in, disclosed if not enabled — not the default.)"
         },
         {
           "title": "Set geo-replication",
