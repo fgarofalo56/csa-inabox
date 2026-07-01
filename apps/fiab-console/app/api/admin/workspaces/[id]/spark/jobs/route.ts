@@ -22,7 +22,7 @@
  * gate when no Databricks host (so the surface stays consistent with the others).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { requireWorkspace } from '@/lib/auth/workspace-guard';
 import {
   sparkConfigGate,
   getSparkConfig,
@@ -33,9 +33,11 @@ import { buildJobSparkConf } from '@/lib/azure/databricks-scale-client';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function gateOr401() {
-  const s = getSession();
-  if (!s) return { resp: NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 }) };
+/** Authorize (401 unauth / 404 not owner-or-admin) THEN honest 503 config gate.
+ * Authorization runs first so an unauthorized caller can't probe config state. */
+async function guardWorkspace(id: string) {
+  const w = await requireWorkspace(id);
+  if (w.resp) return { resp: w.resp };
   const g = sparkConfigGate();
   if (g) {
     return {
@@ -45,13 +47,13 @@ function gateOr401() {
       ),
     };
   }
-  return { session: s };
+  return { session: w.session };
 }
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const guard = gateOr401();
-  if (guard.resp) return guard.resp;
   const { id } = await ctx.params;
+  const guard = await guardWorkspace(id);
+  if (guard.resp) return guard.resp;
   try {
     const config = await getSparkConfig(id);
     return NextResponse.json({
@@ -65,9 +67,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const guard = gateOr401();
-  if (guard.resp) return guard.resp;
   const { id } = await ctx.params;
+  const guard = await guardWorkspace(id);
+  if (guard.resp) return guard.resp;
   const body = (await req.json().catch(() => ({}))) as {
     session_timeout_minutes?: number;
     optimistic_admission?: boolean;
