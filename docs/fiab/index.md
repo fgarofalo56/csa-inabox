@@ -2,20 +2,22 @@
 
 ![CSA Loom — Microsoft Fabric experience for Azure tenants where Fabric isn't yet available](../assets/images/hero/fiab/index.svg){ .architecture-hero loading="eager" }
 
-!!! success "What's new — Release 2026-05-27"
-    Six PRs landed today on the FedCiv DLZ deployment. All 10 CSA apps
-    now install with full starter code + data drawn from
-    `examples/<industry>/`. 175 ribbon buttons wired across 18 editor
-    files with honest disabled-tooltips on the rest. New shared
-    `<ComputePicker>` (state badges + Resume / Pause / Restart) and
-    nine free-text Azure-resource Inputs swapped to backed `Select`
-    pickers. Monaco self-hosted; CSP loosened for workers; Activator
-    workspace dropdown corrected.
-
-    **Live:** `loom-console--0000082` on image SHA `146d2158`. Smoke:
-    10/10 apps, 85/85 editors, 23/23 services, 46/48 walkthrough.
-    [Read the release notes →](releases/2026-05-27-apps-bundles-and-wiring-sweep.md) ·
-    [Walk the test script →](TEST_SCRIPT_2026_05_27.md)
+!!! success "Platform at a glance"
+    The Loom Console is deployed and running live on Azure-native
+    backends. It ships **117 catalog item-type editors across 22
+    categories** — Lakehouse (ADLS Gen2 + Delta), Warehouse (Synapse),
+    Notebooks (Databricks / Synapse Spark), Pipelines (ADF), Real-Time
+    Intelligence (Azure Data Explorer / Kusto), a Loom-native **report
+    designer** (Azure Analysis Services — no Power BI workspace
+    required), the **Fabric IQ** ontology / graph / plan / map /
+    data-agent family, governance on **Microsoft Purview** + a sovereign
+    RBAC reconciler, **Unity Catalog**, **Azure ML**, security
+    (MIP / DLP / DSPM), a data + API **Marketplace**, a **Learning Hub**,
+    an **MCP server catalog**, and **Copilot throughout**. Everything is
+    **Azure-native by default, with no hard Microsoft Fabric dependency**,
+    across Azure Commercial and Government.
+    [Recent release notes →](releases/2026-05-27-apps-bundles-and-wiring-sweep.md) ·
+    [Walk a test script →](TEST_SCRIPT_2026_05_27.md)
 
 **CSA Loom** is the Cloud Scale Analytics platform that delivers the
 Microsoft Fabric experience inside any Azure tenant where Fabric isn't
@@ -207,8 +209,8 @@ Full architectural decision records: [**ADRs**](adr/README.md).
 |---|---|
 | PRD | v1.0 — finalized 2026-05-22 |
 | Public brand | CSA Loom (Microsoft brand-review submission tracked under PRP-01) |
-| Build wave 0 | In progress (PRP-01 + PRP-19) |
-| v1 GA target | weeks 20-24 (~6 months) |
+| Console build | **Live** — 117 item-type editors across 22 categories running on Azure-native backends (Azure Commercial reference deployment; Government-ready). Report designer, Fabric IQ family, Marketplace, Learning Hub, MCP catalog, and Copilot all shipped |
+| v1 status | Feature-complete across the core Fabric workloads; per-service depth + hardening ongoing (see the [parity matrix](parity-matrix.md)) |
 | v1.1 target | +3 months — DoD IL5 |
 | v2 target | +6 months — Fabric Databases (HorizonDB-equivalent). The **Fabric IQ family** (Ontology / Plan / Graph / Map / Data Agent / Workshop / Slate / OSDK / Release-environment / Health-check / AIP Logic) has **already shipped** with real Azure-native backends — see the [parity matrix](parity-matrix.md#fabric-iq-family-delivered-azure-native) |
 
