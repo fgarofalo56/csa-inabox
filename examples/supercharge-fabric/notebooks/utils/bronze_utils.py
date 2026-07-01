@@ -19,15 +19,20 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from pyspark.sql import DataFrame, SparkSession
-
+# Import the Spark types at RUNTIME (not under TYPE_CHECKING) so that when these
+# utility cells run as SEPARATE interactive statements (Synapse Livy / notebook
+# per-cell run) the def-cell annotations (df: DataFrame, spark: SparkSession)
+# resolve against real names in the shared session namespace. The cell-scoped
+# `from __future__ import annotations` above does NOT carry across cells, so a
+# later def-cell evaluates its annotations eagerly — a TYPE_CHECKING-only import
+# would leave DataFrame / SparkSession undefined and raise NameError.
 try:
+    from pyspark.sql import DataFrame, SparkSession
     from pyspark.sql.functions import current_timestamp, input_file_name, lit
     _PYSPARK_AVAILABLE = True
-except ImportError:
+except ImportError:  # pragma: no cover - non-Spark lint/runtime
+    DataFrame = SparkSession = object  # type: ignore[assignment,misc]
     _PYSPARK_AVAILABLE = False
 
 # COMMAND ----------

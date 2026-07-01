@@ -23,7 +23,7 @@ const CELLS_UTILS_BRONZE_UTILS: NotebookCell[] = [
   {
     "id": "utils-bronze-utils-c1",
     "type": "code",
-    "source": "from __future__ import annotations\n\nimport re\nfrom typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from pyspark.sql import DataFrame, SparkSession\n\ntry:\n    from pyspark.sql.functions import current_timestamp, input_file_name, lit\n    _PYSPARK_AVAILABLE = True\nexcept ImportError:\n    _PYSPARK_AVAILABLE = False",
+    "source": "from __future__ import annotations\n\nimport re\n\n# Import the Spark types at RUNTIME (not under TYPE_CHECKING) so that when these\n# utility cells run as SEPARATE interactive statements (Synapse Livy / notebook\n# per-cell run) the def-cell annotations (df: DataFrame, spark: SparkSession)\n# resolve against real names in the shared session namespace. The cell-scoped\n# `from __future__ import annotations` above does NOT carry across cells, so a\n# later def-cell evaluates its annotations eagerly — a TYPE_CHECKING-only import\n# would leave DataFrame / SparkSession undefined and raise NameError.\ntry:\n    from pyspark.sql import DataFrame, SparkSession\n    from pyspark.sql.functions import current_timestamp, input_file_name, lit\n    _PYSPARK_AVAILABLE = True\nexcept ImportError:  # pragma: no cover - non-Spark lint/runtime\n    DataFrame = SparkSession = object  # type: ignore[assignment,misc]\n    _PYSPARK_AVAILABLE = False",
     "lang": "pyspark"
   },
   {
