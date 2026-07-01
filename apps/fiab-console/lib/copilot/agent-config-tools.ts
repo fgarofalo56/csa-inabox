@@ -20,7 +20,7 @@
 import { aoaiChat } from '../azure/aoai-chat-client';
 import { NoAoaiDeploymentError } from '../azure/copilot-orchestrator';
 import { executeQuery as synapseExecute, dedicatedTarget, serverlessTarget } from '../azure/synapse-sql-client';
-import { listTableDetails, getTableSchema, kustoConfigGate, defaultDatabase, clusterUri } from '../azure/kusto-client';
+import { listTableDetails, listTables, listFunctions, getTableSchema, kustoConfigGate, defaultDatabase, clusterUri } from '../azure/kusto-client';
 import { getIndex, searchConfigGate } from '../azure/search-index-client';
 import { AGENT_CONFIG_COPILOT } from '../azure/copilot-personas';
 import { mergeSuggestionIntoSources } from '../editors/_da-config-merge';
@@ -173,6 +173,114 @@ async function searchSchema(src: DataAgentSource): Promise<SchemaResult> {
       .join(', ')}`,
   );
   return { schemaText: cap(lines.join('\n')) };
+}
+
+// ── structured object listing (real backends) — powers the Tree source picker ─
+
+export interface SourceObject {
+  /** Owning schema (SQL only). */
+  schema?: string;
+  /** Bare object name — persisted verbatim into `src.tables` (matches the
+   *  comma-separated selection filter `selectedTables` reads back). */
+  name: string;
+  kind: 'table' | 'view' | 'function' | 'field';
+}
+
+export interface SourceObjectsResult {
+  objects: SourceObject[];
+  /** Honest gate when the backend is unreachable / unconfigured / schema-less. */
+  gate?: string;
+}
+
+/**
+ * List the REAL selectable schema objects (tables / views / functions / AI
+ * Search index fields) for one source from its Azure-native backend — the
+ * structured counterpart of `fetchSourceSchema`, powering the data-agent typed
+ * Tree source picker (replaces the freeform comma-separated table Input).
+ * Never throws for an unreachable backend — the `gate` carries the reason.
+ */
+export async function listSourceObjects(src: DataAgentSource): Promise<SourceObjectsResult> {
+  try {
+    switch (src.type) {
+      case 'warehouse':
+        return await sqlObjects(dedicatedTarget(), 'warehouse (Synapse dedicated SQL pool)');
+      case 'lakehouse': {
+        const db = src.name && /^[A-Za-z0-9_]+$/.test(src.name) ? src.name : 'master';
+        return await sqlObjects(serverlessTarget(db), `lakehouse (Synapse serverless over ${db})`);
+      }
+      case 'kql':
+        return await kqlObjects(src);
+      case 'ai-search':
+        return await searchObjects(src);
+      case 'semantic-model':
+        return {
+          objects: [],
+          gate: 'Semantic models are scoped in Power BI "Prep for AI" Verified Answers — there is no table selection here.',
+        };
+      case 'ontology':
+      case 'graph':
+        return { objects: [], gate: `${src.type === 'graph' ? 'Graphs' : 'Ontologies'} are queried whole — no table scoping.` };
+      default:
+        return { objects: [], gate: `Schema introspection for source type "${src.type}" is not wired.` };
+    }
+  } catch (e: any) {
+    return { objects: [], gate: `Could not read schema from ${src.name || src.type}: ${e?.message || String(e)}` };
+  }
+}
+
+async function sqlObjects(target: ReturnType<typeof dedicatedTarget>, label: string): Promise<SourceObjectsResult> {
+  // INFORMATION_SCHEMA.TABLES gives real tables + views (TABLE_TYPE); ROUTINES
+  // gives scalar/table functions. Both are read-only metadata on dedicated AND
+  // serverless SQL. No Fabric.
+  const res = await synapseExecute(
+    target,
+    'SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES ORDER BY TABLE_SCHEMA, TABLE_NAME',
+  );
+  const objects: SourceObject[] = [];
+  for (const row of res.rows) {
+    const [schema, name, type] = row as [string, string, string];
+    if (!name) continue;
+    objects.push({ schema: schema || undefined, name, kind: /view/i.test(String(type)) ? 'view' : 'table' });
+  }
+  // Functions are best-effort — a serverless endpoint may not expose ROUTINES.
+  try {
+    const fres = await synapseExecute(
+      target,
+      "SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME",
+    );
+    for (const row of fres.rows) {
+      const [schema, name] = row as [string, string];
+      if (name) objects.push({ schema: schema || undefined, name, kind: 'function' });
+    }
+  } catch { /* functions optional */ }
+  if (!objects.length) return { objects: [], gate: `No tables / views / functions found in ${label}.` };
+  return { objects };
+}
+
+async function kqlObjects(src: DataAgentSource): Promise<SourceObjectsResult> {
+  const gate = kustoConfigGate();
+  if (gate) return { objects: [], gate: `ADX not configured: set ${gate.missing}. Cluster: ${clusterUri()}.` };
+  const db = src.name && /^[A-Za-z0-9_-]+$/.test(src.name) ? src.name : defaultDatabase();
+  const tables = await listTables(db); // real `.show tables`
+  const objects: SourceObject[] = tables.map((t) => ({ name: t.name, kind: 'table' as const })).filter((o) => o.name);
+  try {
+    const fns = await listFunctions(db); // real `.show functions`
+    for (const f of fns) if (f.name) objects.push({ name: f.name, kind: 'function' });
+  } catch { /* functions optional */ }
+  if (!objects.length) return { objects: [], gate: `No tables / functions found in ADX database "${db}".` };
+  return { objects };
+}
+
+async function searchObjects(src: DataAgentSource): Promise<SourceObjectsResult> {
+  const gate = searchConfigGate();
+  if (gate) return { objects: [], gate: `AI Search not configured: set ${gate.missing}.` };
+  const index = src.name || (src.tables ? src.tables.split(',')[0].trim() : '');
+  if (!index) return { objects: [], gate: 'No AI Search index name on this source.' };
+  const def: any = await getIndex(index); // real getIndex
+  if (!def) return { objects: [], gate: `AI Search index "${index}" not found.` };
+  const fields: any[] = Array.isArray(def.fields) ? def.fields : [];
+  if (!fields.length) return { objects: [], gate: `AI Search index "${index}" has no fields.` };
+  return { objects: fields.map((f) => ({ name: String(f.name), kind: 'field' as const })).filter((o) => o.name) };
 }
 
 // ── AOAI generation ──────────────────────────────────────────────────────────

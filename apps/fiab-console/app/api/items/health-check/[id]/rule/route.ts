@@ -84,12 +84,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   let rule: MonitorRuleRecord;
   try {
+    // Bind the rule to the item's persisted notification action group (from the
+    // Notifications tab) when present; otherwise fall back to a per-rule email.
+    const boundActionGroupId = ((hc.state as any)?.actionGroup?.id as string | undefined) || undefined;
     rule = await createMonitorActivatorRule(hc.displayName || 'Health check', {
       name,
       query,
       severity,
       evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : 'PT5M',
       windowSize: typeof body?.windowSize === 'string' ? body.windowSize : 'PT15M',
+      existingActionGroupId: boundActionGroupId,
       action: email ? { target: email } : undefined,
     });
   } catch (e: any) {

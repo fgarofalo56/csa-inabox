@@ -14,7 +14,7 @@ import {
   Card, Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
-  Tree, TreeItem, TreeItemLayout,
+  Tree, TreeItem, TreeItemLayout, Checkbox,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Dropdown, Option, Switch,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
@@ -157,17 +157,9 @@ const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[
   { value: 'ontology', label: 'Ontology', itemType: 'ontology' },
   { value: 'graph', label: 'Graph model', itemType: 'graph-model' },
 ];
-// Schema-selection label per type (Fabric exposes Tables/Views/Functions for
-// SQL + Eventhouse, model name for semantic models, none for graph/ontology).
-const DA_SCHEMA_LABEL: Record<DaSourceType, string> = {
-  warehouse: 'Tables / views / functions in scope (comma-separated)',
-  lakehouse: 'Tables in scope (comma-separated)',
-  kql: 'Tables / materialized views / functions in scope (comma-separated)',
-  'semantic-model': 'Tables / model in scope (comma-separated)',
-  'ai-search': 'Index fields in scope (optional, comma-separated)',
-  ontology: 'Ontology is queried whole — no table scoping',
-  graph: 'Graph is queried whole — no node/edge scoping',
-};
+// Schema-selection for graph/ontology (queried whole) + semantic-model (Power
+// BI "Prep for AI") is a caption; every other type gets the real Tree picker
+// (SourceSchemaTree) fed by /source-schema — no freeform table strings.
 const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
 
 // `normalizeDaSources` / `guessDaSourceType` / DaSource(Type) are imported from
@@ -633,10 +625,12 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                         {src.type === 'graph' ? 'Graphs are queried whole — no node/edge scoping.' : 'Ontologies are queried whole — no subset scoping.'}
                       </Caption1>
+                    ) : src.type === 'semantic-model' ? (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        Semantic models are scoped in Power BI &ldquo;Prep for AI&rdquo; Verified Answers — no table selection here.
+                      </Caption1>
                     ) : (
-                      <Field label={DA_SCHEMA_LABEL[src.type]}>
-                        <Input value={src.tables || ''} onChange={(_, d) => updateSource(src.id, { tables: d.value })} placeholder="dim_date, fact_sales" />
-                      </Field>
+                      <SourceSchemaTree id={id} src={src} onChange={(tables) => updateSource(src.id, { tables })} />
                     )}
                     <Field label="Source instructions">
                       <Textarea value={src.instructions || ''} rows={4} onChange={(_, d) => updateSource(src.id, { instructions: d.value })} />
@@ -1191,6 +1185,114 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         </div>
       </>
     } />
+  );
+}
+
+// ----- Source schema Tree picker (replaces the freeform table Input) ----------
+// A real Tables / Views / Functions / Fields checkbox browser for one bound
+// source, fed by GET /api/items/data-agent/[id]/source-schema which reads the
+// live Azure-native backend (Synapse INFORMATION_SCHEMA / ADX .show tables /
+// AI Search getIndex). Checked leaves populate `src.tables` in the SAME
+// comma-separated shape the grounding backend already reads back — no freeform
+// text, per .claude/rules/loom_no_freeform_config.
+interface SchemaObject { schema?: string; name: string; kind: 'table' | 'view' | 'function' | 'field' }
+const DA_KIND_GROUPS: { kind: SchemaObject['kind']; label: string }[] = [
+  { kind: 'table', label: 'Tables' },
+  { kind: 'view', label: 'Views' },
+  { kind: 'function', label: 'Functions' },
+  { kind: 'field', label: 'Fields' },
+];
+
+function SourceSchemaTree({ id, src, onChange }: { id: string; src: DaSource; onChange: (tables: string) => void }) {
+  const [objects, setObjects] = useState<SchemaObject[]>([]);
+  const [loadingSchema, setLoadingSchema] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const selected = useMemo(
+    () => new Set((src.tables || '').split(',').map((t) => t.trim()).filter(Boolean)),
+    [src.tables],
+  );
+
+  const load = useCallback(async () => {
+    if (id === 'new') { setGate('Save the agent first, then browse this source’s schema.'); setObjects([]); return; }
+    if (!src.name) { setGate('This source has no bound resource name yet.'); setObjects([]); return; }
+    setLoadingSchema(true); setGate(null); setErr(null);
+    try {
+      const params = new URLSearchParams({ sourceKind: src.type, name: src.name });
+      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/source-schema?${params.toString()}`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        if (j?.gate) setGate(j.gate.remediation || j.gate.reason || 'Schema unavailable.');
+        else setErr(j?.error || `HTTP ${r.status}`);
+        setObjects([]);
+        return;
+      }
+      setObjects(Array.isArray(j.tables) ? (j.tables as SchemaObject[]) : []);
+    } catch (e: any) { setErr(e?.message || String(e)); setObjects([]); }
+    finally { setLoadingSchema(false); }
+  }, [id, src.type, src.name]);
+
+  useEffect(() => { void load(); }, [load]);
+
+  const toggle = (nm: string, checked: boolean) => {
+    const next = new Set(selected);
+    if (checked) next.add(nm); else next.delete(nm);
+    onChange(Array.from(next).join(', '));
+  };
+
+  const groups = DA_KIND_GROUPS
+    .map((g) => ({ ...g, items: objects.filter((o) => o.kind === g.kind) }))
+    .filter((g) => g.items.length > 0);
+
+  return (
+    <Field
+      label="Schema objects in scope"
+      hint="Select the tables, views, and functions the agent may query from this source. Leave all unchecked to keep the whole source in scope."
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
+          <Badge appearance="tint" color="brand">{selected.size} selected</Badge>
+          <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={load} disabled={loadingSchema}>Refresh</Button>
+          {loadingSchema && <Spinner size="tiny" />}
+        </div>
+        {gate && (
+          <MessageBar intent="warning">
+            <MessageBarBody><MessageBarTitle>Schema unavailable</MessageBarTitle>{gate}</MessageBarBody>
+          </MessageBar>
+        )}
+        {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {!loadingSchema && !gate && !err && groups.length === 0 && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No selectable objects found on this source.</Caption1>
+        )}
+        {groups.length > 0 && (
+          <Tree
+            aria-label="Schema objects"
+            defaultOpenItems={groups.map((g) => g.kind)}
+            style={{ maxHeight: 320, overflowY: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalXS }}
+          >
+            {groups.map((g) => (
+              <TreeItem key={g.kind} itemType="branch" value={g.kind}>
+                <TreeItemLayout>{g.label} ({g.items.length})</TreeItemLayout>
+                <Tree>
+                  {g.items.map((o) => {
+                    const key = `${g.kind}:${o.schema ? `${o.schema}.` : ''}${o.name}`;
+                    const label = o.schema ? `${o.schema}.${o.name}` : o.name;
+                    return (
+                      <TreeItem key={key} itemType="leaf" value={key}>
+                        <TreeItemLayout>
+                          <Checkbox label={label} checked={selected.has(o.name)} onChange={(_, d) => toggle(o.name, !!d.checked)} />
+                        </TreeItemLayout>
+                      </TreeItem>
+                    );
+                  })}
+                </Tree>
+              </TreeItem>
+            ))}
+          </Tree>
+        )}
+      </div>
+    </Field>
   );
 }
 

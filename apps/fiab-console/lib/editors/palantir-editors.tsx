@@ -19,7 +19,7 @@
  * workspace (.claude/rules/no-fabric-dependency.md).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type CSSProperties } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Title2, Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
@@ -36,7 +36,7 @@ import {
   History20Regular, Bug20Regular,
   ArrowSwap20Regular, People20Regular, Tag20Regular, ChevronRight20Regular,
   CheckmarkCircle20Regular, DismissCircle20Regular, Cloud20Regular, Branch20Regular,
-  Settings20Regular, Warning20Regular, Pulse20Regular,
+  Settings20Regular, Warning20Regular, Pulse20Regular, Alert20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
@@ -1507,7 +1507,7 @@ interface HealthState { rules?: MonitorRule[]; [k: string]: unknown }
 export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { loading } = useItemState<HealthState>('health-check', id, { rules: [] });
-  const [tab, setTab] = useState<'checks' | 'status' | 'history' | 'settings'>('checks');
+  const [tab, setTab] = useState<'checks' | 'status' | 'history' | 'notifications' | 'settings'>('checks');
   const [rules, setRules] = useState<MonitorRule[]>([]);
   const [checkType, setCheckType] = useState<'freshness' | 'rowcount' | 'custom'>('freshness');
   const [name, setName] = useState('');
@@ -1679,6 +1679,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
           <Tab value="checks" icon={<Flash20Regular />}>Checks{rules.length ? ` (${rules.length})` : ''}</Tab>
           <Tab value="status" icon={<Pulse20Regular />}>Status</Tab>
           <Tab value="history" icon={<History20Regular />}>History</Tab>
+          <Tab value="notifications" icon={<Alert20Regular />}>Notifications</Tab>
           <Tab value="settings" icon={<Settings20Regular />}>Settings</Tab>
         </TabList>
 
@@ -1828,6 +1829,9 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
           </div>
         )}
 
+        {/* ───────── Notifications ───────── */}
+        {tab === 'notifications' && <HealthCheckNotifications id={id} itemName={item.displayName || id} />}
+
         {/* ───────── Settings ───────── */}
         {tab === 'settings' && (
           <div className={s.section}>
@@ -1838,12 +1842,228 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
             </MessageBarBody></MessageBar>
             <MessageBar intent="warning"><MessageBarBody>
               <MessageBarTitle>Planned (tracked in docs/fiab/parity/health-check.md)</MessageBarTitle>
-              The full Foundry check-type library (Time / Size / Content / Schema families), action-group channel management with test-fire, dynamic thresholds + KQL preview, Monitoring Views, and incident/issue management are not built yet. Today: freshness / row-count / custom-KQL checks with severity, on-demand run, enable / disable / delete, a status dashboard, and fired-alert history.
+              The full Foundry check-type library (Time / Size / Content / Schema families), dynamic thresholds + KQL preview, Monitoring Views, and incident/issue management are not built yet. Available today: freshness / row-count / custom-KQL checks with severity, on-demand run, enable / disable / delete, a status dashboard, fired-alert history, and action-group channel management with test-fire (see the <b>Notifications</b> tab).
             </MessageBarBody></MessageBar>
           </div>
         )}
       </div>
     } />
+  );
+}
+
+// ─────────── HealthCheck → Notifications (Azure Monitor action groups) ───────────
+// Real channel management for the check's alerts. Every channel is a live
+// action-group receiver (email / SMS / webhook / Azure Function / Logic App)
+// upserted via Microsoft.Insights/actionGroups; "Send test" fires a real
+// createNotifications through every receiver. Azure-native default — no Fabric.
+// Backed by /api/items/health-check/[id]/action-group (GET list + PUT upsert +
+// POST test). New check rules created afterward bind to this action group.
+type AgSms = { countryCode: string; phoneNumber: string };
+type AgWebhook = { name?: string; serviceUri: string; useCommonAlertSchema?: boolean };
+type AgFunction = { name?: string; functionUrl: string; useCommonAlertSchema?: boolean };
+type AgLogicApp = { name?: string; resourceId: string; useCommonAlertSchema?: boolean };
+interface HcActionGroup {
+  name: string; id?: string; shortName: string;
+  emails: string[]; sms: AgSms[]; webhooks: AgWebhook[]; functions: AgFunction[]; logicApps: AgLogicApp[];
+}
+interface AgSummaryRow {
+  name: string; id: string; shortName?: string;
+  emailCount: number; smsCount: number; webhookCount: number; logicAppCount: number;
+}
+
+function HealthCheckNotifications({ id, itemName }: { id: string; itemName: string }) {
+  const s = useStyles();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [groups, setGroups] = useState<AgSummaryRow[]>([]);
+  const [savedId, setSavedId] = useState<string | undefined>(undefined);
+
+  const [name, setName] = useState('');
+  const [shortName, setShortName] = useState('');
+  const [emails, setEmails] = useState<string[]>([]);
+  const [sms, setSms] = useState<AgSms[]>([]);
+  const [webhooks, setWebhooks] = useState<AgWebhook[]>([]);
+  const [functions, setFunctions] = useState<AgFunction[]>([]);
+  const [logicApps, setLogicApps] = useState<AgLogicApp[]>([]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+      } else {
+        setGroups(Array.isArray(j.groups) ? j.groups : []);
+        setMsg(null);
+      }
+      const cur = (j?.current || null) as HcActionGroup | null;
+      if (cur && cur.name) {
+        setName(cur.name); setShortName(cur.shortName || ''); setSavedId(cur.id);
+        setEmails(Array.isArray(cur.emails) ? cur.emails : []);
+        setSms(Array.isArray(cur.sms) ? cur.sms : []);
+        setWebhooks(Array.isArray(cur.webhooks) ? cur.webhooks : []);
+        setFunctions(Array.isArray(cur.functions) ? cur.functions : []);
+        setLogicApps(Array.isArray(cur.logicApps) ? cur.logicApps : []);
+      } else {
+        const base = (itemName || 'health-check').replace(/[^A-Za-z0-9-]/g, '-').slice(0, 40) || 'health-check';
+        setName((n) => n || `${base}-ag`);
+        setShortName((n) => n || ((itemName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom'));
+      }
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setLoading(false); }
+  }, [id, itemName]);
+  useEffect(() => { void load(); }, [load]);
+
+  const save = useCallback(async () => {
+    setSaving(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), shortName: shortName.trim() || undefined, emails, sms, webhooks, functions, logicApps }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setSavedId(j.id);
+      setMsg({ intent: 'success', text: `Saved action group “${j.current?.name || name}”. New checks created from here on notify these channels.` });
+      void load();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSaving(false); }
+  }, [id, name, shortName, emails, sms, webhooks, functions, logicApps, load]);
+
+  const test = useCallback(async () => {
+    setTesting(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ actionGroupId: savedId }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      const rc = j.result?.receivers || {};
+      setMsg({ intent: 'success', text: `Test notification sent (HTTP ${j.result?.status ?? '—'}) to ${rc.emails || 0} email · ${rc.sms || 0} SMS · ${rc.webhooks || 0} webhook/function · ${rc.logicApps || 0} Logic App receiver(s).` });
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setTesting(false); }
+  }, [id, savedId]);
+
+  const channelCount = emails.length + sms.length + webhooks.length + functions.length + logicApps.length;
+  const rowStyle: CSSProperties = { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' };
+  const chanHead = (icon: ReactNode, title: string) => (
+    <div className={s.sectionHead}><span className={s.sectionIcon}>{icon}</span><Subtitle2>{title}</Subtitle2></div>
+  );
+
+  return (
+    <div className={s.section}>
+      <SectionHead icon={<Alert20Regular />} title="Notification channels" hint="The Azure Monitor action group this check's alerts fire. Every row is a real action-group receiver — Azure-native, no Fabric." />
+      <MessageBar intent="info"><MessageBarBody>
+        Saving upserts a real <b>Microsoft.Insights/actionGroups</b> and binds new check rules to it; <b>Send test</b> delivers a Common Alert Schema payload through every receiver. Requires <b>LOOM_SUBSCRIPTION_ID</b> + <b>LOOM_ALERT_RG</b> and the Console UAMI as <b>Monitoring Contributor</b>.
+      </MessageBarBody></MessageBar>
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+      {loading && <Spinner size="tiny" label="Loading channels…" labelPosition="after" />}
+
+      <div className={s.addBar}>
+        <Field label="Action group name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="orders-health-ag" /></Field>
+        <Field label="Short name (≤12, shown in alerts)"><Input value={shortName} maxLength={12} onChange={(_, d) => setShortName(d.value)} placeholder="loom" /></Field>
+        <span className={s.spacer} />
+        <Badge appearance="tint" color={channelCount ? 'brand' : 'warning'}>{channelCount} receiver{channelCount === 1 ? '' : 's'}</Badge>
+        {savedId && <Badge appearance="tint" color="success">saved</Badge>}
+      </div>
+
+      {/* Email */}
+      <div>
+        {chanHead(<People20Regular />, 'Email')}
+        {emails.map((e, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'Email address' : ''} style={{ flex: 1, minWidth: 240 }}>
+              <Input type="email" value={e} onChange={(_, d) => setEmails((arr) => arr.map((x, j) => (j === i ? d.value : x)))} placeholder="oncall@contoso.com" />
+            </Field>
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setEmails((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setEmails((arr) => [...arr, ''])} style={{ marginTop: tokens.spacingVerticalXS }}>Add email</Button>
+      </div>
+
+      {/* SMS */}
+      <div>
+        {chanHead(<Pulse20Regular />, 'SMS')}
+        {sms.map((r, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'Country code' : ''} style={{ width: 120 }}>
+              <Input value={r.countryCode} onChange={(_, d) => setSms((arr) => arr.map((x, j) => (j === i ? { ...x, countryCode: d.value } : x)))} placeholder="1" />
+            </Field>
+            <Field label={i === 0 ? 'Phone number' : ''} style={{ flex: 1, minWidth: 200 }}>
+              <Input value={r.phoneNumber} onChange={(_, d) => setSms((arr) => arr.map((x, j) => (j === i ? { ...x, phoneNumber: d.value } : x)))} placeholder="5555550123" />
+            </Field>
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setSms((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setSms((arr) => [...arr, { countryCode: '1', phoneNumber: '' }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add SMS</Button>
+      </div>
+
+      {/* Webhook */}
+      <div>
+        {chanHead(<Link20Regular />, 'Webhook')}
+        {webhooks.map((r, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'HTTPS endpoint' : ''} style={{ flex: 1, minWidth: 280 }}>
+              <Input value={r.serviceUri} onChange={(_, d) => setWebhooks((arr) => arr.map((x, j) => (j === i ? { ...x, serviceUri: d.value } : x)))} placeholder="https://hooks.example.com/alert" />
+            </Field>
+            <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setWebhooks((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setWebhooks((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setWebhooks((arr) => [...arr, { serviceUri: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add webhook</Button>
+      </div>
+
+      {/* Azure Function */}
+      <div>
+        {chanHead(<Code20Regular />, 'Azure Function')}
+        <Caption1 className={s.hint}>Delivered as a webhook to the function's HTTPS trigger URL (include the function key).</Caption1>
+        {functions.map((r, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'Function HTTPS trigger URL' : ''} style={{ flex: 1, minWidth: 280 }}>
+              <Input value={r.functionUrl} onChange={(_, d) => setFunctions((arr) => arr.map((x, j) => (j === i ? { ...x, functionUrl: d.value } : x)))} placeholder="https://myfunc.azurewebsites.net/api/alert?code=..." />
+            </Field>
+            <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setFunctions((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setFunctions((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setFunctions((arr) => [...arr, { functionUrl: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add function</Button>
+      </div>
+
+      {/* Logic App */}
+      <div>
+        {chanHead(<Cloud20Regular />, 'Logic App')}
+        <Caption1 className={s.hint}>The workflow's callback URL is resolved from its resource id via ARM listCallbackUrl on save.</Caption1>
+        {logicApps.map((r, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'Logic App resource id' : ''} style={{ flex: 1, minWidth: 320 }}>
+              <Input value={r.resourceId} onChange={(_, d) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, resourceId: d.value } : x)))} placeholder="/subscriptions/…/providers/Microsoft.Logic/workflows/notify" />
+            </Field>
+            <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setLogicApps((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setLogicApps((arr) => [...arr, { resourceId: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add Logic App</Button>
+      </div>
+
+      <div style={rowStyle}>
+        <Button appearance="primary" icon={<Alert20Regular />} disabled={saving || !name.trim()} onClick={save}>{saving ? 'Saving…' : 'Save channels'}</Button>
+        <Button appearance="secondary" icon={<Play20Regular />} disabled={testing || !savedId} onClick={test} title={savedId ? undefined : 'Save the action group first.'}>{testing ? 'Sending…' : 'Send test'}</Button>
+        <span className={s.spacer} />
+        {groups.length > 0 && <Caption1 className={s.hint}>{groups.length} action group{groups.length === 1 ? '' : 's'} in {`LOOM_ALERT_RG`}</Caption1>}
+      </div>
+    </div>
   );
 }
 
