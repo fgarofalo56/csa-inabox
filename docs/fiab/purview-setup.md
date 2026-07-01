@@ -114,6 +114,41 @@ point `LOOM_PURVIEW_ACCOUNT` at it. (Adopting the `-api` host + `/datagovernance
 client surface would be a follow-up; the classic Data Map path remains the
 supported default.)
 
+## Scanning private-endpoint-locked sources — managed-VNet Integration Runtime {#purview-managed-vnet-ir}
+
+To scan a source that is **locked behind Private Link** (no public network
+access) you need a self-hosted IR **or** — new in 2026-06 — a Purview
+**managed-VNet Integration Runtime** with **managed private endpoints**. The
+managed path needs **no SHIR VMSS**: Purview hosts the scan compute inside its
+own managed VNet and reaches each PE-locked source through an approved managed
+private endpoint.
+
+The Console wires this end-to-end (commit `8704e7ef`):
+
+- BFF: `app/api/admin/scaling/compute/purview-managed-vnet/route.ts` (GET status,
+  POST create/upsert), surfaced in `ScaleManagePanel`.
+- Client (`apps/fiab-console/lib/azure/purview-client.ts`), over the Purview
+  **scanning** data plane:
+  - `upsertPurviewManagedVnet` → `PUT /scan/managedvirtualnetworks/{mvnet}` —
+    create the managed VNet
+  - `upsertPurviewManagedVnetIr` → `PUT /scan/integrationruntimes/{ir}` (kind
+    `Managed`) — create the managed-VNet IR
+  - `list/upsertPurviewManagedPrivateEndpoint` →
+    `PUT /scan/managedvirtualnetworks/{mvnet}/managedprivateendpoints/{name}` —
+    create a managed PE to a target resource (`groupId` = the sub-resource, e.g.
+    `blob` / `dfs` / `sqlServer`)
+
+**One-time human step (honest gate):** each managed private endpoint must be
+**approved by the target resource's owner** (Azure portal → the source resource →
+Networking → Private endpoint connections → Approve, or `az network
+private-endpoint-connection approve`). The Console surfaces the exact approval
+step + portal URL + `az` command. Until approved, the PE is `Pending` and the
+scan can't reach the source.
+
+Use the **managed-VNet IR** for Azure PaaS sources behind Private Link (Storage /
+Azure SQL / etc.); keep the **SHIR VMSS** ([purview-shir-autoscale](parity/purview-shir-autoscale.md))
+for on-prem / VM-hosted sources that a managed PE can't reach.
+
 ## Files
 
 - Client: `apps/fiab-console/lib/azure/purview-client.ts`

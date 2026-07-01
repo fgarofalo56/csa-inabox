@@ -210,7 +210,7 @@ Full architectural decision records: [**ADRs**](adr/README.md).
 | Build wave 0 | In progress (PRP-01 + PRP-19) |
 | v1 GA target | weeks 20-24 (~6 months) |
 | v1.1 target | +3 months — DoD IL5 |
-| v2 target | +6 months — Fabric IQ family parity |
+| v2 target | +6 months — Fabric Databases (HorizonDB-equivalent). The **Fabric IQ family** (Ontology / Plan / Graph / Map / Data Agent / Workshop / Slate / OSDK / Release-environment / Health-check / AIP Logic) has **already shipped** with real Azure-native backends — see the [parity matrix](parity-matrix.md#fabric-iq-family-delivered-azure-native) |
 
 ## How Loom relates to Microsoft Fabric
 

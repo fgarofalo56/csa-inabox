@@ -1639,18 +1639,38 @@ var / this role.
 
 ---
 
-## Deploy-planner ML workspace — LOOM_AML_WORKSPACE env patch {#aml-workspace-env-patch}
+## Deploy-planner ML workspace — zero-gate default + LOOM_AML_WORKSPACE retarget {#aml-workspace-env-patch}
 
-By default the `ml-experiment` "Runs & metrics" tab tracks against the AI Foundry
-hub workspace (via the `LOOM_FOUNDRY_NAME` / `LOOM_FOUNDRY_REGION` fallback in
-`mlflow-client.ts`) — so it works out of the box. When you deploy a **dedicated**
-Azure ML workspace alongside the console (deploy-planner `mlWorkspaceEnabled = true`,
-or a BYO AML workspace) and want experiment tracking to target **that** workspace,
-the console's `LOOM_AML_WORKSPACE` env var must be set.
+**As of 2026-06 the Data Science editors work on a clean deploy with zero
+post-deploy steps.** When `mlWorkspaceEnabled = true` (the default),
+`deploy-planner/ml-workspace.bicep` provisions:
 
-The admin-plane Container App env is rendered **before** the deploy-planner
-workspace exists (same ordering constraint as the Databricks hostname), so this
-is a one-time post-deploy patch:
+- a dedicated **Azure ML workspace** alongside the Console;
+- an always-on **default Compute Instance** (`ci-loom-<hash>`) whose
+  `idleTimeBeforeShutdown` is set to `LOOM_AML_COMPUTE_IDLE_TTL` (default
+  `PT30M`), so it **auto-stops when idle** to cap cost;
+- the workspace **system-assigned MI granted Contributor** on the workspace —
+  required by Azure ML for the Compute-Instance idle-shutdown schedule and
+  lifecycle.
+
+`admin-plane/main.bicep` then emits **`LOOM_AML_DEFAULT_COMPUTE`** (the
+deterministic default-CI name) and `LOOM_AML_COMPUTE_IDLE_TTL` onto the Console,
+so the notebook compute picker auto-selects the default instance and the Compute
+Instance stop / create / idle-shutdown lifecycle works out of the box (commits
+`32b5ba1f`, `68ad5335`). When the workspace is not provisioned,
+`LOOM_AML_DEFAULT_COMPUTE` is empty and the AML-compute controls honest-gate as
+before — no fabricated compute.
+
+### Retarget experiment tracking to a different workspace (optional)
+
+`LOOM_AML_WORKSPACE` is now **only** needed to point MLflow experiment tracking
+at a **different** (BYO or secondary) Azure ML workspace than the default one.
+The `ml-experiment` "Runs & metrics" tab tracks against the AI Foundry hub
+workspace by default (via the `LOOM_FOUNDRY_NAME` / `LOOM_FOUNDRY_REGION`
+fallback in `mlflow-client.ts`), so it works unset. The admin-plane Container App
+env is rendered **before** a dedicated deploy-planner workspace exists (same
+ordering constraint as the Databricks hostname), so retargeting is a one-time
+patch:
 
 ```bash
 AML_WS=$(az ml workspace show -g <dlz-rg> -n <aml-workspace-name> --query name -o tsv)
@@ -1663,16 +1683,79 @@ still functional, but runs logged against the dedicated workspace won't appear.
 Also grant the Console UAMI AzureML Data Scientist on that workspace
 ([§AzureML Data Scientist](#aml-data-scientist)).
 
-| Env var | Backs | Fallback when empty |
+| Env var | Backs | Default when empty |
 |---|---|---|
-| `LOOM_AML_WORKSPACE` | MLflow tracking workspace name (`mlflow-client.ts`) | `LOOM_FOUNDRY_NAME` |
+| `LOOM_AML_DEFAULT_COMPUTE` | Default Compute Instance the notebook picker auto-selects (`ci-loom-<hash>`) | empty ⇒ AML-compute controls honest-gate |
+| `LOOM_AML_COMPUTE_IDLE_TTL` | Idle TTL before the default CI auto-stops | `PT30M` |
+| `LOOM_AML_WORKSPACE` | MLflow tracking workspace name to retarget (`mlflow-client.ts`) | `LOOM_FOUNDRY_NAME` (Foundry hub) |
 | `LOOM_AML_RG` | RG of that workspace | `LOOM_FOUNDRY_RG` |
 
 ### Bicep sync
 
-- `LOOM_AML_WORKSPACE` / `LOOM_AML_RG` params + env wiring:
+- Default workspace + idle-TTL Compute Instance + workspace-MI Contributor:
+  `platform/fiab/bicep/modules/deploy-planner/ml-workspace.bicep`.
+- `LOOM_AML_DEFAULT_COMPUTE` / `LOOM_AML_COMPUTE_IDLE_TTL` / `LOOM_AML_WORKSPACE` /
+  `LOOM_AML_RG` params + env wiring:
   `platform/fiab/bicep/modules/admin-plane/main.bicep` (`loomAmlWorkspace` /
-  `loomAmlRg`), threaded from `platform/fiab/bicep/main.bicep`.
+  `loomAmlRg` + the `byoExisting` AML compute carriers), threaded from
+  `platform/fiab/bicep/main.bicep`.
+
+---
+
+## Azure Maps — interactive map visual {#azure-maps-enablement}
+
+The Console `map` editor and the report **Map visual** render on the real
+**Azure Maps Web SDK** (`azure-maps-control` from `atlas.microsoft.com`) — no
+Fabric, no Power BI. The Azure-native map backend is **opt-in**: with it unset
+the aggregated location rows still render on the offline SVG fallback, and the
+canvas shows an honest MessageBar naming the env var + bicep module.
+
+Three things enable the interactive map:
+
+1. **Select the Azure Maps backend.** Set **`LOOM_MAPS_BACKEND=azure-maps`** on
+   the Console. This is the opt-in switch `resolveMapsBackend()`
+   (`apps/fiab-console/lib/azure/maps-client.ts`) reads; any other value keeps
+   the map on the offline fallback.
+
+2. **Point at the account (AAD path, preferred).** Set
+   **`LOOM_AZURE_MAPS_CLIENT_ID`** to the Azure Maps account **`uniqueId`** (the
+   `mapsClientId` bicep output). The Console UAMI mints an
+   `atlas.microsoft.com` token and sends it with `x-ms-client-id = uniqueId` —
+   no subscription key on disk. (`LOOM_AZURE_MAPS_KEY` is a commercial-only
+   subscription-key fallback.) For this to work the Console UAMI must hold the
+   **"Azure Maps Data Reader"** data-plane role on the `Microsoft.Maps/accounts`
+   account — granted by the bicep module below.
+
+3. **Allow the SDK host in CSP.** The Console Content-Security-Policy must allow
+   **`atlas.microsoft.com`** (script/style/connect/img) so the Web SDK loads
+   (fixed in commit `984a64e9`). A stock deploy already ships this; a
+   hand-edited CSP must keep the allowance or the map silently fails to load.
+
+```bash
+# Existing deployment — enable the interactive map on the Console
+MAPS_CLIENT_ID=$(az maps account show -g <dlz-rg> -n <maps-account> --query properties.uniqueId -o tsv)
+az containerapp update --name loom-console -g rg-csa-loom-admin-<region> \
+  --set-env-vars LOOM_MAPS_BACKEND=azure-maps LOOM_AZURE_MAPS_CLIENT_ID="$MAPS_CLIENT_ID"
+# then grant the Console UAMI "Azure Maps Data Reader" on the account (bicep does this on a fresh deploy)
+```
+
+### Verify
+
+Open a `map` item → the canvas renders the real Azure Maps basemap with
+BubbleLayer / HeatMapLayer / PolygonLayer over the bound data. If gated, the
+MessageBar names `LOOM_MAPS_BACKEND` / `LOOM_AZURE_MAPS_CLIENT_ID` and the
+"Azure Maps Data Reader" role; the aggregated rows still draw on the fallback.
+
+### Bicep sync
+
+- Account + Data Reader grant + `mapsClientId` (uniqueId) output:
+  `platform/fiab/bicep/modules/landing-zone/azure-maps.bicep` (and the
+  admin-plane variant `modules/admin-plane/azure-maps.bicep`). Deploys the Gen2
+  `Microsoft.Maps/accounts` account and grants the Console UAMI "Azure Maps Data
+  Reader".
+- `LOOM_MAPS_BACKEND` / `LOOM_AZURE_MAPS_CLIENT_ID` env wiring:
+  `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+- CSP `atlas.microsoft.com` allowance: commit `984a64e9`.
 
 ---
 

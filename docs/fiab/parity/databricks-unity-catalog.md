@@ -90,7 +90,7 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 | C9 | View table detail (columns) on select | ✅ built | `GET /tables?full_name=` `getUcTable` |
 | C10 | Create table **from a file / volume** (upload → infer schema) | ✅ built | Create-table dialog "From file" tab: browser reads the file → POST `tables` `mode:from_file` → `createUcTableFromFile` uploads to a UC volume (`PUT /api/2.0/fs/files`) then `CREATE TABLE … AS SELECT * FROM read_files(…)` on the warehouse (schema inferred) |
 | C11 | Partition columns / clustering / table properties (`TBLPROPERTIES`) | ❌ MISSING | not surfaced |
-| C12 | Column tags / masks / column-level comments-as-tags | ❌ MISSING | plain comment only |
+| C12 | Column tags / masks / column-level comments-as-tags | ✅ built | column-level governed-tag assignment (G1); attribute-based column governance via ABAC policies (G2) |
 
 ### D. Volumes & functions
 
@@ -123,25 +123,36 @@ Legend: built ✅ (full 1:1 + real backend) · partial ⚠️ · honest-gate ⚠
 |---|---|---|---|
 | F1 | Data **lineage** graph (upstream/downstream) | ✅ built | `UcLineagePanel` (lineage tab + per-table button) → `GET /api/databricks/unity-catalog/lineage` → `getTableLineage` (`/api/2.0/lineage-tracking/table-lineage`) + `getTableLineageSystemTables` (`system.access.{table,column}_lineage`) |
 | F2 | Sample data / column profile / table history | ❌ MISSING | not surfaced |
-| F3 | Tags & comments browser across securables | ❌ MISSING | comment-on-create only |
-| F4 | External locations / storage credentials / connections CRUD | ❌ MISSING | not surfaced |
+| F3 | Tags & comments browser across securables | ✅ built | governed-tag + object/column tag assignment across securables (G1) |
+| F4 | External locations / storage credentials / connections CRUD | ✅ built | External-Locations / Storage-Credentials / Connections (Lakehouse Federation) dialogs → BFF `…/unity-catalog/{external-locations,storage-credentials,connections}` → `/api/2.1/unity-catalog/{external-locations,storage-credentials,connections}` (list/create/get/patch/delete); a **foreign catalog** binds a connection (see A5) |
 | F5 | Delta Sharing (shares / recipients / providers) | ❌ MISSING | not surfaced |
-| F6 | Workspace-catalog bindings management | ❌ MISSING | not surfaced |
-| F7 | Insights / monitoring / quality (Lakehouse Monitoring) | ❌ MISSING | not surfaced |
+| F6 | Workspace-catalog bindings management | ✅ built | catalog **"Workspace bindings"** dialog (All / specific workspaces + Read-Only) → BFF `…/unity-catalog/bindings` → `/api/2.1/unity-catalog/bindings/{securable_type}/{name}` (GET/PATCH) |
+| F7 | Insights / monitoring / quality (Lakehouse Monitoring) | ✅ built | lakehouse data-quality monitoring (G4) |
 | F8 | **Databricks Marketplace** (browse listings · installed shared catalogs) | ✅ built | `MarketplaceDialog` (toolbar **Marketplace**) → `GET /api/databricks/unity-catalog/marketplace` → `listMarketplaceListings` / `searchMarketplaceListings` / `listMarketplaceInstallations` (`/api/2.1/marketplace-consumer/{listings,search-listings,installations}`). Install = honest note (consumer "Get instant access" accepted-terms flow); installed listing surfaces as a Delta-Sharing shared catalog. Privilege `USE MARKETPLACE ASSETS`. |
 | F9 | **Clean rooms** (list · collaborators · shared assets) | ✅ built | `CleanRoomsDialog` (toolbar **Clean rooms**) → `GET /api/databricks/unity-catalog/clean-rooms` → `listCleanRooms` / `getCleanRoom` / `listCleanRoomAssets` (`/api/2.0/clean-rooms[/{name}[/assets]]`). Create + `CLEAN ROOM TASK` DDL = honest notes (Public-Preview cross-org handshake). |
+
+### G. Governance depth (shipped after the write build — 2026-06)
+
+| # | Catalog Explorer capability | Loom | Where / backend |
+|---|---|---|---|
+| G1 | **Governed tags** (allowed-values tag policies) + object/column tag assignment | ✅ built | governed-tag + tag-assignment dialogs → BFF `…/unity-catalog/{governed-tags,tags}` → UC tag-policy + securable-tag REST (commit `28782e63`). This also closes the C12 column-tag gap and the F3 tag/comment-browser gap. |
+| G2 | **ABAC policies** (attribute-based row/column governance) | ✅ built | ABAC policy dialog → BFF `…/unity-catalog/policies` → `/api/2.1/unity-catalog/abac/policies` (commit `28782e63`) |
+| G3 | **Registered ML models** as UC securables (grant / own) | ✅ built | models surface + grants securable → BFF `…/unity-catalog/models` → `/api/2.1/unity-catalog/models` + permissions (commit `5f0e7d74`) |
+| G4 | **Lakehouse data-quality monitoring** | ✅ built | quality-monitor dialog → BFF `…/unity-catalog/quality-monitors` → UC monitoring REST (commit `5f0e7d74`) |
+| G5 | **Data classification** (system.* audit/query + classification tags) | ✅ built | classification surface → BFF `…/unity-catalog/{data-classification,system-tables}` (commit `ae2f0e47`) |
 
 ---
 
 ## Coverage tally
 
-- **built ✅: 37** (was 29; the **audit-t18 final wave** added C10 create-table-from-file,
-  E10 principal directory picker, E8 storage/metastore securables, and reconciled
-  two rows that were already shipped but mis-graded — F1 lineage graph and D3
-  volume create)
-- **partial ⚠️: 0** (E8 promoted to built)
+- **built ✅: 47** (was 37; the **2026-06 governance wave** flipped F4 external
+  locations / storage credentials / connections and F6 workspace-catalog bindings
+  to built, added G1–G5 governed-tags/ABAC/registered-model-securables/data-quality-
+  monitoring/data-classification, and — because G1/G4 cover them — reconciled
+  C12 column tags, F3 tag browser, and F7 Lakehouse Monitoring)
+- **partial ⚠️: 0**
 - **honest-gate ⚠️: 0** (the only gate is the workspace-level `not_configured` 503)
-- **MISSING ❌: 11** (was 12 → 17 baseline): A6, C11, C12, D4, D5, F2, F3, F4, F5, F6, F7
+- **MISSING ❌: 6** (was 11): A6, C11, D4, D5, F2, F5
 
 ## Honest grade: **B+**
 
@@ -177,23 +188,22 @@ prior "build next" list and reconciled two rows that were already shipped:
   to ✅ against the code.
 
 Held to **B+** (not A) by `ui-parity.md`'s "feature completeness must match"
-applied to the whole Catalog Explorer write surface: still no **column-level
-tags / masks** (C12), no **partition/clustering/TBLPROPERTIES** (C11), no
-**volume file browser** (D4) or **function create** (D5), no **sample-data /
-profile / history** (F2), no cross-securable **tag/comment browser** (F3), no
-**external locations / storage credentials / connections / Delta-Sharing CRUD**
-(F4–F5), no **workspace-binding** management (A6/F6), and no **Lakehouse
-Monitoring** (F7).
+applied to the whole Catalog Explorer write surface: still no **partition /
+clustering / TBLPROPERTIES** (C11), no **volume file browser** (D4) or **function
+create** (D5), no **sample-data / profile / history** (F2), no **Delta-Sharing
+CRUD** (F5), and no create-wizard **workspace-binding assignment** step (A6 — the
+standalone bindings manager ships as F6). The **2026-06 governance wave** closed
+the former top gaps: external locations / storage credentials / connections (F4),
+workspace-catalog bindings (F6), governed tags + ABAC (G1/G2), registered-model
+securables (G3), lakehouse data-quality monitoring (G4), and data classification (G5).
 
 ## Highest-value gaps to build next
 
-1. **External locations / storage credentials / connections / Delta Sharing CRUD** (F4–F5).
-2. **Volume file browser** (D4) + **function create/view** (D5).
-3. **Column-level tags / masks** (C12) + a cross-securable tag/comment browser (F3).
-4. **Sample data / column profile / table history** (F2).
-5. **Partition / clustering / TBLPROPERTIES** (C11) on create-table.
-6. **Workspace-catalog bindings** (A6/F6) — multi-workspace metastore only.
-7. **Lakehouse Monitoring** (F7).
+1. **Delta Sharing** (shares / recipients / providers) CRUD (F5).
+2. **Volume file browser** (D4) + **function create / view** (D5).
+3. **Sample data / column profile / table history** (F2).
+4. **Partition / clustering / TBLPROPERTIES** (C11) on create-table.
+5. **Create-wizard workspace-binding assignment step** (A6) — the standalone bindings manager already ships (F6).
 
 ## Backend per control
 

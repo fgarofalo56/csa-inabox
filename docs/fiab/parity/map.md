@@ -6,17 +6,17 @@ Source UI:
 - Palantir Foundry Map / Fabric IQ digital-twin geospatial (layer panel, ontology-bound layers, time, geofence)
 
 Editor under test: `apps/fiab-console/lib/editors/phase4-editors.tsx` → `MapEditor` (registry slug `map`, category "Fabric IQ").
-Backend: `app/api/items/map/[id]/route.ts` (CRUD) + `app/api/items/map/[id]/data/route.ts` (binding → Synapse Serverless / ADX / Weave). Renderer: `lib/components/graph/geojson-map.tsx` (static SVG).
+Backend: `app/api/items/map/[id]/route.ts` (CRUD) + `app/api/items/map/[id]/data/route.ts` (binding → Synapse Serverless / ADX / Weave) + `app/api/items/map/[id]/map-token` (Azure Maps AAD token). Renderer: `lib/components/graph/azure-maps-canvas.tsx` (real Azure Maps Web SDK), with the static `lib/components/graph/geojson-map.tsx` SVG as the offline fallback.
 
-> **Key finding (the parity unlock):** a REAL interactive Azure Maps Web SDK surface already exists in
+> **Key finding (the parity unlock — now shipped):** a REAL interactive Azure Maps Web SDK surface already existed in
 > this codebase — `lib/editors/report/map-visual.tsx` loads `azure-maps-control` from the atlas CDN with
 > `BubbleLayer` / `PolygonLayer` / `LineLayer`, hover popups, a legend, basemap styling and camera-fit;
 > `lib/azure/maps-client.ts` mints an AAD token (Console UAMI + **Azure Maps Data Reader**) for
 > `atlas.microsoft.com`; `/api/items/report/[id]/map-token` serves it; and
 > `platform/fiab/bicep/modules/admin-plane/azure-maps.bicep` deploys the `Microsoft.Maps/accounts` Gen2
-> account. The Fabric IQ `map` editor ignores all of this and renders a **static SVG** behind an optional
-> **non-interactive static raster image**. The biggest win is to retarget the editor onto the interactive
-> SDK the report layer already proves works — NO new Azure dependency, NO Fabric.
+> account. The Fabric IQ `map` editor **used to** ignore all of this and render a **static SVG**. The biggest
+> win — retargeting the editor onto the interactive SDK the report layer already proved works, with NO new
+> Azure dependency and NO Fabric — **shipped in commit `8145dd48`** (see the Status note below).
 
 ## Real feature inventory
 

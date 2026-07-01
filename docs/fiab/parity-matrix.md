@@ -114,7 +114,7 @@ CSA Loom delivers, the parity grade, and where to read the detail.
 | KQL Queryset | Console "Queryset" pane + Cosmos store | **Exact** | |
 | Real-Time Dashboard | ADX dashboards (embedded in Console) | **Exact** | |
 | OneLake availability (KQL DB → Delta export) | ADX `ContinuousExport` to ADLS Gen2 | **Exact** | |
-| Fabric Maps | Azure Maps / Mapbox / PMTiles in Console (**v2 deferred**) | **v2** | |
+| Fabric Maps | Interactive Azure Maps Web SDK in the Console `map` editor (BubbleLayer / HeatMapLayer / PolygonLayer / clusters, basemaps, popups, legend) over the real Synapse / ADX / Weave binding | **Approximate** | [Map parity](parity/map.md) |
 
 ## Data Activator / Reflex
 
@@ -210,16 +210,31 @@ detailed mechanics and the honest discussion of the freshness gap.
 | fabric-cicd Python lib / Fabric CLI deploy | `fiab-cli` wrapping azd + Bicep + workspace-create REST | **Approximate** | |
 | Branched Workspaces (preview at FabCon 2026) | v1.1 | **v1.1** | |
 
-## Fabric IQ family (v2 deferred)
+## Fabric IQ family (delivered — Azure-native)
 
-| Fabric IQ item | CSA Loom delivery | Grade |
+The Fabric IQ / Foundry-parity editors ship today as Loom item-type editors with
+**real Azure-native backends** (no Fabric capacity, no Power BI workspace). Each
+links its per-item parity doc for the built ✅ / honest-gate ⚠️ / gap breakdown.
+The operator's Fabric IQ parity program (2026-06-30) is deepening feature
+completeness toward 1:1 Foundry / Fabric IQ parity from this delivered baseline.
+
+| Fabric IQ item | CSA Loom delivery (Azure-native default) | Grade |
 |---|---|---|
-| Ontology | **v2** | Cosmos + AI Search vector index sketched |
-| Plan (agent orchestration recipes) | **v2** | Container App executor sketched |
-| Graph / FabricGraph | **v2** | Cosmos for Apache Gremlin or TinkerPop on AKS |
-| Operations Agent | **v1.1** | extension of Loom Copilot with write-tools |
-| Maps | **v2** | Azure Maps / Mapbox / PMTiles |
-| Fabric Databases (SQL DB, Cosmos DB, HorizonDB) | **v2** | HorizonDB-equivalent via Postgres Flexible Server |
+| [Ontology](parity/ontology.md) | Cosmos (model) + Apache AGE on Azure DB for PostgreSQL Flexible Server (objects/links/write-back) + Synapse/ADLS datasources | **Approximate** |
+| [Plan](parity/plan.md) | Cosmos planning cells + governed writeback → Azure SQL `MERGE`; actuals from an AAS/XMLA semantic model or Synapse/ADX | **Approximate** |
+| [Graph model](parity/graph-model.md) | ADX (Kusto) node/edge tables + `make-graph` / `graph-match` | **Approximate** |
+| [Map](parity/map.md) | Interactive Azure Maps Web SDK over the Synapse/ADX/Weave binding | **Approximate** |
+| [Data Agent](parity/data-agent.md) | Azure OpenAI NL2SQL / NL2KQL / NL2DAX over bound sources | **Approximate** |
+| [Workshop app (Atelier)](parity/workshop-app.md) | Low-code operational app builder → DAB on ACA + ontology write-back | **Approximate** |
+| [Slate app](parity/slate-app.md) | Pro-code app/dashboard builder (codegen bundle) | **Approximate** |
+| [Ontology SDK (OSDK)](parity/ontology-sdk.md) | Typed SDK generator → DAB on ACA + APIM + Entra app-registrations | **Approximate** |
+| [Release environment](parity/release-environment.md) | Azure Deployment Environments (DevCenter) + App Service slots + ARM deployments | **Approximate** |
+| [Health check](parity/health-check.md) | Azure Monitor `scheduledQueryRules` + action groups + resource-health | **Approximate** |
+| [AIP Logic (Spindle)](parity/aip-logic.md) | Azure OpenAI typed AI logic + tool-calling over the bound Weave ontology | **Approximate** |
+
+Still tracked as **v2**: **Fabric Databases** (SQL DB / Cosmos DB / HorizonDB) — a
+HorizonDB-equivalent via Azure Database for PostgreSQL Flexible Server is the
+planned Azure-native path.
 
 ## Operations + Monitoring
 
@@ -263,10 +278,10 @@ because both audit boundaries are FedRAMP-High-on-Commercial.
 | Grade | Count of capabilities |
 |---|---|
 | **Exact** | ~30 |
-| **Approximate** | ~40 |
+| **Approximate** | ~47 (now includes the delivered Fabric IQ family + Maps) |
 | **Honest gap** | ~5 (Direct Lake on OneLake no-fallback; GCC Direct Lake; V-Order; some Foundry-only Gov features) |
 | **v1.1** | ~6 |
-| **v2** | ~7 (Fabric IQ family + Fabric Databases) |
+| **v2** | ~1 (Fabric Databases / HorizonDB-equivalent via Postgres Flexible Server) |
 
 For the workload-by-workload deep design, see [Workloads](workloads/index.md).
 For the per-boundary deployment dispatch, see [Reference architecture](architecture.md).
