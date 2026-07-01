@@ -122,11 +122,17 @@ until a later cell — an `AnalysisException` under Loom's cell-by-cell executio
 Now ordered by the real Bronze column `_bronze_ingested_at` (same "latest
 ingestion wins" intent).
 
-**Live green proof:** the slot-telemetry medallion chain — seed → `01 — Bronze
-Slot Telemetry` → `01 — Silver Slot Cleansed` → `01 — Gold Slot Performance` —
-runs cell-by-cell on Synapse Spark (`loompool`) in the
-`supercharge-cell-validation` workspace with every code cell reaching Succeeded.
-Re-run the full 117-notebook sweep with `temp/loom-nb.mjs` (see the task ledger).
+**Live green proof (task #83):** the slot-telemetry medallion chain — seed →
+`01 — Bronze Slot Telemetry` → `01 — Silver Slot Cleansed` → `01 — Gold Slot
+Performance` — runs cell-by-cell on Synapse Spark (`loompool`) in the
+`supercharge-cell-validation` workspace with **every code cell Succeeded**:
+seed 1/1, Bronze 11/11, Silver 17/17, Gold 14/14 (43/43). Real data flows
+end-to-end — 600 seeded rows → `lh_bronze.bronze_slot_telemetry` (600) →
+`lh_silver.silver_slot_cleansed` (600, post-dedup) → `lh_gold.gold_slot_performance`
+(real KPIs: net_win, hold %, zone/performance breakdowns). The full 117-notebook
+sweep runs the same way once the fix is deployed (every Livy session gets the
+container-create conf); seed the workspace, then loop `temp/loom-nb.mjs run
+<wsId> <nbId>` over every notebook id.
 
 ## Backend per surface (how they install + run)
 
