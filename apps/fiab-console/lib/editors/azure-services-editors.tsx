@@ -92,6 +92,12 @@ interface SparkBatchDTO {
   submitterName?: string;
 }
 
+// Synapse Spark Big Data pool node sizes (ARM enum) + the GA Spark runtime
+// versions. The live pool's current version is merged in at render so an
+// out-of-list value is never silently dropped from the dropdown.
+const SPARK_NODE_SIZES = ['Small', 'Medium', 'Large', 'XLarge', 'XXLarge'];
+const SPARK_VERSIONS = ['3.3', '3.4'];
+
 export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [pools, setPools] = useState<SparkPoolDTO[]>([]);
@@ -122,6 +128,21 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   const [apEnabled, setApEnabled] = useState(true);
   const [apDelay, setApDelay] = useState(15);
   const [apError, setApError] = useState<string | null>(null);
+
+  // Configuration tab — editable, persisted via ARM PATCH (parity with the
+  // Azure portal pool Settings blade). Seeded from the loaded pool.
+  const [cfgNodeSize, setCfgNodeSize] = useState('Small');
+  const [cfgSparkVersion, setCfgSparkVersion] = useState('3.4');
+  const [cfgApEnabled, setCfgApEnabled] = useState(true);
+  const [cfgApDelay, setCfgApDelay] = useState('15');
+  const [cfgAsEnabled, setCfgAsEnabled] = useState(false);
+  const [cfgAsMin, setCfgAsMin] = useState('3');
+  const [cfgAsMax, setCfgAsMax] = useState('10');
+  const [cfgNodeCount, setCfgNodeCount] = useState('3');
+  const [cfgSaving, setCfgSaving] = useState(false);
+  const [cfgError, setCfgError] = useState<string | null>(null);
+  const [cfgGate, setCfgGate] = useState<string | null>(null);
+  const [cfgSaved, setCfgSaved] = useState(false);
 
   const loadPools = useCallback(async () => {
     setLoading(true); setError(null);
@@ -237,8 +258,68 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
     finally { setBusy(false); }
   }, [selected, apEnabled, apDelay, loadPool]);
 
-  const setAutoPause = useCallback(async (action: 'pause' | 'resume') => {
-    if (!selected) return;
+  // Seed the editable Configuration tab whenever a pool loads/reloads.
+  useEffect(() => {
+    if (!pool) return;
+    setCfgNodeSize(pool.properties.nodeSize || 'Small');
+    setCfgSparkVersion(pool.properties.sparkVersion || '3.4');
+    setCfgApEnabled(pool.properties.autoPause?.enabled ?? true);
+    setCfgApDelay(String(pool.properties.autoPause?.delayInMinutes ?? 15));
+    setCfgAsEnabled(pool.properties.autoScale?.enabled ?? false);
+    setCfgAsMin(String(pool.properties.autoScale?.minNodeCount ?? 3));
+    setCfgAsMax(String(pool.properties.autoScale?.maxNodeCount ?? 10));
+    setCfgNodeCount(String(pool.properties.nodeCount ?? 3));
+    setCfgError(null); setCfgGate(null); setCfgSaved(false);
+  }, [pool]);
+
+  // Spark-version dropdown options — GA set plus the pool's live value.
+  const sparkVersionOptions = useMemo(
+    () => Array.from(new Set([...SPARK_VERSIONS, ...(cfgSparkVersion ? [cfgSparkVersion] : [])])),
+    [cfgSparkVersion],
+  );
+
+  // Client-side validation mirrors the BFF so Save is disabled on bad input.
+  const cfgInvalid = useMemo(() => {    if (cfgApEnabled && (!Number.isFinite(Number(cfgApDelay)) || Number(cfgApDelay) < 5)) return 'Auto-pause delay must be ≥ 5 minutes.';
+    if (cfgAsEnabled) {
+      const min = Number(cfgAsMin), max = Number(cfgAsMax);
+      if (!Number.isFinite(min) || min < 3) return 'Autoscale min must be ≥ 3 nodes.';
+      if (!Number.isFinite(max) || max < min) return 'Autoscale max must be ≥ the min.';
+    } else if (!Number.isFinite(Number(cfgNodeCount)) || Number(cfgNodeCount) < 3) {
+      return 'Node count must be ≥ 3.';
+    }
+    return null;
+  }, [cfgApEnabled, cfgApDelay, cfgAsEnabled, cfgAsMin, cfgAsMax, cfgNodeCount]);
+
+  const saveConfig = useCallback(async () => {
+    if (!selected || cfgInvalid) return;
+    setCfgSaving(true); setCfgError(null); setCfgGate(null); setCfgSaved(false);
+    try {
+      const payload: Record<string, unknown> = {
+        nodeSize: cfgNodeSize,
+        sparkVersion: cfgSparkVersion,
+        autoPause: { enabled: cfgApEnabled, delayInMinutes: cfgApEnabled ? Number(cfgApDelay) : undefined },
+        autoScale: cfgAsEnabled
+          ? { enabled: true, minNodeCount: Number(cfgAsMin), maxNodeCount: Number(cfgAsMax) }
+          : { enabled: false },
+        nodeCount: cfgAsEnabled ? undefined : Number(cfgNodeCount),
+      };
+      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/config`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 403 || j?.forbidden) {
+        setCfgGate(j?.error || 'The Console identity is not authorized to update this pool.');
+        return;
+      }
+      if (!j?.ok) throw new Error(j?.error || `save failed (${r.status})`);
+      setCfgSaved(true);
+      await loadPool(selected);
+    } catch (e: any) { setCfgError(e?.message || String(e)); }
+    finally { setCfgSaving(false); }
+  }, [selected, cfgInvalid, cfgNodeSize, cfgSparkVersion, cfgApEnabled, cfgApDelay, cfgAsEnabled, cfgAsMin, cfgAsMax, cfgNodeCount, loadPool]);
+
+  const setAutoPause = useCallback(async (action: 'pause' | 'resume') => {    if (!selected) return;
     setBusy(true); setError(null);
     try {
       const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/state`, {
@@ -339,17 +420,67 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
             <div className={s.form}>
               <div className={s.row}>
                 <div className={s.field}><Caption1>Pool name</Caption1><Input value={pool?.name || ''} readOnly /></div>
-                <div className={s.field}><Caption1>Node size</Caption1><Input value={pool?.properties.nodeSize || ''} readOnly /></div>
+                <div className={s.field}>
+                  <Caption1>Node size</Caption1>
+                  <Dropdown value={cfgNodeSize} selectedOptions={[cfgNodeSize]} onOptionSelect={(_, d) => setCfgNodeSize(d.optionValue || cfgNodeSize)}>
+                    {SPARK_NODE_SIZES.map((n) => <Option key={n} value={n}>{n}</Option>)}
+                  </Dropdown>
+                </div>
               </div>
               <div className={s.row}>
-                <div className={s.field}><Caption1>Spark version</Caption1><Input value={pool?.properties.sparkVersion || ''} readOnly /></div>
-                <div className={s.field}><Caption1>Auto-pause (min)</Caption1><Input value={String(pool?.properties.autoPause?.delayInMinutes ?? '—')} readOnly /></div>
+                <div className={s.field}>
+                  <Caption1>Spark version</Caption1>
+                  <Dropdown value={cfgSparkVersion} selectedOptions={[cfgSparkVersion]} onOptionSelect={(_, d) => setCfgSparkVersion(d.optionValue || cfgSparkVersion)}>
+                    {sparkVersionOptions.map((v) => <Option key={v} value={v}>{v}</Option>)}
+                  </Dropdown>
+                </div>
+                <div className={s.switchField}>
+                  <Switch label="Auto-pause on idle" checked={cfgApEnabled} onChange={(_, d) => setCfgApEnabled(!!d.checked)} />
+                </div>
               </div>
+              {cfgApEnabled && (
+                <div className={s.row}>
+                  <div className={s.field}><Caption1>Auto-pause delay (minutes, ≥ 5)</Caption1><Input type="number" min={5} value={cfgApDelay} onChange={(_, d) => setCfgApDelay(d.value)} /></div>
+                  <div className={s.field} />
+                </div>
+              )}
               <div className={s.row}>
-                <div className={s.field}><Caption1>Autoscale min</Caption1><Input value={String(pool?.properties.autoScale?.minNodeCount ?? '—')} readOnly /></div>
-                <div className={s.field}><Caption1>Autoscale max</Caption1><Input value={String(pool?.properties.autoScale?.maxNodeCount ?? '—')} readOnly /></div>
+                <div className={s.switchField}>
+                  <Switch label="Autoscale" checked={cfgAsEnabled} onChange={(_, d) => setCfgAsEnabled(!!d.checked)} />
+                </div>
+                <div className={s.field} />
               </div>
-              <Caption1>Edit via Synapse Studio for now; v2.2 wires inline PUT.</Caption1>
+              {cfgAsEnabled ? (
+                <div className={s.row}>
+                  <div className={s.field}><Caption1>Autoscale min (≥ 3 nodes)</Caption1><Input type="number" min={3} value={cfgAsMin} onChange={(_, d) => setCfgAsMin(d.value)} /></div>
+                  <div className={s.field}><Caption1>Autoscale max</Caption1><Input type="number" min={3} value={cfgAsMax} onChange={(_, d) => setCfgAsMax(d.value)} /></div>
+                </div>
+              ) : (
+                <div className={s.row}>
+                  <div className={s.field}><Caption1>Node count (fixed, ≥ 3)</Caption1><Input type="number" min={3} value={cfgNodeCount} onChange={(_, d) => setCfgNodeCount(d.value)} /></div>
+                  <div className={s.field} />
+                </div>
+              )}
+              {cfgInvalid && <MessageBar intent="warning"><MessageBarBody>{cfgInvalid}</MessageBarBody></MessageBar>}
+              {cfgGate && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Not authorized to update this pool</MessageBarTitle>
+                    The Console managed identity needs the <strong>Contributor</strong> role on the Synapse workspace to change pool settings.
+                    Grant it in the portal (Synapse workspace → Access control (IAM) → Add role assignment → <strong>Contributor</strong> → the Console UAMI), then retry.
+                    ARM said: <code>{cfgGate}</code>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {cfgError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{cfgError}</MessageBarBody></MessageBar>}
+              {cfgSaved && <MessageBar intent="success"><MessageBarBody>Pool configuration saved — Synapse is applying the change.</MessageBarBody></MessageBar>}
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button appearance="primary" icon={<Save20Regular />} disabled={cfgSaving || !selected || !!cfgInvalid} onClick={saveConfig}>
+                  {cfgSaving ? 'Saving…' : 'Save configuration'}
+                </Button>
+                <Button appearance="subtle" disabled={cfgSaving || !pool} onClick={() => { if (selected) loadPool(selected); }}>Discard changes</Button>
+                <Caption1 className={s.hint}>Persisted to <code>Microsoft.Synapse/workspaces/…/bigDataPools/{pool?.name || '…'}</code> via ARM PATCH.</Caption1>
+              </div>
             </div>
           )}
           {tab === 'submit' && (
@@ -1297,63 +1428,145 @@ USING Outputters.Csv(outputHeader: true);`;
 // v3.27: heuristic U-SQL → PySpark translator. Handles EXTRACT/OUTPUT
 // patterns + SELECT/GROUP BY. NOT a full compiler — operator covers
 // the 80% case; the rest must be hand-edited in the resulting cell.
-function convertUsqlToPyspark(usql: string): string {
-  const lines: string[] = [
-    '# Converted from U-SQL by Loom usql-job heuristic translator.',
-    '# REVIEW BEFORE RUNNING — this covers EXTRACT/SELECT/GROUP BY/OUTPUT only.',
-    '',
-  ];
+//
+// v3.42 (no-vaporware): GROUP BY projections are now translated into a REAL
+// `.agg(F.sum(...).alias(...), …)` chain. The previous build emitted a
+// `.agg(/* TODO … */)` — a snippet that never runs. When a projected column
+// is neither a GROUP BY key nor a supported aggregate we REFUSE to emit and
+// return an `error` the editor surfaces in a MessageBar, rather than shipping
+// broken code.
+
+// PySpark equivalents for the U-SQL aggregate functions we translate.
+const USQL_AGG_FNS: Record<string, string> = { SUM: 'sum', COUNT: 'count', AVG: 'avg', MIN: 'min', MAX: 'max' };
+
+/** Split a SELECT projection on top-level commas only (ignores commas inside FUNC(...) parens). */
+function splitProjection(projection: string): string[] {
+  const parts: string[] = [];
+  let depth = 0, cur = '';
+  for (const ch of projection) {
+    if (ch === '(') { depth++; cur += ch; }
+    else if (ch === ')') { depth = Math.max(0, depth - 1); cur += ch; }
+    else if (ch === ',' && depth === 0) { parts.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  if (cur.trim()) parts.push(cur);
+  return parts.map(p => p.trim()).filter(Boolean);
+}
+
+/**
+ * Translate a U-SQL grouped SELECT into `src.groupBy(keys).agg(exprs)`.
+ * Returns `{ code }` on success or `{ error }` when a projected column is
+ * neither a group key nor a supported aggregate — the caller then refuses to
+ * emit a broken snippet.
+ */
+function translateGroupByAgg(
+  target: string, src: string, projection: string, groupCols: string[],
+): { code: string } | { error: string } {
+  const groupSet = new Set(groupCols.map(c => c.toLowerCase()));
+  const aggExprs: string[] = [];
+  for (const item of splitProjection(projection)) {
+    const fn = item.match(/^(\w+)\s*\(\s*([\s\S]*?)\s*\)\s*(?:AS\s+([\w]+))?$/i);
+    if (fn) {
+      const name = fn[1].toUpperCase();
+      const arg = fn[2].trim();
+      const py = USQL_AGG_FNS[name];
+      if (!py) {
+        return { error: `Unsupported aggregate "${fn[1]}(...)" in the SELECT projection. Loom translates SUM, COUNT, AVG, MIN and MAX only — rewrite "${item}" as one of those (or hand-author the PySpark) and convert again.` };
+      }
+      const alias = fn[3] || `${py}_${arg.replace(/[^\w]/g, '') || 'all'}`;
+      const col = arg === '*' ? '"*"' : `"${arg}"`;
+      aggExprs.push(`F.${py}(${col}).alias("${alias}")`);
+      continue;
+    }
+    // Plain projected column — legal only if it's one of the GROUP BY keys.
+    const bare = item.replace(/\s+AS\s+[\w]+$/i, '').trim();
+    if (groupSet.has(bare.toLowerCase())) continue;
+    return { error: `Column "${item}" is neither a GROUP BY key nor an aggregate. In a grouped query every projected column must be aggregated or listed in GROUP BY — fix the U-SQL and convert again.` };
+  }
+  if (!aggExprs.length) {
+    return { error: 'The grouped SELECT has no aggregate columns to translate. Add at least one SUM/COUNT/AVG/MIN/MAX(...) to the projection.' };
+  }
+  const keys = groupCols.map(c => `"${c}"`).join(', ');
+  return { code: `${target} = ${src}.groupBy(${keys}).agg(${aggExprs.join(', ')})` };
+}
+
+function convertUsqlToPyspark(usql: string): { code: string; error: string | null } {
+  const body: string[] = [];
+  let needsF = false;
   const extractMatch = usql.match(/@(\w+)\s*=\s*EXTRACT\s+([\s\S]*?)FROM\s+"([^"]+)"\s+USING\s+Extractors\.(\w+)\s*\(([^)]*)\)/i);
   if (extractMatch) {
     const [, alias, cols, path, fmt, opts] = extractMatch;
     const skip = /skipFirstNRows:\s*1/i.test(opts);
     const schema = cols.split(',').map(c => c.trim().split(/\s+/)).filter(p => p.length === 2)
       .map(([n, t]) => `('${n}', '${t.toLowerCase()}')`).join(', ');
-    lines.push(`# EXTRACT @${alias}`);
-    lines.push(`${alias} = spark.read.option("header", ${skip ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
-    lines.push(`# Original U-SQL schema: ${schema}`);
-    lines.push('');
+    body.push(`# EXTRACT @${alias}`);
+    body.push(`${alias} = spark.read.option("header", ${skip ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
+    body.push(`# Original U-SQL schema: ${schema}`);
+    body.push('');
   }
   const selectMatch = usql.match(/@(\w+)\s*=\s*SELECT\s+([\s\S]*?)\s+FROM\s+@(\w+)([\s\S]*?);/i);
   if (selectMatch) {
     const [, target, projection, src, rest] = selectMatch;
     const groupBy = rest.match(/GROUP\s+BY\s+([\w,\s]+)/i);
-    lines.push(`# SELECT into @${target}`);
+    body.push(`# SELECT into @${target}`);
     if (groupBy) {
-      lines.push(`${target} = ${src}.groupBy("${groupBy[1].trim().replace(/\s*,\s*/g, '", "')}").agg(/* TODO: hand-translate aggregates from: ${projection.trim()} */)`);
+      const groupCols = groupBy[1].trim().split(/\s*,\s*/).filter(Boolean);
+      const res = translateGroupByAgg(target, src, projection, groupCols);
+      if ('error' in res) {
+        // Refuse to emit a broken snippet — surface the reason to the editor.
+        return { code: '', error: res.error };
+      }
+      needsF = true;
+      body.push(res.code);
     } else {
-      lines.push(`${target} = ${src}.selectExpr(${projection.split(',').map(c => '"' + c.trim() + '"').join(', ')})`);
+      body.push(`${target} = ${src}.selectExpr(${projection.split(',').map(c => '"' + c.trim() + '"').join(', ')})`);
     }
-    lines.push('');
+    body.push('');
   }
   const outputMatch = usql.match(/OUTPUT\s+@(\w+)\s+TO\s+"([^"]+)"\s+USING\s+Outputters\.(\w+)\s*\(([^)]*)\)/i);
   if (outputMatch) {
     const [, src, path, fmt, opts] = outputMatch;
     const header = /outputHeader:\s*true/i.test(opts);
-    lines.push(`# OUTPUT @${src}`);
-    lines.push(`${src}.write.mode("overwrite").option("header", ${header ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
+    body.push(`# OUTPUT @${src}`);
+    body.push(`${src}.write.mode("overwrite").option("header", ${header ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
   }
-  if (lines.length <= 3) {
-    lines.push('# Translator could not parse the input.');
-    lines.push('# Original U-SQL preserved as a comment block:');
-    usql.split(/\r?\n/).forEach(l => lines.push('# ' + l));
+  const header: string[] = [
+    '# Converted from U-SQL by Loom usql-job heuristic translator.',
+    '# REVIEW BEFORE RUNNING — this covers EXTRACT/SELECT/GROUP BY/OUTPUT only.',
+  ];
+  if (needsF) header.push('from pyspark.sql import functions as F');
+  header.push('');
+  if (!body.length) {
+    body.push('# Translator could not parse the input.');
+    body.push('# Original U-SQL preserved as a comment block:');
+    usql.split(/\r?\n/).forEach(l => body.push('# ' + l));
   }
-  return lines.join('\n');
+  return { code: [...header, ...body].join('\n'), error: null };
 }
 
 export function UsqlJobEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [usql, setUsql] = useState<string>(USQL_SAMPLE);
   const [pyspark, setPyspark] = useState<string>('');
+  const [convertError, setConvertError] = useState<string | null>(null);
+
+  // Run the translator; on an unsupported construct it returns an error and
+  // NO code — we clear the output and show the reason rather than emitting a
+  // broken snippet (no-vaporware).
+  const runConvert = useCallback(() => {
+    const res = convertUsqlToPyspark(usql);
+    setConvertError(res.error);
+    setPyspark(res.error ? '' : res.code);
+  }, [usql]);
 
   // Ribbon — Convert to PySpark wires to the inline heuristic translator.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Migration', actions: [
-        { label: 'Convert to PySpark', onClick: () => setPyspark(convertUsqlToPyspark(usql)) },
+        { label: 'Convert to PySpark', onClick: runConvert },
       ]},
     ]},
-  ], [usql]);
+  ], [runConvert]);
 
   // v3.27: D-fix — ADLA was retired 2024-02-29. The previous editor
   // pretended to estimate AUs and submit jobs to a service that no
@@ -1373,11 +1586,19 @@ export function UsqlJobEditor({ item, id }: { item: FabricItemType; id: string }
         <Subtitle2>U-SQL source</Subtitle2>
         <textarea className={s.monaco} spellCheck={false} value={usql} onChange={(e) => setUsql(e.target.value)} aria-label="U-SQL editor" />
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
-          <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setPyspark(convertUsqlToPyspark(usql))}>
+          <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={runConvert}>
             Convert to PySpark
           </Button>
           <Caption1 style={{ alignSelf: 'center' }}>Heuristic translator — covers EXTRACT / SELECT / GROUP BY / OUTPUT. Review before running.</Caption1>
         </div>
+        {convertError && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Cannot fully translate this U-SQL</MessageBarTitle>
+              {convertError}
+            </MessageBarBody>
+          </MessageBar>
+        )}
         {pyspark && (
           <>
             <Subtitle2>PySpark (review + paste into a Notebook)</Subtitle2>

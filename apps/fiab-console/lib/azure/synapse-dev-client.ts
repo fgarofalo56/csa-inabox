@@ -380,6 +380,72 @@ export async function setSparkPoolAutoPause(
   return jsonOrThrow<SparkPool>(r, `setSparkPoolAutoPause(${name})`);
 }
 
+/**
+ * Full Configuration-tab save for a Spark Big Data pool — the inline
+ * equivalent of the Azure portal's pool "Settings" blade. PATCHes any subset
+ * of { nodeSize, sparkVersion, autoPause, autoScale, nodeCount } against the
+ * ARM bigDataPools resource in a single call so the editor can persist every
+ * field at once (no per-field round-trips).
+ *
+ * autoScale.enabled=false clears autoscale and a fixed `nodeCount` is applied
+ * instead; autoScale.enabled=true applies min/max and Synapse ignores
+ * nodeCount. autoPause.enabled=false disables idle pausing. The Synapse RP
+ * accepts a partial `properties` PATCH, so we only send what changed + the
+ * required `location`.
+ */
+export async function updateBigDataPool(
+  name: string,
+  spec: {
+    nodeSize?: SparkPool['properties']['nodeSize'];
+    sparkVersion?: string;
+    autoPause?: { enabled: boolean; delayInMinutes?: number };
+    autoScale?: { enabled: boolean; minNodeCount?: number; maxNodeCount?: number };
+    nodeCount?: number;
+    location?: string;
+  },
+): Promise<SparkPool> {
+  const properties: Record<string, unknown> = {};
+  if (spec.nodeSize) properties.nodeSize = spec.nodeSize;
+  if (spec.sparkVersion) properties.sparkVersion = spec.sparkVersion;
+  if (spec.autoPause) {
+    if (spec.autoPause.enabled && (spec.autoPause.delayInMinutes == null || spec.autoPause.delayInMinutes < 5)) {
+      throw new Error('updateBigDataPool: autoPause.delayInMinutes must be ≥ 5 when enabled');
+    }
+    properties.autoPause = spec.autoPause.enabled
+      ? { enabled: true, delayInMinutes: spec.autoPause.delayInMinutes }
+      : { enabled: false };
+  }
+  if (spec.autoScale) {
+    if (spec.autoScale.enabled) {
+      const min = Number(spec.autoScale.minNodeCount);
+      const max = Number(spec.autoScale.maxNodeCount);
+      if (!Number.isFinite(min) || !Number.isFinite(max) || min < 3 || max < min) {
+        throw new Error('updateBigDataPool: autoScale.minNodeCount must be ≥ 3 and ≤ maxNodeCount');
+      }
+      properties.autoScale = { enabled: true, minNodeCount: min, maxNodeCount: max };
+    } else {
+      properties.autoScale = { enabled: false };
+      if (typeof spec.nodeCount === 'number') {
+        if (spec.nodeCount < 3) throw new Error('updateBigDataPool: nodeCount must be ≥ 3');
+        properties.nodeCount = spec.nodeCount;
+      }
+    }
+  } else if (typeof spec.nodeCount === 'number') {
+    if (spec.nodeCount < 3) throw new Error('updateBigDataPool: nodeCount must be ≥ 3');
+    properties.nodeCount = spec.nodeCount;
+  }
+  if (!Object.keys(properties).length) {
+    throw new Error('updateBigDataPool: no properties to update');
+  }
+  const body: Record<string, unknown> = { properties };
+  if (spec.location) body.location = spec.location;
+  const r = await callArm(`${armBase()}/bigDataPools/${name}?api-version=${ARM_API}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SparkPool>(r, `updateBigDataPool(${name})`);
+}
+
 // ============================================================
 // Spark Livy batch jobs (dev endpoint)
 // ============================================================
