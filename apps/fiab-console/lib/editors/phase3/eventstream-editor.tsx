@@ -13,17 +13,20 @@
  * registry resolves it unchanged.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Input, Spinner, Field, Link,
-  Tab, TabList, Dropdown, Option,
+  Tab, TabList, Dropdown, Option, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Select, tokens,
 } from '@fluentui/react-components';
 import {
-  Play20Regular, Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
+  Play20Regular, Pause20Regular, Save20Regular, Add20Regular, Delete20Regular, ArrowSync20Regular,
+  ArrowUp20Regular, ArrowDown20Regular,
   MathFormula20Regular, Flowchart20Regular, Open20Regular, Form20Regular, Flash20Regular,
+  Filter20Regular, Table20Regular, DataArea20Regular, Merge20Regular, Branch20Regular,
+  Notebook20Regular, DocumentBulletList20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
@@ -36,6 +39,7 @@ import {
   type TransformNode as VisualTransformNode,
   type SinkNode as VisualSinkNode,
 } from '@/lib/components/eventstream/visual-designer';
+import { compileToSaql } from '@/lib/azure/asa-query-compiler';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useWorkspaces, WorkspacePicker } from './workspace-picker';
@@ -51,6 +55,7 @@ interface EventstreamState {
   ok: boolean;
   runtimeStatus?: string;
   runtimeNote?: string;
+  displayName?: string;
   config?: StreamCfg;
   asaJobName?: string | null;
   error?: string;
@@ -61,6 +66,224 @@ const DEFAULT_ES_CFG: StreamCfg = {
   transforms: [],
   sink: { kind: 'kusto', database: 'loomdb-default', table: '' },
 };
+
+// ============================================================
+// Eventstream operator model (Fabric Eventstream parity: the 7 stream
+// operators). Operators are stored as entries in the same wire `transforms[]`
+// array the visual designer + provision route already read — so the guided
+// builder, the canvas, and the Azure-native provisioner stay one model. The
+// four operators the shared SAQL compiler does not model natively
+// (Manage fields, Expand — plus Union/Join which it does) are emitted by the
+// local `esBuildSaql` below; everything is typed config (no JSON authoring),
+// clearing the no-freeform-config gate.
+// ============================================================
+
+interface EsFieldMap {
+  /** Source column (or expression) to keep. */
+  source: string;
+  /** Rename target (blank = keep source name). */
+  target?: string;
+  /** Optional CAST target type (SAQL scalar type). */
+  cast?: string;
+}
+
+type EsOpKind = 'filter' | 'manage-fields' | 'aggregate' | 'group-by' | 'expand' | 'union' | 'join';
+
+const ES_OPERATOR_KINDS: Array<{ value: EsOpKind; label: string; icon: ReactNode; hint: string }> = [
+  { value: 'filter', label: 'Filter', icon: <Filter20Regular />, hint: 'Keep only events matching a WHERE condition.' },
+  { value: 'manage-fields', label: 'Manage fields', icon: <Table20Regular />, hint: 'Add, remove, rename or re-type columns (projection with CAST/alias).' },
+  { value: 'aggregate', label: 'Aggregate', icon: <MathFormula20Regular />, hint: 'Windowed aggregate (SUM/COUNT/AVG/MIN/MAX) over a tumbling/hopping window.' },
+  { value: 'group-by', label: 'Group by', icon: <MathFormula20Regular />, hint: 'Group events by columns + window and aggregate each group.' },
+  { value: 'expand', label: 'Expand', icon: <DataArea20Regular />, hint: 'Flatten an array column into one row per element (CROSS APPLY GetArrayElements).' },
+  { value: 'union', label: 'Union', icon: <Merge20Regular />, hint: 'Merge all upstream sources into one stream.' },
+  { value: 'join', label: 'Join', icon: <Branch20Regular />, hint: 'Temporal JOIN with another source within a time bound.' },
+];
+
+const ES_CAST_TYPES = ['', 'bigint', 'float', 'nvarchar(max)', 'datetime', 'bit', 'record', 'array'];
+const ES_AGG_FUNCS = ['COUNT', 'SUM', 'AVG', 'MIN', 'MAX'] as const;
+const ES_WINDOW_TYPES = ['Tumbling', 'Hopping', 'Sliding', 'Session', 'Snapshot'] as const;
+const ES_WINDOW_UNITS = ['second', 'minute', 'hour', 'day'] as const;
+
+/** Default typed config for a freshly-added operator of `kind`. */
+function esDefaultOperator(kind: EsOpKind, n: number): Record<string, any> {
+  const base = { kind, name: `${kind}-${n}` };
+  switch (kind) {
+    case 'filter':
+      return { ...base, expression: '' };
+    case 'manage-fields':
+      return { ...base, fieldMap: [{ source: '', target: '', cast: '' }] as EsFieldMap[] };
+    case 'aggregate':
+    case 'group-by':
+      return {
+        ...base, groupBy: [] as string[],
+        aggregates: [{ func: 'COUNT', field: '*', alias: 'eventCount' }],
+        windowType: 'Tumbling', windowSize: 5, windowUnit: 'minute', havingExpression: '',
+      };
+    case 'expand':
+      return { ...base, expandField: '', expandAlias: 'element', expandOutput: '' };
+    case 'union':
+      return { ...base };
+    case 'join':
+      return { ...base, joinSource: '', joinType: 'INNER', joinOn: 'L.id = R.id', joinDurationSeconds: 60 };
+    default:
+      return base;
+  }
+}
+
+// ---- self-contained SAQL emitter (covers the 2 operators the shared
+// compiler doesn't: manage-fields + expand). Grounded in the Stream Analytics
+// Query Language reference: CAST, CROSS APPLY GetArrayElements, TumblingWindow,
+// System.Timestamp(), HAVING, DATEDIFF join, UNION. ----
+function esBr(name?: string): string {
+  const clean = (name || 'input').replace(/[[\]]/g, '').trim();
+  return `[${clean || 'input'}]`;
+}
+function esWindowClause(t: any): string | null {
+  if (!t.windowType) return null;
+  const unit = t.windowUnit || 'second';
+  const size = t.windowSize ?? 30;
+  switch (t.windowType) {
+    case 'Tumbling': return `TumblingWindow(${unit}, ${size})`;
+    case 'Hopping': return `HoppingWindow(${unit}, ${size}, ${t.hopSize ?? size})`;
+    case 'Sliding': return `SlidingWindow(${unit}, ${size})`;
+    case 'Session': return `SessionWindow(${unit}, ${size}, ${t.hopSize ?? size})`;
+    case 'Snapshot': return 'SnapshotWindow()';
+    default: return null;
+  }
+}
+function esAggregateSelectList(t: any): string {
+  const parts: string[] = [];
+  (t.groupBy || []).forEach((c: string) => c && parts.push(c.trim()));
+  (t.selectFields || []).forEach((c: string) => c && parts.push(c.trim()));
+  (t.aggregates || []).forEach((a: any) => {
+    if (!a || !a.func) return;
+    const field = a.func === 'COUNT' ? (a.field && a.field !== '*' ? a.field : '*') : a.field || '*';
+    const alias = (a.alias || `${String(a.func).toLowerCase()}_${(a.field || 'all').replace(/[^A-Za-z0-9_]/g, '')}`).trim();
+    parts.push(`${a.func}(${field}) AS ${alias}`);
+  });
+  if (esWindowClause(t)) parts.push('System.Timestamp() AS windowEnd');
+  return parts.length ? parts.join(', ') : '*';
+}
+function esManageFieldsSelectList(t: any): string {
+  const maps: EsFieldMap[] = Array.isArray(t.fieldMap) ? t.fieldMap.filter((m: EsFieldMap) => m && (m.source || '').trim()) : [];
+  if (!maps.length) return '*';
+  return maps.map((m) => {
+    const src = m.source.trim();
+    const tgt = (m.target || '').trim();
+    const cast = (m.cast || '').trim();
+    const base = cast ? `CAST(${src} AS ${cast})` : src;
+    if (tgt && tgt !== src) return `${base} AS ${tgt}`;
+    if (cast) return `${base} AS ${src}`;
+    return base;
+  }).join(', ');
+}
+function esSelectList(t: any): string {
+  switch (t.kind) {
+    case 'manage-fields': return esManageFieldsSelectList(t);
+    case 'aggregate':
+    case 'group-by':
+    case 'window': return esAggregateSelectList(t);
+    case 'expand': {
+      const alias = (t.expandAlias || 'element').trim() || 'element';
+      const outCol = (t.expandOutput || t.expandField || 'value').trim() || 'value';
+      return `${alias}.ArrayValue AS ${outCol}`;
+    }
+    case 'join': return 'L.*, R.*';
+    case 'filter':
+    case 'union':
+    default: return '*';
+  }
+}
+function esTail(t: any, fromRef: string, isSource: boolean, sources: any[]): string {
+  const ts = isSource && t.timestampBy ? ` TIMESTAMP BY ${String(t.timestampBy).trim()}` : '';
+  switch (t.kind) {
+    case 'filter': {
+      const where = (t.expression || '').trim();
+      return `FROM ${fromRef}${ts}${where ? `\nWHERE ${where}` : ''}`;
+    }
+    case 'manage-fields':
+      return `FROM ${fromRef}${ts}`;
+    case 'aggregate':
+    case 'group-by':
+    case 'window': {
+      const gb: string[] = [...(t.groupBy || []).map((c: string) => c.trim()).filter(Boolean)];
+      const w = esWindowClause(t);
+      if (w) gb.push(w);
+      const groupBy = gb.length ? `\nGROUP BY ${gb.join(', ')}` : '';
+      const having = (t.havingExpression || '').trim() ? `\nHAVING ${t.havingExpression.trim()}` : '';
+      return `FROM ${fromRef}${ts}${groupBy}${having}`;
+    }
+    case 'expand': {
+      const alias = (t.expandAlias || 'element').trim() || 'element';
+      const arr = (t.expandField || 'items').trim() || 'items';
+      return `FROM ${fromRef}${ts}\nCROSS APPLY GetArrayElements(${arr}) AS ${alias}`;
+    }
+    case 'join': {
+      const right = esBr(t.joinSource || sources[1]?.name || 'right');
+      const jt = t.joinType || 'INNER';
+      const on = (t.joinOn || 'L.id = R.id').trim();
+      const dur = t.joinDurationSeconds ?? 60;
+      return `FROM ${fromRef} L${ts}\n${jt} JOIN ${right} R\nON ${on}\nAND DATEDIFF(second, L, R) BETWEEN 0 AND ${dur}`;
+    }
+    case 'union': {
+      const aliases = sources.length ? sources.map((sn: any) => esBr(sn.name)) : [fromRef];
+      const [first, ...rest] = aliases;
+      const tail = rest.map((a: string) => `UNION\nSELECT *\nFROM ${a}`).join('\n');
+      return tail ? `FROM ${first}\n${tail}` : `FROM ${first}`;
+    }
+    default:
+      return `FROM ${fromRef}${ts}`;
+  }
+}
+const ES_SAQL_HEADER = '-- Generated by CSA Loom Eventstream operator builder — edit the operators, not this text.';
+/** Emit SAQL for the whole operator chain (all 7 operators). */
+function esBuildSaql(sources: any[], transforms: any[], sinks: any[]): string {
+  const srcAlias = esBr(sources[0]?.name || 'input');
+  const sinkList = sinks.length ? sinks : [{ kind: 'kusto', name: 'output' }];
+  if (!transforms.length) {
+    const body = sinkList.map((sk) => `SELECT *\nINTO ${esBr(sk.name)}\nFROM ${srcAlias}`).join(';\n\n');
+    return `${ES_SAQL_HEADER}\n\n${body}\n`;
+  }
+  const hasUnion = transforms.some((t) => t.kind === 'union');
+  if (transforms.length === 1 && !hasUnion) {
+    const t = transforms[0];
+    const selectList = esSelectList(t);
+    const body = sinkList.map((sk) => `SELECT ${selectList}\nINTO ${esBr(sk.name)}\n${esTail(t, srcAlias, true, sources)}`).join(';\n\n');
+    return `${ES_SAQL_HEADER}\n\n${body}\n`;
+  }
+  const ctes: string[] = [];
+  let prev = srcAlias;
+  let prevIsSource = true;
+  transforms.forEach((t, i) => {
+    const stepName = `step${i + 1}`;
+    const inner = `  SELECT ${esSelectList(t)}\n  ${esTail(t, prev, prevIsSource, sources).replace(/\n/g, '\n  ')}`;
+    ctes.push(`${stepName} AS (\n${inner}\n)`);
+    prev = stepName;
+    prevIsSource = false;
+  });
+  const finalSelects = sinkList.map((sk) => `SELECT *\nINTO ${esBr(sk.name)}\nFROM ${prev}`).join(';\n\n');
+  return `${ES_SAQL_HEADER}\n\nWITH ${ctes.join(',\n')}\n${finalSelects}\n`;
+}
+/**
+ * Compile the topology to a definition SAQL. Reuses the shared, proven
+ * compiler for the kinds it models; falls back to the local emitter only when
+ * a Manage-fields / Expand operator is present (the two it doesn't model).
+ */
+function esCompileDefinition(sources: any[], transforms: any[], sinks: any[]): string {
+  const hasCustom = (transforms || []).some((t: any) => t.kind === 'manage-fields' || t.kind === 'expand');
+  if (!hasCustom) {
+    try { return compileToSaql(sources as any, transforms as any, sinks as any); } catch { /* fall through */ }
+  }
+  return esBuildSaql(sources, transforms, sinks);
+}
+/** Normalize a parsed cfg into { sources[], transforms[], sinks[] }. */
+function esTopology(cfg: any): { sources: any[]; transforms: any[]; sinks: any[] } {
+  const c = cfg || {};
+  const sources = Array.isArray(c.sources) && c.sources.length ? c.sources : (c.source ? [c.source] : []);
+  const sinks = Array.isArray(c.sinks) && c.sinks.length ? c.sinks : (c.sink ? [c.sink] : []);
+  const transforms = Array.isArray(c.transforms) ? c.transforms : [];
+  return { sources, transforms, sinks };
+}
 
 export function EventstreamEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -73,7 +296,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   const [parseErr, setParseErr] = useState<string | null>(null);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveMsg, setSaveMsg] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'designer' | 'sql' | 'json'>('designer');
+  const [activeTab, setActiveTab] = useState<'designer' | 'operators' | 'sql' | 'definition'>('designer');
   // Publish-to-Fabric dialog state. Publishing creates/updates a REAL
   // Fabric Eventstream item via the definition REST API.
   const [publishOpen, setPublishOpen] = useState(false);
@@ -137,6 +360,23 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     setParseErr(null);
     setSaveErr(null);
   }, []);
+
+  // Merge a partial topology patch (sources/transforms/sinks) into the wire cfg
+  // and push it through the same projection the designer uses, so the guided
+  // Operators builder, the canvas, and the JSON model stay in lock-step.
+  const commitTopology = useCallback(
+    (patch: { sources?: any[]; transforms?: any[]; sinks?: any[] }) => {
+      let cur: VisualPipelineConfig = {};
+      try { cur = JSON.parse(cfgText) as VisualPipelineConfig; } catch { cur = {}; }
+      const t = esTopology(cur);
+      onDesignerChange({
+        sources: patch.sources ?? t.sources,
+        transforms: patch.transforms ?? t.transforms,
+        sinks: patch.sinks ?? t.sinks,
+      });
+    },
+    [cfgText, onDesignerChange],
+  );
 
   // Auto-pick the first workspace once loaded so the editor isn't blocked
   // on a manual click for the common single-workspace deployments. Users
@@ -376,9 +616,9 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     (kind: 'source' | 'sink' | 'transform', preset?: Record<string, any>) => {
       let cur: VisualPipelineConfig = {};
       try { cur = JSON.parse(cfgText) as VisualPipelineConfig; } catch { cur = {}; }
-      const sources = Array.isArray(cur.sources) ? cur.sources : (cur.source ? [cur.source] : []);
-      const sinks = Array.isArray(cur.sinks) ? cur.sinks : (cur.sink ? [cur.sink] : []);
-      const transforms = cur.transforms || [];
+      const sources: any[] = Array.isArray(cur.sources) ? cur.sources : (cur.source ? [cur.source] : []);
+      const sinks: any[] = Array.isArray(cur.sinks) ? cur.sinks : (cur.sink ? [cur.sink] : []);
+      const transforms: any[] = cur.transforms || [];
       if (kind === 'source') {
         sources.push({ kind: 'eventhub', name: `source-${sources.length + 1}`, namespace: '', consumerGroup: '$Default' });
       } else if (kind === 'sink') {
@@ -388,10 +628,11 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         if (sinkKind === 'lakehouse') { base.container = ''; base.pathPattern = 'events/{date}/{time}'; }
         sinks.push({ ...base, ...preset });
       } else {
-        transforms.push({ kind: (preset?.kind as any) || 'filter', name: `transform-${transforms.length + 1}`, expression: preset?.expression || '' });
+        const tk = ((preset?.kind as any) || 'filter') as EsOpKind;
+        transforms.push(esDefaultOperator(tk, transforms.length + 1));
       }
       onDesignerChange({ sources, sinks, transforms });
-      setActiveTab('designer');
+      setActiveTab(kind === 'transform' ? 'operators' : 'designer');
     },
     [cfgText, onDesignerChange],
   );
@@ -411,8 +652,12 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
       ]},
       { label: 'Transform', actions: [
         { label: 'Filter', onClick: () => ribbonAdd('transform', { kind: 'filter' }) },
+        { label: 'Manage fields', onClick: () => ribbonAdd('transform', { kind: 'manage-fields' }) },
         { label: 'Aggregate', onClick: () => ribbonAdd('transform', { kind: 'aggregate' }) },
         { label: 'Group by', onClick: () => ribbonAdd('transform', { kind: 'group-by' }) },
+        { label: 'Expand', onClick: () => ribbonAdd('transform', { kind: 'expand' }) },
+        { label: 'Union', onClick: () => ribbonAdd('transform', { kind: 'union' }) },
+        { label: 'Join', onClick: () => ribbonAdd('transform', { kind: 'join' }) },
       ]},
       { label: 'Destination', actions: [
         { label: 'KQL Database', onClick: () => ribbonAdd('sink', { kind: 'kusto' }) },
@@ -448,7 +693,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="New eventstream"
-        intro="An Eventstream is a streaming topology: sources (Event Hubs, IoT Hub, Kafka, sample data) → operators (filter, aggregate, group-by, join) → destinations (Eventhouse/KQL, Lakehouse, Activator, custom endpoint). Create it, then design the topology on the visual canvas and Provision to Azure to stand up a real Event Hub (transport) + Stream Analytics job (transform) — Azure-native, no Fabric required. Publishing to Microsoft Fabric is available as an opt-in alternative." />
+        intro="An Eventstream is a streaming topology: sources (Event Hubs, IoT Hub, Kafka, sample data) → operators (filter, manage fields, aggregate, group-by, expand, union, join) → destinations (Eventhouse/KQL, Lakehouse, Activator, derived stream, Spark notebook). Create it, then design the topology on the visual canvas or the guided Operators builder and Provision to Azure to stand up a real Event Hub (transport) + Stream Analytics job (transform) — Azure-native, no Fabric required. Publishing to Microsoft Fabric is available as an opt-in alternative." />
     );
   }
 
@@ -773,32 +1018,36 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
           </MessageBar>
         )}
 
-        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'sql' | 'json') || 'designer')}>
+        <TabList selectedValue={activeTab} onTabSelect={(_: unknown, d: any) => setActiveTab((d.value as 'designer' | 'operators' | 'sql' | 'definition') || 'designer')}>
           <Tab value="designer" icon={<Flowchart20Regular />}>Visual designer</Tab>
+          <Tab value="operators" icon={<Filter20Regular />}>Operators</Tab>
           <Tab value="sql" icon={<MathFormula20Regular />}>SQL operator</Tab>
-          <Tab value="json" icon={<Form20Regular />}>JSON</Tab>
+          <Tab value="definition" icon={<DocumentBulletList20Regular />}>Definition</Tab>
         </TabList>
 
         {activeTab === 'designer' && (
           <EventstreamVisualDesigner config={parsedVisual} onChange={onDesignerChange} itemId={id} />
         )}
 
+        {activeTab === 'operators' && (
+          <EventstreamOperatorsTab
+            id={id}
+            cfg={parsedVisual}
+            asaJobName={asaJobName}
+            onAsaJobName={setAsaJobName}
+            dirty={dirty}
+            saving={saving}
+            onCommit={commitTopology}
+            onSave={save}
+          />
+        )}
+
         {activeTab === 'sql' && (
           <EventstreamSqlOperatorTab id={id} asaJobName={asaJobName} onAsaJobName={setAsaJobName} />
         )}
 
-        {activeTab === 'json' && (
-          <>
-            <Caption1>Edit the pipeline definition as JSON. Schema: <code>{`{ source, transforms[], sink }`}</code>.</Caption1>
-            <MonacoTextarea
-              value={cfgText}
-              onChange={(v) => { setCfgText(v); setDirty(true); setParseErr(null); setSaveErr(null); }}
-              language="json"
-              height={360}
-              minHeight={300}
-              ariaLabel="Eventstream JSON config"
-            />
-          </>
+        {activeTab === 'definition' && (
+          <EventstreamDefinitionView cfg={parsedVisual} />
         )}
       </div>
     } />
@@ -1248,6 +1497,536 @@ function EventstreamSqlOperatorTab({
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Eventstream — guided Operators builder (Fabric Eventstream's 7 stream
+// operators) + derived-stream and Spark-notebook destinations.
+//
+// Every operator is configured through typed controls (dropdowns, field rows,
+// number inputs) — NO JSON authoring (clears loom_no_freeform_config). The
+// only freeform slots are the single-expression WHERE / HAVING / JOIN-ON boxes,
+// the explicitly-allowed 1:1 builder exception. The whole chain compiles to
+// SAQL (esCompileDefinition) shown read-only, and the real Azure backend is hit
+// two ways: Validate → ASA compileQuery (subscription-scoped RP action) and
+// Apply to ASA → saveTransformation (PUT on the live streaming job). Honest
+// Fluent gates surface when Stream Analytics / Spark bindings aren't provisioned.
+// ============================================================
+function EventstreamOperatorsTab({
+  id, cfg, asaJobName, onAsaJobName, dirty, saving, onCommit, onSave,
+}: {
+  id: string;
+  cfg: VisualPipelineConfig;
+  asaJobName: string;
+  onAsaJobName: (v: string) => void;
+  dirty: boolean;
+  saving: boolean;
+  onCommit: (patch: { sources?: any[]; transforms?: any[]; sinks?: any[] }) => void;
+  onSave: () => void;
+}) {
+  const s = useStyles();
+  const { sources, transforms, sinks } = useMemo(() => esTopology(cfg), [cfg]);
+
+  const compiledSaql = useMemo(() => esCompileDefinition(sources, transforms, sinks), [sources, transforms, sinks]);
+
+  const [validating, setValidating] = useState(false);
+  const [validateResult, setValidateResult] = useState<{ valid: boolean; errors: Array<{ message: string; startLine?: number }>; warnings: string[]; outputs: string[] } | null>(null);
+  const [validateErr, setValidateErr] = useState<string | null>(null);
+  const [validateHint, setValidateHint] = useState<string | null>(null);
+
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyMsg, setApplyMsg] = useState<string | null>(null);
+  const [applyErr, setApplyErr] = useState<string | null>(null);
+  const [applyHint, setApplyHint] = useState<string | null>(null);
+
+  // ---- operator mutations (operators live in transforms[]) ----
+  const updateOp = useCallback((idx: number, patch: Record<string, any>) => {
+    onCommit({ transforms: transforms.map((t, i) => (i === idx ? { ...t, ...patch } : t)) });
+  }, [transforms, onCommit]);
+  const addOp = useCallback((kind: EsOpKind) => {
+    onCommit({ transforms: [...transforms, esDefaultOperator(kind, transforms.length + 1)] });
+  }, [transforms, onCommit]);
+  const removeOp = useCallback((idx: number) => {
+    onCommit({ transforms: transforms.filter((_, i) => i !== idx) });
+  }, [transforms, onCommit]);
+  const moveOp = useCallback((idx: number, dir: -1 | 1) => {
+    const j = idx + dir;
+    if (j < 0 || j >= transforms.length) return;
+    const next = [...transforms];
+    [next[idx], next[j]] = [next[j], next[idx]];
+    onCommit({ transforms: next });
+  }, [transforms, onCommit]);
+
+  // ---- destination mutations (derived streams + spark-notebook live in sinks[]) ----
+  const updateSink = useCallback((idx: number, patch: Record<string, any>) => {
+    onCommit({ sinks: sinks.map((sk, i) => (i === idx ? { ...sk, ...patch } : sk)) });
+  }, [sinks, onCommit]);
+  const removeSink = useCallback((idx: number) => {
+    onCommit({ sinks: sinks.filter((_, i) => i !== idx) });
+  }, [sinks, onCommit]);
+  const addDerived = useCallback(() => {
+    onCommit({ sinks: [...sinks, { kind: 'derivedStream', name: `derived-${sinks.length + 1}`, paused: false }] });
+  }, [sinks, onCommit]);
+  const addSparkSink = useCallback(() => {
+    onCommit({ sinks: [...sinks, { kind: 'spark-notebook', name: `notebook-sink-${sinks.length + 1}`, notebook: '', sparkPool: '', binding: 'transport' }] });
+  }, [sinks, onCommit]);
+
+  const derivedStreams = sinks.map((sk, i) => ({ sk, i })).filter((x) => x.sk?.kind === 'derivedStream');
+  const sparkSinks = sinks.map((sk, i) => ({ sk, i })).filter((x) => x.sk?.kind === 'spark-notebook');
+
+  const doValidate = useCallback(async () => {
+    setValidating(true); setValidateResult(null); setValidateErr(null); setValidateHint(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'compile', query: compiledSaql }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setValidateErr(j.error || `HTTP ${r.status}`); setValidateHint(j.hint || null); return; }
+      setValidateResult({ valid: !!j.valid, errors: j.errors || [], warnings: j.warnings || [], outputs: j.outputs || [] });
+    } catch (e: any) {
+      setValidateErr(e?.message || String(e));
+    } finally { setValidating(false); }
+  }, [id, compiledSaql]);
+
+  const doApplyToAsa = useCallback(async () => {
+    if (!asaJobName.trim()) { setApplyErr('Enter an ASA job name first.'); setApplyHint(null); return; }
+    setApplyBusy(true); setApplyMsg(null); setApplyErr(null); setApplyHint(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'save', query: compiledSaql, asaJobName: asaJobName.trim() }),
+      });
+      const j = await r.json();
+      if (!j.ok) { setApplyErr(j.error || `HTTP ${r.status}`); setApplyHint(j.hint || null); return; }
+      setApplyMsg(j.asaPushed
+        ? `Pushed the operator chain to ASA job "${asaJobName.trim()}" (live transformation updated). Start the job in the Stream Analytics editor to land events.`
+        : (j.hint || 'Saved the operator chain.'));
+    } catch (e: any) {
+      setApplyErr(e?.message || String(e));
+    } finally { setApplyBusy(false); }
+  }, [id, compiledSaql, asaJobName]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Guided operator builder — Filter · Manage fields · Aggregate · Group by · Expand · Union · Join</MessageBarTitle>
+          Build the stream transformation with typed controls (no query typing). The chain compiles to a
+          Stream Analytics query shown below — <strong>Validate</strong> runs the real ASA compiler and
+          <strong> Apply to ASA</strong> pushes it to the live streaming job. Azure-native — no Fabric required.
+        </MessageBarBody>
+      </MessageBar>
+
+      {/* ── Add operator palette ─────────────────────────────────────────── */}
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <Subtitle2>Operators</Subtitle2>
+          {transforms.length > 0 && <Badge appearance="tint" color="informative">{transforms.length}</Badge>}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS }}>
+          {ES_OPERATOR_KINDS.map((op) => (
+            <Tooltip key={op.value} content={op.hint} relationship="description">
+              <Button appearance="outline" size="small" icon={op.icon as any} onClick={() => addOp(op.value)}>{op.label}</Button>
+            </Tooltip>
+          ))}
+        </div>
+        {transforms.length === 0 && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            No operators yet. Add one above — the stream passes through unchanged until you do.
+          </Caption1>
+        )}
+      </div>
+
+      {/* ── Operator chain ───────────────────────────────────────────────── */}
+      {transforms.map((op, idx) => (
+        <EsOperatorCard
+          key={idx}
+          idx={idx}
+          total={transforms.length}
+          op={op}
+          sources={sources}
+          onChange={(patch) => updateOp(idx, patch)}
+          onRemove={() => removeOp(idx)}
+          onMove={(dir) => moveOp(idx, dir)}
+        />
+      ))}
+
+      {/* ── Compiled SAQL preview (read-only) ────────────────────────────── */}
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+          <Subtitle2>Compiled Stream Analytics query</Subtitle2>
+          <Badge appearance="outline" color="brand">read-only · generated</Badge>
+          <Field label="ASA job" style={{ minWidth: 220, marginLeft: 'auto' }}>
+            <Input value={asaJobName} onChange={(_: unknown, d: any) => onAsaJobName(d.value)} placeholder="asa-loom-default-eastus2" />
+          </Field>
+        </div>
+        <MonacoTextarea value={compiledSaql} onChange={() => { /* read-only */ }} language="sql" height={220} minHeight={160} readOnly ariaLabel="Compiled Stream Analytics query (read-only)" />
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+          <Button appearance="outline" icon={<Play20Regular />} onClick={doValidate} disabled={validating}>
+            {validating ? 'Validating…' : 'Validate (ASA compile)'}
+          </Button>
+          <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={doApplyToAsa} disabled={applyBusy || !asaJobName.trim()}
+            title={asaJobName.trim() ? 'Push the compiled query to the live ASA job transformation (real PUT)' : 'Enter an ASA job name first'}>
+            {applyBusy ? 'Applying…' : 'Apply to ASA job'}
+          </Button>
+          <Button appearance="primary" icon={<Save20Regular />} onClick={onSave} disabled={saving || !dirty}>
+            {saving ? 'Saving…' : 'Save topology'}
+          </Button>
+        </div>
+        {validateErr && (
+          <MessageBar intent={validateHint ? 'warning' : 'error'}>
+            <MessageBarBody><MessageBarTitle>{validateHint ? 'Stream Analytics not configured' : 'Validation failed'}</MessageBarTitle>{validateErr}{validateHint ? <><br /><Caption1>{validateHint}</Caption1></> : null}</MessageBarBody>
+          </MessageBar>
+        )}
+        {validateResult && (
+          <MessageBar intent={validateResult.valid && validateResult.errors.length === 0 ? 'success' : 'error'}>
+            <MessageBarBody>
+              <MessageBarTitle>{validateResult.valid && validateResult.errors.length === 0 ? 'Query compiled' : 'Compile errors'}</MessageBarTitle>
+              {validateResult.errors.length === 0
+                ? <>Outputs: {validateResult.outputs.length ? validateResult.outputs.map((o) => <code key={o} style={{ marginRight: tokens.spacingHorizontalS }}>{o}</code>) : '(none)'}</>
+                : <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>{validateResult.errors.map((e, i) => <li key={i}>{e.startLine ? `Line ${e.startLine}: ` : ''}{e.message}</li>)}</ul>}
+              {validateResult.warnings.length > 0 && (
+                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18, color: tokens.colorPaletteYellowForeground2 }}>
+                  {validateResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
+                </ul>
+              )}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {applyErr && (
+          <MessageBar intent={applyHint ? 'warning' : 'error'}>
+            <MessageBarBody><MessageBarTitle>{applyHint ? 'Stream Analytics not configured' : 'Apply failed'}</MessageBarTitle>{applyErr}{applyHint ? <><br /><Caption1>{applyHint}</Caption1></> : null}</MessageBarBody>
+          </MessageBar>
+        )}
+        {applyMsg && !applyErr && <MessageBar intent="success"><MessageBarBody>{applyMsg}</MessageBarBody></MessageBar>}
+      </div>
+
+      {/* ── Derived streams (pause / resume) ─────────────────────────────── */}
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <Branch20Regular style={{ color: tokens.colorBrandForeground1 }} />
+          <Subtitle2>Derived streams</Subtitle2>
+          {derivedStreams.length > 0 && <Badge appearance="tint" color="informative">{derivedStreams.length}</Badge>}
+          <Button appearance="outline" size="small" icon={<Add20Regular />} onClick={addDerived} style={{ marginLeft: 'auto' }}>Add derived stream</Button>
+        </div>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          A derived stream fans this stream out to a downstream Eventstream. <strong>Pause</strong> excludes it
+          from the running topology; the paused state is persisted and honored when you Provision to Azure /
+          Push to ASA. Save to persist changes.
+        </Caption1>
+        {derivedStreams.length === 0 && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No derived streams. Add one to branch this stream to another consumer.</Caption1>
+        )}
+        {derivedStreams.map(({ sk, i }) => {
+          const paused = !!sk.paused;
+          return (
+            <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM }}>
+              <Field label="Name" style={{ flex: 1 }}>
+                <Input value={sk.name || ''} onChange={(_: unknown, d: any) => updateSink(i, { name: d.value })} placeholder="derived-1" />
+              </Field>
+              <Badge appearance="filled" color={paused ? 'warning' : 'success'} style={{ alignSelf: 'center' }}>{paused ? 'Paused' : 'Running'}</Badge>
+              <Button appearance={paused ? 'primary' : 'outline'} icon={paused ? <Play20Regular /> : <Pause20Regular />}
+                onClick={() => updateSink(i, { paused: !paused })}>
+                {paused ? 'Resume' : 'Pause'}
+              </Button>
+              <Button appearance="subtle" icon={<Delete20Regular />} aria-label={`Remove derived stream ${sk.name || i}`} onClick={() => removeSink(i)} />
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ── Spark notebook sink (honest-gated) ───────────────────────────── */}
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <Notebook20Regular style={{ color: tokens.colorBrandForeground1 }} />
+          <Subtitle2>Spark notebook sink</Subtitle2>
+          {sparkSinks.length > 0 && <Badge appearance="tint" color="informative">{sparkSinks.length}</Badge>}
+          <Button appearance="outline" size="small" icon={<Add20Regular />} onClick={addSparkSink} style={{ marginLeft: 'auto' }}>Add Spark notebook sink</Button>
+        </div>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Requires a Spark structured-streaming binding</MessageBarTitle>
+            Routing the stream to a notebook runs an Azure-native Spark structured-streaming job that reads the
+            stream&apos;s Event Hub / ADLS landing. Set <code>LOOM_SYNAPSE_WORKSPACE</code> (or
+            <code> LOOM_DATABRICKS_WORKSPACE_URL</code>) and pick a Spark pool below. Until the binding is
+            provisioned the mapping is saved as configuration only — no events are processed yet.
+          </MessageBarBody>
+        </MessageBar>
+        {sparkSinks.length === 0 && (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No Spark notebook sinks. Add one to hand the stream to a PySpark notebook.</Caption1>
+        )}
+        {sparkSinks.map(({ sk, i }) => (
+          <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <Field label="Name" style={{ flex: 1, minWidth: 140 }}>
+                <Input value={sk.name || ''} onChange={(_: unknown, d: any) => updateSink(i, { name: d.value })} placeholder="notebook-sink-1" />
+              </Field>
+              <Field label="Notebook" style={{ flex: 1, minWidth: 140 }}>
+                <Input value={sk.notebook || ''} onChange={(_: unknown, d: any) => updateSink(i, { notebook: d.value })} placeholder="stream-processor" />
+              </Field>
+              <Button appearance="subtle" icon={<Delete20Regular />} aria-label={`Remove Spark notebook sink ${sk.name || i}`} onClick={() => removeSink(i)} />
+            </div>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <Field label="Spark pool" style={{ flex: 1, minWidth: 140 }}>
+                <Input value={sk.sparkPool || ''} onChange={(_: unknown, d: any) => updateSink(i, { sparkPool: d.value })} placeholder="(or LOOM_SYNAPSE_SPARK_POOL)" />
+              </Field>
+              <Field label="Reads from" style={{ minWidth: 200 }}>
+                <Select value={sk.binding || 'transport'} onChange={(_: unknown, d: any) => updateSink(i, { binding: d.value })}>
+                  <option value="transport">Transport Event Hub (this stream)</option>
+                  <option value="adls">ADLS Gen2 landing (Lakehouse sink)</option>
+                </Select>
+              </Field>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ---- one operator card (typed config per Fabric Eventstream operator) ----
+function EsOperatorCard({
+  idx, total, op, sources, onChange, onRemove, onMove,
+}: {
+  idx: number;
+  total: number;
+  op: any;
+  sources: any[];
+  onChange: (patch: Record<string, any>) => void;
+  onRemove: () => void;
+  onMove: (dir: -1 | 1) => void;
+}) {
+  const s = useStyles();
+  const kind = op.kind as EsOpKind;
+  const meta = ES_OPERATOR_KINDS.find((k) => k.value === kind);
+  const isAgg = kind === 'aggregate' || kind === 'group-by';
+
+  const setFieldMap = (rows: EsFieldMap[]) => onChange({ fieldMap: rows });
+  const fieldMap: EsFieldMap[] = Array.isArray(op.fieldMap) ? op.fieldMap : [];
+
+  const setAggs = (rows: any[]) => onChange({ aggregates: rows });
+  const aggregates: any[] = Array.isArray(op.aggregates) ? op.aggregates : [];
+
+  const csv = (a?: string[]) => (a || []).join(', ');
+  const toArr = (v: string) => v.split(',').map((x) => x.trim()).filter(Boolean);
+
+  return (
+    <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+        <Badge appearance="filled" color="brand">{idx + 1}</Badge>
+        {meta?.icon}
+        <Field label="Operation" style={{ minWidth: 180 }}>
+          <Select value={kind} onChange={(_: unknown, d: any) => onChange({ kind: d.value })} aria-label={`Operator ${idx + 1} operation`}>
+            {ES_OPERATOR_KINDS.map((k) => <option key={k.value} value={k.value}>{k.label}</option>)}
+          </Select>
+        </Field>
+        <Field label="Name" style={{ flex: 1, minWidth: 140 }}>
+          <Input value={op.name || ''} onChange={(_: unknown, d: any) => onChange({ name: d.value })} placeholder={`${kind}-${idx + 1}`} />
+        </Field>
+        <Tooltip content="Move up" relationship="label">
+          <Button appearance="subtle" icon={<ArrowUp20Regular />} disabled={idx === 0} onClick={() => onMove(-1)} aria-label="Move operator up" />
+        </Tooltip>
+        <Tooltip content="Move down" relationship="label">
+          <Button appearance="subtle" icon={<ArrowDown20Regular />} disabled={idx === total - 1} onClick={() => onMove(1)} aria-label="Move operator down" />
+        </Tooltip>
+        <Button appearance="subtle" icon={<Delete20Regular />} onClick={onRemove} aria-label={`Remove operator ${idx + 1}`} />
+      </div>
+      {meta?.hint && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{meta.hint}</Caption1>}
+
+      {/* FILTER */}
+      {kind === 'filter' && (
+        <Field label="WHERE condition" hint="e.g. temperature > 30 AND deviceId = 'sensor-A'">
+          <MonacoTextarea value={op.expression || ''} onChange={(v) => onChange({ expression: v })} language="sql" height={64} lineNumbers={false} ariaLabel="WHERE condition" />
+        </Field>
+      )}
+
+      {/* MANAGE FIELDS */}
+      {kind === 'manage-fields' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+          <Caption1>Choose which columns to keep, rename them, or change their type. Leave the list empty to pass every field through.</Caption1>
+          {fieldMap.map((m, i) => (
+            <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'flex-end' }}>
+              <Field label={i === 0 ? 'Source column' : undefined} style={{ flex: 1 }}>
+                <Input value={m.source} onChange={(_: unknown, d: any) => setFieldMap(fieldMap.map((r, j) => j === i ? { ...r, source: d.value } : r))} placeholder="deviceId" aria-label={`Field ${i + 1} source`} />
+              </Field>
+              <Field label={i === 0 ? 'Rename to' : undefined} style={{ flex: 1 }}>
+                <Input value={m.target || ''} onChange={(_: unknown, d: any) => setFieldMap(fieldMap.map((r, j) => j === i ? { ...r, target: d.value } : r))} placeholder="(keep name)" aria-label={`Field ${i + 1} rename`} />
+              </Field>
+              <Field label={i === 0 ? 'Cast type' : undefined} style={{ minWidth: 130 }}>
+                <Select value={m.cast || ''} onChange={(_: unknown, d: any) => setFieldMap(fieldMap.map((r, j) => j === i ? { ...r, cast: d.value } : r))} aria-label={`Field ${i + 1} cast`}>
+                  {ES_CAST_TYPES.map((c) => <option key={c || 'none'} value={c}>{c || '(no cast)'}</option>)}
+                </Select>
+              </Field>
+              <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => setFieldMap(fieldMap.filter((_, j) => j !== i))} aria-label={`Remove field ${i + 1}`} />
+            </div>
+          ))}
+          <Button appearance="secondary" size="small" icon={<Add20Regular />} onClick={() => setFieldMap([...fieldMap, { source: '', target: '', cast: '' }])}>Add field</Button>
+        </div>
+      )}
+
+      {/* AGGREGATE / GROUP BY */}
+      {isAgg && (
+        <>
+          <Field label="Group by columns" hint="Comma-separated (optional)">
+            <Input value={csv(op.groupBy)} onChange={(_: unknown, d: any) => onChange({ groupBy: toArr(d.value) })} placeholder="deviceId, region" />
+          </Field>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+            <Caption1>Aggregations</Caption1>
+            {aggregates.map((a, i) => (
+              <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'flex-end' }}>
+                <Field style={{ minWidth: 100 }}>
+                  <Select value={a.func || 'COUNT'} onChange={(_: unknown, d: any) => setAggs(aggregates.map((r, j) => j === i ? { ...r, func: d.value } : r))} aria-label={`Aggregation ${i + 1} function`}>
+                    {ES_AGG_FUNCS.map((f) => <option key={f} value={f}>{f}</option>)}
+                  </Select>
+                </Field>
+                <Field style={{ flex: 1 }}>
+                  <Input value={a.field || ''} onChange={(_: unknown, d: any) => setAggs(aggregates.map((r, j) => j === i ? { ...r, field: d.value } : r))} placeholder={a.func === 'COUNT' ? '* (or field)' : 'field'} aria-label={`Aggregation ${i + 1} field`} />
+                </Field>
+                <Field style={{ flex: 1 }}>
+                  <Input value={a.alias || ''} onChange={(_: unknown, d: any) => setAggs(aggregates.map((r, j) => j === i ? { ...r, alias: d.value } : r))} placeholder="alias" aria-label={`Aggregation ${i + 1} alias`} />
+                </Field>
+                <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => setAggs(aggregates.filter((_, j) => j !== i))} aria-label={`Remove aggregation ${i + 1}`} />
+              </div>
+            ))}
+            <Button appearance="secondary" size="small" icon={<Add20Regular />} onClick={() => setAggs([...aggregates, { func: 'AVG', field: '', alias: '' }])}>Add aggregation</Button>
+          </div>
+          <Field label="Timestamp column (TIMESTAMP BY)" hint="Event-time column used for windowing (optional)">
+            <Input value={op.timestampBy || ''} onChange={(_: unknown, d: any) => onChange({ timestampBy: d.value })} placeholder="EventEnqueuedUtcTime" />
+          </Field>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+            <Field label="Window" style={{ minWidth: 130 }}>
+              <Select value={op.windowType || 'Tumbling'} onChange={(_: unknown, d: any) => onChange({ windowType: d.value })}>
+                {ES_WINDOW_TYPES.map((w) => <option key={w} value={w}>{w}</option>)}
+              </Select>
+            </Field>
+            {op.windowType !== 'Snapshot' && (
+              <>
+                <Field label="Size" style={{ minWidth: 90 }}>
+                  <Input type="number" value={String(op.windowSize ?? 5)} onChange={(_: unknown, d: any) => onChange({ windowSize: Number(d.value) || 0 })} />
+                </Field>
+                <Field label="Unit" style={{ minWidth: 110 }}>
+                  <Select value={op.windowUnit || 'minute'} onChange={(_: unknown, d: any) => onChange({ windowUnit: d.value })}>
+                    {ES_WINDOW_UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+                  </Select>
+                </Field>
+                {(op.windowType === 'Hopping' || op.windowType === 'Session') && (
+                  <Field label={op.windowType === 'Hopping' ? 'Hop' : 'Max duration'} style={{ minWidth: 90 }}>
+                    <Input type="number" value={String(op.hopSize ?? op.windowSize ?? 1)} onChange={(_: unknown, d: any) => onChange({ hopSize: Number(d.value) || 0 })} />
+                  </Field>
+                )}
+              </>
+            )}
+          </div>
+          <Field label="HAVING (optional)" hint="Filter on aggregates, e.g. COUNT(*) > 100">
+            <MonacoTextarea value={op.havingExpression || ''} onChange={(v) => onChange({ havingExpression: v })} language="sql" height={52} lineNumbers={false} ariaLabel="HAVING expression" />
+          </Field>
+        </>
+      )}
+
+      {/* EXPAND */}
+      {kind === 'expand' && (
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+          <Field label="Array column to flatten" style={{ flex: 1, minWidth: 160 }} hint="Emits one row per element (CROSS APPLY GetArrayElements)">
+            <Input value={op.expandField || ''} onChange={(_: unknown, d: any) => onChange({ expandField: d.value })} placeholder="tags" />
+          </Field>
+          <Field label="Element alias" style={{ minWidth: 130 }}>
+            <Input value={op.expandAlias || 'element'} onChange={(_: unknown, d: any) => onChange({ expandAlias: d.value })} placeholder="element" />
+          </Field>
+          <Field label="Output column" style={{ minWidth: 140 }} hint="Name for the flattened value">
+            <Input value={op.expandOutput || ''} onChange={(_: unknown, d: any) => onChange({ expandOutput: d.value })} placeholder="tag" />
+          </Field>
+        </div>
+      )}
+
+      {/* UNION */}
+      {kind === 'union' && (
+        <MessageBar intent={sources.length > 1 ? 'success' : 'warning'}>
+          <MessageBarBody>
+            {sources.length > 1
+              ? <>Merges all {sources.length} sources ({sources.map((sn) => sn.name).join(', ')}) into one stream. No extra configuration required.</>
+              : <>Union merges multiple sources — add a second source on the Visual designer for this to have an effect.</>}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* JOIN */}
+      {kind === 'join' && (
+        <>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+            <Field label="Join with source" style={{ flex: 1, minWidth: 160 }}>
+              <Select value={op.joinSource || ''} onChange={(_: unknown, d: any) => onChange({ joinSource: d.value })}>
+                <option value="">{sources.length > 1 ? 'Select a source…' : 'Add a second source first'}</option>
+                {sources.map((sn) => <option key={sn.name} value={sn.name}>{sn.name}</option>)}
+              </Select>
+            </Field>
+            <Field label="Join type" style={{ minWidth: 140 }}>
+              <Select value={op.joinType || 'INNER'} onChange={(_: unknown, d: any) => onChange({ joinType: d.value })}>
+                <option value="INNER">INNER</option>
+                <option value="LEFT OUTER">LEFT OUTER</option>
+              </Select>
+            </Field>
+            <Field label="Within (seconds)" style={{ minWidth: 130 }} hint="DATEDIFF temporal bound">
+              <Input type="number" value={String(op.joinDurationSeconds ?? 60)} onChange={(_: unknown, d: any) => onChange({ joinDurationSeconds: Number(d.value) || 0 })} />
+            </Field>
+          </div>
+          <Field label="ON condition" hint="e.g. L.deviceId = R.deviceId (L = this stream, R = joined source)">
+            <MonacoTextarea value={op.joinOn || ''} onChange={(v) => onChange({ joinOn: v })} language="sql" height={52} lineNumbers={false} ariaLabel="JOIN ON condition" />
+          </Field>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ============================================================
+// Eventstream — read-only Definition view.
+//
+// Replaces the former editable JSON tab (a loom_no_freeform_config BLOCKING
+// violation: a raw editable JSON authoring surface). The topology is now edited
+// exclusively through typed controls (Visual designer + Operators builder); this
+// view renders the GENERATED, read-only definition: the compiled Stream
+// Analytics query plus the resolved topology JSON. Nothing here is editable.
+// ============================================================
+function EventstreamDefinitionView({ cfg }: { cfg: VisualPipelineConfig }) {
+  const s = useStyles();
+  const { sources, transforms, sinks } = useMemo(() => esTopology(cfg), [cfg]);
+  const compiledSaql = useMemo(() => esCompileDefinition(sources, transforms, sinks), [sources, transforms, sinks]);
+  const topologyJson = useMemo(() => JSON.stringify({ sources, transforms, sinks }, null, 2), [sources, transforms, sinks]);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+      <MessageBar intent="info">
+        <MessageBarBody>
+          <MessageBarTitle>Generated definition (read-only)</MessageBarTitle>
+          Edit the stream on the <strong>Visual designer</strong> or <strong>Operators</strong> tabs. The
+          Stream Analytics query and the topology below are generated from those typed controls — this view
+          is read-only.
+        </MessageBarBody>
+      </MessageBar>
+
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <MathFormula20Regular style={{ color: tokens.colorBrandForeground1 }} />
+          <Subtitle2>Compiled Stream Analytics query</Subtitle2>
+          <Badge appearance="outline" color="brand">read-only</Badge>
+        </div>
+        <MonacoTextarea value={compiledSaql} onChange={() => { /* read-only */ }} language="sql" height={240} minHeight={180} readOnly ariaLabel="Compiled Stream Analytics query definition (read-only)" />
+      </div>
+
+      <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <Form20Regular style={{ color: tokens.colorBrandForeground1 }} />
+          <Subtitle2>Resolved topology</Subtitle2>
+          <Badge appearance="outline" color="brand">read-only</Badge>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 'auto' }}>
+            {sources.length} source{sources.length === 1 ? '' : 's'} · {transforms.length} operator{transforms.length === 1 ? '' : 's'} · {sinks.length} destination{sinks.length === 1 ? '' : 's'}
+          </Caption1>
+        </div>
+        <MonacoTextarea value={topologyJson} onChange={() => { /* read-only */ }} language="json" height={240} minHeight={180} readOnly ariaLabel="Resolved topology definition (read-only)" />
       </div>
     </div>
   );
