@@ -26,6 +26,7 @@ import {
   Tab, TabList, Field, Dropdown, Option, Checkbox, SearchBox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Accordion, AccordionItem, AccordionHeader, AccordionPanel,
+  Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -38,12 +39,19 @@ import {
   CheckmarkCircle20Regular, DismissCircle20Regular, Cloud20Regular, Branch20Regular,
   Settings20Regular, Warning20Regular, Pulse20Regular, Alert20Regular,
   ArrowUp16Regular, ArrowDown16Regular, Wrench20Regular, Braces20Regular,
+  Clock20Regular, DataHistogram20Regular, TextField20Regular, Beaker20Regular,
+  Globe20Regular, CloudArrowUp20Regular, Open20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
-import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef } from './slate/slate-app-builder';
+import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef, type SlateVariable } from './slate/slate-app-builder';
 import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable } from './workshop/workshop-app-builder';
 import { deriveObjectProperties } from './_palantir-codegen';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import {
+  CHECK_TYPE_LIBRARY, CHECK_FAMILY_META, COMPARISON_OPERATORS, AGGREGATIONS,
+  buildCheckQuery, type CheckTypeDef, type CheckFamily, type CheckField,
+} from '@/app/api/items/health-check/_lib/check-types';
 import type { OntologyEntityBinding } from './_family-utils';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -186,6 +194,20 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
     fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
   },
+  checkTile: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, textAlign: 'left', cursor: 'pointer',
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform', transitionDuration: tokens.durationNormal, transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)', border: `1px solid ${tokens.colorBrandStroke1}` },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '2px' },
+  },
+  checkTileHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  checkTileIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  galleryFamily: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
 });
 
 /** Code/output viewer with a working copy-to-clipboard control. */
@@ -454,6 +476,8 @@ interface OsdkState {
   boundOntologyId?: string; boundOntologyName?: string;
   objectCount?: number; linkCount?: number; actionCount?: number; lastGeneratedAt?: string;
   selectedObjectTypes?: string[]; selectedLinkTypes?: string[]; selectedActionTypes?: string[];
+  /** DAB runtime origin (Azure Container Apps) the live "Try it" explorer proxies. */
+  serviceUrl?: string;
   [k: string]: unknown;
 }
 interface GeneratedSdk { typescript: string; python: string; dabConfig: unknown; actions: string; objectCount: number; linkCount: number; actionCount: number; propertyCount: number }
@@ -461,6 +485,101 @@ interface GeneratedSdk { typescript: string; python: string; dabConfig: unknown;
 /** Stable identity for a link in the scope selector (kind + endpoints). */
 function osdkLinkKey(l: { from: string; to: string; kind: string }): string { return `${l.kind}:${l.from}->${l.to}`; }
 function osdkLinkLabel(l: { from: string; to: string; kind: string }): string { return `${l.from} —${l.kind}→ ${l.to}`; }
+
+// ── OSDK live "Try it" API Explorer — proxies the real DAB runtime (REST + GraphQL) ──
+interface OsdkTryResult { columns: string[]; rows: unknown[][]; url?: string; rowCount?: number; raw?: unknown; error?: string; gate?: { reason: string; remediation: string } }
+
+function OsdkTryIt({ id, objectTypes, serviceUrl, onServiceUrl }: {
+  id: string; objectTypes: string[]; serviceUrl: string; onServiceUrl: (v: string) => void;
+}) {
+  const s = useStyles();
+  const [mode, setMode] = useState<'rest' | 'graphql'>('rest');
+  const [objectType, setObjectType] = useState('');
+  const [first, setFirst] = useState('25');
+  const [filter, setFilter] = useState('');
+  const [gql, setGql] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<OsdkTryResult | null>(null);
+
+  useEffect(() => { if (!objectType && objectTypes.length) setObjectType(objectTypes[0]); }, [objectTypes, objectType]);
+  useEffect(() => {
+    if (!gql && objectType) setGql(`{\n  ${objectType.charAt(0).toLowerCase()}${objectType.slice(1)}s {\n    items { __typename }\n  }\n}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectType]);
+
+  const run = useCallback(async () => {
+    setBusy(true); setRes(null);
+    try {
+      const body = mode === 'graphql'
+        ? { mode, graphql: gql }
+        : { mode, objectType, first: Number(first) || 25, filter: filter.trim() || undefined };
+      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setRes({ columns: [], rows: [], error: j?.error || `HTTP ${r.status}`, gate: j?.gate }); return; }
+      setRes({ columns: j.columns || [], rows: j.rows || [], url: j.url, rowCount: j.rowCount, raw: j.raw });
+    } catch (e: any) { setRes({ columns: [], rows: [], error: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  }, [id, mode, objectType, first, filter, gql]);
+
+  return (
+    <div className={s.section}>
+      <SectionHead icon={<Beaker20Regular />} title="Try it — live API Explorer" hint="Run real REST (OData) + GraphQL requests against the Data API Builder runtime that serves this ontology on Azure Container Apps. Results are live rows — no mock data." />
+      <Field label="DAB runtime service URL" hint="This SDK's Data API origin (set at Publish, or point at the shared preview runtime). Blank falls back to LOOM_DAB_PREVIEW_URL.">
+        <Input value={serviceUrl} onChange={(_, d) => onServiceUrl(d.value)} placeholder="https://dab-loom.<region>.azurecontainerapps.io" />
+      </Field>
+      <TabList selectedValue={mode} onTabSelect={(_, d) => { setMode(d.value as 'rest' | 'graphql'); setRes(null); }}>
+        <Tab value="rest" icon={<Globe20Regular />}>REST</Tab>
+        <Tab value="graphql" icon={<Braces20Regular />}>GraphQL</Tab>
+      </TabList>
+
+      {mode === 'rest' ? (
+        <div className={s.addBar}>
+          <Field label="Object type" className={s.fieldMed}>
+            <Dropdown value={objectType} selectedOptions={objectType ? [objectType] : []} placeholder={objectTypes.length ? 'Select object type' : 'Bind an ontology first'}
+              onOptionSelect={(_, d) => setObjectType(d.optionValue || '')}>
+              {objectTypes.map((t) => <Option key={t} value={t}>{t}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="$first" className={s.fieldNarrow}><Input type="number" value={first} onChange={(_, d) => setFirst(d.value)} /></Field>
+          <Field label="$filter (OData, optional)" className={s.fieldWide}><Input value={filter} onChange={(_, d) => setFilter(d.value)} placeholder="Status eq 'active'" /></Field>
+          <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} disabled={busy || !objectType} onClick={run}>{busy ? 'Running…' : 'Run'}</Button>
+        </div>
+      ) : (
+        <>
+          <Field label="GraphQL query">
+            <Textarea value={gql} onChange={(_, d) => setGql(d.value)} rows={6} resize="vertical" placeholder={'{\n  employees { items { id name } }\n}'} />
+          </Field>
+          <div className={s.addBar}>
+            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} disabled={busy || !gql.trim()} onClick={run}>{busy ? 'Running…' : 'Run'}</Button>
+          </div>
+        </>
+      )}
+
+      {res?.gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Configure the Data API runtime</MessageBarTitle>{res.gate.reason} {res.gate.remediation}</MessageBarBody></MessageBar>}
+      {res?.error && !res.gate && <MessageBar intent="error"><MessageBarBody>{res.error}</MessageBarBody></MessageBar>}
+      {res && !res.error && (
+        <>
+          {res.url && <Caption1 className={s.hint}><strong>Request:</strong> <span className={s.outPill}>{mode.toUpperCase()} {res.url}</span></Caption1>}
+          <Caption1 className={s.hint}>{res.rowCount ?? res.rows.length} row(s)</Caption1>
+          {res.rows.length === 0 ? <div className={s.empty}><Caption1>The request succeeded but returned no rows.</Caption1></div> : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label="Try it result">
+                <TableHeader><TableRow>{res.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+                <TableBody>
+                  {res.rows.slice(0, 50).map((row, ri) => (
+                    <TableRow key={ri}>{res.columns.map((_, ci) => <TableCell key={ci}>{row[ci] === null || row[ci] === undefined ? '' : String(row[ci])}</TableCell>)}</TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -742,14 +861,26 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
             } />
           </div>
         )}
+
+        {onto.boundOntologyId && (
+          <OsdkTryIt
+            id={id}
+            objectTypes={[...selObj].length ? [...selObj] : classes.map((c) => c.name)}
+            serviceUrl={String(state.serviceUrl || '')}
+            onServiceUrl={(v) => setState((p) => ({ ...p, serviceUrl: v }))}
+          />
+        )}
       </div>
     } />
   );
 }
 
 // ───────────────────────── Slate app ─────────────────────────
+interface SlateVersion { version: string; url: string; hostname: string; staticSiteName: string; createdAt: string; widgetCount: number }
 interface SlateState {
-  apiBaseUrl?: string; widgets?: SlateWidgetDef[]; queries?: SlateQueryDef[]; lastGeneratedAt?: string;
+  apiBaseUrl?: string; widgets?: SlateWidgetDef[]; queries?: SlateQueryDef[]; variables?: SlateVariable[]; lastGeneratedAt?: string;
+  // Real SWA publish history (Microsoft.Web/staticSites) persisted to Cosmos.
+  versions?: SlateVersion[]; staticSiteName?: string; lastPublishedUrl?: string; lastPublishedAt?: string;
   // Set by the rayfin-azure-stack demote-to-template scaffold: the backing
   // Azure Functions API item this SWA web tier calls (apiBaseUrl is seeded to
   // its route). Proves the template wired a REAL Functions sibling.
@@ -760,14 +891,20 @@ interface SlateState {
 export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const router = useRouter();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<SlateState>('slate-app', id, { apiBaseUrl: '/api', widgets: [], queries: [] });
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<SlateState>('slate-app', id, { apiBaseUrl: '/api', widgets: [], queries: [], variables: [] });
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState<string | null>(null);
   const [files, setFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [fileTab, setFileTab] = useState('index.html');
+  // Publish → Azure Static Web Apps.
+  const [pubOpen, setPubOpen] = useState(false);
+  const [pubBusy, setPubBusy] = useState(false);
+  const [pubMsg, setPubMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   const widgets = Array.isArray(state.widgets) ? state.widgets : [];
   const queries = Array.isArray(state.queries) ? state.queries : [];
+  const variables = Array.isArray(state.variables) ? state.variables : [];
+  const versions = Array.isArray(state.versions) ? state.versions : [];
 
   // Map the builder's typed widgets back onto the static-SWA codegen contract
   // ({id,title,kind,query}). REST-bound widgets carry a real path so the
@@ -787,6 +924,7 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
   const setApiBaseUrl = useCallback((v: string) => setState((p) => ({ ...p, apiBaseUrl: v })), [setState]);
   const onQueriesChange = useCallback((next: SlateQueryDef[]) => setState((p) => ({ ...p, queries: next })), [setState]);
   const onWidgetsChange = useCallback((next: SlateWidgetDef[]) => setState((p) => ({ ...p, widgets: next })), [setState]);
+  const onVariablesChange = useCallback((next: SlateVariable[]) => setState((p) => ({ ...p, variables: next })), [setState]);
 
   const generate = useCallback(async () => {
     setGenBusy(true); setGenErr(null);
@@ -803,16 +941,39 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
     finally { setGenBusy(false); }
   }, [id, state.apiBaseUrl, widgetsForCodegen]);
 
+  const publish = useCallback(async () => {
+    setPubBusy(true); setPubMsg(null);
+    try {
+      // Persist the latest queries/widgets first so Publish deploys the current app.
+      if (dirty) await save();
+      const r = await fetch(`/api/items/slate-app/${encodeURIComponent(id)}/publish`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.reason || ''} ${j.gate.remediation || ''}` : '';
+        setPubMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setPubMsg({ intent: 'success', text: `Published ${j.version} → Azure Static Web App “${j.staticSiteName}”.${j.url ? ` Live at ${j.url}.` : ''}${j.tokenRetrieved ? ' Deployment token retrieved.' : ''}` });
+      await reload(); // pull the new versions[] from Cosmos
+    } catch (e: any) { setPubMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setPubBusy(false); }
+  }, [id, dirty, save, reload]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'App', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || !dirty },
         { label: genBusy ? 'Generating…' : 'Generate bundle', onClick: generate, disabled: genBusy || widgetsForCodegen.length === 0 },
       ]},
+      { label: 'Deploy', actions: [
+        { label: 'Publish…', onClick: () => { setPubMsg(null); setPubOpen(true); }, disabled: false },
+      ]},
     ]},
   ], [save, saving, dirty, generate, genBusy, widgetsForCodegen.length]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Slate app" intro="A live dashboard / app builder over Azure-native data (ADX, Synapse serverless, DAB REST). Compose queries + widgets on a drag-resize canvas, preview them live, then generate a deployable Azure Static Web Apps bundle — no Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Slate app" intro="A live dashboard / app builder over Azure-native data (ADX, Synapse serverless, DAB REST). Compose queries + widgets on a drag-resize canvas, drive them with variables + interactions, preview live, then publish to Azure Static Web Apps — no Fabric required." />;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -820,11 +981,11 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
           <MessageBarTitle>Slate app (Palantir Slate)</MessageBarTitle>
-          Build a live app: define queries (REST / KQL / SQL over Azure-native backends), place widgets on the drag-resize canvas, and preview them bound to real data. Generate a deployable Azure Static Web Apps bundle when ready. No Microsoft Fabric required.
+          Build a live app: define queries (REST / KQL / SQL over Azure-native backends), place widgets on the drag-resize canvas, wire variables + interactions, and preview them bound to real data. Publish to Azure Static Web Apps when ready. No Microsoft Fabric required.
         </MessageBarBody></MessageBar>
 
         <div className={s.section}>
-          <SectionHead icon={<Database20Regular />} title="Data API base" hint="The DAB / Ontology-SDK REST base that REST queries resolve against (e.g. /api or an APIM URL). KQL / SQL queries hit ADX / Synapse directly." />
+          <SectionHead icon={<Database20Regular />} title="Data API base" hint="The DAB / Ontology-SDK REST base that REST queries + write-backs resolve against (e.g. /api or an APIM URL). KQL / SQL queries hit ADX / Synapse directly." />
           <Field label="API base URL"><Input value={String(state.apiBaseUrl || '/api')} onChange={(_, d) => setApiBaseUrl(d.value)} placeholder="/api" /></Field>
           {state.functionItemId && (
             <Caption1 className={s.hint}>
@@ -842,15 +1003,17 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
           apiBaseUrl={String(state.apiBaseUrl || '/api')}
           queries={queries}
           widgets={widgets}
+          variables={variables}
           onQueriesChange={onQueriesChange}
           onWidgetsChange={onWidgetsChange}
+          onVariablesChange={onVariablesChange}
         />
 
         {genErr && <MessageBar intent="error"><MessageBarBody>{genErr}</MessageBarBody></MessageBar>}
 
         {files.length > 0 && (
           <div className={s.section}>
-            <SectionHead icon={<Code20Regular />} title="Generated Static Web Apps bundle" hint="Copy these files into your SWA repo, or wire them through a release-environment promotion. REST-bound widgets are embedded; KQL / SQL widgets run live in Preview but aren't part of the static bundle." />
+            <SectionHead icon={<Code20Regular />} title="Generated Static Web Apps bundle" hint="Copy these files into your SWA repo, or push them with the deployment token retrieved by Publish. REST-bound widgets are embedded; KQL / SQL widgets run live in Preview but aren't part of the static bundle." />
             <TabList selectedValue={fileTab} onTabSelect={(_, d) => setFileTab(d.value as string)}>
               {files.map((f) => <Tab key={f.name} value={f.name}>{f.name}</Tab>)}
             </TabList>
@@ -858,7 +1021,69 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
           </div>
         )}
 
+        {/* Publish history — real Azure Static Web Apps versions persisted to Cosmos. */}
+        <div className={s.section}>
+          <SectionHead icon={<CloudArrowUp20Regular />} title="Publish → Azure Static Web Apps" hint="Each publish provisions (or updates) a real Microsoft.Web/staticSites resource and records a version. Azure-native — no Fabric." />
+          <div className={s.addBar}>
+            <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={() => { setPubMsg(null); setPubOpen(true); }}>Publish…</Button>
+            {state.lastPublishedUrl && (
+              <Button appearance="outline" icon={<Open20Regular />} onClick={() => window.open(String(state.lastPublishedUrl), '_blank', 'noopener')}>Open live app</Button>
+            )}
+          </div>
+          {versions.length === 0 ? (
+            <div className={s.empty}><Caption1>Not published yet — click Publish to create an Azure Static Web App and record the first version.</Caption1></div>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label="Publish history">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Static Web App</TableHeaderCell>
+                  <TableHeaderCell>URL</TableHeaderCell><TableHeaderCell>Widgets</TableHeaderCell><TableHeaderCell>Published</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {versions.map((v) => (
+                    <TableRow key={v.version + v.createdAt}>
+                      <TableCell><Badge appearance="tint" color="brand">{v.version}</Badge></TableCell>
+                      <TableCell>{v.staticSiteName}</TableCell>
+                      <TableCell>{v.url
+                        ? <Button appearance="transparent" size="small" icon={<Open20Regular />} onClick={() => window.open(v.url, '_blank', 'noopener')}>{v.hostname || 'open'}</Button>
+                        : <Caption1 className={s.mutedCaption}>provisioning…</Caption1>}</TableCell>
+                      <TableCell>{v.widgetCount}</TableCell>
+                      <TableCell>{v.createdAt ? new Date(v.createdAt).toLocaleString() : '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+
         <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+
+        <Dialog open={pubOpen} onOpenChange={(_, d) => { if (!d.open) setPubOpen(false); }}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Publish to Azure Static Web Apps</DialogTitle>
+              <DialogContent>
+                <div className={s.dialogForm}>
+                  <MessageBar intent="info"><MessageBarBody>
+                    Publish provisions (or updates) a real <strong>Microsoft.Web/staticSites</strong> resource for this app and retrieves its SWA deployment token — the credential the SWA CLI / GitHub Action uses to push the generated bundle. Requires <strong>LOOM_SWA_SUBSCRIPTION_ID</strong> + <strong>LOOM_SWA_RESOURCE_GROUP</strong> (optional <strong>LOOM_SWA_LOCATION</strong>) and the Console UAMI granted <strong>Website Contributor</strong> on that resource group. Azure-native — no Microsoft Fabric.
+                  </MessageBarBody></MessageBar>
+                  <Caption1 className={s.hint}>
+                    {widgetsForCodegen.length} REST-bound widget{widgetsForCodegen.length === 1 ? '' : 's'} will be embedded in the deployed bundle.
+                    {dirty ? ' Unsaved changes are saved automatically before publishing.' : ''}
+                  </Caption1>
+                  {pubMsg && <MessageBar intent={pubMsg.intent}><MessageBarBody>{pubMsg.text}</MessageBarBody></MessageBar>}
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setPubOpen(false)}>Close</Button>
+                <Button appearance="primary" icon={pubBusy ? <Spinner size="tiny" /> : <CloudArrowUp20Regular />} disabled={pubBusy} onClick={publish}>
+                  {pubBusy ? 'Publishing…' : 'Publish now'}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
       </div>
     } />
   );
@@ -1529,22 +1754,213 @@ function hcSeverityLabel(sev?: number): string {
 }
 interface HealthState { rules?: MonitorRule[]; [k: string]: unknown }
 
-export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: string }) {
+// ── check-type gallery + typed wizard (Palantir Foundry check-type library) ──
+const HC_FAMILY_ICON: Record<CheckFamily, ReactNode> = {
+  time: <Clock20Regular />, size: <DataHistogram20Regular />, content: <TextField20Regular />, schema: <Braces20Regular />, status: <Pulse20Regular />,
+};
+
+/** Build the current KQL for a wizard config, client-side (instant preview). */
+function hcParamsFor(def: CheckTypeDef, params: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of def.fields) out[f.id] = params[f.id] ?? f.default ?? '';
+  return out;
+}
+
+function CheckTypeGallery({ onPick }: { onPick: (def: CheckTypeDef) => void }) {
   const s = useStyles();
-  const { loading } = useItemState<HealthState>('health-check', id, { rules: [] });
-  const [tab, setTab] = useState<'checks' | 'status' | 'history' | 'notifications' | 'settings'>('checks');
-  const [rules, setRules] = useState<MonitorRule[]>([]);
-  const [checkType, setCheckType] = useState<'freshness' | 'rowcount' | 'custom'>('freshness');
+  const families = Object.keys(CHECK_FAMILY_META) as CheckFamily[];
+  return (
+    <div className={s.section}>
+      <SectionHead icon={<Flash20Regular />} title="Check-type library" hint="Pick a check type to open a typed wizard. Every type compiles to a real Azure Monitor scheduled-query condition over Log Analytics." />
+      {families.map((fam) => {
+        const defs = CHECK_TYPE_LIBRARY.filter((d) => d.family === fam);
+        if (defs.length === 0) return null;
+        return (
+          <div key={fam} className={s.galleryFamily}>
+            <div className={s.sectionHead}>
+              <span className={s.sectionIcon}>{HC_FAMILY_ICON[fam]}</span>
+              <div><Subtitle2>{CHECK_FAMILY_META[fam].label}</Subtitle2><Caption1 as="p" block className={s.hint}>{CHECK_FAMILY_META[fam].description}</Caption1></div>
+            </div>
+            <TileGrid minTileWidth={240}>
+              {defs.map((def) => (
+                <div key={def.id} className={s.checkTile} role="button" tabIndex={0}
+                  onClick={() => onPick(def)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(def); } }}
+                  aria-label={`Add ${def.label} check`}>
+                  <div className={s.checkTileHead}>
+                    <span className={s.checkTileIcon}>{HC_FAMILY_ICON[fam]}</span>
+                    <Body1><strong>{def.label}</strong></Body1>
+                  </div>
+                  <Caption1 className={s.hint}>{def.description}</Caption1>
+                </div>
+              ))}
+            </TileGrid>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface HcWizardConfig {
+  checkType: string; params: Record<string, string>; name: string;
+  evaluationFrequency: string; windowSize: string; severity: number; email?: string;
+}
+
+function CheckWizardField({ field, value, onChange }: { field: CheckField; value: string; onChange: (v: string) => void }) {
+  if (field.kind === 'operator') {
+    const cur = COMPARISON_OPERATORS.find((o) => o.id === value) || COMPARISON_OPERATORS[0];
+    return (
+      <Field label={field.label} hint={field.hint}>
+        <Dropdown value={cur.label} selectedOptions={[cur.id]} onOptionSelect={(_, d) => onChange(d.optionValue || 'gt')}>
+          {COMPARISON_OPERATORS.map((o) => <Option key={o.id} value={o.id} text={o.label}>{`${o.label} (${o.symbol})`}</Option>)}
+        </Dropdown>
+      </Field>
+    );
+  }
+  if (field.kind === 'aggregation') {
+    const cur = AGGREGATIONS.find((a) => a.id === value) || AGGREGATIONS[0];
+    return (
+      <Field label={field.label} hint={field.hint}>
+        <Dropdown value={cur.label} selectedOptions={[cur.id]} onOptionSelect={(_, d) => onChange(d.optionValue || 'sum')}>
+          {AGGREGATIONS.map((a) => <Option key={a.id} value={a.id} text={a.label}>{a.label}</Option>)}
+        </Dropdown>
+      </Field>
+    );
+  }
+  if (field.kind === 'kql') {
+    return <Field label={field.label} hint={field.hint}><Textarea value={value} onChange={(_, d) => onChange(d.value)} rows={5} resize="vertical" placeholder={field.placeholder} /></Field>;
+  }
+  const inputType = field.kind === 'number' || field.kind === 'minutes' ? 'number' : 'text';
+  return <Field label={field.label} hint={field.hint}><Input type={inputType} value={value} onChange={(_, d) => onChange(d.value)} placeholder={field.placeholder} /></Field>;
+}
+
+function HealthCheckWizard({ id, def, onClose, onCreate }: {
+  id: string; def: CheckTypeDef | null; onClose: () => void; onCreate: (cfg: HcWizardConfig) => Promise<boolean>;
+}) {
+  const s = useStyles();
+  const [params, setParams] = useState<Record<string, string>>({});
   const [name, setName] = useState('');
-  const [table, setTable] = useState('');
-  const [thresholdMinutes, setThresholdMinutes] = useState('60');
-  const [minRows, setMinRows] = useState('1');
-  const [customKql, setCustomKql] = useState('');
   const [evalFreq, setEvalFreq] = useState('PT5M');
   const [windowSize, setWindowSize] = useState('PT15M');
   const [severity, setSeverity] = useState('3');
   const [email, setEmail] = useState('');
   const [busy, setBusy] = useState(false);
+  const [sample, setSample] = useState<{ busy?: boolean; fired?: boolean; count?: number; columns?: string[]; rows?: unknown[][]; gate?: { reason: string; remediation: string }; error?: string } | null>(null);
+
+  // Seed field defaults + a friendly default name whenever the type changes.
+  useEffect(() => {
+    if (!def) return;
+    const seed: Record<string, string> = {};
+    for (const f of def.fields) seed[f.id] = f.default ?? '';
+    setParams(seed); setName(`${def.id}-check`); setSample(null);
+  }, [def]);
+
+  const kql = useMemo(() => (def ? buildCheckQuery(def.id, hcParamsFor(def, params)) : null), [def, params]);
+
+  const runSample = useCallback(async () => {
+    if (!def) return;
+    setSample({ busy: true });
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/preview`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ checkType: def.id, params: hcParamsFor(def, params) }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setSample({ error: j?.error || `HTTP ${r.status}`, gate: j?.gate }); return; }
+      if (j.runGate) { setSample({ gate: j.runGate }); return; }
+      setSample({ fired: j.run?.fired, count: j.run?.count, columns: j.run?.columns || [], rows: j.run?.rows || [] });
+    } catch (e: any) { setSample({ error: e?.message || String(e) }); }
+  }, [id, def, params]);
+
+  const create = useCallback(async () => {
+    if (!def) return;
+    setBusy(true);
+    const ok = await onCreate({
+      checkType: def.id, params: hcParamsFor(def, params), name: name.trim() || `${def.id}-check`,
+      evaluationFrequency: evalFreq, windowSize, severity: Number(severity), email: email.trim() || undefined,
+    });
+    setBusy(false);
+    if (ok) onClose();
+  }, [def, params, name, evalFreq, windowSize, severity, email, onCreate, onClose]);
+
+  return (
+    <Dialog open={!!def} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{def ? `New ${def.label} check` : 'New check'}</DialogTitle>
+          <DialogContent>
+            {def && (
+              <div className={s.dialogForm}>
+                <Caption1 className={s.hint}>{def.description}</Caption1>
+                <div className={s.dialogScroll}>
+                  <div className={s.grid2}>
+                    <Field label="Rule name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder={`${def.id}-check`} /></Field>
+                    {def.fields.map((f) => (
+                      <CheckWizardField key={f.id} field={f} value={params[f.id] ?? f.default ?? ''} onChange={(v) => setParams((p) => ({ ...p, [f.id]: v }))} />
+                    ))}
+                  </div>
+                  <Divider />
+                  <div className={s.grid2}>
+                    <Field label="Evaluate every"><Dropdown value={evalFreq} selectedOptions={[evalFreq]} onOptionSelect={(_, d) => setEvalFreq(d.optionValue || 'PT5M')}>
+                      <Option value="PT5M">5 minutes</Option><Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option>
+                    </Dropdown></Field>
+                    <Field label="Look-back window"><Dropdown value={windowSize} selectedOptions={[windowSize]} onOptionSelect={(_, d) => setWindowSize(d.optionValue || 'PT15M')}>
+                      <Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option><Option value="P1D">1 day</Option>
+                    </Dropdown></Field>
+                    <Field label="Severity"><Dropdown value={hcSeverityLabel(Number(severity))} selectedOptions={[severity]} onOptionSelect={(_, d) => setSeverity(d.optionValue || '3')}>
+                      {HC_SEVERITY_OPTS.map((o) => <Option key={o.v} value={String(o.v)} text={o.label}>{o.label}</Option>)}
+                    </Dropdown></Field>
+                    <Field label="Notify email (optional)"><Input value={email} onChange={(_, d) => setEmail(d.value)} placeholder="oncall@contoso.com" /></Field>
+                  </div>
+
+                  <SectionHead icon={<Code20Regular />} title="KQL preview" hint="The exact condition this check's scheduledQueryRule will evaluate. Fires when the query returns rows." />
+                  {kql ? <CodeBlock ariaLabel="Compiled KQL" content={kql} /> : <MessageBar intent="warning"><MessageBarBody>Fill in the required fields (table / column / KQL) to compile the condition.</MessageBarBody></MessageBar>}
+                  <div className={s.addBar}>
+                    <Button appearance="outline" icon={sample?.busy ? <Spinner size="tiny" /> : <Play20Regular />} disabled={!kql || sample?.busy} onClick={runSample}>
+                      {sample?.busy ? 'Running…' : 'Run live sample'}
+                    </Button>
+                    {sample && !sample.busy && !sample.gate && !sample.error && (
+                      <Badge appearance="tint" color={sample.fired ? 'danger' : 'success'}>{sample.fired ? 'Would fire' : 'Pass'} · {sample.count ?? 0} row(s)</Badge>
+                    )}
+                  </div>
+                  {sample?.gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Live sample unavailable</MessageBarTitle>{sample.gate.reason} {sample.gate.remediation}</MessageBarBody></MessageBar>}
+                  {sample?.error && !sample.gate && <MessageBar intent="error"><MessageBarBody>{sample.error}</MessageBarBody></MessageBar>}
+                  {sample && !sample.busy && (sample.columns?.length || 0) > 0 && (sample.rows?.length || 0) > 0 && (
+                    <div className={s.tableWrap}>
+                      <Table size="small" aria-label="Sample rows">
+                        <TableHeader><TableRow>{(sample.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+                        <TableBody>
+                          {(sample.rows || []).slice(0, 10).map((row, ri) => (
+                            <TableRow key={ri}>{(sample.columns || []).map((_, ci) => <TableCell key={ci}>{(row as unknown[])[ci] === null || (row as unknown[])[ci] === undefined ? '' : String((row as unknown[])[ci])}</TableCell>)}</TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Flash20Regular />} disabled={busy || !kql} onClick={create}>
+              {busy ? 'Creating…' : 'Create rule'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const { loading } = useItemState<HealthState>('health-check', id, { rules: [] });
+  const [tab, setTab] = useState<'checks' | 'status' | 'history' | 'notifications' | 'settings'>('checks');
+  const [rules, setRules] = useState<MonitorRule[]>([]);
+  // Check-type wizard: the selected library type (null = closed).
+  const [wizardDef, setWizardDef] = useState<CheckTypeDef | null>(null);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
   // Per-rule lifecycle (Run / Enable / Disable / Delete).
   const [rowBusy, setRowBusy] = useState<string | null>(null);
@@ -1582,30 +1998,29 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
     if ((tab === 'status' || tab === 'history') && !historyLoaded && rules.length > 0) void loadHistory();
   }, [tab, historyLoaded, rules.length, loadHistory]);
 
-  const createRule = useCallback(async () => {
-    setBusy(true); setMsg(null);
+  const createRule = useCallback(async (cfg: HcWizardConfig): Promise<boolean> => {
+    setMsg(null);
     try {
       const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          checkType, name: name.trim() || undefined, table: table.trim() || undefined,
-          thresholdMinutes: Number(thresholdMinutes) || undefined, minRows: Number(minRows) || undefined,
-          customKql: customKql.trim() || undefined, evaluationFrequency: evalFreq, windowSize,
-          severity: Number(severity), email: email.trim() || undefined,
+          checkType: cfg.checkType, params: cfg.params, name: cfg.name || undefined,
+          evaluationFrequency: cfg.evaluationFrequency, windowSize: cfg.windowSize,
+          severity: cfg.severity, email: cfg.email,
         }),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
         setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
-        return;
+        return false;
       }
       setMsg({ intent: 'success', text: `Created Azure Monitor rule "${j.rule?.name}" (${j.rule?.azureRuleName}).` });
-      setName(''); setHistoryLoaded(false);
+      setHistoryLoaded(false);
       void loadRules();
-    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
-    finally { setBusy(false); }
-  }, [id, checkType, name, table, thresholdMinutes, minRows, customKql, evalFreq, windowSize, severity, email, loadRules]);
+      return true;
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); return false; }
+  }, [id, loadRules]);
 
   const toggleRule = useCallback(async (rl: MonitorRule, enabled: boolean) => {
     setRowBusy(rl.id); setMsg(null);
@@ -1679,13 +2094,13 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Check', actions: [
-        { label: busy ? 'Creating…' : 'Create rule', onClick: createRule, disabled: busy },
+        { label: 'Custom KQL check', onClick: () => { setTab('checks'); setWizardDef(CHECK_TYPE_LIBRARY.find((d) => d.id === 'custom') || null); }, disabled: false },
       ]},
       { label: 'View', actions: [
         { label: historyBusy ? 'Refreshing…' : 'Refresh', onClick: () => { void loadRules(); setHistoryLoaded(false); void loadHistory(); }, disabled: historyBusy },
       ]},
     ]},
-  ], [createRule, busy, loadRules, loadHistory, historyBusy]);
+  ], [loadRules, loadHistory, historyBusy]);
 
   if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create health check" intro="Data-freshness / SLA monitoring backed by real Azure Monitor scheduled-query alert rules. Azure-native default — no Fabric required." />;
 
@@ -1712,36 +2127,11 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
 
         {/* ───────── Checks ───────── */}
         {tab === 'checks' && <>
-          <div className={s.section}>
-            <SectionHead icon={<Flash20Regular />} title="New check rule" hint="Pick a check type; Loom creates a real scheduledQueryRule over Log Analytics." />
-            <div className={s.addBar}>
-              <Field label="Check type"><Dropdown value={checkType} selectedOptions={[checkType]} onOptionSelect={(_, d) => setCheckType((d.optionValue as 'freshness' | 'rowcount' | 'custom') || 'freshness')}>
-                <Option value="freshness">freshness</Option><Option value="rowcount">row count</Option><Option value="custom">custom KQL</Option>
-              </Dropdown></Field>
-              <Field label="Rule name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="orders-freshness" /></Field>
-              {checkType !== 'custom' && <Field label="Table (Log Analytics)"><Input value={table} onChange={(_, d) => setTable(d.value)} placeholder="AppEvents" /></Field>}
-              {checkType === 'freshness' && <Field label="Stale after (minutes)"><Input type="number" value={thresholdMinutes} onChange={(_, d) => setThresholdMinutes(d.value)} /></Field>}
-              {checkType === 'rowcount' && <Field label="Min rows in window"><Input type="number" value={minRows} onChange={(_, d) => setMinRows(d.value)} /></Field>}
-            </div>
-            {checkType === 'custom' && <Field label="KQL condition (fires when it returns rows)"><Textarea value={customKql} onChange={(_, d) => setCustomKql(d.value)} placeholder={'MyTable\n| where TimeGenerated > ago(1h)\n| summarize n=count()\n| where n == 0'} rows={4} resize="vertical" /></Field>}
-            <div className={s.addBar}>
-              <Field label="Evaluate every"><Dropdown value={evalFreq} selectedOptions={[evalFreq]} onOptionSelect={(_, d) => setEvalFreq(d.optionValue || 'PT5M')}>
-                <Option value="PT5M">5 minutes</Option><Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option>
-              </Dropdown></Field>
-              <Field label="Look-back window"><Dropdown value={windowSize} selectedOptions={[windowSize]} onOptionSelect={(_, d) => setWindowSize(d.optionValue || 'PT15M')}>
-                <Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option><Option value="P1D">1 day</Option>
-              </Dropdown></Field>
-              <Field label="Severity"><Dropdown value={hcSeverityLabel(Number(severity))} selectedOptions={[severity]} onOptionSelect={(_, d) => setSeverity(d.optionValue || '3')}>
-                {HC_SEVERITY_OPTS.map((o) => <Option key={o.v} value={String(o.v)} text={o.label}>{o.label}</Option>)}
-              </Dropdown></Field>
-              <Field label="Notify email (optional)"><Input value={email} onChange={(_, d) => setEmail(d.value)} placeholder="oncall@contoso.com" /></Field>
-              <Button appearance="primary" icon={<Flash20Regular />} disabled={busy} onClick={createRule}>{busy ? 'Creating…' : 'Create rule'}</Button>
-            </div>
-          </div>
+          <CheckTypeGallery onPick={(def) => setWizardDef(def)} />
 
           <div className={s.section}>
             <SectionHead icon={<Database20Regular />} title="Active checks" hint="Each row is a real scheduledQueryRule. Run now, enable/disable, or delete — all hit Azure Monitor." />
-            {rules.length === 0 ? <div className={s.empty}><Caption1>No checks yet — define one above.</Caption1></div> : (
+            {rules.length === 0 ? <div className={s.empty}><Caption1>No checks yet — pick a check type above to open the wizard.</Caption1></div> : (
               <div className={s.tableWrap}>
               <Table size="small" aria-label="Checks">
                 <TableHeader><TableRow>
@@ -1865,12 +2255,14 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
               <MessageBarTitle>Azure-native default — no Microsoft Fabric</MessageBarTitle>
               Checks are real Azure Monitor scheduled-query alert rules over Log Analytics. Creating / running / scheduling requires <b>LOOM_LOG_ANALYTICS_WORKSPACE_ID</b> (run KQL), <b>LOOM_LOG_ANALYTICS_RESOURCE_ID</b> + <b>LOOM_ALERT_RG</b> (create rules), and the Console UAMI granted <b>Monitoring Contributor</b> on the alert resource group (plus <b>Monitoring Reader</b> at subscription scope for fired-alert history). A Fabric Reflex backend is opt-in only via LOOM_ACTIVATOR_BACKEND=fabric.
             </MessageBarBody></MessageBar>
-            <MessageBar intent="warning"><MessageBarBody>
-              <MessageBarTitle>Planned (tracked in docs/fiab/parity/health-check.md)</MessageBarTitle>
-              The full Foundry check-type library (Time / Size / Content / Schema families), dynamic thresholds + KQL preview, Monitoring Views, and incident/issue management are not built yet. Available today: freshness / row-count / custom-KQL checks with severity, on-demand run, enable / disable / delete, a status dashboard, fired-alert history, and action-group channel management with test-fire (see the <b>Notifications</b> tab).
+            <MessageBar intent="success"><MessageBarBody>
+              <MessageBarTitle>Check-type library available</MessageBarTitle>
+              The full check-type library is built: {CHECK_TYPE_LIBRARY.length} check types across Time / Size / Content / Schema / Status families, each a typed wizard with operator + threshold controls and a live KQL preview + sample run. Also available: on-demand run, enable / disable / delete, a status dashboard, fired-alert history, and action-group channel management with test-fire (see the <b>Notifications</b> tab). Still planned: Monitoring Views and incident/issue management (tracked in docs/fiab/parity/health-check.md).
             </MessageBarBody></MessageBar>
           </div>
         )}
+
+        <HealthCheckWizard id={id} def={wizardDef} onClose={() => setWizardDef(null)} onCreate={createRule} />
       </div>
     } />
   );
