@@ -39,6 +39,7 @@ CSA-in-a-Box (Cloud-Scale Analytics in a Box) is a **reference implementation** 
 | **Compliance**         | NIST 800-53 r5, FedRAMP Moderate, CMMC 2.0 L2, HIPAA, SOC 2, PCI-DSS, GDPR crosswalks                                       |
 | **Examples**           | 10 examples (9 verticals + iot-streaming cross-cutting pattern) spanning federal agencies, tribal, casino, ML lifecycle, IoT, AI agents |
 | **Operations**         | 8 production runbooks, DR drill automation, supply-chain security (SBOM + signing)                                          |
+| **CSA Loom console**   | A Next.js + Fluent UI v9 workspace that delivers the Microsoft Fabric experience on Azure-native services — **117 item-type editors** (Lakehouse, Warehouse, Notebooks, Pipelines, Real-Time Intelligence, a report designer, the Fabric IQ family), governance, security, a Marketplace, a Learning Hub, and Copilot throughout — **no hard Microsoft Fabric dependency**. See [CSA Loom](fiab/index.md). |
 
 **It is _not_** a turnkey SaaS — it is opinionated open-source IaC + reference code you fork into your tenant.
 
