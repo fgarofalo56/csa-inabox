@@ -1,42 +1,13 @@
 import { makeStyles, tokens } from '@fluentui/react-components';
+import { useMemo } from 'react';
+import { useSharedEditorStyles } from '../shared-styles';
 
-export const useStyles = makeStyles({
-  monaco: {
-    width: '100%',
-    minHeight: '180px',
-    fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: tokens.fontSizeBase200,
-    padding: tokens.spacingVerticalM,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    backgroundColor: tokens.colorNeutralBackground3,
-    color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
-  },
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
-  toolbar: { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' },
-  card: {
-    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground1,
-  },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '180px' },
-  resultMeta: { display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS },
-  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
-  treePad: { padding: tokens.spacingVerticalS },
-  assistBar: {
-    display: 'flex', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, alignItems: 'center',
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  assistResult: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
-    whiteSpace: 'pre-wrap', margin: 0,
-    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%',
-    maxHeight: '320px', overflow: 'auto',
-  },
+/**
+ * phase3-specific styles: the Real-Time-Intelligence "live" affordance
+ * (auto-refresh status pill + pulsing dot) that mirrors Fabric Real-Time
+ * Dashboard. The editor-agnostic primitives now live in `../shared-styles`.
+ */
+const usePhase3Styles = makeStyles({
   // Live auto-refresh status pill — mirrors Fabric Real-Time Dashboard's
   // "live" affordance so the user can see the continuous cadence is firing.
   livePill: {
@@ -62,3 +33,16 @@ export const useStyles = makeStyles({
     animationTimingFunction: 'ease-in-out',
   },
 });
+
+/**
+ * phase3 editor styles = the shared editor primitives + phase3-specific
+ * live-affordance styles. Same `useStyles()` call-site API as before (returns a
+ * class-name map keyed by `pad`/`toolbar`/`card`/…/`livePill`/`liveDot`/…), so
+ * the 14 phase3 importers are unchanged. The merge is memoized on the two
+ * (stable) Griffel results, preserving object identity across renders.
+ */
+export function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = usePhase3Styles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
