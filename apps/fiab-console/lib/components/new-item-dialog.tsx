@@ -185,12 +185,22 @@ interface Props {
   defaultCategory?: WorkloadCategory;
   /** Workspace to scope the new item to; forwarded as ?workspaceId=… */
   workspaceId?: string;
+  /** Controlled open state (optional). When provided the caller owns open/close. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  /** Hide the built-in "+ New item" trigger button (for controlled callers with their own CTA). */
+  hideTrigger?: boolean;
 }
 
-export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
+export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, onOpenChange, hideTrigger }: Props = {}) {
   const styles = useStyles();
   const router = useRouter();
-  const [open, setOpen] = useState(false);
+  // Support both uncontrolled (internal state) and controlled (caller-owned)
+  // open. `setOpen(bool)` notifies the caller when controlled and updates the
+  // internal state otherwise — every call site passes a plain boolean.
+  const [openU, setOpenU] = useState(false);
+  const open = openProp ?? openU;
+  const setOpen = (v: boolean) => { onOpenChange?.(v); if (openProp === undefined) setOpenU(v); };
   const [category, setCategory] = useState<WorkloadCategory>(defaultCategory ?? 'Data Engineering');
   const [query, setQuery] = useState('');
   // Two-step flow when workspaceId is known: pick type → name it inline.
@@ -426,9 +436,11 @@ export function NewItemDialog({ defaultCategory, workspaceId }: Props = {}) {
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) reset(); }}>
-      <DialogTrigger disableButtonEnhancement>
-        <Button appearance="primary" icon={<Add24Regular />}>New item</Button>
-      </DialogTrigger>
+      {!hideTrigger && (
+        <DialogTrigger disableButtonEnhancement>
+          <Button appearance="primary" icon={<Add24Regular />}>New item</Button>
+        </DialogTrigger>
+      )}
       <DialogSurface className={styles.surface}>
         <DialogBody>
           <DialogTitle>

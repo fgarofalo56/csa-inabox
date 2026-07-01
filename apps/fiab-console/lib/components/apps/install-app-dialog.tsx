@@ -29,6 +29,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
+import { loomDocUrl } from '@/lib/learn/content';
 import {
   Button, Badge, Caption1,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -350,7 +351,7 @@ export function InstallAppDialog({
                   {deploy && mode === 'dedicated' && (
                     <MessageBar intent="info">
                       <MessageBarBody>
-                        Dedicated mode requires bicep modules to have been pre-deployed for this app. See <Link href="/docs/fiab/operations/app-install-provisioning">app-install-provisioning</Link> for the param-file shape.
+                        Dedicated mode requires bicep modules to have been pre-deployed for this app. See <a href={loomDocUrl('fiab/operations/app-install-provisioning')} target="_blank" rel="noreferrer">app-install-provisioning</a> for the param-file shape.
                       </MessageBarBody>
                     </MessageBar>
                   )}

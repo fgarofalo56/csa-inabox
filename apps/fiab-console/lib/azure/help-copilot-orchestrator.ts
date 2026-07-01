@@ -38,6 +38,7 @@ import {
   isSearchConfigured,
   type DocHit,
 } from './loom-docs-index';
+import { NAV_ITEMS } from '@/lib/nav/nav-items';
 import { gatherReceipts, type ReceiptSource } from './help-receipts';
 import {
   PROPOSED_CHANGE_KEY,
@@ -285,10 +286,16 @@ function buildTools(deps: {
       handler: async ({ slug }) => {
         const safe = String(slug || '').trim();
         if (!safe.startsWith('/')) return { result: { ok: false, error: 'slug must start with /' } };
-        // Confine to known prefixes
-        const allowed = ['/workspaces', '/browse', '/onelake', '/governance', '/monitor', '/admin',
-          '/setup', '/apps', '/workloads', '/learn', '/copilot', '/data-agent', '/realtime-hub',
-          '/api-marketplace', '/workload-hub', '/deployment-pipelines', '/items', '/'];
+        // Allow-list DERIVED from the single source of truth (the left-nav
+        // destinations in NAV_ITEMS) so the Copilot can route to every real
+        // surface and never drifts from a hand-maintained array. A few non-nav
+        // but navigable prefixes are appended (per-item editors, app + learn
+        // pages, experience sub-apps). The /api-marketplace redirect stub is
+        // intentionally NOT here — /marketplace (in NAV_ITEMS) supersedes it.
+        const allowed = [
+          ...NAV_ITEMS.map((n) => n.href),
+          '/items', '/apps', '/learn', '/workloads', '/experience',
+        ];
         if (!allowed.some((p) => safe === p || safe.startsWith(`${p}/`))) {
           return { result: { ok: false, error: `slug ${safe} not in allow-list` } };
         }

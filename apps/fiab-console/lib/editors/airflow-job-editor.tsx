@@ -33,6 +33,7 @@ import {
 import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { loomDocUrl } from '@/lib/learn/content';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
@@ -390,7 +391,7 @@ export function AirflowJobEditor({ item, id }: Props) {
                     <MessageBarBody>
                       <MessageBarTitle>Connect an Airflow webserver</MessageBarTitle>
                       No webserver URL is configured for this job. Open the <strong>Settings</strong> tab and paste the Airflow webserver URL (e.g. <code>https://airflow.contoso.com</code>).
-                      See <a href="/docs/fiab/v3-tenant-bootstrap.md">docs/fiab/v3-tenant-bootstrap.md</a> for the AAD ingress + bearer-token bootstrap.
+                      See <a href={loomDocUrl('fiab/v3-tenant-bootstrap')} target="_blank" rel="noreferrer">the tenant bootstrap guide</a> for the AAD ingress + bearer-token bootstrap.
                     </MessageBarBody>
                   </MessageBar>
                 )}

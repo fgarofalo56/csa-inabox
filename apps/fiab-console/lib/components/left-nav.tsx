@@ -28,38 +28,48 @@ import {
   Alert24Regular,
   DataPie24Regular,
   Table24Regular,
+  type FluentIcon,
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
+import { NAV_ITEMS } from '@/lib/nav/nav-items';
 
-// Fabric-parity left nav: top-level surfaces only, like the real
-// Fabric portal. Item types are reached from inside a workspace via
-// the "+ New" item dialog.
-const navItems = [
-  { href: '/', icon: Home24Regular, label: 'Home' },
-  { href: '/workspaces', icon: Building24Regular, label: 'Workspaces' },
-  { href: '/browse', icon: Apps24Regular, label: 'Browse' },
-  { href: '/onelake', icon: Library24Regular, label: 'OneLake catalog' },
-  { href: '/catalog', icon: GlobeSearch24Regular, label: 'Unified catalog' },
-  { href: '/org-reports', icon: DataPie24Regular, label: 'Organization reports' },
-  { href: '/semantic-model', icon: Table24Regular, label: 'Semantic models' },
-  { href: '/thread', icon: Branch24Regular, label: 'Lineage' },
-  { href: '/marketplace', icon: StoreMicrosoft24Regular, label: 'Marketplace' },
-  { href: '/governance', icon: ShieldCheckmark24Regular, label: 'Governance' },
-  { href: '/monitor', icon: ChartMultiple24Regular, label: 'Monitor' },
-  { href: '/realtime-hub', icon: Flash24Regular, label: 'Real-Time hub' },
-  { href: '/activator-hub', icon: Alert24Regular, label: 'Activator' },
-  { href: '/business-events', icon: Send24Regular, label: 'Business events' },
-  { href: '/rti-hub', icon: DataUsage24Regular, label: 'RTI catalog' },
-  { href: '/data-agent', icon: Bot24Regular, label: 'Data agents' },
-  { href: '/experience/data-science/home', icon: BeakerEdit24Regular, label: 'Data Science' },
-  { href: '/experience/warp/home', icon: Flow24Regular, label: 'Warp' },
-  { href: '/copilot', icon: CopilotIcon, label: 'Copilot' },
-  { href: '/workload-hub', icon: PuzzlePieceRegular, label: 'Workload hub' },
-  { href: '/connections', icon: PlugConnected24Regular, label: 'Connections' },
-  { href: '/deployment-pipelines', icon: CloudArrowUp24Regular, label: 'Deployment' },
-  { href: '/admin', icon: ShieldKeyhole24Regular, label: 'Admin portal' },
-  { href: '/setup', icon: Settings24Regular, label: 'Setup & landing zones' },
-];
+// Fabric-parity left nav: top-level surfaces only, like the real Fabric portal.
+// Item types are reached from inside a workspace via the "+ New" item dialog.
+//
+// The DESTINATIONS (href + label) live in the shared NAV_ITEMS source of truth
+// (lib/nav/nav-items.ts) so the Copilot navigate-tool allow-list can't drift
+// from this rail. The icon per destination is presentation-only and mapped here.
+const ICON_BY_HREF: Record<string, FluentIcon | typeof CopilotIcon> = {
+  '/': Home24Regular,
+  '/workspaces': Building24Regular,
+  '/browse': Apps24Regular,
+  '/onelake': Library24Regular,
+  '/catalog': GlobeSearch24Regular,
+  '/org-reports': DataPie24Regular,
+  '/semantic-model': Table24Regular,
+  '/thread': Branch24Regular,
+  '/marketplace': StoreMicrosoft24Regular,
+  '/governance': ShieldCheckmark24Regular,
+  '/monitor': ChartMultiple24Regular,
+  '/realtime-hub': Flash24Regular,
+  '/activator-hub': Alert24Regular,
+  '/business-events': Send24Regular,
+  '/rti-hub': DataUsage24Regular,
+  '/data-agent': Bot24Regular,
+  '/experience/data-science/home': BeakerEdit24Regular,
+  '/experience/warp/home': Flow24Regular,
+  '/copilot': CopilotIcon,
+  '/workload-hub': PuzzlePieceRegular,
+  '/connections': PlugConnected24Regular,
+  '/deployment-pipelines': CloudArrowUp24Regular,
+  '/admin': ShieldKeyhole24Regular,
+  '/setup': Settings24Regular,
+};
+
+const navItems = NAV_ITEMS.map((it) => ({
+  ...it,
+  icon: ICON_BY_HREF[it.href] ?? Apps24Regular,
+}));
 
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', padding: '8px 0' },

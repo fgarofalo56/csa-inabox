@@ -207,13 +207,13 @@ const SECTIONS: {
     group: 'Catalog management',
     items: [
       { href: '/governance/catalog', label: 'Data catalog', desc: 'Unified inventory across OneLake, Synapse, Databricks, ADLS.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-teal)' },
-      { href: '/catalog/domains', label: 'Governance domains', desc: 'Domains, data products, glossary terms.', icon: DocumentBulletList20Regular, color: 'var(--loom-accent-indigo)' },
+      { href: '/admin/domains', label: 'Governance domains', desc: 'Business domains, subdomains, workspace assignment, delegated settings.', icon: DocumentBulletList20Regular, color: 'var(--loom-accent-indigo)' },
     ],
   },
   {
     group: 'Discovery & lineage',
     items: [
-      { href: '/governance/lineage', label: 'Lineage', desc: 'End-to-end column & item lineage graph.', icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
+      { href: '/governance/lineage', label: 'Purview lineage', desc: 'End-to-end column & item lineage graph.', icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
       { href: '/catalog', label: 'Search', desc: 'Federated search across Purview, Unity, OneLake.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-blue)' },
     ],
   },

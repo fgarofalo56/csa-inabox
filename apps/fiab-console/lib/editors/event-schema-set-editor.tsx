@@ -32,6 +32,7 @@ import {
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { loomDocUrl } from '@/lib/learn/content';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
@@ -607,7 +608,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                       {' '}<code>{active.eventHubsSchemaGroup || 'loom-schemas'}</code>, which enforces this
                       compatibility policy at registration time and rejects breaking changes (HTTP 400) before
                       they are persisted. Avro evolution is checked by the service; JSON Schema and Protobuf
-                      use NONE per Event Hubs Schema Registry behavior. See <a href="/docs/fiab/event-schema-registry.md">docs/fiab/event-schema-registry.md</a>.
+                      use NONE per Event Hubs Schema Registry behavior. See <a href={loomDocUrl('fiab/event-schema-registry')} target="_blank" rel="noreferrer">the event schema registry guide</a>.
                     </MessageBarBody>
                   </MessageBar>
                 ) : (
@@ -619,7 +620,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
                       registry required. Avro is structurally checked (added/removed fields, defaults, type
                       promotion); JSON Schema and Protobuf use NONE, matching Event Hubs Schema Registry. To
                       delegate enforcement to a real Azure Event Hubs Schema Registry instead, set
-                      {' '}<code>LOOM_EH_SCHEMA_GROUP</code>. See <a href="/docs/fiab/event-schema-registry.md">docs/fiab/event-schema-registry.md</a>.
+                      {' '}<code>LOOM_EH_SCHEMA_GROUP</code>. See <a href={loomDocUrl('fiab/event-schema-registry')} target="_blank" rel="noreferrer">the event schema registry guide</a>.
                     </MessageBarBody>
                   </MessageBar>
                 )}
