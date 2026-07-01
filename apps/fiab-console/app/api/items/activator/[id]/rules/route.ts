@@ -23,6 +23,7 @@ import {
   type MonitorRuleRecord,
 } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { KustoError } from '@/lib/azure/kusto-client';
 import { loadContentBackedItem, activatorRuleFromContent } from '../../../_lib/ai-content-fallback';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
@@ -57,6 +58,26 @@ function monitorGate(e: any): NextResponse | null {
     }, { status: 403 });
   }
   return null;
+}
+
+/** Honest Azure infra-gate for ADX / Eventhouse (Kusto) trigger/preview errors.
+ *  A rule authored over Eventhouse data evaluates against the ADX cluster; when
+ *  LOOM_KUSTO_* is unset (a non-ADX deploy) or the UAMI lacks cluster rights the
+ *  query fails — surface it as a precise 503/403 gate, NOT a Fabric gate. */
+function kustoGate(e: any): NextResponse | null {
+  if (!(e instanceof KustoError)) return null;
+  if (e.status === 401 || e.status === 403) {
+    return NextResponse.json({
+      ok: false,
+      error: `Azure Data Explorer ${e.status}: not authorized to query the Eventhouse cluster.`,
+      gate: { reason: 'The Console UAMI needs query rights on the ADX / Eventhouse cluster.', remediation: 'Grant the Console UAMI Database Viewer (or AllDatabasesViewer) on the ADX cluster so it can run the rule KQL. No Microsoft Fabric required.' },
+    }, { status: 403 });
+  }
+  return NextResponse.json({
+    ok: false,
+    error: `Azure Data Explorer error: ${e.message}`,
+    gate: { reason: 'The Eventhouse / ADX cluster is not reachable for this rule.', remediation: 'Set LOOM_KUSTO_CLUSTER_URI (and LOOM_KUSTO_DEFAULT_DB) to your Eventhouse cluster, or choose a Log Analytics source. No Microsoft Fabric required.' },
+  }, { status: e.status && e.status >= 400 ? e.status : 503 });
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -126,15 +147,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!item) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
   const rules: MonitorRuleRecord[] = Array.isArray((item.state as any)?.rules) ? (item.state as any).rules : [];
 
-  // Trigger now = run the rule's KQL against Log Analytics and report rows.
+  // Trigger now = run the rule's KQL against its source (ADX/Eventhouse for RTI
+  // rules, Log Analytics for LA rules) and report rows / would-fire.
   if (triggerId) {
     const rule = rules.find((r) => r.id === triggerId || r.name === triggerId);
-    if (!rule?.query) return NextResponse.json({ ok: false, error: `rule '${triggerId}' not found` }, { status: 404 });
+    if (!rule) return NextResponse.json({ ok: false, error: `rule '${triggerId}' not found` }, { status: 404 });
+    if (!rule.query && rule.sourceKind !== 'adx') {
+      return NextResponse.json({ ok: false, error: `rule '${triggerId}' has no query to run` }, { status: 400 });
+    }
     try {
-      const out = await triggerMonitorActivatorRule(rule.query);
-      return NextResponse.json({ ok: true, ...out, backend: 'azure-monitor' });
+      const out = await triggerMonitorActivatorRule(rule);
+      return NextResponse.json({ ok: true, ...out });
     } catch (e: any) {
-      return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+      return kustoGate(e) || monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
     }
   }
 
@@ -152,6 +177,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : undefined,
       windowSize: typeof body?.windowSize === 'string' ? body.windowSize : undefined,
       existingActionGroupId: typeof body?.existingActionGroupId === 'string' ? body.existingActionGroupId : undefined,
+      sourceKind: body?.sourceKind === 'adx' ? 'adx' : (body?.sourceKind === 'log-analytics' ? 'log-analytics' : undefined),
+      adxDatabase: typeof body?.adxDatabase === 'string' ? body.adxDatabase : undefined,
+      adxClusterUri: typeof body?.adxClusterUri === 'string' ? body.adxClusterUri : undefined,
     });
     // Persist onto the Cosmos item so the rule list survives reload.
     const nextRules = [...rules.filter((r) => r.id !== rule.id), rule];
@@ -160,7 +188,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, rule, backend: 'azure-monitor' });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return kustoGate(e) || monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }
 
@@ -323,6 +351,11 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : old.evaluationFrequency,
       windowSize: typeof body?.windowSize === 'string' ? body.windowSize : old.windowSize,
       existingActionGroupId: typeof body?.existingActionGroupId === 'string' ? body.existingActionGroupId : undefined,
+      // Preserve (or update) the source backend + ADX target across an edit so a
+      // partial PUT never silently flips an Eventhouse rule back to Log Analytics.
+      sourceKind: body?.sourceKind === 'adx' ? 'adx' : (body?.sourceKind === 'log-analytics' ? 'log-analytics' : (old.sourceKind || undefined)),
+      adxDatabase: typeof body?.adxDatabase === 'string' ? body.adxDatabase : old.adxDatabase,
+      adxClusterUri: typeof body?.adxClusterUri === 'string' ? body.adxClusterUri : old.adxClusterUri,
     });
     // Rename → drop the orphan ARM rule left behind under the old name.
     if (rec.azureRuleName !== old.azureRuleName) {
@@ -342,6 +375,6 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, rule: rec, backend: 'azure-monitor' });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return kustoGate(e) || monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }

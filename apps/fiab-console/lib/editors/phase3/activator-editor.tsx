@@ -135,6 +135,14 @@ interface RuleLite {
   backend?: 'azure-monitor' | 'fabric';
   actionGroupId?: string;
   actionGroupReceivers?: { emails: number; sms: number; webhooks: number; logicApps: number };
+  // RTI source backend — 'adx' (Eventhouse / KQL Database) or 'log-analytics'.
+  sourceKind?: 'log-analytics' | 'adx';
+  adxDatabase?: string;
+  adxClusterUri?: string;
+  /** Whether hands-off scheduled evaluation is wired (LA: always; ADX: only when
+   *  an ADX-scoped alert host is provisioned). */
+  scheduled?: boolean;
+  note?: string;
 }
 /** Shape of one /api/items/activator/[id]/history event (AlertHistoryEvent). */
 interface HistoryEventLite {
@@ -213,19 +221,29 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const [busyRuleId, setBusyRuleId] = useState<string>('');
   const [editingRuleId, setEditingRuleId] = useState<string>('');
   // ── Azure Monitor scheduled-query wizard (DEFAULT backend) ──
-  // Data source: a raw KQL query (Log Analytics) OR an Event Hub whose data is
-  // ingested into LA (the alert query then targets the hub's table).
-  const [sourceType, setSourceType] = useState<'kql' | 'eventhub'>('kql');
+  // Data source: an Eventhouse / KQL Database (ADX — the RTI DEFAULT, where
+  // real-time streams land), a raw KQL query (Log Analytics), OR an Event Hub
+  // whose data is ingested into LA (the alert query then targets the hub table).
+  const [sourceType, setSourceType] = useState<'adx' | 'kql' | 'eventhub'>('adx');
   const [kqlQuery, setKqlQuery] = useState('');
   const [sourceTable, setSourceTable] = useState('');
   const [selectedHub, setSelectedHub] = useState('');
+  // Eventhouse / ADX source picker (cluster + database + table, resolved from
+  // LOOM_KUSTO_* via /adx-source; the trigger/preview runs the KQL against it).
+  const [adxCluster, setAdxCluster] = useState('');
+  const [adxDatabase, setAdxDatabase] = useState('');
+  const [adxDatabases, setAdxDatabases] = useState<{ name: string }[]>([]);
+  const [adxTables, setAdxTables] = useState<{ name: string }[]>([]);
+  const [adxDefaultCluster, setAdxDefaultCluster] = useState('');
+  const [adxGate, setAdxGate] = useState<string | null>(null);
+  const [adxLoading, setAdxLoading] = useState(false);
   // Evaluation cadence (ISO-8601).
   const [evalFreq, setEvalFreq] = useState('PT5M');
   const [winSize, setWinSize] = useState('PT5M');
   // Severity 0 (critical) – 4 (verbose); Warning is the portal default.
   const [severity, setSeverity] = useState(2);
-  // Trigger-now result for inline feedback (rows + fired).
-  const [triggerResult, setTriggerResult] = useState<{ ruleId: string; fired: boolean; count: number } | null>(null);
+  // Trigger-now result for inline feedback (rows + fired + which backend ran).
+  const [triggerResult, setTriggerResult] = useState<{ ruleId: string; fired: boolean; count: number; backend?: string } | null>(null);
 
   // Run history / trigger log (Azure Monitor alert instances for this reflex).
   const [activeView, setActiveView] = useState<'rules' | 'history'>('rules');
@@ -263,6 +281,33 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     }
   }, []);
 
+  // Eventhouse / ADX source picker — resolve the real cluster + databases (and,
+  // when a database is chosen, its tables) from /adx-source (backed by
+  // kusto-client + LOOM_KUSTO_*). On an honest gate (LOOM_KUSTO_* unset / no
+  // cluster rights) surface the remediation instead of a phantom list.
+  const loadAdxSource = useCallback(async (db?: string) => {
+    if (!selectedId) return;
+    setAdxLoading(true); setAdxGate(null);
+    try {
+      const qs = db ? `&database=${encodeURIComponent(db)}` : '';
+      const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/adx-source?_=1${qs}`);
+      const j = await r.json();
+      if (!j.ok) { setAdxGate(j.gate?.remediation || j.error || 'Eventhouse not reachable'); if (!db) { setAdxDatabases([]); } else { setAdxTables([]); } return; }
+      if (db) {
+        setAdxTables(Array.isArray(j.tables) ? j.tables : []);
+      } else {
+        setAdxDatabases(Array.isArray(j.databases) ? j.databases : []);
+        setAdxDefaultCluster(j.cluster || '');
+        // Default the database selection to the cluster's default (or first).
+        setAdxDatabase((prev) => prev || j.defaultDatabase || (j.databases?.[0]?.name ?? ''));
+      }
+    } catch (e: any) {
+      setAdxGate(e?.message || String(e));
+    } finally {
+      setAdxLoading(false);
+    }
+  }, [selectedId]);
+
   // Auto-pick the first workspace once loaded so the editor isn't blocked on a
   // manual click for the common single-workspace deployments (matches the
   // Eventstream editor). After NewItemCreateGate routes here post-create, this
@@ -275,6 +320,15 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   useEffect(() => { if (workspaceId && selectedId) loadRules(workspaceId, selectedId); }, [workspaceId, selectedId, loadRules]);
+
+  // Load Eventhouse databases when the ADX source is active in the open rule
+  // wizard; load that database's tables when the chosen database changes.
+  useEffect(() => {
+    if (ruleOpen && sourceType === 'adx' && selectedId) loadAdxSource();
+  }, [ruleOpen, sourceType, selectedId, loadAdxSource]);
+  useEffect(() => {
+    if (ruleOpen && sourceType === 'adx' && adxDatabase) loadAdxSource(adxDatabase);
+  }, [ruleOpen, sourceType, adxDatabase, loadAdxSource]);
 
   const createReflex = useCallback(async () => {
     if (!createName.trim() || !workspaceId) return;
@@ -314,10 +368,10 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       PowerAutomateFlow: { triggerUrl: actTarget },
     };
     const action = { kind: actKind, config: cfgByKind[actKind] || {} };
-    // The data-source picker decides what the Azure Monitor scheduled-query
-    // rule evaluates: a raw KQL query wins (verbatim), otherwise the condition
-    // builder composes KQL against the chosen source table (Event Hub-derived
-    // when the Event Hub source is selected).
+    // The data-source picker decides what the rule evaluates. Eventhouse / ADX
+    // (the RTI default) runs the KQL against a Kusto database; a raw KQL query
+    // wins verbatim, else the condition builder composes it against the chosen
+    // table. Log Analytics / Event Hub keep the Azure Monitor scheduledQueryRule.
     const body: Record<string, unknown> = {
       name: ruleName.trim(),
       condition,
@@ -327,13 +381,22 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       windowSize: winSize,
       ...(useExistingAg && existingAgId ? { existingActionGroupId: existingAgId } : {}),
     };
-    if (sourceType === 'kql' && kqlQuery.trim()) {
+    if (sourceType === 'adx') {
+      body.sourceKind = 'adx';
+      if (adxDatabase.trim()) body.adxDatabase = adxDatabase.trim();
+      if (adxCluster.trim()) body.adxClusterUri = adxCluster.trim();
+      if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
+      if (kqlQuery.trim()) body.query = kqlQuery.trim();
+    } else if (sourceType === 'kql' && kqlQuery.trim()) {
+      body.sourceKind = 'log-analytics';
       body.query = kqlQuery.trim();
       if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
     } else if (sourceType === 'eventhub' && selectedHub) {
+      body.sourceKind = 'log-analytics';
       body.sourceTable = sourceTable.trim() || `${selectedHub}_CL`;
-    } else if (sourceTable.trim()) {
-      body.sourceTable = sourceTable.trim();
+    } else {
+      body.sourceKind = 'log-analytics';
+      if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
     }
     try {
       // Edit mode (editingRuleId set) PUTs the full structured body to the
@@ -352,7 +415,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       if (!j.ok) { setRuleErr(j.error || j.gate?.remediation || (editing ? 'update rule failed' : 'add rule failed')); }
       else { setRuleOpen(false); setRuleName(''); setKqlQuery(''); setEditingRuleId(''); loadRules(workspaceId, selectedId); }
     } finally { setRuleBusy(false); }
-  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, actCountryCode, actPhone, actLogicAppResourceId, actLogicAppCallbackUrl, sourceType, kqlQuery, sourceTable, selectedHub, severity, evalFreq, winSize, useExistingAg, existingAgId, editingRuleId, workspaceId, selectedId, loadRules]);
+  }, [ruleName, condProperty, condOperator, condValue, actKind, actTarget, actMessage, actCountryCode, actPhone, actLogicAppResourceId, actLogicAppCallbackUrl, sourceType, kqlQuery, sourceTable, selectedHub, adxDatabase, adxCluster, severity, evalFreq, winSize, useExistingAg, existingAgId, editingRuleId, workspaceId, selectedId, loadRules]);
 
   const triggerNow = useCallback(async (ruleId: string) => {
     if (!workspaceId || !selectedId) return;
@@ -360,8 +423,9 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
     const j = await r.json();
     if (!j.ok) { setRulesErr(j.error || j.gate?.remediation || 'trigger failed'); return; }
-    // Azure-native trigger = run the rule's KQL now; report rows + whether it fired.
-    setTriggerResult({ ruleId, fired: !!j.fired, count: typeof j.count === 'number' ? j.count : (Array.isArray(j.rows) ? j.rows.length : 0) });
+    // Azure-native trigger = run the rule's KQL now against its source (ADX for
+    // Eventhouse/RTI rules, Log Analytics otherwise); report rows + would-fire.
+    setTriggerResult({ ruleId, fired: !!j.fired, count: typeof j.count === 'number' ? j.count : (Array.isArray(j.rows) ? j.rows.length : 0), backend: j.backend });
     loadRules(workspaceId, selectedId);
   }, [workspaceId, selectedId, loadRules]);
 
@@ -425,8 +489,13 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     setActLogicAppResourceId(String(cfg.logicAppResourceId || ''));
     setActLogicAppCallbackUrl(String(cfg.callbackUrl || ''));
     // Prefer the structured condition builder when the record carries one;
-    // otherwise fall back to editing the verbatim KQL the rule runs.
-    setSourceType('kql');
+    // otherwise fall back to editing the verbatim KQL the rule runs. Restore the
+    // rule's source backend (Eventhouse/ADX vs Log Analytics) so the edit PUTs
+    // against the same source instead of flipping it.
+    const isAdx = r.sourceKind === 'adx';
+    setSourceType(isAdx ? 'adx' : 'kql');
+    setAdxDatabase(isAdx ? String(r.adxDatabase || '') : '');
+    setAdxCluster(isAdx ? String(r.adxClusterUri || '') : '');
     setSourceTable(r.objectName ? String(r.objectName) : '');
     setSelectedHub('');
     if (!hasStructured && typeof r.query === 'string' && r.query.trim()) setKqlQuery(r.query);
@@ -561,7 +630,8 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     setRuleName(''); setCondProperty(''); setCondOperator('GreaterThan'); setCondValue('20');
     setActKind('TeamsMessage'); setActTarget(''); setActMessage('Loom alert: {{eventValue}}');
     setActCountryCode('1'); setActPhone(''); setActLogicAppResourceId(''); setActLogicAppCallbackUrl('');
-    setSourceType('kql'); setKqlQuery(''); setSourceTable(''); setSelectedHub('');
+    setSourceType('adx'); setKqlQuery(''); setSourceTable(''); setSelectedHub('');
+    setAdxCluster(''); setAdxDatabase(''); setAdxTables([]); setAdxGate(null);
     setEvalFreq('PT5M'); setWinSize('PT5M'); setSeverity(2);
     setUseExistingAg(false); setExistingAgId(''); setRuleErr(null);
   }, []);
@@ -613,7 +683,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   if (id === 'new') {
     return (
       <NewItemCreateGate item={item} createLabel="New reflex"
-        intro="An Activator (Reflex) watches a KQL query or an Event Hub and runs actions — Email, Teams, a pipeline, a notebook, or a Power Automate flow — when a rule's condition fires. Create it, then add rules. The default backend is Azure Monitor: each rule becomes a real Microsoft.Insights scheduled-query alert rule — no Microsoft Fabric required." />
+        intro="An Activator (Reflex) watches an Eventhouse / KQL Database (Real-Time Intelligence) stream, a KQL query, or an Event Hub and runs actions — Email, Teams, a pipeline, a notebook, or a Power Automate flow — when a rule's condition fires. Create it, then add rules. The default source is Eventhouse / ADX: the rule's KQL runs against Azure Data Explorer, and Trigger/Preview evaluates it against real stream data — no Microsoft Fabric required." />
     );
   }
 
@@ -689,16 +759,63 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
                           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>DATA SOURCE</Caption1>
                           <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
-                            <Field label="Source type" style={{ width: 240 }}>
-                              <Select value={sourceType} onChange={(_: unknown, d: any) => setSourceType(d.value as 'kql' | 'eventhub')}>
+                            <Field label="Source type" style={{ width: 280 }}>
+                              <Select value={sourceType} onChange={(_: unknown, d: any) => setSourceType(d.value as 'adx' | 'kql' | 'eventhub')}>
+                                <option value="adx">Eventhouse / KQL Database (ADX)</option>
                                 <option value="kql">KQL query (Log Analytics)</option>
                                 <option value="eventhub">Event Hub</option>
                               </Select>
                             </Field>
-                            <Field label="Source table (KQL table the condition targets)" style={{ flex: 1 }}>
-                              <Input placeholder="e.g. AppEvents_CL" value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} />
-                            </Field>
+                            {sourceType !== 'adx' && (
+                              <Field label="Source table (KQL table the condition targets)" style={{ flex: 1 }}>
+                                <Input placeholder="e.g. AppEvents_CL" value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} />
+                              </Field>
+                            )}
                           </div>
+
+                          {sourceType === 'adx' && (
+                            <>
+                              <MessageBar intent="info">
+                                <MessageBarBody>
+                                  Real-Time Intelligence streams land in Azure Data Explorer / Eventhouse. This rule&apos;s KQL runs against the ADX cluster — <strong>Trigger / Preview evaluates it against real Eventhouse data</strong>. No Microsoft Fabric required.
+                                </MessageBarBody>
+                              </MessageBar>
+                              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
+                                <Field label="Database" style={{ width: 240 }} hint={adxLoading ? 'Loading databases…' : undefined}>
+                                  <Select value={adxDatabase} onChange={(_: unknown, d: any) => { setAdxDatabase(d.value); setSourceTable(''); }} disabled={adxLoading || adxDatabases.length === 0}>
+                                    {adxDatabases.length === 0 && <option value="">{adxLoading ? 'Loading…' : 'No databases'}</option>}
+                                    {adxDatabases.map((db) => <option key={db.name} value={db.name}>{db.name}</option>)}
+                                  </Select>
+                                </Field>
+                                <Field label="Table" style={{ width: 240 }} hint="The Eventhouse table the condition targets.">
+                                  <Select value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} disabled={adxLoading || adxTables.length === 0}>
+                                    <option value="">{adxTables.length === 0 ? (adxLoading ? 'Loading…' : 'Select a database') : '— select a table —'}</option>
+                                    {adxTables.map((t) => <option key={t.name} value={t.name}>{t.name}</option>)}
+                                  </Select>
+                                </Field>
+                                <Field label="Cluster (optional override)" style={{ flex: 1, minWidth: 240 }} hint={adxDefaultCluster ? `Default: ${adxDefaultCluster}` : 'Resolved from LOOM_KUSTO_CLUSTER_URI'}>
+                                  <Input placeholder="https://<cluster>.<region>.kusto.windows.net" value={adxCluster} onChange={(_: unknown, d: any) => setAdxCluster(d.value)} />
+                                </Field>
+                              </div>
+                              {adxGate && (
+                                <MessageBar intent="warning">
+                                  <MessageBarBody>
+                                    <MessageBarTitle>Eventhouse not reachable</MessageBarTitle>
+                                    {adxGate}
+                                  </MessageBarBody>
+                                </MessageBar>
+                              )}
+                              <Field label="KQL query (optional)" hint="Verbatim query — alert fires when it returns ≥ 1 row. Leave empty to use the condition builder below against the selected table.">
+                                <MonacoTextarea value={kqlQuery} onChange={setKqlQuery} language="kql" className={s.monaco} ariaLabel="Eventhouse alert KQL query" />
+                              </Field>
+                              <MessageBar intent="warning">
+                                <MessageBarBody>
+                                  <MessageBarTitle>Scheduled evaluation</MessageBarTitle>
+                                  Continuous, hands-off evaluation for Eventhouse / ADX sources is on-demand today — use <strong>Trigger</strong> to evaluate now against real ADX data. For a scheduled host, set <code>LOOM_ADX_ALERT_SCOPE</code> to the ADX cluster resource id (and grant the alert identity Database Viewer). Log Analytics sources evaluate continuously via Azure Monitor.
+                                </MessageBarBody>
+                              </MessageBar>
+                            </>
+                          )}
                           {sourceType === 'kql' && (
                             <Field label="KQL query" hint="Verbatim query — alert fires when it returns ≥ 1 row. Leave empty to use the condition builder below.">
                               <MonacoTextarea value={kqlQuery} onChange={setKqlQuery} language="kql" className={s.monaco} ariaLabel="Alert KQL query" />
@@ -722,7 +839,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                             </>
                           )}
 
-                          {!(sourceType === 'kql' && kqlQuery.trim()) && (
+                          {!((sourceType === 'adx' || sourceType === 'kql') && kqlQuery.trim()) && (
                             <>
                               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>WHEN — condition</Caption1>
                               <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
@@ -847,9 +964,9 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           </div>
 
                           <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>
-                            {sourceType === 'kql' && kqlQuery.trim()
-                              ? `KQL: ${kqlQuery.trim().slice(0, 80)}${kqlQuery.trim().length > 80 ? '…' : ''} → ${useExistingAg ? 'existing action group' : actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`
-                              : `${condProperty || (sourceTable || '<table>')} ${condOperator} ${condValue || '<value>'} → ${useExistingAg ? 'existing action group' : actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`}
+                            {(sourceType === 'adx' || sourceType === 'kql') && kqlQuery.trim()
+                              ? `${sourceType === 'adx' ? 'ADX' : 'LA'} KQL: ${kqlQuery.trim().slice(0, 72)}${kqlQuery.trim().length > 72 ? '…' : ''} → ${useExistingAg ? 'existing action group' : actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`
+                              : `${sourceType === 'adx' ? `${adxDatabase || '<db>'}/` : ''}${condProperty || (sourceTable || '<table>')} ${condOperator} ${condValue || '<value>'} → ${useExistingAg ? 'existing action group' : actKind} · sev${severity} · eval ${evalFreq} / win ${winSize}`}
                           </Caption1>
                           {ruleErr && <MessageBar intent="error"><MessageBarBody>{ruleErr}</MessageBarBody></MessageBar>}
                         </div>
@@ -866,7 +983,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
               {triggerResult && (
                 <MessageBar intent={triggerResult.fired ? 'success' : 'info'}>
                   <MessageBarBody>
-                    Trigger '{triggerResult.ruleId}': {triggerResult.count} row(s) — {triggerResult.fired ? 'FIRED (the alert condition was met)' : 'no rows, would not fire'}.
+                    Trigger '{triggerResult.ruleId}'{triggerResult.backend ? ` (${triggerResult.backend === 'adx' ? 'Eventhouse / ADX' : 'Log Analytics'})` : ''}: {triggerResult.count} row(s) — {triggerResult.fired ? 'FIRED (the alert condition was met)' : 'no rows, would not fire'}.
                   </MessageBarBody>
                 </MessageBar>
               )}
@@ -890,7 +1007,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                       {rules.map((r) => (
                         <TableRow key={r.id}>
                           <TableCell>{r.name}</TableCell>
-                          <TableCell><Badge size="small" appearance="tint" color={r.backend === 'fabric' ? 'warning' : 'brand'}>{r.backend === 'fabric' ? 'Fabric' : 'Azure Monitor'}</Badge></TableCell>
+                          <TableCell><Badge size="small" appearance="tint" color={r.backend === 'fabric' ? 'warning' : 'brand'}>{r.backend === 'fabric' ? 'Fabric' : (r.sourceKind === 'adx' ? 'Azure Monitor · Eventhouse' : 'Azure Monitor · LA')}</Badge></TableCell>
                           <TableCell className={s.cell}>
                             {r.query
                               ? r.query.replace(/\s+/g, ' ').slice(0, 60) + (r.query.length > 60 ? '…' : '')
@@ -922,7 +1039,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                                 icon={<Play20Regular />}
                                 disabled={busyRuleId === r.id}
                                 onClick={() => triggerNow(r.id)}
-                                title="Trigger now — run this rule's KQL against Log Analytics"
+                                title={r.sourceKind === 'adx' ? "Trigger now — run this rule's KQL against the Eventhouse / ADX cluster" : "Trigger now — run this rule's KQL against Log Analytics"}
                                 aria-label={`Trigger rule ${r.name}`}
                               >
                                 Trigger
