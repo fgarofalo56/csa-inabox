@@ -1631,6 +1631,182 @@ export async function previewAdfCdcTarget(
 }
 
 // ============================================================
+// Global parameters (Microsoft.DataFactory/factories/globalParameters)
+//
+// ADF stores every factory-level global parameter in a SINGLE child resource
+// conventionally named `default`, whose `properties` is the full
+// { paramName -> { type, value } } dictionary. `type` is one of
+// Bool|String|Int|Float|Object|Array. This is a pure ADF ARM resource
+// (api-version 2018-06-01) — no Fabric dependency, works Commercial + Gov.
+//
+// The editor manages add/edit/remove on the whole dict client-side and PUTs
+// the entire set in one call — exactly how ADF Studio's Manage → Global
+// parameters publish works. Grounded in the ADF REST reference
+// (GlobalParameters_CreateOrUpdate) + @azure/arm-datafactory FactoryProperties.
+// ============================================================
+
+export type AdfGlobalParameterType = 'Bool' | 'String' | 'Int' | 'Float' | 'Object' | 'Array';
+
+export interface AdfGlobalParameterSpec {
+  /** Global Parameter type — Bool | String | Int | Float | Object | Array. */
+  type: AdfGlobalParameterType | string;
+  /** Value of the parameter (shape depends on `type`). */
+  value: unknown;
+}
+
+/** All global parameters live under one child resource conventionally named `default`. */
+const GLOBAL_PARAMS_RESOURCE = 'default';
+
+/**
+ * Read the factory's global parameters (the { name -> { type, value } } dict
+ * from the `default` globalParameters child resource). Returns {} when no
+ * global parameters are defined (the resource 404s) rather than throwing —
+ * so the navigator renders an empty group instead of an error.
+ */
+export async function getGlobalParameters(): Promise<Record<string, AdfGlobalParameterSpec>> {
+  const r = await call(`${base()}/globalParameters/${GLOBAL_PARAMS_RESOURCE}?api-version=${API}`);
+  if (r.status === 404) return {};
+  const body = await jsonOrThrow<{ properties?: Record<string, AdfGlobalParameterSpec> }>(r, 'getGlobalParameters');
+  return body.properties || {};
+}
+
+/**
+ * Replace the factory's ENTIRE global-parameter set (idempotent PUT of the
+ * `default` globalParameters resource). The editor supplies the full dict after
+ * applying add/edit/remove; PUTting it replaces the set (an empty dict clears
+ * all global parameters). Returns the persisted dict. Real ARM REST — no mocks.
+ */
+export async function updateGlobalParameters(
+  params: Record<string, AdfGlobalParameterSpec>,
+): Promise<Record<string, AdfGlobalParameterSpec>> {
+  const r = await call(`${base()}/globalParameters/${GLOBAL_PARAMS_RESOURCE}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties: params }),
+  });
+  const body = await jsonOrThrow<{ properties?: Record<string, AdfGlobalParameterSpec> }>(r, 'updateGlobalParameters');
+  return body.properties || {};
+}
+
+// ============================================================
+// Managed Virtual Network + Managed Private Endpoints
+// (Microsoft.DataFactory/factories/managedVirtualNetworks/{mvnet}/managedPrivateEndpoints)
+//
+// A managed private endpoint lets the factory's Managed VNet Azure IR reach a
+// PE-locked data source (ADLS, Azure SQL, Key Vault, …) privately — the ADF
+// analogue of the Purview managed-VNet PE path. ADF's managed VNet is
+// conventionally named `default`; managed PEs live under it. A newly-created PE
+// lands in a **Pending** connection state — the OWNER of the target resource
+// must APPROVE the private-endpoint connection (a separate ARM action on the
+// source) before traffic can traverse it. Loom surfaces that as a next step; it
+// does not auto-approve. Pure ADF ARM (2018-06-01), no Fabric. Grounded in the
+// ADF REST reference + @azure/arm-datafactory ManagedPrivateEndpoints.
+// ============================================================
+
+/** ADF's managed virtual network is conventionally named `default`. */
+export const DEFAULT_MANAGED_VNET = 'default';
+
+export interface AdfManagedVnet {
+  name: string;
+  id?: string;
+}
+
+export interface AdfManagedPrivateEndpoint {
+  name: string;
+  /** ARM resource id of the private-link resource the PE targets. */
+  privateLinkResourceId?: string;
+  /** Sub-resource group id (e.g. `dfs`/`blob` for ADLS Gen2, `sqlServer` for Azure SQL). */
+  groupId?: string;
+  provisioningState?: string;
+  /** Owner-reported approval status: Pending | Approved | Rejected | Disconnected. */
+  connectionStatus?: string;
+  fqdns?: string[];
+  isReserved?: boolean;
+}
+
+function mapManagedPe(raw: any): AdfManagedPrivateEndpoint {
+  return {
+    name: raw?.name,
+    privateLinkResourceId: raw?.properties?.privateLinkResourceId,
+    groupId: raw?.properties?.groupId,
+    provisioningState: raw?.properties?.provisioningState,
+    connectionStatus: raw?.properties?.connectionState?.status,
+    fqdns: raw?.properties?.fqdns,
+    isReserved: raw?.properties?.isReserved,
+  };
+}
+
+/** List the managed virtual networks on the env-pinned factory (usually 0 or 1 — `default`). */
+export async function listManagedVnets(): Promise<AdfManagedVnet[]> {
+  const r = await call(`${base()}/managedVirtualNetworks?api-version=${API}`);
+  if (r.status === 404) return [];
+  const body = await jsonOrThrow<{ value?: Array<{ name: string; id?: string }> }>(r, 'listManagedVnets');
+  return (body.value || []).map((v) => ({ name: v.name, id: v.id }));
+}
+
+/**
+ * Create (idempotent PUT) the factory's managed virtual network — the
+ * prerequisite for managed private endpoints. Safe to call when it already
+ * exists. Returns the managed VNet. Real ARM REST.
+ */
+export async function ensureManagedVnet(mvnet: string = DEFAULT_MANAGED_VNET): Promise<AdfManagedVnet> {
+  const r = await call(`${base()}/managedVirtualNetworks/${encodeURIComponent(mvnet)}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties: {} }),
+  });
+  const raw = await jsonOrThrow<{ name?: string; id?: string }>(r, `ensureManagedVnet(${mvnet})`);
+  return { name: raw.name || mvnet, id: raw.id };
+}
+
+/** List the managed private endpoints in a managed VNet (empty when the VNet doesn't exist). */
+export async function listManagedPrivateEndpoints(
+  mvnet: string = DEFAULT_MANAGED_VNET,
+): Promise<AdfManagedPrivateEndpoint[]> {
+  const r = await call(`${base()}/managedVirtualNetworks/${encodeURIComponent(mvnet)}/managedPrivateEndpoints?api-version=${API}`);
+  if (r.status === 404) return [];
+  const body = await jsonOrThrow<{ value?: any[] }>(r, 'listManagedPrivateEndpoints');
+  return (body.value || []).map(mapManagedPe);
+}
+
+/**
+ * Create (idempotent PUT) a managed private endpoint to a target resource.
+ * `privateLinkResourceId` is the ARM id of the source (e.g. the DLZ lake's
+ * storage account) and `groupId` its sub-resource (`dfs`/`blob`, `sqlServer`,
+ * `vault`, …). The PE is created **Pending** — the resource owner must approve
+ * the private-endpoint connection on the target before it carries traffic. Real
+ * ARM REST; throws the raw ARM error on non-2xx so the route can surface it.
+ */
+export async function upsertManagedPrivateEndpoint(
+  name: string,
+  opts: { privateLinkResourceId: string; groupId: string; fqdns?: string[]; mvnet?: string },
+): Promise<AdfManagedPrivateEndpoint> {
+  const mvnet = opts.mvnet || DEFAULT_MANAGED_VNET;
+  const properties: Record<string, unknown> = {
+    privateLinkResourceId: opts.privateLinkResourceId,
+    groupId: opts.groupId,
+  };
+  if (opts.fqdns && opts.fqdns.length) properties.fqdns = opts.fqdns;
+  const r = await call(
+    `${base()}/managedVirtualNetworks/${encodeURIComponent(mvnet)}/managedPrivateEndpoints/${encodeURIComponent(name)}?api-version=${API}`,
+    { method: 'PUT', body: JSON.stringify({ properties }) },
+  );
+  const raw = await jsonOrThrow<any>(r, `upsertManagedPrivateEndpoint(${name})`);
+  return mapManagedPe(raw);
+}
+
+export async function deleteManagedPrivateEndpoint(
+  name: string,
+  mvnet: string = DEFAULT_MANAGED_VNET,
+): Promise<void> {
+  const r = await call(
+    `${base()}/managedVirtualNetworks/${encodeURIComponent(mvnet)}/managedPrivateEndpoints/${encodeURIComponent(name)}?api-version=${API}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteManagedPrivateEndpoint failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
 // Cross-factory helpers — back the MountedDataFactory editor which
 // targets an externally-referenced ADF by (subscriptionId, resourceGroup,
 // factoryName) rather than the env-pinned default factory above.
