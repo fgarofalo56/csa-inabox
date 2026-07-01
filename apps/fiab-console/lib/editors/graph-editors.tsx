@@ -10,15 +10,21 @@
  *  - Cypher / GQL: KQL backends (ADX `make-graph` + `graph-match` for Cypher
  *    semantics) are dispatched via the existing /api/items/kql-database/[id]/query
  *    route, so no new BFF endpoints required here.
- *  - Vector store: backend picker (Cosmos vCore / AI Search / pgvector) +
- *    create-index form. Live similarity test is fully wired against Azure AI
- *    Search: POST /api/items/vector-store/[id]/search dispatches to
- *    foundry-client.vectorSearch() (k-NN + optional hybrid). Requires the
- *    LOOM_AI_SEARCH_SERVICE env var and the Console UAMI 'Search Index Data
- *    Contributor' RBAC on the search service (see ai-search.bicep) — without
- *    them the route returns a 503 honest gate naming both. The non-ai-search
- *    backends (cosmos-nosql / cosmos-vcore / pgvector) persist their spec to
- *    Cosmos and surface an honest infra gate in the editor.
+ *  - Vector store: backend picker (AI Search / Cosmos NoSQL / Cosmos vCore /
+ *    pgvector) + create-index form. THREE backends have live create + kNN +
+ *    upload data planes (real backend, no mock, per no-vaporware.md):
+ *      • ai-search    → foundry-client (AI Search vector + optional BM25 hybrid).
+ *                       Gate: LOOM_AI_SEARCH_SERVICE + 'Search Index Data
+ *                       Contributor' RBAC on the search service (ai-search.bicep).
+ *      • pgvector     → pgvector-client (PostgreSQL `vector` extension: CREATE
+ *                       INDEX … USING hnsw; ORDER BY embedding <op> $1::vector).
+ *                       Gate: LOOM_PGVECTOR_HOST + LOOM_POSTGRES_AAD_USER.
+ *      • cosmos-vcore → cosmos-vcore-vector-client (Cosmos DB for MongoDB vCore
+ *                       `cosmosSearch` index + $search kNN aggregation).
+ *                       Gate: LOOM_COSMOS_VCORE_CONNECTION_STRING.
+ *    Each returns a 503 honest gate (env var named) only when its connection
+ *    isn't wired. cosmos-nosql (DiskANN) is the one config-only backend and
+ *    surfaces an honest gate.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -605,10 +611,12 @@ const VECTOR_BACKEND_DESCRIPTIONS: Record<VectorBackend, string> = {
   pgvector: 'PostgreSQL pgvector',
 };
 
-// Native AI Search vector backend is fully wired (create index / add docs /
-// vector search). The other backends persist their spec to Cosmos and show an
-// honest gate — they aren't reachable from this Loom build's network plane.
+// AI Search, pgvector and Cosmos vCore all have live create / upload / kNN data
+// planes (real backends; see the file header). cosmos-nosql (DiskANN) is the one
+// config-only backend and surfaces an honest gate.
 const AI_SEARCH_BACKEND: VectorBackend = 'ai-search';
+/** Backends with a live data plane in this build (everything except cosmos-nosql). */
+const LIVE_BACKENDS: ReadonlySet<VectorBackend> = new Set(['ai-search', 'pgvector', 'cosmos-vcore']);
 
 /**
  * Renders live k-NN search hits as a sortable results table when the rows share a
@@ -758,7 +766,9 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const [searching, setSearching] = useState(false);
   const [searchResult, setSearchResult] = useState<any>(null);
 
-  const isAiSearch = backend === AI_SEARCH_BACKEND;
+  // ai-search, pgvector and cosmos-vcore all have live data planes; cosmos-nosql
+  // is the one config-only backend (honest gate).
+  const backendLive = LIVE_BACKENDS.has(backend);
 
   // Load persisted spec.
   useEffect(() => {
@@ -808,38 +818,38 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     finally { setSaving(false); }
   }, [id, backend, indexName, dim, metric, algorithm]);
 
-  // Load the live AI Search index schema.
+  // Load the live index schema for whichever backend is selected.
   const loadSchema = useCallback(async () => {
-    if (!isAiSearch || !indexName) return;
+    if (!backendLive || !indexName) return;
     setSchemaMsg(null); setLiveIndex(null); setSchemaLoading(true);
     try {
-      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index?name=${encodeURIComponent(indexName)}`);
+      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index?name=${encodeURIComponent(indexName)}&backend=${encodeURIComponent(backend)}`);
       const j = await r.json();
       if (!j.ok) { setSchemaMsg(j); return; }
       setLiveIndex(j.exists ? j.index : null);
       if (!j.exists) setSchemaMsg({ ok: true, info: `Index "${indexName}" not created yet — click Create index.` });
     } catch (e: any) { setSchemaMsg({ ok: false, error: e?.message || String(e) }); }
     finally { setSchemaLoading(false); }
-  }, [isAiSearch, indexName, id]);
+  }, [backendLive, indexName, id, backend]);
 
-  useEffect(() => { if (isAiSearch) loadSchema(); }, [isAiSearch, loadSchema]);
+  useEffect(() => { if (backendLive) loadSchema(); }, [backendLive, loadSchema]);
 
-  // Create / update the real AI Search vector index.
+  // Create / update the real vector index on the selected backend.
   const createIndex = useCallback(async () => {
     await persistSpec();
-    if (!isAiSearch) { setCreateResult({ ok: false, deferred: true, error: `Live index creation is wired for the ai-search backend only. The "${backend}" spec was persisted to Cosmos; provision that backend and switch this Loom build to reach it.` }); return; }
+    if (!backendLive) { setCreateResult({ ok: false, deferred: true, error: `The "${backend}" backend is config-only in this build. The spec was persisted to Cosmos; switch to ai-search, cosmos-vcore, or pgvector to create a live index.` }); return; }
     setCreating(true); setCreateResult(null);
     try {
       const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ indexName, dim, metric, algorithm }),
+        body: JSON.stringify({ indexName, dim, metric, algorithm, backend }),
       });
       const j = await r.json();
       setCreateResult(j);
       if (j.ok) await loadSchema();
     } catch (e: any) { setCreateResult({ ok: false, error: e?.message || String(e) }); }
     finally { setCreating(false); }
-  }, [persistSpec, isAiSearch, backend, id, indexName, dim, metric, algorithm, loadSchema]);
+  }, [persistSpec, backendLive, backend, id, indexName, dim, metric, algorithm, loadSchema]);
 
   const uploadDocs = useCallback(async () => {
     setUploading(true); setUploadResult(null);
@@ -849,12 +859,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       if (!Array.isArray(documents)) documents = [documents];
       const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ indexName, documents }),
+        body: JSON.stringify({ indexName, documents, backend }),
       });
       setUploadResult(await r.json());
     } catch (e: any) { setUploadResult({ ok: false, error: e?.message || String(e) }); }
     finally { setUploading(false); }
-  }, [docsText, indexName, id]);
+  }, [docsText, indexName, id, backend]);
 
   const runSearch = useCallback(async () => {
     setSearching(true); setSearchResult(null);
@@ -863,12 +873,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       try { vector = JSON.parse(searchVec); } catch { setSearchResult({ ok: false, error: 'Query vector must be a JSON number array, e.g. [0.1, 0.2, …]' }); return; }
       const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/search`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ indexName, vector, k, text: searchText || undefined }),
+        body: JSON.stringify({ indexName, vector, k, metric, text: searchText || undefined, backend }),
       });
       setSearchResult(await r.json());
     } catch (e: any) { setSearchResult({ ok: false, error: e?.message || String(e) }); }
     finally { setSearching(false); }
-  }, [searchVec, searchText, k, indexName, id]);
+  }, [searchVec, searchText, k, indexName, id, metric, backend]);
 
   // Ctrl+S persists the spec.
   useEffect(() => {
@@ -884,14 +894,14 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       { label: 'Index', actions: [
         { label: saving ? 'Saving…' : 'Save spec', icon: <Save20Regular />, onClick: saving ? undefined : () => persistSpec(), disabled: saving },
         { label: creating ? 'Creating…' : 'Create index', icon: <Add20Regular />, onClick: creating ? undefined : createIndex, disabled: creating },
-        { label: 'Reload schema', icon: <ArrowClockwise20Regular />, onClick: loadSchema, disabled: !isAiSearch },
+        { label: 'Reload schema', icon: <ArrowClockwise20Regular />, onClick: loadSchema, disabled: !backendLive },
       ]},
       { label: 'Test', actions: [
         { label: 'Documents', icon: <Add20Regular />, onClick: () => setTab('documents') },
         { label: 'Vector search', icon: <Search20Regular />, onClick: () => setTab('search') },
       ]},
     ]},
-  ], [saving, persistSpec, creating, createIndex, loadSchema, isAiSearch]);
+  ], [saving, persistSpec, creating, createIndex, loadSchema, backendLive]);
 
   const vectorField = useMemo(() => {
     const f = (liveIndex?.fields || []).find((x: any) => x.type?.includes('Collection(Edm.Single)'));
@@ -979,13 +989,32 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
             </TabList>
           </div>
           <div className={s.pad}>
-            {!isAiSearch && (
+            {backend === 'cosmos-nosql' && (
               <MessageBar intent="warning">
                 <MessageBarBody>
-                  <MessageBarTitle>{VECTOR_BACKEND_DESCRIPTIONS[backend]} — config-only in this build</MessageBarTitle>
-                  The spec persists to Cosmos, but this Loom build only reaches the <strong>Azure AI Search</strong> data plane.
-                  To run live index/search here, switch the backend to <code>ai-search</code> and set <code>LOOM_AI_SEARCH_SERVICE</code>
-                  (+ grant the Console UAMI <em>Search Index Data Contributor</em>). For {backend}, provision the resource and wire its endpoint.
+                  <MessageBarTitle>Cosmos DB for NoSQL (DiskANN) — config-only in this build</MessageBarTitle>
+                  The spec persists to Cosmos, but a DiskANN vector policy on a Cosmos NoSQL container isn't wired here.
+                  Switch the backend to <code>ai-search</code>, <code>cosmos-vcore</code>, or <code>pgvector</code> for a live create + k-NN index.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {backend === 'pgvector' && (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>PostgreSQL pgvector — live backend</MessageBarTitle>
+                  Create runs <code>CREATE EXTENSION vector</code> + <code>CREATE INDEX … USING hnsw</code>; search runs a real k-NN
+                  (<code>ORDER BY embedding &lt;op&gt; $1::vector LIMIT k</code>). Requires <code>LOOM_PGVECTOR_HOST</code> +{' '}
+                  <code>LOOM_POSTGRES_AAD_USER</code>, and the server must allow-list the <code>vector</code> extension. When unset,
+                  the action returns an honest gate below.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {backend === 'cosmos-vcore' && (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Cosmos DB for MongoDB vCore — live backend</MessageBarTitle>
+                  Create builds a <code>cosmosSearch</code> vector index; search runs the <code>$search</code> k-NN aggregation.
+                  Requires <code>LOOM_COSMOS_VCORE_CONNECTION_STRING</code>. When unset, the action returns an honest gate below.
                 </MessageBarBody>
               </MessageBar>
             )}
@@ -997,12 +1026,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                     {creating ? 'Creating…' : 'Create / update index'}
                   </Button>
                   <Button icon={<Save20Regular />} onClick={() => persistSpec()} disabled={saving}>{saving ? 'Saving…' : 'Save spec'}</Button>
-                  <Button icon={<ArrowClockwise20Regular />} onClick={loadSchema} disabled={!isAiSearch || schemaLoading}>Reload schema</Button>
+                  <Button icon={<ArrowClockwise20Regular />} onClick={loadSchema} disabled={!backendLive || schemaLoading}>Reload schema</Button>
                 </div>
                 {createResult && (
                   <MessageBar intent={createResult.ok ? 'success' : createResult.deferred ? 'warning' : 'error'}>
                     <MessageBarBody>
-                      <MessageBarTitle>{createResult.ok ? `Index "${indexName}" created` : createResult.deferred ? 'AI Search not provisioned' : 'Create failed'}</MessageBarTitle>
+                      <MessageBarTitle>{createResult.ok ? `Index "${indexName}" created` : createResult.deferred ? 'Backend not provisioned' : 'Create failed'}</MessageBarTitle>
                       {createResult.error || (createResult.ok ? `${createResult.index?.fields?.length || 0} fields, ${dim}-dim ${metric} vector field.` : '')}
                       {createResult.hint && <><br />{createResult.hint}</>}
                     </MessageBarBody>
@@ -1015,11 +1044,11 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                 )}
                 {schemaMsg?.info && <MessageBar intent="info"><MessageBarBody>{schemaMsg.info}</MessageBarBody></MessageBar>}
                 {schemaLoading && <Spinner size="small" label="Loading live index schema…" labelPosition="after" />}
-                {!schemaLoading && !liveIndex && isAiSearch && !schemaMsg && (
+                {!schemaLoading && !liveIndex && backendLive && !schemaMsg && (
                   <div className={s.emptyState}>
                     <Database24Regular className={s.emptyIcon} fontSize={40} />
                     <Subtitle2>No live index yet</Subtitle2>
-                    <Caption1>Set the index name, dimensions, and metric on the left, then choose <strong>Create / update index</strong> to provision it on Azure AI Search.</Caption1>
+                    <Caption1>Set the index name, dimensions, and metric on the left, then choose <strong>Create / update index</strong> to provision it on the selected backend (<strong>{VECTOR_BACKEND_DESCRIPTIONS[backend]}</strong>).</Caption1>
                   </div>
                 )}
                 {liveIndex && (
