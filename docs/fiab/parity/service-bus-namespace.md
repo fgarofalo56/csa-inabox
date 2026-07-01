@@ -13,16 +13,29 @@ Source UI: **Azure portal → Service Bus namespace** (Entities → Queues / Top
 
 A navigator over the deployment-pinned Service Bus namespace
 (`Microsoft.ServiceBus/namespaces`). Lists the namespace properties, queues, and
-topics; creates / deletes queues and topics. Real ARM REST via the shared
+topics; creates / deletes queues and topics with the **full portal setting
+surface**; drills a topic into its **subscriptions** and each subscription's
+**SQL / correlation filter rules**; manages **shared access policies** (SAS)
+including list/regenerate keys; and shows a read-only **networking** view (IP /
+VNet firewall + private endpoints). Real ARM REST via the shared
 sovereign-cloud-aware fetcher (`lib/azure/servicebus-client.ts`) — no mocks.
 
 | Capability | Loom | Backend (real REST, api `2021-11-01`) |
 | --- | --- | --- |
 | Namespace properties (SKU/tier/status/endpoint/TLS/localAuth) | ✅ | `GET .../namespaces/{ns}` |
-| List queues | ✅ | `GET .../namespaces/{ns}/queues` |
-| Create / delete queue (maxSize, requiresSession) | ✅ | `PUT/DELETE .../queues/{name}` |
+| List queues (active/dead-letter counts) | ✅ | `GET .../namespaces/{ns}/queues` |
+| Create / delete queue — maxSize, TTL, lock, max-delivery, requires-session, DLQ-on-expiration, duplicate detection + window, partitioning, auto-forward | ✅ | `PUT/DELETE .../queues/{name}` |
 | List topics | ✅ | `GET .../namespaces/{ns}/topics` |
-| Create / delete topic (maxSize) | ✅ | `PUT/DELETE .../topics/{name}` |
+| Create / delete topic — maxSize, TTL, duplicate detection + window, partitioning, support-ordering | ✅ | `PUT/DELETE .../topics/{name}` |
+| List topic subscriptions (counts) | ✅ | `GET .../topics/{t}/subscriptions` |
+| Create / delete subscription — lock, max-delivery, TTL, requires-session, DLQ-on-expiration | ✅ | `PUT/DELETE .../topics/{t}/subscriptions/{s}` |
+| List subscription filter rules | ✅ | `GET .../subscriptions/{s}/rules` |
+| Create / delete rule — SQL filter or correlation filter + optional SQL action | ✅ | `PUT/DELETE .../subscriptions/{s}/rules/{r}` |
+| List / create / delete shared access policies (SAS, Listen/Send/Manage) | ✅ | `GET/PUT/DELETE .../authorizationRules/{r}` |
+| List / regenerate SAS keys (suppressed honestly when `disableLocalAuth`) | ✅ | `POST .../authorizationRules/{r}/listKeys` · `.../regenerateKeys` |
+| Networking — IP/VNet firewall + public-access + trusted-service (read) | ✅ | `GET .../networkRuleSets/default` |
+| Private endpoint connections (read) | ✅ | `GET .../privateEndpointConnections` |
+| Networking **edit** (firewall/PE approve) | ⚠️ read-only in UI | change via `servicebus.bicep` / portal |
 
 ## Azure-native backend
 
