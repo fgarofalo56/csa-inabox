@@ -25,6 +25,67 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.50.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.49.0...csa-inabox-v0.50.0) (2026-07-01)
+
+
+### Features
+
+* **fiab-console/uat:** add UAT_GREP_INVERT to exclude specs (e.g. 'tutorial:' screenshot suite) from functional runs ([#1564](https://github.com/fgarofalo56/csa-inabox/issues/1564)) ([09457c6](https://github.com/fgarofalo56/csa-inabox/commit/09457c62a570515e78d0569d697ce79511da7b81))
+* **fiab-console:** collapsible compact ribbon (all editors) + notebook toolbar spacing ([899826d](https://github.com/fgarofalo56/csa-inabox/commit/899826dc4c8527ed8a4f9b4f9d2fd9add19d5396))
+* **fiab-console:** unified Loom Marketplace — merge API + Data marketplaces + Delta Sharing ([09621c5](https://github.com/fgarofalo56/csa-inabox/commit/09621c590a345aa0e63dd18bec0b68bdb75079bb))
+* **fiab/day-one:** Internal-APIM gateway private DNS (bicep) + Delta Sharing UAMI grant (bootstrap) ([e5b0066](https://github.com/fgarofalo56/csa-inabox/commit/e5b0066b2ee68d042c51dbed8e80fd9086b28982))
+
+
+### Bug Fixes
+
+* **csa-loom:** convert YAML temp path with cygpath for Windows az (job env now applies) ([#1562](https://github.com/fgarofalo56/csa-inabox/issues/1562)) ([929f8bb](https://github.com/fgarofalo56/csa-inabox/commit/929f8bbb53e44c306a93c95f5f9304d0f8f93559))
+* **csa-loom:** grant Synapse RBAC by APP id too (working serverless/warehouse login) + dispatch workflow ([#1574](https://github.com/fgarofalo56/csa-inabox/issues/1574)) ([791c172](https://github.com/fgarofalo56/csa-inabox/commit/791c172a3e7837c86e8a89fb969096fe66bd2dee)), closes [#1549](https://github.com/fgarofalo56/csa-inabox/issues/1549)
+* **csa-loom:** loom-uat/verify job-deploy scripts — results-account wiring + Windows temp-path fix ([#1557](https://github.com/fgarofalo56/csa-inabox/issues/1557)) ([cd10c0a](https://github.com/fgarofalo56/csa-inabox/commit/cd10c0adcd3a4ca26b3e0a9ad03d520dbedeffe8))
+* **fiab-console/connectables:** use ACA-compatible UAMI credential for Resource Graph (Add existing) ([#1570](https://github.com/fgarofalo56/csa-inabox/issues/1570)) ([4740cdb](https://github.com/fgarofalo56/csa-inabox/commit/4740cdb8ec1c4909b5dfb24c96e5a2f5559a14d7))
+* **fiab-console/lakehouse:** never 504 on list-containers — timeout + honest gate (day-1) ([#1569](https://github.com/fgarofalo56/csa-inabox/issues/1569)) ([aaaac6e](https://github.com/fgarofalo56/csa-inabox/commit/aaaac6edf4815544d305ac08d680a0e098ba482e))
+* **fiab-console/uat:** classify status:'remediation' as honest infra-gate (was mis-flagged as realFail) ([#1568](https://github.com/fgarofalo56/csa-inabox/issues/1568)) ([164a797](https://github.com/fgarofalo56/csa-inabox/commit/164a797e548cb886332dedaf1868b2be48b473ff))
+* **fiab-console/uat:** pass governance domain in createWorkspace + per-run failure enumeration + ACA upload credential ([#1561](https://github.com/fgarofalo56/csa-inabox/issues/1561)) ([c190e17](https://github.com/fgarofalo56/csa-inabox/commit/c190e1755f2750bf4cc3c913b1d9b1c33798f86e))
+* **fiab-console/uat:** poll async install job (202 jobId) instead of reading sync response + drop redundant tracing.start ([#1566](https://github.com/fgarofalo56/csa-inabox/issues/1566)) ([91b590b](https://github.com/fgarofalo56/csa-inabox/commit/91b590b7b3faed790abb145574a3eb74e285062c))
+* **fiab-console/uat:** resolve all 28 functional UAT failures (verified live — test bugs, product renders correctly) ([#1567](https://github.com/fgarofalo56/csa-inabox/issues/1567)) ([30d6414](https://github.com/fgarofalo56/csa-inabox/commit/30d64145a1661fe45fbaeece09f9757b8568b7ce))
+* **fiab-console:** ACA-first UAMI credential sweep across ~47 BFF routes (Refs [#1549](https://github.com/fgarofalo56/csa-inabox/issues/1549)) ([#1571](https://github.com/fgarofalo56/csa-inabox/issues/1571)) ([b558e9f](https://github.com/fgarofalo56/csa-inabox/commit/b558e9f446ef93b5b29cf3d1f1c655bbb22210f7))
+* **fiab-console:** activator alert skipQueryValidation + lakehouse empty-path graceful msg + reference-lakehouse probe timeout ([09095e7](https://github.com/fgarofalo56/csa-inabox/commit/09095e7ad9cec47b329e3c9a6d14a57c0ec9083d))
+* **fiab-console:** ARM resource-list fallback for connectables "Add existing" when ARG fails ([#1572](https://github.com/fgarofalo56/csa-inabox/issues/1572)) ([c7114f1](https://github.com/fgarofalo56/csa-inabox/commit/c7114f1d7fb10ac60d0f930c33e3f2350a3d2d9a)), closes [#1549](https://github.com/fgarofalo56/csa-inabox/issues/1549)
+* **fiab-console:** canvas designer reclaims space for node properties + notebook toolbar alignment ([d14a560](https://github.com/fgarofalo56/csa-inabox/commit/d14a56078c8c7d3828ecedae71041b00b141c82f))
+* **fiab-console:** claim-vs-reality batch — Power BI dataset delete + APIM backend creds/TLS (Refs [#1549](https://github.com/fgarofalo56/csa-inabox/issues/1549)) ([#1560](https://github.com/fgarofalo56/csa-inabox/issues/1560)) ([a37f010](https://github.com/fgarofalo56/csa-inabox/commit/a37f010c82117474a9aeb9be75e84e8bed0cbcea))
+* **fiab-console:** item editor renders full ribbon even when live-backend load errors (ui-parity) ([6c87366](https://github.com/fgarofalo56/csa-inabox/commit/6c87366bc494b1dbcf778d91e5235062dadb1852))
+* **fiab-console:** lakehouse CREATE SCHEMA runs Spark DDL in background (no 504) ([213b7bb](https://github.com/fgarofalo56/csa-inabox/commit/213b7bb20c25fd136fb174e4d4c537a7a6e952c8))
+* **fiab-console:** marketplace data-products search self-heal + Web 3.0 visual alignment ([7189ac1](https://github.com/fgarofalo56/csa-inabox/commit/7189ac1eba4e80ce6cb1d5d60fdec1c63e3308fb))
+* **fiab-console:** marketplace functional-loop fixes (data-product indexing + Delta Sharing gate + APIM Internal gateway DNS) ([93bd2fd](https://github.com/fgarofalo56/csa-inabox/commit/93bd2fd3a4a57367c4d3d2c0c3fad80ecd0702b3))
+* **fiab-console:** pipeline "Validate" now runs a real server-side validator (not a non-existent ADF REST call) ([#1559](https://github.com/fgarofalo56/csa-inabox/issues/1559)) ([a310c83](https://github.com/fgarofalo56/csa-inabox/commit/a310c83bf734e8c9a39abbde8a67e38b886ebc2f)), closes [#1549](https://github.com/fgarofalo56/csa-inabox/issues/1549)
+* **fiab-console:** pipeline dataset/LS auto-provision ([#1576](https://github.com/fgarofalo56/csa-inabox/issues/1576)) + install-dialog loading state + workspaces count timeout ([b10e916](https://github.com/fgarofalo56/csa-inabox/commit/b10e9166962eef1e889224c83813b60e47ae4f60))
+* **fiab-console:** query-through-shortcut action for Files shortcuts + bound compute-targets discovery ([531a428](https://github.com/fgarofalo56/csa-inabox/commit/531a4284ac99c39ec452602d38648974108689b2))
+* **fiab-console:** render dedicated item editor immediately — don't gate on slow getItem (ui-parity) ([870ed00](https://github.com/fgarofalo56/csa-inabox/commit/870ed003c96ff94b8aa91cf961f76d3744e6384e))
+* **fiab-console:** resolveRunCluster picks ALL-PURPOSE clusters only (Databricks notebook/ml-model runs) ([9868ccf](https://github.com/fgarofalo56/csa-inabox/commit/9868ccfff9bc718448946adcde532e04e350689c))
+* **fiab-console:** Tables shortcuts register views in a serverless user DB, not master ([65fc2bb](https://github.com/fgarofalo56/csa-inabox/commit/65fc2bba37ad6821771621c80e6b00d70eb7f92f))
+* **fiab-console:** workspace create defaults to 'default' domain when none picked ([3fe039c](https://github.com/fgarofalo56/csa-inabox/commit/3fe039c040253131d7d700a6446a36907528e8ca))
+* **fiab/bootstrap:** Power Platform SP management-app grant (script + tenant-bootstrap doc) ([0b29ac1](https://github.com/fgarofalo56/csa-inabox/commit/0b29ac142a5d47b579ffc5ce34a94f32699a887c))
+* **fiab/dlz:** make multi-sub DLZ reachability + Synapse RBAC day-1 (no-public) (Refs [#1549](https://github.com/fgarofalo56/csa-inabox/issues/1549)) ([#1573](https://github.com/fgarofalo56/csa-inabox/issues/1573)) ([0f71828](https://github.com/fgarofalo56/csa-inabox/commit/0f71828e2f1337c029195bd03c64f69f8cd92b5f))
+
+
+### Documentation
+
+* **audit:** no-cuts functional run — 8 resource-bound editors hide ribbon during load/error (ui-parity gap) ([dc8f994](https://github.com/fgarofalo56/csa-inabox/commit/dc8f994486fc0c2be6e71f322547926bcc2f02fb))
+* **fiab/audit:** live UI sweep log — shortcuts (bugs 1-3) + workspace domain (bug 4) + apps verdict ([84e2db1](https://github.com/fgarofalo56/csa-inabox/commit/84e2db176377730523c73322aa83fc19973d6cf8))
+* **fiab/audit:** New-item sweep — all 109 item types pass (batched), realFails=0 ([e83f959](https://github.com/fgarofalo56/csa-inabox/commit/e83f959faa037964f20d5c0291f321aead8f296e))
+* **fiab/audit:** verified Databricks all-purpose-cluster fix (3 apps pass on re-run; realFails=0) ([bd0a945](https://github.com/fgarofalo56/csa-inabox/commit/bd0a9450857faa26787393bc0cb77a3cbfdf7e9f))
+* publish refreshed CSA Loom overview + Fabric IQ/RTI parity docs ([#1583](https://github.com/fgarofalo56/csa-inabox/issues/1583)) ([a2f6387](https://github.com/fgarofalo56/csa-inabox/commit/a2f638718a8663bfe7cdca8b22129fc64674aa00))
+
+
+### Continuous Integration
+
+* **csa-loom:** targeted Delta Sharing metastore grant workflow (deploy SP grants UAMI CREATE SHARE/RECIPIENT/PROVIDER) ([2647afe](https://github.com/fgarofalo56/csa-inabox/commit/2647afef5a1db9b955d50d966ab2ad952e706afa))
+
+
+### Miscellaneous
+
+* **csa-loom:** bump loom-uat replicaTimeout to 7200s (full-install suite runs longer post-[#1561](https://github.com/fgarofalo56/csa-inabox/issues/1561)) ([#1563](https://github.com/fgarofalo56/csa-inabox/issues/1563)) ([23b7cb2](https://github.com/fgarofalo56/csa-inabox/commit/23b7cb238adbdd0ee6d036c0fa39163016102b24))
+* **csa-loom:** wire UAT_GREP_INVERT into loom-uat job env ([#1564](https://github.com/fgarofalo56/csa-inabox/issues/1564)) ([#1565](https://github.com/fgarofalo56/csa-inabox/issues/1565)) ([76a4eeb](https://github.com/fgarofalo56/csa-inabox/commit/76a4eeb8a891d3edff32580a1541cefcc1dc5ac7))
+
 ## [0.49.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.48.2...csa-inabox-v0.49.0) (2026-06-20)
 
 
