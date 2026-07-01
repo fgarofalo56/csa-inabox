@@ -50,6 +50,14 @@ import { KeyValueRows } from '@/lib/components/ui/key-value-rows';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
 import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph';
+import {
+  ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
+  Handle, Position, useNodesState, MarkerType,
+  type Node as RfNode, type Edge as RfEdge, type NodeProps, type NodeTypes, type Connection,
+} from '@xyflow/react';
+import '@xyflow/react/dist/style.css';
+import { CanvasNode, CATEGORY_ACCENT, portStyle, type CanvasVisual } from '@/lib/components/canvas/canvas-node-kit';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
 import {
   AzureMapsCanvas, AZURE_MAPS_STYLES, DEFAULT_BASEMAP, DEFAULT_CONTROLS,
@@ -120,28 +128,141 @@ interface GraphDecl {
   originKeyColumns?: string[];  // edge src → origin node key
   targetKeyColumns?: string[];  // edge dst → target node key
 }
-interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string; lastMaterializedAt?: string; [k: string]: unknown }
+interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string; lastMaterializedAt?: string; positions?: Record<string, { x: number; y: number }>; [k: string]: unknown }
 
-// Derive a force-directed graph from the graph-model schema: one node per
-// node type, one edge per edge type. Edges that recorded srcType/dstType
-// connect the right node types; otherwise they fan from the first node type.
-function GraphModelSchemaViz({ nodes, edges }: { nodes: GraphDecl[]; edges: GraphDecl[] }) {
-  const g = useMemo(() => {
-    const vizNodes = nodes.map((n) => ({ id: n.name, label: n.name }));
-    const ids = new Set(vizNodes.map((n) => n.id));
-    const vizEdges = edges.map((e) => {
+// ── Interactive, editable schema canvas (draggable + connectable) ────────────
+// Upgrades the old read-only ForceDirectedGraph picture to a real authoring
+// affordance over the SAME node/edge model: entities are draggable (positions
+// persist to the Cosmos model doc), double-click opens the entity's editor, and
+// dragging between two entities opens the Add-relationship dialog pre-filled
+// with from/to. Built on the shared Web-5.0 canvas-node-kit (@xyflow/react).
+interface GEntityData { name: string; propCount: number; bound: boolean; [k: string]: unknown }
+const G_ACCENT = CATEGORY_ACCENT.move;
+const G_VISUAL: CanvasVisual = { icon: <BranchFork20Regular />, category: 'move', accent: G_ACCENT };
+
+function GraphEntityNode({ data, selected }: NodeProps) {
+  const d = data as GEntityData;
+  return (
+    <CanvasNode
+      width={190}
+      title={d.name || '(unnamed)'}
+      visual={G_VISUAL}
+      selected={selected}
+      typeLabel="Entity"
+      description={`${d.propCount} propert${d.propCount === 1 ? 'y' : 'ies'}${d.bound ? ' · source bound' : ''}`}
+    >
+      <Handle type="target" position={Position.Left} style={{ ...portStyle('in', G_ACCENT), left: -6, top: 22 }} />
+      <Handle type="source" position={Position.Right} style={{ ...portStyle('out', G_ACCENT), right: -6, top: 22 }} />
+    </CanvasNode>
+  );
+}
+const G_NODE_TYPES: NodeTypes = { 'graph-entity': GraphEntityNode };
+
+const G_COL_GAP = 240;
+const G_ROW_GAP = 150;
+const G_COLS = 3;
+function gGridLayout(names: string[]): Map<string, { x: number; y: number }> {
+  const m = new Map<string, { x: number; y: number }>();
+  names.forEach((n, i) => m.set(n, { x: (i % G_COLS) * G_COL_GAP, y: Math.floor(i / G_COLS) * G_ROW_GAP }));
+  return m;
+}
+
+interface GraphModelCanvasProps {
+  nodes: GraphDecl[];
+  edges: GraphDecl[];
+  positions: Record<string, { x: number; y: number }>;
+  onMoveNode: (name: string, pos: { x: number; y: number }) => void;
+  onOpenNode: (name: string) => void;
+  onDrawEdge: (fromName: string, toName: string) => void;
+}
+
+function GraphModelCanvasInner({ nodes, edges, positions, onMoveNode, onOpenNode, onDrawEdge }: GraphModelCanvasProps) {
+  const [rfNodes, setRfNodes, onNodesChange] = useNodesState<RfNode>([]);
+  const grid = useMemo(() => gGridLayout(nodes.map((n) => n.name)), [nodes]);
+
+  useEffect(() => {
+    setRfNodes(nodes.map((n) => ({
+      id: n.name,
+      type: 'graph-entity',
+      position: positions[n.name] || grid.get(n.name) || { x: 0, y: 0 },
+      data: { name: n.name, propCount: (n.properties || []).length, bound: !!n.sourceTable } as GEntityData,
+    })));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nodes, positions, grid, setRfNodes]);
+
+  const rfEdges: RfEdge[] = useMemo(() => {
+    const ids = new Set(nodes.map((n) => n.name));
+    const out: RfEdge[] = [];
+    edges.forEach((e, i) => {
       const src = e.properties?.find((p) => p.name === 'srcType')?.type;
       const dst = e.properties?.find((p) => p.name === 'dstType')?.type;
-      // srcType/dstType were stored as property *types* in the add dialog when
-      // a from/to node was chosen; fall back to first/last node type.
-      const source = (src && ids.has(src) ? src : nodes[0]?.name) || e.name;
-      const target = (dst && ids.has(dst) ? dst : nodes[nodes.length - 1]?.name) || e.name;
-      return { source, target, label: e.name };
+      const source = (src && ids.has(src) ? src : nodes[0]?.name) || '';
+      const target = (dst && ids.has(dst) ? dst : nodes[nodes.length - 1]?.name) || '';
+      if (!source || !target || !ids.has(source) || !ids.has(target)) return;
+      out.push({
+        id: `edge-${i}-${e.name}`,
+        source,
+        target,
+        label: e.name,
+        type: 'smoothstep',
+        style: { stroke: tokens.colorNeutralStroke1, strokeWidth: 1.6 },
+        labelStyle: { fontSize: tokens.fontSizeBase100, fill: tokens.colorNeutralForeground2 },
+        markerEnd: { type: MarkerType.ArrowClosed, color: tokens.colorNeutralStroke1, width: 16, height: 16 },
+      });
     });
-    return { nodes: vizNodes, edges: vizEdges };
-  }, [nodes, edges]);
-  if (g.nodes.length === 0) return <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add a node type to see the schema graph.</Caption1>;
-  return <ForceDirectedGraph nodes={g.nodes} edges={g.edges} height={300} />;
+    return out;
+  }, [edges, nodes]);
+
+  return (
+    <ResizableCanvasRegion storageKey="graph-model-schema" defaultPx={340} minPx={240} ariaLabel="Resize schema canvas height">
+      <div
+        style={{ position: 'relative', width: '100%', height: '100%', minHeight: 0, overflow: 'hidden', backgroundColor: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge }}
+        data-testid="graph-model-canvas"
+        aria-label="Graph model schema canvas"
+      >
+        <ReactFlow
+          nodes={rfNodes}
+          edges={rfEdges}
+          nodeTypes={G_NODE_TYPES}
+          onNodesChange={onNodesChange}
+          onNodeDragStop={(_, n) => onMoveNode(n.id, { x: Math.round(n.position.x), y: Math.round(n.position.y) })}
+          onNodeDoubleClick={(_, n) => onOpenNode(n.id)}
+          onConnect={(c: Connection) => { if (c.source && c.target) onDrawEdge(c.source, c.target); }}
+          minZoom={0.2}
+          maxZoom={2}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          nodesDraggable
+          nodesConnectable
+          proOptions={{ hideAttribution: true }}
+          deleteKeyCode={null}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+          <Panel position="top-left">
+            <Caption1 style={{ backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, color: tokens.colorNeutralForeground3 }}>
+              Drag to arrange · double-click an entity to edit · drag between entities to add a relationship
+            </Caption1>
+          </Panel>
+          <Controls showInteractive={false} />
+          <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+        </ReactFlow>
+        {nodes.length === 0 && (
+          <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add a node type to see the schema graph.</Caption1>
+          </div>
+        )}
+      </div>
+    </ResizableCanvasRegion>
+  );
+}
+
+/** Public schema canvas — wraps the inner canvas in a ReactFlowProvider. */
+function GraphModelCanvas(props: GraphModelCanvasProps) {
+  return (
+    <ReactFlowProvider>
+      <GraphModelCanvasInner {...props} />
+    </ReactFlowProvider>
+  );
 }
 
 export function GraphModelEditor({ item, id }: { item: FabricItemType; id: string }) {
@@ -212,6 +333,8 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
   const [edgeSrc, setEdgeSrc] = useState('');
   const [edgeDst, setEdgeDst] = useState('');
   const [dlgErr, setDlgErr] = useState<string | null>(null);
+  // Canvas double-click → edit this node type in a dialog (Gap A).
+  const [nodeEditIdx, setNodeEditIdx] = useState<number | null>(null);
 
   // Parse "name:type, name2:type2" → [{name,type}]. Blank → [].
   const parseProps = (txt: string): { name: string; type: string }[] =>
@@ -230,6 +353,22 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
   const persistIfExisting = (next: GraphState) => {
     setState(() => next);
     if (id && id !== 'new') save(next);
+  };
+
+  // ── Interactive schema canvas → model wiring (Gap A) ─────────────────────────
+  // Drag stop persists the node position into the model doc (Cosmos); double-
+  // click opens the entity editor dialog; drawing an edge opens the Add-
+  // relationship dialog pre-filled with from/to. All reuse the existing type/
+  // edge authoring logic — the canvas is an affordance over it, not a new store.
+  const moveNode = (name: string, pos: { x: number; y: number }) => {
+    persistIfExisting({ ...state, positions: { ...(state.positions || {}), [name]: pos } });
+  };
+  const openNodeEditor = (name: string) => {
+    const idx = arr<GraphDecl>(state.nodes).findIndex((n) => n.name === name);
+    if (idx >= 0) setNodeEditIdx(idx);
+  };
+  const drawEdge = (from: string, to: string) => {
+    setNewName(''); setPropsText(''); setEdgeSrc(from); setEdgeDst(to); setDlgErr(null); setEdgeDlgOpen(true);
   };
 
   const addEntity = useCallback(() => {
@@ -329,11 +468,18 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
             ))}
           </div>
         </div>
-        <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><ChartMultiple20Regular className={s.secHeadIcon} /><Subtitle2>Schema graph</Subtitle2></div>
+        <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><ChartMultiple20Regular className={s.secHeadIcon} /><Subtitle2>Schema canvas</Subtitle2></div>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          Node types are vertices; edge types whose properties carry <code>srcType</code> / <code>dstType</code> connect them, others link to a shared hub.
+          Drag entities to arrange, double-click one to edit its properties + source binding, and drag from one entity to another to add a relationship. Edge types whose properties carry <code>srcType</code>/<code>dstType</code> connect the right entities; others link the first and last. Positions save with the model.
         </Caption1>
-        <GraphModelSchemaViz nodes={arr(state.nodes)} edges={arr(state.edges)} />
+        <GraphModelCanvas
+          nodes={arr(state.nodes)}
+          edges={arr(state.edges)}
+          positions={(state.positions as Record<string, { x: number; y: number }>) || {}}
+          onMoveNode={moveNode}
+          onOpenNode={openNodeEditor}
+          onDrawEdge={drawEdge}
+        />
         {state.lastMaterializedAt && (
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Last built {new Date(state.lastMaterializedAt).toLocaleString()}</Caption1>
         )}
@@ -496,6 +642,38 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
               <DialogActions>
                 <Button appearance="secondary" onClick={() => setEdgeDlgOpen(false)}>Cancel</Button>
                 <Button appearance="primary" onClick={addRelationship}>Add relationship</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
+
+        {/* Node-type editor (opened by double-clicking an entity on the canvas) */}
+        <Dialog open={nodeEditIdx !== null} onOpenChange={(_, d) => { if (!d.open) setNodeEditIdx(null); }}>
+          <DialogSurface style={{ maxWidth: 640 }}>
+            <DialogBody>
+              <DialogTitle>
+                Edit entity{nodeEditIdx !== null && arr<GraphDecl>(state.nodes)[nodeEditIdx] ? ` — ${arr<GraphDecl>(state.nodes)[nodeEditIdx].name || `node ${nodeEditIdx + 1}`}` : ''}
+              </DialogTitle>
+              <DialogContent>
+                {nodeEditIdx !== null && arr<GraphDecl>(state.nodes)[nodeEditIdx] && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                    <GraphTypeEditor
+                      kind="node"
+                      types={[arr<GraphDecl>(state.nodes)[nodeEditIdx] as any]}
+                      onChange={(next) => { const t = next[0]; if (t) patchType('node', nodeEditIdx!, { name: t.name, properties: t.properties } as Partial<GraphDecl>); }}
+                    />
+                    <div className={s.secHead}><Database20Regular className={s.secHeadIcon} /><Subtitle2>Source binding</Subtitle2></div>
+                    <GraphSourceBinding
+                      itemId={id}
+                      kind="node"
+                      type={arr<GraphDecl>(state.nodes)[nodeEditIdx] as SourceBindable}
+                      onChange={(patch) => patchType('node', nodeEditIdx!, patch as Partial<GraphDecl>)}
+                    />
+                  </div>
+                )}
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="primary" onClick={() => { if (id && id !== 'new') save(); setNodeEditIdx(null); }}>Done</Button>
               </DialogActions>
             </DialogBody>
           </DialogSurface>

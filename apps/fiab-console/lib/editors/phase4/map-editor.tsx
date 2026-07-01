@@ -53,7 +53,7 @@ import { ForceDirectedGraph } from '@/lib/components/graph/force-directed-graph'
 import { type MapLayer, type MapLayerType } from '@/lib/components/graph/geojson-map';
 import {
   AzureMapsCanvas, AZURE_MAPS_STYLES, DEFAULT_BASEMAP, DEFAULT_CONTROLS,
-  featurePropertyKeys, type AzureMapsView, type AzureMapsControls,
+  featurePropertyKeys, type AzureMapsView, type AzureMapsControls, type MapMeasure,
 } from '@/lib/components/graph/azure-maps-canvas';
 import { GraphTypeEditor } from '@/lib/components/graph/graph-type-editor';
 import { GraphSourceBinding, type SourceBindable } from '@/lib/components/graph/graph-source-binding';
@@ -135,6 +135,10 @@ interface MapState {
   controls?: AzureMapsControls;
   /** Persisted camera view (center/zoom/bearing/pitch + auto-zoom). */
   view?: AzureMapsView;
+  /** Persisted drawn annotations (GeoJSON FeatureCollection from the drawing tools). */
+  annotations?: unknown;
+  /** Persisted geocoding address list (one per line) for the address→lat/lon tool. */
+  geocodeAddresses?: string;
   [k: string]: unknown;
 }
 
@@ -275,6 +279,62 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     } finally { setRunning(false); }
   }, [binding, id, setState]);
 
+  // ── Drawing annotations (persist drawn shapes to state.annotations) ──────────
+  const [drawing, setDrawing] = useState(false);
+  const [measure, setMeasure] = useState<MapMeasure | null>(null);
+  const onAnnotationsChange = useCallback((fc: { type: 'FeatureCollection'; features: unknown[] }) => {
+    setState((p) => ({ ...p, annotations: fc }));
+  }, [setState]);
+  const annotationCount = Array.isArray((state.annotations as any)?.features) ? (state.annotations as any).features.length : 0;
+
+  // ── Geocoding (address → lat/lon via Azure Maps Search REST; honest 503 gate) ─
+  const [geocoding, setGeocoding] = useState(false);
+  const [geoMsg, setGeoMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const geocodeAddresses = String(state.geocodeAddresses || '');
+  const setGeocodeAddresses = useCallback((v: string) => setState((p) => ({ ...p, geocodeAddresses: v })), [setState]);
+
+  const runGeocode = useCallback(async () => {
+    if (!id || id === 'new') { setGeoMsg({ intent: 'error', text: 'Save the map once so it has an id, then geocode.' }); return; }
+    const addresses = geocodeAddresses.split(/\r?\n/).map((a) => a.trim()).filter(Boolean);
+    if (!addresses.length) { setGeoMsg({ intent: 'error', text: 'Enter one or more addresses (one per line).' }); return; }
+    setGeocoding(true); setGeoMsg(null);
+    try {
+      const r = await fetch(`/api/items/map/${encodeURIComponent(id)}/geocode`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ addresses }),
+      });
+      const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      if (!j.ok) {
+        setGeoMsg({ intent: j.code === 'maps_not_configured' ? 'warning' : 'error', text: j.error || `HTTP ${r.status}` });
+        return;
+      }
+      const rows = (j.rows || []) as Array<{ lat: number; lon: number; value?: number; label?: string }>;
+      setState((p) => ({ ...p, geojson: geoRowsToGeoJSON(rows) }));
+      setGeoMsg({
+        intent: rows.length ? 'success' : 'warning',
+        text: `Geocoded ${j.geocoded}/${j.total} address(es)${j.failed ? `, ${j.failed} unresolved` : ''}. Plotted on the map — Save to persist.`,
+      });
+    } catch (e: any) {
+      setGeoMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setGeocoding(false); }
+  }, [id, geocodeAddresses, setState]);
+
+  // Pull the currently-bound features' labels into the geocode box — the
+  // "address column" flow: bind rows whose label is a street address, then
+  // geocode those labels to precise lat/lon.
+  const useBoundLabelsAsAddresses = useCallback(() => {
+    try {
+      const j = JSON.parse(state.geojson);
+      const feats = Array.isArray(j?.features) ? j.features : [];
+      const labels = feats
+        .map((f: any) => f?.properties?.name ?? f?.properties?.label ?? f?.properties?.title)
+        .filter((x: any) => x != null)
+        .map((x: any) => String(x));
+      if (!labels.length) { setGeoMsg({ intent: 'warning', text: 'No label/name values in the current features to use as addresses.' }); return; }
+      setGeocodeAddresses(Array.from(new Set(labels)).join('\n'));
+    } catch { setGeoMsg({ intent: 'error', text: 'Current GeoJSON is invalid; cannot extract labels.' }); }
+  }, [state.geojson, setGeocodeAddresses]);
+
   const setLayer = useCallback((lid: string, patch: Partial<MapLayer>) => {
     setState((p) => {
       const cur = (p.layers && p.layers.length ? p.layers : DEFAULT_LAYERS);
@@ -307,8 +367,12 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
         { label: '+ Cluster', onClick: () => addLayer('cluster') },
         { label: '+ Choropleth', onClick: () => addLayer('choropleth') },
       ]},
+      { label: 'Tools', actions: [
+        { label: drawing ? 'Drawing on' : 'Draw / measure', onClick: () => setDrawing((v) => !v), title: 'Toggle the drawing + spherical measure toolbar on the map' },
+        { label: geocoding ? 'Geocoding…' : 'Geocode', onClick: runGeocode, disabled: geocoding, title: 'Geocode the addresses entered in the Data binding tab' },
+      ]},
     ]},
-  ], [save, saving, dirty, running, runBinding, binding.source, runValidate, addLayer]);
+  ], [save, saving, dirty, running, runBinding, binding.source, runValidate, addLayer, drawing, geocoding, runGeocode]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -488,6 +552,33 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
               </div>
             ))}
             <Caption1>Add more from the ribbon (Point / Heatmap / Cluster / Choropleth). Choropleth shades Polygon features by weight; the others place glyphs at point geometry. Symbology persists with the map.</Caption1>
+
+            {/* ── Address geocoding (Azure Maps Search REST) ─────────────────── */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, boxShadow: tokens.shadow2, marginTop: tokens.spacingVerticalS }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                <Layer20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                <Subtitle2>Geocode addresses</Subtitle2>
+                <Badge appearance="tint" color="brand">Azure Maps Search</Badge>
+              </div>
+              <Caption1>
+                Resolve street addresses to lat/lon through the Azure-native Azure Maps <strong>Search</strong> REST API (no Power BI / Fabric). Paste one address per line, or pull the labels from features you already bound above, then plot them. Without an Azure Maps account you get an honest gate naming the env var to set.
+              </Caption1>
+              <Field label="Addresses (one per line)">
+                <Textarea
+                  value={geocodeAddresses}
+                  onChange={(_, d) => setGeocodeAddresses(d.value)}
+                  placeholder={'1 Microsoft Way, Redmond, WA\n350 5th Ave, New York, NY\nEiffel Tower, Paris'}
+                  resize="vertical"
+                  style={{ minHeight: 96 }}
+                />
+              </Field>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button appearance="primary" disabled={geocoding} onClick={runGeocode}>{geocoding ? 'Geocoding…' : 'Geocode & plot'}</Button>
+                <Button appearance="secondary" disabled={geocoding} onClick={useBoundLabelsAsAddresses}>Use bound labels</Button>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Replaces the map features with the geocoded points.</Caption1>
+              </div>
+              {geoMsg && <MessageBar intent={geoMsg.intent}><MessageBarBody>{geoMsg.text}</MessageBarBody></MessageBar>}
+            </div>
           </div>
         )}
 
@@ -518,7 +609,17 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
                 </Dropdown>
               </Field>
               <Switch checked={view.autoZoom !== false} onChange={(_, d) => setAutoZoom(d.checked)} label="Auto-zoom to data" />
+              <Switch checked={drawing} onChange={(_, d) => setDrawing(d.checked)} label="Draw / measure" />
               <div style={{ flex: 1 }} />
+              {measure && (
+                <Badge
+                  appearance="tint"
+                  color={measure.mode === 'error' ? 'danger' : 'brand'}
+                  icon={<Ruler20Regular />}
+                >
+                  {measure.text}
+                </Badge>
+              )}
               <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Controls:</Caption1>
                 <Switch checked={mapControls.zoom !== false} onChange={(_, d) => setControl({ zoom: d.checked })} label="Zoom" />
@@ -539,10 +640,14 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
                 view={view}
                 onViewChange={setView}
                 height={mapHeight}
+                drawingEnabled={drawing}
+                annotations={state.annotations}
+                onAnnotationsChange={onAnnotationsChange}
+                onMeasure={setMeasure}
               />
             </div>
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-              Pan, scroll to zoom, right-drag to rotate/tilt. Turn off Auto-zoom to pin a custom center/zoom (saved with the map). Hover or click a feature for its tooltip. The basemap uses Azure Maps (no Power BI / Fabric); without an account a vector overlay still renders.
+              Pan, scroll to zoom, right-drag to rotate/tilt. Turn off Auto-zoom to pin a custom center/zoom (saved with the map). Hover or click a feature for its tooltip. Toggle <strong>Draw / measure</strong> for the drawing toolbar (point, line, polygon, rectangle, circle + edit/erase) with a live spherical distance/area readout; drawn shapes{annotationCount ? ` (${annotationCount})` : ''} save with the map. The basemap uses Azure Maps (no Power BI / Fabric); without an account a vector overlay still renders.
             </Caption1>
           </>
         )}

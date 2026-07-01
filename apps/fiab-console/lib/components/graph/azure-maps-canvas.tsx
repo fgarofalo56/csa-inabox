@@ -96,6 +96,54 @@ function loadAtlas(): Promise<Atlas> {
   return atlasPromise;
 }
 
+// ── Azure Maps drawing-tools module (atlas.drawing) — Azure-native CDN ─────────
+// The drawing tools ship as a SEPARATE module layered on the base SDK (same
+// atlas.microsoft.com CDN — never a Fabric/Power BI host). It registers
+// `atlas.drawing.DrawingManager` + `atlas.control.DrawingToolbar`. Loaded lazily
+// only when the map editor turns Draw mode on, AFTER the base SDK is present.
+
+const ATLAS_DRAWING_JS = `https://atlas.microsoft.com/sdk/javascript/drawing/1/atlas-drawing.min.js`;
+const ATLAS_DRAWING_CSS = `https://atlas.microsoft.com/sdk/javascript/drawing/1/atlas-drawing.min.css`;
+
+let atlasDrawingPromise: Promise<Atlas> | null = null;
+
+/** Inject the drawing-tools CSS + JS once (after the base SDK) and resolve `atlas`. */
+function loadAtlasDrawing(): Promise<Atlas> {
+  if (typeof window === 'undefined') return Promise.reject(new Error('Azure Maps drawing tools need a browser'));
+  return loadAtlas().then((atlas: Atlas) => {
+    if (atlas?.drawing?.DrawingManager) return atlas;
+    if (atlasDrawingPromise) return atlasDrawingPromise;
+    atlasDrawingPromise = new Promise<Atlas>((resolve, reject) => {
+      if (!document.getElementById('loom-atlas-drawing-css')) {
+        const link = document.createElement('link');
+        link.id = 'loom-atlas-drawing-css';
+        link.rel = 'stylesheet';
+        link.href = ATLAS_DRAWING_CSS;
+        document.head.appendChild(link);
+      }
+      const done = () => {
+        const a = (window as any).atlas;
+        a?.drawing?.DrawingManager ? resolve(a) : reject(new Error('Azure Maps drawing tools loaded but atlas.drawing is missing'));
+      };
+      let script = document.getElementById('loom-atlas-drawing-js') as HTMLScriptElement | null;
+      if (script) {
+        if ((window as any).atlas?.drawing?.DrawingManager) { done(); return; }
+        script.addEventListener('load', done);
+        script.addEventListener('error', () => { atlasDrawingPromise = null; reject(new Error('Failed to load the Azure Maps drawing-tools module')); });
+        return;
+      }
+      script = document.createElement('script');
+      script.id = 'loom-atlas-drawing-js';
+      script.src = ATLAS_DRAWING_JS;
+      script.async = true;
+      script.addEventListener('load', done);
+      script.addEventListener('error', () => { atlasDrawingPromise = null; reject(new Error('Failed to load the Azure Maps drawing-tools module from the CDN')); });
+      document.head.appendChild(script);
+    });
+    return atlasDrawingPromise;
+  });
+}
+
 // ── basemap styles (parity: the 10 atlas styles, live-switchable) ─────────────
 
 export interface BasemapStyleOption { value: string; label: string }
@@ -261,6 +309,14 @@ const useStyles = makeStyles({
 
 // ── public props ─────────────────────────────────────────────────────────────
 
+/** Live measurement emitted while drawing (spherical distance / area). */
+export interface MapMeasure {
+  /** The drawing mode being measured (e.g. 'draw-line', 'draw-polygon'). */
+  mode: string;
+  /** Human-readable readout, e.g. `Distance 1.24 km` or `Area 3.10 km²`. */
+  text: string;
+}
+
 export interface AzureMapsCanvasProps {
   /** BFF token route, e.g. `/api/items/map/<id>/map-token`. */
   tokenUrl: string;
@@ -280,6 +336,15 @@ export interface AzureMapsCanvasProps {
   onViewChange?: (v: AzureMapsView) => void;
   /** Canvas height in px (height-bounded so it never overflows). */
   height?: number;
+  // ── Drawing tools (additive, off by default) ────────────────────────────────
+  /** Mount the Azure Maps drawing-tools toolbar (point/line/polygon/rectangle/circle + edit/erase). */
+  drawingEnabled?: boolean;
+  /** Persisted drawn shapes as a GeoJSON FeatureCollection (loaded into the draw layer on enable). */
+  annotations?: unknown;
+  /** Fired after any draw/edit/erase with the current drawn-shape FeatureCollection (persist to state.annotations). */
+  onAnnotationsChange?: (featureCollection: { type: 'FeatureCollection'; features: unknown[] }) => void;
+  /** Fired with the live spherical distance/area readout as the user draws (null clears it). */
+  onMeasure?: (measure: MapMeasure | null) => void;
 }
 
 // ── component ─────────────────────────────────────────────────────────────────
@@ -289,6 +354,7 @@ export function AzureMapsCanvas(props: AzureMapsCanvasProps): ReactElement {
     tokenUrl, fallbackSubscriptionKey, geojson, layers,
     style = DEFAULT_BASEMAP, controls = DEFAULT_CONTROLS,
     view, onViewChange, height = 460,
+    drawingEnabled = false, annotations, onAnnotationsChange, onMeasure,
   } = props;
   const s = useStyles();
 
@@ -302,6 +368,17 @@ export function AzureMapsCanvas(props: AzureMapsCanvasProps): ReactElement {
   const layerIdsRef = useRef<string[]>([]);
   const popupRef = useRef<Atlas | null>(null);
   const controlsRef = useRef<Atlas[]>([]);
+  const drawingRef = useRef<Atlas | null>(null);
+
+  // Latest annotation callbacks in refs so the drawing effect (gated on
+  // ready/drawingEnabled only) always calls through to the current handlers
+  // without re-creating the DrawingManager on every parent re-render.
+  const onAnnotationsChangeRef = useRef(onAnnotationsChange);
+  onAnnotationsChangeRef.current = onAnnotationsChange;
+  const onMeasureRef = useRef(onMeasure);
+  onMeasureRef.current = onMeasure;
+  const annotationsRef = useRef<unknown>(annotations);
+  annotationsRef.current = annotations;
 
   // Mirror the latest view in a ref so the init effect can apply the persisted
   // camera that's known at init time (which lands after item-state load),
@@ -438,6 +515,68 @@ export function AzureMapsCanvas(props: AzureMapsCanvasProps): ReactElement {
     if (!ready || !map) return;
     try { map.setStyle({ style }); } catch { /* noop */ }
   }, [ready, style]);
+
+  // ── 3b. drawing tools — mount the DrawingManager + toolbar when enabled ───────
+  // Gated on ready/drawingEnabled ONLY so a data/layer/style change never tears
+  // the DrawingManager down mid-draw. Seeds persisted annotations, emits the
+  // drawn FeatureCollection on every change, and streams a live spherical
+  // distance/area readout via onMeasure while the user draws.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!ready || !map || !drawingEnabled) return;
+    let disposed = false;
+    loadAtlasDrawing()
+      .then((atlas: Atlas) => {
+        if (disposed || !mapRef.current) return;
+        const dm = new atlas.drawing.DrawingManager(map, {
+          interactionType: 'hybrid',
+          toolbar: new atlas.control.DrawingToolbar({
+            position: 'top-left',
+            style: 'light',
+            buttons: ['draw-point', 'draw-line', 'draw-polygon', 'draw-rectangle', 'draw-circle', 'edit-geometry', 'erase-geometry'],
+          }),
+        });
+        drawingRef.current = dm;
+
+        // Seed previously-persisted annotations into the draw source.
+        try {
+          const seed = collectFeatures(annotationsRef.current);
+          if (seed.length) {
+            const src = dm.getSource();
+            for (const f of seed) { try { src.add(new atlas.Shape(f)); } catch { /* skip a bad shape */ } }
+          }
+        } catch { /* seeding is best-effort */ }
+
+        const emit = () => {
+          try {
+            const src = dm.getSource();
+            const fc = src?.toJson ? src.toJson() : null;
+            const feats = fc && Array.isArray(fc.features) ? fc.features : [];
+            onAnnotationsChangeRef.current?.({ type: 'FeatureCollection', features: feats });
+          } catch { /* noop */ }
+        };
+        const measure = (shape: any) => {
+          const mode = (dm.getOptions ? dm.getOptions().mode : '') || 'draw';
+          onMeasureRef.current?.(measureShape(atlas, shape, mode));
+        };
+
+        map.events.add('drawingchanging', dm, measure);
+        map.events.add('drawingcomplete', dm, (shape: any) => { measure(shape); emit(); });
+        map.events.add('drawingchanged', dm, emit);
+        map.events.add('drawingerased', dm, () => { onMeasureRef.current?.(null); emit(); });
+        map.events.add('drawingmodechanged', dm, () => onMeasureRef.current?.(null));
+      })
+      .catch((e: any) => {
+        if (!disposed) onMeasureRef.current?.({ mode: 'error', text: `Drawing tools failed to load: ${e?.message || String(e)}` });
+      });
+
+    return () => {
+      disposed = true;
+      if (drawingRef.current) { try { drawingRef.current.dispose(); } catch { /* noop */ } drawingRef.current = null; }
+      onMeasureRef.current?.(null);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, drawingEnabled]);
 
   // ── 4. (re)draw the data layers whenever ready / data / layers / style change ─
   const drawSig = useMemo(
@@ -698,6 +837,66 @@ function fmtNum(n: number): string {
   if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
   return String(Math.round(n * 100) / 100);
 }
+
+/** Format a distance (meters) as m / km. */
+function fmtDist(m: number): string {
+  if (!Number.isFinite(m) || m <= 0) return '0 m';
+  return m >= 1000
+    ? `${(m / 1000).toLocaleString(undefined, { maximumFractionDigits: 2 })} km`
+    : `${m.toLocaleString(undefined, { maximumFractionDigits: 0 })} m`;
+}
+
+/** Format an area (square meters) as m² / km². */
+function fmtArea(m2: number): string {
+  if (!Number.isFinite(m2) || m2 <= 0) return '0 m²';
+  return m2 >= 1_000_000
+    ? `${(m2 / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })} km²`
+    : `${m2.toLocaleString(undefined, { maximumFractionDigits: 0 })} m²`;
+}
+
+/** Area of an atlas Shape (m²) via atlas.math.getArea — spherical, never throws. */
+function safeArea(atlas: Atlas, shape: any): number {
+  try { const a = atlas.math.getArea(shape, 'squareMeters'); return Number.isFinite(a) ? a : 0; } catch { return 0; }
+}
+
+/**
+ * Live spherical measurement for a drawn shape using `atlas.math`:
+ *   • LineString → distance (getLengthOfPath) + point count
+ *   • Polygon/Rectangle → area (getArea) + perimeter (getLengthOfPath)
+ *   • Circle → radius + area
+ *   • Point → the coordinate
+ * Returns null for shapes that carry no meaningful measure.
+ */
+function measureShape(atlas: Atlas, shape: any, mode: string): MapMeasure | null {
+  try {
+    if (!shape) return null;
+    const feat = shape.toJson ? shape.toJson() : shape;
+    const geom = feat?.geometry || feat;
+    const type: string = geom?.type || (shape.getType ? shape.getType() : '');
+    const props = feat?.properties || (shape.getProperties ? shape.getProperties() : {}) || {};
+    // Circle — atlas stores it as a Point with a Circle subType + radius (m).
+    if (props.subType === 'Circle' || props._azureMapsShapeType === 'Circle') {
+      const radius = Number(props.radius) || 0;
+      return { mode, text: `Radius ${fmtDist(radius)} · Area ${fmtArea(safeArea(atlas, shape))}` };
+    }
+    if (type === 'LineString') {
+      const coords: any[] = geom.coordinates || [];
+      const len = coords.length >= 2 ? atlas.math.getLengthOfPath(coords, 'meters') : 0;
+      return { mode, text: `Distance ${fmtDist(len)} · ${coords.length} pt${coords.length === 1 ? '' : 's'}` };
+    }
+    if (type === 'Polygon' || type === 'MultiPolygon') {
+      const ring: any[] = type === 'Polygon' ? (geom.coordinates?.[0] || []) : (geom.coordinates?.[0]?.[0] || []);
+      const perim = ring.length >= 2 ? atlas.math.getLengthOfPath(ring, 'meters') : 0;
+      return { mode, text: `Area ${fmtArea(safeArea(atlas, shape))} · Perimeter ${fmtDist(perim)}` };
+    }
+    if (type === 'Point') {
+      const c: any[] = geom.coordinates || [];
+      if (c.length >= 2) return { mode, text: `Point ${Number(c[1]).toFixed(5)}, ${Number(c[0]).toFixed(5)}` };
+    }
+    return null;
+  } catch { return null; }
+}
+
 
 /** Concrete text color for on-map labels (the SDK can't read CSS vars). */
 function tokenColor(_role: 'textOnMap'): string { return '#242424'; }
