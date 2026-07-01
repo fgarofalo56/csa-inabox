@@ -68,8 +68,8 @@ from pyspark.sql.window import Window
 
 # Parameters
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
-source_table = "lh_bronze.dbo.bronze_table_games"
-target_table = "lh_silver.dbo.silver_table_enriched"
+source_table = "lh_bronze.bronze_table_games"
+target_table = "lh_silver.silver_table_enriched"
 
 print(f"Processing batch: {batch_id}")
 

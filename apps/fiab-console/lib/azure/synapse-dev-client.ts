@@ -907,9 +907,21 @@ export async function createLivySessionAsync(
     request.heartbeatTimeoutInSecond = sizing.heartbeatTimeoutInSecond;
   }
   // spark.* properties (preset + builder + Synapse→LA diagnostics) → Livy `conf`.
-  if (sizing?.conf && Object.keys(sizing.conf).length) {
-    request.conf = { ...sizing.conf };
-  }
+  // Also inject fs.azure.createRemoteFileSystemDuringInitialization=true so the
+  // ABFS driver auto-creates the workspace's default filesystem (the `synapse`
+  // container that backs fs.defaultFS + the Hive warehouse) on first access.
+  // On this deployment that container was never provisioned, so EVERY relative
+  // path write ("Files/…") 404'd ("filesystem does not exist") and EVERY Hive
+  // catalog op (SHOW DATABASES / CREATE DATABASE / saveAsTable / spark.table)
+  // threw "null path" — because the warehouse dir pointed at a non-existent
+  // container. Creating it once (idempotent — a no-op when it already exists)
+  // makes managed-table catalog ops and relative paths work for every notebook
+  // run + the sample-data seed. Caller confs win on key conflicts.
+  const conf: Record<string, string> = {
+    'spark.hadoop.fs.azure.createRemoteFileSystemDuringInitialization': 'true',
+    ...(sizing?.conf || {}),
+  };
+  request.conf = conf;
   const r = await callDev(
     `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
     { method: 'POST', body: JSON.stringify(request) },

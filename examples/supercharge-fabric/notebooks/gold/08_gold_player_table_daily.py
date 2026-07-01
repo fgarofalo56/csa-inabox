@@ -75,8 +75,8 @@ def _notebook_exit(status: str) -> None:
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
 # Source and target (three-part names for schema-enabled Lakehouses)
-source_table = "lh_silver.dbo.silver_table_enriched"
-target_table = "lh_gold.dbo.gold_player_table_daily"
+source_table = "lh_silver.silver_table_enriched"
+target_table = "lh_gold.gold_player_table_daily"
 
 print(f"Processing batch: {batch_id}")
 print(f"Source: {source_table}")

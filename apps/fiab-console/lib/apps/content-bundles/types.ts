@@ -7,10 +7,13 @@
  * first open so the user sees a fully-formed workspace experience instead
  * of an empty editor (Phase 1 of the apps-content initiative).
  *
- * Phase 2 (tracked separately) will additionally trigger real
- * Fabric/ADX/Synapse resource creation + sample data ingestion at install
- * time. Until then the content here is the source-of-truth template until
- * the user clicks Save and pushes it to the live backing service.
+ * Phase 2 (partially landed) additionally triggers real Fabric/ADX/Synapse
+ * resource creation at install time (see lib/install/provisioning-engine.ts),
+ * and — for the Supercharge medallion apps — sample-data ingestion: the install
+ * worker lands the Bronze SOURCE parquet + pre-creates the lh_bronze/lh_silver/
+ * lh_gold Spark databases via lib/apps/supercharge-seed.ts so the notebooks run
+ * green end-to-end. For other apps the content here is the source-of-truth
+ * template until the user clicks Save and pushes it to the live backing service.
  */
 import type { NotebookCell } from '@/lib/types/notebook-cell';
 

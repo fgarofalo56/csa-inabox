@@ -61,8 +61,8 @@ from pyspark.sql.window import Window
 
 # Parameters
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
-source_table = "lh_bronze.dbo.bronze_financial_txn"
-target_table = "lh_silver.dbo.silver_financial_reconciled"
+source_table = "lh_bronze.bronze_financial_txn"
+target_table = "lh_silver.silver_financial_reconciled"
 
 # Compliance thresholds
 CTR_THRESHOLD = 10000

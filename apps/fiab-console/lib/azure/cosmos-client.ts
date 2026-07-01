@@ -278,7 +278,7 @@ export interface AppInstallJob {
   workspaceId: string;
   status: 'running' | 'done' | 'partial' | 'failed';
   /** Coarse phase for the progress label. */
-  phase: 'creating-items' | 'provisioning' | 'finalizing' | 'done';
+  phase: 'creating-items' | 'provisioning' | 'seeding' | 'finalizing' | 'done';
   /** Whether live-service provisioning was requested (the wizard's Deploy switch). */
   deploy: boolean;
   mode: 'shared' | 'dedicated';
@@ -291,6 +291,9 @@ export interface AppInstallJob {
   /** Final provisioning report (set once the provision phase completes). Typed
    *  structurally so this low-level module stays decoupled from the engine. */
   provision?: unknown;
+  /** Sample-data seed outcome (Supercharge medallion apps) — lands the Bronze
+   *  SOURCE parquet + creates the lh_* Spark databases. Best-effort. */
+  seed?: { status: 'succeeded' | 'failed' | 'gated'; error?: string; gate?: string; at: string };
   /** Catastrophic worker error (the install loop itself threw) — distinct from
    *  per-item provision failures captured inside `provision`. */
   error?: string;

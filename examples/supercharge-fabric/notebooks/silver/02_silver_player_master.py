@@ -75,8 +75,8 @@ def _notebook_exit(status: str) -> None:
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
 # Source and target
-SOURCE_TABLE = "lh_bronze.dbo.bronze_player_profile"
-TARGET_TABLE = "lh_silver.dbo.silver_player_master"
+SOURCE_TABLE = "lh_bronze.bronze_player_profile"
+TARGET_TABLE = "lh_silver.silver_player_master"
 KEY_COLUMN = "player_id"
 
 # Attributes that trigger a new version when changed

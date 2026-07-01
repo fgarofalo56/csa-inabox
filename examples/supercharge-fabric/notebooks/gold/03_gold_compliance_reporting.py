@@ -71,11 +71,11 @@ def _notebook_exit(status: str) -> None:
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
 # Sources (three-part names for schema-enabled Lakehouses)
-compliance_table = "lh_silver.dbo.silver_compliance_validated"
-financial_table = "lh_silver.dbo.silver_financial_reconciled"
+compliance_table = "lh_silver.silver_compliance_validated"
+financial_table = "lh_silver.silver_financial_reconciled"
 
 # Target
-target_table = "lh_gold.dbo.gold_compliance_reporting"
+target_table = "lh_gold.gold_compliance_reporting"
 
 print(f"Processing batch: {batch_id}")
 

@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { substituteNotebookPlaceholders } from '@/lib/apps/notebook-placeholders';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -71,8 +72,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!nb) return err('notebook not found', 404);
     // Per-cell run path: caller passes { source, lang, cellId } — we run
     // only that cell's source. Fallback to notebook-level `code` blob.
+    // Resolve the `{{ADLS_ACCOUNT}}` deployment placeholder to the real
+    // Azure-native ADLS account (LOOM_ADLS_ACCOUNT) BEFORE the source is
+    // submitted to Livy / persisted to pendingRuns — so notebooks installed
+    // before the install-time substitution (or edited by hand) still execute
+    // against a valid abfss host instead of the raw token.
     const state = (nb.state as any) || {};
-    const cellSource = typeof body?.source === 'string' ? body.source : '';
+    const cellSource = substituteNotebookPlaceholders(typeof body?.source === 'string' ? body.source : '');
     const cellLang = typeof body?.lang === 'string' ? body.lang : '';
     const cellId = typeof body?.cellId === 'string' ? body.cellId : '';
     // Whole-notebook run: when no per-cell source is passed, assemble the code
@@ -85,7 +91,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       : (state.content?.kind === 'notebook' && Array.isArray(state.content.cells) ? state.content.cells : []);
     const codeFromCells = allCells.filter((c) => c?.type === 'code' && typeof c.source === 'string')
       .map((c) => c.source).join('\n\n');
-    const code = cellSource || state.code || codeFromCells || '';
+    // cellSource is already placeholder-resolved above; resolve the whole-notebook
+    // fallback too so a bundle-installed notebook that predates the fix runs clean.
+    const code = cellSource || substituteNotebookPlaceholders(state.code || codeFromCells || '');
     if (!code.trim()) return err('notebook is empty — write code before running', 400);
 
     // Map cell-lang to the statement-kind that Livy / Databricks expects.

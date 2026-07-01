@@ -88,8 +88,8 @@ def _notebook_exit(status: str) -> None:
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
 # Source and target
-source_table = "lh_bronze.dbo.bronze_slot_telemetry"
-target_table = "lh_silver.dbo.silver_slot_cleansed"
+source_table = "lh_bronze.bronze_slot_telemetry"
+target_table = "lh_silver.silver_slot_cleansed"
 
 print(f"Processing batch: {batch_id}")
 print(f"Source: {source_table}")
@@ -272,9 +272,13 @@ df_with_kpis = df_with_dq \
 
 # COMMAND ----------
 
-# Deduplicate on natural key — deterministic: keep latest Bronze ingestion
+# Deduplicate on natural key — deterministic: keep latest Bronze ingestion.
+# Order by _bronze_ingested_at (a real Bronze column) rather than
+# _silver_timestamp, which is not added until the "Add Silver Metadata" cell
+# below — ordering by it here raised AnalysisException when Loom runs the
+# notebook cell-by-cell (each cell is a separate Livy statement).
 dedup_window = Window.partitionBy("machine_id", "event_timestamp", "event_type") \
-    .orderBy(col("_silver_timestamp").desc())  # latest wins
+    .orderBy(col("_bronze_ingested_at").desc())  # latest Bronze ingestion wins
 df_deduped = df_with_kpis.withColumn("_rn", row_number().over(dedup_window)) \
     .filter(col("_rn") == 1) \
     .drop("_rn")
