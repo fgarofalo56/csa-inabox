@@ -18,6 +18,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import {
   listDlpCompliancePolicies,
@@ -41,6 +42,8 @@ const tenantRef = () => ({
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const blocked = await pdpCheck(s, tenantRef(), 'read');
   if (blocked) return blocked;
   const id = req.nextUrl.searchParams.get('id');
@@ -57,6 +60,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const blocked = await pdpCheck(s, tenantRef(), 'admin');
   if (blocked) return blocked;
   let body: { policy?: DlpPolicyInput };
@@ -71,6 +76,8 @@ export async function POST(req: NextRequest) {
 export async function PATCH(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const blocked = await pdpCheck(s, tenantRef(), 'admin');
   if (blocked) return blocked;
   let body: { id?: string; policy?: Partial<DlpPolicyInput> };
@@ -85,6 +92,8 @@ export async function PATCH(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const blocked = await pdpCheck(s, tenantRef(), 'admin');
   if (blocked) return blocked;
   let id = req.nextUrl.searchParams.get('id') || '';

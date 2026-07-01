@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   listDataSources,
   registerDataSource,
@@ -23,6 +24,8 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   try {
     const sources = await listDataSources();
     return NextResponse.json({ ok: true, sources, source: 'purview-scan-api' });
@@ -32,6 +35,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
   if (!body?.name || !body?.kind || !body?.properties) {
@@ -46,6 +51,8 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const name = req.nextUrl.searchParams.get('name');
   if (!name) return NextResponse.json({ ok: false, error: 'name query param required' }, { status: 400 });
   try {

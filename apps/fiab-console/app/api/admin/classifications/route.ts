@@ -21,6 +21,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { isPurviewConfigured, getPurviewAccountName } from '@/lib/azure/purview-client';
 import {
@@ -115,6 +116,8 @@ async function pushTaxonomy(tenantId: string, rules: ClassificationRule[]) {
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const tenantId = s.claims.oid;
   try {
     const doc = await loadOrSeed(tenantId, s.claims.upn || tenantId);
@@ -134,6 +137,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const tenantId = s.claims.oid;
   const body = await req.json().catch(() => ({}));
 
@@ -199,6 +204,8 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const tenantId = s.claims.oid;
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id query param required' }, { status: 400 });
