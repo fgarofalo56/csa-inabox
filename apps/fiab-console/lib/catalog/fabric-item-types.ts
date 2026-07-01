@@ -2406,9 +2406,9 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
       "docsUrl": "https://learn.microsoft.com/azure/azure-sql/database/sql-database-paas-overview"
     } },
   { slug: 'azure-sql-managed-instance',  displayName: 'SQL Managed Instance',        restType: 'AzureSqlManagedInstance',   category: 'Azure SQL Database', searchOnly: true,
-    description: 'Microsoft.Sql/managedInstances — listing + state. Editor execution deferred to v3.x (TDS via PE).',
+    description: 'Microsoft.Sql/managedInstances — list + state, live sys.* schema navigator, and T-SQL query execution over TDS (via the private endpoint).',
     learnContent: {
-      "overview": "An Azure SQL Managed Instance (Microsoft.Sql/managedInstances) gives near-100% SQL Server compatibility for lift-and-shift. In Loom this surface lists instances and state; editor execution (TDS via private endpoint) is deferred to a later v3.x release.",
+      "overview": "An Azure SQL Managed Instance (Microsoft.Sql/managedInstances) gives near-100% SQL Server compatibility for lift-and-shift. In Loom this surface lists instances and state, browses each instance's schema (real sys.* over TDS), and runs live T-SQL against the selected instance — the same AAD-authenticated TDS execution path the Azure SQL Database editor uses, pointed at the instance's private-endpoint FQDN.",
       "steps": [
         {
           "title": "List instances",
@@ -2416,11 +2416,15 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
         },
         {
           "title": "Inspect an instance",
-          "body": "Review SKU, vCores, and networking."
+          "body": "Review SKU, vCores, networking, and the private-endpoint FQDN."
         },
         {
-          "title": "Know the deferral",
-          "body": "TDS query execution over a private endpoint is deferred to v3.x; the editor says so rather than faking results."
+          "title": "Browse the schema",
+          "body": "Select an instance to load its schemas, tables, views, and stored procedures in the sys.* object navigator."
+        },
+        {
+          "title": "Run T-SQL",
+          "body": "Open the Query tab and execute T-SQL over AAD-authenticated TDS. The Console must reach the instance over its private endpoint and the UAMI must be an Entra admin (or have db_datareader + VIEW DEFINITION); the real connection error surfaces if the private endpoint is unreachable."
         },
         {
           "title": "Plan migration",
@@ -2572,8 +2576,8 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
           "body": "Use the ＋ New menu to create a database (optional shared throughput) or a container (partition key + manual/autoscale RU/s). The create issues a real ARM PUT and the tree refreshes."
         },
         {
-          "title": "Mind the honest gates",
-          "body": "The item document grid, indexing-policy editor, and conflict-resolution policy are disclosed as 'coming' rows under Not yet wired — never faked. Script authoring is read-only for now."
+          "title": "Edit policies and author scripts",
+          "body": "The item document grid (Monaco SQL + Execute against the real data plane, live RU charge, JSON document CRUD), the indexing-policy editor, and the conflict-resolution policy are all wired — edits save through a real ARM / data-plane PATCH (the Save indexing policy and Save conflict resolution policy buttons). Script authoring is live too: New / existing Stored Procedure, UDF, and Trigger tabs create or replace scripts with a real ARM PUT, delete them, and run stored procedures on the data plane. The only non-functional states are honest infra gates — a read-only UAMI surfaces the ARM 403 as a MessageBar naming the exact role to grant, never faked data."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/templates/microsoft.documentdb/2024-11-15/databaseaccounts"
@@ -2655,19 +2659,19 @@ export const FABRIC_ITEM_TYPES: readonly FabricItemType[] = [
   { slug: 'vector-store',                displayName: 'Vector store',                restType: 'VectorStore',               category: 'Azure Graph + Vector',
     description: 'Vector index — Cosmos vCore, AI Search, or PostgreSQL pgvector. Similarity search + RAG grounding.',
     learnContent: {
-      "overview": "A Vector store is a backend-agnostic vector index — Cosmos vCore, AI Search, or PostgreSQL pgvector — for similarity search and RAG grounding. In Loom you pick a backend and define an index spec, which persists to item state; a live similarity test is deferred to v3.x.",
+      "overview": "A Vector store is a backend-agnostic vector index — Azure AI Search, Cosmos vCore, PostgreSQL pgvector, or Cosmos DB for NoSQL — for similarity search and RAG grounding. In Loom you pick a backend, define an index spec, create the real index, upload documents, and run live k-NN similarity search against the selected Azure backend. AI Search (the default), Cosmos vCore, and pgvector each ship a live create + upload + similarity-search data plane; Cosmos DB for NoSQL (DiskANN) is the one config-only backend and surfaces an honest gate.",
       "steps": [
         {
           "title": "Pick a backend",
-          "body": "Choose Cosmos vCore, AI Search, or pgvector based on existing data gravity."
+          "body": "Choose Azure AI Search (default), Cosmos vCore, pgvector, or Cosmos DB for NoSQL based on existing data gravity. AI Search, Cosmos vCore, and pgvector have a live data plane; Cosmos NoSQL (DiskANN) is config-only and honest-gated."
         },
         {
           "title": "Define the index",
           "body": "Set dimensions, distance metric, and fields in the create-index form."
         },
         {
-          "title": "Save the spec",
-          "body": "Save persists the index spec to item state; live similarity test is deferred to v3.x and disclosed."
+          "title": "Create the index and search",
+          "body": "Create / update index provisions the real vector index on the selected backend; upload documents, then run live k-NN similarity search from the search panel — a real backend call, not a mock. Save also persists the spec to item state."
         },
         {
           "title": "Ground RAG",
