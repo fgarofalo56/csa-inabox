@@ -93,10 +93,10 @@ the existing Monaco KQL editor + focuses it (existing Run flow). Pre-save
 | **Get data** — ingest a file with format + mapping reference | ✅ | KQL-database ribbon **Data → Get data** wizard: format selector + optional `ingestionMappingReference`; small text files (≤5 MB) → real `.ingest inline into table T with (format=…, ingestionMappingReference=…)`; Parquet/Avro/ORC → generates the real `.ingest into … from @'blob'` command template (inline unsupported for binary) |
 | **Database schema** — show full schema | ✅ | branch row loads `.show database schema` into the editor; `GET /api/adx/overview` also returns `.show database schema as json` |
 | **Continuous export** — list (read-only) | ✅ | `GET /api/adx/overview` → `.show continuous-exports`; status badge (running/disabled/last-result) |
-| **Continuous export** — create / enable / disable / drop | ⚠️ | honest "coming" row — authoring needs an external table + Database Admin (`.create-or-alter continuous-export over (T) to ExternalTable <\| query`); listed read-only above |
+| **Continuous export** — create / edit / drop | ✅ | **Now built.** Continuous export group ＋ New + per-row **Edit** open a structured dialog (name, source-table `over` dropdown, external-table target dropdown, run interval value+unit, optional export query); per-row **Drop**. `GET/POST/DELETE /api/adx/continuous-exports` → `.show continuous-exports` / `.create-or-alter continuous-export N over (T) to table Ext with (intervalBetweenRuns=…, managedIdentity=system) <\| query` / `.drop continuous-export N`. Target must be a pre-existing external table. Honest "needs Database Admin" MessageBar on 403 |
 | **Database policies** — list (read-only) | ✅ | **Now built (PR #536).** A **Policies group** lists db-level retention/caching/sharding/mergepolicy/streamingingestion via `GET /api/adx/policies` → `showDatabasePolicies()` → real `.show database <db> policy <kind>` (`kusto-client.ts:342`, tree `:423-440`); raw policy JSON in a tooltip |
 | **Update policies** | ⚠️ | honest "coming" row — `.alter table T policy update`; the KQL database **ribbon** (New → Update policy) already authors these via the query route, not the navigator yet |
-| **Retention / caching policies** (authoring) | ⚠️ | db-level retention/caching are now **read** in the Policies group above (✅, real `.show database … policy`); per-table & inline-`.alter` **authoring** remains an honest "coming" row — `.alter table T policy retention` / `.alter database policy caching` (the latter authored today from the Eventhouse "Data policies" dialog) |
+| **Retention / caching policies** (authoring) | ✅ | **Now built.** Policies group **⚙ menu** → *Retention policy…* / *Caching policy…* opens structured dialogs with a scope selector (Database / a specific Table). Retention: soft-delete days + Recoverability toggle → `.alter table\|database policy retention '{"SoftDeletePeriod":"…","Recoverability":"…"}'`. Caching: hot-cache value+unit → `.alter table\|database policy caching hot = <timespan>`. `POST /api/adx/policy-authoring` reads the policy back as the receipt; honest "needs Database Admin" MessageBar on 403 |
 | **Row-level security** | ✅ | per-table shield action → inline RLS dialog (or the parent-owned editor via `onEditRls`); `GET/POST /api/adx/rls` → `.show` / `.alter table T policy row_level_security` (the predicate is the one sanitized free-form field — loom-no-freeform-config RLS carve-out) |
 | **External tables** — list / count / **create + query + drop** | ✅ | **Now built.** An **External tables group** lists `.show external tables` via `GET /api/adx/external-tables`; ＋ New opens a structured create dialog (kind toggle delta/storage, abfss URI, ColumnGridDesigner schema + dataformat for kind=storage, optional MI object id + query-acceleration hot days); per-row **Query** (`external_table("T") \| take 100`) and **Drop**. `POST` → `.create-or-alter external table … kind=delta\|storage` (+ optional `policy query_acceleration`); `DELETE` → `.drop external table T ifexists`. Pure ADX ↔ ADLS Gen2 — no Fabric/OneLake |
 | Honest infra-gate when cluster unconfigured | ✅ | routes 503 `not_configured` → whole navigator shows one `MessageBar` naming `LOOM_KUSTO_CLUSTER_URI` + the Database Admin / AllDatabasesAdmin role |
@@ -133,16 +133,17 @@ return `{ ok, … }` JSON. Shared plumbing: `app/api/adx/_shared.ts`.
 | External table query acceleration | `POST /api/adx/external-tables {queryAccelerationHotDays}` | `setQueryAccelerationPolicy` / `showQueryAccelerationPolicy` | `.alter external table ["N"] policy query_acceleration '{...}'` |
 | External table drop | `DELETE /api/adx/external-tables` | `dropExternalTable` | `.drop external table ["N"] ifexists` |
 | RLS read / author | `GET/POST /api/adx/rls` | `showTableRlsPolicy` / `alterTableRlsPolicy` | `.show` / `.alter table ["T"] policy row_level_security` |
+| Continuous export list | `GET /api/adx/continuous-exports` | `listContinuousExports` | `.show continuous-exports` |
+| Continuous export create/edit | `POST /api/adx/continuous-exports` | `createOrAlterContinuousExport` / `showContinuousExport` | `.create-or-alter continuous-export N over (["T"]) to table ["Ext"] with (intervalBetweenRuns=…, managedIdentity=system) <\| query` |
+| Continuous export drop | `DELETE /api/adx/continuous-exports` | `dropContinuousExport` | `.drop continuous-export ["N"]` |
+| Retention policy author (table/db) | `POST /api/adx/policy-authoring {kind:'retention'}` | `setTableRetentionPolicy` / `setDatabaseRetentionPolicy` / `showTablePolicy` / `showDatabasePolicy` | `.alter table\|database ["X"] policy retention '{"SoftDeletePeriod":"…","Recoverability":"…"}'` |
+| Caching policy author (table/db) | `POST /api/adx/policy-authoring {kind:'caching'}` | `setTableCachingPolicy` / `setDatabaseCachingPolicy` | `.alter table\|database ["X"] policy caching hot = <timespan>` |
 
 ## Deferred (explicit follow-ups, not half-built)
 
-- **Continuous-export authoring** — `.create-or-alter continuous-export` over an
-  external table (needs an external table + Database Admin). Listed read-only.
 - **Update policies in the navigator** — `.alter table T policy update`; today
   the KQL database **ribbon** (New → Update policy) authors these against the
   same query route.
-- **Retention / caching policies** — `.alter table T policy retention` /
-  `.alter database policy caching`; db-level details surfaced read-only today.
 - **SQL external tables** — `.create external table … kind=sql`; the navigator
   authors **delta** + **storage** (Blob/ADLS Gen2) kinds today. SQL external
   tables (SQL Server / MySQL / PostgreSQL / Cosmos DB) are a follow-up.
