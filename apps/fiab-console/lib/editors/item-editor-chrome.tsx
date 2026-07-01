@@ -9,7 +9,7 @@
 
 import { ReactNode, useState } from 'react';
 import { Badge, Button, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
-import { PanelLeftContract20Regular, PanelLeftExpand20Regular, Sparkle20Regular } from '@fluentui/react-icons';
+import { PanelLeftContract20Regular, PanelLeftExpand20Regular, Sparkle20Regular, Share20Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { openCopilot } from '@/lib/components/copilot-pane';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
@@ -18,6 +18,8 @@ import { useCollapsibleState, CollapsedRail, CollapseToggle, RAIL_WIDTH } from '
 import { LineageDrawer } from '@/lib/components/onelake/lineage-drawer';
 import { ThreadMenu } from '@/lib/components/thread/thread-menu';
 import { BundleContentBar } from '@/lib/components/bundle-content-bar';
+import { ShareItemDialog } from '@/lib/dialogs/share-item-dialog';
+import { EndorsementControl } from '@/lib/editors/endorsement-control';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 const useStyles = makeStyles({
@@ -104,6 +106,9 @@ interface Props {
 export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot' }: Props) {
   const styles = useStyles();
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  // Share dialog (Fabric "Grant people access") — reachable from EVERY editor's
+  // header, not just the standalone Manage-permissions page.
+  const [shareOpen, setShareOpen] = useState(false);
   // Right rail (Copilot / properties) collapse — persisted PER SURFACE so the
   // canvas keeps the width the operator chose across visits to this item type.
   const [rightCollapsed, setRightCollapsed] = useCollapsibleState(`right.${item.slug}`, false);
@@ -145,6 +150,18 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
           <ThreadMenu type={item.slug} id={id} name={title} />
           {/* OneLake item-to-item lineage drawer (upstream/downstream graph). */}
           {!isNew && <LineageDrawer type={item.slug} id={id} displayName={item.displayName} />}
+          {/* Generic endorsement (Promote / Certify / Master data) — real Azure-
+              native backend (Cosmos state.endorsement), on every editor. */}
+          {!isNew && <EndorsementControl itemType={item.slug} itemId={id} />}
+          {/* Share (Fabric "Grant people access") — opens the fully-wired
+              ShareItemDialog for this item. Real backend: item-permissions. */}
+          {!isNew && (
+            <Tooltip content={`Share this ${item.displayName.toLowerCase()} — grant people or groups access`} relationship="label">
+              <Button appearance="subtle" size="small" icon={<Share20Regular />} onClick={() => setShareOpen(true)}>
+                Share
+              </Button>
+            </Tooltip>
+          )}
           <ItemSidePanel type={item.slug} id={id} />
         </div>
       }
@@ -152,6 +169,15 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
       <div className={styles.layout}>
         <Ribbon tabs={ribbon} />
         <BundleContentBar itemType={item.slug} itemId={id} />
+        {!isNew && (
+          <ShareItemDialog
+            open={shareOpen}
+            itemId={id}
+            itemType={item.slug}
+            onClose={() => setShareOpen(false)}
+            onGranted={() => setShareOpen(false)}
+          />
+        )}
         <div className={hasGrid ? styles.body : ''} style={bodyStyle}>
           {leftPanel && (
             leftCollapsed ? (

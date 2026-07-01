@@ -27,6 +27,7 @@ import {
   Add20Regular, Delete20Regular, ArrowSync20Regular, ShieldTask20Regular,
   Folder20Regular, People20Regular, CheckmarkCircle20Filled,
   CloudArrowUp20Regular, MoreHorizontal20Regular, FilterRegular, ColumnTripleRegular,
+  Eye20Regular, Person20Regular, Play20Regular,
 } from '@fluentui/react-icons';
 
 import { RowSecurityDialog } from '@/lib/panes/onelake-security/row-security-dialog';
@@ -74,6 +75,10 @@ interface OneLakeSecurityRole {
   isDefault?: boolean;
   createdBy: string;
   createdAt: string;
+  /** Row-level rules (ADDITIVE) — one predicate per table. Drives Preview-as. */
+  rls?: { table: string; predicate: string }[];
+  /** Column-level rules (ADDITIVE) — allowed columns per table. Drives Preview-as masking. */
+  cls?: { table: string; allowedColumns: string[] }[];
 }
 
 interface PrincipalHit { id: string; type: 'user' | 'group'; displayName: string; upn?: string }
@@ -97,7 +102,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
   const base = `/api/items/${itemType}/${encodeURIComponent(itemId)}/security-roles`;
   const effContainer = container || (itemType === 'lakehouse' ? 'gold' : 'bronze');
 
-  const [view, setView] = useState<'roles' | 'verify' | 'fabric'>('roles');
+  const [view, setView] = useState<'roles' | 'verify' | 'preview' | 'fabric'>('roles');
   const [roles, setRoles] = useState<OneLakeSecurityRole[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -303,6 +308,72 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
     finally { setSyncBusy(false); }
   }, [base, workspaceId, fabricItemId]);
 
+  // ---- Preview as <principal> (test-as-user) --------------------------
+  // Evaluate a role's RLS predicate + CLS allow-list against LIVE rows for the
+  // selected principal — real Synapse/ADX SELECT via .../security-roles/preview-as.
+  const [prevRoleId, setPrevRoleId] = useState('');
+  const [prevTable, setPrevTable] = useState('');
+  const [prevQ, setPrevQ] = useState('');
+  const [prevKind, setPrevKind] = useState<'user' | 'group'>('user');
+  const [prevHits, setPrevHits] = useState<PrincipalHit[]>([]);
+  const [prevSearchBusy, setPrevSearchBusy] = useState(false);
+  const [prevPrincipal, setPrevPrincipal] = useState<{ upn: string; displayName: string } | null>(null);
+  const [prevBusy, setPrevBusy] = useState(false);
+  const [prevErr, setPrevErr] = useState<string | null>(null);
+  const [prevGate, setPrevGate] = useState<{ missing: string; hint: string } | null>(null);
+  const [prevResult, setPrevResult] = useState<{
+    engine: string; table: string; principal: string; predicate?: string;
+    projectedColumns: string[] | string; columns: string[]; rows: unknown[][];
+    rowCount: number; executionMs: number; truncated: boolean; note?: string;
+  } | null>(null);
+
+  const prevRole = useMemo(() => (roles || []).find((r) => r.id === prevRoleId) || null, [roles, prevRoleId]);
+  const prevTables = useMemo(() => {
+    if (!prevRole) return [] as string[];
+    const set = new Set<string>();
+    for (const r of prevRole.rls || []) if (r?.table) set.add(r.table);
+    for (const c of prevRole.cls || []) if (c?.table) set.add(c.table);
+    return Array.from(set);
+  }, [prevRole]);
+
+  // Debounced Entra search for the "Preview as" principal picker.
+  useEffect(() => {
+    if (view !== 'preview') return;
+    const q = prevQ.trim();
+    if (q.length < 2) { setPrevHits([]); return; }
+    const h = setTimeout(async () => {
+      setPrevSearchBusy(true);
+      try {
+        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${prevKind}`);
+        const j = await r.json();
+        setPrevHits((j.results || []).map((p: any) => ({ id: p.id, type: p.type, displayName: p.displayName, upn: p.upn })));
+      } catch { setPrevHits([]); }
+      finally { setPrevSearchBusy(false); }
+    }, 300);
+    return () => clearTimeout(h);
+  }, [prevQ, prevKind, view]);
+
+  const runPreview = useCallback(async () => {
+    if (!prevRole || !prevPrincipal) return;
+    setPrevBusy(true); setPrevErr(null); setPrevGate(null); setPrevResult(null);
+    try {
+      const r = await fetch(`${base}/preview-as`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          roleName: prevRole.roleName,
+          table: prevTable || undefined,
+          principal: prevPrincipal.upn,
+          sampleRows: 100,
+        }),
+      });
+      const j = await r.json();
+      if (j.gate) { setPrevGate({ missing: j.missing, hint: j.hint }); return; }
+      if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
+      setPrevResult(j);
+    } catch (e: any) { setPrevErr(e?.message || String(e)); }
+    finally { setPrevBusy(false); }
+  }, [base, prevRole, prevTable, prevPrincipal]);
+
   const permDisabled = (p: 'Read' | 'ReadWrite') => !allowedPerms.includes(p);
 
   return (
@@ -316,6 +387,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
       <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as any)}>
         <Tab value="roles" icon={<ShieldTask20Regular />}>Roles</Tab>
         <Tab value="verify" icon={<CheckmarkCircle20Filled />}>Verification</Tab>
+        <Tab value="preview" icon={<Eye20Regular />}>Preview as</Tab>
         {fabricSyncEnabled && <Tab value="fabric" icon={<CloudArrowUp20Regular />}>Fabric sync</Tab>}
       </TabList>
 
@@ -433,6 +505,145 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
                 Missing ({verifyResult.membersMissing.length}): {verifyResult.membersMissing.join(', ') || '—'}.
               </MessageBarBody>
             </MessageBar>
+          )}
+        </>
+      )}
+
+      {view === 'preview' && (
+        <>
+          <Body1>
+            Preview the rows a member of a role would see — the role&apos;s row-level filter and
+            column-level masking applied for the selected principal, run against the live source
+            engine (no policy is created).
+          </Body1>
+          <Field label="Role">
+            <select
+              value={prevRoleId}
+              onChange={(e) => {
+                setPrevRoleId(e.target.value);
+                setPrevTable('');
+                setPrevResult(null);
+                setPrevErr(null);
+                setPrevGate(null);
+              }}
+              style={{ padding: tokens.spacingVerticalS }}
+            >
+              <option value="">Select a role…</option>
+              {(roles || []).map((r) => <option key={r.id} value={r.id}>{r.roleName}</option>)}
+            </select>
+          </Field>
+
+          {prevRole && prevTables.length === 0 && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>No row/column rules on this role</MessageBarTitle>
+                Add a Row security or Column security rule (role ⋯ menu on the Roles tab) to preview
+                filtered/masked rows.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
+          {prevRole && prevTables.length > 0 && (
+            <Field label="Table">
+              <select
+                value={prevTable}
+                onChange={(e) => { setPrevTable(e.target.value); setPrevResult(null); }}
+                style={{ padding: tokens.spacingVerticalS }}
+              >
+                <option value="">First ruled table ({prevTables[0]})</option>
+                {prevTables.map((t) => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </Field>
+          )}
+
+          <RadioGroup value={prevKind} layout="horizontal" onChange={(_, d) => { setPrevKind(d.value as any); setPrevHits([]); }}>
+            <Radio value="user" label="Users" />
+            <Radio value="group" label="Groups" />
+          </RadioGroup>
+          <Field label="Preview as (search Entra)">
+            <Input
+              value={prevPrincipal ? (prevPrincipal.displayName) : prevQ}
+              disabled={!!prevPrincipal}
+              onChange={(_, d) => setPrevQ(d.value)}
+              placeholder="Search a user or group…"
+              contentBefore={<Person20Regular />}
+              contentAfter={
+                prevPrincipal
+                  ? <Button size="small" appearance="subtle" onClick={() => { setPrevPrincipal(null); setPrevQ(''); }}>Change</Button>
+                  : (prevSearchBusy ? <Spinner size="extra-tiny" /> : undefined)
+              }
+            />
+          </Field>
+          {!prevPrincipal && prevHits.length > 0 && (
+            <div className={s.pickList}>
+              {prevHits.map((p) => (
+                <div key={p.id} role="button" tabIndex={0} className={s.resultRow}
+                  onClick={() => { setPrevPrincipal({ upn: p.upn || p.id, displayName: p.displayName }); setPrevHits([]); }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') { setPrevPrincipal({ upn: p.upn || p.id, displayName: p.displayName }); setPrevHits([]); } }}>
+                  <Body1>{p.displayName}</Body1>
+                  <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>{p.upn || p.id}</Caption1>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div>
+            <Button
+              appearance="primary"
+              icon={prevBusy ? <Spinner size="extra-tiny" /> : <Play20Regular />}
+              onClick={runPreview}
+              disabled={!prevRole || prevTables.length === 0 || !prevPrincipal || prevBusy}
+            >
+              {prevBusy ? 'Running preview…' : 'Preview rows'}
+            </Button>
+          </div>
+
+          {prevGate && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Backing store not configured</MessageBarTitle>
+                {prevGate.hint}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {prevErr && <MessageBar intent="error"><MessageBarBody>{prevErr}</MessageBarBody></MessageBar>}
+
+          {prevResult && (
+            <>
+              <MessageBar intent={prevResult.rowCount === 0 ? 'warning' : 'success'}>
+                <MessageBarBody>
+                  <MessageBarTitle>
+                    {prevResult.rowCount.toLocaleString()} row{prevResult.rowCount === 1 ? '' : 's'} visible to{' '}
+                    {prevResult.principal} on {prevResult.table}
+                  </MessageBarTitle>
+                  {prevResult.note} {prevResult.predicate ? `· predicate: ${prevResult.predicate}` : ''}
+                  {' '}· {prevResult.executionMs} ms{prevResult.truncated ? ' · truncated' : ''}
+                  {Array.isArray(prevResult.projectedColumns)
+                    ? ` · columns: ${prevResult.projectedColumns.join(', ')}`
+                    : ''}
+                </MessageBarBody>
+              </MessageBar>
+              {prevResult.columns.length > 0 && (
+                <div style={{ overflow: 'auto', maxHeight: '340px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                  <Table aria-label="Preview-as result rows" size="small">
+                    <TableHeader>
+                      <TableRow>
+                        {prevResult.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {prevResult.rows.map((row, i) => (
+                        <TableRow key={i}>
+                          {row.map((v, j) => (
+                            <TableCell key={j}>{v == null ? 'NULL' : String(v)}</TableCell>
+                          ))}
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
           )}
         </>
       )}
