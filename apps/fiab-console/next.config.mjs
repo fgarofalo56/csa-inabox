@@ -50,12 +50,29 @@ const nextConfig = {
             key: 'Strict-Transport-Security',
             value: 'max-age=31536000; includeSubDomains; preload',
           },
-          // NOTE: Content-Security-Policy is intentionally NOT set here. It
-          // requires a per-request nonce (script-src 'nonce-<n>') which a static
-          // next.config header cannot carry, so the CSP is owned by middleware.ts
-          // (SECURITY deep-audit: removed 'unsafe-inline'/data: from script-src in
-          // favour of a nonce-based policy). Setting a second CSP here would
-          // produce duplicate headers and re-introduce the weaker policy.
+          {
+            key: 'Content-Security-Policy',
+            value: [
+              "default-src 'self'",
+              // Monaco editor creates its language-service workers from
+              // blob: URLs (TypeScript, JSON, CSS, HTML, KQL workers) and
+              // bundles them via base64 data: URIs in some paths — both
+              // need to be explicitly allowed since they fall under
+              // script-src in CSP3.
+              // Azure Maps Web SDK (Fabric IQ map + report map visual) loads
+              // atlas.min.js / atlas.min.css and fetches tiles/styles/glyph
+              // fonts from the Atlas CDN — allow that host (Azure-native, no
+              // Fabric/Power BI host is ever contacted).
+              "script-src 'self' 'unsafe-inline' blob: data: https://atlas.microsoft.com",
+              "worker-src 'self' blob: data:",
+              "child-src 'self' blob: data:",
+              "style-src 'self' 'unsafe-inline' https://atlas.microsoft.com",
+              "img-src 'self' data: https:",
+              "font-src 'self' data: https://atlas.microsoft.com",
+              "connect-src 'self' https://login.microsoftonline.com https://login.microsoftonline.us https://*.azure.com https://*.azure.us https://atlas.microsoft.com",
+              "frame-ancestors 'none'",
+            ].join('; '),
+          },
         ],
       },
     ];

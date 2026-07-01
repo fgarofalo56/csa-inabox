@@ -206,13 +206,7 @@ function origin(req: NextRequest): string {
   return `${proto}://${host}`;
 }
 
-function htmlBody(url: string, nonce?: string): string {
-  // Strict CSP (middleware.ts) forbids un-nonced inline scripts. This raw
-  // route-handler Response is not auto-nonced by Next, so we stamp the nonce
-  // (from the `x-nonce` request header the middleware set) onto the inline
-  // redirect script. The <meta http-equiv="refresh"> + <noscript> below remain
-  // as JS-free fallbacks.
-  const nonceAttr = nonce ? ` nonce="${nonce}"` : '';
+function htmlBody(url: string): string {
   return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -222,35 +216,32 @@ function htmlBody(url: string, nonce?: string): string {
 </head><body>
 <noscript>Click <a href="${url}" style="color:#fff;">here</a> to continue.</noscript>
 <div>Signing you in…</div>
-<script${nonceAttr}>window.location.replace(${JSON.stringify(url)});</script>
+<script>window.location.replace(${JSON.stringify(url)});</script>
 </body></html>`;
 }
 
-function htmlRedirect(url: string, cookieValue?: string, nonce?: string): Response {
+function htmlRedirect(url: string, cookieValue?: string): Response {
   const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
   if (cookieValue) {
     headers['set-cookie'] = `${COOKIE_NAME}=${cookieValue}; Path=/; Max-Age=${MAX_AGE_SECS}; HttpOnly; Secure; SameSite=Lax`;
   }
-  return new Response(htmlBody(url, nonce), { status: 200, headers });
+  return new Response(htmlBody(url), { status: 200, headers });
 }
 
 export async function GET(req: NextRequest) {
   const url = new URL(req.url);
-  // CSP nonce for the inline redirect script (set by middleware.ts). Threaded
-  // into every htmlRedirect() below so the redirect works under strict CSP.
-  const nonce = req.headers.get('x-nonce') ?? undefined;
   const code = url.searchParams.get('code');
   const aadError = url.searchParams.get('error');
   if (aadError) {
     console.error('[auth/callback] AAD error', aadError, url.searchParams.get('error_description'));
-    return htmlRedirect(`/?auth_error=aad_${aadError}`, undefined, nonce);
+    return htmlRedirect(`/?auth_error=aad_${aadError}`);
   }
-  if (!code) return htmlRedirect(`/?auth_error=missing_code`, undefined, nonce);
+  if (!code) return htmlRedirect(`/?auth_error=missing_code`);
   const msalClientId = process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
   const msalClientSecret = process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
-  if (!msalClientId || !process.env.AZURE_TENANT_ID) return htmlRedirect(`/?auth_error=not_configured`, undefined, nonce);
-  if (!msalClientSecret) return htmlRedirect(`/?auth_error=no_client_secret`, undefined, nonce);
-  if (!process.env.SESSION_SECRET) return htmlRedirect(`/?auth_error=no_session_secret`, undefined, nonce);
+  if (!msalClientId || !process.env.AZURE_TENANT_ID) return htmlRedirect(`/?auth_error=not_configured`);
+  if (!msalClientSecret) return htmlRedirect(`/?auth_error=no_client_secret`);
+  if (!process.env.SESSION_SECRET) return htmlRedirect(`/?auth_error=no_session_secret`);
   try {
     const client = getMsalClient();
     const result = await client.acquireTokenByCode({
@@ -258,7 +249,7 @@ export async function GET(req: NextRequest) {
       scopes: SCOPES,
       redirectUri: `${origin(req)}/auth/callback`,
     });
-    if (!result?.account || !result.accessToken) return htmlRedirect(`/?auth_error=no_token`, undefined, nonce);
+    if (!result?.account || !result.accessToken) return htmlRedirect(`/?auth_error=no_token`);
     const account = result.account;
     const claims: UserClaims = {
       oid: account.homeAccountId.split('.')[0],
@@ -311,10 +302,10 @@ export async function GET(req: NextRequest) {
     // consent failure surfaces as that server's honest admin gate, never blocks
     // login, and never reaches a Fabric/Power BI host on the default path.
     await captureUserMsRemoteMcpTokens(client, account, claims.oid);
-    return htmlRedirect('/', cookieValue, nonce);
+    return htmlRedirect('/', cookieValue);
   } catch (e) {
     const msg = (e as Error).message ?? 'unknown';
     console.error('[auth/callback] exception:', msg);
-    return htmlRedirect(`/?auth_error=exchange_failed&detail=${encodeURIComponent(msg.slice(0, 80))}`, undefined, nonce);
+    return htmlRedirect(`/?auth_error=exchange_failed&detail=${encodeURIComponent(msg.slice(0, 80))}`);
   }
 }
