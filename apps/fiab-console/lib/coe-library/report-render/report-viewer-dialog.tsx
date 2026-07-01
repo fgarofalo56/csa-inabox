@@ -32,9 +32,11 @@ export interface ReportViewerDialogProps {
   publishedBadge?: boolean;
   /** Default to live data. Admin surfaces = true; consumer gallery = false. */
   defaultLive?: boolean;
+  /** Lock to LIVE-only (hide the Live/Sample toggle) — the consumer gallery renders real data, never sample. */
+  lockLive?: boolean;
 }
 
-export function ReportViewerDialog({ open, onClose, fetchUrl, title, publishedBadge, defaultLive }: ReportViewerDialogProps): React.ReactElement {
+export function ReportViewerDialog({ open, onClose, fetchUrl, title, publishedBadge, defaultLive, lockLive }: ReportViewerDialogProps): React.ReactElement {
   const s = useStyles();
   const [payload, setPayload] = React.useState<ReportPayload | null>(null);
   React.useEffect(() => { if (!open) setPayload(null); }, [open]);
@@ -52,7 +54,7 @@ export function ReportViewerDialog({ open, onClose, fetchUrl, title, publishedBa
             </span>
           </DialogTitle>
           <DialogContent>
-            <ReportView fetchUrl={open ? fetchUrl : null} onLoaded={setPayload} defaultLive={defaultLive} />
+            <ReportView fetchUrl={open ? fetchUrl : null} onLoaded={setPayload} defaultLive={defaultLive} lockLive={lockLive} />
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Close</Button>

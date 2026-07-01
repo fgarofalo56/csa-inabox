@@ -1,17 +1,20 @@
 /**
- * Organization reports render BFF.
+ * Organization reports render BFF (consumer gallery).
  *
- * GET  /api/org-reports/render?id=<cloneId>            → render model (+ SAMPLE)
- * GET  ...&mode=live[&subscriptionId=&billingScope=&…] → LIVE render of a
- *                                                         published report
+ * GET  /api/org-reports/render?id=<cloneId>            → LIVE render model
+ * GET  ...&subscriptionId=&billingScope=&…             → LIVE render, scoped
  * POST ...?id=<cloneId>  body { params: {…} }          → LIVE render (overrides)
  *
- * 404 if the report is not published (so unpublishing immediately removes
- * consumer access). In live mode each entity resolves against the deployment's
- * OWN Azure estate (Cost Management, Log Analytics, Resource Graph, Defender)
- * via report-render/live-bindings, with per-entity `dataSources` provenance.
+ * The consumer gallery ALWAYS renders REAL, live data from the deployment's OWN
+ * Azure estate (Cost Management, Log Analytics, Azure Resource Graph, Azure
+ * Policy, Defender) via report-render/live-bindings — there is NO sample-data
+ * path. Every entity resolves to real rows or a REAL EMPTY table (schema, zero
+ * rows) with a per-entity `dataSources` note; bundled SAMPLE rows are never
+ * emitted (no-vaporware.md). `mode` is accepted for back-compat but ignored —
+ * the answer is always live.
  *
- * Azure-native: no Microsoft Fabric / Power BI service is contacted.
+ * 404 if the report is not published (so unpublishing immediately removes
+ * consumer access). Azure-native: no Microsoft Fabric / Power BI is contacted.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -24,6 +27,7 @@ import {
   resolveReportParams,
   resolveBuilderSources,
   getBuilderSource,
+  emptyLike,
   type EntityBindingResult,
   type ReportParamOverrides,
 } from '@/lib/coe-library/report-render/live-bindings';
@@ -38,31 +42,32 @@ function err(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
-/** Render a published Loom-native dashboard for the consumer gallery. */
-async function buildDashboardPayload(id: string, live: boolean, overrides: ReportParamOverrides): Promise<NextResponse> {
+/** Reduce a parsed table-set to its column SCHEMA only (zero rows) — never sample rows leave the server. */
+function schemaOnly(sample: SampleData): SampleData {
+  const out: SampleData = {};
+  for (const [k, v] of Object.entries(sample)) out[k] = emptyLike(v);
+  return out;
+}
+
+/** Render a published Loom-native dashboard for the consumer gallery — LIVE only. */
+async function buildDashboardPayload(id: string, overrides: ReportParamOverrides): Promise<NextResponse> {
   const dash = await getPublishedDashboard(id);
   if (!dash) return err('dashboard not found or not published', 404);
   const spec = dash.spec;
   const model = synthReportModel(spec);
 
-  const sampleBySource: Record<string, SampleTable> = {};
+  // Column SCHEMA per tile (from the bound source) — zero rows. Keeps each
+  // tile's field mapping intact without ever fabricating sample rows.
+  const schemaBySource: Record<string, SampleTable> = {};
   for (const tile of spec.tiles) {
     const src = getBuilderSource(tile.sourceId);
-    if (src) {
-      const cols = src.columns;
-      const val = cols.includes(tile.value) ? tile.value : cols[cols.length - 1];
-      sampleBySource[tile.sourceId] = {
-        columns: cols,
-        rows: [1, 2, 3].map((n) => Object.fromEntries(cols.map((c) => [c, c === val ? n * 100 : `Sample ${n}`]))),
-      };
-    }
+    if (src) schemaBySource[tile.sourceId] = { columns: src.columns, rows: [] };
   }
-  const sample = synthSampleData(spec, sampleBySource);
+  const schema = synthSampleData(spec, schemaBySource);
   const base = {
-    ok: true as const, model, sample, published: true,
+    ok: true as const, model, sample: schema, published: true,
     template: { id: dash.id, title: dash.name, description: dash.description, category: dash.category },
   };
-  if (!live) return NextResponse.json({ ...base, params: resolveReportParams(overrides) });
   try {
     const resolved = await resolveBuilderSources(spec.tiles.map((t) => t.sourceId), overrides);
     const liveData: SampleData = {};
@@ -70,7 +75,8 @@ async function buildDashboardPayload(id: string, live: boolean, overrides: Repor
     for (const tile of spec.tiles) {
       const r = resolved[tile.sourceId] || { source: 'error' as const, note: 'Data source did not resolve.' };
       dataSources[tile.id] = r;
-      liveData[tile.id] = r.source === 'live' && r.table ? r.table : sample[tile.id];
+      // Live rows when resolved; otherwise a REAL EMPTY table (schema, zero rows).
+      liveData[tile.id] = r.source === 'live' && r.table ? r.table : emptyLike(schema[tile.id]);
     }
     return NextResponse.json({ ...base, live: liveData, dataSources, params: resolveReportParams(overrides), mode: 'live' });
   } catch (e: any) {
@@ -78,13 +84,13 @@ async function buildDashboardPayload(id: string, live: boolean, overrides: Repor
   }
 }
 
-async function buildPayload(req: NextRequest, live: boolean, overrides: ReportParamOverrides): Promise<NextResponse> {
+async function buildPayload(req: NextRequest, overrides: ReportParamOverrides): Promise<NextResponse> {
   const url = new URL(req.url);
   const id = url.searchParams.get('id')?.trim();
   if (!id) return err('id is required', 400);
   // A published Loom-native dashboard is rendered via the dashboard synthesizer.
   if (url.searchParams.get('kind') === 'dashboard') {
-    try { return await buildDashboardPayload(id, live, overrides); }
+    try { return await buildDashboardPayload(id, overrides); }
     catch (e: any) { return err(e?.message || String(e), 500); }
   }
 
@@ -97,12 +103,14 @@ async function buildPayload(req: NextRequest, live: boolean, overrides: ReportPa
 
     const files = getTemplateFiles(clone.templateId);
     const model = parseReportModel(files);
-    const sample = parseSampleData(files);
+    // The bundled table-set — used ONLY for its column schema (never its rows).
+    const parsed = parseSampleData(files);
 
     const base = {
       ok: true as const,
       model,
-      sample,
+      // Schema-only (zero rows) — the consumer render is always live/empty, never sample.
+      sample: schemaOnly(parsed),
       published: true,
       template: {
         id: tpl.id,
@@ -112,12 +120,8 @@ async function buildPayload(req: NextRequest, live: boolean, overrides: ReportPa
       },
     };
 
-    if (!live) {
-      return NextResponse.json({ ...base, params: resolveReportParams(overrides) });
-    }
-
     try {
-      const { live: liveData, dataSources, params } = await resolveLiveReport(clone.templateId, sample, overrides);
+      const { live: liveData, dataSources, params } = await resolveLiveReport(clone.templateId, parsed, overrides);
       return NextResponse.json({ ...base, live: liveData, dataSources, params, mode: 'live' });
     } catch (e: any) {
       return NextResponse.json({
@@ -136,14 +140,13 @@ export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const url = new URL(req.url);
-  const live = url.searchParams.get('mode') === 'live';
   const overrides: ReportParamOverrides = {
     subscriptionId: url.searchParams.get('subscriptionId')?.trim() || undefined,
     billingScope: url.searchParams.get('billingScope')?.trim() || undefined,
     tenantId: url.searchParams.get('tenantId')?.trim() || undefined,
     managementApiBase: url.searchParams.get('managementApiBase')?.trim() || undefined,
   };
-  return buildPayload(req, live, overrides);
+  return buildPayload(req, overrides);
 }
 
 export async function POST(req: NextRequest) {
@@ -158,5 +161,5 @@ export async function POST(req: NextRequest) {
     tenantId: typeof p.tenantId === 'string' ? p.tenantId.trim() : undefined,
     managementApiBase: typeof p.managementApiBase === 'string' ? p.managementApiBase.trim() : undefined,
   };
-  return buildPayload(req, true, overrides);
+  return buildPayload(req, overrides);
 }

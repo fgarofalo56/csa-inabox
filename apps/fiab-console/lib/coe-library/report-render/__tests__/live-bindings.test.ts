@@ -4,8 +4,10 @@
  * Covers (per .claude/rules/no-vaporware.md — exercises real mapping logic, not
  * a façade):
  *   - resolveReportParams: env-first defaulting + override behavior
- *   - resolveLiveReport: per-entity live / sample / error TAGGING + the
- *     {columns, rows} shape each resolver maps its real client output into
+ *   - resolveLiveReport: per-entity live / empty / error TAGGING + the
+ *     {columns, rows} shape each resolver maps its real client output into.
+ *     There is NO sample-data render path: unbound / empty / errored entities
+ *     render a REAL EMPTY table (schema, zero rows) — never bundled SAMPLE rows.
  *
  * The Azure clients are mocked so the tests assert the binding's mapping +
  * tagging contract deterministically (no live Azure calls).
@@ -48,6 +50,10 @@ import { getDefenderSummary } from '@/lib/azure/defender-client';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 
 const sampleTable = (columns: string[]) => ({ columns, rows: [{ __sample: true }] });
+/** An Azure Resource Graph HTTP response with the given `data` rows. */
+const argResponse = (data: any[]) => ({ ok: true, status: 200, text: async () => JSON.stringify({ data }) });
+/** The query string an ARG call was invoked with (to differentiate concurrent resolvers). */
+const argQuery = (init: any): string => { try { return String(JSON.parse(init.body).query || ''); } catch { return ''; } };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -104,19 +110,20 @@ describe('resolveLiveReport — Cost Management (cloud-cost-finops)', () => {
     expect(live.Budget.rows[0]).toMatchObject({ SubscriptionName: 'sub-env', MonthlyBudget: 1000 });
   });
 
-  it('tags Budget SAMPLE (not error) when no Consumption budgets exist — never fabricated', async () => {
+  it('tags Budget EMPTY (not error) when no Consumption budgets exist — real empty, never fabricated', async () => {
     (getLoomCostSummary as any).mockResolvedValue({
       currency: 'USD', subscriptions: ['sub-env'], subscriptionErrors: [],
       byService: [{ key: 'Storage', cost: 5 }], budgets: [],
     });
     const { live, dataSources } = await resolveLiveReport('cloud-cost-finops', sample);
-    expect(dataSources.Budget.source).toBe('sample');
+    expect(dataSources.Budget.source).toBe('empty');
     expect(dataSources.Budget.note).toMatch(/no azure consumption budgets/i);
-    // falls back to the bundled sample table
-    expect(live.Budget).toBe(sample.Budget);
+    // Renders a REAL EMPTY table (schema, zero rows) — never the bundled sample.
+    expect(live.Budget.columns).toEqual(['SubscriptionName', 'MonthlyBudget']);
+    expect(live.Budget.rows).toHaveLength(0);
   });
 
-  it('tags Cost ERROR (and falls back to sample) when Cost Management is not configured', async () => {
+  it('tags Cost ERROR (and renders empty) when Cost Management is not configured', async () => {
     const e: any = new Error('Monitor not configured. Missing env: LOOM_SUBSCRIPTION_ID');
     e.name = 'MonitorNotConfiguredError';
     (getLoomCostSummary as any).mockRejectedValue(e);
@@ -124,7 +131,7 @@ describe('resolveLiveReport — Cost Management (cloud-cost-finops)', () => {
     const { live, dataSources } = await resolveLiveReport('cloud-cost-finops', sample);
     expect(dataSources.Cost.source).toBe('error');
     expect(dataSources.Cost.note).toMatch(/not configured/i);
-    expect(live.Cost).toBe(sample.Cost);
+    expect(live.Cost.rows).toHaveLength(0);
   });
 });
 
@@ -134,16 +141,16 @@ describe('resolveLiveReport — Azure Resource Graph (resource-inventory-sprawl)
     Orphans: sampleTable(['OrphanType', 'Count', 'EstMonthlyWaste']),
   };
 
-  it('maps ARG rows into the Resources shape (live) and leaves unbound Orphans as sample', async () => {
-    (fetchWithTimeout as any).mockResolvedValue({
-      ok: true,
-      status: 200,
-      text: async () => JSON.stringify({
-        data: [
-          { ResourceType: 'microsoft.storage/storageaccounts', Location: 'eastus', SubscriptionName: 'sub-env', Environment: 'prod', HasOwnerTag: 'Yes', ResourceCount: 7 },
-          { ResourceType: 'microsoft.compute/virtualmachines', Location: 'westus', SubscriptionName: 'sub-env', Environment: '', HasOwnerTag: 'No', ResourceCount: 3 },
-        ],
-      }),
+  it('maps ARG rows into the Resources shape (live) and resolves Orphans live from its own ARG query', async () => {
+    (fetchWithTimeout as any).mockImplementation((_url: string, init: any) => {
+      const q = argQuery(init);
+      if (q.includes('OrphanType')) {
+        return Promise.resolve(argResponse([{ OrphanType: 'Unattached managed disk', Count: 4 }]));
+      }
+      return Promise.resolve(argResponse([
+        { ResourceType: 'microsoft.storage/storageaccounts', Location: 'eastus', SubscriptionName: 'sub-env', Environment: 'prod', HasOwnerTag: 'Yes', ResourceCount: 7 },
+        { ResourceType: 'microsoft.compute/virtualmachines', Location: 'westus', SubscriptionName: 'sub-env', Environment: '', HasOwnerTag: 'No', ResourceCount: 3 },
+      ]));
     });
 
     const { live, dataSources } = await resolveLiveReport('resource-inventory-sprawl', sample);
@@ -153,25 +160,24 @@ describe('resolveLiveReport — Azure Resource Graph (resource-inventory-sprawl)
     expect(live.Resources.rows).toHaveLength(2);
     expect(live.Resources.rows[0]).toMatchObject({ ResourceType: 'microsoft.storage/storageaccounts', Location: 'eastus', ResourceCount: 7 });
 
-    // Orphans has no live Loom backend → honest sample, never fabricated.
-    expect(dataSources.Orphans.source).toBe('sample');
-    expect(dataSources.Orphans.note).toMatch(/no live azure binding/i);
-    expect(live.Orphans).toBe(sample.Orphans);
+    // Orphans now has a real ARG backend → live, monthly-waste left null (honest unknown), never fabricated.
+    expect(dataSources.Orphans.source).toBe('live');
+    expect(live.Orphans.rows[0]).toMatchObject({ OrphanType: 'Unattached managed disk', Count: 4, EstMonthlyWaste: null });
   });
 
-  it('tags Resources ERROR (and falls back to sample) on an ARG 403', async () => {
+  it('tags Resources ERROR (and renders empty) on an ARG 403', async () => {
     (fetchWithTimeout as any).mockResolvedValue({
       ok: false, status: 403, text: async () => JSON.stringify({ error: { message: 'Forbidden' } }),
     });
     const { live, dataSources } = await resolveLiveReport('resource-inventory-sprawl', sample);
     expect(dataSources.Resources.source).toBe('error');
     expect(dataSources.Resources.note).toMatch(/access denied|reader/i);
-    expect(live.Resources).toBe(sample.Resources);
+    expect(live.Resources.rows).toHaveLength(0);
   });
 });
 
-describe('resolveLiveReport — Log Analytics + Defender', () => {
-  it('maps monthly active users into Adoption Signals (live)', async () => {
+describe('resolveLiveReport — Log Analytics + Defender + Azure Policy', () => {
+  it('maps monthly active users into Adoption Signals (live); unbound Maturity Assessment renders empty', async () => {
     (queryLogs as any).mockResolvedValue({
       columns: ['Month', 'MonthlyActiveUsers'],
       rows: [['2026-05-01T00:00:00Z', 12], ['2026-06-01T00:00:00Z', 18]],
@@ -184,15 +190,25 @@ describe('resolveLiveReport — Log Analytics + Defender', () => {
     const { live, dataSources } = await resolveLiveReport('coe-adoption-maturity', sample);
     expect(dataSources['Adoption Signals'].source).toBe('live');
     expect(live['Adoption Signals'].rows[1]).toMatchObject({ Month: '2026-06-01T00:00:00Z', MonthlyActiveUsers: 18 });
-    // Maturity Assessment has no live backend → sample
-    expect(dataSources['Maturity Assessment'].source).toBe('sample');
+    // Maturity Assessment has no live backend → real EMPTY table, never sample.
+    expect(dataSources['Maturity Assessment'].source).toBe('empty');
+    expect(live['Maturity Assessment'].rows).toHaveLength(0);
   });
 
-  it('maps Defender secure score into Secure Score (live)', async () => {
+  it('maps Defender secure score (live) and Azure Policy compliance (live) for security-compliance-posture', async () => {
     (getDefenderSummary as any).mockResolvedValue({
       secureScore: { current: 42, max: 60, percentage: 70 },
       subscriptionId: 'sub-env',
       recommendations: [], unhealthyCount: 0, highSeverityCount: 0, alerts: [], portalUrl: '',
+    });
+    (fetchWithTimeout as any).mockImplementation((_url: string, init: any) => {
+      const q = argQuery(init);
+      if (q.includes('policyresources')) {
+        return Promise.resolve(argResponse([
+          { PolicyInitiative: 'Azure Security Benchmark', ComplianceState: 'NonCompliant', ResourceCount: 12 },
+        ]));
+      }
+      return Promise.resolve(argResponse([]));
     });
     const sample: SampleData = {
       'Secure Score': sampleTable(['SubscriptionName', 'CurrentScore', 'MaxScore', 'Percentage']),
@@ -201,6 +217,7 @@ describe('resolveLiveReport — Log Analytics + Defender', () => {
     const { live, dataSources } = await resolveLiveReport('security-compliance-posture', sample);
     expect(dataSources['Secure Score'].source).toBe('live');
     expect(live['Secure Score'].rows[0]).toMatchObject({ CurrentScore: 42, MaxScore: 60, Percentage: 70 });
-    expect(dataSources['Policy Compliance'].source).toBe('sample');
+    expect(dataSources['Policy Compliance'].source).toBe('live');
+    expect(live['Policy Compliance'].rows[0]).toMatchObject({ PolicyInitiative: 'Azure Security Benchmark', ComplianceState: 'NonCompliant', ResourceCount: 12 });
   });
 });

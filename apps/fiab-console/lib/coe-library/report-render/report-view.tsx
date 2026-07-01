@@ -20,7 +20,7 @@ import {
   Switch, Spinner, Button, Field, Input, Popover, PopoverTrigger, PopoverSurface,
   MessageBar, MessageBarBody, Caption1, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Settings20Regular } from '@fluentui/react-icons';
+import { Settings20Regular, CloudCheckmark20Regular } from '@fluentui/react-icons';
 import { ReportCanvas } from './report-canvas';
 import { useReportModel, type FetchSpec, type ReportPayload, type ReportParams } from './use-report';
 
@@ -37,6 +37,7 @@ const useStyles = makeStyles({
   },
   panelActions: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'flex-end', marginTop: tokens.spacingVerticalS },
   hint: { color: tokens.colorNeutralForeground3 },
+  liveTag: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorPaletteGreenForeground1 },
 });
 
 interface Overrides {
@@ -66,6 +67,12 @@ export interface ReportViewProps {
   fetchUrl: string | null;
   /** Default to live data (admins) — falls back per-entity automatically. */
   defaultLive?: boolean;
+  /**
+   * Lock the surface to LIVE data only — hide the Live/Sample toggle entirely
+   * (the consumer Organization-reports gallery renders real data, never sample).
+   * The Parameters popover is still available.
+   */
+  lockLive?: boolean;
   /** Notified whenever a payload loads (so a parent can read template/published). */
   onLoaded?: (payload: ReportPayload) => void;
 }
@@ -118,14 +125,16 @@ function ParamPanel({
   );
 }
 
-export function ReportView({ fetchUrl, defaultLive = true, onLoaded }: ReportViewProps): React.ReactElement {
+export function ReportView({ fetchUrl, defaultLive = true, lockLive = false, onLoaded }: ReportViewProps): React.ReactElement {
   const s = useStyles();
-  const [live, setLive] = React.useState(defaultLive);
+  const [live, setLive] = React.useState(lockLive ? true : defaultLive);
   const [draft, setDraft] = React.useState<Overrides>({});
   const [applied, setApplied] = React.useState<Overrides>({});
   const [panelOpen, setPanelOpen] = React.useState(false);
 
-  const spec = React.useMemo(() => buildSpec(fetchUrl, live, applied), [fetchUrl, live, applied]);
+  // When locked, always render live (the sample path is removed for consumers).
+  const effectiveLive = lockLive ? true : live;
+  const spec = React.useMemo(() => buildSpec(fetchUrl, effectiveLive, applied), [fetchUrl, effectiveLive, applied]);
   const { data, loading, error } = useReportModel(spec);
 
   React.useEffect(() => { if (data) onLoaded?.(data); }, [data, onLoaded]);
@@ -137,12 +146,18 @@ export function ReportView({ fetchUrl, defaultLive = true, onLoaded }: ReportVie
   const header = (
     <div className={s.header}>
       <div className={s.spacer} />
-      <Switch
-        checked={live}
-        onChange={(_, d) => setLive(!!d.checked)}
-        label={live ? 'Live data' : 'Sample data'}
-      />
-      {live && (
+      {lockLive ? (
+        <Caption1 className={s.liveTag}>
+          <CloudCheckmark20Regular /> Live data
+        </Caption1>
+      ) : (
+        <Switch
+          checked={live}
+          onChange={(_, d) => setLive(!!d.checked)}
+          label={live ? 'Live data' : 'Sample data'}
+        />
+      )}
+      {effectiveLive && (
         <Popover open={panelOpen} onOpenChange={(_, d) => setPanelOpen(d.open)} trapFocus>
           <PopoverTrigger disableButtonEnhancement>
             <Button appearance="subtle" size="small" icon={<Settings20Regular />}>Parameters</Button>
@@ -162,18 +177,19 @@ export function ReportView({ fetchUrl, defaultLive = true, onLoaded }: ReportVie
     </div>
   );
 
-  if (loading) return <div className={s.center}><Spinner label={live ? 'Rendering live report…' : 'Rendering report…'} /></div>;
+  if (loading) return <div className={s.center}><Spinner label={effectiveLive ? 'Rendering live report…' : 'Rendering report…'} /></div>;
   if (error) return <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>;
   if (!data) return <div className={s.center}><Spinner label="Rendering report…" /></div>;
 
-  const liveMode = live && !!data.dataSources;
+  const liveMode = effectiveLive && !!data.dataSources;
+  // Live table when resolved, else a REAL EMPTY table (schema, zero rows) — never sample rows.
   const renderData = liveMode ? (data.live || data.sample) : data.sample;
 
   return (
     <>
-      {live && data.liveError && (
+      {effectiveLive && data.liveError && (
         <MessageBar intent="warning">
-          <MessageBarBody>Live render fell back to sample: {data.liveError}</MessageBarBody>
+          <MessageBarBody>Live render error: {data.liveError}</MessageBarBody>
         </MessageBar>
       )}
       <ReportCanvas
