@@ -10,9 +10,10 @@
  * ARM REST. No mocks.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { adfConfigGate, getDataset } from '@/lib/azure/adf-client';
+import { apiOk, apiError, apiUnauthorized } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,25 +21,22 @@ export const dynamic = 'force-dynamic';
 function gate() {
   const g = adfConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `Data Factory not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiError(`Data Factory not configured: set ${g.missing}.`, 503, { code: 'not_configured', missing: g.missing });
   }
   return null;
 }
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ name: string }> }) {
   const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  if (!session) return apiUnauthorized();
   const g = gate(); if (g) return g;
   const { name } = await ctx.params;
-  if (!name) return NextResponse.json({ ok: false, error: 'name is required' }, { status: 400 });
+  if (!name) return apiError('name is required', 400);
   try {
     const dataset = await getDataset(name);
-    return NextResponse.json({ ok: true, dataset });
+    return apiOk({ dataset });
   } catch (e: any) {
     const status = /not\s*found|404/i.test(e?.message || '') ? 404 : 502;
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status });
+    return apiError(e?.message || String(e), status);
   }
 }

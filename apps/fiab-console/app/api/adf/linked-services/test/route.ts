@@ -13,32 +13,30 @@
  * LOOM_DLZ_RG / LOOM_ADF_NAME aren't set.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { adfConfigGate, testLinkedService, type AdfLinkedService } from '@/lib/azure/adf-client';
+import { apiOk, apiError, apiUnauthorized, apiBadRequest } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  if (!session) return apiUnauthorized();
   const g = adfConfigGate();
   if (g) {
-    return NextResponse.json(
-      { ok: false, code: 'not_configured', error: `Data Factory not configured: set ${g.missing}.`, missing: g.missing },
-      { status: 503 },
-    );
+    return apiError(`Data Factory not configured: set ${g.missing}.`, 503, { code: 'not_configured', missing: g.missing });
   }
   const body = await req.json().catch(() => ({}));
   const properties = body?.properties as AdfLinkedService['properties'] | undefined;
   if (!properties || typeof properties.type !== 'string') {
-    return NextResponse.json({ ok: false, error: 'properties.type is required' }, { status: 400 });
+    return apiBadRequest('properties.type is required');
   }
   try {
     await testLinkedService({ name: 'test', properties });
-    return NextResponse.json({ ok: true });
+    return apiOk();
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return apiError(e?.message || String(e), 502);
   }
 }
