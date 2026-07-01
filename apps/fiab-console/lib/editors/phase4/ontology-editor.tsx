@@ -32,6 +32,7 @@ import {
   Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
+  Key16Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -44,7 +45,6 @@ import { DataAgentConfigCopilotPanel } from '../data-agent-config-copilot';
 import { mergeSuggestionIntoSources } from '../_da-config-merge';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
-import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { KeyValueRows } from '@/lib/components/ui/key-value-rows';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
@@ -107,6 +107,24 @@ import {
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
+
+/**
+ * Local Loom-token styles for the two typed surfaces added in this editor:
+ *  - the datasource column→property mapping grid (Gap B), mirroring
+ *    GraphSourceBinding's mapRow/mapName layout, and
+ *  - shared spacing for the typed instance form.
+ * Kept local (not in ./shared) to keep this change scoped to the ontology editor.
+ */
+const useOntoLocalStyles = makeStyles({
+  mapRow: {
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+    gap: tokens.spacingHorizontalS, alignItems: 'center',
+    marginTop: tokens.spacingVerticalXS,
+  },
+  mapName: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0,
+  },
+});
 
 // ----- Ontology (text-stored OWL/RDF; class tree parsed client-side) -----
 const ONTO_SAMPLE = `# Turtle-ish — define entity types and a parent hierarchy.\n# Each line: "ClassName : ParentClass  -- description"\nThing :  -- root\nParty : Thing -- person or org\nCustomer : Party -- buying party\nVendor : Party -- selling party\nOrder : Thing -- transaction record\nFlight : Thing -- aviation event\n`;
@@ -182,11 +200,13 @@ function OntologyHierarchyViz({ classes }: { classes: { name: string; parent?: s
 function WeaveInstancePanel({
   id,
   classes,
+  objectTypes,
   actionTypes,
   onActionTypesChange,
 }: {
   id: string;
   classes: { name: string }[];
+  objectTypes: OntoObjectType[];
   actionTypes: WeaveActionTypeDecl[];
   onActionTypesChange: (next: WeaveActionTypeDecl[]) => void;
 }) {
@@ -198,11 +218,27 @@ function WeaveInstancePanel({
   const [objects, setObjects] = useState<Array<{ id: string; objectType: string; properties: Record<string, unknown> }>>([]);
   const [objLoading, setObjLoading] = useState(false);
   const [objMsg, setObjMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
-  const [newProps, setNewProps] = useState('{}');
+  // Typed per-property values for the new instance (Gap A — replaces the raw JSON
+  // textarea that was a loom_no_freeform_config violation). `instVals` holds a
+  // control value per declared property; `kvProps` is the structured key/value
+  // fallback for legacy object types that declare no typed properties.
+  const [instVals, setInstVals] = useState<Record<string, string | boolean>>({});
+  const [kvProps, setKvProps] = useState('');
+  const [kvNonce, setKvNonce] = useState(0);
   const [creating, setCreating] = useState(false);
   const [sort, setSort] = useState<{ col: string; dir: 'asc' | 'desc' }>({ col: 'id', dir: 'asc' });
 
+  // The declared object type currently selected — its `properties` drive the
+  // typed create form. Falls back to null for a legacy (property-less) type.
+  const selectedOt = useMemo(() => objectTypes.find((o) => o.apiName === objType) || null, [objectTypes, objType]);
+  const NUMERIC_BASE = useMemo(() => new Set<OntoBaseType>(['byte', 'short', 'integer', 'long', 'float', 'double', 'decimal']), []);
+  const setInstVal = useCallback((name: string, val: string | boolean) => {
+    setInstVals((cur) => ({ ...cur, [name]: val }));
+  }, []);
+
   useEffect(() => { if (!objType && classNames.length) setObjType(classNames[0]); }, [classNames, objType]);
+  // Reset the typed create form whenever the selected object type changes.
+  useEffect(() => { setInstVals({}); setKvProps(''); setKvNonce((n) => n + 1); }, [objType]);
 
   const loadObjects = useCallback(async (t: string) => {
     if (!id || id === 'new' || !t) return;
@@ -226,10 +262,23 @@ function WeaveInstancePanel({
 
   const createObject = useCallback(async () => {
     if (!objType) { setObjMsg({ intent: 'error', text: 'Pick an object type.' }); return; }
+    // Build the instance properties from the TYPED form (per declared property)
+    // or, for a legacy property-less object type, the structured key/value rows.
+    // No raw JSON is authored here — the JSON textarea is gone.
     let properties: Record<string, unknown> = {};
-    if (newProps.trim()) {
-      try { properties = JSON.parse(newProps); } catch { setObjMsg({ intent: 'error', text: 'Properties must be valid JSON (an object of scalar values).' }); return; }
-      if (typeof properties !== 'object' || Array.isArray(properties)) { setObjMsg({ intent: 'error', text: 'Properties must be a JSON object.' }); return; }
+    if (selectedOt && selectedOt.properties.length > 0) {
+      for (const p of selectedOt.properties) {
+        const v = instVals[p.apiName];
+        if (v === undefined || v === '') continue;
+        properties[p.apiName] = v;
+      }
+    } else if (kvProps.trim()) {
+      // KeyValueRows emits a JSON string of a flat scalar object (structured
+      // control, not a freeform textarea). Guard the shape defensively.
+      try {
+        const parsed = JSON.parse(kvProps);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) properties = parsed as Record<string, unknown>;
+      } catch { setObjMsg({ intent: 'error', text: 'Enter key/value pairs for the new instance.' }); return; }
     }
     setCreating(true); setObjMsg(null);
     try {
@@ -244,12 +293,14 @@ function WeaveInstancePanel({
         return;
       }
       setObjMsg({ intent: 'success', text: `Created ${objType} instance (AGE vertex id ${j.object?.id}).` });
-      setNewProps('{}');
+      setInstVals({});
+      setKvProps('');
+      setKvNonce((n) => n + 1);
       await loadObjects(objType);
     } catch (e: any) {
       setObjMsg({ intent: 'error', text: e?.message || String(e) });
     } finally { setCreating(false); }
-  }, [id, objType, newProps, loadObjects]);
+  }, [id, objType, selectedOt, instVals, kvProps, loadObjects]);
 
   // ── Write-back action types ──
   const [actDlgOpen, setActDlgOpen] = useState(false);
@@ -366,9 +417,65 @@ function WeaveInstancePanel({
                 {classNames.map((c) => <Option key={c} value={c}>{c}</Option>)}
               </Dropdown>
             </Field>
-            <Field label="New instance properties (JSON object of scalars)" hint='e.g. {"name": "Acme", "tier": 1}'>
-              <Textarea value={newProps} onChange={(_, d) => setNewProps(d.value)} resize="vertical" />
-            </Field>
+            {selectedOt && selectedOt.properties.length > 0 ? (
+              <div className={s.tmSubBlock}>
+                <div className={s.ontoSectionHead}>
+                  <Table20Regular />
+                  <Subtitle2>Properties</Subtitle2>
+                  <Caption1 className={s.ontoSectionHint}>Typed fields for a new {objType} instance — validated against the declared schema.</Caption1>
+                </div>
+                {selectedOt.properties.map((p) => {
+                  const label = `${p.displayName || p.apiName}${p.required ? ' *' : ''}`;
+                  const hint = `${ONTO_BASE_TYPE_LABELS[p.baseType]}${p.arrayOf ? ' []' : ''}${p.description ? ` — ${p.description}` : ''}`;
+                  const v = instVals[p.apiName];
+                  const strv = typeof v === 'string' ? v : '';
+                  if (p.baseType === 'boolean' && !p.arrayOf) {
+                    return (
+                      <Field key={p.apiName} label={label} hint={hint}>
+                        <Switch checked={v === true} onChange={(_, d) => setInstVal(p.apiName, d.checked)} />
+                      </Field>
+                    );
+                  }
+                  if (!p.arrayOf && NUMERIC_BASE.has(p.baseType)) {
+                    return (
+                      <Field key={p.apiName} label={label} hint={hint}>
+                        <Input type="number" value={strv} onChange={(_, d) => setInstVal(p.apiName, d.value)} />
+                      </Field>
+                    );
+                  }
+                  if (!p.arrayOf && p.baseType === 'date') {
+                    return (
+                      <Field key={p.apiName} label={label} hint={hint}>
+                        <Input type="date" value={strv} onChange={(_, d) => setInstVal(p.apiName, d.value)} />
+                      </Field>
+                    );
+                  }
+                  if (!p.arrayOf && p.baseType === 'timestamp') {
+                    return (
+                      <Field key={p.apiName} label={label} hint={hint}>
+                        <Input type="datetime-local" value={strv} onChange={(_, d) => setInstVal(p.apiName, d.value)} />
+                      </Field>
+                    );
+                  }
+                  return (
+                    <Field key={p.apiName} label={label} hint={p.arrayOf ? `${hint} (comma-separated)` : hint}>
+                      <Input value={strv} onChange={(_, d) => setInstVal(p.apiName, d.value)} placeholder={p.arrayOf ? 'a, b, c' : ''} />
+                    </Field>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className={s.tmSubBlock}>
+                <div className={s.ontoSectionHead}>
+                  <Table20Regular />
+                  <Subtitle2>Properties</Subtitle2>
+                </div>
+                <Caption1 className={s.ontoSectionHint}>
+                  {objType || 'This type'} has no declared typed properties yet — add them in the <strong>Typed model</strong> panel above for a fully-typed form, or enter ad-hoc key/value pairs below.
+                </Caption1>
+                <KeyValueRows key={`kv-${objType}-${kvNonce}`} value={kvProps} onChange={setKvProps} keyPlaceholder="name" valuePlaceholder="Acme" />
+              </div>
+            )}
             <Button appearance="primary" icon={creating ? <Spinner size="tiny" /> : <Add20Regular />} onClick={createObject} disabled={creating || !objType} className={s.ontoStartBtn}>
               {creating ? 'Creating…' : `Create ${objType || 'object'}`}
             </Button>
@@ -517,6 +624,7 @@ function OntologyTypedModelPanel({
   saving: boolean;
 }) {
   const s = useStyles();
+  const ls = useOntoLocalStyles();
   const model = useMemo(() => migrateOntologyState(state), [state]);
   const { objectTypes, linkTypes, actionTypes } = model;
   const objNames = useMemo(() => objectTypes.map((o) => o.apiName), [objectTypes]);
@@ -537,18 +645,78 @@ function OntologyTypedModelPanel({
     properties: OntoProperty[];
     primaryKey: string; titleKey: string;
     dsKind: '' | 'lakehouse' | 'warehouse'; dsSourceId: string; dsTable: string; dsPkColumn: string;
+    /** Ontology property apiName → backing source column (Gap B mapping grid). */
+    dsColumnMap: Record<string, string>;
   }
   const blankOt = (): OtDraft => ({
     index: null, apiName: '', displayName: '', pluralDisplayName: '', description: '',
     status: 'active', color: '', properties: [], primaryKey: '', titleKey: '',
-    dsKind: '', dsSourceId: '', dsTable: '', dsPkColumn: '',
+    dsKind: '', dsSourceId: '', dsTable: '', dsPkColumn: '', dsColumnMap: {},
   });
   const [otOpen, setOtOpen] = useState(false);
   const [ot, setOt] = useState<OtDraft>(blankOt);
   const [otErr, setOtErr] = useState<string | null>(null);
   const patchOt = (p: Partial<OtDraft>) => setOt((d) => ({ ...d, ...p }));
 
-  const openNewOt = () => { setOt(blankOt()); setOtErr(null); setOtOpen(true); };
+  // ── Datasource schema browse (Gap B) — live Synapse INFORMATION_SCHEMA via
+  // /api/items/ontology/[id]/datasource. Lists tables, then columns for the
+  // selected table, so the operator maps source columns → object properties and
+  // picks a PK column (no bare Inputs). Honest 503 gate degrades to manual entry.
+  const [dsTables, setDsTables] = useState<{ qualified: string; schema: string; name: string }[]>([]);
+  const [dsColumns, setDsColumns] = useState<{ name: string; dataType: string }[]>([]);
+  const [dsLoading, setDsLoading] = useState(false);
+  const [dsGate, setDsGate] = useState<string | null>(null);
+  const [dsErr, setDsErr] = useState<string | null>(null);
+  const canBrowseDs = !!id && id !== 'new';
+  const dsBase = `/api/items/ontology/${encodeURIComponent(id)}/datasource`;
+
+  const loadDsTables = useCallback(async (kind: 'lakehouse' | 'warehouse') => {
+    if (!canBrowseDs || !kind) { setDsTables([]); return; }
+    setDsLoading(true); setDsErr(null); setDsGate(null);
+    try {
+      const r = await fetch(`${dsBase}?sourceKind=${kind}`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        if (r.status === 503) setDsGate(j?.error || 'Schema introspection not configured for this deployment.');
+        else setDsErr(j?.error || `HTTP ${r.status}`);
+        setDsTables([]);
+        return;
+      }
+      setDsTables(Array.isArray(j.tables) ? j.tables : []);
+    } catch (e: any) { setDsErr(e?.message || String(e)); }
+    finally { setDsLoading(false); }
+  }, [dsBase, canBrowseDs]);
+
+  const loadDsColumns = useCallback(async (kind: 'lakehouse' | 'warehouse', table: string) => {
+    if (!canBrowseDs || !kind || !table) { setDsColumns([]); return; }
+    setDsLoading(true); setDsErr(null);
+    try {
+      const r = await fetch(`${dsBase}?sourceKind=${kind}&table=${encodeURIComponent(table)}`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        if (r.status === 503) setDsGate(j?.error || 'Schema introspection not configured for this deployment.');
+        else setDsErr(j?.error || `HTTP ${r.status}`);
+        setDsColumns([]);
+        return;
+      }
+      setDsColumns(Array.isArray(j.columns) ? j.columns : []);
+    } catch (e: any) { setDsErr(e?.message || String(e)); }
+    finally { setDsLoading(false); }
+  }, [dsBase, canBrowseDs]);
+
+  // Load tables when the dialog is open + a datasource kind is picked; load
+  // columns when a table is chosen. Reflects a pre-existing binding on edit.
+  useEffect(() => {
+    if (otOpen && ot.dsKind) void loadDsTables(ot.dsKind);
+    else { setDsTables([]); setDsColumns([]); setDsGate(null); setDsErr(null); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otOpen, ot.dsKind]);
+  useEffect(() => {
+    if (otOpen && ot.dsKind && ot.dsTable) void loadDsColumns(ot.dsKind, ot.dsTable);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [otOpen, ot.dsTable]);
+
+  const openNewOt = () => { setOt(blankOt()); setOtErr(null); setDsGate(null); setDsErr(null); setOtOpen(true); };
   const openEditOt = (i: number) => {
     const o = objectTypes[i];
     const ds = o.datasource;
@@ -558,8 +726,9 @@ function OntologyTypedModelPanel({
       properties: o.properties.map((p) => ({ ...p })),
       primaryKey: o.primaryKey || '', titleKey: o.titleKey || '',
       dsKind: ds?.kind || '', dsSourceId: ds?.sourceItemId || '', dsTable: ds?.table || '', dsPkColumn: ds?.primaryKeyColumn || '',
+      dsColumnMap: ds?.columnMap ? { ...ds.columnMap } : {},
     });
-    setOtErr(null); setOtOpen(true);
+    setOtErr(null); setDsGate(null); setDsErr(null); setOtOpen(true);
   };
 
   const otKeyEligible = useMemo(() => ot.properties.filter((p) => isOntoIdent(p.apiName) && ONTO_KEY_ELIGIBLE_TYPES.has(p.baseType)), [ot.properties]);
@@ -588,10 +757,18 @@ function OntologyTypedModelPanel({
     if (ot.dsKind && ot.dsSourceId) {
       const list = ot.dsKind === 'lakehouse' ? lakehouses : warehouses;
       const disp = list.find((x) => x.id === ot.dsSourceId)?.displayName;
+      // Build the column map (property apiName → source column), keeping only
+      // entries whose property still exists and whose column is set.
+      const propSet = new Set(properties.map((p) => p.apiName));
+      const columnMap: Record<string, string> = {};
+      for (const [prop, col] of Object.entries(ot.dsColumnMap)) {
+        if (propSet.has(prop) && col.trim()) columnMap[prop] = col.trim();
+      }
       datasource = {
         kind: ot.dsKind, sourceItemId: ot.dsSourceId,
         ...(disp ? { sourceDisplayName: disp } : {}),
         ...(ot.dsTable.trim() ? { table: ot.dsTable.trim() } : {}),
+        ...(Object.keys(columnMap).length ? { columnMap } : {}),
         ...(ot.dsPkColumn.trim() ? { primaryKeyColumn: ot.dsPkColumn.trim() } : {}),
         boundAt: new Date().toISOString(),
       };
@@ -892,7 +1069,7 @@ function OntologyTypedModelPanel({
                     <Caption1 className={s.ontoSectionHint}>Azure-native — ADLS Delta lakehouse or Synapse SQL warehouse. No Fabric.</Caption1>
                   </div>
                   <Field label="Kind">
-                    <Dropdown value={ot.dsKind ? (ot.dsKind === 'lakehouse' ? 'Lakehouse' : 'Warehouse') : '(none)'} selectedOptions={ot.dsKind ? [ot.dsKind] : ['']} onOptionSelect={(_, d) => patchOt({ dsKind: (d.optionValue as 'lakehouse' | 'warehouse') || '', dsSourceId: '' })}>
+                    <Dropdown value={ot.dsKind ? (ot.dsKind === 'lakehouse' ? 'Lakehouse' : 'Warehouse') : '(none)'} selectedOptions={ot.dsKind ? [ot.dsKind] : ['']} onOptionSelect={(_, d) => patchOt({ dsKind: (d.optionValue as 'lakehouse' | 'warehouse') || '', dsSourceId: '', dsTable: '', dsPkColumn: '', dsColumnMap: {} })}>
                       <Option value="">(none)</Option>
                       <Option value="lakehouse">Lakehouse (ADLS Delta)</Option>
                       <Option value="warehouse">Warehouse (Synapse SQL)</Option>
@@ -907,12 +1084,55 @@ function OntologyTypedModelPanel({
                           {dsList.map((x) => <Option key={x.id} value={x.id}>{x.displayName}</Option>)}
                         </Dropdown>
                       </Field>
-                      <Field label="Table" hint="Backing table (e.g. dbo.Customer or a Delta table name).">
-                        <Input value={ot.dsTable} onChange={(_, d) => patchOt({ dsTable: d.value })} placeholder="dbo.Customer" />
-                      </Field>
-                      <Field label="Primary-key column" hint="Source column that is the object's primary key.">
-                        <Input value={ot.dsPkColumn} onChange={(_, d) => patchOt({ dsPkColumn: d.value })} placeholder="CustomerID" />
-                      </Field>
+                      {dsGate ? (
+                        // Honest infra gate (per no-vaporware): the route named the exact
+                        // env var to set. The full binding UI still works via manual entry.
+                        <>
+                          <MessageBar intent="warning"><MessageBarBody>{dsGate}</MessageBarBody></MessageBar>
+                          <Field label="Table" hint="Backing table (schema.table).">
+                            <Input value={ot.dsTable} onChange={(_, d) => patchOt({ dsTable: d.value })} placeholder="dbo.Customer" />
+                          </Field>
+                          <Field label="Primary-key column" hint="Source column that is the object's primary key.">
+                            <Input value={ot.dsPkColumn} onChange={(_, d) => patchOt({ dsPkColumn: d.value })} placeholder="CustomerID" />
+                          </Field>
+                        </>
+                      ) : (
+                        <>
+                          <Field label="Table" hint="Live schema from the backing source — pick a table to map its columns.">
+                            <Dropdown value={ot.dsTable} selectedOptions={ot.dsTable ? [ot.dsTable] : []} placeholder={dsLoading ? 'Loading tables…' : 'Select a table'} onOptionSelect={(_, d) => patchOt({ dsTable: d.optionValue || '', dsPkColumn: '', dsColumnMap: {} })}>
+                              {dsTables.map((t) => <Option key={t.qualified} value={t.qualified} text={t.qualified}><Table20Regular />&nbsp;{t.qualified}</Option>)}
+                            </Dropdown>
+                          </Field>
+                          {dsLoading && <Spinner size="tiny" label="Loading source schema…" labelPosition="after" />}
+                          {dsErr && <MessageBar intent="error"><MessageBarBody>{dsErr}</MessageBarBody></MessageBar>}
+                          {ot.dsTable && dsColumns.length > 0 && (
+                            <>
+                              <Field label="Primary-key column" hint="Source column that uniquely identifies each instance.">
+                                <Dropdown value={ot.dsPkColumn} selectedOptions={ot.dsPkColumn ? [ot.dsPkColumn] : []} placeholder="Select the PK column" onOptionSelect={(_, d) => patchOt({ dsPkColumn: d.optionValue || '' })}>
+                                  {dsColumns.map((c) => <Option key={c.name} value={c.name} text={c.name}><Key16Regular />&nbsp;{c.name}{c.dataType ? ` · ${c.dataType}` : ''}</Option>)}
+                                </Dropdown>
+                              </Field>
+                              {ot.properties.filter((p) => isOntoIdent(p.apiName)).length > 0 && (
+                                <div>
+                                  <Caption1 className={s.ontoSectionHint}>Map each property to a source column (leave as-is to match by name):</Caption1>
+                                  {ot.properties.filter((p) => isOntoIdent(p.apiName)).map((p) => (
+                                    <div key={p.apiName} className={ls.mapRow}>
+                                      <span className={ls.mapName}><Caption1>{p.apiName}</Caption1><Badge appearance="outline">{ONTO_BASE_TYPE_LABELS[p.baseType]}</Badge></span>
+                                      <Dropdown value={ot.dsColumnMap[p.apiName] || ''} selectedOptions={ot.dsColumnMap[p.apiName] ? [ot.dsColumnMap[p.apiName]] : []} placeholder={`(same: ${p.apiName})`} onOptionSelect={(_, d) => patchOt({ dsColumnMap: { ...ot.dsColumnMap, [p.apiName]: d.optionValue || '' } })}>
+                                        <Option value="">{`(same: ${p.apiName})`}</Option>
+                                        {dsColumns.map((c) => <Option key={c.name} value={c.name} text={c.name}>{c.dataType ? `${c.name} · ${c.dataType}` : c.name}</Option>)}
+                                      </Dropdown>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </>
+                          )}
+                          {ot.dsTable && !dsLoading && dsColumns.length === 0 && !dsErr && (
+                            <Caption1 className={s.ontoSectionHint}>No columns found for this table.</Caption1>
+                          )}
+                        </>
+                      )}
                     </>
                   ))}
                 </div>
@@ -1031,6 +1251,8 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
   const classes = parseOntologyHierarchy(state.source || '');
+  // Typed object types (drives the typed instance form in WeaveInstancePanel).
+  const objectTypes = useMemo(() => migrateOntologyState(state).objectTypes, [state]);
   const [materializing, setMaterializing] = useState(false);
   const [matMsg, setMatMsg] = useState<string | null>(null);
 
@@ -1299,52 +1521,52 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         {/* ── Typed modeling surface (object / link / action types) ── */}
         <OntologyTypedModelPanel id={id} state={state} persistOnto={persistOnto} lakehouses={lakehouses} warehouses={warehouses} saving={saving} />
 
-        <div className={s.ontoSourceGrid}>
-          <div>
-            <Subtitle2>Source ({classes.length} classes)</Subtitle2>
-            <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalSNudge, color: tokens.colorNeutralForeground3 }}>
-              One class per line — DSL: <code>ClassName : ParentClass -- description</code> (parent and
-              description optional). Example: <code>Account : Party -- a customer account</code>. Indentation is
-              ignored; <code>Child : Parent</code> defines the IS_A hierarchy.
-            </Caption1>
-            {/* Warn when nothing parses, so the editor doesn't silently produce a
-                0-class ontology that materialize/bind/run-action can't act on. */}
-            {classes.length === 0 && (state.source || '').trim().length > 0 && (
-              <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalSNudge }}>
-                <MessageBarBody>
-                  The source has content but parsed to <strong>0 classes</strong>. Each class needs its own line
-                  in the form <code>ClassName : ParentClass -- description</code>. Fix the grammar above and the
-                  class hierarchy will populate.
-                </MessageBarBody>
-              </MessageBar>
-            )}
-            {/* v3.28 Phase 4.5: functional setState — materializeToGraphModel
-                does NOT write back to state, so this is defensive but cheap. */}
-            <MonacoTextarea value={state.source} onChange={(v) => setState((p) => ({ ...p, source: v }))} language="json" height={400} minHeight={320} ariaLabel="Ontology source" />
+        {/* ── Class hierarchy (read-only visualization) ──
+            The freeform Monaco DSL source editor was removed — the Typed model
+            panel above is the structured source of truth (loom_no_freeform_config).
+            state.source is kept in sync from the typed model + Add entity/Add
+            relationship dialogs; this section just visualizes the parsed IS_A tree. */}
+        <div className={s.ontoSection}>
+          <div className={s.ontoSectionHead}>
+            <span className={s.ontoSectionIcon}><BranchFork20Regular /></span>
+            <div>
+              <Subtitle2>Class hierarchy ({classes.length} class{classes.length === 1 ? '' : 'es'})</Subtitle2>
+              <Caption1 as="p" block className={s.ontoSectionHint}>
+                The IS_A hierarchy derived from the typed object model. Author object types in <strong>Typed model</strong> above,
+                or use <strong>Add entity</strong> / <strong>Add relationship</strong> on the Home ribbon.
+              </Caption1>
+            </div>
           </div>
-          <div>
-            <Subtitle2>Class hierarchy</Subtitle2>
-            <Tree aria-label="Class hierarchy">
-              {classes.map((c) => (
-                <TreeItem itemType="leaf" key={c.name}>
-                  <TreeItemLayout>
-                    <strong>{c.name}</strong>
-                    {c.parent && <Caption1 style={{ marginLeft: tokens.spacingHorizontalSNudge, color: tokens.colorNeutralForeground3 }}>: {c.parent}</Caption1>}
-                  </TreeItemLayout>
-                </TreeItem>
-              ))}
-            </Tree>
-            <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Hierarchy graph</Subtitle2>
-            <OntologyHierarchyViz classes={classes} />
-            <Button appearance="primary" disabled={materializing || classes.length === 0} onClick={materializeToGraphModel} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}>
-              {materializing ? 'Materializing…' : `Materialize as graph-model (${classes.length} class${classes.length === 1 ? '' : 'es'})`}
-            </Button>
-            {matMsg && (
-              <MessageBar intent={matMsg.startsWith('Failed') ? 'error' : 'success'} style={{ marginTop: tokens.spacingVerticalS }}>
-                <MessageBarBody>{matMsg}</MessageBarBody>
-              </MessageBar>
-            )}
-          </div>
+          {classes.length === 0 ? (
+            <EmptyState icon={<BranchFork20Regular />} title="No classes yet" body="Add an object type in the Typed model panel to populate the hierarchy." />
+          ) : (
+            <div className={s.ontoSourceGrid}>
+              <div>
+                <Tree aria-label="Class hierarchy">
+                  {classes.map((c) => (
+                    <TreeItem itemType="leaf" key={c.name}>
+                      <TreeItemLayout>
+                        <strong>{c.name}</strong>
+                        {c.parent && <Caption1 style={{ marginLeft: tokens.spacingHorizontalSNudge, color: tokens.colorNeutralForeground3 }}>: {c.parent}</Caption1>}
+                      </TreeItemLayout>
+                    </TreeItem>
+                  ))}
+                </Tree>
+              </div>
+              <div>
+                <Subtitle2>Hierarchy graph</Subtitle2>
+                <OntologyHierarchyViz classes={classes} />
+              </div>
+            </div>
+          )}
+          <Button appearance="primary" disabled={materializing || classes.length === 0} onClick={materializeToGraphModel} className={s.ontoStartBtn}>
+            {materializing ? 'Materializing…' : `Materialize as graph-model (${classes.length} class${classes.length === 1 ? '' : 'es'})`}
+          </Button>
+          {matMsg && (
+            <MessageBar intent={matMsg.startsWith('Failed') ? 'error' : 'success'}>
+              <MessageBarBody>{matMsg}</MessageBarBody>
+            </MessageBar>
+          )}
         </div>
 
         {/* ── Data bindings + Activator triggers (deferred gate lifted v3.28) ── */}
@@ -1424,6 +1646,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
         <WeaveInstancePanel
           id={id}
           classes={classes}
+          objectTypes={objectTypes}
           actionTypes={Array.isArray(state.actionTypes) ? state.actionTypes : []}
           onActionTypesChange={(next) => persistOnto({ ...state, actionTypes: normalizeOntoActionTypes(next) })}
         />
