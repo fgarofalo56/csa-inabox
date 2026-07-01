@@ -113,6 +113,19 @@ function topicUrl(cfg: EventGridTopicsConfig, topic: string): string {
   return `${rgUrl(cfg)}/providers/Microsoft.EventGrid/topics/${encodeURIComponent(topic)}`;
 }
 
+/**
+ * Relative ARM resource id (no host) of a custom topic — the scope for Azure
+ * Monitor metrics (Microsoft.Insights/metrics). Event Grid metrics are
+ * per-topic (unlike the namespace-scoped Event Hubs / Service Bus metrics).
+ * monitor-client.fetchMetrics prepends the sovereign ARM base.
+ */
+export function eventGridTopicResourceId(topic: string): string {
+  const cfg = readEventGridTopicsConfig();
+  const name = (topic || '').trim();
+  if (!name) throw new EventGridTopicsError(400, undefined, 'topic is required');
+  return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventGrid/topics/${encodeURIComponent(name)}`;
+}
+
 async function armToken(): Promise<string> {
   const t = await credential.getToken(armScope());
   if (!t?.token) throw new EventGridTopicsError(401, undefined, 'Failed to acquire ARM token for Event Grid');

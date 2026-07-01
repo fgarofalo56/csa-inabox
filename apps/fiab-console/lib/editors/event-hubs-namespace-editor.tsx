@@ -21,6 +21,8 @@ import {
   Add20Regular, ArrowSync20Regular, Delete20Regular, Stream20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { MessagingMetricsTab } from '@/lib/components/messaging/metrics-tab';
+import { EventHubsDataExplorer } from '@/lib/components/messaging/event-hubs-data-explorer';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -133,6 +135,8 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
       { label: 'Event hubs', actions: [{ label: 'New event hub', onClick: gate ? undefined : () => setCreateOpen(true), disabled: !!gate }] },
       { label: 'View', actions: [
         { label: 'Event hubs', onClick: () => setTab('hubs') },
+        { label: 'Metrics', onClick: () => setTab('metrics') },
+        { label: 'Data Explorer', onClick: () => setTab('explorer') },
         { label: 'Overview', onClick: () => setTab('overview') },
       ]},
     ]},
@@ -144,6 +148,8 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
         <div className={s.tabs}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
             <Tab value="hubs">Event hubs</Tab>
+            <Tab value="metrics">Metrics</Tab>
+            <Tab value="explorer">Data Explorer</Tab>
             <Tab value="overview">Overview</Tab>
           </TabList>
         </div>
@@ -253,6 +259,10 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
             </div>
           )}
           {!loading && !gate && tab === 'overview' && !ns && <Body1>Namespace properties unavailable.</Body1>}
+
+          {!loading && !gate && tab === 'metrics' && <MessagingMetricsTab kind="event-hubs" scopeLabel={ns?.name} />}
+
+          {!loading && !gate && tab === 'explorer' && <EventHubsDataExplorer hubs={hubs} />}
         </div>
       </>
     } />

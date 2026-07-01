@@ -26,6 +26,7 @@ import {
   KeyReset20Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { MessagingMetricsTab } from '@/lib/components/messaging/metrics-tab';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -238,6 +239,7 @@ export function EventGridTopicEditor({ item, id }: Props) {
       { label: 'View', actions: [
         { label: 'Topics', onClick: () => setTab('topics') },
         { label: 'Detail', onClick: () => setTab('detail'), disabled: !selected },
+        { label: 'Metrics', onClick: () => setTab('metrics'), disabled: !selected },
       ]},
     ]},
   ], [gate, load, selected]);
@@ -249,6 +251,7 @@ export function EventGridTopicEditor({ item, id }: Props) {
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
             <Tab value="topics">Topics</Tab>
             <Tab value="detail" disabled={!selected}>Detail</Tab>
+            <Tab value="metrics" disabled={!selected}>Metrics</Tab>
           </TabList>
         </div>
         <div className={s.pad}>
@@ -370,6 +373,10 @@ export function EventGridTopicEditor({ item, id }: Props) {
                 </div>
               )}
             </>
+          )}
+
+          {!loading && !gate && tab === 'metrics' && (
+            <MessagingMetricsTab kind="event-grid" topic={selected || undefined} scopeLabel={selected || undefined} />
           )}
         </div>
 

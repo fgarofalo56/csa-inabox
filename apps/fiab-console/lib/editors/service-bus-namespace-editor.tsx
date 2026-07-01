@@ -28,6 +28,8 @@ import {
   Key20Regular, Filter20Regular, Copy20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { MessagingMetricsTab } from '@/lib/components/messaging/metrics-tab';
+import { ServiceBusExplorer } from '@/lib/components/messaging/service-bus-explorer';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -378,6 +380,8 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
       { label: 'View', actions: [
         { label: 'Queues', onClick: () => setTab('queues') },
         { label: 'Topics', onClick: () => setTab('topics') },
+        { label: 'Explorer', onClick: () => setTab('explorer') },
+        { label: 'Metrics', onClick: () => setTab('metrics') },
         { label: 'Shared access policies', onClick: () => setTab('sas') },
         { label: 'Networking', onClick: () => setTab('networking') },
         { label: 'Overview', onClick: () => setTab('overview') },
@@ -392,6 +396,8 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
             <Tab value="queues">Queues</Tab>
             <Tab value="topics">Topics</Tab>
+            <Tab value="explorer">Explorer</Tab>
+            <Tab value="metrics">Metrics</Tab>
             <Tab value="sas">Shared access policies</Tab>
             <Tab value="networking">Networking</Tab>
             <Tab value="overview">Overview</Tab>
@@ -810,6 +816,12 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
             </div>
           )}
           {!loading && !gate && tab === 'overview' && !ns && <Body1>Namespace properties unavailable.</Body1>}
+
+          {/* EXPLORER — send + peek (data plane) */}
+          {!loading && !gate && tab === 'explorer' && <ServiceBusExplorer queues={queues} topics={topics} />}
+
+          {/* METRICS — Azure Monitor */}
+          {!loading && !gate && tab === 'metrics' && <MessagingMetricsTab kind="service-bus" scopeLabel={ns?.name} />}
         </div>
       </>
     } />

@@ -94,6 +94,17 @@ function nsUrl(cfg: EventHubsConfig): string {
   return `${armBase()}/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
 }
 
+/**
+ * Relative ARM resource id (no host) of the deployment-pinned Event Hubs
+ * namespace — the scope for Azure Monitor metrics (Microsoft.Insights/metrics).
+ * Returned host-less so monitor-client.fetchMetrics can prepend the sovereign
+ * ARM base. Throws the honest 503 when the namespace env is unset.
+ */
+export function eventHubsNamespaceResourceId(): string {
+  const cfg = readEventHubsConfig();
+  return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventHub/namespaces/${encodeURIComponent(cfg.namespace)}`;
+}
+
 async function callArm(url: string, init?: RequestInit): Promise<Response> {
   const t = await credential.getToken(ARM_SCOPE);
   if (!t?.token) throw new EventHubsArmError(401, undefined, 'Failed to acquire ARM token');

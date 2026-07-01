@@ -67,6 +67,16 @@ function nsPath(cfg: ServiceBusConfig): string {
   return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.ServiceBus/namespaces/${encodeURIComponent(cfg.namespace)}`;
 }
 
+/**
+ * Relative ARM resource id (no host) of the deployment-pinned Service Bus
+ * namespace — the scope for Azure Monitor metrics (Microsoft.Insights/metrics).
+ * monitor-client.fetchMetrics prepends the sovereign ARM base. Throws when the
+ * namespace env is unset.
+ */
+export function serviceBusNamespaceResourceId(): string {
+  return nsPath(readServiceBusConfig());
+}
+
 export interface NamespaceProperties {
   name: string;
   location?: string;
