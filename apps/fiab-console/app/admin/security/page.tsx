@@ -42,6 +42,7 @@ import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { EmptyState } from '@/lib/components/empty-state';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 
 interface Insights {
   kpis: { totalItems: number; sensitiveCoveragePct: number; classificationCoveragePct: number; activePolicies: number; auditEvents30d: number };
@@ -60,6 +61,8 @@ interface AuditRow {
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
+  explainer: { marginBottom: tokens.spacingVerticalL },
+  explainerList: { marginTop: tokens.spacingVerticalS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   topTabs: { marginBottom: tokens.spacingVerticalL },
   statsRow: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(180px, 100%), 1fr))',
@@ -125,6 +128,55 @@ export default function SecurityPage() {
         wired in this deployment, the affected tab surfaces a precise remediation (env var, AppRole, bicep
         module, bootstrap script).
       </Body1>
+
+      <div className={s.explainer}>
+        <SectionExplainer>
+          Each tab configures one layer of your tenant security posture; every action rides a real Microsoft Purview or Microsoft Graph backend, never a Fabric dependency:
+          <ul className={s.explainerList}>
+            <li>
+              <strong>Purview</strong> — register data sources, run scans, and curate the glossary + domains so assets are discovered and governed.{' '}
+              <LearnPopover
+                title="Microsoft Purview"
+                content="The unified data governance plane: the Data Map catalogs your data estate, scans classify it, and the business glossary + domains add ownership and meaning."
+                learnMoreHref="https://learn.microsoft.com/purview/purview"
+              />
+            </li>
+            <li>
+              <strong>Information Protection</strong> — manage tenant <strong>sensitivity labels</strong> and label policies, then apply a label to an item.{' '}
+              <LearnPopover
+                title="Sensitivity labels (MIP)"
+                content="Microsoft Information Protection labels (Public → Highly Confidential) classify how sensitive an item is and drive downstream encryption, access, and DLP enforcement. Labels and their policies are read from Microsoft Graph."
+                tips={['Labels are tenant-wide (compliance.microsoft.com)', 'A label policy scopes which users see which labels', 'Applying a label can enforce encryption + access controls']}
+                learnMoreHref="https://learn.microsoft.com/purview/sensitivity-labels"
+              />
+            </li>
+            <li>
+              <strong>DLP</strong> — author Data Loss Prevention policies + rules, review alerts, and simulate a policy before enforcing.{' '}
+              <LearnPopover
+                title="Data Loss Prevention"
+                content="DLP policies detect and block risky sharing of sensitive information types (PII, PCI, PHI, credentials). Run a policy in simulation mode first to see what it would catch before turning on enforcement."
+                learnMoreHref="https://learn.microsoft.com/purview/dlp-learn-about-dlp"
+              />
+            </li>
+            <li>
+              <strong>DSPM for AI</strong> — Data Security Posture Management surfaces which AI interactions touch sensitive or unlabeled data so you can close gaps.{' '}
+              <LearnPopover
+                title="DSPM for AI"
+                content="Data Security Posture Management for AI reports on prompts and responses that reference sensitive data, unlabeled assets, and oversharing risk across your AI apps and agents."
+                learnMoreHref="https://learn.microsoft.com/purview/dspm-for-ai"
+              />
+            </li>
+            <li>
+              <strong>Audit</strong> — a filterable, CSV-exportable log of every governance and permission event across the platform.{' '}
+              <LearnPopover
+                title="Audit log"
+                content="A searchable trail of tenant-settings flips, item edits, share and role grants, scans, and app installs — sourced from the Loom audit store, Purview Data Map, and Log Analytics. Filter by user, event type, and time range, then export to CSV."
+                learnMoreHref="https://learn.microsoft.com/purview/audit-solutions-overview"
+              />
+            </li>
+          </ul>
+        </SectionExplainer>
+      </div>
 
       <TabList
         className={s.topTabs}

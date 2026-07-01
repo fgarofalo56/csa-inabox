@@ -18,6 +18,7 @@ import { ServiceCard, type UtilizationSnapshot } from '@/lib/components/admin-sc
 import { ScalePicker } from '@/lib/components/admin-scaling/scale-picker';
 import { CostPreview } from '@/lib/components/admin-scaling/cost-preview';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 
 /**
  * /admin/scaling — Scale-by-SKU dropdowns for every scalable Loom backing
@@ -44,6 +45,8 @@ const ACA_PROFILES = ['Consumption','D4','D8','D16','D32','E4','E8','E16','E32']
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
+  explainer: { marginBottom: tokens.spacingVerticalL },
+  explainerList: { marginTop: tokens.spacingVerticalS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   grid: {
     display: 'grid',
     // min(420px, 100%) lets the track shrink below 420px on narrow viewports
@@ -659,6 +662,41 @@ export default function ScalingPage() {
         capacity, APIM, ADX) — refresh the card after a few minutes to see
         the new state.
       </Body1>
+
+      <div className={styles.explainer}>
+        <SectionExplainer>
+          Each card scales a real Azure backing service — no Microsoft Fabric capacity required. Scaling models differ by service:
+          <ul className={styles.explainerList}>
+            <li>
+              <strong>Fabric / Power BI capacity</strong> — pick an <strong>F-SKU</strong> (F2 → F2048) or Power BI <strong>P-SKU</strong>; capacity units scale linearly and you can pause to stop compute billing.{' '}
+              <LearnPopover
+                title="Fabric / Power BI capacity SKUs"
+                content="F-SKUs (F2–F2048) are Fabric capacity units billed per CU-hour; F64 is roughly equivalent to a Power BI Premium P1. Pausing a capacity stops compute charges (storage still bills). Power BI Premium P-SKUs (P1–P3) are the legacy equivalent."
+                tips={['F64 ≈ P1 (Power BI Premium)', 'Pause to stop compute billing', 'Scale is applied asynchronously — refresh the card after a few minutes']}
+                learnMoreHref="https://learn.microsoft.com/fabric/enterprise/licenses"
+              />
+            </li>
+            <li>
+              <strong>Synapse dedicated SQL pool</strong> — a provisioned MPP warehouse scaled by <strong>DWU</strong> (DW100c → DW30000c). Cost scales with the DWU level; pause the pool when idle to pay for storage only. This is distinct from <strong>Synapse serverless</strong>, which has no dial — it autoscales and bills per TB scanned.{' '}
+              <LearnPopover
+                title="DWU vs. serverless autoscale"
+                content="A dedicated SQL pool is a fixed provisioned tier: you pick a DWU level (DW100c–DW30000c) and pay that hourly rate whether or not it is busy — so pause it when idle. Synapse serverless has no capacity to size; it elastically autoscales and bills only for the bytes each query processes."
+                tips={['Dedicated: fixed DWU, hourly, pausable', 'Serverless: no dial, pay-per-TB scanned', 'Raise the DWU only for the duration of a heavy load, then lower it']}
+                learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/quickstart-scale-compute-portal"
+              />
+            </li>
+            <li>
+              <strong>Cosmos DB</strong> — set throughput per container as <strong>manual RU/s</strong> (a fixed hourly reservation) or <strong>autoscale max RU/s</strong> (scales between 10% and 100% of the max on demand). Autoscale bills about 1.5× the manual rate per RU, but only for the RU/s actually used each hour — cheaper for spiky load, pricier for steady high load.{' '}
+              <LearnPopover
+                title="Manual vs. autoscale RU/s"
+                content="Manual throughput reserves a fixed RU/s and bills it every hour regardless of use — best for steady, predictable traffic. Autoscale sets a maximum and scales down to 10% of it when idle; the per-RU rate is about 1.5× manual, so it wins on spiky or unknown workloads and loses on flat high utilization."
+                tips={['Manual: fixed RU/s, lowest rate, steady load', 'Autoscale: 10%–100% of max, ~1.5× rate, spiky load', 'Serverless accounts have no RU/s dial (billed per request)']}
+                learnMoreHref="https://learn.microsoft.com/azure/cosmos-db/how-to-choose-offer"
+              />
+            </li>
+          </ul>
+        </SectionExplainer>
+      </div>
 
       <div className={styles.grid}>
 

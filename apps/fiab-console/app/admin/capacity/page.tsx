@@ -17,6 +17,7 @@ import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
+import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
@@ -116,6 +117,8 @@ function fmtCurrency(n: number, currency: string): string {
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
+  explainer: { marginBottom: tokens.spacingVerticalL },
+  explainerList: { marginTop: tokens.spacingVerticalS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   stats: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
@@ -563,6 +566,31 @@ export default function CapacityPage() {
         gate, never a fake value.
       </Body1>
 
+      <div className={styles.explainer}>
+        <SectionExplainer>
+          A <strong>capacity</strong> here is the pool of Azure compute + storage that backs your Loom workloads — the resources listed below are what actually run your lakehouses, warehouses, pipelines, and analytics. Loom is Azure-native, so a "capacity" is one or more of these services rather than a single Microsoft Fabric SKU.
+          <ul className={styles.explainerList}>
+            <li>
+              <strong>SKUs &amp; equivalents</strong> — where Fabric uses one F-SKU dial (F2–F2048), Loom sizes each service on its own scale: Synapse <strong>DWU</strong>, ADX vCore tiers, Databricks cluster sizes, AI Search replicas/partitions. Roughly, an F64 of Fabric compute maps to a mid-tier Synapse pool plus an ADX cluster.{' '}
+              <LearnPopover
+                title="Capacity &amp; SKU equivalents"
+                content="Fabric bundles all engines under one capacity SKU. Loom exposes each Azure engine's native SKU so you pay only for what a workload needs — a Synapse DWU level for the warehouse, an ADX tier for real-time, Databricks node sizes for Spark, and AI Search units for retrieval."
+                learnMoreHref="https://learn.microsoft.com/fabric/enterprise/licenses"
+              />
+            </li>
+            <li>
+              <strong>Pause / resume &amp; cost</strong> — most engines can pause (Synapse dedicated pools, ADX, Databricks auto-terminate) so idle compute stops billing while data persists. Month-to-date cost per resource comes live from Azure Cost Management; 24h utilization comes from Azure Monitor.{' '}
+              <LearnPopover
+                title="Pause, resume, and cost"
+                content="Pausing a dedicated SQL pool or ADX cluster stops compute charges — you keep paying only for stored data. Resume on demand (a dedicated pool takes ~60–90s to come online). The $/mo column is real Cost Management data; where an offer has no cost or metric feed (e.g. some Azure Government offers) the cell shows an honest gate."
+                tips={['Pause idle pools to pay storage only', 'Resume is on-demand (~60–90s for a dedicated pool)', 'Use "Scale & manage" below to change SKU / pause / resume in place']}
+                learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/pause-and-resume-compute-portal"
+              />
+            </li>
+          </ul>
+        </SectionExplainer>
+      </div>
+
       {unauth && <SignInRequired subject="Azure resource inventory" />}
 
       {!unauth && data === null && (
@@ -612,9 +640,16 @@ export default function CapacityPage() {
           <Section
             title="Scale & manage"
             actions={
-              <Caption1 className={a.muted}>
-                Change SKUs, pause / resume, scale — live Azure-native compute
-              </Caption1>
+              <>
+                <Caption1 className={a.muted}>
+                  Change SKUs, pause / resume, scale — live Azure-native compute
+                </Caption1>
+                <LearnPopover
+                  title="Scale & manage"
+                  content="Change a service's SKU, pause or resume it, and scale replicas — applied in place via a real Azure REST call, no portal hand-off. Scale changes on Fabric capacity, APIM, and ADX are asynchronous; refresh after a few minutes to see the new state."
+                  learnMoreHref="https://learn.microsoft.com/azure/azure-resource-manager/management/overview"
+                />
+              </>
             }
           >
             <ScaleManagePanel />
@@ -623,9 +658,17 @@ export default function CapacityPage() {
           <Section
             title="Ops Copilot"
             actions={
-              <Caption1 className={a.muted}>
-                Natural language → ARM / config action, with approval diff + RBAC gate
-              </Caption1>
+              <>
+                <Caption1 className={a.muted}>
+                  Natural language → ARM / config action, with approval diff + RBAC gate
+                </Caption1>
+                <LearnPopover
+                  title="Ops Copilot"
+                  content="Describe an operation in plain language (e.g. “pause the dev SQL pool”) and the copilot proposes the exact ARM/config change. You review a diff and approve before anything runs, and every action is gated by your Azure RBAC — it can never do more than you can."
+                  tips={['Every change shows an approval diff first', 'Actions honor your Azure RBAC role', 'Each run is written to the audit log']}
+                  learnMoreHref="https://learn.microsoft.com/azure/role-based-access-control/overview"
+                />
+              </>
             }
           >
             <OpsCopilotPane />

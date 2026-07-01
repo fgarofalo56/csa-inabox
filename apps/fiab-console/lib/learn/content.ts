@@ -79,7 +79,7 @@ export function loomThumbUrl(slug: string): string | undefined {
 }
 
 /**
- * The 85 item-type slugs that have a real per-editor Loom doc at
+ * The 95 item-type slugs that have a real per-editor Loom doc at
  * `docs/fiab/tutorials/editor-<slug>.md` (served at
  * `<base>/fiab/tutorials/editor-<slug>/`). Kept in sync with the mkdocs.yml
  * "Editor Tutorials (per-item)" nav block. A slug NOT in this set has no Loom
@@ -106,6 +106,12 @@ export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
   'sql-server-2025-vector-index', 'synapse-dedicated-sql-pool', 'synapse-pipeline',
   'synapse-serverless-sql-pool', 'synapse-spark-pool', 'tracing', 'user-data-function',
   'usql-job', 'variable-library', 'vector-store', 'warehouse',
+  // Fabric IQ (Palantir Foundry parity) — authored wave 9
+  'workshop-app', 'slate-app', 'ontology-sdk', 'aip-logic', 'release-environment',
+  'health-check',
+  // Real-Time Intelligence / messaging + lakehouse — authored wave 9
+  'event-hubs-namespace', 'service-bus-namespace', 'event-grid-topic',
+  'lakehouse-shortcut',
 ]);
 
 const REGISTRY: Record<string, LearnEntry> = {

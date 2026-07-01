@@ -1659,6 +1659,16 @@ nav:
               - Variable Library: fiab/tutorials/editor-variable-library.md
               - Vector Store: fiab/tutorials/editor-vector-store.md
               - Warehouse: fiab/tutorials/editor-warehouse.md
+              - Event Grid Topic: fiab/tutorials/editor-event-grid-topic.md
+              - Event Hubs Namespace: fiab/tutorials/editor-event-hubs-namespace.md
+              - Health Check: fiab/tutorials/editor-health-check.md
+              - Lakehouse Shortcut: fiab/tutorials/editor-lakehouse-shortcut.md
+              - Ontology SDK: fiab/tutorials/editor-ontology-sdk.md
+              - Release Environment: fiab/tutorials/editor-release-environment.md
+              - Service Bus Namespace: fiab/tutorials/editor-service-bus-namespace.md
+              - Slate App: fiab/tutorials/editor-slate-app.md
+              - "Spindle (AIP Logic & agents)": fiab/tutorials/editor-aip-logic.md
+              - Workshop App: fiab/tutorials/editor-workshop-app.md
           - Parity Gap Reports:
               - Summaries:
                   - "AI/ML editors (2026-05-26)": fiab/parity-gap/_ai-ml-summary.md

@@ -22,6 +22,7 @@ import { AdminShell } from '@/lib/components/admin-shell';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
+import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 
 type AuditSource = 'cosmos' | 'purview' | 'loganalytics';
 
@@ -66,6 +67,8 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalL,
     display: 'block',
   },
+  explainer: { marginBottom: tokens.spacingVerticalL },
+  explainerList: { marginTop: tokens.spacingVerticalS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   filters: {
     display: 'flex',
     gap: tokens.spacingHorizontalM,
@@ -227,6 +230,38 @@ export default function AuditLogsPage() {
         (Loom events), Purview Data Map (governance), and Log Analytics
         (Loom-app operations).
       </Body1>
+
+      <div className={s.explainer}>
+        <SectionExplainer>
+          The audit log is your compliance trail — every governance and security-relevant action across the platform lands here, merged from three real backends. Filter by user, event type, and time range, then export the result to CSV for review or evidence.
+          <ul className={s.explainerList}>
+            <li>
+              <strong>Cosmos</strong> — Loom's own events: tenant-settings flips, item saves, share grants, role changes, and app installs.{' '}
+              <LearnPopover
+                title="Cosmos (Loom events)"
+                content="Loom writes an immutable audit record to its Cosmos audit container for every state-changing action in the console — who did what, to which item, and the before/after value."
+                learnMoreHref="https://learn.microsoft.com/azure/cosmos-db/introduction"
+              />
+            </li>
+            <li>
+              <strong>Purview Data Map</strong> — governance events: scans, classifications, and asset-level access recorded by Microsoft Purview.{' '}
+              <LearnPopover
+                title="Purview Data Map"
+                content="Governance events come from the Microsoft Purview Data Map. Purview audit is per-asset, so some events appear only when you filter by an item / asset ID."
+                learnMoreHref="https://learn.microsoft.com/purview/audit-solutions-overview"
+              />
+            </li>
+            <li>
+              <strong>Log Analytics</strong> — Loom-app operational events (requests, deploys, errors) shipped to the workspace via Azure Monitor.{' '}
+              <LearnPopover
+                title="Log Analytics"
+                content="Operational events for the Loom console itself are queried from the Log Analytics workspace. When the workspace isn't wired up, that source shows an honest partial-result banner rather than dropping events silently."
+                learnMoreHref="https://learn.microsoft.com/azure/azure-monitor/logs/log-analytics-overview"
+              />
+            </li>
+          </ul>
+        </SectionExplainer>
+      </div>
 
       {error && (
         <MessageBar intent="error" className={atab.messageBar}>
