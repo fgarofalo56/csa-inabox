@@ -40,6 +40,7 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { randomUUID } from 'node:crypto';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { networkingConfigContainer } from '@/lib/azure/cosmos-client';
+import { normalizePrivateLinkTargetId } from '@/lib/azure/pe-subresource-groups';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -47,6 +48,10 @@ const ARM_SCOPE = armScope();
 const NSG_API = '2024-05-01';
 // Private endpoints + DNS zone groups — same version network-discovery.ts uses.
 const PE_API = '2024-03-01';
+// Virtual networks — used to resolve the managed-VNet region for a managed PE.
+const VNET_API = '2024-05-01';
+/** Tag stamped on private endpoints Loom creates via the self-service surface. */
+const LOOM_MANAGED_TAG = 'loom-managed';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -578,4 +583,219 @@ export async function removeOutboundRule(workspaceId: string, ruleId: string): P
   }
   doc.outboundRules = doc.outboundRules.filter((r) => r.id !== ruleId);
   await writeDoc(doc);
+}
+
+// ---------------------------------------------------------------------------
+// Self-service MANAGED private endpoints (admin Network page — Phase 4 G5)
+// ---------------------------------------------------------------------------
+//
+// The workspace-scoped outbound rules above register a PE against a Cosmos doc
+// for a single workspace. This section powers the tenant-admin "Managed private
+// endpoints" surface on the shared admin Network page: create a REAL
+// Microsoft.Network/privateEndpoints into the DLZ managed-VNet PE subnet
+// (LOOM_PE_SUBNET_ID) against ANY connectable Azure resource, then track the
+// approval lifecycle. A managed PE is created with a MANUAL private-link service
+// connection so it lands **Pending** until the OWNER of the target resource
+// approves the connection — the honest governance approval step this surface
+// tracks (it never auto-approves on the requestor's behalf).
+//
+// Real ARM (2024-03-01), no mocks. Honest gates flow through the shared
+// networkingErrorResponse mapper via NetworkingNotConfiguredError (503, exact
+// env var) / NetworkingArmError 401|403 (403, Network Contributor role).
+//
+// Learn: https://learn.microsoft.com/rest/api/virtualnetwork/private-endpoints/create-or-update
+//        https://learn.microsoft.com/azure/private-link/manage-private-endpoint
+
+export interface ManagedPrivateEndpoint {
+  id: string;
+  name: string;
+  location?: string;
+  resourceGroup?: string;
+  provisioningState?: string;
+  /** Approval status of the private-link connection: Pending | Approved | Rejected | Disconnected. */
+  connectionState?: string;
+  /** Approver's description returned by ARM (why approved / rejected). */
+  connectionDescription?: string;
+  /** ARM `actionsRequired` hint (e.g. "None" once approved). */
+  actionsRequired?: string;
+  /** ARM id of the target (backing) resource the PE fronts. */
+  privateLinkServiceId?: string;
+  /** Friendly name of the target resource (last id segment). */
+  targetResourceName?: string;
+  /** Sub-resource group id(s) the PE connects to (e.g. ['blob'] / ['sqlServer']). */
+  groupIds?: string[];
+  /** ARM id of the subnet the PE's NIC lives in. */
+  subnetId?: string;
+  /** The approval request message sent to the target owner (Loom stores the justification here). */
+  requestMessage?: string;
+  /** True when Loom created this PE via the self-service surface (loom-managed tag). */
+  loomManaged?: boolean;
+  /** OID of the admin who created it (loom-created-by tag). */
+  createdBy?: string;
+  /** ISO timestamp the PE was created (loom-created-at tag). */
+  createdAt?: string;
+}
+
+/** Shape one ARM privateEndpoint resource into a {@link ManagedPrivateEndpoint}. */
+function shapeManagedPe(raw: any): ManagedPrivateEndpoint {
+  const p = raw?.properties || {};
+  const conns: any[] = p.privateLinkServiceConnections?.length
+    ? p.privateLinkServiceConnections
+    : (p.manualPrivateLinkServiceConnections || []);
+  const conn = conns[0]?.properties || {};
+  const st = conn?.privateLinkServiceConnectionState || {};
+  const svcId: string | undefined = conn?.privateLinkServiceId;
+  const id: string = raw?.id || '';
+  const rg = /\/resourceGroups\/([^/]+)\//i.exec(id)?.[1];
+  const tags: Record<string, string> =
+    raw?.tags && typeof raw.tags === 'object' ? raw.tags : {};
+  return {
+    id,
+    name: raw?.name || id.split('/').pop() || '',
+    location: raw?.location,
+    resourceGroup: rg,
+    provisioningState: p.provisioningState,
+    connectionState: st?.status,
+    connectionDescription: st?.description,
+    actionsRequired: st?.actionsRequired,
+    privateLinkServiceId: svcId,
+    targetResourceName: svcId ? svcId.split('/').pop() : undefined,
+    groupIds: conn?.groupIds || [],
+    subnetId: p?.subnet?.id,
+    requestMessage: conn?.requestMessage,
+    loomManaged: String(tags[LOOM_MANAGED_TAG] || '').toLowerCase() === 'true',
+    createdBy: tags['loom-created-by'],
+    createdAt: tags['loom-created-at'],
+  };
+}
+
+/**
+ * List every private endpoint in the networking RG (the DLZ managed network),
+ * shaped with its connection-approval state. Loom-managed endpoints (created via
+ * this surface) sort first. Needs only Reader on the networking RG for the list;
+ * a missing sub/RG throws NetworkingNotConfiguredError → honest 503 at the BFF.
+ */
+export async function listManagedPrivateEndpoints(): Promise<ManagedPrivateEndpoint[]> {
+  const cfg = readNetworkingConfig();
+  const path =
+    `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.networkingRg)}` +
+    `/providers/Microsoft.Network/privateEndpoints?api-version=${PE_API}`;
+  const j = await armGet<{ value?: any[] }>(path);
+  const out = (j?.value || []).map(shapeManagedPe);
+  out.sort((a, b) =>
+    (Number(!!b.loomManaged) - Number(!!a.loomManaged)) || a.name.localeCompare(b.name));
+  return out;
+}
+
+/** Read a single managed PE's live connection-approval state (poll after approve). */
+export async function getPrivateEndpointConnectionState(
+  name: string,
+): Promise<ManagedPrivateEndpoint | null> {
+  const cfg = readNetworkingConfig();
+  try {
+    const raw = await armGet<any>(`${peBase(cfg, name)}?api-version=${PE_API}`);
+    return shapeManagedPe(raw);
+  } catch (e) {
+    if (e instanceof NetworkingArmError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+/**
+ * Resolve the Azure region for a managed PE. A private endpoint must be in the
+ * same region as the subnet it deploys into, so we prefer the explicit body /
+ * LOOM_LOCATION / LOOM_REGION value, then fall back to reading the managed-VNet's
+ * own region from ARM (derived from the PE subnet id). Throws an honest 400 when
+ * neither is resolvable.
+ */
+async function resolveManagedPeLocation(cfg: NetworkingConfig, explicit?: string): Promise<string> {
+  const env = (explicit || process.env.LOOM_LOCATION || process.env.LOOM_REGION || '').trim();
+  if (env) return env;
+  const vnetId = cfg.peSubnetId ? cfg.peSubnetId.split('/subnets/')[0] : '';
+  if (vnetId) {
+    try {
+      const vnet = await armGet<{ location?: string }>(`${vnetId}?api-version=${VNET_API}`);
+      if (vnet?.location) return String(vnet.location);
+    } catch { /* fall through to the honest error below */ }
+  }
+  throw new NetworkingArmError(
+    'Could not resolve an Azure region for the managed private endpoint — set LOOM_LOCATION.',
+    400,
+  );
+}
+
+export interface ManagedPeCreateInput {
+  /** ARM-safe PE name (validated by the BFF route). */
+  name: string;
+  /** Full ARM id of the target resource (SQL databases are normalized to the server). */
+  targetResourceId: string;
+  /** ARM resource type of the picked resource (drives SQL server normalization). */
+  armType?: string;
+  /** Sub-resource group id (e.g. blob/dfs/sqlServer/vault/namespace). */
+  groupId: string;
+  /** Justification — sent to the target owner as the approval request message. */
+  justification: string;
+  /** Region override; defaults to LOOM_LOCATION → managed-VNet region. */
+  location?: string;
+  /** OID of the creating admin (stamped as the loom-created-by tag). */
+  createdBy?: string;
+}
+
+/**
+ * Create a REAL Microsoft.Network/privateEndpoints into the DLZ managed-VNet PE
+ * subnet (LOOM_PE_SUBNET_ID), against the target resource, with a MANUAL
+ * private-link connection so it lands Pending until the target owner approves.
+ * The justification rides along as the connection `requestMessage` (shown to the
+ * approver). Throws NetworkingNotConfiguredError when the PE subnet isn't wired.
+ */
+export async function createManagedPrivateEndpoint(
+  input: ManagedPeCreateInput,
+): Promise<ManagedPrivateEndpoint> {
+  const cfg = readNetworkingConfig();
+  if (!cfg.peSubnetId) {
+    // Honest structured 503 — the managed-VNet PE subnet isn't wired yet.
+    throw new NetworkingNotConfiguredError(['LOOM_PE_SUBNET_ID']);
+  }
+  const target = normalizePrivateLinkTargetId(input.targetResourceId, input.armType);
+  if (!target.startsWith('/subscriptions/')) {
+    throw new NetworkingArmError(
+      'targetResourceId must be the full ARM id of the target resource (/subscriptions/…)',
+      400,
+    );
+  }
+  if (!input.groupId) throw new NetworkingArmError('groupId (sub-resource) is required', 400);
+  const location = await resolveManagedPeLocation(cfg, input.location);
+  // requestMessage is capped at 140 chars by ARM.
+  const requestMessage = (input.justification || 'CSA Loom managed private endpoint').slice(0, 140);
+  const body = {
+    location,
+    tags: {
+      [LOOM_MANAGED_TAG]: 'true',
+      'loom-created-at': new Date().toISOString(),
+      ...(input.createdBy ? { 'loom-created-by': input.createdBy } : {}),
+    },
+    properties: {
+      subnet: { id: cfg.peSubnetId },
+      // MANUAL connection ⇒ always lands Pending until the target owner approves
+      // — the honest governance approval step (never auto-approved here).
+      manualPrivateLinkServiceConnections: [
+        {
+          name: `${input.name}-conn`,
+          properties: {
+            privateLinkServiceId: target,
+            groupIds: [input.groupId],
+            requestMessage,
+          },
+        },
+      ],
+    },
+  };
+  const raw = await armPut<any>(`${peBase(cfg, input.name)}?api-version=${PE_API}`, body);
+  return shapeManagedPe(raw);
+}
+
+/** Delete a managed private endpoint by name via ARM. */
+export async function deleteManagedPrivateEndpoint(name: string): Promise<void> {
+  const cfg = readNetworkingConfig();
+  await armDelete(`${peBase(cfg, name)}?api-version=${PE_API}`);
 }

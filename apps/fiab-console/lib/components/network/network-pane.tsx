@@ -30,6 +30,7 @@ import {
   Info16Filled, Dismiss16Filled,
 } from '@fluentui/react-icons';
 import { FullNetworkTopologyCanvas } from './full-topology-canvas';
+import { ManagedPrivateEndpointsCard } from './managed-private-endpoints';
 
 interface DnsRecord { fqdn: string; ips: string[]; zone: string; }
 interface PrivateEndpoint {
@@ -462,6 +463,12 @@ export function NetworkPane() {
           )}
         </div>
       )}
+
+      {/* 1b · Managed private endpoints — self-service create + approval (Phase 4 G5).
+          Tenant-admin gated; renders its own honest MessageBar when not configured
+          / not authorized, so it shows the create + approval surface independently
+          of the read-only inventory above. */}
+      <ManagedPrivateEndpointsCard />
 
       {/* 2 · Hosts-file override */}
       {!loading && data?.ok && hostsBlock && (
