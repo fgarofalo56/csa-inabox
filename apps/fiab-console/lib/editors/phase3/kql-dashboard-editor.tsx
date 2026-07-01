@@ -43,6 +43,7 @@ import {
   TileVisual, kqlResultToCsv, downloadTextFile, slugifyForFile,
   type KqlResult, type TileViz,
 } from './kql-results';
+import { AnomalyForecastDialog } from './anomaly-forecast';
 import { useStyles } from './styles';
 
 // ----- KQL Dashboard (Fabric Real-Time Dashboard parity) -----
@@ -337,6 +338,9 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const [aiErr, setAiErr] = useState<string | null>(null);
   const [aiNote, setAiNote] = useState<string | null>(null);
   const [aiDataSourceId, setAiDataSourceId] = useState('');
+  // Anomaly/forecast tile builder — native-KQL time-series ML (series_decompose)
+  // over the Azure-native ADX cluster. Composes the tile's KQL, no Fabric.
+  const [anomalyOpen, setAnomalyOpen] = useState(false);
   // Query-based param value caches: variableName → string[]
   const [paramValueCache, setParamValueCache] = useState<Record<string, string[]>>({});
   // Real KQL databases on the shared Loom ADX cluster — populates the data
@@ -568,6 +572,22 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     }
   }, [id, tiles, buildModel, updateTile]);
 
+  // Append an anomaly/forecast tile from the AnomalyForecastDialog. The dialog
+  // hands back the fully-composed series_decompose KQL; we add it as a normal
+  // time-chart tile (bound to the dashboard default DB) and run it live so the
+  // decomposition renders immediately via the existing TimeSeriesChart.
+  const addAnomalyTile = useCallback(({ kql, title }: { kql: string; title: string; mode: 'anomaly' | 'forecast' }) => {
+    let insertedIdx = 0;
+    setTiles((prev) => {
+      insertedIdx = prev.length;
+      return [...prev, { title, kql, viz: 'timechart' as TileViz, database: defaultDb, w: 6, h: 3 }];
+    });
+    setDirty(true);
+    setAnomalyOpen(false);
+    setTileFlyoutIdx(insertedIdx);
+    setTimeout(() => runTile(insertedIdx), 0);
+  }, [defaultDb, runTile]);
+
   // Re-run ONLY the tiles whose KQL body references the given parameter
   // variable name (selective dependent-tile re-run, like Fabric re-evaluating
   // just the tiles a changed filter feeds). `duration` params affect every
@@ -725,6 +745,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
       { label: 'Edit', actions: [
         { label: 'Add tile', onClick: addTile },
         { label: 'Add tile with Copilot', onClick: () => { setAiErr(null); setAiNote(null); setAiOpen(true); } },
+        { label: 'Add anomaly / forecast tile', onClick: () => setAnomalyOpen(true) },
         { label: 'Data sources', onClick: () => setSourcesOpen(true) },
         { label: 'Parameters', onClick: () => setParamsOpen(true) },
         { label: 'Base queries', onClick: () => setBaseQueriesOpen(true) },
@@ -752,6 +773,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
         {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
         <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={addTile}>Add tile</Button>
         <Button size="small" appearance="primary" icon={<Sparkle20Regular />} onClick={() => { setAiErr(null); setAiNote(null); setAiOpen(true); }}>Add tile with Copilot</Button>
+        <Button size="small" appearance="outline" icon={<MathFormula20Regular />} onClick={() => setAnomalyOpen(true)}>Anomaly / forecast</Button>
         <Button size="small" appearance="outline" icon={<Database20Regular />} onClick={() => setSourcesOpen(true)}>Data sources</Button>
         <Button size="small" appearance="outline" icon={<MathFormula20Regular />} onClick={() => setParamsOpen(true)}>Parameters</Button>
         <Button size="small" appearance="outline" onClick={() => setBaseQueriesOpen(true)}>Base queries</Button>
@@ -1390,6 +1412,19 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* Anomaly / forecast tile builder — native-KQL time-series ML over ADX.
+          The dialog composes the series_decompose KQL and hands it back; we add
+          it as a time-chart tile bound to the dashboard default database. */}
+      <AnomalyForecastDialog
+        open={anomalyOpen}
+        onOpenChange={setAnomalyOpen}
+        itemId={id}
+        database={defaultDb}
+        fetchSchema={false}
+        defaultMode="anomaly"
+        onAddTile={addAnomalyTile}
+      />
     </div>
   );
 

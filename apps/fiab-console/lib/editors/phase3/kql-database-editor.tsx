@@ -53,6 +53,7 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { KqlResultsPanel, type KqlResult } from './kql-results';
+import { AnomalyForecastDialog } from './anomaly-forecast';
 import { useStyles } from './styles';
 
 // ----- KQL Database -----
@@ -245,6 +246,20 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const [rlsBusy, setRlsBusy] = useState(false);
   const [rlsError, setRlsError] = useState<string | null>(null);
   const [rlsNotice, setRlsNotice] = useState<string | null>(null);
+
+  // ── Anomaly detection / forecasting (this task) ─────────────────────────
+  // Native-KQL time-series ML over ADX (series_decompose_anomalies /
+  // series_decompose_forecast) — a table-level action opening the shared
+  // AnomalyForecastDialog. No Fabric, no external ML service.
+  const [anomalyOpen, setAnomalyOpen] = useState(false);
+  const [anomalyMode, setAnomalyMode] = useState<'anomaly' | 'forecast'>('anomaly');
+  const [anomalyTable, setAnomalyTable] = useState<string>('');
+
+  const openAnomaly = useCallback((mode: 'anomaly' | 'forecast', table?: string) => {
+    setAnomalyMode(mode);
+    setAnomalyTable(table || info?.tables?.[0]?.name || '');
+    setAnomalyOpen(true);
+  }, [info?.tables]);
 
   const openRlsEditor = useCallback(async (tableName: string) => {
     setRlsTable(tableName); setRlsError(null); setRlsNotice(null);
@@ -1146,9 +1161,13 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
           { label: 'Cluster lifecycle & scale', onClick: () => setClusterOpen(true), title: 'Stop/start/scale/delete the ADX cluster (ARM)' },
           { label: 'OneLake availability', disabled: true, title: 'OneLake mirroring requires Fabric-managed cluster (LOOM_KUSTO_FABRIC_MANAGED=true)' },
         ]},
+        { label: 'Analyze', actions: [
+          { label: 'Detect anomalies', onClick: () => openAnomaly('anomaly'), title: 'Native-KQL time-series anomaly detection (series_decompose_anomalies) over a table' },
+          { label: 'Forecast', onClick: () => openAnomaly('forecast'), title: 'Native-KQL time-series forecasting (series_decompose_forecast) over a table' },
+        ]},
       ]},
     ];
-  }, [openWizard, openFnEditor, openDcWizard, openRlsEditor, info?.isFollower, info?.tables]);
+  }, [openWizard, openFnEditor, openDcWizard, openRlsEditor, openAnomaly, info?.isFollower, info?.tables]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -2153,6 +2172,17 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          {/* Anomaly detection / forecasting — native KQL time-series ML over ADX */}
+          <AnomalyForecastDialog
+            open={anomalyOpen}
+            onOpenChange={setAnomalyOpen}
+            itemId={id}
+            database={info?.database}
+            tables={(info?.tables ?? []).map((t) => t.name)}
+            defaultTable={anomalyTable}
+            defaultMode={anomalyMode}
+          />
         </div>
       }
     />
