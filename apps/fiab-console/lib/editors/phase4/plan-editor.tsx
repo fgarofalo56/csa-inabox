@@ -32,6 +32,7 @@ import {
   Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
+  Send20Regular, ArrowSplit20Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -98,6 +99,8 @@ import {
   orderedLineItems, lineItemValueAt, lineItemRowTotal, leafInputItems,
   evalFormula, formulaToText, validateModel, validateFormulaRows,
   qfSum, qfAverage, qfDifference, qfRatioPct, qfGrowthPct,
+  // Spreading / breakback / driver-based topological recompute.
+  spread, breakback, driverRows, topoOrderLineItems, type SpreadMode,
   type PlanScenario, type PlanScenarioKind,
   type PlanningSheet, type PlanSemanticModelRef, type PlanBackingDb,
   type PlanCellRow, type PlanRowSortKey, type PeriodPoint, type GanttBar,
@@ -515,6 +518,9 @@ function PlanningSheetPanel({
   // Hierarchy drill-down (collapsed parent ids) + Formula builder target row.
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [formulaEdit, setFormulaEdit] = useState<string | null>(null);
+  // Spreading (allocation) + breakback dialogs — parent+period → child cells.
+  const [spreadCtx, setSpreadCtx] = useState<{ parentId: string; periodId: string; mode: SpreadMode } | null>(null);
+  const [breakbackCtx, setBreakbackCtx] = useState<{ parentId: string; periodId: string } | null>(null);
   const toggleCollapse = (liId: string) => setCollapsed((prev) => {
     const next = new Set(prev);
     if (next.has(liId)) next.delete(liId); else next.add(liId);
@@ -579,6 +585,21 @@ function PlanningSheetPanel({
   const applyQuickFormula = (liId: string, tokens: PlanFormulaToken[]) => {
     setLineItemFormula(liId, tokens);
     setMsg({ intent: 'success', text: 'Quick formula applied. Open the formula to refine it.' });
+  };
+  // Flag/unflag a row as a driver (planning assumption formulas reference).
+  const toggleDriver = (liId: string) =>
+    mutateSheet(sheet.id, (s) => ({ ...s, lineItems: s.lineItems.map((li) => (li.id === liId ? { ...li, driver: !li.driver } : li)) }));
+  // Direct children of a parent row — the spread/breakback allocation targets.
+  const directChildren = (parentId: string) => sheet.lineItems.filter((li) => li.parentId === parentId);
+  // Write an allocation result (one value per direct child) into a period's cells.
+  const writeChildCells = (parentId: string, periodId: string, values: number[]) => {
+    const kids = sheet.lineItems.filter((li) => li.parentId === parentId);
+    mutateSheet(sheet.id, (s) => {
+      const next = { ...s.cells };
+      kids.forEach((k, i) => { next[cellKey(k.id, periodId, activeScenarioId)] = values[i] ?? 0; });
+      return { ...s, cells: next };
+    });
+    setMsg({ intent: 'success', text: `Distributed to ${kids.length} child row${kids.length === 1 ? '' : 's'}.` });
   };
 
   const addSheet = () => {
@@ -655,7 +676,10 @@ function PlanningSheetPanel({
   };
   const visibleRows = ordered.filter((o) => !isHidden(o.item));
   // Candidate rows a formula can reference (every row in the sheet except itself).
-  const formulaCandidates = sheet.lineItems.map((li) => ({ id: li.id, name: li.name }));
+  // Drivers sort first and carry a "(driver)" hint so assumptions are easy to pick.
+  const formulaCandidates = [...sheet.lineItems]
+    .map((li) => ({ id: li.id, name: li.driver ? `${li.name} (driver)` : li.name, driver: !!li.driver }))
+    .sort((a, b) => (a.driver === b.driver ? 0 : a.driver ? -1 : 1));
   const editingFormulaItem = formulaEdit ? byId.get(formulaEdit) : undefined;
   const varColspan = sheet.periods.length + (showVariance ? 6 : 3);
 
@@ -754,17 +778,54 @@ function PlanningSheetPanel({
                           icon={collapsed.has(li.id) ? <ChevronRight16Regular /> : <ChevronDown16Regular />} onClick={() => toggleCollapse(li.id)} />
                       ) : isFormula ? (
                         <Calculator20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+                      ) : li.driver ? (
+                        <Flash20Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
                       ) : <span style={{ width: tokens.spacingHorizontalL, flexShrink: 0 }} />}
                       <Input value={li.name} onChange={(_, d) => renameLineItem(li.id, d.value)} aria-label="Line item name" style={{ minWidth: 0, fontWeight: isRollup ? tokens.fontWeightSemibold : undefined } as any} />
+                      {li.driver && <Badge appearance="tint" color="brand" style={{ flexShrink: 0 }}>Driver</Badge>}
                     </span>
                     {formulaText && <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, fontFamily: 'monospace', marginLeft: tokens.spacingHorizontalL }}>= {formulaText}</Caption1>}
                   </TableCell>
-                  {sheet.periods.map((p, pIdx) => (
+                  {sheet.periods.map((p, pIdx) => {
+                    const canAllocate = isRollup && directChildren(li.id).length > 0;
+                    return (
                     <TableCell key={p.id}>
                       {computed ? (
-                        <span style={{ display: 'inline-block', minWidth: 60, color: tokens.colorNeutralForeground2 }}>
-                          {fmtNum(lineItemValueAt(sheet, activeScenarioId, li.id, pIdx))}
-                        </span>
+                        canAllocate ? (
+                          <Menu openOnContext>
+                            <MenuTrigger disableButtonEnhancement>
+                              <span
+                                role="button"
+                                tabIndex={0}
+                                title="Right-click to spread this total down to children"
+                                style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, minWidth: 60, color: tokens.colorNeutralForeground2, cursor: 'context-menu' }}
+                              >
+                                {fmtNum(lineItemValueAt(sheet, activeScenarioId, li.id, pIdx))}
+                                <Button
+                                  size="small"
+                                  appearance="transparent"
+                                  icon={<Edit16Regular />}
+                                  aria-label={`Breakback ${li.name} ${p.label}`}
+                                  title="Edit total — push the change back to children (breakback)"
+                                  onClick={(e) => { e.stopPropagation(); setBreakbackCtx({ parentId: li.id, periodId: p.id }); }}
+                                />
+                              </span>
+                            </MenuTrigger>
+                            <MenuPopover>
+                              <MenuList>
+                                <MenuItem icon={<ArrowSplit20Regular />} onClick={() => setSpreadCtx({ parentId: li.id, periodId: p.id, mode: 'evenly' })}>Spread evenly</MenuItem>
+                                <MenuItem icon={<DataTrending20Regular />} onClick={() => setSpreadCtx({ parentId: li.id, periodId: p.id, mode: 'growth' })}>Spread by growth %</MenuItem>
+                                <MenuItem icon={<Layer20Regular />} onClick={() => setSpreadCtx({ parentId: li.id, periodId: p.id, mode: 'weight' })}>Spread by weight</MenuItem>
+                                <MenuDivider />
+                                <MenuItem icon={<Edit16Regular />} onClick={() => setBreakbackCtx({ parentId: li.id, periodId: p.id })}>Breakback (edit total)…</MenuItem>
+                              </MenuList>
+                            </MenuPopover>
+                          </Menu>
+                        ) : (
+                          <span style={{ display: 'inline-block', minWidth: 60, color: tokens.colorNeutralForeground2 }}>
+                            {fmtNum(lineItemValueAt(sheet, activeScenarioId, li.id, pIdx))}
+                          </span>
+                        )
                       ) : (
                         <Input
                           type="number"
@@ -775,7 +836,8 @@ function PlanningSheetPanel({
                         />
                       )}
                     </TableCell>
-                  ))}
+                    );
+                  })}
                   <TableCell><strong>{fmtNum(computed ? lineItemRowTotal(sheet, activeScenarioId, li.id) : rowTotal(sheet, activeScenarioId, li.id))}</strong></TableCell>
                   {showVariance && (
                     <TableCell>
@@ -817,6 +879,11 @@ function PlanningSheetPanel({
                           )}
                           <MenuItem icon={<ChevronRight16Regular />} onClick={() => indentRow(li.id)}>Indent (nest)</MenuItem>
                           <MenuItem icon={<ChevronLeft16Regular />} onClick={() => outdentRow(li.id)} disabled={!li.parentId}>Outdent</MenuItem>
+                          {!isRollup && (
+                            <MenuItem icon={<Flash20Regular />} onClick={() => toggleDriver(li.id)}>
+                              {li.driver ? 'Unmark as driver' : 'Mark as driver'}
+                            </MenuItem>
+                          )}
                           <MenuDivider />
                           <MenuItem icon={<Dismiss16Regular />} onClick={() => removeLineItem(li.id)}>Delete row</MenuItem>
                         </MenuList>
@@ -851,9 +918,21 @@ function PlanningSheetPanel({
 
       {(sheet.lineItems.some((li) => li.parentId) || sheet.lineItems.some((li) => li.kind === 'formula')) && (
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          <Layer20Regular style={{ verticalAlign: 'middle' }} /> Roll-up parents and formula rows are computed (read-only); only leaf inputs hold entered values.
+          <Layer20Regular style={{ verticalAlign: 'middle' }} /> Roll-up parents and formula rows are computed (read-only); only leaf inputs hold entered values. Right-click a roll-up cell to spread its total down to children.
         </Caption1>
       )}
+
+      {driverRows(sheet.lineItems).length > 0 && (() => {
+        const { order, cycle } = topoOrderLineItems(sheet);
+        const formulaOrder = order.map((oid) => byId.get(oid)).filter((li) => li?.kind === 'formula');
+        return (
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            <Flash20Regular style={{ verticalAlign: 'middle', color: tokens.colorBrandForeground1 }} /> Drivers: <strong>{driverRows(sheet.lineItems).map((d) => d.name).join(', ')}</strong>
+            {formulaOrder.length > 0 && <> — formulas recompute in dependency order: {formulaOrder.map((li) => li!.name).join(' → ')}.</>}
+            {cycle && <span style={{ color: tokens.colorPaletteRedForeground1 }}> (reference cycle detected — fix a formula.)</span>}
+          </Caption1>
+        );
+      })()}
 
       {state.semanticModelRef && (
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
@@ -875,7 +954,196 @@ function PlanningSheetPanel({
         rows={formulaCandidates.filter((r) => r.id !== formulaEdit)}
         onApply={(toks) => { if (formulaEdit) setLineItemFormula(formulaEdit, toks); }}
       />
+      <SpreadDialog
+        ctx={spreadCtx}
+        sheet={sheet}
+        scenarioId={activeScenarioId}
+        childrenOf={directChildren}
+        onClose={() => setSpreadCtx(null)}
+        onApply={(vals) => { if (spreadCtx) writeChildCells(spreadCtx.parentId, spreadCtx.periodId, vals); }}
+      />
+      <BreakbackDialog
+        ctx={breakbackCtx}
+        sheet={sheet}
+        scenarioId={activeScenarioId}
+        childrenOf={directChildren}
+        onClose={() => setBreakbackCtx(null)}
+        onApply={(vals) => { if (breakbackCtx) writeChildCells(breakbackCtx.parentId, breakbackCtx.periodId, vals); }}
+      />
     </div>
+  );
+}
+
+/**
+ * Spread (allocation) dialog — distribute a total for a roll-up parent cell down
+ * to its direct child rows for one period, by mode (evenly / by growth % / by
+ * weight). Pure math via spread(); live preview; writes leaf child cells on Apply.
+ */
+function SpreadDialog({
+  ctx, sheet, scenarioId, childrenOf, onClose, onApply,
+}: {
+  ctx: { parentId: string; periodId: string; mode: SpreadMode } | null;
+  sheet: PlanningSheet;
+  scenarioId: string;
+  childrenOf: (parentId: string) => PlanLineItem[];
+  onClose: () => void;
+  onApply: (values: number[]) => void;
+}) {
+  const open = !!ctx;
+  const parent = ctx ? sheet.lineItems.find((li) => li.id === ctx.parentId) : undefined;
+  const period = ctx ? sheet.periods.find((p) => p.id === ctx.periodId) : undefined;
+  const periodIdx = ctx ? sheet.periods.findIndex((p) => p.id === ctx.periodId) : -1;
+  const kids = ctx ? childrenOf(ctx.parentId) : [];
+  const currentTotal = ctx ? lineItemValueAt(sheet, scenarioId, ctx.parentId, periodIdx) : 0;
+  const curVals = ctx ? kids.map((k) => getCell(sheet.cells, k.id, ctx.periodId, scenarioId)) : [];
+
+  const [target, setTarget] = useState('');
+  const [growth, setGrowth] = useState('10');
+  useEffect(() => {
+    if (open) { setTarget(String(currentTotal || '')); setGrowth('10'); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const targetNum = target === '' ? 0 : Number(target);
+  const growthPct = Number(growth) / 100;
+  const preview = ctx && Number.isFinite(targetNum)
+    ? spread(targetNum, curVals, ctx.mode, { growthPct: Number.isFinite(growthPct) ? growthPct : 0 })
+    : [];
+  const modeLabel = { evenly: 'evenly', growth: 'by growth %', weight: 'by weight' }[ctx?.mode || 'evenly'];
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 540 }}>
+        <DialogBody>
+          <DialogTitle>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+              <ArrowSplit20Regular style={{ color: tokens.colorBrandForeground1 }} /> Spread {modeLabel}
+            </span>
+          </DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Distribute a total for <strong>{parent?.name}</strong> · <strong>{period?.label}</strong> down to its {kids.length} child row{kids.length === 1 ? '' : 's'}. Only leaf children hold entered values.
+              </Caption1>
+              <Field label="Total to spread">
+                <Input type="number" value={target} onChange={(_, d) => setTarget(d.value)} contentBefore={<Money20Regular />} />
+              </Field>
+              {ctx?.mode === 'growth' && (
+                <Field label="Growth per period (%)" hint="Each successive child grows by this percentage.">
+                  <Input type="number" value={growth} onChange={(_, d) => setGrowth(d.value)} contentAfter="%" />
+                </Field>
+              )}
+              {kids.length === 0 ? (
+                <MessageBar intent="warning"><MessageBarBody>This row has no child rows. Indent rows beneath it first (row menu → Indent).</MessageBarBody></MessageBar>
+              ) : (
+                <Table size="small" aria-label="Spread preview">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Child row</TableHeaderCell>
+                    <TableHeaderCell>Current</TableHeaderCell>
+                    <TableHeaderCell>After</TableHeaderCell>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {kids.map((k, i) => (
+                      <TableRow key={k.id}>
+                        <TableCell>{k.name}</TableCell>
+                        <TableCell>{fmtNum(curVals[i])}</TableCell>
+                        <TableCell><strong>{fmtNum(preview[i] || 0)}</strong></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={kids.length === 0 || !Number.isFinite(targetNum)} onClick={() => { onApply(preview); onClose(); }}>Apply spread</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/**
+ * Breakback dialog — edit a roll-up parent's total for one period and push the
+ * delta proportionally back to its children. Pure math via breakback(); live
+ * preview shows the current → after per child; writes leaf child cells on Apply.
+ */
+function BreakbackDialog({
+  ctx, sheet, scenarioId, childrenOf, onClose, onApply,
+}: {
+  ctx: { parentId: string; periodId: string } | null;
+  sheet: PlanningSheet;
+  scenarioId: string;
+  childrenOf: (parentId: string) => PlanLineItem[];
+  onClose: () => void;
+  onApply: (values: number[]) => void;
+}) {
+  const open = !!ctx;
+  const parent = ctx ? sheet.lineItems.find((li) => li.id === ctx.parentId) : undefined;
+  const period = ctx ? sheet.periods.find((p) => p.id === ctx.periodId) : undefined;
+  const periodIdx = ctx ? sheet.periods.findIndex((p) => p.id === ctx.periodId) : -1;
+  const kids = ctx ? childrenOf(ctx.parentId) : [];
+  const currentTotal = ctx ? lineItemValueAt(sheet, scenarioId, ctx.parentId, periodIdx) : 0;
+  const curVals = ctx ? kids.map((k) => getCell(sheet.cells, k.id, ctx.periodId, scenarioId)) : [];
+
+  const [target, setTarget] = useState('');
+  useEffect(() => {
+    if (open) setTarget(String(currentTotal || ''));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const targetNum = target === '' ? 0 : Number(target);
+  const preview = ctx && Number.isFinite(targetNum) ? breakback(curVals, targetNum) : [];
+  const delta = targetNum - currentTotal;
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 540 }}>
+        <DialogBody>
+          <DialogTitle>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+              <Edit16Regular style={{ color: tokens.colorBrandForeground1 }} /> Breakback — edit total
+            </span>
+          </DialogTitle>
+          <DialogContent>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Set a new total for <strong>{parent?.name}</strong> · <strong>{period?.label}</strong>. The change ({fmtNum(delta)}) is pushed to its {kids.length} child row{kids.length === 1 ? '' : 's'} in proportion to their current share.
+              </Caption1>
+              <Field label="New total">
+                <Input type="number" value={target} onChange={(_, d) => setTarget(d.value)} contentBefore={<Money20Regular />} />
+              </Field>
+              {kids.length === 0 ? (
+                <MessageBar intent="warning"><MessageBarBody>This row has no child rows to break back into.</MessageBarBody></MessageBar>
+              ) : (
+                <Table size="small" aria-label="Breakback preview">
+                  <TableHeader><TableRow>
+                    <TableHeaderCell>Child row</TableHeaderCell>
+                    <TableHeaderCell>Current</TableHeaderCell>
+                    <TableHeaderCell>After</TableHeaderCell>
+                  </TableRow></TableHeader>
+                  <TableBody>
+                    {kids.map((k, i) => (
+                      <TableRow key={k.id}>
+                        <TableCell>{k.name}</TableCell>
+                        <TableCell>{fmtNum(curVals[i])}</TableCell>
+                        <TableCell><strong>{fmtNum(preview[i] || 0)}</strong></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </div>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" disabled={kids.length === 0 || !Number.isFinite(targetNum)} onClick={() => { onApply(preview); onClose(); }}>Apply breakback</Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
 
@@ -1925,6 +2193,171 @@ function PlanModelPanel({
   );
 }
 
+// ===================================================================
+// Plan Copilot — the collapsible right-rail connected-planning assistant.
+//
+// Streams from POST /api/items/plan/[id]/copilot, which grounds a chat completion
+// on THIS plan's real persisted cells / variance / model (the shared aoai-chat-
+// client). Renders the normalized token/final/error SSE incrementally. Honest
+// AOAI 503 gate in a Fluent MessageBar; the editor stays fully functional.
+// Web5: Fluent v9 + Loom tokens, chat bubbles, quick prompts, an icon per action.
+// ===================================================================
+
+const usePlanCopilotStyles = makeStyles({
+  pane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minHeight: 0, height: '100%' },
+  head: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  thread: {
+    flex: 1, minHeight: '220px', overflowY: 'auto', display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalS, paddingRight: tokens.spacingHorizontalXXS,
+  },
+  bubble: { padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge, maxWidth: '94%', whiteSpace: 'pre-wrap' },
+  you: { alignSelf: 'flex-end', backgroundColor: tokens.colorBrandBackground2 },
+  bot: { alignSelf: 'flex-start', backgroundColor: tokens.colorNeutralBackground2 },
+  quick: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  composer: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  sendRow: { display: 'flex', justifyContent: 'flex-end' },
+});
+
+interface CopilotTurn { who: 'you' | 'copilot'; text: string; streaming?: boolean }
+
+function PlanCopilotPane({ id, sheetName, scenarioName }: { id: string; sheetName: string; scenarioName: string }) {
+  const s = usePlanCopilotStyles();
+  const [turns, setTurns] = useState<CopilotTurn[]>([{
+    who: 'copilot',
+    text: "I'm your Plan Copilot. Ask me to explain a variance, draft a forecast, or sanity-check your budget — I read this plan's cells, variance, and model.",
+  }]);
+  const [draft, setDraft] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [aoaiGate, setAoaiGate] = useState<string | null>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
+  const isNew = !id || id === 'new';
+
+  const scrollDown = () => requestAnimationFrame(() => { if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight; });
+
+  const send = useCallback(async (raw: string) => {
+    const text = raw.trim();
+    if (!text || busy) return;
+    if (isNew) { setAoaiGate('Save the plan first — Plan Copilot grounds on the saved plan.'); return; }
+    setDraft(''); setAoaiGate(null); setBusy(true);
+    // Compact prior history (last 6 non-streaming turns) for a conversational thread.
+    const history = turns
+      .filter((t) => t.text && !t.streaming)
+      .slice(-6)
+      .map((t) => ({ role: t.who === 'you' ? 'user' : 'assistant', content: t.text }));
+    setTurns((prev) => [...prev, { who: 'you', text }, { who: 'copilot', text: '', streaming: true }]);
+    scrollDown();
+    try {
+      const res = await fetch(`/api/items/plan/${encodeURIComponent(id)}/copilot`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt: text, history }),
+      });
+      if (res.status === 503) {
+        const j = await res.json().catch(() => ({}));
+        setAoaiGate(j.error || 'Azure OpenAI is not configured for this deployment.');
+        setTurns((prev) => prev.filter((t) => !t.streaming));
+        return;
+      }
+      if (!res.ok || !res.body) {
+        const j = await res.json().catch(() => ({}));
+        setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, text: `Error: ${j.error || `HTTP ${res.status}`}`, streaming: false } : t)));
+        return;
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const appendToken = (tok: string) => setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, text: t.text + tok } : t)));
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const blocks = buffer.split('\n\n');
+        buffer = blocks.pop() ?? '';
+        for (const block of blocks) {
+          let event = 'message';
+          let data = '';
+          for (const line of block.split('\n')) {
+            if (line.startsWith('event:')) event = line.slice(6).trim();
+            else if (line.startsWith('data:')) data += line.slice(5).trim();
+          }
+          if (!data) continue;
+          if (event === 'token') { try { const d = JSON.parse(data); if (d.text) appendToken(d.text); } catch { /* ignore */ } }
+          else if (event === 'final') { try { const d = JSON.parse(data); setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, text: d.text || t.text, streaming: false } : t))); } catch { /* ignore */ } }
+          else if (event === 'error') { try { const d = JSON.parse(data); setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, text: `Error: ${d.error || 'failed'}`, streaming: false } : t))); } catch { /* ignore */ } }
+          scrollDown();
+        }
+      }
+      setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, streaming: false } : t)));
+    } catch (e: any) {
+      setTurns((prev) => prev.map((t) => (t.streaming ? { ...t, text: `Network error: ${e?.message || e}`, streaming: false } : t)));
+    } finally {
+      setBusy(false);
+      scrollDown();
+    }
+  }, [busy, id, isNew, turns]);
+
+  return (
+    <div className={s.pane} aria-label="Plan Copilot">
+      <div className={s.head}>
+        <Sparkle20Regular style={{ color: tokens.colorBrandForeground1 }} />
+        <Subtitle2>Plan Copilot</Subtitle2>
+        {busy && <Spinner size="tiny" />}
+      </div>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        Grounded on <strong>{sheetName || 'this plan'}</strong> · scenario <strong>{scenarioName}</strong> — cells, variance &amp; model.
+      </Caption1>
+
+      {aoaiGate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Copilot unavailable</MessageBarTitle>
+            {aoaiGate}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      <div className={s.thread} ref={threadRef} aria-live="polite">
+        {turns.map((t, i) => (
+          <div key={i} className={`${s.bubble} ${t.who === 'you' ? s.you : s.bot}`}>
+            {t.text
+              ? <Body1>{t.text}</Body1>
+              : (t.streaming ? <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3 }}><Spinner size="extra-tiny" /> Thinking…</span> : null)}
+          </div>
+        ))}
+      </div>
+
+      {turns.length <= 1 && (
+        <div className={s.quick}>
+          <Button size="small" appearance="outline" icon={<ChartMultiple20Regular />} disabled={busy || isNew}
+            onClick={() => void send('Explain the biggest variance in this plan and what might be driving it.')}>
+            Explain this variance
+          </Button>
+          <Button size="small" appearance="outline" icon={<DataTrending20Regular />} disabled={busy || isNew}
+            onClick={() => void send('Draft a next-quarter forecast for each line item based on the current trend, and call out the assumptions.')}>
+            Draft next-quarter forecast
+          </Button>
+        </div>
+      )}
+
+      <div className={s.composer}>
+        <Textarea
+          value={draft}
+          onChange={(_e, d) => setDraft(d.value)}
+          placeholder={isNew ? 'Save the plan to chat…' : 'Ask about this plan…'}
+          disabled={busy || isNew}
+          resize="vertical"
+          rows={2}
+          aria-label="Ask Plan Copilot"
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !busy) { e.preventDefault(); void send(draft); } }}
+        />
+        <div className={s.sendRow}>
+          <Button appearance="primary" icon={<Send20Regular />} disabled={busy || isNew || !draft.trim()} onClick={() => void send(draft)}>Send</Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<PlanState>('plan', id, {
@@ -2072,7 +2505,10 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
 
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
-    } />
+    }
+      rightPanel={<PlanCopilotPane id={id} sheetName={intelSheet?.name || ''} scenarioName={intelScenario?.name || ''} />}
+      rightPanelLabel="Plan Copilot"
+    />
   );
 }
 

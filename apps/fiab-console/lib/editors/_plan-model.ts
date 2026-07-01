@@ -55,6 +55,14 @@ export interface PlanLineItem {
    * builder dialog — never freeform text (`.claude/rules` loom_no_freeform_config).
    */
   formula?: PlanFormulaToken[];
+  /**
+   * Marks this row as a **driver** (a planning assumption — headcount, price,
+   * conversion rate) that formula rows reference. Purely metadata: it surfaces
+   * the row in the Formula builder's picker with a "driver" hint and orders the
+   * dependency (topological) recompute so drivers evaluate before the formulas
+   * that consume them. A driver is normally a leaf `input`.
+   */
+  driver?: boolean;
 }
 
 export interface PlanPeriod {
@@ -955,4 +963,164 @@ export function defaultPlanModel(): PlanModel {
       { id: 'meas_total', name: 'Total', agg: 'sum', unit: 'USD' },
     ],
   };
+}
+
+// ===================================================================
+// Spreading / allocation, breakback, and driver-based topological recompute.
+//
+// The defining "connected planning" depth (Anaplan / Fabric IQ Plan): a total
+// entered at one level distributes DOWN to child cells (spreading), an edit to a
+// roll-up parent pushes the delta back to its children (breakback), and rows
+// flagged as DRIVERS feed formula rows that recompute in dependency
+// (topological) order. All pure + side-effect-free so the allocation math is
+// vitest-covered without React or Azure. Cells persist to Cosmos — NO Microsoft
+// Fabric dependency (.claude/rules/no-fabric-dependency.md).
+//   Fabric refs: /fabric/iq/plan/planning-overview#key-capabilities
+// ===================================================================
+
+/** How a total is distributed across a set of target cells. */
+export type SpreadMode = 'evenly' | 'growth' | 'weight';
+
+export interface SpreadOptions {
+  /**
+   * For {@link SpreadMode} `'growth'`: period-over-period growth as a fraction
+   * (0.1 = +10% each step). Targets form a geometric ramp (1+g)^i, scaled so the
+   * sum equals `value`. Ignored by the other modes.
+   */
+  growthPct?: number;
+  /**
+   * For `'weight'`: explicit relative weights (one per target). When omitted the
+   * targets' own current values are the weights (preserve the existing shape,
+   * rescale to the new total). All-zero weights degrade to `'evenly'`.
+   */
+  weights?: number[];
+}
+
+/** Round to 6 dp so a distribution never emits float dust like 33.33333333. */
+function round6(n: number): number {
+  return Math.round((Number.isFinite(n) ? n : 0) * 1e6) / 1e6;
+}
+
+/**
+ * Distribute a total `value` across the `cells` targets by `mode`, returning a
+ * NEW array of the same length whose sum equals `value` (within fp rounding):
+ *   • evenly — value / n into every cell;
+ *   • growth — a geometric ramp (1+growthPct)^i scaled so Σ = value;
+ *   • weight — proportional to `opts.weights` (or the cells' current values);
+ *              all-zero weights degrade to evenly.
+ * Any rounding remainder is folded into the last cell so Σ is exact. An empty
+ * target set returns []. Deterministic — vitest-covered.
+ */
+export function spread(value: number, cells: number[], mode: SpreadMode, opts: SpreadOptions = {}): number[] {
+  const n = cells.length;
+  if (n === 0) return [];
+  const total = Number.isFinite(value) ? value : 0;
+
+  let raw: number[];
+  if (mode === 'growth') {
+    const g = Number.isFinite(opts.growthPct) ? (opts.growthPct as number) : 0;
+    const ramp = cells.map((_, i) => Math.pow(1 + g, i));
+    const denom = ramp.reduce((a, b) => a + b, 0) || 1;
+    raw = ramp.map((r) => (total * r) / denom);
+  } else if (mode === 'weight') {
+    const w = (opts.weights && opts.weights.length === n ? opts.weights : cells)
+      .map((x) => (Number.isFinite(x) ? x : 0));
+    const denom = w.reduce((a, b) => a + b, 0);
+    raw = denom > 0 ? w.map((x) => (total * x) / denom) : cells.map(() => total / n);
+  } else {
+    raw = cells.map(() => total / n);
+  }
+
+  const out = raw.map(round6);
+  // Fold any rounding remainder into the last cell so the sum is exact.
+  const diff = round6(total - out.reduce((a, b) => a + b, 0));
+  if (diff !== 0) out[n - 1] = round6(out[n - 1] + diff);
+  return out;
+}
+
+/**
+ * Breakback — the roll-up counterpart to spreading. Given a parent's current
+ * child values and a `newValue` typed onto the parent, push the delta
+ * (newValue − Σchildren) DOWN to the children in proportion to their current
+ * share, returning a NEW children array that sums to `newValue`. When the
+ * children are all zero the delta splits evenly (no share to weight by). Pure;
+ * numerically equals a weight-spread but expressed as a delta push so the
+ * "edit a parent → children adjust" intent reads directly. Vitest-covered.
+ */
+export function breakback(children: number[], newValue: number): number[] {
+  const n = children.length;
+  if (n === 0) return [];
+  const target = Number.isFinite(newValue) ? newValue : 0;
+  const cur = children.map((x) => (Number.isFinite(x) ? x : 0));
+  const sum = cur.reduce((a, b) => a + b, 0);
+  if (sum === 0) return spread(target, cur, 'evenly');
+  const delta = target - sum;
+  const out = cur.map((x) => round6(x + (delta * x) / sum));
+  const diff = round6(target - out.reduce((a, b) => a + b, 0));
+  if (diff !== 0) out[n - 1] = round6(out[n - 1] + diff);
+  return out;
+}
+
+// ---- Driver rows + topological recompute ----
+
+/** Rows flagged as planning drivers (assumptions formula rows reference). */
+export function driverRows(lineItems: PlanLineItem[]): PlanLineItem[] {
+  return lineItems.filter((li) => li.driver);
+}
+
+export interface TopoOrder {
+  /** Line-item ids ordered so each formula row follows every row it references. */
+  order: string[];
+  /** True when a formula reference cycle was detected (order still returned). */
+  cycle: boolean;
+}
+
+/**
+ * Topologically order a sheet's line items by formula dependency: a formula row
+ * comes AFTER every row it references, so a driver-based recompute evaluates
+ * rows in a single deterministic pass (drivers / inputs first, then the formulas
+ * that consume them, then formulas of formulas). Non-formula rows have no
+ * formula deps and keep their declared order. On a reference cycle the sort
+ * degrades gracefully: `cycle:true` and any unresolved rows are appended in
+ * declared order. Pure — vitest-covered.
+ */
+export function topoOrderLineItems(sheet: PlanningSheet): TopoOrder {
+  const items = sheet.lineItems || [];
+  const byId = new Map(items.map((li) => [li.id, li]));
+  const deps = new Map<string, string[]>();
+  for (const li of items) {
+    const refs = li.kind === 'formula' && Array.isArray(li.formula)
+      ? formulaRefs(li.formula).filter((r) => byId.has(r) && r !== li.id)
+      : [];
+    deps.set(li.id, refs);
+  }
+  const order: string[] = [];
+  const state = new Map<string, 1 | 2>(); // 1 = visiting, 2 = done
+  let cycle = false;
+  const visit = (id: string) => {
+    const st = state.get(id);
+    if (st === 2) return;
+    if (st === 1) { cycle = true; return; }
+    state.set(id, 1);
+    for (const d of deps.get(id) || []) visit(d);
+    state.set(id, 2);
+    order.push(id);
+  };
+  for (const li of items) visit(li.id);
+  const placed = new Set(order);
+  for (const li of items) if (!placed.has(li.id)) order.push(li.id);
+  return { order, cycle };
+}
+
+/**
+ * Recompute every line item's row total for a scenario in topological order
+ * (drivers / inputs first, then dependent formulas). Returns a { lineItemId →
+ * rowTotal } map. Real math over {@link lineItemRowTotal}; the topo order makes
+ * the pass deterministic and driver-first. Pure — vitest-covered.
+ */
+export function recomputeRowTotals(sheet: PlanningSheet, scenarioId: string): Record<string, number> {
+  const { order } = topoOrderLineItems(sheet);
+  const out: Record<string, number> = {};
+  for (const id of order) out[id] = lineItemRowTotal(sheet, scenarioId, id);
+  return out;
 }

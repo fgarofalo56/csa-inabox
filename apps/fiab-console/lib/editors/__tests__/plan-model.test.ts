@@ -18,6 +18,8 @@ import {
   leafInputItems, orderMembers, orderedLineItems, lineItemValueAt, lineItemRowTotal,
   evalFormula, formulaToText, formulaRefs, validateModel, validateFormulaRows,
   qfSum, qfAverage, qfDifference, qfRatioPct, qfGrowthPct,
+  // Spreading / breakback / driver topological recompute under test
+  spread, breakback, driverRows, topoOrderLineItems, recomputeRowTotals,
   type PlanLineItem, type PlanMember, type PlanModel, type PlanFormulaToken,
 } from '../_plan-model';
 
@@ -356,5 +358,98 @@ describe('_plan-model validation', () => {
     expect(res.ok).toBe(false);
     const msgs = res.issues.map((i) => i.message).join(' | ');
     expect(msgs).toMatch(/missing row|cycle/i);
+  });
+});
+
+// ===================================================================
+// Spreading / allocation, breakback, and driver topological recompute.
+// ===================================================================
+
+describe('_plan-model spread (allocation)', () => {
+  it('spreads evenly and the parts sum to the total', () => {
+    const out = spread(100, [0, 0, 0, 0], 'evenly');
+    expect(out).toEqual([25, 25, 25, 25]);
+    expect(out.reduce((a, b) => a + b, 0)).toBe(100);
+  });
+  it('spreads by growth % as a geometric ramp scaled to the total', () => {
+    const out = spread(100, [0, 0], 'growth', { growthPct: 1 }); // ramp 1,2 → 1/3,2/3
+    expect(out[0]).toBeCloseTo(33.333333, 4);
+    expect(out[1]).toBeCloseTo(66.666667, 4);
+    expect(out.reduce((a, b) => a + b, 0)).toBeCloseTo(100, 6);
+    expect(out[1]).toBeGreaterThan(out[0]); // later periods grow
+  });
+  it('spreads by weight proportional to current values', () => {
+    const out = spread(100, [30, 10], 'weight'); // 3:1 → 75, 25
+    expect(out).toEqual([75, 25]);
+  });
+  it('weight mode with all-zero weights degrades to evenly', () => {
+    expect(spread(100, [0, 0, 0, 0], 'weight')).toEqual([25, 25, 25, 25]);
+  });
+  it('honors explicit weights over current values', () => {
+    expect(spread(100, [1, 1], 'weight', { weights: [3, 1] })).toEqual([75, 25]);
+  });
+  it('folds the rounding remainder into the last cell so Σ is exact', () => {
+    const out = spread(100, [0, 0, 0], 'evenly'); // 33.333333 ×3
+    expect(out.reduce((a, b) => a + b, 0)).toBe(100);
+  });
+  it('returns [] for an empty target set', () => {
+    expect(spread(100, [], 'evenly')).toEqual([]);
+  });
+});
+
+describe('_plan-model breakback', () => {
+  it('pushes the delta proportionally so children sum to the new parent value', () => {
+    const out = breakback([60, 40], 200); // was 100 → scale ×2
+    expect(out).toEqual([120, 80]);
+    expect(out.reduce((a, b) => a + b, 0)).toBe(200);
+  });
+  it('splits evenly when the children are all zero', () => {
+    expect(breakback([0, 0, 0, 0], 100)).toEqual([25, 25, 25, 25]);
+  });
+  it('handles a decrease (negative delta) keeping the proportion', () => {
+    const out = breakback([75, 25], 40); // ×0.4
+    expect(out[0]).toBeCloseTo(30, 6);
+    expect(out[1]).toBeCloseTo(10, 6);
+    expect(out.reduce((a, b) => a + b, 0)).toBeCloseTo(40, 6);
+  });
+  it('equals a weight-spread when the children have a non-zero sum', () => {
+    const children = [30, 20, 50];
+    expect(breakback(children, 400)).toEqual(spread(400, children, 'weight'));
+  });
+});
+
+describe('_plan-model drivers + topological recompute', () => {
+  /** headcount (driver) → salaries formula = headcount × 100. */
+  function driverSheet(): PlanningSheet {
+    const s = defaultPlanningSheet();
+    s.lineItems = [
+      { id: 'hc', name: 'Headcount', kind: 'input', driver: true },
+      { id: 'sal', name: 'Salaries', kind: 'formula', formula: [{ k: 'row', ref: 'hc' }, { k: 'op', op: '*' }, { k: 'num', value: 100 }] },
+    ];
+    for (const p of s.periods) s.cells[cellKey('hc', p.id, 'baseline')] = 5;
+    return s;
+  }
+  it('driverRows returns only flagged rows', () => {
+    expect(driverRows(driverSheet().lineItems).map((li) => li.id)).toEqual(['hc']);
+  });
+  it('topoOrderLineItems places a driver before the formula that references it', () => {
+    const { order, cycle } = topoOrderLineItems(driverSheet());
+    expect(cycle).toBe(false);
+    expect(order.indexOf('hc')).toBeLessThan(order.indexOf('sal'));
+  });
+  it('topoOrderLineItems flags a reference cycle without dropping rows', () => {
+    const s = defaultPlanningSheet();
+    s.lineItems = [
+      { id: 'a', name: 'A', kind: 'formula', formula: [{ k: 'row', ref: 'b' }] },
+      { id: 'b', name: 'B', kind: 'formula', formula: [{ k: 'row', ref: 'a' }] },
+    ];
+    const { order, cycle } = topoOrderLineItems(s);
+    expect(cycle).toBe(true);
+    expect(order.sort()).toEqual(['a', 'b']);
+  });
+  it('recomputeRowTotals evaluates driver → formula in order (5×100 = 500/period)', () => {
+    const totals = recomputeRowTotals(driverSheet(), 'baseline');
+    expect(totals.hc).toBe(20); // 5 × 4 periods
+    expect(totals.sal).toBe(2000); // 500 × 4 periods
   });
 });
