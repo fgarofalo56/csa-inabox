@@ -24,6 +24,13 @@ Source UI:
 > Power BI are strictly opt-in. Everything works with
 > `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
 
+**Last verified: 2026-07-01 against current code**
+(`apps/fiab-console/lib/editors/workshop/workshop-app-builder.tsx` +
+`app/api/items/workshop-app/[id]/run-action`). The P0 app-builder core
+(canvas · widgets · typed variables · event wiring · live Preview) is confirmed
+wired to real Synapse T-SQL; the stale bottom "CRUD console / 15%" assessment has
+been corrected.
+
 ---
 
 ## Real feature inventory (Palantir Workshop — exhaustive)
@@ -69,7 +76,7 @@ Source UI:
 | – | Bind a Loom Ontology | ✅ built | `bind-ontology` → Cosmos + Thread edge |
 | – | Pick entity types → "object views" (list toggle) | ✅ built | editor state |
 | – | Object Table **read** (list rows) | ✅ built | `run-action` `op:list` → `SELECT TOP` (Synapse) |
-| – | Read single row (get) | ✅ built | `run-action` `op:get` |
+| – | Read single row (get) | ⚠️ route only | `run-action` `op:get` implemented server-side; not yet issued by a builder control |
 | – | Write-back **create/update/delete** via column-derived form | ✅ built | `run-action` `op:create/update/delete` (parameterised T-SQL) |
 | – | Writes constrained to ontology shape; SQL-injection-safe | ✅ built | `safeSqlIdent` + `writableColumns`/`keyColumns` |
 | – | Lineage on write-back | ✅ built | `recordThreadEdge` |
@@ -79,7 +86,7 @@ Source UI:
 | A4/A5 | Tabs + overlays (drawer/modal) | ❌ MISSING | — |
 | A6 | Loop/flow layouts | ❌ MISSING | — |
 | A8 | **Preview / run mode** (live app distinct from editor) | ✅ built | Run-mode tab; widgets read real Synapse via `run-action` `list`/`aggregate`/`distinct` |
-| A9 | **Publish / share** the app | ⚠️ partial (Data-API-Builder wiring banner only) | needs ACA/DAB/APIM publish |
+| A9 | **Publish / share** the app | ❌ MISSING | only a display-only "Runs on ACA" info banner; no real ACA/DAB/APIM deploy action |
 | B | **Widget library** (core set: Object Table, Chart, Metric/KPI, Filter, Form, Button, Text) | ✅ built | reads `run-action` `list`/`aggregate`; charts reuse `loom-chart`; Form = real CRUD |
 | B+ | Object View / Links / Map / Pivot / Gantt / Timeline / AIP / scenario / media | ❌ MISSING | — |
 | C10–C12 | **Variables + state**; object-set-filter variables | ✅ built | typed Variables panel (object-set-filter / string / number / boolean / date); object-set-filter → parameterised `WHERE` in `run-action` |
@@ -97,13 +104,19 @@ Source UI:
 > (A1), sections/tabs/overlays (A3–A5), publish (A9), map/object-view/links and
 > the AIP/scenario widgets (B+), conditional visibility (D16).
 
-**Honest assessment:** the current editor is a single scrolling config form
-(bind ontology → toggle which entities list → add CRUD actions → run a dialog).
-The write path is genuinely real (parameterised T-SQL on Synapse, injection-safe,
-ontology-bound) — that is its strength. But it is **not an app builder**: there
-is no canvas, no widget palette, no variables, no event wiring, no preview, no
-charts/maps/filters, no multi-page layout, no publish. Against Workshop it is
-roughly **15% of the surface** — a CRUD console, not a low-code operational app.
+**Honest assessment (refreshed 2026-07-01):** the "single scrolling CRUD console
+/ ~15% of the surface" grade is **stale**. The editor is now a real low-code app
+builder for the core surface: a **drag-resize widget/layout canvas** persisted to
+Cosmos, a **core widget library** (Object Table, Chart, Metric/KPI, Filter, Form,
+Button, Text), **typed variables** whose object-set-filter values compile to a
+parameterised Synapse `WHERE`, **button/table/page event→effect wiring**, and a
+**live Preview** that reads real Synapse rows — with real, injection-safe
+parameterised T-SQL CRUD write-back and lineage edges (`run-action` →
+`synapse-sql-client`). Roughly **C+ / B-** vs Palantir Workshop. The broader
+Foundry surface is still open (tracked above): multi-page (A1), sections/tabs/
+overlays (A3–A5), loop layouts (A6), real publish (A9), the B+ widget family
+(object-view/links/map/pivot/gantt/timeline/AIP/scenario/media), conditional
+visibility (D16), and the AIP copilot widget.
 
 ---
 

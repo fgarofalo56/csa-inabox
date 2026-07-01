@@ -21,6 +21,13 @@
 > breakback/spreading, drivers, versions/snapshots) is absent and several polish
 > surfaces (Intelligence gallery, comments, export, writeback logs) are thin or
 > missing. Real grade today: **C+ / B-**. This doc is the roadmap to true parity.
+>
+> **Last verified: 2026-07-01 against current code**
+> (`apps/fiab-console/lib/editors/phase4/plan-editor.tsx` + `_plan-model.ts`).
+> The P0 structural-EPM core has since **landed**: a **Model** tab (dimensions +
+> user measures), member **hierarchies with roll-up/drill-down**, and a guided
+> **Formula builder** over a no-`eval` token AST — so those rows flip ❌→✅ below.
+> Breakback/spreading, drivers, versions/snapshots, and AI Copilot remain ❌.
 
 ---
 
@@ -100,30 +107,31 @@
 
 | # | Capability | Status | Notes / backend |
 | --- | --- | --- | --- |
+| 1 | Multi-dimensional cube (row AND column dimensions) | ✅ built (caveat) | `PlanModelPanel` Model tab + `addDimension` (`plan-editor.tsx:1713/1735`); `PlanDimension.axis` (`_plan-model.ts:523`); column-axis members validated/persisted but the grid still pivots periods as columns |
+| 2/3 | Hierarchies, roll-up/drill-down, member mgmt | ✅ built | roll-up `lineItemValueAt` sums children (`_plan-model.ts:817`); expand/collapse `toggleCollapse` (`plan-editor.tsx:752`); indent/outdent + `DimensionMembersEditor` (`:1650`) |
+| 4 | Measures (user-defined, SUM/AVG/COUNT/MIN/MAX + scope) | ✅ built (caveat) | `PlanMeasure`/`addMeasure` (`_plan-model.ts:534`, `plan-editor.tsx:1740`); defined/validated/persisted, not yet evaluated into a cube-output surface |
+| 5/7 | Formula rows + quick formulas | ✅ built | `FormulaBuilderDialog` guided palette (`plan-editor.tsx:1462`) over `evalFormula` recursive-descent AST, **no `eval`** (`_plan-model.ts:664`); quick formulas `qf*` (`:765-792`) |
 | 12 | Scenarios (branch/rename/delete, per-scenario cells) | ✅ built | `PlanningSheetPanel`; `cloneScenarioCells`/`dropScenarioCells`; Cosmos |
 | 16 | Variance plan vs actuals (Δ, Δ%) | ✅ built | `computeVariance`; variance overlay + Intelligence report |
 | 15/17 | Forecast (OLS) + trend | ✅ built | `forecastPeriods`/`linearFit`; `PlanTrendChart` |
 | 18 | PowerTable: flat SQL-bound grid, sort/filter/inline-edit | ✅ built | `PlanPowerTablePanel`; `flattenPlanCells` |
 | 20 | Two-way writeback (MERGE) + load-from-SQL | ✅ built | `/api/items/plan/[id]/writeback`; `plan-backing-store` (real Azure SQL) |
-| 25 (partial) | InfoBridge line-item→source mapping, push to actuals | ✅ built | `PlanInfoBridgePanel`; `applyMappingsToActuals` |
+| 25 (partial) | InfoBridge line-item→source mapping, push to actuals | ✅ built | `PlanInfoBridgePanel`; `applyMappingsToActuals` (no merge/append/pivot/group transforms) |
 | 30 | Approval workflow (real Office365 Logic App + callback) | ✅ built | `/approval` + `/approval-callback`; `plan-approval-client` |
 | — | Semantic-model bind for actuals + Azure SQL provisioning | ✅ built | `PlanSettingsFlyout`; `/binding` |
-| 21 (partial) | Intelligence: 1 trend chart + variance table + Gantt | ⚠️ thin | one visual each; no gallery/cards/canvas |
-| 4 | Measures (auto subtotal only) | ⚠️ thin | `subtotal` kind auto-sums; no user-defined measures |
-| 1 | Multi-dimensional cube (flat line-items × periods only) | ❌ MISSING | 2-D grid only |
-| 2/3 | Hierarchies, roll-up/drill-down, member mgmt | ❌ MISSING | — |
-| 5/6/7 | Formula rows / calculated columns / quick formulas | ❌ MISSING | — |
-| 8 | Driver-based planning | ❌ MISSING | — |
-| 9/10 | Spreading/allocation + breakback | ❌ MISSING | — |
-| 11 | Top N / grouping / hierarchy nav / column width | ❌ MISSING | basic PowerTable sort only |
-| 13 | Versions & snapshots, compare, rolling forecast | ❌ MISSING | — |
+| 21 (partial) | Intelligence: KPI cards + trend chart + variance table + Gantt | ⚠️ thin | KPI cards + one visual each; no chart **gallery**/storyboard |
+| 11 | Top N / grouping / hierarchy nav / column width | ⚠️ partial | hierarchy nav built (expand/collapse/indent); Top N, grouping UI, column width missing |
+| 6 | Calculated columns | ❌ MISSING | only built-in Total column + formula *rows* (no user calc-column construct) |
+| 8 | Driver-based planning | ❌ MISSING | no named-driver primitive |
+| 9/10 | Spreading/allocation + breakback | ❌ MISSING | no `spread()`/`breakback()` in `_plan-model.ts` |
+| 13 | Versions & snapshots, compare, rolling forecast | ❌ MISSING | no snapshot route/container, no compare A↔B |
 | 14/29 | Scenario security + roles (Planner/Stakeholder/Viewer) | ❌ MISSING | — |
 | 19 | Import CSV/Excel/JSON | ❌ MISSING | — |
 | 22 | Export to Excel / PDF | ❌ MISSING | — |
 | 23/28 | Comments, annotations, @mentions, comments pane | ❌ MISSING | — |
 | 26/27 | Multiple destinations, decimal/text config, autowriteback, writeback logs | ❌ MISSING | single hard-coded `dbo.loom_plan_cells`, no logs |
 | 25 (rest) | InfoBridge transforms (merge/append/pivot/group), sheet-to-sheet | ❌ MISSING | mapping only |
-| 31 | AI-assisted planning / Copilot | ❌ MISSING | computed (non-AI) insights only |
+| 31 | AI-assisted planning / Copilot | ❌ MISSING | computed (non-AI) `planInsights` only; `DataAgent*` imports are unrendered dead leftovers |
 
 ---
 

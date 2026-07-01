@@ -11,6 +11,13 @@ notification, **alert history** (`Alerts` / `alertsmanagement`) for run/fired
 history, and **`listResourceHealth` / `fetchMetrics`** for the status dashboard.
 Fabric Reflex remains opt-in only via `LOOM_ACTIVATOR_BACKEND=fabric`.
 
+**Last verified: 2026-07-01 against current code**
+(`apps/fiab-console/lib/editors/palantir-editors.tsx` health-check editor +
+`app/api/items/health-check/[id]/{rule,rule/[ruleId],run,history}`). The editor
+is now a **4-tab shell** (Checks · Status · History · Settings — no Notifications
+tab yet); the status dashboard (G), fired-alert history (H), and per-rule
+lifecycle (K) have shipped and flip ❌→✅ below.
+
 ---
 
 ## Real feature inventory
@@ -65,20 +72,26 @@ Each check exposes: **Severity** (Moderate / Critical), **Escalate** toggle, **N
 |---|---|---|---|
 | A | Check-type library (5 families, ~30 types) | ❌ — only `freshness` / `rowcount` / `custom KQL` | `buildQuery()` in `[id]/rule/route.ts` |
 | B | Target / scope picker | ❌ — free-text "Table" input only | none |
-| C | Threshold/operator + dynamic threshold + preview | ❌ — minutes / minRows only, no operator, no KQL preview | none |
-| D | Schedule (freq + window) | ✅ partial — 2 dropdowns | `evaluationFrequency` / `windowSize` |
-| E | Severity & escalation | ❌ | `ScheduledQueryRuleInput` supports severity (unused) |
-| F | Action groups / channels + test-fire | ❌ — single email box → inline action | `upsertActionGroup`, `listActionGroups`, `sendActionGroupTestNotification` exist, UI ignores |
-| G | Status dashboard | ❌ | `listResourceHealth`, `fetchMetrics`, `listAlertHistory` exist, UI ignores |
-| H | Run / fired-alert history | ❌ | `getActivatorHistory`, `listAlertHistory` exist, UI ignores |
+| C | Threshold/operator + dynamic threshold + preview | ⚠️ — static threshold value inputs built (`thresholdMinutes`/`minRows`); operator hard-coded, no dynamic threshold, no KQL preview | `ScheduledQueryRuleInput` |
+| D | Schedule (freq + window) | ✅ — `evalFreq` + `windowSize` dropdowns | `createMonitorActivatorRule({evaluationFrequency, windowSize})` |
+| E | Severity & escalation | ⚠️ — severity `Dropdown` (0–4) wired + rendered as badge; **escalation chains missing** | `createMonitorActivatorRule({severity})` |
+| F | Action groups / channels + test-fire | ❌ — single email input only; `upsertActionGroup`/`sendActionGroupTestNotification` exist but UI never calls them | (clients unused) |
+| G | Status dashboard | ✅ — Status tab, 4 stat tiles (Total/Healthy/Firing/Disabled) from rule state + fired alerts | `getActivatorHistory` + `listScheduledQueryRules` |
+| H | Run / fired-alert history | ✅ — History tab `Table` of fired/resolved events (time, severity, state) | `getActivatorHistory` (`[id]/history`) |
 | I | Issues / incident management | ❌ | none |
 | J | Monitoring Views (scoped groups) | ❌ | `listScheduledQueryRules` exists |
-| K | Per-rule enable/disable/delete/test | ❌ — read-only table | `patchScheduledQueryRule`, `deleteScheduledQueryRule`, `triggerMonitorActivatorRule` exist, UI ignores |
+| K | Per-rule enable/disable/delete/test | ✅ — row Run/Enable/Disable/Delete buttons wired | `triggerMonitorActivatorRule` (`[id]/run`) + `enable`/`disable`/`deleteMonitorActivatorRule` (`[id]/rule/[ruleId]`) |
 | L | Remediation | ❌ | Logic App receiver in action groups |
 
-Current grade: **D (stubbed-thin)** — one create-rule form + a static read-only
-table. Backend is richer than the surface; most parity is wiring existing clients
-into a real multi-tab editor.
+Current grade: **C (functional but incomplete)** — a real 4-tab shell with an
+end-to-end check lifecycle (create rule, per-rule Run/Enable/Disable/Delete, a
+derived status dashboard, and fired-alert history), all wired to real Azure
+Monitor `scheduledQueryRules`. The "ignored clients" critique is now accurate
+only for **action groups** (`upsertActionGroup` / `sendActionGroupTestNotification`),
+`listResourceHealth`, and `fetchMetrics`. Still missing: the Foundry check-type
+library, scope picker, operator/dynamic-threshold/KQL-preview, action-group
+channel management + test-fire, a Notifications tab, and incident /
+Monitoring-Views / remediation.
 
 ---
 

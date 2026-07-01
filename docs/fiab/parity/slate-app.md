@@ -7,9 +7,16 @@ Source UI: Palantir Foundry **Slate** — https://www.palantir.com/docs/foundry/
 - Read/write: https://palantirfoundation.org/docs/foundry/slate/read-write-overview
 
 Editor: `apps/fiab-console/lib/editors/palantir-editors.tsx` → `SlateAppEditor`
-Routes: `app/api/items/slate-app/route.ts`, `app/api/items/slate-app/[id]/route.ts`, `app/api/items/slate-app/[id]/generate/route.ts`
+(delegates to `apps/fiab-console/lib/editors/slate/slate-app-builder.tsx`)
+Routes: `app/api/items/slate-app/route.ts`, `app/api/items/slate-app/[id]/route.ts`, `app/api/items/slate-app/[id]/query/run/route.ts` (live query engine), `app/api/items/slate-app/[id]/generate/route.ts`
 Codegen: `apps/fiab-console/lib/editors/_palantir-codegen.ts` → `generateSlateBundle`
 Catalog: `slate-app` / restType `SlateApp` / category **Fabric IQ** (preview)
+
+**Last verified: 2026-07-01 against current code.** A `slate-app-builder.tsx`
+now provides a real drag-resize canvas + a multi-type query engine
+(`/query/run` → ADX / Synapse / DAB REST) driving a live in-editor preview — the
+"~3 of 32, no canvas/no live data" grade is stale; rows 1/5/12/24 flip ❌→✅ and
+3/10/13 flip ❌→⚠️.
 
 Slate is Foundry's **pro-code application builder**: a drag-and-drop widget grid, a first-class
 Queries panel (Ontology / Function / SQL / HTTP-JSON), a Variables + Events/Actions reactivity
@@ -59,43 +66,48 @@ the default path, per `.claude/rules/no-fabric-dependency.md`).
 
 | # | Status | Notes |
 |---|---|---|
-| 1 | ❌ MISSING | No canvas. Widgets render as a flat vertical list of rows; no place/move/resize. |
-| 2 | ❌ MISSING | Single implicit page only. |
-| 3 | ❌ MISSING | No palette. One "Add widget" add-bar with a 3-value Kind dropdown. |
-| 4 | ⚠️ partial | "table" kind exists but is just a title + REST path; no columns/sort/paging/selection config, no in-editor render. |
-| 5 | ⚠️ partial | "chart" + "metric" kinds exist as labels only; the generated bundle renders chart as a plain HTML table (no real chart); no subtypes. |
-| 6 | ❌ MISSING | No Map widget. |
+| 1 | ✅ BUILT | Real drag-resize `CanvasWidget` (pointer-drag `startDrag` + corner `startResize`, snap-to-grid, persisted `{x,y,w,h}`) — `slate-app-builder.tsx:406-447`. Add is click-from-palette; move/resize are real drag. |
+| 2 | ❌ MISSING | Only `mode:'design'\|'preview'`; single canvas, no page model/nav. |
+| 3 | ⚠️ partial | `WidgetPalette` exists (5 kinds as buttons, `:454-465`) but is a flat list, not category-grouped. |
+| 4 | ⚠️ partial | `QueryResultTable` real client sort + Prev/Next paging + columns (`:303-353`); no row-select. Now renders live query rows. |
+| 5 | ✅ BUILT | `LoomChart` real SVG renderer (column/bar/line/area/pie/donut/scatter) bound to live results (`:388`). |
+| 6 | ❌ MISSING | No Map widget (`SlateWidgetKind` has no map). |
 | 7 | ❌ MISSING | No graph/tree/image widgets. |
 | 8 | ❌ MISSING | No input/control widgets. |
 | 9 | ❌ MISSING | No button/action/tabs/toast widgets. |
-| 10 | ❌ MISSING | No text/markdown/iframe/media widgets. |
-| 11 | ❌ MISSING | No container/layout nesting. |
-| 12 | ❌ MISSING | No Queries panel. Each widget carries a single freeform "Query path" string appended to `apiBaseUrl`. |
-| 13 | ❌ MISSING | Only "REST path concat" — no SQL/KQL/Function/object-set query types, no editor. |
-| 14 | ❌ MISSING | No templating / variable substitution / security helpers. |
+| 10 | ⚠️ partial | `text` kind renders sanitized markdown-lite (`renderMarkdownLite :190`); no iframe/PDF/video. |
+| 11 | ❌ MISSING | `container` kind is a decorative dashed frame only; does not nest child widgets. |
+| 12 | ✅ BUILT | `QueriesPanel` — add/edit/remove named queries, type dropdown (datasource picker), per-query **Run** executes the real route (`:541-589`). |
+| 13 | ⚠️ 3 of 5 | `rest-dab` (HTTP-JSON), `kql`, `sql` wired (`/query/run` dispatch); ontology/function not first-class. |
+| 14 | ❌ MISSING | No `{{var}}` templating / security helpers. |
 | 15 | ❌ MISSING | No query partials. |
-| 16 | ❌ MISSING | No conditional run / triggers. |
-| 17 | ❌ MISSING | No paging/sort wiring. |
+| 16 | ❌ MISSING | Queries run on button click / "Run all" only; no conditional triggers. |
+| 17 | ❌ MISSING | Paging/sort are in-memory client only; no `$top/$skip/OFFSET` pushed to backend. |
 | 18 | ❌ MISSING | No variables system. |
 | 19 | ❌ MISSING | No transformations / filter vars. |
-| 20 | ❌ MISSING | No per-user persistence. |
-| 21 | ❌ MISSING | No events. |
+| 20 | ❌ MISSING | Persistence is owner-scoped item state, not per-viewer storage. |
+| 21 | ❌ MISSING | Widgets have no event handlers. |
 | 22 | ❌ MISSING | No actions/effects. |
-| 23 | ❌ MISSING | No write-back from the Slate editor (WorkshopApp has it; Slate does not). |
-| 24 | ⚠️ partial | Generated bundle does `fetch(apiBase/query)` at runtime, but the editor never reads live data; no object-set/OSDK/Function integration in-editor. |
-| 25 | ❌ MISSING | No style controls; the generated bundle has one hard-coded inline stylesheet. |
+| 23 | ❌ MISSING | Queries are read-only; no write-back widget/action. |
+| 24 | ✅ BUILT | `runPreview` executes each bound widget's query against the real backend; `WidgetView` renders live rows (`:360-392`, `:761-772`). |
+| 25 | ❌ MISSING | Inspector exposes title/query/chartType/agg/text only; no style controls. |
 | 26 | ❌ MISSING | No custom HTML/CSS/JS authoring surface. |
-| 27 | ❌ MISSING | No app parameters / module interface. |
+| 27 | ❌ MISSING | Only an `apiBaseUrl` data-base field; no app parameters / module interface. |
 | 28 | ❌ MISSING | No public-app / upload support. |
-| 29 | ⚠️ partial | "Generate bundle" emits index.html/app.js/staticwebapp.config.json as **copyable text** — no actual deploy, no versions, no import/export. |
+| 29 | ⚠️ partial | "Generate bundle" emits a real deployable SWA bundle as **copyable text** (`generate` route) — no ARM/SWA deploy, no versions. |
 | 30 | n/a | Out of scope for this editor (Loom Marketplace is separate). |
-| 31 | ❌ MISSING | No debug/dependency/perf surface. |
-| 32 | ❌ MISSING | No usage/edit history. |
+| 31 | ❌ MISSING | Only a property inspector; no debug/dependency/perf surface. |
+| 32 | ❌ MISSING | `state.lastGeneratedAt` set, but no usage/edit-history UI. |
 
-Honest summary: the surface is a **D (stubbed-but-real-codegen)** — it persists a widget list to
-Cosmos and deterministically emits a real, deployable SWA bundle (no mocks), but it is not an app
-*builder*: no canvas, no live data, no query engine, no reactivity, no deploy. ~3 of 32 inventory
-rows are even partially present.
+Honest summary (refreshed 2026-07-01): the stale "D (~3 of 32), no canvas / no
+live data / no query engine / no reactivity" verdict is now wrong. There is a
+**real drag-resize canvas** and a genuine **multi-type query engine**
+(`/query/run` → `kusto-client` ADX / `synapse-sql-client` / DAB-APIM REST)
+driving a **live in-editor preview** — rows 1, 5, 12, 24 are solid BUILT ✅, rows
+4 & 13 partial ⚠️. Grade today **~C**. The Slate reactivity depth (variables,
+events/actions, write-back, templating, multi-page, control/action/map/graph
+widgets, per-user storage, real deploy) remains entirely MISSING, so it is
+nowhere near full 32-row parity.
 
 ## Build plan
 

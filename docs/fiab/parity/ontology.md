@@ -1,7 +1,8 @@
 # ontology — parity with Palantir Foundry Ontology
 
 **Category:** Fabric IQ · **Loom slug:** `ontology` · **Editor:** `OntologyEditor` in
-`apps/fiab-console/lib/editors/phase4-editors.tsx` (registry → `phase4-editors`).
+`apps/fiab-console/lib/editors/phase4/ontology-editor.tsx` (registry → `phase4`).
+**Last verified: 2026-07-01 against current code.**
 **Backend (default, Azure-native, NO Fabric):** Cosmos (item state / model
 persistence), Apache AGE on Azure Database for PostgreSQL Flexible Server
 (object + link instances, write-back actions), Synapse dedicated/serverless SQL
@@ -93,31 +94,39 @@ generation.
 
 ## Loom coverage (current state — honest)
 
-| Real capability | Loom today | Status |
-|---|---|---|
-| Object types | A freeform Monaco textarea DSL: `Name : Parent -- desc`. Classes have only an implicit id + description. **No properties, no types.** | ❌ partial (freeform — violates `loom_no_freeform_config`) |
-| Property type system | None. Object instances take a freeform JSON props textarea. | ❌ MISSING (+freeform violation) |
-| Primary key / title key | None. | ❌ MISSING |
-| Display metadata (icon/color/status/groups/visibility) | None (only a class name + optional description). | ❌ MISSING |
-| Link types (named, cardinality, from/to, backing FK) | Only **IS_A** inheritance via `Child : Parent`. No named links, no cardinality. | ❌ MISSING |
-| Action types | Declared with name + objectType + kind (create/update/delete); **params are a `string[]` of names — untyped, no validation, no defaults, no prompts, no form**. | ⚠️ thin partial |
-| Backing datasources | "Bind to data source" maps a **whole** Lakehouse/Warehouse item to entity types (Cosmos). No table pick, **no column→property mapping**, no PK column. | ⚠️ thin partial |
-| Object instances (write-back) | Real Apache AGE vertices via `/objects`; create form is a **freeform JSON textarea**. | ⚠️ real backend, freeform UI |
-| Link instances | Route exists (`/links`, AGE edges) but **no UI** in the editor. | ⚠️ backend only |
-| Shared properties | None. | ❌ MISSING |
-| Interfaces | None. | ❌ MISSING |
-| Object views | None. | ❌ MISSING |
-| Security / granular permissions | None. | ❌ MISSING |
-| Derived properties | None. | ❌ MISSING |
-| Activator triggers | Real Azure Monitor scheduled-query alert per entity change. | ✅ (Loom extra) |
-| Materialize → graph-model (ADX) | Real — emits a graph-model item, ADX-materializable. | ✅ (Loom extra) |
-| OSDK | Separate `ontology-sdk` editor (DAB). | ✅ adjacent |
+| Real capability | Loom today | Status | Backend per control |
+|---|---|---|---|
+| Object types | **Structured typed designer** (`OntologyTypedModelPanel`, `ontology-editor.tsx:824-928`): object-type dialog with API/display/plural name, description, status + accent color, properties, PK, title key, datasource, persisted via `saveOt` (`:568-622`). A legacy DSL Monaco box remains as a secondary path. | ✅ | Cosmos item PATCH |
+| Property type system | **Add-property dialog** (`:854`) with base-type `Dropdown` over `ONTO_BASE_TYPES` (string/boolean/byte/short/int/long/float/double/decimal/date/timestamp/geopoint/geoshape/timeseries…), `arrayOf` + required toggles. | ✅ | Cosmos item PATCH |
+| Primary key / title key | Per-type primary-key + title-property `Dropdown`s over key-eligible props (`:875-886`). | ✅ | Cosmos item PATCH |
+| Display metadata (icon/color/status/groups/visibility) | **Status** + **accent color** `Dropdown`s editable in the dialog (`:837-847`); **icon / groups / visibility** exist in the model but have no editable control yet. | ⚠️ partial | Cosmos item PATCH |
+| Link types (named, cardinality, from/to, backing FK) | **Link-type dialog** (`:930-969`): from/to object-type `Dropdown`s, cardinality (1:1 / 1:many / many:many), `foreignKeyProperty`; persisted via `saveLt` (`:646-663`). | ✅ | Cosmos item PATCH |
+| Action types | **Typed-parameter builder** (`:971-1025`): name + type `Dropdown` (incl. objectReference/enum) + required, kind create/update/delete; validated server-side. Param **defaults/prompts** are modeled but not yet editable, and the run form is still generic key/value entry. | ✅ partial | `/run-action` (`validateActionRun`) → Apache AGE |
+| Backing datasources | Object-type datasource block (kind lakehouse/warehouse, source-item `Dropdown`, table + PK-column inputs, `:888-918`), persisted per type. **Table/column are free-text** and the Synapse introspection route (`/datasource`) is not yet wired into the dialog; no column→property mapping grid. | ⚠️ partial | Cosmos; (`/datasource` Synapse `synapse-sql-client` exists, unwired) |
+| Object instances (write-back) | Real **Apache AGE** vertices via `/objects` (`WeaveInstancePanel.createObject :227-252`), sortable instance list; honest 503 gate when `LOOM_WEAVE_PG_FQDN` unset. Create form is still a freeform JSON `Textarea` (not derived from property types). | ⚠️ real backend, freeform create form | `/objects` → Apache AGE (`weave-ontology-store`) |
+| Link instances | `/links` AGE-edge route is real but **not yet surfaced** in the editor UI. | ⚠️ backend only | `/links` → Apache AGE |
+| Shared properties | None. | ❌ MISSING | — |
+| Interfaces | None. | ❌ MISSING | — |
+| Object views | None. | ❌ MISSING | — |
+| Security / granular permissions | None. | ❌ MISSING | — |
+| Derived properties | None. | ❌ MISSING | — |
+| Activator triggers | Real Azure Monitor scheduled-query alert per entity change (`createTrigger :1142-1168`); honest gate when Monitor unconfigured. | ✅ (Loom extra) | `/activator` → `monitor-client` |
+| Materialize → graph-model (ADX) | Real — emits a graph-model item (`materializeToGraphModel :1232-1271`), ADX-materializable in the graph-model editor. | ✅ (Loom extra) | `POST /api/items/graph-model` → (ADX in graph-model editor) |
+| Data bindings (Loom item → entity types) | Bind lakehouse/warehouse items to the ontology, persisted to Cosmos (`submitBinding :1093-1140`). | ✅ | `/bind` → Cosmos |
+| OSDK | Separate `ontology-sdk` editor (DAB). | ✅ adjacent | Data API Builder |
 
-**Verdict:** the editor is a thin "class hierarchy" DSL + AGE instance scratchpad
-with two freeform textareas. It models **none** of the Foundry pillars —
-typed properties, named link types, typed action parameters, shared properties,
-interfaces, object views, security, derived properties. Two `loom_no_freeform_config`
-BLOCKING violations (the DSL source textarea and the JSON props textareas).
+**Verdict:** the earlier grade (a "thin class-hierarchy DSL + JSON scratchpad")
+is **stale**. The primary surface is now a **typed Object/Link/Action-type
+designer** (`OntologyTypedModelPanel`) persisting to Cosmos, backed by real
+Apache-AGE object/action write-back, real Azure Monitor Activator triggers,
+Cosmos data-bindings, and graph-model materialization — the Foundry core is
+built. Genuine remaining gaps are the advanced Foundry pillars: **shared
+properties, interfaces, object views, granular security, derived properties,
+link-instance UI, and OSDK-in-editor**, plus two honest partials (the
+object-instance create form and the action run-form are still freeform JSON, and
+datasource binding lacks a column→property mapping grid). The
+`loom_no_freeform_config` cleanup is therefore partially delivered (typed model
+dialogs shipped; the instance/run JSON textareas remain to convert).
 
 ---
 

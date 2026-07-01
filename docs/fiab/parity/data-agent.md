@@ -10,14 +10,19 @@
 - https://learn.microsoft.com/fabric/data-science/data-agent-end-to-end-tutorial
 - https://learn.microsoft.com/fabric/data-science/evaluate-data-agent
 
-Loom surface: `apps/fiab-console/lib/editors/phase4-editors.tsx` → `DataAgentEditor`
+Loom surface: `apps/fiab-console/lib/editors/phase4/data-agent-editor.tsx` → `DataAgentEditor`
 (registered for `data-agent` in `lib/editors/registry.ts`). Lifecycle pane
 `lib/panes/data-agent.tsx`; Config-Copilot `lib/editors/data-agent-config-copilot.tsx`;
 result-viz `lib/editors/data-agent-result-viz.tsx`. Runtime
 `lib/azure/data-agent-client.ts` (grounded chat) + `lib/azure/data-agent-execute.ts`
 (real read-only per-source query execution). Routes under
-`app/api/items/data-agent/[id]/*` (chat / conversations / copilot / publish /
+`app/api/items/data-agent/[id]/*` (chat / conversations / copilot / evaluate / publish /
 m365-copilot / deploy).
+
+**Last verified: 2026-07-01 against current code.** The editor now ships tabs
+Build · Config Copilot · Test chat · **Evaluate** · Publish · **Consume** · Run
+inspector · Monitoring — Evaluation (#15), Consume (#20), and conversation
+starters (#22) have shipped and flip ❌→✅ below.
 
 Azure-native by default (no Microsoft Fabric dependency): a data agent is a Cosmos
 item; grounded chat runs on the Azure OpenAI deployment the cross-item Copilot
@@ -98,21 +103,24 @@ strictly opt-in.
 | 12 | Generated-query transparency | ✅ | tools-used trace + executed rows (`DataAgentResultViz` KPI/chart/table toggle) |
 | 13 | Multi-source routing trace | ✅ | `tools[]` per turn |
 | 14 | Conversation history | ✅ | `/conversations` (Cosmos), History menu |
-| 15 | **Evaluation** | ❌ | no ground-truth set, no accuracy score, no `/evaluate` route |
+| 15 | **Evaluation** | ✅ | Evaluate tab: ground-truth `Table` + Run → `POST /evaluate` runs each Q through `chatGrounded`, judges with an AOAI LLM-as-judge (`aoaiChatJson`), persists `evalRuns` to Cosmos, shows accuracy donut + per-Q pass/fail + run history |
 | 16 | Answer only from sources | ✅ | system prompt scope-limits |
 | 17 | Read-only under identity | ✅ | `data-agent-execute` SELECT/WITH-only, KQL mgmt/ingest blocked, 25-row cap |
 | 18 | Content safety / sensitivity | ⚠️ | DSPM labels emitted post-hoc (`resolveAgentSourceLabels`); **no guardrails config UI** |
 | 19 | Publish (Foundry / M365) | ✅ / ⚠️ | `/publish` (Foundry Agent Service) + `/m365-copilot` (Copilot Studio); honest infra-gates |
-| 20 | **Consume / REST endpoint + snippets** | ❌ | no consume tab, no cURL/Python/JS snippet, no API/APIM exposure |
+| 20 | **Consume / REST endpoint + snippets** | ✅ | Consume tab renders the POST endpoint + copy-paste cURL / Python / JS snippets (lang `Dropdown` + Copy). Snippets target the existing `/chat` route (no separate `consume/` route / APIM exposure yet) |
 | 21 | Version history | ❌ | `publishedSnapshot` stored but no versions UI / restore |
-| 22 | Conversation starters | ❌ | no authoring of suggested prompts |
+| 22 | Conversation starters | ✅ | Consume tab authors suggested prompts (add/update/remove), persisted to `state.conversationStarters`, surfaced in the Test-pane empty state |
 | — | Run-steps inspector (published Foundry agent) | ✅ | extra-vs-Fabric: `/data-agent/run-steps` trace |
 | — | Monitoring (Azure Monitor alert rules) | ✅ | extra-vs-Fabric: reuses activator rules route |
 
-**Grade: B (functional, real backend) — not A.** The build/test/publish loop is real
-and grounded, but Evaluation, a real schema picker, AI Search / Microsoft Graph source
-config, a Guardrails surface, a Consume/endpoint surface, version history, and
-conversation starters are missing — exactly what makes it read as "basic."
+**Grade: B+ / A- (functional, real backend).** The build/test loop is real and
+grounded, and **Evaluation** (LLM-as-judge `/evaluate` persisting runs to Cosmos),
+a **Consume** endpoint + cURL/Python/JS snippets, and **conversation starters** have
+now shipped — all three flip ❌→✅. The rows that remain genuinely missing/partial
+are the real schema-tree picker (#3, still comma-separated text), Microsoft Graph
+source type (#2), AI Search unstructured config (#7), a Guardrails config surface
+(#18), and version history (#21) — that's what still reads as "basic."
 
 ---
 

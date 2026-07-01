@@ -16,6 +16,10 @@ Kusto graph operators `make-graph` + `graph-match` (+ `graph-shortest-paths`,
 translator and the `kql-database` / `gql-graph` query routes. Fabric Graph REST
 is opt-in only (`LOOM_GRAPH_MODEL_BACKEND=fabric` + a bound workspace).
 
+**Last verified: 2026-07-01 against current code**
+(`apps/fiab-console/lib/editors/phase4/graph-model-editor.tsx` +
+`app/api/items/graph-model/[id]/{materialize,query,source-schema}`).
+
 ## Real feature inventory
 
 ### A. Modeling — node types
@@ -76,37 +80,43 @@ is opt-in only (`LOOM_GRAPH_MODEL_BACKEND=fabric` + a bound workspace).
 
 | # | Real capability | Loom status | Backend per control |
 |---|---|---|---|
-| 1 | Add node type w/ source table + key + property mapping | ⚠️ partial — name + freeform `name:type` props only; **no source-table picker, no key column** | Cosmos (item-crud); no table binding |
-| 2 | Compound keys | ❌ MISSING | — |
-| 3 | Property typing (GQL types + NOT NULL + LIST) | ⚠️ Kusto scalar dropdown only; no nullability/LIST | Kusto type at materialize |
+| 1 | Add node type w/ source table + key + property mapping | ✅ per-node `GraphSourceBinding`: DB/table picker, key column(s), property→column map (`graph-source-binding.tsx:183-241`, wired `graph-model-editor.tsx:314`) | `/source-schema` → `kusto-client` (live ADX) |
+| 2 | Compound keys | ✅ `multiselect` keyColumns; materialize `strcat`s composite key (`materialize/route.ts:72-78`) | `kusto-client` |
+| 3 | Property typing (GQL types + NOT NULL + LIST) | ⚠️ Kusto scalar-type dropdown only; no `NOT NULL`/`LIST` (`graph-type-editor.tsx:84-87`) | Kusto type at materialize |
 | 4 | Edit node type (props grid) | ✅ `GraphTypeEditor` card w/ add/remove props + type dropdown | Cosmos |
-| 5 | Multiple labels / inheritance | ❌ MISSING | — |
-| 6 | Per-type source-row filters | ❌ MISSING | — |
-| 7 | Add edge w/ origin/target node + key columns | ⚠️ partial — From/To stored as `srcType`/`dstType` props; **no key columns, no source table** | Cosmos |
+| 5 | Multiple labels / inheritance | ❌ MISSING (single `name`, no parent type) | — |
+| 6 | Per-type source-row filters | ❌ MISSING (binding has no WHERE/filter) | — |
+| 7 | Add edge w/ origin/target node + key columns | ✅ From/To dropdowns + edge origin/target key multiselects + source table (`graph-source-binding.tsx:206-223`) | `kusto-client` |
 | 8 | Edge properties | ✅ via props grid | Cosmos → Kusto cols |
 | 9 | Edge type families | ❌ MISSING (names must be unique) | — |
-| 10 | Directionality | ⚠️ implied by From/To; not enforced | — |
-| 11 | Table mappings / source-table list | ❌ MISSING | — |
-| 12 | Property→column mapping | ❌ MISSING (props abstract, not column-bound) | — |
-| 13 | Schema graph canvas | ⚠️ read-only `ForceDirectedGraph`; edges fan to hub when src/dst absent | client-only |
-| 14 | Canvas interact (drag/select/dbl-click) | ❌ MISSING | — |
-| 15 | Save → load data → construct graph (+ banner) | ⚠️ Materialize creates **empty** ADX `Node_*`/`Edge_*` tables; **no data load** | `/materialize` → `executeMgmtCommand` (real ADX) |
+| 10 | Directionality | ⚠️ directed src→dst enforced at materialize (`make-graph src --> dst`); no directed/undirected toggle | `kusto-client` |
+| 11 | Table mappings / source-table list | ✅ live table dropdown from ADX (`source-schema` `listTables`) | `kusto-client` |
+| 12 | Property→column mapping | ✅ `setPropColumn` maps + auto-types; materialize casts `sourceColumn` (`materialize/route.ts:143-147`) | `kusto-client` |
+| 13 | Schema graph canvas | ⚠️ `ForceDirectedGraph` **is** interactive (hover-highlight, click-inspect, keyboard); layout read-only (no drag) — the old "non-interactive" note was stale | client-only |
+| 14 | Canvas interact (drag/select/dbl-click) | ⚠️ hover + click-select + keyboard focus; **no** node drag / dbl-click | client-only |
+| 15 | Save → load data → construct graph (+ banner) | ✅ Build graph **loads real data** (`.set-or-append`, `materialize/route.ts:138-177`), returns per-table row counts + `make-graph` verify + "Data load completed" banner (`graph-model-editor.tsx:345-383`) | `/materialize` → `kusto-client` (real ADX) |
 | 16 | Model validation at save | ⚠️ minimal (name regex, dup name); no type-consistency / endpoint validation | client-only |
-| 17 | Visual Query Builder | ❌ MISSING (no query surface in this editor) | — |
-| 18 | Diagram / Card / Table result views | ❌ MISSING | — |
-| 19 | GQL/openCypher code editor + Run | ❌ MISSING here (lives in separate `gql-graph` editor) | `cypherToKql` + `/api/items/kql-database/[id]/query` (reusable) |
+| 17 | Visual Query Builder | ❌ MISSING (no no-code query panel) | — |
+| 18 | Diagram / Card / Table result views | ✅ TabList table/card/diagram render real `/query` rows (`graph-model-editor.tsx:405-441`) | `/query` → `kusto-client` |
+| 19 | GQL/openCypher code editor + Run | ✅ in-editor Monaco (graphql) + Run → `runQuery` (`graph-model-editor.tsx:390-392`) | `cypherToKql` → `/query` (real ADX) |
 | 20 | Save queryset | ❌ MISSING | — |
 | 21 | GQL graph-type definition import/export | ❌ MISSING | — |
-| 22 | Sample dataset starter | ❌ MISSING | — |
+| 22 | Sample dataset starter | ❌ MISSING (only a default Customer/PLACED seed) | — |
 
-**Honest assessment:** the editor is a **thin two-column type designer**
-(node/edge cards with name + abstract property rows) plus a non-interactive
-force-directed schema picture and one **Materialize** button that creates
-*empty* ADX tables. No source-table binding, no key columns, no data load, no
-query experience, no canvas editing, and no validation beyond a name regex. It
-is roughly **C- / D+** vs the real product: it persists state and creates real
-ADX tables (real backend, not vaporware) but covers ~25% of the inventory and
-never produces a *queryable graph with data in it*.
+**Honest assessment (refreshed 2026-07-01):** the prior "thin type designer +
+empty ADX tables + no query" grade is **stale**. The editor is now a real
+three-part surface: a typed node/edge designer with a props grid, a **per-type
+live-ADX source binding** (DB/table picker, compound key columns, property→column
+mapping fed by `/source-schema`), and a working **Build graph** flow that
+actually `.set-or-append`-ingests source rows, reports per-type row counts, and
+runs a verifying `make-graph`, plus an **in-editor GQL/openCypher Monaco editor
+with Run** and Table/Card/Diagram result views — all real ADX via `kusto-client`.
+Net: **~10 built ✅, 4 partial ⚠️** (property-type constraints, directionality
+toggle, canvas is inspect-only/no-drag, save-time validation), **8 still
+missing ❌** (label inheritance, source-row filters, edge families, visual query
+builder, save queryset, GQL DDL import/export, sample-dataset starter). Roughly
+**B-** vs the real product — it now produces a *queryable graph with data in it*
+on the Azure-native default path.
 
 ## Build plan
 
