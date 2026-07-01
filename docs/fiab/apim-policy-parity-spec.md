@@ -10,7 +10,7 @@ Every API call routed through APIM executes a policy document at four ordered sc
 
 ### Scope navigation
 - Policy editing is reached from four entry points, all rendering the same editor with different `scope` and target ids:
-  - **Global**: APIM service → APIs → All APIs → Policies tab → "`</>` Policy code editor"
+  - **Global**: APIM service → APIs → All APIs → Policies tab → "`&lt;/&gt;` Policy code editor"
   - **Product**: Products → {product} → Policies tab
   - **API**: APIs → {api} → Design → Inbound/Backend/Outbound/On-error `&lt;/&gt;` buttons
   - **Operation**: APIs → {api} → Design → {operation} → Inbound/Backend/Outbound/On-error `&lt;/&gt;` buttons
