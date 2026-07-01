@@ -5,7 +5,7 @@
  *
  * Extends the Loom-native DQ rule store with the missing run/results surface and
  * always-on enforcement, all Azure-native (no Microsoft Fabric):
- *   - Rules    : author rules (shared store; same as /catalog/data-quality)
+ *   - Rules    : author rules in the Loom-native DQ rule store (no Fabric dep)
  *   - Run      : execute the rule set on Kusto / Databricks SQL / Synapse SQL
  *                (/api/dq/run) and see the composite score + per-rule breakdown
  *   - Results  : run history with pass% bars (/api/dq/results)
