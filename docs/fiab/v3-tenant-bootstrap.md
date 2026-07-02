@@ -2948,10 +2948,46 @@ az role assignment create \
   --scope /subscriptions/<dlz-sub>/resourceGroups/<dlz-rg>/providers/Microsoft.Storage/storageAccounts/<lake-account>
 ```
 
-**Integration pass (not done here):** add `report-accel.bicep` to
-`modules/admin-plane/main.bicep`, pass the CAE + UAMI + lake account, and set the
-console's `LOOM_REPORT_ACCEL_URL` to the module's `accelUrl` output. The module
-is standalone and does not edit `main.bicep`.
+**Integration (done):** `report-accel.bicep` is wired into
+`modules/admin-plane/main.bicep` (module `reportAccel`), which passes the CAE +
+accel UAMI + lake account and sets the console's `LOOM_REPORT_ACCEL_URL` to the
+module's `accelUrl` output. It is deployed only when `reportAccelActive`
+(`reportAccelEnabled && reportAccelImageReady`, Container Apps platform,
+`deployAppsEnabled`).
+
+#### Image build + activation (out-of-the-box)
+
+The accel host runs a **custom image** — `csa-loom/report-accel:v0.1` — built from
+`platform/report-accel/` (unlike the stock-image UDF/warm-pool hosts). That image
+is now built + pushed by the **`build-fiab-images-acr-tasks`** pipeline
+(`.github/workflows/build-fiab-images-acr-tasks.yml`) alongside every other Loom
+component: it is in the default `all` matrix and the workflow's `push` trigger
+also fires on changes under `platform/report-accel/**`. The build runs
+server-side inside ACR (`az acr build`) so it works even when the Loom ACR has
+`publicNetworkAccess=Disabled` (private endpoint), tagging
+`csa-loom/report-accel` `:v0.1` + `:<sha>` + `:latest`.
+
+Because the image is produced by the standard component build, the root
+`reportAccelImageReady` param now **defaults to `true`** — the admin-plane
+activates the accel Container App on a normal deploy instead of falling back to
+Synapse Serverless. On a **clean deploy against an ACR that has never run the
+image build**, set `reportAccelImageReady=false` (or run the image build first)
+so the deployment does not reference an image that is not yet present; the report
+route stays on cache + Serverless until the image exists.
+
+One-time / on-demand image build (any boundary):
+
+```bash
+# Manual dispatch — build just report-accel:
+gh workflow run build-fiab-images-acr-tasks.yml -f apps=report-accel
+
+# ...or server-side directly against the resolved ACR (private-endpoint safe):
+az acr build --registry <acrloom...> \
+  --image csa-loom/report-accel:v0.1 \
+  --image csa-loom/report-accel:latest \
+  --file platform/report-accel/Dockerfile \
+  platform/report-accel
+```
 
 ## Unified capacity + chargeback dashboard (Cost Management + Monitor)
 
