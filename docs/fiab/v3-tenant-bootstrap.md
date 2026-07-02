@@ -3022,3 +3022,52 @@ operator wires it in a dedicated integration commit: add the module (scope
 `subscription()`, pass `consoleIdentity.outputs.principalId`), then set the
 console's `LOOM_BILLING_SCOPE` env to the module's `loomBillingScope` output. The
 module header carries the exact snippet.
+
+## Per-user notebook Compute Instances (multi-user Azure ML)
+
+Azure ML **Compute Instances are single-user**: only the user a CI is assigned
+to (`personalComputeInstanceSettings.assignedUser`) can start or run cells on it.
+A single shared "default" CI therefore cannot make notebooks multi-user. Loom's
+notebook editor gives every signed-in user a **"Create my compute instance"**
+action that provisions a CI named deterministically (`ci-loom-<oid>`) and
+**assigned to that user** (assignedUser = their AAD objectId + tenant id — the
+"create on behalf of" pattern), with an idle-shutdown TTL. Each user runs on
+their OWN compute; the picker surfaces "My compute" first.
+
+This works out of the box once the AML workspace is configured
+(`LOOM_AML_WORKSPACE` + `LOOM_AML_REGION`, Console UAMI holding **AzureML Data
+Scientist** + **AzureML Compute Operator**). No Fabric dependency — Azure-native
+by default.
+
+### Policy env (per-user CI defaults + tenant ceiling)
+
+The `admin-plane/notebook-compute-pool.bicep` module emits four env values that
+tune the flow. All have safe defaults, so the flow works with them unset:
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `LOOM_AML_PERUSER_ENABLED` | `true` | Master switch. `false` hides "Create my compute instance" and 403-gates the `/mine` POST. |
+| `LOOM_AML_CI_SIZE` | `Standard_DS3_v2` | Default VM size for a per-user CI. |
+| `LOOM_AML_CI_IDLE_TTL` | `PT30M` | Idle auto-shutdown TTL (ISO-8601) so an idle CI deallocates and stops billing. |
+| `LOOM_AML_CI_MAX` | `50` | Tenant ceiling on per-user CIs (cost guard). When reached the editor shows an honest quota MessageBar and `/mine` POST returns **409**. |
+
+### BFF surface
+
+- `GET /api/aml/compute-instances/mine` — the caller's own CI (if any), the
+  deterministic name it would be created as, the policy, and the tenant quota
+  state.
+- `POST /api/aml/compute-instances/mine` — creates (or idempotently re-attaches)
+  the caller's per-user CI via a real ARM `PUT …/computes/{ci-loom-<oid>}` with
+  `assignedUser` set, then best-effort applies the idle-shutdown TTL. Enforces
+  `LOOM_AML_CI_MAX` before creating.
+- `GET /api/loom/compute-targets` — surfaces the caller's own CI **first**
+  (labelled "My compute").
+
+### Integration pass (not done in the feature branch)
+
+`notebook-compute-pool.bicep` is standalone and does **not** edit `main.bicep`.
+The operator wires it in a dedicated integration commit: add the module, then map
+its four outputs (`perUserEnabledEnv` / `perUserVmSizeEnv` / `perUserIdleTtlEnv`
+/ `maxPerTenantEnv`) onto the loom-console `env` list as `LOOM_AML_PERUSER_ENABLED`
+/ `LOOM_AML_CI_SIZE` / `LOOM_AML_CI_IDLE_TTL` / `LOOM_AML_CI_MAX`. The module
+header carries the exact snippet.

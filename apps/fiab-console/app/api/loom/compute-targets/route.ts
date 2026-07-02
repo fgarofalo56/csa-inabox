@@ -36,6 +36,10 @@ interface ComputeTarget {
   sku?: string;
   nodeSize?: string;
   runEndpoint: string;
+  /** For an AML Compute Instance: true when it's assigned to the caller (their
+   *  own single-user CI). Notebooks are only genuinely multi-user when each user
+   *  runs on the CI assigned to them, so the picker surfaces "mine" first. */
+  mine?: boolean;
 }
 
 /**
@@ -133,21 +137,29 @@ export async function GET() {
   // notebook editor filters to kind === 'aml-ci' when its workspace toggle is
   // set to Azure ML. Azure-native — no Fabric dependency.
   try {
-    const { amlIsConfigured, listCIs, ciIsRunning } = await import('@/lib/azure/aml-client');
+    const { amlIsConfigured, listCIs, ciIsRunning, ciIsOwnedBy } = await import('@/lib/azure/aml-client');
     if (amlIsConfigured()) {
+      const oid = s.claims.oid;
       const cis = await withTimeout(listCIs(), 8000, 'aml-ci');
+      const amlRows: ComputeTarget[] = [];
       for (const ci of cis) {
-        computes.push({
+        const mine = ciIsOwnedBy(ci, oid);
+        amlRows.push({
           id: `aml-ci:${ci.name}`,
-          name: `${ci.name} (AML Compute Instance)`,
+          // Label the caller's own single-user CI so the picker reads clearly.
+          name: mine ? `${ci.name} (My compute)` : `${ci.name} (AML Compute Instance)`,
           kind: 'aml-ci',
           state: ci.state,
           nodeSize: ci.vmSize,
           sku: ci.vmSize,
           runEndpoint: '/api/items/notebook/{id}/run',
+          mine,
         });
         void ciIsRunning; // running-state computed client-side from `state`
       }
+      // Caller's own CI(s) first — a user should land on THEIR compute.
+      amlRows.sort((a, b) => Number(b.mine) - Number(a.mine));
+      computes.push(...amlRows);
     }
   } catch (e: any) {
     errors.push({ kind: 'aml-ci', error: e?.message || String(e) });

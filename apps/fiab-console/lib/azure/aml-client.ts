@@ -232,6 +232,14 @@ export interface AmlCompute {
    * than max node of compute"). Undefined for ComputeInstance / when absent.
    */
   maxNodeCount?: number;
+  /**
+   * The AAD objectId of the user a *personal* Compute Instance is assigned to
+   * (`personalComputeInstanceSettings.assignedUser.objectId`). Azure ML Compute
+   * Instances are single-user: a CI can only be started / used by its assigned
+   * user. This is how Loom makes notebooks genuinely multi-user — every user
+   * provisions a CI owned by *them*. Undefined for shared / unassigned CIs.
+   */
+  assignedUserObjectId?: string;
 }
 
 /** A Compute Instance view (subset of AmlCompute) used by the notebook path. */
@@ -244,6 +252,8 @@ function shapeCompute(raw: any): AmlCompute {
     typeof inner?.scaleSettings?.maxNodeCount === 'number'
       ? inner.scaleSettings.maxNodeCount
       : undefined;
+  const assignedUserObjectId =
+    inner?.personalComputeInstanceSettings?.assignedUser?.objectId || undefined;
   return {
     id: raw?.id,
     name: raw?.name,
@@ -254,6 +264,7 @@ function shapeCompute(raw: any): AmlCompute {
     vmSize: inner.vmSize,
     createdOn: p.createdOn,
     maxNodeCount,
+    assignedUserObjectId,
   };
 }
 
@@ -331,22 +342,49 @@ export async function stopCI(name: string): Promise<void> {
   throw new AmlError(res.status, t, `Compute Instance stop failed: ${t.slice(0, 240)}`);
 }
 
+/** A user explicitly assigned to a *personal* Compute Instance (AAD ids). */
+export interface AssignedUser {
+  objectId: string;
+  tenantId: string;
+}
+
 /**
  * Create a Compute Instance.
  *   PUT {base}/computes/{name}?api-version=2024-10-01
  *   body { location, properties: { computeType:'ComputeInstance',
- *          properties: { vmSize, idleTimeBeforeShutdown? } } }
+ *          properties: { vmSize, idleTimeBeforeShutdown?,
+ *                        computeInstanceAuthorizationType:'personal',
+ *                        personalComputeInstanceSettings:{assignedUser:{objectId,tenantId}} } } }
+ *
+ * PER-USER OWNERSHIP: when `opts.assignedUser` is supplied, the CI is created as
+ * a *personal* compute instance assigned to that user's AAD objectId + tenantId
+ * (the "create on behalf of" pattern —
+ * https://learn.microsoft.com/azure/machine-learning/how-to-create-compute-instance#create-on-behalf-of).
+ * An AML Compute Instance is single-user by design — only its assigned user can
+ * start / use it — so assigning per-user CIs is exactly what makes Loom notebooks
+ * genuinely multi-user (each user runs on THEIR own CI, not one shared box). The
+ * Console UAMI creates it on their behalf; the assigned user owns it thereafter.
+ *
  * Provisioning is async — ARM answers 202 (returns a 'Creating' placeholder) or
  * 200/201 with the resource body. A non-202 failure (e.g. 404 workspace) throws
  * AmlError so the route surfaces an honest error — never a faked success.
  */
 export async function createCI(
   name: string,
-  opts: { vmSize: string; idleTimeBeforeShutdown?: string },
+  opts: { vmSize: string; idleTimeBeforeShutdown?: string; assignedUser?: AssignedUser },
 ): Promise<AmlComputeInstance> {
   const target = resolveAmlTarget();
   const inner: Record<string, unknown> = { vmSize: opts.vmSize };
   if (opts.idleTimeBeforeShutdown) inner.idleTimeBeforeShutdown = opts.idleTimeBeforeShutdown;
+  if (opts.assignedUser?.objectId && opts.assignedUser?.tenantId) {
+    inner.computeInstanceAuthorizationType = 'personal';
+    inner.personalComputeInstanceSettings = {
+      assignedUser: {
+        objectId: opts.assignedUser.objectId,
+        tenantId: opts.assignedUser.tenantId,
+      },
+    };
+  }
   const armBody = {
     location: amlRegion(target),
     properties: {
@@ -359,13 +397,73 @@ export async function createCI(
     body: JSON.stringify(armBody),
     target,
   });
+  const assignedUserObjectId = opts.assignedUser?.objectId;
   if (res.status === 202) {
-    return { id: '', name, computeType: 'ComputeInstance', provisioningState: 'Creating', state: 'Creating', vmSize: opts.vmSize };
+    return { id: '', name, computeType: 'ComputeInstance', provisioningState: 'Creating', state: 'Creating', vmSize: opts.vmSize, assignedUserObjectId };
   }
   const j = await readAmlJson<any>(res, 'createCI');
   return j
     ? shapeCompute(j)
-    : { id: '', name, computeType: 'ComputeInstance', provisioningState: 'Creating', state: 'Creating', vmSize: opts.vmSize };
+    : { id: '', name, computeType: 'ComputeInstance', provisioningState: 'Creating', state: 'Creating', vmSize: opts.vmSize, assignedUserObjectId };
+}
+
+// ============================================================
+// Per-user Compute Instance policy (multi-user notebooks)
+// ============================================================
+
+/**
+ * Per-user CI defaults + tenant ceiling, sourced from env (emitted by the
+ * admin-plane/notebook-compute-pool.bicep module). All have safe defaults so
+ * the flow works out of the box when the AML workspace is present:
+ *   LOOM_AML_PERUSER_ENABLED  on/off master switch (default on)
+ *   LOOM_AML_CI_SIZE          default VM size for a per-user CI
+ *   LOOM_AML_CI_IDLE_TTL      default idle-shutdown ISO-8601 duration
+ *   LOOM_AML_CI_MAX           max per-user CIs across the tenant (cost guard)
+ */
+export interface PerUserCiConfig {
+  enabled: boolean;
+  vmSize: string;
+  idleTtl: string;
+  maxPerTenant: number;
+}
+export function perUserCiConfig(): PerUserCiConfig {
+  const max = Number(process.env.LOOM_AML_CI_MAX);
+  return {
+    enabled: (process.env.LOOM_AML_PERUSER_ENABLED ?? 'true').toLowerCase() !== 'false',
+    vmSize: process.env.LOOM_AML_CI_SIZE?.trim() || 'Standard_DS3_v2',
+    idleTtl: process.env.LOOM_AML_CI_IDLE_TTL?.trim() || 'PT30M',
+    maxPerTenant: Number.isFinite(max) && max > 0 ? max : 50,
+  };
+}
+
+/** Prefix every Loom-provisioned per-user CI name carries (for quota + listing). */
+export const PERUSER_CI_PREFIX = 'ci-loom-';
+
+/**
+ * Deterministic per-user Compute Instance name: `ci-loom-<oid-first-12-hex>`.
+ * Derived only from the user's AAD objectId so the same user always resolves to
+ * the same CI (idempotent create/attach) and it satisfies AML's compute naming
+ * rule (3-24 chars, starts with a letter, alnum + hyphen). Compute Instance
+ * names must also be unique within a REGION, so this is best-effort unique —
+ * the oid prefix collision space is negligible in a single tenant.
+ */
+export function perUserCiName(oid: string): string {
+  const short = (oid || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12).toLowerCase();
+  return `${PERUSER_CI_PREFIX}${short || 'user'}`;
+}
+
+/** True when a CI is a Loom-managed per-user instance (by assignment or name). */
+export function isPerUserCi(ci: AmlComputeInstance): boolean {
+  return !!ci.assignedUserObjectId || (ci.name || '').startsWith(PERUSER_CI_PREFIX);
+}
+
+/** The subset of CIs owned by (assigned to) a given user oid. */
+export function ciIsOwnedBy(ci: AmlComputeInstance, oid: string): boolean {
+  if (!oid) return false;
+  if (ci.assignedUserObjectId) return ci.assignedUserObjectId === oid;
+  // A per-user CI mid-provision (202 placeholder) may not have surfaced its
+  // assignedUser yet — fall back to the deterministic name match.
+  return (ci.name || '') === perUserCiName(oid);
 }
 
 /**

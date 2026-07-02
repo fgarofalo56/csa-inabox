@@ -19,7 +19,7 @@ import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input, Tooltip, Divider,
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover, Field,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
@@ -198,6 +198,8 @@ interface ComputeTarget {
   name: string;
   kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql' | 'aml-ci';
   state?: string;
+  /** AML Compute Instance assigned to the caller (their own single-user CI). */
+  mine?: boolean;
 }
 
 /** Notebook compute backend: Loom-native Spark/Databricks vs the Azure ML path. */
@@ -275,11 +277,45 @@ function useAmlConfigured() {
   return { configured, defaultCompute };
 }
 
+/** The caller's OWN per-user Compute Instance state + tenant quota + policy.
+ *  AML Compute Instances are single-user, so a shared default CI can't make
+ *  notebooks multi-user — every user provisions a CI assigned to THEM. Backs the
+ *  "My compute" label + "Create my compute instance" action + honest quota gate. */
+interface MyCiState {
+  loading: boolean;
+  enabled: boolean;
+  myName: string | null;
+  mine: { name: string; state?: string; running?: boolean } | null;
+  policy: { vmSize?: string; idleTtl?: string; maxPerTenant?: number } | null;
+  quota: { used: number; max: number; atLimit: boolean } | null;
+}
+function useMyCi() {
+  const [state, setState] = useState<MyCiState>({ loading: true, enabled: true, myName: null, mine: null, policy: null, quota: null });
+  const refresh = useCallback(async () => {
+    try {
+      const j = await (await fetch('/api/aml/compute-instances/mine')).json();
+      setState({
+        loading: false,
+        enabled: j?.enabled !== false,
+        myName: typeof j?.myName === 'string' ? j.myName : null,
+        mine: j?.mine || null,
+        policy: j?.policy || null,
+        quota: j?.quota || null,
+      });
+    } catch {
+      setState((p) => ({ ...p, loading: false }));
+    }
+  }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+  return { ...state, refresh };
+}
+
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
   const cp = useComputes();
   const { configured: amlConfigured, defaultCompute: amlDefaultCompute } = useAmlConfigured();
+  const myCi = useMyCi();
   // Notebook compute backend toggle. Defaults to Loom-native Spark/Databricks;
   // the user flips to Azure ML when they want a Compute Instance + datastores.
   const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('loom');
@@ -414,12 +450,16 @@ export function NotebookEditor({ item, id }: Props) {
       return;
     }
     if (!computeId && cp.computes.length) {
-      // In Azure ML mode, prefer the bicep default Compute Instance
-      // (LOOM_AML_DEFAULT_COMPUTE) so the "no CI" gate clears the moment that CI
-      // exists — falling back to the first runnable CI otherwise.
-      if (workspaceType === 'aml' && amlDefaultCompute) {
-        const def = cp.computes.find(c => c.kind === 'aml-ci' && c.name === amlDefaultCompute);
-        if (def) { setComputeId(def.id); return; }
+      // In Azure ML mode, prefer the caller's OWN per-user CI (multi-user:
+      // everyone lands on THEIR compute), then the bicep default CI
+      // (LOOM_AML_DEFAULT_COMPUTE), then the first runnable CI.
+      if (workspaceType === 'aml') {
+        const own = cp.computes.find(c => c.kind === 'aml-ci' && c.mine);
+        if (own) { setComputeId(own.id); return; }
+        if (amlDefaultCompute) {
+          const def = cp.computes.find(c => c.kind === 'aml-ci' && c.name === amlDefaultCompute);
+          if (def) { setComputeId(def.id); return; }
+        }
       }
       const first = cp.computes.find(computeMatchesType);
       if (first) setComputeId(first.id);
@@ -612,6 +652,42 @@ export function NotebookEditor({ item, id }: Props) {
       setNewCiErr(e?.message || String(e));
     } finally { setNewCiBusy(false); }
   }, [newCiName, newCiVmSize, newCiTtl, cp]);
+
+  // Provision (or attach) the caller's OWN per-user Compute Instance. This is
+  // what makes notebooks genuinely multi-user: a CI is single-user, so each user
+  // runs on a CI assigned to THEM (assignedUser = their AAD oid). One click →
+  // POST /api/aml/compute-instances/mine → the deterministic ci-loom-<oid> CI is
+  // created (or the existing one re-attached), then selected. Honest quota gate
+  // surfaces when the tenant per-user limit is hit.
+  const [provisioningMyCi, setProvisioningMyCi] = useState(false);
+  const [myCiErr, setMyCiErr] = useState<string | null>(null);
+  const provisionMyCi = useCallback(async () => {
+    setProvisioningMyCi(true); setMyCiErr(null); setRunMsg('Provisioning your compute instance…');
+    try {
+      const r = await fetch('/api/aml/compute-instances/mine', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if ((!r.ok && r.status !== 202) || j?.ok === false) {
+        setMyCiErr(j?.error || j?.hint || `HTTP ${r.status}`);
+        setRunMsg(null);
+        return;
+      }
+      const name: string | undefined = j?.name || j?.mine?.name;
+      await Promise.all([cp.refresh(), myCi.refresh()]);
+      if (name) setComputeId(`aml-ci:${name}`);
+      setRunMsg(
+        j?.reused
+          ? `Attached your compute instance "${name}".`
+          : `Your compute instance "${name}" is being created — it appears as Creating, then Running.`,
+      );
+    } catch (e: any) {
+      setMyCiErr(e?.message || String(e));
+      setRunMsg(null);
+    } finally { setProvisioningMyCi(false); }
+  }, [cp, myCi]);
 
   // Auto-start a stopped AML Compute Instance when it's selected in AML mode.
   // Debounced 1.5s so flipping through the picker doesn't fire a start per
@@ -2225,17 +2301,41 @@ export function NotebookEditor({ item, id }: Props) {
                   >Configure compute</Button>
                 )}
               </div>
-              {/* Create a new Azure ML Compute Instance — clears the "no CI" gate. */}
+              {/* Per-user + custom Compute Instance actions. "Create my compute
+                  instance" is the multi-user path: a CI is single-user, so each
+                  user provisions one assigned to THEM. Shown when the user has no
+                  own CI yet (and per-user CIs are enabled). "New compute
+                  instance" remains for a named/custom CI. */}
               {workspaceType === 'aml' && (
-                <Button
-                  appearance="outline"
-                  size="small"
-                  icon={<Add20Regular />}
-                  disabled={amlConfigured === false}
-                  onClick={() => { setNewCiErr(null); setNewCiOpen(true); }}
-                  title={amlConfigured === false ? 'Azure ML workspace not configured' : 'Create a new Azure ML Compute Instance'}
-                  style={{ alignSelf: 'flex-start', marginTop: tokens.spacingVerticalXS }}
-                >New compute instance</Button>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center', marginTop: tokens.spacingVerticalXS }}>
+                  {myCi.enabled && !myCi.mine && (
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      icon={<Add20Regular />}
+                      disabled={amlConfigured === false || provisioningMyCi || myCi.loading || !!myCi.quota?.atLimit}
+                      onClick={provisionMyCi}
+                      title={
+                        amlConfigured === false ? 'Azure ML workspace not configured'
+                          : myCi.quota?.atLimit ? 'Per-user Compute Instance limit reached'
+                          : `Provision your own Compute Instance (${myCi.myName || 'ci-loom-…'}), assigned to you`
+                      }
+                    >{provisioningMyCi ? 'Provisioning…' : 'Create my compute instance'}</Button>
+                  )}
+                  {myCi.mine && (
+                    <Badge appearance="tint" color="brand" size="small" title={`Your Compute Instance ${myCi.mine.name} is assigned to you`}>
+                      My compute: {myCi.mine.name}{myCi.mine.state ? ` · ${myCi.mine.state}` : ''}
+                    </Badge>
+                  )}
+                  <Button
+                    appearance="outline"
+                    size="small"
+                    icon={<Add20Regular />}
+                    disabled={amlConfigured === false}
+                    onClick={() => { setNewCiErr(null); setNewCiOpen(true); }}
+                    title={amlConfigured === false ? 'Azure ML workspace not configured' : 'Create a new named Azure ML Compute Instance'}
+                  >New compute instance</Button>
+                </div>
               )}
             </div>
             <Divider vertical className={s.toolDivider} />
@@ -2522,7 +2622,36 @@ export function NotebookEditor({ item, id }: Props) {
               </MessageBarBody>
             </MessageBar>
           )}
-          {!cp.loading && !cp.error && workspaceType === 'aml' && cp.computes.filter(c => c.kind === 'aml-ci').length === 0 && (
+          {/* Honest per-user quota gate — the tenant hit its per-user CI ceiling
+              (LOOM_AML_CI_MAX). Naming the exact limit + remediation per
+              no-vaporware.md. */}
+          {workspaceType === 'aml' && myCi.quota?.atLimit && !myCi.mine && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Per-user Compute Instance limit reached</MessageBarTitle>
+                {myCi.quota.used}/{myCi.quota.max} per-user Compute Instances are in use. An
+                administrator can raise <code>LOOM_AML_CI_MAX</code>, or stop/delete unused Compute
+                Instances in the Azure ML workspace to free capacity.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {myCiErr && <MessageBar intent="error"><MessageBarBody>{myCiErr}</MessageBarBody></MessageBar>}
+          {!cp.loading && !cp.error && workspaceType === 'aml' && amlConfigured !== false && myCi.enabled && !myCi.mine && !myCi.quota?.atLimit && cp.computes.filter(c => c.kind === 'aml-ci' && c.mine).length === 0 && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>You don't have a compute instance yet</MessageBarTitle>
+                Azure ML Compute Instances are single-user. Provision one assigned to you
+                {myCi.myName ? <> (<code>{myCi.myName}</code>)</> : null} to run cells on your own
+                compute — it auto-stops after {(myCi.policy?.idleTtl && TTL_LABEL[myCi.policy.idleTtl]) || '30 minutes'} idle.
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" appearance="primary" icon={<Add20Regular />} disabled={provisioningMyCi || myCi.loading} onClick={provisionMyCi}>
+                  {provisioningMyCi ? 'Provisioning…' : 'Create my compute instance'}
+                </Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {!cp.loading && !cp.error && workspaceType === 'aml' && cp.computes.filter(c => c.kind === 'aml-ci').length === 0 && (amlConfigured === false || !myCi.enabled) && (
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>No Azure ML Compute Instance is available</MessageBarTitle>
