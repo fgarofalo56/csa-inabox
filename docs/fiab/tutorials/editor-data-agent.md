@@ -14,14 +14,15 @@
 
 ## What this editor does
 
-A Data agent is conversational Q&A grounded in your data sources and semantic model. In Loom it is built on a Foundry prompt-flow plus AI Search hybrid retrieval over your warehouse, lakehouse, and semantic models.
+A Data agent is conversational Q&A grounded in your data sources — warehouse, lakehouse, KQL, AI Search, graph, and semantic models. In Loom the **Build** tab binds up to 5 sources, each scoped with a real schema tree; **Config Copilot**, **Test chat**, **Evaluate**, **Publish**, **Consume**, **Run inspector**, and **Monitoring** round out the lifecycle. Azure-native — no Microsoft Fabric required.
 
 ## Getting started
 
-1. **Pick data sources** — Ground the agent on a warehouse, lakehouse, and/or semantic model.
-2. **Configure retrieval** — The agent uses AI Search hybrid retrieval plus a Foundry prompt flow to answer.
-3. **Test questions** — Ask sample business questions and verify the agent cites the right data.
-4. **Refine grounding** — Tune the sources and prompt so answers stay accurate and on-topic.
+1. **Pick data sources** — On the **Build** tab bind up to 5 sources — warehouse, lakehouse, KQL / Eventhouse, AI Search, graph, or semantic model — and give each instructions and example questions.
+2. **Scope the schema** — Expand each source's schema tree — real Tables / Views / Functions / Fields read live from the backend (Synapse INFORMATION_SCHEMA, ADX `.show tables`, AI Search index) — and check exactly which objects the agent may query. No freeform table strings.
+3. **Draft with Config Copilot** — The **Config Copilot** tab drafts instructions and source descriptions from your bound schema so grounding starts strong.
+4. **Test questions** — Use **Test chat** to ask sample business questions and verify the agent queries the right sources; the **Run inspector** shows each tool call and query.
+5. **Evaluate and publish** — Score the agent against a question set on **Evaluate**, then **Publish** and share the **Consume** endpoint; **Monitoring** tracks usage over time.
 
 ## Learn more
 

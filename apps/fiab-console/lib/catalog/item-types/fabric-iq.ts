@@ -12,23 +12,23 @@ export const fabricIqItems: FabricItemType[] = [
   { slug: 'ontology', displayName: 'Ontology', restType: 'Ontology', category: 'Fabric IQ', preview: true,
     description: 'Define business entities, relationships, and condition-action rules.',
     learnContent: {
-      "overview": "An Ontology defines business entities, relationships, and condition-action rules (preview). In Loom it types entities and feeds the graph backend semantic layer. Use it to give connected data a shared vocabulary.",
+      "overview": "An Ontology defines business object types, link types, actions, and interfaces over your data (preview). In Loom it is a typed modeling surface — structured forms, no freeform JSON — whose instances live in a real graph backend, and whose object types can be backed by a Lakehouse / Warehouse datasource with per-property column mapping.",
       "steps": [
         {
-          "title": "Define entities",
-          "body": "Declare the business entity types and their key properties."
+          "title": "Define object types",
+          "body": "On the Object types tab declare each business entity with the typed form — properties with base types, a title property, status, and color. No JSON textarea."
         },
         {
-          "title": "Define relationships",
-          "body": "Connect entities with typed relationships to model the domain graph."
+          "title": "Back a type with a datasource",
+          "body": "Bind an object type to a Lakehouse / Warehouse table and map each ontology property to a source column — the editor browses the live Synapse schema so the column mapping is picked, not typed."
         },
         {
-          "title": "Add rules",
-          "body": "Author condition-action rules that fire when entity state changes."
+          "title": "Define link types and interfaces",
+          "body": "Connect object types with typed link types (cardinality + properties), and declare Interfaces / Shared properties as contracts that object types implement."
         },
         {
-          "title": "Mind the preview gate",
-          "body": "Fabric IQ ontology is preview; if the graph backend isn't provisioned the editor discloses what's required."
+          "title": "Create instances and links",
+          "body": "Use the typed instance form to create real object instances and link instances between them — both persist to the graph backend (Apache AGE), and Actions execute as real graph transactions."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
@@ -36,23 +36,23 @@ export const fabricIqItems: FabricItemType[] = [
   { slug: 'graph-model', displayName: 'Graph model', restType: 'GraphModel', category: 'Fabric IQ', preview: true,
     description: 'Native graph storage + GQL queries for connected data.',
     learnContent: {
-      "overview": "A Graph model is the schema definition for a property graph — node labels, edge types, allowed properties, indexes (preview). In Loom it feeds Cosmos Gremlin, Cypher-over-ADX, or GQL backends. Use it to design the shape before loading data.",
+      "overview": "A Graph model is the schema definition for a property graph — node labels, edge types, allowed properties, indexes (preview). In Loom you author it on an interactive schema canvas and query it with GQL/openCypher translated to the ADX graph engine (make-graph / graph-match) — Cosmos Gremlin and GQL backends are also supported. No Microsoft Fabric required.",
       "steps": [
         {
-          "title": "Declare node labels",
-          "body": "Define the node types and the properties each carries."
+          "title": "Model on the schema canvas",
+          "body": "Add entities (node labels) on the interactive canvas — drag to arrange, double-click an entity to edit its properties in the side panel, and drag between two entities to add a relationship (edge type) pre-filled with from/to."
         },
         {
-          "title": "Declare edge types",
-          "body": "Define edge types and which node labels they connect."
-        },
-        {
-          "title": "Add indexes",
-          "body": "Specify indexes on key properties to speed up traversals."
+          "title": "Declare properties and indexes",
+          "body": "Give each node label and edge type typed properties, and specify indexes on key properties to speed up traversals."
         },
         {
           "title": "Bind a backend",
-          "body": "Map the model onto Cosmos Gremlin, ADX graph (Cypher), or a GQL backend."
+          "body": "Map the model onto the ADX graph (GQL/openCypher over make-graph), Cosmos Gremlin, or a GQL backend."
+        },
+        {
+          "title": "Query with the builder",
+          "body": "Use the no-code query builder — pick a start entity, relationship, target, property filters, and returns — or write GQL/openCypher directly; both run the same translate-to-KQL path and render results as Table, Card, or Diagram."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
@@ -69,6 +69,18 @@ export const fabricIqItems: FabricItemType[] = [
         {
           "title": "Branch scenarios",
           "body": "Create baseline, optimistic, pessimistic, and custom scenarios; each branch clones the source assumptions so you can model what-ifs side by side."
+        },
+        {
+          "title": "Spread and breakback",
+          "body": "On a roll-up parent cell, Spread evenly / by growth % / by weight allocates a total down to the child cells (with a preview table), and Breakback edits the parent's total and pushes the change proportionally back into the children."
+        },
+        {
+          "title": "Flag driver rows",
+          "body": "Mark assumption rows (headcount, price, growth rate) as Drivers — they sort first in the Formula builder's picker and the dependency-ordered recompute evaluates drivers before the formulas that consume them."
+        },
+        {
+          "title": "Ask Plan Copilot",
+          "body": "Open the Plan Copilot rail to explain a variance, draft a forecast, or sanity-check the budget — it grounds an Azure OpenAI chat on this plan's cells, variance, and model."
         },
         {
           "title": "Compare plan vs actuals",
@@ -99,6 +111,14 @@ export const fabricIqItems: FabricItemType[] = [
           "body": "Set color ramps and symbology so the geography reads clearly."
         },
         {
+          "title": "Draw and measure",
+          "body": "Toggle Draw / measure to sketch points, lines, polygons, rectangles, and circles directly on the map with a live spherical distance / area readout; drawn annotations persist with the map."
+        },
+        {
+          "title": "Geocode addresses",
+          "body": "Paste addresses (one per line) in the Geocode addresses box and Geocode & plot — Loom resolves them to lat/lon via Azure Maps Search and plots the points. Requires the Azure Maps account wiring; a missing account surfaces an honest gate."
+        },
+        {
           "title": "Embed it",
           "body": "Embed the map in a report or dashboard for consumers."
         }
@@ -108,23 +128,27 @@ export const fabricIqItems: FabricItemType[] = [
   { slug: 'data-agent', displayName: 'Data agent', restType: 'DataAgent', category: 'Fabric IQ',
     description: 'Conversational Q&A grounded in your data sources and semantic model.',
     learnContent: {
-      "overview": "A Data agent is conversational Q&A grounded in your data sources and semantic model. In Loom it is built on a Foundry prompt-flow plus AI Search hybrid retrieval over your warehouse, lakehouse, and semantic models.",
+      "overview": "A Data agent is conversational Q&A grounded in your data sources — warehouse, lakehouse, KQL, AI Search, graph, and semantic models. In Loom the Build tab binds up to 5 sources, each scoped with a real schema tree; Test chat, Evaluate, Publish, Consume, and Monitoring round out the lifecycle. Azure-native — no Microsoft Fabric required.",
       "steps": [
         {
           "title": "Pick data sources",
-          "body": "Ground the agent on a warehouse, lakehouse, and/or semantic model."
+          "body": "On the Build tab bind up to 5 sources — warehouse, lakehouse, KQL / Eventhouse, AI Search, graph, or semantic model — and give each instructions and example questions."
         },
         {
-          "title": "Configure retrieval",
-          "body": "The agent uses AI Search hybrid retrieval plus a Foundry prompt flow to answer."
+          "title": "Scope the schema",
+          "body": "Expand each source's schema tree — real Tables / Views / Functions / Fields read live from the backend (Synapse INFORMATION_SCHEMA, ADX .show tables, AI Search index) — and check exactly which objects the agent may query. No freeform table strings."
+        },
+        {
+          "title": "Draft with Config Copilot",
+          "body": "The Config Copilot tab drafts instructions and source descriptions from your bound schema so grounding starts strong."
         },
         {
           "title": "Test questions",
-          "body": "Ask sample business questions and verify the agent cites the right data."
+          "body": "Use Test chat to ask sample business questions and verify the agent queries the right sources; the Run inspector shows each tool call and query."
         },
         {
-          "title": "Refine grounding",
-          "body": "Tune the sources and prompt so answers stay accurate and on-topic."
+          "title": "Evaluate and publish",
+          "body": "Score the agent against a question set on Evaluate, then Publish and share the Consume endpoint; Monitoring tracks usage over time."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/fundamentals/fabric-iq"
@@ -132,26 +156,26 @@ export const fabricIqItems: FabricItemType[] = [
   { slug: 'operations-agent', displayName: 'Operations agent', restType: 'OperationsAgent', category: 'Fabric IQ', preview: true, hiddenFromGallery: true,
     description: 'Monitor real-time data and recommend actions via Activator + Power Automate.',
     learnContent: {
-      "overview": "An Operations agent monitors real-time data and recommends actions via Activator and Power Automate (preview). In Loom it watches items and workspaces, flags drift, opens incidents in the audit log, and proposes remediations via the Cross-item Copilot.",
+      "overview": "An Operations agent is an AI agent that watches your real-time operational data and proposes actions (preview). In Loom it is Azure-native: the agent's instructions, model, and tools are configured in the editor, it grounds on a bound Eventhouse (Azure Data Explorer) and Ontology, runs live test questions with tool traces, evaluates time / data-change triggers as real Azure Monitor rules, and drafts human-in-the-loop remediation proposals. Deploy to Foundry optionally publishes the agent to the Azure AI Foundry Agent Service — no Microsoft Fabric required.",
       "steps": [
         {
-          "title": "Set what to watch",
-          "body": "Choose the items, workspaces, or streams the agent should monitor."
+          "title": "Configure the agent",
+          "body": "On the Configure tab set the instructions and model, and bind the Eventhouse (ADX) and Ontology the agent grounds on — dropdown pickers, no freeform ids. Deploy to Foundry optionally publishes the definition to the Azure AI Foundry Agent Service."
         },
         {
-          "title": "Define signals",
-          "body": "Configure the drift or threshold signals that should raise an incident."
+          "title": "Test / Run",
+          "body": "Ask the agent a live operational question on the Test / Run tab; it queries the bound Eventhouse and Ontology and shows the per-tool run trace alongside the answer."
         },
         {
-          "title": "Wire actions",
-          "body": "Connect Activator and Power Automate so the agent can act on findings."
+          "title": "Create triggers",
+          "body": "On the Triggers tab wire time-based and data-change triggers — real Azure Monitor scheduled-query rules over the bound data — so the agent runs hands-off."
         },
         {
-          "title": "Mind the preview gate",
-          "body": "This is preview; if the supporting runtime isn't provisioned the editor discloses what's required."
+          "title": "Review proposals",
+          "body": "The Proposals tab is human-in-the-loop: the agent drafts operational actions and you approve or reject each one before anything executes."
         }
       ],
-      "docsUrl": "https://learn.microsoft.com/fabric/data-activator/activator-introduction"
+      "docsUrl": "https://learn.microsoft.com/azure/ai-services/agents/overview"
     } },
   // ── Palantir-class migration surfaces (audit-T29 / deep T50-T57) ──
   // Doc-only mappings in docs/migrations/palantir-foundry/ are superseded here
@@ -177,8 +201,9 @@ export const fabricIqItems: FabricItemType[] = [
       "steps": [
         { "title": "Pick workspace + name", "body": "Choose the target Loom workspace and a name for the app stack." },
         { "title": "Instantiate the stack", "body": "Loom creates a real data-api-builder item (the query surface) and a real workshop-app item, then wires the Workshop app's data binding to the Data API — both are fully editable, runnable Loom items, not stubs or a copied bundle." },
-        { "title": "Author in the Workshop app", "body": "You land in the runnable Workshop app, already bound to the real Data API. Add object views, actions, and widgets over the live query surface." },
-        { "title": "Generate the SWA bundle (optional)", "body": "When you want to ship the web tier outside Loom, emit a real index.html + app.js + staticwebapp.config.json artifact and deploy it to Azure Static Web Apps." }
+        { "title": "Author queries + widgets", "body": "Define queries (REST / KQL / SQL over Azure-native backends) and place widgets on the drag-resize canvas, previewing them bound to real data." },
+        { "title": "Wire variables + interactions", "body": "Declare app variables and reference them anywhere with {{name}} interpolation, then wire widget interactions — click / row-select / load triggers firing effects like set a variable, refresh queries, navigate, or write back — executed live in Preview." },
+        { "title": "Publish to Static Web Apps", "body": "Use the in-editor Publish action to provision a real Azure Static Web App and deploy the generated bundle one-click (versions are tracked); you can still download the index.html + app.js + staticwebapp.config.json bundle to ship it yourself." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/static-web-apps/overview"
     } },
@@ -190,6 +215,7 @@ export const fabricIqItems: FabricItemType[] = [
         { "title": "Bind an ontology", "body": "Pick a saved Ontology; its entity types + bound Lakehouse/Warehouse define the SDK surface." },
         { "title": "Generate the SDK", "body": "Loom emits real typed TypeScript and Python client source from the ontology's object / link / action types." },
         { "title": "Review the Data API", "body": "Inspect the generated DAB entity config (REST + GraphQL) that backs the SDK." },
+        { "title": "Try it live", "body": "Use the Try it API Explorer to run real REST (OData) and GraphQL requests against the DAB runtime serving this ontology and inspect live rows before shipping the client." },
         { "title": "Publish", "body": "Publish the Data API through APIM so apps (incl. Slate) can call the typed endpoints." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/data-api-builder/overview"
@@ -211,9 +237,10 @@ export const fabricIqItems: FabricItemType[] = [
     learnContent: {
       "overview": "Palantir Foundry Health Checks watch pipelines and datasets for freshness and SLA breaches. The CSA Loom equivalent creates real Azure Monitor scheduled-query alert rules (scheduledQueryRules) over Log Analytics that fire when an item's data goes stale or a row-count / freshness threshold is crossed. Azure-native default (Fabric Reflex is opt-in via LOOM_ACTIVATOR_BACKEND=fabric) — no Fabric required.",
       "steps": [
-        { "title": "Pick a check type", "body": "Choose freshness, row-count, or a custom KQL condition over the Log Analytics workspace." },
+        { "title": "Pick a check type", "body": "Browse the check-type gallery — 21 typed checks across the Time & freshness, Size & volume, Content & values, Schema, and Status & custom families (freshness, max age, row count, volume drop, nulls, duplicates, allowed values, column presence/type, heartbeat, custom KQL, and more)." },
+        { "title": "Fill the typed wizard", "body": "Each check type opens a structured wizard (table, column, operator, threshold — no freeform JSON) with a live KQL preview of the exact condition; Run live sample executes it against the workspace before you commit." },
         { "title": "Set the schedule", "body": "Choose how often the rule evaluates and the lookback window (e.g. evaluate every 5 minutes over 15 minutes)." },
-        { "title": "Add a notification", "body": "Optionally attach an email receiver; Loom creates a real Azure Monitor action group." },
+        { "title": "Wire notifications", "body": "The Notifications tab manages Azure Monitor action groups (email, SMS, webhook receivers) with a real test-fire so you can verify delivery." },
         { "title": "Create the rule", "body": "Loom creates the scheduledQueryRule on Azure Monitor, or shows exactly which env var / RBAC grant is missing." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-types#log-alerts"

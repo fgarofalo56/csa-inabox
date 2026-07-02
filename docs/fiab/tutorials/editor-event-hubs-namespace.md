@@ -35,7 +35,14 @@ transport surface.
    retention**; Loom PUTs `.../namespaces/{ns}/eventhubs/{name}` over real ARM.
 4. **Add consumer groups.** Under a hub, create one or more **consumer groups** so
    each downstream reader tracks its own position.
-5. **Wire it downstream.** Point an **Eventstream**, **Stream Analytics** job, or
+5. **Send + peek in Data Explorer.** The **Data Explorer** tab sends test events
+   to a hub over the real HTTPS data plane (Entra auth) and peeks recent events,
+   so you can verify the stream end-to-end without leaving Loom. A missing
+   data-plane role surfaces as an honest gate naming the exact grant.
+6. **Monitor with Metrics.** The **Metrics** tab charts live **Azure Monitor**
+   platform metrics for the namespace — incoming/outgoing messages, requests,
+   throttling — the same `Microsoft.Insights/metrics` REST the Monitor hub uses.
+7. **Wire it downstream.** Point an **Eventstream**, **Stream Analytics** job, or
    **KQL ingestion** at the hub — the namespace is the source.
 
 ## The Azure backend it rides on

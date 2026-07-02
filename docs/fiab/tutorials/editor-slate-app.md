@@ -40,9 +40,20 @@ also emit a deployable **Azure Static Web Apps** bundle for the web tier.
 4. **Design the page.** On the **Design** tab, **Add widget** (table, chart bound
    to a query, markdown) and set widget **Properties**; switch to **Preview** to
    see it with live data.
-5. **Generate the SWA bundle (optional).** Use **Generate bundle** to emit a real
-   `index.html` + `app.js` + `staticwebapp.config.json` artifact and deploy it to
-   Azure Static Web Apps.
+5. **Define variables.** Declare app **variables** with default values and
+   reference them anywhere — widget text, query bodies, REST paths — with
+   `{{name}}` interpolation; queries re-resolve when a variable changes.
+6. **Wire interactions.** On any widget choose **Add interactions** and wire
+   events — **click**, **row-select**, **load** — to effects: set a variable,
+   refresh queries, navigate, or write back. Interactions execute live in
+   **Preview**, and effect values support `{{variable}}` interpolation.
+7. **Publish to Static Web Apps.** Use the in-editor **Publish** action to
+   provision a real **Azure Static Web App** and deploy the generated bundle
+   one-click (each publish is version-tracked and returns the live URL). You
+   can still **Generate bundle** to download the `index.html` + `app.js` +
+   `staticwebapp.config.json` artifact and ship it yourself. Publishing
+   requires the SWA env wiring; if it is missing the editor shows an honest
+   gate naming the exact env vars.
 
 ## The Azure backend it rides on
 

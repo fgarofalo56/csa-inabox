@@ -14,14 +14,15 @@
 
 ## What this editor does
 
-An Eventstream is a code-free visual canvas to ingest, transform, and route real-time event streams. In Loom you wire source connectors (Event Hubs, IoT Hub, Kafka, Azure SQL CDC) through optional transforms to destinations; pipeline config persists to Cosmos.
+An Eventstream is a code-free visual canvas to ingest, transform, and route real-time event streams. In Loom you wire source connectors (Event Hubs, IoT Hub, Kafka, Azure SQL CDC) through operators to destinations, then **Provision to Azure** to stand up a real Event Hub (transport) + Stream Analytics job (transforms) — Azure-native, no Fabric required. The editor has four tabs: **Visual designer** (the canvas), **Operators** (the guided operator builder), **SQL operator**, and a read-only **Definition** view.
 
 ## Getting started
 
 1. **Add a source** — Use Event Hub or IoT Hub for telemetry, or Kafka for cross-cloud streams, on the visual canvas.
-2. **Add transforms** — Optionally drop in filter, derived columns, or manage-fields nodes before the destination.
-3. **Add a destination** — Route to a KQL database for real-time queries plus a Lakehouse for long-term retention.
-4. **Route to Activator** — Send the stream to an Activator to fire actions on conditions.
+2. **Add operators** — Drop in operators between source and destination — **Filter, Manage fields, Aggregate, Group by, Expand, Union, and Join** — on the canvas or the guided Operators builder. **Validate** runs the real Stream Analytics compiler and **Apply to ASA** pushes the compiled query to the live streaming job.
+3. **Add destinations** — Route to a KQL database for real-time queries, a Lakehouse for long-term retention, an Activator to fire actions on conditions, a derived stream, or a **Spark notebook sink** (structured streaming over the stream's Event Hub / ADLS landing).
+4. **Pause and resume** — Pause a derived stream to exclude it from the running topology and Resume it later; the paused state persists and is honored when you Provision to Azure.
+5. **Review the Definition** — The read-only **Definition** tab shows the canonical topology JSON. The canvas and Operators builder are the source of truth — the JSON view is for inspection, not editing.
 
 ## Learn more
 

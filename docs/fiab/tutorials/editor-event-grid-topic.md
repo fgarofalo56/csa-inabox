@@ -42,6 +42,10 @@ the 1:1 parity for Fabric "business events" / Activator structured-signal routin
 5. **Publish a CloudEvent.** Send a governed CloudEvent to the topic's data-plane
    endpoint (`POST {endpoint}/api/events`) to test the route. Publish uses Entra
    auth by default; `aeg-sas-key` is used only when `LOOM_EVENTGRID_SAS_AUTH=1`.
+6. **Monitor with Metrics.** Select a topic and open the **Metrics** tab to chart
+   live **Azure Monitor** platform metrics for that topic — published events,
+   delivered events, delivery failures — over the real
+   `Microsoft.Insights/metrics` REST.
 
 ## The Azure backend it rides on
 

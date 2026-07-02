@@ -35,7 +35,12 @@ publishes through **Azure API Management** — no Fabric workspace required.
    / action types, which you can copy into your app repo.
 4. **Review the Data API.** Inspect the generated **Data API Builder** entity
    configuration (REST + GraphQL) that backs the client.
-5. **Publish to APIM.** Click **Publish to APIM** to expose the Data API through
+5. **Try it live.** Use the **Try it — live API Explorer** to run real **REST
+   (OData)** and **GraphQL** requests against the DAB runtime that serves this
+   ontology on Azure Container Apps and inspect live rows — no mock data —
+   before shipping the client. The explorer targets the runtime URL set at
+   Publish (or the shared preview runtime from `LOOM_DAB_PREVIEW_URL`).
+6. **Publish to APIM.** Click **Publish to APIM** to expose the Data API through
    Azure API Management so apps can call the typed endpoints behind a managed
    gateway.
 

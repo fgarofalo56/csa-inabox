@@ -21,7 +21,8 @@ A KQL database is a Kusto store for high-volume, low-latency analytics over time
 1. **Ingest data** — Bring data in from an Eventstream, Event Hubs, or a direct REST POST.
 2. **Query with KQL** — Open a KQL queryset to run interactive queries and pin charts to a Real-Time dashboard.
 3. **Wire an Activator rule** — Attach an Activator on a KQL query to fire on a threshold breach such as failure rate over 5 percent.
-4. **Make data available as Delta** — Configure ADX continuous export (or an external table) to land the same data as Delta in ADLS Gen2, so it's queryable alongside lakehouses — no OneLake needed.
+4. **Detect anomalies / Forecast** — Run native-KQL time-series ML over any table from the ribbon's **Detect anomalies** / **Forecast** actions — `series_decompose_anomalies` / `series_decompose_forecast` over a `make-series` — then **Add as tile** to pin the result to a Real-Time dashboard. No external ML service required.
+5. **Make data available as Delta** — Configure ADX continuous export (or an external table) to land the same data as Delta in ADLS Gen2, so it's queryable alongside lakehouses — no OneLake needed.
 
 ## Learn more
 

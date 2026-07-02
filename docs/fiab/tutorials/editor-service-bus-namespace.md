@@ -38,10 +38,18 @@ Real ARM REST via `lib/azure/servicebus-client.ts` — no mocks.
 4. **Add subscriptions + filter rules.** Drill into the topic, add a
    **subscription**, then add **SQL** or **correlation filter** rules (with an
    optional SQL action) so each subscriber receives only matching messages.
-5. **Manage access + networking.** List / create / regenerate **shared access
+5. **Send + peek in Explorer.** The **Explorer** tab sends a test message to a
+   queue or topic over the real HTTPS data plane and **peeks**
+   (non-destructively — real peek-lock + unlock, no messages consumed) recent
+   messages from a queue or a topic subscription. A missing **Data
+   Sender/Receiver** role surfaces as an honest gate.
+6. **Monitor with Metrics.** The **Metrics** tab charts live **Azure Monitor**
+   platform metrics for the namespace — incoming/outgoing messages, active
+   connections, dead-lettered messages.
+7. **Manage access + networking.** List / create / regenerate **shared access
    policies** (suppressed honestly when local auth is disabled), and review the
    IP / VNet firewall + private-endpoint **networking** view.
-6. **Connect producers + consumers.** Apps authenticate with **Entra ID** (local
+8. **Connect producers + consumers.** Apps authenticate with **Entra ID** (local
    auth disabled by default) and send / receive against the queue or topic.
 
 ## The Azure backend it rides on

@@ -26,18 +26,30 @@ via `LOOM_ACTIVATOR_BACKEND=fabric`.
 ## Step-by-step in Loom
 
 1. **Create the item.** Choose **+ New item → Health check** (Fabric IQ). The
-   editor opens at `/items/health-check/<id>`.
-2. **Pick a check type.** Choose **freshness**, **row-count**, or a **custom KQL**
-   condition evaluated over the Log Analytics workspace.
-3. **Set the schedule.** Choose how often the rule evaluates and the lookback
+   editor opens at `/items/health-check/<id>` with five tabs: **Checks**,
+   **Status**, **History**, **Notifications**, and **Settings**.
+2. **Pick a check type.** Browse the check-type gallery — **21 typed checks**
+   across five families: **Time & freshness** (data freshness, maximum age,
+   future timestamps), **Size & volume** (min/max row count, distinct count,
+   volume drop), **Content & values** (nulls, blanks, duplicates, aggregate
+   threshold, out-of-range, allowed values, pattern mismatch, error events),
+   **Schema** (column present, column type, column-count drift), and
+   **Status & custom** (liveness heartbeat, custom KQL).
+3. **Fill the typed wizard.** Each check type opens a structured wizard (table,
+   column, operator, threshold — no freeform JSON) with a live **KQL preview**
+   of the exact condition the rule will evaluate; **Run live sample** executes
+   it against the workspace before you commit.
+4. **Set the schedule.** Choose how often the rule evaluates and the lookback
    window (for example, evaluate every 5 minutes over the last 15 minutes).
-4. **Add a notification (optional).** Attach an email receiver; Loom creates a
-   real Azure Monitor **action group** for it.
-5. **Create the rule.** Click **Create rule**. Loom creates the real
+5. **Wire notifications.** The **Notifications** tab manages Azure Monitor
+   **action groups** (email, SMS, webhook receivers) with a real **test-fire**
+   so you can verify delivery before an alert ever trips.
+6. **Create the rule.** Click **Create rule**. Loom creates the real
    `scheduledQueryRule` on Azure Monitor, or shows exactly which env var / RBAC
    grant is missing (honest gate).
-6. **Monitor the board.** The overview shows **Total checks**, **Open alerts**,
-   and each check's status, matched rows, and resolution state.
+7. **Monitor the board.** The **Status** tab shows **Total checks**, **Open
+   alerts**, and each check's status and matched rows; **History** lists fired
+   alerts and their resolution state.
 
 ## The Azure backend it rides on
 

@@ -20,8 +20,11 @@ A Plan (preview) is the Fabric IQ EPM/CPM item: build budgets and forecasts acro
 
 1. **Add line items and periods** — Define budget/forecast line items on the Planning sheet and the periods (months, quarters) to plan across.
 2. **Branch scenarios** — Create baseline, optimistic, pessimistic, and custom scenarios; each branch clones the source assumptions so you can model what-ifs side by side.
-3. **Compare plan vs actuals** — Turn on the variance overlay to see Δ and Δ% against actuals from the bound semantic model (or entered manually).
-4. **Write back to Azure SQL** — Configure a backing Azure SQL database in Settings, then Write back to MERGE planning cells into dbo.loom_plan_cells for governed, queryable storage.
+3. **Spread and breakback** — On a roll-up parent cell, **Spread evenly / by growth % / by weight** allocates a total down to the child cells (with a preview table), and **Breakback (edit total)** edits the parent's total and pushes the change proportionally back into the children.
+4. **Flag driver rows** — Mark assumption rows (headcount, price, growth rate) as **Drivers** — they sort first in the Formula builder's picker and the dependency-ordered recompute evaluates drivers before the formulas that consume them.
+5. **Ask Plan Copilot** — Open the **Plan Copilot** rail to explain a variance, draft a forecast, or sanity-check the budget — it grounds an Azure OpenAI chat on this plan's cells, variance, and model.
+6. **Compare plan vs actuals** — Turn on the variance overlay to see Δ and Δ% against actuals from the bound semantic model (or entered manually).
+7. **Write back to Azure SQL** — Configure a backing Azure SQL database in Settings, then Write back to MERGE planning cells into dbo.loom_plan_cells for governed, queryable storage.
 
 ## Learn more
 

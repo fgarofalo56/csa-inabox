@@ -14,14 +14,14 @@
 
 ## What this editor does
 
-An Ontology defines business entities, relationships, and condition-action rules (preview). In Loom it types entities and feeds the graph backend semantic layer. Use it to give connected data a shared vocabulary.
+An Ontology defines business object types, link types, actions, and interfaces over your data (preview). In Loom it is a typed modeling surface — structured forms, no freeform JSON — whose instances live in a real graph backend, and whose object types can be backed by a Lakehouse / Warehouse datasource with per-property column mapping. The editor's tabs are **Object types**, **Link types**, **Actions**, **Interfaces**, and **Shared properties**.
 
 ## Getting started
 
-1. **Define entities** — Declare the business entity types and their key properties.
-2. **Define relationships** — Connect entities with typed relationships to model the domain graph.
-3. **Add rules** — Author condition-action rules that fire when entity state changes.
-4. **Mind the preview gate** — Fabric IQ ontology is preview; if the graph backend isn't provisioned the editor discloses what's required.
+1. **Define object types** — On the **Object types** tab declare each business entity with the typed form — properties with base types, a title property, status, and color. No JSON textarea.
+2. **Back a type with a datasource** — Bind an object type to a Lakehouse / Warehouse table and map each ontology property to a source column — the editor browses the live Synapse schema so the column mapping is picked, not typed.
+3. **Define link types and interfaces** — Connect object types with typed link types (cardinality + properties), and declare **Interfaces** / **Shared properties** as contracts that object types implement.
+4. **Create instances and links** — Use the typed instance form to create real object instances and link instances between them — both persist to the graph backend (Apache AGE), and **Actions** execute as real graph transactions.
 
 ## Learn more
 

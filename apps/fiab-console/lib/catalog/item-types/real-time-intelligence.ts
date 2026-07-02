@@ -75,6 +75,10 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
           "body": "Attach an Activator on a KQL query to fire on a threshold breach such as failure rate over 5 percent."
         },
         {
+          "title": "Detect anomalies / Forecast",
+          "body": "Run native-KQL time-series ML over any table from the ribbon's Detect anomalies / Forecast actions — series_decompose_anomalies / series_decompose_forecast over a make-series — then Add as tile to pin the result to a Real-Time dashboard. No external ML service required."
+        },
+        {
           "title": "Make data available as Delta",
           "body": "Configure ADX continuous export (or an external table) to land the same data as Delta in ADLS Gen2, so it's queryable alongside lakehouses — no OneLake needed."
         }
@@ -132,23 +136,27 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
   { slug: 'eventstream', displayName: 'Eventstream', restType: 'Eventstream', category: 'Real-Time Intelligence',
     description: 'Visual canvas to ingest, transform, and route real-time event streams.',
     learnContent: {
-      "overview": "An Eventstream is a code-free visual canvas to ingest, transform, and route real-time event streams. In Loom you wire source connectors (Event Hubs, IoT Hub, Kafka, Azure SQL CDC) through optional transforms to destinations; pipeline config persists to Cosmos.",
+      "overview": "An Eventstream is a code-free visual canvas to ingest, transform, and route real-time event streams. In Loom you wire source connectors (Event Hubs, IoT Hub, Kafka, Azure SQL CDC) through operators to destinations, then Provision to Azure to stand up a real Event Hub (transport) + Stream Analytics job (transforms) — Azure-native, no Fabric required.",
       "steps": [
         {
           "title": "Add a source",
           "body": "Use Event Hub or IoT Hub for telemetry, or Kafka for cross-cloud streams, on the visual canvas."
         },
         {
-          "title": "Add transforms",
-          "body": "Optionally drop in filter, derived columns, or manage-fields nodes before the destination."
+          "title": "Add operators",
+          "body": "Drop in operators between source and destination — Filter, Manage fields, Aggregate, Group by, Expand, Union, and Join — on the canvas or the guided Operators builder. Validate runs the real Stream Analytics compiler; Apply to ASA pushes the compiled query to the live streaming job."
         },
         {
-          "title": "Add a destination",
-          "body": "Route to a KQL database for real-time queries plus a Lakehouse for long-term retention."
+          "title": "Add destinations",
+          "body": "Route to a KQL database for real-time queries, a Lakehouse for long-term retention, an Activator to fire actions on conditions, a derived stream, or a Spark notebook sink (structured streaming over the stream's Event Hub / ADLS landing)."
         },
         {
-          "title": "Route to Activator",
-          "body": "Send the stream to an Activator to fire actions on conditions."
+          "title": "Pause and resume",
+          "body": "Pause a derived stream to exclude it from the running topology and Resume it later — the paused state persists and is honored when you Provision to Azure."
+        },
+        {
+          "title": "Review the Definition",
+          "body": "The read-only Definition tab shows the canonical topology JSON. The canvas and Operators builder are the source of truth — the JSON view is for inspection, not editing."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/overview"
@@ -180,23 +188,23 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
   { slug: 'activator', displayName: 'Activator', restType: 'Reflex', category: 'Real-Time Intelligence',
     description: 'Detect conditions and trigger actions (Teams, email, pipeline, notebook, Power Automate).',
     learnContent: {
-      "overview": "An Activator (Reflex) detects conditions on a stream or KQL query and fires actions — Teams, email, pipeline, notebook, or Power Automate. In Loom it watches a real-time source and triggers automation with no code.",
+      "overview": "An Activator (Reflex) detects conditions on real-time data and fires actions — Teams, email, webhook, SMS, Logic App, pipeline, notebook, or Power Automate. In Loom the DEFAULT rule source is an Eventhouse / KQL database on Azure Data Explorer: the rule's KQL evaluates against real stream data via the ADX-native Activator runtime — no Microsoft Fabric required. Log Analytics KQL and Event Hub sources are alternatives backed by Azure Monitor scheduled-query alerts.",
       "steps": [
         {
           "title": "Pick a source",
-          "body": "Bind to a KQL queryset, a semantic model measure, or an Eventstream."
+          "body": "The default source is Eventhouse / KQL Database (ADX): pick the database and table from the live pickers (resolved from the shared ADX cluster). Log Analytics KQL queries and Event Hubs are alternative sources."
         },
         {
           "title": "Define the trigger",
-          "body": "Set the condition — a value crossing a threshold or a pattern occurring over a window."
+          "body": "Use the guided condition builder (property, operator, threshold) against the selected table, or supply a verbatim KQL query — the rule fires when it returns rows."
         },
         {
           "title": "Pick the action",
-          "body": "Choose a Teams notification, email, pipeline run, notebook, or Power Automate flow."
+          "body": "Choose a Teams notification, email, webhook, SMS, Logic App, pipeline run, notebook, or Power Automate flow — delivered through a real Azure Monitor action group."
         },
         {
-          "title": "Activate the rule",
-          "body": "Save and activate; the rule runs continuously against the live source."
+          "title": "Evaluate and watch history",
+          "body": "Trigger / Preview evaluates ADX rules on demand against real Eventhouse data; set LOOM_ADX_ALERT_SCOPE (ADX cluster resource id) for hands-off scheduled evaluation. Log Analytics rules evaluate continuously via Azure Monitor. The Run history tab lists fired alerts."
         }
       ],
       "docsUrl": "https://learn.microsoft.com/fabric/data-activator/activator-introduction"
@@ -213,6 +221,8 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
         { "title": "Bind the namespace", "body": "The editor targets the deployment namespace (LOOM_EVENTHUB_NAMESPACE). If unset it shows an honest gate naming the env var + the Contributor role the Console UAMI needs." },
         { "title": "Create an event hub", "body": "Name a hub and pick a partition count + retention; Loom PUTs Microsoft.EventHub/namespaces/{ns}/eventhubs over real ARM." },
         { "title": "Add consumer groups", "body": "Create consumer groups on a hub so independent readers each track their own offset." },
+        { "title": "Send + peek in Data Explorer", "body": "The Data Explorer tab sends test events to a hub over the real data plane (Entra auth) and peeks recent events so you can verify the stream without leaving Loom." },
+        { "title": "Monitor with Metrics", "body": "The Metrics tab charts live Azure Monitor platform metrics for the namespace (incoming/outgoing messages, requests, throttling)." },
         { "title": "Wire it downstream", "body": "Point an Eventstream, Stream Analytics job, or KQL ingestion at the hub — the namespace is the source." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/event-hubs/event-hubs-about"
@@ -225,6 +235,8 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
         { "title": "Bind the namespace", "body": "The editor targets the deployment namespace (LOOM_SERVICEBUS_NAMESPACE). If unset it shows an honest gate naming the env var + the Contributor role the Console UAMI needs." },
         { "title": "Create a queue", "body": "Name a queue and set max size + lock duration; Loom PUTs Microsoft.ServiceBus/namespaces/{ns}/queues over real ARM for point-to-point messaging." },
         { "title": "Create a topic", "body": "Create a topic for publish-subscribe fan-out; subscribers each get their own copy of every message." },
+        { "title": "Send + peek in Explorer", "body": "The Explorer tab sends a test message to a queue or topic over the real data plane and peeks (non-destructively) recent messages from a queue or topic subscription — no messages consumed." },
+        { "title": "Monitor with Metrics", "body": "The Metrics tab charts live Azure Monitor platform metrics for the namespace (incoming/outgoing messages, active connections, dead-lettered messages)." },
         { "title": "Connect producers + consumers", "body": "Apps authenticate with Entra ID (local auth disabled by default) and send/receive against the queue or topic." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/service-bus-messaging/service-bus-messaging-overview"
@@ -237,7 +249,8 @@ export const realTimeIntelligenceItems: FabricItemType[] = [
         { "title": "Bind the resource group", "body": "The editor targets the deployment Event Grid scope (LOOM_EVENTGRID_SUB / RG). If unset it shows an honest gate naming the env vars + the EventGrid Contributor role." },
         { "title": "Create a custom topic", "body": "Name a topic; Loom PUTs Microsoft.EventGrid/topics with the CloudEvents v1.0 input schema (idempotent) over real ARM." },
         { "title": "Inspect endpoint + keys", "body": "The editor surfaces the topic endpoint and access keys publishers use to POST events." },
-        { "title": "Review subscriptions", "body": "List the event subscriptions that route this topic's events to handlers, with their filters and delivery destinations." }
+        { "title": "Review subscriptions", "body": "List the event subscriptions that route this topic's events to handlers, with their filters and delivery destinations." },
+        { "title": "Monitor with Metrics", "body": "Select a topic and open the Metrics tab to chart live Azure Monitor platform metrics (published events, delivered events, delivery failures) for that topic." }
       ],
       "docsUrl": "https://learn.microsoft.com/azure/event-grid/custom-topics"
     } },

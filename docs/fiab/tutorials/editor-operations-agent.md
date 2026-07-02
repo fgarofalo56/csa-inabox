@@ -14,18 +14,18 @@
 
 ## What this editor does
 
-An Operations agent monitors real-time data and recommends actions via Activator and Power Automate (preview). In Loom it watches items and workspaces, flags drift, opens incidents in the audit log, and proposes remediations via the Cross-item Copilot.
+An Operations agent is an AI agent that watches your real-time operational data and proposes actions (preview). In Loom it is Azure-native: the agent's instructions, model, and tools are configured in the editor, it grounds on a bound **Eventhouse** (Azure Data Explorer) and **Ontology**, runs live test questions with tool traces, evaluates time / data-change triggers as real Azure Monitor rules, and drafts human-in-the-loop remediation proposals. The editor has four tabs: **Configure**, **Test / Run**, **Triggers**, and **Proposals** — no Microsoft Fabric required.
 
 ## Getting started
 
-1. **Set what to watch** — Choose the items, workspaces, or streams the agent should monitor.
-2. **Define signals** — Configure the drift or threshold signals that should raise an incident.
-3. **Wire actions** — Connect Activator and Power Automate so the agent can act on findings.
-4. **Mind the preview gate** — This is preview; if the supporting runtime isn't provisioned the editor discloses what's required.
+1. **Configure the agent** — On the **Configure** tab set the instructions and model, and bind the Eventhouse (ADX) and Ontology the agent grounds on — dropdown pickers, no freeform ids. **Deploy to Foundry** optionally publishes the definition to the Azure AI Foundry Agent Service.
+2. **Test / Run** — Ask the agent a live operational question on the **Test / Run** tab; it queries the bound Eventhouse and Ontology and shows the per-tool run trace alongside the answer.
+3. **Create triggers** — On the **Triggers** tab wire time-based and data-change triggers — real Azure Monitor scheduled-query rules over the bound data — so the agent runs hands-off.
+4. **Review proposals** — The **Proposals** tab is human-in-the-loop: the agent drafts operational actions and you approve or reject each one before anything executes.
 
 ## Learn more
 
-- Microsoft Learn reference: [https://learn.microsoft.com/fabric/data-activator/activator-introduction](https://learn.microsoft.com/fabric/data-activator/activator-introduction)
+- Microsoft Learn reference: [https://learn.microsoft.com/azure/ai-services/agents/overview](https://learn.microsoft.com/azure/ai-services/agents/overview)
 
 ## Verified by the UAT harness
 

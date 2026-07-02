@@ -14,14 +14,14 @@
 
 ## What this editor does
 
-A Graph model is the schema definition for a property graph — node labels, edge types, allowed properties, indexes (preview). In Loom it feeds Cosmos Gremlin, Cypher-over-ADX, or GQL backends. Use it to design the shape before loading data.
+A Graph model is the schema definition for a property graph — node labels, edge types, allowed properties, indexes (preview). In Loom you author it on an interactive schema canvas and query it with GQL/openCypher translated to the ADX graph engine (`make-graph` / `graph-match`) — Cosmos Gremlin and GQL backends are also supported. No Microsoft Fabric required.
 
 ## Getting started
 
-1. **Declare node labels** — Define the node types and the properties each carries.
-2. **Declare edge types** — Define edge types and which node labels they connect.
-3. **Add indexes** — Specify indexes on key properties to speed up traversals.
-4. **Bind a backend** — Map the model onto Cosmos Gremlin, ADX graph (Cypher), or a GQL backend.
+1. **Model on the schema canvas** — Add entities (node labels) on the interactive canvas — drag to arrange, double-click an entity to edit its properties in the side panel, and drag between two entities to add a relationship (edge type) pre-filled with from/to.
+2. **Declare properties and indexes** — Give each node label and edge type typed properties, and specify indexes on key properties to speed up traversals.
+3. **Bind a backend** — Map the model onto the ADX graph (GQL/openCypher over `make-graph`), Cosmos Gremlin, or a GQL backend.
+4. **Query with the builder** — Use the no-code query builder — pick a start entity, relationship, target, property filters, and returns — or write GQL/openCypher directly; both run the same translate-to-KQL path and render results as **Table**, **Card**, or **Diagram**.
 
 ## Learn more
 

@@ -21,7 +21,9 @@ A Map is a geospatial visualization layered over Lakehouse, KQL, and Ontology da
 1. **Bind a geo-dataset** — On the Data binding tab, pick Lakehouse / KQL / Ontology, map the lat/lon (and optional value/label) columns, and Run binding — Loom queries the real backend and folds the rows into the map.
 2. **Add layers** — Compose point, heatmap, cluster, or choropleth layers over the bound data; each can be weighted by a numeric value column/property.
 3. **Style and color** — Set color ramps and symbology so the geography reads clearly.
-4. **Embed it** — Embed the map in a report or dashboard for consumers.
+4. **Draw and measure** — Toggle **Draw / measure** to sketch points, lines, polygons, rectangles, and circles directly on the map with a live spherical distance / area readout; drawn annotations persist with the map.
+5. **Geocode addresses** — Paste addresses (one per line) in the **Geocode addresses** box on the Data binding tab and **Geocode & plot** — Loom resolves them to lat/lon via Azure Maps Search and plots the points (use *Use bound labels* to geocode an address column you already bound). Requires the Azure Maps account wiring; a missing account surfaces an honest gate.
+6. **Embed it** — Embed the map in a report or dashboard for consumers.
 
 ## Learn more
 

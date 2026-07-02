@@ -72,14 +72,21 @@ existing reflexes from `/api/items/activator?workspaceId=…`.
 Click **New reflex**, name it (e.g. `vm-cpu-watch`), and confirm. This
 POSTs to `/api/items/activator?workspaceId=…`.
 
-### 6. Add a Teams rule
+### 6. Add a Teams rule bound to the VmMetrics ADX table
 
 Click **+ New rule** (or the ribbon **Teams** template, which pre-fills the
-wizard). The rule wizard uses guided fields — no JSON:
+wizard). The rule wizard uses guided fields — no JSON. Bind the rule to the
+data you seeded in step 2 via the **Eventhouse / ADX source** (the default):
 
 - **Rule name**: `VM CPU high`
+- **Source type**: **Eventhouse / KQL Database (ADX)** — the default. The
+  **Database** dropdown lists the real databases on the shared ADX cluster
+  (resolved live via `/adx-source`); pick the KQL database from step 1, then
+  pick **Table** → `VmMetrics`.
 - **Condition**: property `CpuPercent`, operator **GreaterThan**, value
-  `85`
+  `85` — the condition builder targets the selected `VmMetrics` table.
+  (Alternatively, paste a verbatim KQL query in the **KQL query** box — the
+  rule fires when it returns rows.)
 - **Action kind**: **TeamsMessage** (the available kinds are
   **TeamsMessage, Email, Webhook, AdfPipelineRun, NotebookRun,
   PowerAutomateFlow**)
@@ -87,7 +94,9 @@ wizard). The rule wizard uses guided fields — no JSON:
 - **Message**: `VM {{eventValue}} CPU alert`
 
 Save. The rule POSTs to
-`/api/items/activator/<id>/rules?workspaceId=…`.
+`/api/items/activator/<id>/rules?workspaceId=…` and is evaluated by the
+**ADX-native Activator runtime** — the KQL runs against the real
+Eventhouse/ADX data, no Microsoft Fabric required.
 
 ### 7. Start the reflex
 
@@ -95,11 +104,21 @@ Click **Start**. This POSTs to
 `/api/items/activator/<id>/start?workspaceId=…`, which sets every trigger
 Active.
 
-### 8. Trigger and observe
+### 8. Trigger and observe — the rule fires on real ADX data
 
-Click **Trigger now** on the rule row for an immediate test fire. The rule
-row's `lastTriggered` timestamp updates, and the Teams webhook fires if the
-URL is valid.
+Click **Trigger now** on the rule row. The runtime evaluates the rule's KQL
+against the seeded `VmMetrics` table — because the seeded data spikes CPU to
+~100% for ~15 minutes, the condition (`CpuPercent > 85`) matches real rows
+and the rule **fires on real data** (not a simulated fire). The rule row's
+`lastTriggered` timestamp updates, and the Teams webhook fires if the URL is
+valid. **Preview** shows the matched rows without dispatching actions.
+
+> **Continuous evaluation:** ADX-sourced rules evaluate on demand via
+> **Trigger / Preview** by default. For hands-off scheduled evaluation, set
+> `LOOM_ADX_ALERT_SCOPE` to the ADX cluster resource id (and grant the alert
+> identity **Database Viewer**) — Loom then creates a real Azure Monitor
+> scheduled-query rule scoped to the cluster. Log Analytics-sourced rules
+> always evaluate continuously via Azure Monitor.
 
 ### 9. Add a second action (Email)
 
