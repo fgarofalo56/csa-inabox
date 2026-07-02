@@ -18,6 +18,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { getPublishedReport, getTemplate, getTemplateFiles } from '@/lib/coe-library/coe-library-client';
 import { parseReportModel } from '@/lib/coe-library/report-render/pbir-parse';
@@ -38,9 +39,6 @@ import type { SampleData, SampleTable } from '@/lib/coe-library/report-render/tm
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
 
 /** Reduce a parsed table-set to its column SCHEMA only (zero rows) — never sample rows leave the server. */
 function schemaOnly(sample: SampleData): SampleData {
@@ -52,7 +50,7 @@ function schemaOnly(sample: SampleData): SampleData {
 /** Render a published Loom-native dashboard for the consumer gallery — LIVE only. */
 async function buildDashboardPayload(id: string, overrides: ReportParamOverrides): Promise<NextResponse> {
   const dash = await getPublishedDashboard(id);
-  if (!dash) return err('dashboard not found or not published', 404);
+  if (!dash) return apiError('dashboard not found or not published', 404);
   const spec = dash.spec;
   const model = synthReportModel(spec);
 
@@ -87,19 +85,19 @@ async function buildDashboardPayload(id: string, overrides: ReportParamOverrides
 async function buildPayload(req: NextRequest, overrides: ReportParamOverrides): Promise<NextResponse> {
   const url = new URL(req.url);
   const id = url.searchParams.get('id')?.trim();
-  if (!id) return err('id is required', 400);
+  if (!id) return apiError('id is required', 400);
   // A published Loom-native dashboard is rendered via the dashboard synthesizer.
   if (url.searchParams.get('kind') === 'dashboard') {
     try { return await buildDashboardPayload(id, overrides); }
-    catch (e: any) { return err(e?.message || String(e), 500); }
+    catch (e: any) { return apiError(e?.message || String(e), 500); }
   }
 
   try {
     const clone = await getPublishedReport(id);
-    if (!clone) return err('report not found or not published', 404);
+    if (!clone) return apiError('report not found or not published', 404);
 
     const tpl = getTemplate(clone.templateId);
-    if (!tpl) return err(`unknown template: ${clone.templateId}`, 404);
+    if (!tpl) return apiError(`unknown template: ${clone.templateId}`, 404);
 
     const files = getTemplateFiles(clone.templateId);
     const model = parseReportModel(files);
@@ -132,13 +130,13 @@ async function buildPayload(req: NextRequest, overrides: ReportParamOverrides): 
       });
     }
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function GET(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const url = new URL(req.url);
   const overrides: ReportParamOverrides = {
     subscriptionId: url.searchParams.get('subscriptionId')?.trim() || undefined,
@@ -151,7 +149,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   let body: any = {};
   try { body = await req.json(); } catch { /* empty → env defaults */ }
   const p = body?.params || {};

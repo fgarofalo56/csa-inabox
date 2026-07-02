@@ -8,6 +8,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { listMcpTools } from '@/lib/azure/mcp-client';
 import { getPbiUserToken } from '@/lib/azure/pbi-user-token-store';
@@ -15,17 +16,15 @@ import { getPbiUserToken } from '@/lib/azure/pbi-user-token-store';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const body = await req.json().catch(() => ({}));
   const config = body.config;
-  if (!config || typeof config !== 'object') return err('config (object) required', 400);
-  if (!config.endpoint || !config.authMethod) return err('endpoint and authMethod required', 400);
+  if (!config || typeof config !== 'object') return apiError('config (object) required', 400);
+  if (!config.endpoint || !config.authMethod) return apiError('endpoint and authMethod required', 400);
 
   // entra-obo (e.g. the opt-in "Power BI (remote)" MCP server): validate the
   // endpoint with the ADMIN's own per-user On-Behalf-Of token rather than a

@@ -24,6 +24,7 @@ import {
   type MonitorRuleRecord, type OnDemandRunRecord,
 } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError } from '@/lib/azure/kusto-client';
 import { loadContentBackedItem, activatorRuleFromContent } from '../../../_lib/ai-content-fallback';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -43,23 +44,14 @@ async function bundleRules(id: string, tenantId: string) {
 }
 
 /** Honest Azure infra-gate (NOT a Fabric gate) for Monitor errors. */
-function monitorGate(e: any): NextResponse | null {
-  if (e instanceof MonitorNotConfiguredError) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor not configured: set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_ALERT_RG'}.`,
-      gate: { reason: 'The Azure-native Activator creates scheduled-query alert rules on Azure Monitor.', remediation: `Set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.` },
-    }, { status: 503 });
-  }
-  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor ${e.status}: not authorized to create alert rules.`,
+const monitorGateBodies: MonitorGateBodies = {
+  notConfigured: (missing) => ({ error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_ALERT_RG'}.`,
+      gate: { reason: 'The Azure-native Activator creates scheduled-query alert rules on Azure Monitor.', remediation: `Set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.` },
+    }),
+  unauthorized: (status) => ({ error: `Azure Monitor ${status}: not authorized to create alert rules.`,
       gate: { reason: 'The Console UAMI needs rights on the alert resource group.', remediation: 'Grant the Console UAMI "Monitoring Contributor" on LOOM_ALERT_RG so it can create scheduledQueryRules + action groups.' },
-    }, { status: 403 });
-  }
-  return null;
-}
+    }),
+};
 
 /** Honest Azure infra-gate for ADX / Eventhouse (Kusto) trigger/preview errors.
  *  A rule authored over Eventhouse data evaluates against the ADX cluster; when
@@ -182,7 +174,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       } catch { /* run result still returned below */ }
       return NextResponse.json({ ok: true, ...out, historyRecorded });
     } catch (e: any) {
-      return kustoGate(e) || monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+      return kustoGate(e) || monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
     }
   }
 
@@ -211,7 +203,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, rule, backend: 'azure-monitor' });
   } catch (e: any) {
-    return kustoGate(e) || monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return kustoGate(e) || monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }
 
@@ -280,7 +272,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       } : {}),
     });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }
 
@@ -325,7 +317,7 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, backend: 'azure-monitor' });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }
 
@@ -416,6 +408,6 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     await items.item(item.id, item.workspaceId).replace(next);
     return NextResponse.json({ ok: true, rule: rec, backend: 'azure-monitor' });
   } catch (e: any) {
-    return kustoGate(e) || monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return kustoGate(e) || monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }

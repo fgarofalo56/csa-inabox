@@ -12,6 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { listMcpServers, getMcpServer, saveMcpServer, deleteMcpServer, updateMcpServerTestResult } from '@/lib/azure/mcp-config-store';
@@ -21,9 +22,7 @@ import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 /** Public (no-secret) view of an MCP server doc — mirrors git-binding-store's
  * toView(): the raw bearer / API secret in `authValue` (authMethod 'header') is
@@ -108,7 +107,7 @@ async function probeAndPersist(tenantId: string, doc: McpServerConfigDoc): Promi
 
 export async function GET() {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   try {
     const servers = await listMcpServers(tenantId);
@@ -121,13 +120,13 @@ export async function GET() {
     const { resources } = await c.items.query<McpServerConfigDoc>(q).fetchAll();
     return NextResponse.json({ ok: true, servers: (resources || []).map(toView) });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const body = await req.json().catch(() => ({}));
@@ -150,22 +149,22 @@ export async function POST(req: NextRequest) {
     } catch { /* audit is best-effort */ }
     return NextResponse.json({ ok: true, server: toView(doc) });
   } catch (e: any) {
-    return err(e?.message || String(e), 400);
+    return apiError(e?.message || String(e), 400);
   }
 }
 
 export async function PUT(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const url = new URL(req.url);
   const serverId = url.searchParams.get('id') || url.pathname.split('/').pop();
-  if (!serverId) return err('id required', 400);
+  if (!serverId) return apiError('id required', 400);
   const body = await req.json().catch(() => ({}));
   try {
     const existing = await getMcpServer(tenantId, serverId);
-    if (!existing) return err('not found', 404);
+    if (!existing) return apiError('not found', 404);
     const config = sanitize(body.config);
     // Carry forward catalog-deploy metadata when the edit (e.g. the manual form)
     // doesn't include it — so editing a deployed server never orphans its KV
@@ -193,21 +192,21 @@ export async function PUT(req: NextRequest) {
     } catch { /* audit is best-effort */ }
     return NextResponse.json({ ok: true, server: toView(doc) });
   } catch (e: any) {
-    return err(e?.message || String(e), 400);
+    return apiError(e?.message || String(e), 400);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const url = new URL(req.url);
   const serverId = url.searchParams.get('id') || url.pathname.split('/').pop();
-  if (!serverId) return err('id required', 400);
+  if (!serverId) return apiError('id required', 400);
   try {
     const existing = await getMcpServer(tenantId, serverId);
-    if (!existing) return err('not found', 404);
+    if (!existing) return apiError('not found', 404);
     await deleteMcpServer(tenantId, serverId);
     // Audit
     try {
@@ -224,6 +223,6 @@ export async function DELETE(req: NextRequest) {
     } catch { /* audit is best-effort */ }
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

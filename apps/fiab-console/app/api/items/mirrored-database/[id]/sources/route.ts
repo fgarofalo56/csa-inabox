@@ -15,6 +15,7 @@
  * in Key Vault) and a `hasSecret` flag are exposed.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -24,7 +25,7 @@ import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY } from '@/lib
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 /** Known source types the mirror engine + ADF CDC path can replicate. */
 function knownSource(t: string): boolean {
@@ -34,13 +35,13 @@ function knownSource(t: string): boolean {
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!resource || resource.itemType !== 'mirrored-database') return err('mirrored database not found', 404);
+    if (!resource || resource.itemType !== 'mirrored-database') return apiError('mirrored database not found', 404);
     const st = (resource.state || {}) as Record<string, any>;
     const def = st?.definition?.properties?.source?.typeProperties || {};
     const sourceType = String(st.sourceType || st?.definition?.properties?.source?.type || '');
@@ -64,23 +65,23 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       : [];
     return NextResponse.json({ ok: true, sources });
   } catch (e: any) {
-    if (e?.code === 404) return err('mirrored database not found', 404);
-    return err(e?.message || String(e), 500);
+    if (e?.code === 404) return apiError('mirrored database not found', 404);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({} as any));
   const sourceType = String(body?.sourceType || '').trim();
   const server = String(body?.server || '').trim();
   const database = String(body?.database || '').trim();
   const connectionId = body?.connectionId ? String(body.connectionId) : undefined;
-  if (!knownSource(sourceType)) return err(`sourceType must be a supported mirror source`, 400);
-  if (!database) return err('database is required', 400);
+  if (!knownSource(sourceType)) return apiError(`sourceType must be a supported mirror source`, 400);
+  if (!database) return apiError('database is required', 400);
 
   const tables = Array.isArray(body?.tables)
     ? body.tables.filter((t: any) => t?.schema && t?.table).map((t: any) => ({ schema: String(t.schema), table: String(t.table) }))
@@ -92,7 +93,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!existing || existing.itemType !== 'mirrored-database') return err('mirrored database not found', 404);
+    if (!existing || existing.itemType !== 'mirrored-database') return apiError('mirrored database not found', 404);
     const state = (existing.state || {}) as Record<string, any>;
 
     const nextState: Record<string, any> = {
@@ -119,7 +120,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       source: { sourceType, server, database, connectionId: nextState.connectionId, tables, includeIcebergTables, hasSecret },
     });
   } catch (e: any) {
-    if (e?.code === 404) return err('mirrored database not found', 404);
-    return err(e?.message || String(e), 500);
+    if (e?.code === 404) return apiError('mirrored database not found', 404);
+    return apiError(e?.message || String(e), 500);
   }
 }

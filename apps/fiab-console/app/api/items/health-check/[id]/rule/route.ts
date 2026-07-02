@@ -14,6 +14,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import { createMonitorActivatorRule, type MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { buildCheckQuery, CHECK_TYPE_BY_ID } from '../../_lib/check-types';
 
 export const runtime = 'nodejs';
@@ -22,23 +23,14 @@ const ITEM_TYPE = 'health-check';
 function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
 }
-function monitorGate(e: any): NextResponse | null {
-  if (e instanceof MonitorNotConfiguredError) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor not configured: set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_ALERT_RG'}.`,
-      gate: { reason: 'Health checks create scheduled-query alert rules on Azure Monitor.', remediation: `Set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.` },
-    }, { status: 503 });
-  }
-  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor ${e.status}: not authorized to create alert rules.`,
+const monitorGateBodies: MonitorGateBodies = {
+  notConfigured: (missing) => ({ error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_ALERT_RG'}.`,
+      gate: { reason: 'Health checks create scheduled-query alert rules on Azure Monitor.', remediation: `Set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.` },
+    }),
+  unauthorized: (status) => ({ error: `Azure Monitor ${status}: not authorized to create alert rules.`,
       gate: { reason: 'The Console UAMI needs rights on the alert resource group.', remediation: 'Grant the Console UAMI "Monitoring Contributor" on LOOM_ALERT_RG.' },
-    }, { status: 403 });
-  }
-  return null;
-}
+    }),
+};
 
 /**
  * Build a real KQL condition for the chosen check type. Delegates to the shared
@@ -96,7 +88,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       action: email ? { target: email } : undefined,
     });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 
   const state = { ...((hc.state || {}) as Record<string, unknown>) };

@@ -24,6 +24,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
 import { aoaiChatStream, type AoaiChatMessage } from '@/lib/azure/aoai-chat-client';
+import { iterateAoaiDeltas } from '@/lib/api/aoai-sse';
 import {
   periodSeries, computeVariance, grandTotal, planInsights, forecastPeriods,
   defaultScenarios,
@@ -145,32 +146,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   // Re-emit the AOAI SSE deltas as the app's normalized token/final/error stream.
   const encoder = new TextEncoder();
-  const decoder = new TextDecoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (event: string, data: unknown) =>
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       let full = '';
       try {
-        const reader = upstream.body!.getReader();
-        let buf = '';
-        while (true) {
-          const { value, done } = await reader.read();
-          if (done) break;
-          buf += decoder.decode(value, { stream: true });
-          const lines = buf.split('\n');
-          buf = lines.pop() ?? ''; // keep the trailing partial line
-          for (const line of lines) {
-            const t = line.trim();
-            if (!t.startsWith('data:')) continue;
-            const payload = t.slice(5).trim();
-            if (!payload || payload === '[DONE]') continue;
-            try {
-              const j = JSON.parse(payload);
-              const delta = j?.choices?.[0]?.delta?.content;
-              if (typeof delta === 'string' && delta) { full += delta; send('token', { text: delta }); }
-            } catch { /* keepalive / partial frame — ignore */ }
-          }
+        for await (const delta of iterateAoaiDeltas(upstream)) {
+          full += delta;
+          send('token', { text: delta });
         }
         send('final', { text: full });
       } catch (e: any) {

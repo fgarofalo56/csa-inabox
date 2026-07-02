@@ -20,6 +20,7 @@ import {
   type MonitorRuleRecord,
 } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,23 +29,14 @@ const ITEM_TYPE = 'health-check';
 function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
 }
-function monitorGate(e: any): NextResponse | null {
-  if (e instanceof MonitorNotConfiguredError) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor not configured: set ${e.missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID / LOOM_ALERT_RG'}.`,
-      gate: { reason: 'Health-check rules are Azure Monitor scheduled-query alert rules.', remediation: `Set ${e.missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.` },
-    }, { status: 503 });
-  }
-  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor ${e.status}: not authorized to manage alert rules.`,
+const monitorGateBodies: MonitorGateBodies = {
+  notConfigured: (missing) => ({ error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID / LOOM_ALERT_RG'}.`,
+      gate: { reason: 'Health-check rules are Azure Monitor scheduled-query alert rules.', remediation: `Set ${missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.` },
+    }),
+  unauthorized: (status) => ({ error: `Azure Monitor ${status}: not authorized to manage alert rules.`,
       gate: { reason: 'The Console UAMI needs rights on the alert resource group.', remediation: 'Grant the Console UAMI "Monitoring Contributor" on LOOM_ALERT_RG.' },
-    }, { status: 403 });
-  }
-  return null;
-}
+    }),
+};
 
 async function findRule(id: string, oid: string, ruleId: string) {
   const hc = await loadOwnedItem(id, ITEM_TYPE, oid);
@@ -67,7 +59,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (enabled) await enableMonitorRule(rule.azureRuleName);
     else await disableMonitorRule(rule.azureRuleName);
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
   const nextState = { ...((hc.state || {}) as Record<string, unknown>) };
   nextState.rules = rules.map((r) =>
@@ -87,7 +79,7 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
   try {
     await deleteMonitorActivatorRule(rule.azureRuleName);
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
   const nextState = { ...((hc.state || {}) as Record<string, unknown>) };
   nextState.rules = rules.filter((r) => r.id !== rule.id);

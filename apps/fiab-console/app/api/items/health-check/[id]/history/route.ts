@@ -11,6 +11,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { getActivatorHistory, type MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,23 +20,14 @@ const ITEM_TYPE = 'health-check';
 function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
 }
-function monitorGate(e: any): NextResponse | null {
-  if (e instanceof MonitorNotConfiguredError) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor not configured: set ${e.missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'}.`,
-      gate: { reason: 'Fired-alert history comes from Azure Monitor AlertsManagement.', remediation: `Set ${e.missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'} on the Console. No Microsoft Fabric required.` },
-    }, { status: 503 });
-  }
-  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor ${e.status}: not authorized to read alert history.`,
+const monitorGateBodies: MonitorGateBodies = {
+  notConfigured: (missing) => ({ error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'}.`,
+      gate: { reason: 'Fired-alert history comes from Azure Monitor AlertsManagement.', remediation: `Set ${missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'} on the Console. No Microsoft Fabric required.` },
+    }),
+  unauthorized: (status) => ({ error: `Azure Monitor ${status}: not authorized to read alert history.`,
       gate: { reason: 'The Console UAMI needs Monitoring Reader at subscription scope.', remediation: 'Grant the Console UAMI "Monitoring Reader" on the subscription.' },
-    }, { status: 403 });
-  }
-  return null;
-}
+    }),
+};
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
@@ -53,6 +45,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const events = await getActivatorHistory(names, { days });
     return NextResponse.json({ ok: true, events, backend: 'azure-monitor' });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }

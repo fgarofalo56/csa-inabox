@@ -16,6 +16,7 @@
  * family isn't directly enumerable.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -30,7 +31,7 @@ import { MIRROR_SQL_FAMILY, MIRROR_PG_FAMILY, MIRROR_COSMOS_FAMILY } from '@/lib
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 /**
  * Resolve the SQL auth for the mirror's stored connection. Returns:
@@ -58,14 +59,14 @@ async function resolveSqlAuth(tenantId: string, connectionId?: string): Promise<
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
 
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!resource || resource.itemType !== 'mirrored-database') return err('mirrored database not found', 404);
+    if (!resource || resource.itemType !== 'mirrored-database') return apiError('mirrored database not found', 404);
     const st = (resource.state || {}) as Record<string, any>;
     const def = st?.definition?.properties?.source?.typeProperties || {};
     const sourceType = String(st.sourceType || st?.definition?.properties?.source?.type || '');
@@ -73,15 +74,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const database = String(st.database || def.database || '');
     const connectionId: string | undefined = st.connectionId || undefined;
 
-    if (!database) return err('this mirror has no source database set; edit the mirror first', 400);
+    if (!database) return apiError('this mirror has no source database set; edit the mirror first', 400);
 
     let tables: Array<{ schema: string; table: string }> = [];
     if (MIRROR_SQL_FAMILY.has(sourceType)) {
-      if (!server) return err('this mirror has no source server set; edit the mirror first', 400);
+      if (!server) return apiError('this mirror has no source server set; edit the mirror first', 400);
       const auth = await resolveSqlAuth(s.claims.oid, connectionId);
       tables = (await listTablesWithAuth(server, database, auth)).map((t) => ({ schema: t.schema, table: t.name }));
     } else if (MIRROR_PG_FAMILY.has(sourceType)) {
-      if (!server) return err('this mirror has no source server set; edit the mirror first', 400);
+      if (!server) return apiError('this mirror has no source server set; edit the mirror first', 400);
       tables = await listPostgresTables(server, database);
     } else if (MIRROR_COSMOS_FAMILY.has(sourceType)) {
       tables = (await listContainers(database)).map((c: any) => ({ schema: 'cosmos', table: c.name || c.id }));
@@ -94,7 +95,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     tables.sort((a, b) => `${a.schema}.${a.table}`.localeCompare(`${b.schema}.${b.table}`));
     return NextResponse.json({ ok: true, tables });
   } catch (e: any) {
-    if (e?.code === 404) return err('mirrored database not found', 404);
-    return err(e?.message || String(e), e?.status || 500);
+    if (e?.code === 404) return apiError('mirrored database not found', 404);
+    return apiError(e?.message || String(e), e?.status || 500);
   }
 }

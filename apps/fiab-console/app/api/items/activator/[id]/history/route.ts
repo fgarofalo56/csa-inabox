@@ -22,35 +22,27 @@ import {
   type OnDemandRunRecord,
 } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { loadContentBackedItem } from '@/app/api/items/_lib/ai-content-fallback';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** Honest Azure infra-gate (NOT a Fabric gate) for Monitor errors. */
-function monitorGate(e: any): NextResponse | null {
-  if (e instanceof MonitorNotConfiguredError) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor not configured: set ${e.missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'}.`,
+const monitorGateBodies: MonitorGateBodies = {
+  notConfigured: (missing) => ({ error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'}.`,
       gate: {
         reason: 'Run history reads fired/resolved alert instances from Azure Monitor Alerts Management.',
-        remediation: `Set ${e.missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'} on the Console. No Microsoft Fabric required.`,
+        remediation: `Set ${missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'} on the Console. No Microsoft Fabric required.`,
       },
-    }, { status: 503 });
-  }
-  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor ${e.status}: not authorized to read alert history.`,
+    }),
+  unauthorized: (status) => ({ error: `Azure Monitor ${status}: not authorized to read alert history.`,
       gate: {
         reason: 'Run history requires Microsoft.AlertsManagement/alerts/read.',
         remediation: 'Grant the Console UAMI the "Monitoring Reader" built-in role at subscription scope.',
       },
-    }, { status: 403 });
-  }
-  return null;
-}
+    }),
+};
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
@@ -121,6 +113,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         note: `Azure Monitor alert instances unavailable (${e?.message || String(e)}). Showing persisted on-demand Trigger/Preview runs only.`,
       });
     }
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }

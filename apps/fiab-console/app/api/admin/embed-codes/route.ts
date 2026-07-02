@@ -10,6 +10,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -24,9 +25,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 const NOT_CONFIGURED_HINT = {
   missingEnvVar: 'LOOM_ORG_VISUALS_URL',
@@ -59,7 +58,7 @@ async function audit(tenantId: string, who: string, kind: string, fields: Record
 
 export async function GET() {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   if (!isConfigured()) return notConfigured();
   const tenantId = s.claims.oid;
   try {
@@ -67,37 +66,37 @@ export async function GET() {
     return NextResponse.json({ ok: true, codes });
   } catch (e: any) {
     if (e instanceof NotConfiguredError) return notConfigured();
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   if (!isConfigured()) return notConfigured();
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const body = await req.json().catch(() => ({}));
   const report = typeof body.report === 'string' ? body.report.trim() : '';
-  if (!report) return err('report is required', 400);
+  if (!report) return apiError('report is required', 400);
   try {
     const code = await createEmbedCode(tenantId, who, report);
     await audit(tenantId, who, 'embed-code.create', { embedCodeId: code.id, report });
     return NextResponse.json({ ok: true, code });
   } catch (e: any) {
     if (e instanceof NotConfiguredError) return notConfigured();
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   if (!isConfigured()) return notConfigured();
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return err('id required', 400);
+  if (!id) return apiError('id required', 400);
   try {
     const code = await revokeEmbedCode(tenantId, id, who);
     await audit(tenantId, who, 'embed-code.revoke', { embedCodeId: id, report: code.report });
@@ -105,6 +104,6 @@ export async function DELETE(req: NextRequest) {
   } catch (e: any) {
     if (e instanceof NotConfiguredError) return notConfigured();
     const msg = e?.message || String(e);
-    return err(msg, /not found/i.test(msg) ? 404 : 500);
+    return apiError(msg, /not found/i.test(msg) ? 404 : 500);
   }
 }

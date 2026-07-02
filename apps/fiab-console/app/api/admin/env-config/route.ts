@@ -21,6 +21,7 @@
  * No mocks — real ARM + real Cosmos + real audit trail (no-vaporware.md).
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
@@ -64,9 +65,7 @@ interface EnvConfigDoc {
   updatedBy: string;
 }
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 function appName(): string {
   return process.env.LOOM_CONSOLE_APP_NAME || 'loom-console';
@@ -209,7 +208,7 @@ export async function PUT(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const incoming = body?.values;
   if (!incoming || typeof incoming !== 'object') {
-    return err('values (object of key→value) required', 400);
+    return apiError('values (object of key→value) required', 400);
   }
 
   // Whitelist + delta computation. Plain keys are diffed against the running

@@ -17,6 +17,7 @@
  * See .claude/rules/no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -29,9 +30,7 @@ import type { TenantCopilotConfig } from '@/lib/types/copilot-config';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 /** Whitelist of persistable STRING keys — never trust the client to send extras. */
 const KEYS: (keyof TenantCopilotConfig)[] = [
@@ -57,7 +56,7 @@ function sanitize(input: any): TenantCopilotConfig {
 
 export async function GET() {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   try {
     const config = (await loadTenantCopilotConfig(tenantId)) || {};
@@ -88,17 +87,17 @@ export async function GET() {
     };
     return NextResponse.json({ ok: true, config, accounts, defaultAccount, envDefaults, accountsError });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function PUT(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   const body = await req.json().catch(() => ({}));
   const incoming = body?.config;
-  if (!incoming || typeof incoming !== 'object') return err('config (object) required', 400);
+  if (!incoming || typeof incoming !== 'object') return apiError('config (object) required', 400);
 
   const who = s.claims.upn || s.claims.email || tenantId;
   try {
@@ -126,6 +125,6 @@ export async function PUT(req: NextRequest) {
     const { id: _i, tenantId: _t, updatedAt, updatedBy, ...config } = doc;
     return NextResponse.json({ ok: true, config, updatedAt, updatedBy });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

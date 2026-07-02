@@ -41,6 +41,7 @@ import {
   persistStep,
 } from '@/lib/azure/copilot-orchestrator';
 import { aoaiChatStream } from '@/lib/azure/aoai-chat-client';
+import { iterateAoaiDeltas } from '@/lib/api/aoai-sse';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
 import { buildDatastoreSchema } from '@/lib/azure/delta-schema';
@@ -386,33 +387,11 @@ export async function POST(req: NextRequest) {
           cfg: tenantConfig,
         });
 
-        // Forward the AOAI SSE stream: parse `data: {...}` lines, pull
-        // choices[0].delta.content, re-emit as our `chunk` events.
-        const reader = res.body!.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let nl: number;
-          while ((nl = buffer.indexOf('\n')) >= 0) {
-            const line = buffer.slice(0, nl).trim();
-            buffer = buffer.slice(nl + 1);
-            if (!line.startsWith('data:')) continue;
-            const payload = line.slice(5).trim();
-            if (payload === '[DONE]') continue;
-            try {
-              const j = JSON.parse(payload);
-              const delta: string = j?.choices?.[0]?.delta?.content ?? '';
-              if (delta) {
-                full += delta;
-                send('chunk', { delta });
-              }
-            } catch {
-              /* partial JSON across chunk boundary — ignore, next read completes it */
-            }
-          }
+        // Forward the AOAI SSE stream: pull choices[0].delta.content out of the
+        // `data:` frames (shared decoder) and re-emit as our `chunk` events.
+        for await (const delta of iterateAoaiDeltas(res)) {
+          full += delta;
+          send('chunk', { delta });
         }
 
         await persistStep(sessionId, userOid, { kind: 'final', content: full });

@@ -13,6 +13,7 @@
  *   - For Databricks: runId = "databricks:<runId>", just polls Jobs API.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -22,9 +23,7 @@ import { buildLoomDisplay, enrichChartRecs } from '@/lib/notebook/display-stats'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 interface RunRecord {
   id: string; status: string; jobType: string; invokeType: string;
@@ -53,16 +52,16 @@ async function recordRun(items: any, nb: WorkspaceItem, workspaceId: string, run
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; runId: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
 
   const runId = decodeURIComponent((await ctx.params).runId);
   try {
     // Load notebook for code/lang context
     const items = await itemsContainer();
     const { resource: nb } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!nb || nb.itemType !== 'notebook') return err('notebook not found', 404);
+    if (!nb || nb.itemType !== 'notebook') return apiError('notebook not found', 404);
     const state = (nb.state as any) || {};
     // Per-cell run uses pendingRuns[runId] cached at dispatch; fall back to whole-notebook code.
     const pending = state.pendingRuns?.[runId];
@@ -240,8 +239,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       });
     }
 
-    return err(`unsupported runId format: ${runId}`, 400);
+    return apiError(`unsupported runId format: ${runId}`, 400);
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502);
+    return apiError(e?.message || String(e), e?.status || 502);
   }
 }

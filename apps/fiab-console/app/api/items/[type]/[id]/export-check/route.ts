@@ -19,6 +19,7 @@
  *   - rights filter unavailable (GCC-High/IL5) → CSV/TXT still blocked by FORMAT
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
@@ -28,9 +29,7 @@ import { checkExportProtection } from '@/lib/azure/label-protection';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
   const items = await itemsContainer();
@@ -56,16 +55,16 @@ async function loadItem(itemId: string, type: string, tenantId: string): Promise
 export async function POST(req: NextRequest, props: { params: Promise<{ type: string; id: string }> }) {
   const params = await props.params;
   const session = getSession();
-  if (!session) return err('Unauthorized', 401);
+  if (!session) return apiError('Unauthorized', 401);
 
   let body: any;
-  try { body = await req.json(); } catch { return err('Invalid JSON', 400); }
+  try { body = await req.json(); } catch { return apiError('Invalid JSON', 400); }
   const format = typeof body?.format === 'string' ? body.format : '';
-  if (!format) return err('format is required', 400);
+  if (!format) return apiError('format is required', 400);
 
   try {
     const item = await loadItem(params.id, params.type, session.claims.oid);
-    if (!item) return err('Item not found', 404);
+    if (!item) return apiError('Item not found', 404);
 
     const state = (item.state || {}) as Record<string, unknown>;
     const labelId = typeof state.sensitivityLabelId === 'string' ? state.sensitivityLabelId : '';
@@ -92,6 +91,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
     return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {
     // MIP upstream/config errors must not silently allow export — surface them.
-    return err(e?.message || 'Failed to evaluate export protection', 500);
+    return apiError(e?.message || 'Failed to evaluate export protection', 500);
   }
 }

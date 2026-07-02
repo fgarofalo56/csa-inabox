@@ -21,6 +21,7 @@
  * structural errors (warnings do not fail validation).
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { validatePipelineSpec } from '@/lib/azure/pipeline-validate';
@@ -29,15 +30,13 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 export async function POST(req: NextRequest, ctx: { params: { id: string } | Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
 
   const params = await Promise.resolve(ctx.params);
   const body = await req.json().catch(() => ({} as any));
@@ -50,10 +49,10 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } | Pro
     try {
       const items = await itemsContainer();
       const { resource } = await items.item(params.id, workspaceId).read<WorkspaceItem>();
-      if (!resource || resource.itemType !== 'data-pipeline') return err('pipeline not found', 404);
+      if (!resource || resource.itemType !== 'data-pipeline') return apiError('pipeline not found', 404);
       definition = (resource.state as any)?.definition || (resource.state as any)?.content || { properties: { activities: [] } };
     } catch (e: any) {
-      return err(e?.message || String(e), e?.status || 502);
+      return apiError(e?.message || String(e), e?.status || 502);
     }
   }
 
@@ -75,6 +74,6 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } | Pro
             .join('; ') || 'Pipeline validation failed.',
     });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

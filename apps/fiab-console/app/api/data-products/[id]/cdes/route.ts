@@ -16,6 +16,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import {
   getAssetCdeClassifications,
@@ -32,16 +33,14 @@ const ITEM_TYPE = 'data-product';
 interface Dataset { name?: string; guid?: string; }
 interface Cde { typeName: string; displayName: string; assetGuid: string; assetName?: string; }
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
-  if (!session) return err('unauthenticated', 401);
+  if (!session) return apiError('unauthenticated', 401);
 
   const item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
-  if (!item) return err('data-product item not found', 404);
+  if (!item) return apiError('data-product item not found', 404);
 
   // Honest infra gate — render the read-only panel with guidance, no 5xx.
   if (!isPurviewConfigured()) {
@@ -87,7 +86,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     if (e instanceof PurviewNotConfiguredError) {
       return NextResponse.json({ ok: true, cdes: [], gated: true, hint: e.message });
     }
-    return err(e?.message || 'Failed to read CDE classifications from Purview', 502);
+    return apiError(e?.message || 'Failed to read CDE classifications from Purview', 502);
   }
 
   return NextResponse.json({ ok: true, cdes: Array.from(byType.values()) });

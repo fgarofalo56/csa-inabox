@@ -17,6 +17,7 @@
  * group client supports); Logic App callback URLs are resolved via ARM.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import {
@@ -43,9 +44,6 @@ interface PersistedActionGroup {
   logicApps: { name?: string; resourceId: string; useCommonAlertSchema?: boolean }[];
 }
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
 
 function monitorGate(e: any): NextResponse | null {
   if (e instanceof MonitorNotConfiguredError) {
@@ -78,11 +76,11 @@ function currentOf(state: Record<string, unknown>): PersistedActionGroup | null 
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const { id } = await ctx.params;
   if (!id || id === 'new') return NextResponse.json({ ok: true, groups: [], current: null });
   const hc = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
-  if (!hc) return err('health-check not found', 404);
+  if (!hc) return apiError('health-check not found', 404);
   const current = currentOf((hc.state || {}) as Record<string, unknown>);
   try {
     const groups = await listActionGroups();
@@ -94,15 +92,15 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const { id } = await ctx.params;
-  if (!id || id === 'new') return err('save the health check before configuring notifications (no id yet)', 400);
+  if (!id || id === 'new') return apiError('save the health check before configuring notifications (no id yet)', 400);
   const hc = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
-  if (!hc) return err('health-check not found', 404);
+  if (!hc) return apiError('health-check not found', 404);
   const body = await req.json().catch(() => ({} as any));
 
   const name = String(body?.name || '').trim();
-  if (!name) return err('an action-group name is required', 400);
+  if (!name) return apiError('an action-group name is required', 400);
   const shortName = (String(body?.shortName || name).replace(/[^A-Za-z0-9]/g, '') || 'loom').slice(0, 12);
 
   const emails: string[] = Array.isArray(body?.emails)
@@ -154,15 +152,15 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const { id } = await ctx.params;
-  if (!id || id === 'new') return err('save the health check first', 400);
+  if (!id || id === 'new') return apiError('save the health check first', 400);
   const hc = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
-  if (!hc) return err('health-check not found', 404);
+  if (!hc) return apiError('health-check not found', 404);
   const body = await req.json().catch(() => ({} as any));
   const current = currentOf((hc.state || {}) as Record<string, unknown>);
   const actionGroupId = String(body?.actionGroupId || current?.id || '').trim();
-  if (!actionGroupId) return err('no action group to test — save notification channels first', 400);
+  if (!actionGroupId) return apiError('no action group to test — save notification channels first', 400);
   try {
     const result = await sendActionGroupTestNotification(actionGroupId, typeof body?.alertType === 'string' ? body.alertType : undefined);
     return NextResponse.json({ ok: true, result });

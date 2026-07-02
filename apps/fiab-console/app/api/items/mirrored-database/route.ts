@@ -3,6 +3,7 @@
  * engine itself is the loom-mirroring-engine container app (existing).
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
@@ -10,7 +11,7 @@ import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
   const c = await workspacesContainer();
@@ -22,12 +23,12 @@ async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
 
 export async function GET(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
     const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return err('workspace not found', 404);
+    if (!ws) return apiError('workspace not found', 404);
     const items = await itemsContainer();
     const { resources } = await items.items.query<WorkspaceItem>({
       query: 'SELECT * FROM c WHERE c.workspaceId = @w AND c.itemType = @t ORDER BY c.updatedAt DESC',
@@ -40,20 +41,20 @@ export async function GET(req: NextRequest) {
         createdAt: r.createdAt, updatedAt: r.updatedAt,
       })),
     });
-  } catch (e: any) { return err(e?.message || String(e), 500); }
+  } catch (e: any) { return apiError(e?.message || String(e), 500); }
 }
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   const displayName = String(body?.displayName || '').trim();
-  if (!displayName) return err('displayName required', 400);
+  if (!displayName) return apiError('displayName required', 400);
   try {
     const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return err('workspace not found', 404);
+    if (!ws) return apiError('workspace not found', 404);
     const items = await itemsContainer();
     const now = new Date().toISOString();
     // Persist the source config in a flat, engine-readable shape (sourceType +
@@ -90,5 +91,5 @@ export async function POST(req: NextRequest) {
     };
     const { resource } = await items.items.create(item);
     return NextResponse.json({ ok: true, mirroredDatabase: resource });
-  } catch (e: any) { return err(e?.message || String(e), 500); }
+  } catch (e: any) { return apiError(e?.message || String(e), 500); }
 }

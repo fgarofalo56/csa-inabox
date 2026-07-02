@@ -12,6 +12,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../../../_lib/item-crud';
 import { triggerMonitorActivatorRule, type MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,23 +21,14 @@ const ITEM_TYPE = 'health-check';
 function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
 }
-function monitorGate(e: any): NextResponse | null {
-  if (e instanceof MonitorNotConfiguredError) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor not configured: set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_WORKSPACE_ID'}.`,
-      gate: { reason: 'Running a check evaluates its KQL against the Log Analytics workspace.', remediation: `Set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_WORKSPACE_ID'} on the Console. No Microsoft Fabric required.` },
-    }, { status: 503 });
-  }
-  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor ${e.status}: not authorized to query Log Analytics.`,
+const monitorGateBodies: MonitorGateBodies = {
+  notConfigured: (missing) => ({ error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_WORKSPACE_ID'}.`,
+      gate: { reason: 'Running a check evaluates its KQL against the Log Analytics workspace.', remediation: `Set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_WORKSPACE_ID'} on the Console. No Microsoft Fabric required.` },
+    }),
+  unauthorized: (status) => ({ error: `Azure Monitor ${status}: not authorized to query Log Analytics.`,
       gate: { reason: 'The Console UAMI needs read access to the Log Analytics workspace.', remediation: 'Grant the Console UAMI "Log Analytics Reader" on the workspace.' },
-    }, { status: 403 });
-  }
-  return null;
-}
+    }),
+};
 
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string; ruleId: string }> }) {
   const s = getSession();
@@ -60,6 +52,6 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       backend: 'azure-monitor',
     });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 }

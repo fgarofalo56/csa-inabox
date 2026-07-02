@@ -15,6 +15,7 @@
  * carries an honest error naming LOOM_KEY_VAULT_URI (no-vaporware).
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import {
@@ -27,7 +28,6 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'variable-library';
 const VALUE_SETS: ValueSet[] = ['default', 'dev', 'test', 'prod'];
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
 
 /**
  * Resolve a secret-ref raw value:
@@ -56,13 +56,13 @@ async function resolveSecretRef(raw: string): Promise<string> {
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const { id } = await ctx.params;
-  if (!id || id === 'new') return err('save the variable library before resolving', 400);
+  if (!id || id === 'new') return apiError('save the variable library before resolving', 400);
   const body = await req.json().catch(() => ({} as any));
   try {
     const item = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
-    if (!item) return err('not found', 404);
+    if (!item) return apiError('not found', 404);
     const state = (item.state || {}) as Record<string, unknown>;
     const variables: VarDef[] = Array.isArray(state.variables) ? (state.variables as VarDef[]) : [];
     const requested = String(body?.valueSet || state.activeValueSet || 'default') as ValueSet;
@@ -83,6 +83,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     return NextResponse.json({ ok: true, valueSet, resolved, expanded });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

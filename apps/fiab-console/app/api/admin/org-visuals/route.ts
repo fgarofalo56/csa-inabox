@@ -14,6 +14,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -31,9 +32,7 @@ export const dynamic = 'force-dynamic';
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024; // 64 MB — generous for .pbiviz bundles.
 const MAX_ICON_BYTES = 256 * 1024; // 256 KB — small icon kept inline as a data: URI.
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 const NOT_CONFIGURED_HINT = {
   missingEnvVar: 'LOOM_ORG_VISUALS_URL',
@@ -66,7 +65,7 @@ async function audit(tenantId: string, who: string, kind: string, fields: Record
 
 export async function GET() {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   if (!isConfigured()) return notConfigured();
   const tenantId = s.claims.oid;
   try {
@@ -74,13 +73,13 @@ export async function GET() {
     return NextResponse.json({ ok: true, visuals });
   } catch (e: any) {
     if (e instanceof NotConfiguredError) return notConfigured();
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   if (!isConfigured()) return notConfigured();
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
@@ -89,20 +88,20 @@ export async function POST(req: NextRequest) {
   try {
     form = await req.formData();
   } catch {
-    return err('expected multipart/form-data', 400);
+    return apiError('expected multipart/form-data', 400);
   }
   const file = form.get('file');
   const name = String(form.get('name') || '').trim();
   const version = String(form.get('version') || '').trim();
   const description = String(form.get('description') || '').trim();
-  if (!file || typeof file === 'string') return err('file is required', 400);
-  if (!name) return err('name is required', 400);
-  if (!version) return err('version is required', 400);
+  if (!file || typeof file === 'string') return apiError('file is required', 400);
+  if (!name) return apiError('name is required', 400);
+  if (!version) return apiError('version is required', 400);
 
   const fileName = (file.name || 'visual.pbiviz').trim();
   const buf = Buffer.from(await file.arrayBuffer());
-  if (buf.length === 0) return err('uploaded file is empty', 400);
-  if (buf.length > MAX_BUNDLE_BYTES) return err(`bundle exceeds ${MAX_BUNDLE_BYTES} bytes`, 413);
+  if (buf.length === 0) return apiError('uploaded file is empty', 400);
+  if (buf.length > MAX_BUNDLE_BYTES) return apiError(`bundle exceeds ${MAX_BUNDLE_BYTES} bytes`, 413);
 
   // Optional icon (parity with Fabric's "Add visual" Icon field). Stored inline
   // as a small data: URI on the metadata doc — no second blob / SAS round-trip.
@@ -110,9 +109,9 @@ export async function POST(req: NextRequest) {
   const icon = form.get('icon');
   if (icon && typeof icon !== 'string') {
     const type = icon.type || 'image/png';
-    if (!type.startsWith('image/')) return err('icon must be an image', 400);
+    if (!type.startsWith('image/')) return apiError('icon must be an image', 400);
     const iconBuf = Buffer.from(await icon.arrayBuffer());
-    if (iconBuf.length > MAX_ICON_BYTES) return err(`icon exceeds ${MAX_ICON_BYTES} bytes`, 413);
+    if (iconBuf.length > MAX_ICON_BYTES) return apiError(`icon exceeds ${MAX_ICON_BYTES} bytes`, 413);
     if (iconBuf.length > 0) iconDataUri = `data:${type};base64,${iconBuf.toString('base64')}`;
   }
 
@@ -125,20 +124,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, visual });
   } catch (e: any) {
     if (e instanceof NotConfiguredError) return notConfigured();
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function PUT(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   if (!isConfigured()) return notConfigured();
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return err('id required', 400);
+  if (!id) return apiError('id required', 400);
   const body = await req.json().catch(() => ({}));
-  if (typeof body.enabled !== 'boolean') return err('enabled (boolean) is required', 400);
+  if (typeof body.enabled !== 'boolean') return apiError('enabled (boolean) is required', 400);
   try {
     const visual = await toggleOrgVisual(tenantId, id, body.enabled, who);
     await audit(tenantId, who, body.enabled ? 'org-visual.enable' : 'org-visual.disable', { visualId: id, name: visual.name });
@@ -146,24 +145,24 @@ export async function PUT(req: NextRequest) {
   } catch (e: any) {
     if (e instanceof NotConfiguredError) return notConfigured();
     const msg = e?.message || String(e);
-    return err(msg, /not found/i.test(msg) ? 404 : 500);
+    return apiError(msg, /not found/i.test(msg) ? 404 : 500);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   if (!isConfigured()) return notConfigured();
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return err('id required', 400);
+  if (!id) return apiError('id required', 400);
   try {
     await deleteOrgVisual(tenantId, id);
     await audit(tenantId, who, 'org-visual.delete', { visualId: id });
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     if (e instanceof NotConfiguredError) return notConfigured();
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
