@@ -828,11 +828,23 @@ var effectiveSwaRg = !empty(loomSwaResourceGroup) ? loomSwaResourceGroup : resou
 // byoExisting.udfFunctionBase (root param loomUdfFunctionBase), same
 // 256-param-ceiling treatment. Empty → the invoke route serves its honest
 // 503 gate naming this var.
-// TODO udf-runtime.bicep: deploy a Loom-managed Azure Functions host for
-// user-data-function items following the dab-runtime.bicep pattern (opt-out
-// enable flag + per-app identity + KV host key + honest editor gate), then
-// default this to its endpoint instead of a BYO URL.
 var loomUdfFunctionBase = string(byoExisting.?udfFunctionBase ?? '')
+// Enable-gates for the three integration modules wired below. Folded on the
+// byoExisting object (root params reportAccelEnabled&&reportAccelImageReady /
+// udfRuntimeEnabled / sparkPoolEnabled) to stay under the 256-param ceiling.
+var reportAccelEnabled = bool(byoExisting.?reportAccelEnabled ?? false)
+var udfRuntimeEnabled = bool(byoExisting.?udfRuntimeEnabled ?? true)
+var sparkPoolEnabled = bool(byoExisting.?sparkPoolEnabled ?? false)
+// report-accel is an ACA app built from a custom image → only meaningful on
+// Container Apps + when apps deploy (the invocation is image-gated by the root
+// reportAccelImageReady already folded into reportAccelEnabled above).
+var reportAccelActive = reportAccelEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+var loomReportAccelUrl = reportAccelActive ? reportAccel!.outputs.accelUrl : ''
+// user-data-function invoke base: a BYO Functions host (loomUdfFunctionBase)
+// wins; otherwise default to the Loom-managed udf-runtime Container App host
+// (mirrors how LOOM_DAB_PREVIEW_URL defaults to the dab-runtime output). Empty
+// only when neither is present → the invoke route keeps its honest 503 gate.
+var effectiveUdfFunctionBase = !empty(loomUdfFunctionBase) ? loomUdfFunctionBase : (udfRuntimeEnabled ? udfRuntime!.outputs.hostUrl : '')
 // Purview — existingPurviewAccount overrides loomPurviewAccount (reuse > param).
 // The Purview catalog data-plane is reached by account host (`{account}.purview.azure.com`)
 // + a UAMI data-plane role assigned in the Purview portal — it is subscription-
@@ -1975,6 +1987,51 @@ module dabRuntime 'dab-runtime.bicep' = if (dabRuntimeEnabled && !empty(dabSqlSe
   }
 }
 
+// User Data Functions execution host (loom-udf-runtime) — mirrors dab-runtime:
+// a stock MCR image (no ACR/custom-image dependency), the Console UAMI assigned
+// for Azure data access, internal-proxied ingress. Defaults LOOM_UDF_FUNCTION_BASE
+// so the user-data-function invoke path works day-one (no BYO Functions host).
+module udfRuntime 'udf-runtime.bicep' = if (udfRuntimeEnabled) {
+  name: 'udf-runtime'
+  params: {
+    location: location
+    managedEnvironmentId: containerPlatformModule.outputs.caeId
+    uamiResourceId: identity.outputs.uamiConsoleId
+    udfRuntimeEnabled: true
+  }
+}
+
+// DuckDB-over-Delta report accelerator (loom report-accel) — opt-in latency
+// fast path over the lakehouse Delta files. Image-gated (root
+// reportAccelImageReady, folded into reportAccelActive) so a clean first deploy
+// with no image in ACR does not fail on an unresolvable ref; until the image is
+// ready the report query route falls back to Synapse Serverless. Azure-native,
+// no Fabric dependency.
+module reportAccel 'report-accel.bicep' = if (reportAccelActive) {
+  name: 'report-accel'
+  params: {
+    reportAccelEnabled: true
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    accelUamiId: identity.outputs.uamiConsoleId
+    image: '${registry.outputs.acrLoginServer}/csa-loom/report-accel:${appImageTags.?reportAccel ?? 'v0.1'}'
+    complianceTags: complianceTags
+  }
+}
+
+// Warm Spark session pool (config-only — no Azure resource is deployed). The
+// pool lives in the console process (lib/azure/spark-session-pool.ts) and warms
+// REAL Azure-native Synapse Livy sessions; this module validates the knobs and
+// emits the LOOM_SPARK_POOL_* env values wired into the console app below.
+module sparkSessionPool 'spark-session-pool.bicep' = {
+  name: 'spark-session-pool'
+  params: {
+    location: location
+    sparkPoolEnabled: sparkPoolEnabled
+    complianceTags: complianceTags
+  }
+}
+
 // =====================================================================
 // 8b. Copy Job watermark control table (F14) — dbo.copy_watermark +
 // dbo.usp_write_watermark in the control SQL DB, plus grants for the ADF
@@ -3102,15 +3159,39 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_PAGINATED_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
             { name: 'LOOM_REPORT_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
           ] : [],
-          // user-data-function invoke base — a BYO Azure Functions host
-          // (byoExisting.udfFunctionBase ← root param loomUdfFunctionBase).
-          // Only emitted when set; absence keeps the invoke route's honest
-          // 503 gate naming this exact var (no-vaporware.md). TODO
-          // udf-runtime.bicep: deploy a Loom-managed Functions host on the
-          // dab-runtime.bicep pattern and default this to its endpoint.
-          !empty(loomUdfFunctionBase) ? [
-            { name: 'LOOM_UDF_FUNCTION_BASE', value: loomUdfFunctionBase }
+          // user-data-function invoke base. Defaults to the Loom-managed
+          // loom-udf-runtime Container App (udf-runtime.bicep, stock MCR image
+          // on the dab-runtime pattern) so the invoke path works day-one; a BYO
+          // Azure Functions host (byoExisting.udfFunctionBase ← root param
+          // loomUdfFunctionBase) overrides it. Empty only when neither is present
+          // → the invoke route keeps its honest 503 gate (no-vaporware.md).
+          !empty(effectiveUdfFunctionBase) ? [
+            { name: 'LOOM_UDF_FUNCTION_BASE', value: effectiveUdfFunctionBase }
           ] : [],
+          // report-accel (DuckDB-over-Delta) URL — set only when the image-gated
+          // accelerator Container App deployed (report-accel.bicep); absence →
+          // the report query route falls back to Synapse Serverless
+          // (no-vaporware.md; Azure-native, no Fabric dependency).
+          !empty(loomReportAccelUrl) ? [
+            { name: 'LOOM_REPORT_ACCEL_URL', value: loomReportAccelUrl }
+          ] : [],
+          // Warm Spark session pool config (spark-session-pool.bicep, config-only)
+          // — warms Azure-native Synapse Livy sessions to kill notebook cold
+          // start. Always emitted (defaults: disabled / 1 / 3 / 900s); tenant
+          // admins can also flip these live via /api/spark/session-pool.
+          [
+            { name: 'LOOM_SPARK_POOL_ENABLED',  value: sparkSessionPool.outputs.sparkPoolEnabledEnv }
+            { name: 'LOOM_SPARK_POOL_MIN',      value: sparkSessionPool.outputs.sparkPoolMinEnv }
+            { name: 'LOOM_SPARK_POOL_MAX',      value: sparkSessionPool.outputs.sparkPoolMaxEnv }
+            { name: 'LOOM_SPARK_POOL_IDLE_TTL', value: sparkSessionPool.outputs.sparkPoolIdleTtlEnv }
+          ],
+          // Chargeback dashboard billing scope (/admin/usage-chargeback). The
+          // Console UAMI holds Cost Management Reader at subscription scope
+          // (main.bicep's cost-management-reader-rbac module); the default rollup
+          // scope is this deployment subscription. No Fabric dependency.
+          [
+            { name: 'LOOM_BILLING_SCOPE', value: subscription().id }
+          ],
           // Analysis Services — RLS/OLS Security tab backend (Azure-native).
           // LOOM_AAS_SERVER is the asazure://… data-plane name emitted by the
           // AAS module. LOOM_AAS_CLIENT_ID is the SPN appId (not secret). The

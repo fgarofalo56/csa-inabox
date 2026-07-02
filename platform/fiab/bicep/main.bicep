@@ -392,6 +392,18 @@ param dbtRunnerEnabled bool = true
 @description('Set true once the loom-dbt-runner image has been built + pushed to ACR (scripts/csa-loom/build-dbt-runner.sh). Gates the live loom-dbt-runner Container App deployment so a clean first deploy (no image yet) does not fail on an unresolvable image ref — the dbt-job run surface honest-gates until the image is ready, then this flips on. Default false.')
 param dbtRunnerImageReady bool = false
 
+@description('Deploy the report-accel Container App (DuckDB-over-Delta query accelerator) — Loom\'s Azure-native "Direct Lake"-speed report fast path (LOOM_REPORT_ACCEL_URL). Default on (opt-out), but the admin-plane only activates it when the csa-loom/report-accel image is present in ACR (reportAccelImageReady); otherwise the report query route falls back to Synapse Serverless. Container Apps only. No Fabric dependency.')
+param reportAccelEnabled bool = true
+
+@description('Set true once the csa-loom/report-accel image has been built + pushed to ACR (platform/report-accel/). Gates the live report-accel Container App so a clean first deploy (no image yet) does not fail on an unresolvable image ref — the report path uses Synapse Serverless until this flips on. Default false.')
+param reportAccelImageReady bool = false
+
+@description('Deploy the loom-udf-runtime Container App (User Data Functions execution host, stock MCR image on the dab-runtime.bicep pattern) so the user-data-function invoke path (LOOM_UDF_FUNCTION_BASE) works day-one. Default on (opt-out); set false to leave the UDF invoke route honestly 503-gated (or supply a BYO host via loomUdfFunctionBase). Container Apps only. No Fabric dependency.')
+param udfRuntimeEnabled bool = true
+
+@description('Enable the warm Spark session pool (config-only — no Azure resource; warms Azure-native Synapse Livy sessions to kill notebook cold start, LOOM_SPARK_POOL_ENABLED). Default false so notebooks keep today\'s cold-start behaviour until an operator opts in. Min/max/idle-TTL use the module defaults (1 / 3 / 900s).')
+param sparkPoolEnabled bool = false
+
 @description('Wire the org-visuals Blob container backing Embed codes (F22) + Organizational visuals (F23): the Console UAMI data-plane grants (Storage Blob Data Contributor on the container + Storage Blob Delegator at account scope for getUserDelegationKey) and the LOOM_ORG_VISUALS_URL env var. Default on (opt-out) — the org-visuals container itself is always created by landing-zone/storage.bicep (it is part of the foundational medallion account); this flag governs only the grant + env wiring. Set false to leave Embed codes / Org visuals honestly config-gated (no SAS minting). No Fabric/Power BI dependency.')
 param loomOrgVisualsEnabled bool = true
 
@@ -1056,6 +1068,15 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // under admin-plane's 256-param ceiling.
       swaResourceGroup: loomSwaResourceGroup
       udfFunctionBase: loomUdfFunctionBase
+      // report-accel (DuckDB-over-Delta accelerator), UDF runtime host, and warm
+      // Spark session pool enable-gates. Folded onto the BYO object (not scalar
+      // params) to stay under admin-plane's 256-param ceiling. report-accel is
+      // additionally image-gated here (reportAccelImageReady) so a first deploy
+      // with no image in ACR doesn't fail — the report path uses Synapse
+      // Serverless until then.
+      reportAccelEnabled: (reportAccelEnabled && reportAccelImageReady)
+      udfRuntimeEnabled: udfRuntimeEnabled
+      sparkPoolEnabled: sparkPoolEnabled
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
