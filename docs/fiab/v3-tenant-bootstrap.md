@@ -2790,4 +2790,45 @@ manual step for the defaults; the notes below are only for overrides / BYO.
 | `LOOM_AZURE_MAPS_CLIENT_ID` | the deployed Maps account `uniqueId` (`azure-maps.bicep` `mapsClientId` output). BYO accounts: set post-deploy (`az maps account show --query properties.uniqueId`) or rely on the key path | Entra (AAD) auth path — sent as `x-ms-client-id` with the UAMI-minted atlas token | same grant as above |
 | `LOOM_REPORT_RENDERER` | `loomPaginatedRenderUrl` — the **same** headless render Functions host as `LOOM_PAGINATED_RENDER_URL` (both POST to `…/api/render`); `LOOM_REPORT_RENDER_KEY` rides the same `loom-paginated-render-key` KV secret | report-designer high-fidelity export (`app/api/items/report/[id]/export`) | — (Function host key via KV secretRef) |
 | `LOOM_PLAN_BACKING_SQL_SERVER` / `LOOM_PLAN_BACKING_SQL_DATABASE` | root params `loomPlanBackingSqlServer` / `loomPlanBackingSqlDatabase` (previously declared on admin-plane but **orphaned** — never surfaced from the root orchestrator, so no `.bicepparam` could set them). Empty → Plan cells persist to Cosmos + honest gate | Plan (preview) EPM/CPM writeback table `dbo.loom_plan_cells` | one-time: grant the Console UAMI `db_ddladmin` + `db_datawriter` on that database |
-| `LOOM_UDF_FUNCTION_BASE` | root param `loomUdfFunctionBase` (→ `byoExisting.udfFunctionBase`), a BYO Azure Functions host, e.g. `https://my-udf.azurewebsites.net`. Only emitted when set; empty → the user-data-function invoke route serves its honest 503 gate | user-data-function **Invoke** | none yet — a Loom-managed host is tracked as `TODO udf-runtime.bicep` (dab-runtime.bicep pattern) in `modules/admin-plane/main.bicep` |
+| `LOOM_UDF_FUNCTION_BASE` | **derived** from the Loom-managed UDF runtime (`modules/admin-plane/udf-runtime.bicep`, `hostUrl` output) on a stock deploy — no manual step. A BYO Azure Functions host (root param `loomUdfFunctionBase` → `byoExisting.udfFunctionBase`, e.g. `https://my-udf.azurewebsites.net`) still overrides it. Empty only when `udfRuntimeEnabled=false` and no BYO host → the invoke route serves its honest 409 gate | user-data-function **Invoke** | none needed to invoke (the console BFF proxies the host ingress). UDF code runs as the Console UAMI, so grant that UAMI any data-plane role a function needs — see [§ UDF runtime](#udf-runtime) |
+
+---
+
+## User Data Functions (UDF) runtime {#udf-runtime}
+
+The **User Data Function** editor's Test/Run panel invokes
+`POST /api/items/user-data-function/<id>/invoke`, which resolves an Azure-native
+execution host from **`LOOM_UDF_FUNCTION_BASE`** and POSTs
+`{base}/api/<functionName>`. Without a host that path is permanently 409-gated on
+a fresh deploy. `modules/admin-plane/udf-runtime.bicep` deploys a Loom-managed
+host so it works day-one — **no manual step beyond the enable flag**.
+
+**Host kind — Azure Container Apps.** Mirrors the DAB preview runtime
+(`dab-runtime.bicep`): a stock image runs host code delivered as base64 secrets
+and materialized by a busybox init container onto an EmptyDir volume — **no
+custom image build, no ACR dependency**. Broadly available including Azure
+Government / IL5, with **no Fabric or Power BI dependency** (per
+`.claude/rules/no-fabric-dependency.md`). The host runs **real Python**: it
+imports the published UDF source through a bundled `fabric.functions` shim,
+executes the requested `@udf.function()`, and returns its actual value — so the
+Test panel shows a genuinely computed result (no stub, per `no-vaporware.md`).
+Source of truth for the host is `modules/admin-plane/udf-runtime/` (`app.py`,
+`fabric_functions.py`, `default_function_app.py`, `README.md`).
+
+| Param (module) | Default | Purpose |
+| --- | --- | --- |
+| `udfRuntimeEnabled` | `true` | Deploy the host. `false` → module deploys nothing, `hostUrl` empty, invoke path stays honestly 409-gated. |
+| `udfImage` | `mcr.microsoft.com/azure-functions/python:4-python3.11` | Stock image providing `python3` + a shell (MCR, available in Commercial + Gov/IL5). |
+| `hostPort` | `8080` | Host listen port + ACA ingress target. |
+| `corsOrigin` | `*` | Direct-call CORS origin (the BFF-proxy path does not need it). |
+
+**Wiring (done in `modules/admin-plane/main.bicep`):** invoke the module gated by
+`udfRuntimeEnabled`, then emit `{ name:'LOOM_UDF_FUNCTION_BASE', value:
+udfRuntime.outputs.hostUrl }` into the console `apps[]` env; surface
+`udfRuntimeEnabled` + host params from the root `main.bicep`. A BYO Functions host
+(`loomUdfFunctionBase`) still overrides the derived value.
+
+**Data-source bindings.** UDF code runs **as the Console UAMI**, so grant that
+identity any data-plane role a function needs (SQL, ADLS, Cosmos). If a function
+uses an unwired Fabric binding placeholder the host returns HTTP 409 naming the
+remediation — never a faked result.
