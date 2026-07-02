@@ -2772,3 +2772,22 @@ az role assignment create \
 
 All coordinates are Azure-native resource ids — attach works with
 `LOOM_DEFAULT_FABRIC_WORKSPACE` unset (no Fabric dependency).
+
+## New env vars (2026-07) — bicep-sync audit closure {#env-vars-2026-07}
+
+The 2026-07 no-vaporware bicep-sync audit found Console features reading env
+vars that no bicep emitted (and roles no bicep granted). All are now emitted by
+`platform/fiab/bicep/modules/admin-plane/main.bicep` on a stock deploy — no
+manual step for the defaults; the notes below are only for overrides / BYO.
+
+| Env var | Emitted value (stock deploy) | Backs | Role / grant (bicep) |
+| --- | --- | --- | --- |
+| `LOOM_SWA_SUBSCRIPTION_ID` | the deployment subscription | slate-app / workshop-app **Publish** → real Azure Static Web Apps (`Microsoft.Web/staticSites` PUT + `listSecrets`) | — |
+| `LOOM_SWA_RESOURCE_GROUP` | the admin RG (override: root param `loomSwaResourceGroup` → `byoExisting.swaResourceGroup`) | same | Console UAMI → **Website Contributor** (`de139f84-1756-47ae-9be6-808fbbe706ee`) at the SWA RG scope (`modules/admin-plane/swa-publish-rbac.bicep`) |
+| `LOOM_SWA_LOCATION` | the deployment `location` — **never** the route's `eastus2` fallback (invalid in Azure Government) | same | — |
+| `LOOM_ADX_ALERT_SCOPE` | the ADX cluster ARM id (provisioned `adxCluster.outputs.clusterId`, or the BYO `existingAdxClusterName` id) | Activator continuous scheduled evaluation for Eventhouse/ADX-sourced rules (`lib/azure/activator-monitor.ts` — `Microsoft.Insights/scheduledQueryRules` scoped to the cluster) | Activator UAMI → ADX **AllDatabasesViewer** principalAssignment on the cluster (`modules/admin-plane/adx-cluster.bicep`, the shared-cluster parallel of the DLZ per-database `activator-viewer` grant). BYO clusters: grant it manually — `az kusto cluster-principal-assignment create --cluster-name <name> --principal-id <activator-UAMI-principalId> --principal-type App --role AllDatabasesViewer` |
+| `LOOM_MAPS_BACKEND` | `azure-maps` whenever a Maps account is wired (deployed or BYO `loomAzureMapsAccount`); empty otherwise (honest gate) | the interactive map visual (report designer / geo editors) | Console UAMI → **Azure Maps Data Reader** (already granted in `azure-maps.bicep`) |
+| `LOOM_AZURE_MAPS_CLIENT_ID` | the deployed Maps account `uniqueId` (`azure-maps.bicep` `mapsClientId` output). BYO accounts: set post-deploy (`az maps account show --query properties.uniqueId`) or rely on the key path | Entra (AAD) auth path — sent as `x-ms-client-id` with the UAMI-minted atlas token | same grant as above |
+| `LOOM_REPORT_RENDERER` | `loomPaginatedRenderUrl` — the **same** headless render Functions host as `LOOM_PAGINATED_RENDER_URL` (both POST to `…/api/render`); `LOOM_REPORT_RENDER_KEY` rides the same `loom-paginated-render-key` KV secret | report-designer high-fidelity export (`app/api/items/report/[id]/export`) | — (Function host key via KV secretRef) |
+| `LOOM_PLAN_BACKING_SQL_SERVER` / `LOOM_PLAN_BACKING_SQL_DATABASE` | root params `loomPlanBackingSqlServer` / `loomPlanBackingSqlDatabase` (previously declared on admin-plane but **orphaned** — never surfaced from the root orchestrator, so no `.bicepparam` could set them). Empty → Plan cells persist to Cosmos + honest gate | Plan (preview) EPM/CPM writeback table `dbo.loom_plan_cells` | one-time: grant the Console UAMI `db_ddladmin` + `db_datawriter` on that database |
+| `LOOM_UDF_FUNCTION_BASE` | root param `loomUdfFunctionBase` (→ `byoExisting.udfFunctionBase`), a BYO Azure Functions host, e.g. `https://my-udf.azurewebsites.net`. Only emitted when set; empty → the user-data-function invoke route serves its honest 503 gate | user-data-function **Invoke** | none yet — a Loom-managed host is tracked as `TODO udf-runtime.bicep` (dab-runtime.bicep pattern) in `modules/admin-plane/main.bicep` |

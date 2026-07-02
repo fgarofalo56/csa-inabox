@@ -814,6 +814,25 @@ var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundry
 var byoFoundryEndpoint = !empty(existingFoundryAccountName) ? 'https://${existingFoundryAccountName}.${environment().suffixes.storage != 'core.windows.net' ? 'openai.azure.us' : 'openai.azure.com'}/' : ''
 var byoFoundryChatDeployment = string(byoExisting.?foundryChatDeployment ?? '')
 var byoFoundryEmbedDeployment = string(byoExisting.?foundryEmbedDeployment ?? '')
+// Slate-app / Workshop-app Publish → Azure Static Web Apps target RG. The
+// publish BFF routes (app/api/items/{slate-app,workshop-app}/[id]/publish)
+// PUT Microsoft.Web/staticSites + POST listSecrets here. Threaded via
+// byoExisting.swaResourceGroup (root param loomSwaResourceGroup) — NOT a new
+// scalar param, admin-plane/main.bicep is at the 256-param ceiling. Empty
+// defaults to THIS admin RG; the Console UAMI is granted Website Contributor
+// at that RG scope by swa-publish-rbac.bicep below.
+var loomSwaResourceGroup = string(byoExisting.?swaResourceGroup ?? '')
+var effectiveSwaRg = !empty(loomSwaResourceGroup) ? loomSwaResourceGroup : resourceGroup().name
+// user-data-function invoke base URL (LOOM_UDF_FUNCTION_BASE — an Azure
+// Functions host, e.g. https://my-udf.azurewebsites.net). Threaded via
+// byoExisting.udfFunctionBase (root param loomUdfFunctionBase), same
+// 256-param-ceiling treatment. Empty → the invoke route serves its honest
+// 503 gate naming this var.
+// TODO udf-runtime.bicep: deploy a Loom-managed Azure Functions host for
+// user-data-function items following the dab-runtime.bicep pattern (opt-out
+// enable flag + per-app identity + KV host key + honest editor gate), then
+// default this to its endpoint instead of a BYO URL.
+var loomUdfFunctionBase = string(byoExisting.?udfFunctionBase ?? '')
 // Purview — existingPurviewAccount overrides loomPurviewAccount (reuse > param).
 // The Purview catalog data-plane is reached by account host (`{account}.purview.azure.com`)
 // + a UAMI data-plane role assigned in the Purview portal — it is subscription-
@@ -2017,6 +2036,11 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     skipRoleGrants: skipRoleGrants
     // Console UAMI → Monitoring Contributor on the cluster (alert rules + diagnostics).
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Activator UAMI → AllDatabasesViewer (the "alert identity" for continuous
+    // Eventhouse/ADX Activator rule evaluation via LOOM_ADX_ALERT_SCOPE — see
+    // lib/azure/activator-monitor.ts; cluster-level parallel of the per-database
+    // 'activator-viewer' grant in landing-zone/adx-db-inner.bicep).
+    activatorPrincipalId: identity.outputs.uamiActivatorPrincipalId
     // Continuous-export: grant cluster MI Storage Blob Data Contributor on the DLZ ADLS account.
     // Empty when loomStorageAccount is unset → grant is skipped → wizard shows honest gate.
     adlsAccountName: loomStorageAccount
@@ -2234,6 +2258,26 @@ module azureMaps 'azure-maps.bicep' = if (azureMapsEnabled && (boundary == 'Comm
 var effectiveMapsAccount = (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC'))
   ? azureMaps!.outputs.mapsAccountName
   : loomAzureMapsAccount
+
+// =====================================================================
+// 10c. Slate-app / Workshop-app Publish → Azure Static Web Apps RBAC.
+//
+// The publish BFF routes (app/api/items/{slate-app,workshop-app}/[id]/
+// publish) PUT Microsoft.Web/staticSites (idempotent create) and POST
+// listSecrets (deployment token) in LOOM_SWA_RESOURCE_GROUP, so the
+// Console UAMI needs "Website Contributor" at that RG scope. Cross-RG
+// role assignments cannot be authored inline (BCP139) → RG-scoped module
+// (defaults to THIS admin RG via effectiveSwaRg).
+// =====================================================================
+
+module swaPublishRbac 'swa-publish-rbac.bicep' = if (!skipRoleGrants) {
+  name: 'swa-publish-rbac'
+  scope: resourceGroup(effectiveSwaRg)
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
 
 // =====================================================================
 // 11. AI defense (Defender for AI workaround in Gov)
@@ -2782,6 +2826,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // the name is a valid bare KQL identifier. For a reused cluster the
             // real default DB is reconciled post-deploy by patch-navigator-env.sh.
             { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb_default' : '' }
+            // Activator (Reflex) — continuous scheduled evaluation for
+            // Eventhouse/ADX-sourced rules (lib/azure/activator-monitor.ts).
+            // The value is the ADX cluster ARM id: the scope of the
+            // Microsoft.Insights scheduledQueryRule the Console creates
+            // (skipQueryValidation — the KQL targets ADX, not LA). Empty →
+            // ADX rules evaluate on-demand via Trigger/Preview and carry an
+            // honest gate note. The alert identity (Activator UAMI) holds
+            // AllDatabasesViewer on the cluster (adx-cluster.bicep).
+            { name: 'LOOM_ADX_ALERT_SCOPE',    value: !empty(existingAdxClusterName) ? resourceId(byoAdxSub, byoAdxRg, 'Microsoft.Kusto/clusters', existingAdxClusterName) : (adxEnabled ? adxCluster!.outputs.clusterId : '') }
             // ----------------------------------------------------------------
             // Azure Analysis Services (AAS) — Azure-native semantic-model
             // backend (lib/azure/aas-client.ts). When set, the SemanticModel
@@ -2889,6 +2942,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Paginated-report (RDL) export renderer Function — PDF/Excel/Word.
             // Empty → honest export gate in the designer; authoring still works.
             { name: 'LOOM_PAGINATED_RENDER_URL', value: loomPaginatedRenderUrl }
+            // Loom-native report designer export renderer — the SAME headless
+            // Functions host as the paginated (RDL) renderer above (both POST
+            // HTML to ${base}/api/render). app/api/items/report/[id]/export
+            // reads LOOM_REPORT_RENDERER; empty → its honest 412 gate (the
+            // client Print / PNG paths still work). One param, two consumers.
+            { name: 'LOOM_REPORT_RENDERER', value: loomPaginatedRenderUrl }
             // CSA Loom family sweep (Power Platform / ML / Geo / Graph) —
             // see scripts/csa-loom/powerplatform-tenant-bootstrap.sh for
             // the one-time tenant config required to use them.
@@ -2905,6 +2964,28 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // editors prefill + display the deployed account, so the geo
             // surfaces verifiably "use the deployed account".
             { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT', value: effectiveMapsAccount }
+            // Azure Maps backend selector + AAD client id (maps-client.ts and
+            // the /map-token BFF routes). LOOM_MAPS_BACKEND=azure-maps turns
+            // the map visual ON whenever an account is wired (deployed OR BYO
+            // loomAzureMapsAccount); empty → the documented honest gate.
+            // LOOM_AZURE_MAPS_CLIENT_ID is the account's uniqueId — the value
+            // the Web SDK sends as x-ms-client-id on the AAD path (the Console
+            // UAMI holds Azure Maps Data Reader, granted in azure-maps.bicep).
+            // Only derivable for the DEPLOYED account; a BYO account falls back
+            // to the subscription-key path (NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY)
+            // or the operator sets the client id post-deploy.
+            { name: 'LOOM_MAPS_BACKEND',             value: !empty(effectiveMapsAccount) ? 'azure-maps' : '' }
+            { name: 'LOOM_AZURE_MAPS_CLIENT_ID',     value: (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC')) ? azureMaps!.outputs.mapsClientId : '' }
+            // Slate-app / Workshop-app Publish → Azure Static Web Apps (ARM
+            // Microsoft.Web/staticSites + listSecrets; app/api/items/
+            // {slate-app,workshop-app}/[id]/publish). RG defaults to this
+            // admin RG (byoExisting.swaResourceGroup overrides); the Console
+            // UAMI holds Website Contributor there (swa-publish-rbac.bicep).
+            // Location follows the deployment region — NEVER hard-coded
+            // (the route's 'eastus2' fallback is invalid in Azure Government).
+            { name: 'LOOM_SWA_SUBSCRIPTION_ID',      value: subscription().subscriptionId }
+            { name: 'LOOM_SWA_RESOURCE_GROUP',       value: effectiveSwaRg }
+            { name: 'LOOM_SWA_LOCATION',             value: location }
             { name: 'LOOM_KUSTO_CLUSTER',            value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
@@ -3013,9 +3094,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
           ] : [],
           // Paginated-report-renderer Function host key — only when wired.
-          // Surfaced to the export BFF (?code=…), never to the browser.
+          // Surfaced to the export BFF (?code=…), never to the browser. The
+          // report-designer export route reads the SAME host key as
+          // LOOM_REPORT_RENDER_KEY (one Functions host, two consumers — see
+          // LOOM_REPORT_RENDERER above).
           !empty(loomPaginatedRenderUrl) ? [
             { name: 'LOOM_PAGINATED_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
+            { name: 'LOOM_REPORT_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
+          ] : [],
+          // user-data-function invoke base — a BYO Azure Functions host
+          // (byoExisting.udfFunctionBase ← root param loomUdfFunctionBase).
+          // Only emitted when set; absence keeps the invoke route's honest
+          // 503 gate naming this exact var (no-vaporware.md). TODO
+          // udf-runtime.bicep: deploy a Loom-managed Functions host on the
+          // dab-runtime.bicep pattern and default this to its endpoint.
+          !empty(loomUdfFunctionBase) ? [
+            { name: 'LOOM_UDF_FUNCTION_BASE', value: loomUdfFunctionBase }
           ] : [],
           // Analysis Services — RLS/OLS Security tab backend (Azure-native).
           // LOOM_AAS_SERVER is the asazure://… data-plane name emitted by the

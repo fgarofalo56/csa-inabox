@@ -823,6 +823,18 @@ param loomMirrorCopyCadence string = '1h'
 @description('Default Fabric/Power BI workspace id (LOOM_DEFAULT_FABRIC_WORKSPACE). Leave EMPTY (default) for the Azure-native path — Fabric is strictly opt-in (per no-fabric-dependency.md) and only used when a *-backend env is also set to fabric.')
 param loomDefaultFabricWorkspace string = ''
 
+@description('audit-T64: Azure SQL logical server (name or FQDN) holding the Plan (preview) writeback table dbo.loom_plan_cells (LOOM_PLAN_BACKING_SQL_SERVER). Empty → planning cells persist to Cosmos (always works) and the Plan editor shows the honest "set LOOM_PLAN_BACKING_SQL_*" gate. Azure-native parity of Fabric\'s auto-provisioned SQL DB — no Microsoft Fabric dependency. Passed through to the admin-plane module (its params were previously declared there but never surfaced here).')
+param loomPlanBackingSqlServer string = ''
+
+@description('audit-T64: Azure SQL database name for the Plan (preview) writeback store (LOOM_PLAN_BACKING_SQL_DATABASE). Pairs with loomPlanBackingSqlServer; grant the Console UAMI db_ddladmin + db_datawriter on it (see modules/admin-plane/main.bicep plan-backing notes). Empty → Cosmos-only.')
+param loomPlanBackingSqlDatabase string = ''
+
+@description('Resource group where the slate-app / workshop-app Publish routes create Azure Static Web Apps (LOOM_SWA_RESOURCE_GROUP). Empty (default) → the admin-plane RG. The Console UAMI is granted Website Contributor at this RG scope (modules/admin-plane/swa-publish-rbac.bicep). Folded into byoExisting.swaResourceGroup — admin-plane/main.bicep sits at the ARM 256-param ceiling.')
+param loomSwaResourceGroup string = ''
+
+@description('user-data-function invoke base URL — a BYO Azure Functions host, e.g. https://my-udf.azurewebsites.net (LOOM_UDF_FUNCTION_BASE). Empty → the UDF invoke route serves its honest 503 gate naming this var. Folded into byoExisting.udfFunctionBase (256-param ceiling). TODO udf-runtime.bicep: a Loom-managed Functions host on the dab-runtime.bicep pattern will default this.')
+param loomUdfFunctionBase string = ''
+
 @description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → a strong password is auto-generated into the deployment (effShirAdminPassword) so the SHIR provisions by default per deploy-readiness; supply a Key-Vault-backed secret to override. The VMSS stays at capacity 0 (scale-to-0) so the credential is never used interactively — nothing needs to RDP.')
 @secure()
 param shirAdminPassword string = ''
@@ -1037,6 +1049,13 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // byoExisting (not scalar params) to stay under admin-plane's 256-param ceiling.
       amlDefaultCompute: (useSingleDlz && mlWorkspaceEnabled) ? take('ci-loom-${uniqueString(singleDlzRg.id)}', 24) : ''
       amlComputeIdleTtl: mlComputeIdleTtl
+      // Slate-app / Workshop-app Publish → Azure Static Web Apps target RG
+      // (LOOM_SWA_RESOURCE_GROUP; empty → the admin RG) + the BYO
+      // user-data-function Functions host (LOOM_UDF_FUNCTION_BASE; empty →
+      // honest gate). Carried on the BYO object (not scalar params) to stay
+      // under admin-plane's 256-param ceiling.
+      swaResourceGroup: loomSwaResourceGroup
+      udfFunctionBase: loomUdfFunctionBase
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
@@ -1142,6 +1161,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // it the binding silently relies on the admin-plane default matching.
     loomSynapseWorkspace: 'syn-loom-default-${location}'
     loomSynapseDedicatedPool: 'loompool'
+    // audit-T64 orphan closure: these admin-plane params existed (and were
+    // wired to LOOM_PLAN_BACKING_SQL_* in the Console env) but were never
+    // passed from this orchestrator, so no .bicepparam could set them.
+    loomPlanBackingSqlServer: loomPlanBackingSqlServer
+    loomPlanBackingSqlDatabase: loomPlanBackingSqlDatabase
     loomPurviewAccount: loomPurviewAccount
     loomMipEnabled: loomMipEnabled
     loomMipAdminEnabled: loomMipAdminEnabled

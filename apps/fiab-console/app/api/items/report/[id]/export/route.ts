@@ -191,7 +191,7 @@ async function exportLoomNative(
           'LOOM_REPORT_RENDERER to its base URL. The renderer is the ' +
           'azure-functions/paginated-report-renderer Function (deploy/main.bicep) ' +
           'wired through platform/fiab/bicep/modules/admin-plane/main.bicep ' +
-          '(param loomReportRenderUrl → env LOOM_REPORT_RENDERER).',
+          '(param loomPaginatedRenderUrl → env LOOM_REPORT_RENDERER).',
       },
       { status: 412 },
     );
