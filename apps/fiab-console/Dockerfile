@@ -28,8 +28,10 @@ COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
 # The Next build OOMed in the ACR Tasks container (JS heap out of memory) as the
-# app grew — give Node a larger old-space heap. 4 GB fits the default ACR agent.
-ENV NODE_OPTIONS=--max-old-space-size=4096
+# app grew — give Node a larger old-space heap. 4096 became the ceiling again on
+# 2026-07-02 (run cj9h: Mark-Compact 3.6GB → SIGABRT), so 6144; the default ACR
+# Tasks agent has 8 GB RAM.
+ENV NODE_OPTIONS=--max-old-space-size=6144
 RUN npm install -g pnpm@9 && \
     pnpm build
 
