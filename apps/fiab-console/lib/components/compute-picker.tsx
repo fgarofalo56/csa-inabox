@@ -51,6 +51,31 @@ interface UseComputes {
   reload: () => void;
 }
 
+// Module-level shared fetch for /api/loom/compute-targets: dedupe concurrent
+// callers + a short TTL so the many ComputePickers a heavy editor mounts at once
+// share ONE request instead of storming the BFF (~74 calls were observed on the
+// lakehouse editor open). Explicit reload() forces past the cache. rel-T09e.
+let _computesCache: { at: number; data: ComputeTarget[] } | null = null;
+let _computesInFlight: Promise<ComputeTarget[]> | null = null;
+const COMPUTES_TTL_MS = 15_000;
+
+function fetchComputesShared(force = false): Promise<ComputeTarget[]> {
+  if (!force && _computesCache && Date.now() - _computesCache.at < COMPUTES_TTL_MS) {
+    return Promise.resolve(_computesCache.data);
+  }
+  if (_computesInFlight) return _computesInFlight;
+  _computesInFlight = fetch('/api/loom/compute-targets')
+    .then(r => r.json())
+    .then(j => {
+      if (!j.ok) throw new Error(j.error || 'failed');
+      const all = (j.computes || []) as ComputeTarget[];
+      _computesCache = { at: Date.now(), data: all };
+      return all;
+    })
+    .finally(() => { _computesInFlight = null; });
+  return _computesInFlight;
+}
+
 /**
  * Subscribe to /api/loom/compute-targets. Optional `filter` narrows the
  * returned list to specific kinds (e.g. only Databricks clusters).
@@ -59,22 +84,25 @@ export function useComputes(filter?: ComputeKind[]): UseComputes {
   const [computes, setComputes] = useState<ComputeTarget[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Depend on the filter CONTENTS (a stable string), not the array identity —
+  // callers pass a fresh `[...]` literal each render, which otherwise churned
+  // `reload`'s identity and re-fired the effect on every render (rel-T09e).
+  const filterKey = filter ? filter.join(',') : '';
 
-  const reload = useCallback(() => {
+  const reload = useCallback((force = false) => {
     setLoading(true); setError(null);
-    fetch('/api/loom/compute-targets')
-      .then(r => r.json())
-      .then(j => {
-        if (!j.ok) { setError(j.error || 'failed'); return; }
-        const all = (j.computes || []) as ComputeTarget[];
-        setComputes(filter ? all.filter(c => filter.includes(c.kind)) : all);
+    fetchComputesShared(force)
+      .then(all => {
+        const kinds = filterKey ? filterKey.split(',') : null;
+        setComputes(kinds ? all.filter(c => kinds.includes(c.kind)) : all);
       })
       .catch(e => setError(e?.message || String(e)))
       .finally(() => setLoading(false));
-  }, [filter]);
+  }, [filterKey]);
 
+  const forceReload = useCallback(() => reload(true), [reload]);
   useEffect(() => { reload(); }, [reload]);
-  return { computes, loading, error, reload };
+  return { computes, loading, error, reload: forceReload };
 }
 
 function isPaused(state?: string): boolean {

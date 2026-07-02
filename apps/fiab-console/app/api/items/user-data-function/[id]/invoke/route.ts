@@ -70,6 +70,15 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         }
         headers['x-functions-key'] = await getKeyVaultSecretValue(keySecret);
       }
+      // Forward the authored source so the Loom udf-runtime host executes THIS
+      // item's function, not its bundled sample (udf-runtime/app.py reads
+      // `x-udf-source-b64` and loads that source per-request). Without this the
+      // default runtime silently ran compute_score for every function (rel-T05).
+      // A real Azure Functions host ignores the unknown header and runs its
+      // deployed code, so it is safe to always send when we have source.
+      if (typeof st.source === 'string' && st.source.trim()) {
+        headers['x-udf-source-b64'] = Buffer.from(st.source, 'utf-8').toString('base64');
+      }
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(parameters) });
       const text = await res.text();
       return NextResponse.json({ ok: res.ok, backend: 'azure-functions', status: res.status, body: text });

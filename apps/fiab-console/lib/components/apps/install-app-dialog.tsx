@@ -276,8 +276,15 @@ export function InstallAppDialog({
 
   const done = !!(installResult || provisionReport);
 
+  // inertTrapFocus: use the native HTML-dialog `inert`-the-background focus trap
+  // instead of Tabster's aria-hidden modalizer. On Fluent 9.73 + react-tabster
+  // 9.26 under React 19 the modalizer inverted and applied aria-hidden to the
+  // ACTIVE DialogSurface itself (Section 508 break + the surface drops out of the
+  // a11y tree, which is why Playwright's role engine couldn't find the dialog and
+  // all 27 use-case-app UAT tests failed at `getByRole('dialog')`). `inert` on the
+  // background is the correct modal behavior and keeps the surface accessible. rel-T09b.
   return (
-    <Dialog open={open} onOpenChange={(_, d) => handleOpenChange(d.open)}>
+    <Dialog open={open} inertTrapFocus onOpenChange={(_, d) => handleOpenChange(d.open)}>
       <DialogSurface>
         <DialogBody>
           <DialogTitle>Install {appName}</DialogTitle>
