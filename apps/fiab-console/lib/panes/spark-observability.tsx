@@ -220,19 +220,19 @@ export function SparkObservabilityPane() {
   // List view.
   const columns: LoomColumn<SparkApplication>[] = [
     { key: 'name', label: 'Application', sortable: true, filterable: true, width: 240,
-      render: (a) => <Text weight="semibold">{a.name}</Text>, text: (a) => a.name },
+      render: (a) => <Text weight="semibold">{a.name}</Text>, getValue: (a) => a.name },
     { key: 'engine', label: 'Engine', sortable: true, filterable: true, width: 130,
       render: (a) => <Badge appearance="tint" color={a.engine === 'databricks' ? 'brand' : 'informative'}>{a.engine === 'databricks' ? 'Databricks' : 'Synapse'}</Badge>,
-      text: (a) => a.engine },
-    { key: 'pool', label: 'Pool / cluster', sortable: true, filterable: true, width: 160, text: (a) => a.pool || '' },
-    { key: 'user', label: 'Submitter', sortable: true, filterable: true, width: 150, text: (a) => a.user || '' },
+      getValue: (a) => a.engine },
+    { key: 'pool', label: 'Pool / cluster', sortable: true, filterable: true, width: 160, getValue: (a) => a.pool || '' },
+    { key: 'user', label: 'Submitter', sortable: true, filterable: true, width: 150, getValue: (a) => a.user || '' },
     { key: 'start', label: 'Started', sortable: true, width: 170,
-      render: (a) => <span>{a.start ? new Date(a.start).toLocaleString() : '—'}</span>, text: (a) => a.start || '' },
+      render: (a) => <span>{a.start ? new Date(a.start).toLocaleString() : '—'}</span>, getValue: (a) => a.start || '' },
     { key: 'durationMs', label: 'Duration', sortable: true, width: 110,
-      render: (a) => <span>{fmtDuration(a.durationMs)}</span>, text: (a) => String(a.durationMs ?? 0) },
+      render: (a) => <span>{fmtDuration(a.durationMs)}</span>, getValue: (a) => String(a.durationMs ?? 0) },
     { key: 'status', label: 'Status', sortable: true, filterable: true, width: 120,
       render: (a) => a.status ? <Badge appearance="tint" color={statusColor(a.status)}>{a.status}</Badge> : <span className={s.hint}>—</span>,
-      text: (a) => a.status || '' },
+      getValue: (a) => a.status || '' },
   ];
 
   return (
@@ -325,7 +325,7 @@ function NativeLinks({ links, styles }: { links: NativeLink[]; styles: ReturnTyp
         <div key={l.href} className={styles.linkCard}>
           <div className={styles.linkHead}>
             <Open16Regular />
-            <FluentLink href={l.href} target="_blank" rel="noreferrer" weight="semibold">{l.label}</FluentLink>
+            <FluentLink href={l.href} target="_blank" rel="noreferrer"><Text weight="semibold">{l.label}</Text></FluentLink>
           </div>
           <Caption1 className={styles.hint}>{l.detail}</Caption1>
         </div>

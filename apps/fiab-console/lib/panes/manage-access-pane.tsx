@@ -398,10 +398,10 @@ function AddRoleDialog({
             <Field label="Role" style={{ marginTop: tokens.spacingVerticalL }}>
               <Dropdown value={role} selectedOptions={[role]}
                 onOptionSelect={(_e, d) => setRole((d.optionValue || 'Member') as WorkspaceRoleName)}>
-                <Option value="Admin">Admin — {ROLE_DESCRIPTIONS.Admin}</Option>
-                <Option value="Member">Member — {ROLE_DESCRIPTIONS.Member}</Option>
-                <Option value="Contributor">Contributor — {ROLE_DESCRIPTIONS.Contributor}</Option>
-                <Option value="Viewer">Viewer — {ROLE_DESCRIPTIONS.Viewer}</Option>
+                <Option value="Admin">{`Admin — ${ROLE_DESCRIPTIONS.Admin}`}</Option>
+                <Option value="Member">{`Member — ${ROLE_DESCRIPTIONS.Member}`}</Option>
+                <Option value="Contributor">{`Contributor — ${ROLE_DESCRIPTIONS.Contributor}`}</Option>
+                <Option value="Viewer">{`Viewer — ${ROLE_DESCRIPTIONS.Viewer}`}</Option>
               </Dropdown>
             </Field>
 

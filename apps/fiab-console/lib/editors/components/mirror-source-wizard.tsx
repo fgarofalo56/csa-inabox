@@ -95,7 +95,7 @@ const SOURCE_SYNC_NOTE: Record<string, string> = {
 };
 
 const useStyles = makeStyles({
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS },
   cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   sourceGrid: { marginTop: tokens.spacingVerticalS },
@@ -107,7 +107,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow4,
     transitionProperty: 'transform, box-shadow', transitionDuration: tokens.durationFaster,
-    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow16, borderColor: tokens.colorNeutralStroke1 },
+    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow16, borderTopColor: tokens.colorNeutralStroke1, borderRightColor: tokens.colorNeutralStroke1, borderBottomColor: tokens.colorNeutralStroke1, borderLeftColor: tokens.colorNeutralStroke1 },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   cardActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px', backgroundColor: tokens.colorBrandBackground2 },
@@ -411,6 +411,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   }, [workspaceId, createName, createSrc, effServer, effDb, connId, includeIceberg, syncMode, editing, mirrorId, availTables, selTables, isBigQuery, isOracle, projectId, serviceName, gateway, syncUser, onCreated, onUpdated]);
 
   return (
+    <>
     <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
       <DialogSurface style={{ maxWidth: '680px' }}>
         <DialogBody>
@@ -723,6 +724,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
           </DialogActions>
         </DialogBody>
       </DialogSurface>
+    </Dialog>
       <ConnectionBuilder open={connBuilderOpen} onClose={() => setConnBuilderOpen(false)}
         onCreated={(c) => { setConnections((prev) => [...prev.filter((x) => x.id !== c.id), c]); setConnId(c.id); }} />
       {pickedConn && (
@@ -736,6 +738,6 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
           }}
         />
       )}
-    </Dialog>
+    </>
   );
 }

@@ -35,8 +35,12 @@ export interface EditorProps {
 
 type EditorComponent = ComponentType<EditorProps>;
 
-const reg = (loader: () => Promise<{ [k: string]: EditorComponent }>, name: string): EditorComponent =>
-  dynamic(() => loader().then((m) => ({ default: m[name] })), { ssr: false });
+// The loader resolves any module namespace; we pick a single named export by
+// `name`. Typing it as a generic record (rather than requiring EVERY export be
+// an EditorComponent) lets editor modules also export helpers/types alongside
+// their component without tripping the map type.
+const reg = (loader: () => Promise<Record<string, unknown>>, name: string): EditorComponent =>
+  dynamic(() => loader().then((m) => ({ default: m[name] as EditorComponent })), { ssr: false });
 
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Fabric Apps (Build 2026 preview)

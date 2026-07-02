@@ -14,6 +14,7 @@
  * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */
 
+import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input, Tooltip, Divider,
@@ -891,7 +892,7 @@ export function NotebookEditor({ item, id }: Props) {
     </Menu>
   );
 
-  const renderNbFolder = (node: FolderNode<NotebookLite>): JSX.Element | null => {
+  const renderNbFolder = (node: FolderNode<NotebookLite>): React.JSX.Element | null => {
     if (!node.folder) return null;
     const f = node.folder;
     const count = countDescendants(node);

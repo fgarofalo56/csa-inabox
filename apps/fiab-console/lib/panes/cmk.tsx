@@ -364,7 +364,7 @@ function BindWizard({
                 >
                   {keys.map((k) => (
                     <Option key={k.name} value={k.name} disabled={!k.enabled}>
-                      {k.name}{k.enabled ? '' : ' (disabled)'}
+                      {`${k.name}${k.enabled ? '' : ' (disabled)'}`}
                     </Option>
                   ))}
                 </Dropdown>
@@ -381,7 +381,7 @@ function BindWizard({
                   <Option value="__latest__">Latest (auto-rotate)</Option>
                   {versions.map((v) => (
                     <Option key={v.version} value={v.version} disabled={!v.enabled}>
-                      {v.version.slice(0, 16)}…{v.enabled ? '' : ' (disabled)'}
+                      {`${v.version.slice(0, 16)}…${v.enabled ? '' : ' (disabled)'}`}
                     </Option>
                   ))}
                 </Dropdown>

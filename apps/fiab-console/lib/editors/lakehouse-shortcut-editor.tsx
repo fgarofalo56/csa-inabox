@@ -14,6 +14,7 @@
  * Google Cloud Storage, Azure Blob, Dataverse, and internal lakehouse-to-lakehouse.
  */
 
+import type React from 'react';
 import { useCallback, useEffect, useState } from 'react';
 import {
   Caption1, Badge, Button, Spinner, Input, Textarea, Field, Select,
@@ -45,10 +46,10 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusLarge, background: tokens.colorNeutralBackground1,
     cursor: 'pointer', textAlign: 'left', minWidth: 0,
     transitionProperty: 'box-shadow, border-color, background', transitionDuration: tokens.durationNormal,
-    ':hover': { borderColor: tokens.colorBrandStroke1, boxShadow: tokens.shadow4 },
+    ':hover': { border: `1px solid ${tokens.colorBrandStroke1}`, boxShadow: tokens.shadow4 },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
-  sourceCardActive: { borderColor: tokens.colorBrandStroke1, background: tokens.colorBrandBackground2, boxShadow: tokens.shadow4 },
+  sourceCardActive: { border: `1px solid ${tokens.colorBrandStroke1}`, background: tokens.colorBrandBackground2, boxShadow: tokens.shadow4 },
   sourceHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorBrandForeground1 },
   sourceLabel: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1 },
   sourceDesc: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, lineHeight: tokens.lineHeightBase200 },
@@ -58,7 +59,7 @@ const CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'];
 
 type SourceType = 'internal' | 'adls' | 'blob' | 's3' | 's3compatible' | 'gcs' | 'dataverse';
 
-interface SourceDef { value: SourceType; label: string; desc: string; icon: JSX.Element; needsSecret: boolean }
+interface SourceDef { value: SourceType; label: string; desc: string; icon: React.JSX.Element; needsSecret: boolean }
 const SOURCES: SourceDef[] = [
   { value: 'internal', label: 'Internal lakehouse', desc: 'Another Loom lakehouse path (medallion).', icon: <Folder20Regular />, needsSecret: false },
   { value: 'adls', label: 'ADLS Gen2', desc: 'External Data Lake Storage account.', icon: <Cloud20Regular />, needsSecret: false },

@@ -65,6 +65,7 @@ interface PostureResponse {
   hint?: NotConfiguredHint;
   reason?: string;
   remediation?: string;
+  error?: string;
 }
 interface RecommendedAction {
   id: string; title: string; description?: string;

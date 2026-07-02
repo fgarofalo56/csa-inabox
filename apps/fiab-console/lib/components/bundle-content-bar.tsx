@@ -12,6 +12,7 @@
  * least browse what the app's bundle contains and copy snippets out.
  */
 
+import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -215,7 +216,7 @@ function BundleDialog({
 interface RenderableTab {
   id: string;
   label: string;
-  render: (styles: ReturnType<typeof useStyles>) => JSX.Element;
+  render: (styles: ReturnType<typeof useStyles>) => React.JSX.Element;
 }
 
 function pre(text: string, styles: ReturnType<typeof useStyles>) {

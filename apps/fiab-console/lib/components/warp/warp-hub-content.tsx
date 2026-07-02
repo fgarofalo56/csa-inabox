@@ -28,6 +28,7 @@
  *     unset (no Fabric dependency).
  */
 
+import type React from 'react';
 import { useEffect, useState } from 'react';
 import {
   Spinner, Button, Text, Body1, Caption1,
@@ -60,13 +61,13 @@ interface TransformsData {
 
 type WarpTab = 'pipeline' | 'code';
 
-const PIPELINE_CREATE: { slug: string; label: string; icon: JSX.Element }[] = [
+const PIPELINE_CREATE: { slug: string; label: string; icon: React.JSX.Element }[] = [
   { slug: 'data-pipeline', label: 'New data pipeline', icon: <Flow20Regular /> },
   { slug: 'spark-job-definition', label: 'New Spark job', icon: <DatabaseLightning20Regular /> },
   { slug: 'dataflow', label: 'New dataflow', icon: <BranchFork20Regular /> },
 ];
 
-const CODE_CREATE: { slug: string; label: string; icon: JSX.Element }[] = [
+const CODE_CREATE: { slug: string; label: string; icon: React.JSX.Element }[] = [
   { slug: 'dbt-job', label: 'New dbt project', icon: <Code20Regular /> },
 ];
 
@@ -156,7 +157,7 @@ const useStyles = makeStyles({
     ':hover': {
       boxShadow: tokens.shadow8,
       transform: 'translateY(-2px)',
-      borderColor: tokens.colorNeutralStroke1,
+      border: `1px solid ${tokens.colorNeutralStroke1}`,
     },
   },
   learnTitle: {

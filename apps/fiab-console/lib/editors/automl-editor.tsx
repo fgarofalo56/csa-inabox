@@ -95,11 +95,11 @@ const useStyles = makeStyles({
     background: tokens.colorNeutralBackground1,
     transitionProperty: 'background, border-color, box-shadow',
     transitionDuration: tokens.durationFaster,
-    ':hover': { background: tokens.colorNeutralBackground1Hover, borderColor: tokens.colorNeutralStroke1 },
+    ':hover': { background: tokens.colorNeutralBackground1Hover, border: `1px solid ${tokens.colorNeutralStroke1}` },
     ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
   },
   taskTileSelected: {
-    borderColor: tokens.colorBrandStroke1,
+    border: `1px solid ${tokens.colorBrandStroke1}`,
     boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
     background: tokens.colorNeutralBackground1Selected,
   },
@@ -125,12 +125,12 @@ const useStyles = makeStyles({
   stepDotActive: {
     background: tokens.colorBrandBackground,
     color: tokens.colorNeutralForegroundOnBrand,
-    borderColor: tokens.colorBrandBackground,
+    border: `1px solid ${tokens.colorBrandBackground}`,
   },
   stepDotDone: {
     background: tokens.colorPaletteGreenBackground2,
     color: tokens.colorPaletteGreenForeground1,
-    borderColor: tokens.colorPaletteGreenBorder1,
+    border: `1px solid ${tokens.colorPaletteGreenBorder1}`,
   },
   stepConnector: { width: '20px', height: '2px', background: tokens.colorNeutralStroke2, flexShrink: 0 },
   stepConnectorDone: { background: tokens.colorPaletteGreenBorder1 },
