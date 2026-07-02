@@ -1124,3 +1124,224 @@ export function recomputeRowTotals(sheet: PlanningSheet, scenarioId: string): Re
   for (const id of order) out[id] = lineItemRowTotal(sheet, scenarioId, id);
   return out;
 }
+
+// ===================================================================
+// Versions / snapshots — immutable point-in-time copies of the plan.
+//
+// Fabric IQ Plan keeps versioned plan data (budget v1, re-forecast, board
+// submission…); Loom's Azure-native parity persists snapshots INSIDE the plan
+// item's Cosmos state (state.snapshots[]) via the ordinary item PATCH — no
+// Microsoft Fabric dependency (.claude/rules/no-fabric-dependency.md).
+// A snapshot deep-copies the planning data (sheets: cells + lineItems +
+// periods + actuals, and scenarios) so later edits to the live plan can NEVER
+// leak into a taken version. All helpers are pure + side-effect-free
+// (vitest-covered without React or Azure); the editor calls them and persists
+// the returned state.
+// ===================================================================
+
+/** One immutable plan version (deep copies — never references live state). */
+export interface PlanSnapshot {
+  id: string;
+  /** User-supplied label, e.g. "Board submission FY26". */
+  label: string;
+  /** ISO timestamp the snapshot was taken. */
+  takenAt: string;
+  /** Display name / UPN of who took it (best-effort from the session). */
+  author?: string;
+  /** Deep copy of every planning sheet (lineItems + periods + cells + actuals). */
+  sheets: PlanningSheet[];
+  /** Deep copy of the scenario list at capture time. */
+  scenarios: PlanScenario[];
+}
+
+/** The slice of plan editor state the snapshot helpers read and rewrite. */
+export interface PlanVersionedState {
+  sheets?: PlanningSheet[];
+  scenarios?: PlanScenario[];
+  snapshots?: PlanSnapshot[];
+  activeSheetId?: string;
+  activeScenarioId?: string;
+  [k: string]: unknown;
+}
+
+/**
+ * Cap on retained snapshots (oldest dropped first). Snapshots live inside the
+ * plan's Cosmos document, so an unbounded list would eventually exceed the 2 MB
+ * item limit; 50 deep copies of a typical sheet stays comfortably under it.
+ */
+export const MAX_PLAN_SNAPSHOTS = 50;
+
+/** Deep-copy plain JSON data (plan state is always JSON-serializable). */
+function deepCopyJson<T>(v: T): T {
+  return JSON.parse(JSON.stringify(v ?? null)) as T;
+}
+
+/**
+ * Capture the current planning data as a {@link PlanSnapshot} WITHOUT mutating
+ * or appending anything. Missing/empty sheets/scenarios fall back to the same
+ * defaults the editor renders with, so a snapshot of a fresh plan restores to
+ * exactly what the user saw. Exported so the editor can diff "a snapshot vs the
+ * CURRENT state" by capturing an ephemeral snapshot of `state`.
+ */
+export function captureSnapshot(state: PlanVersionedState, label: string, author?: string): PlanSnapshot {
+  const sheets = Array.isArray(state.sheets) && state.sheets.length ? state.sheets : [defaultPlanningSheet()];
+  const scenarios = Array.isArray(state.scenarios) && state.scenarios.length ? state.scenarios : defaultScenarios();
+  const trimmed = (label || '').trim();
+  return {
+    id: newId('snap'),
+    label: trimmed || `Snapshot ${new Date().toISOString().slice(0, 16).replace('T', ' ')}`,
+    takenAt: new Date().toISOString(),
+    author: (author || '').trim() || undefined,
+    sheets: deepCopyJson(sheets),
+    scenarios: deepCopyJson(scenarios),
+  };
+}
+
+/**
+ * Take an immutable snapshot of the plan's current cells + lineItems +
+ * scenarios and append it to `state.snapshots[]`. Returns a NEW state object
+ * (the input is never mutated). Retention is capped at
+ * {@link MAX_PLAN_SNAPSHOTS} — oldest snapshots drop first.
+ */
+export function takeSnapshot<T extends PlanVersionedState>(state: T, label: string, author?: string): T {
+  const snap = captureSnapshot(state, label, author);
+  const prev = Array.isArray(state.snapshots) ? state.snapshots : [];
+  const next = [...prev, snap];
+  const capped = next.length > MAX_PLAN_SNAPSHOTS ? next.slice(next.length - MAX_PLAN_SNAPSHOTS) : next;
+  return { ...state, snapshots: capped };
+}
+
+/** One changed planning cell between two snapshots (before → after). */
+export interface PlanCellChange {
+  sheetId: string;
+  sheetName: string;
+  lineItemId: string;
+  lineItemName: string;
+  periodId: string;
+  periodLabel: string;
+  scenarioId: string;
+  scenarioName: string;
+  /** Value in snapshot A (null when the cell didn't exist there). */
+  before: number | null;
+  /** Value in snapshot B (null when the cell no longer exists). */
+  after: number | null;
+}
+
+/** A line-item (row) structural change between two snapshots. */
+export interface PlanRowChange {
+  sheetId: string;
+  sheetName: string;
+  lineItemId: string;
+  name: string;
+  change: 'added' | 'removed' | 'renamed';
+  /** For 'renamed': the name in snapshot A. */
+  before?: string;
+  /** For 'renamed': the name in snapshot B. */
+  after?: string;
+}
+
+export interface PlanSnapshotDiff {
+  /** Cells whose value differs (union of both snapshots' cell keys). */
+  cells: PlanCellChange[];
+  /** Rows added / removed / renamed per sheet. */
+  rows: PlanRowChange[];
+  scenariosAdded: string[];
+  scenariosRemoved: string[];
+  sheetsAdded: string[];
+  sheetsRemoved: string[];
+  /** True when nothing differs at all. */
+  identical: boolean;
+}
+
+/**
+ * Structural + cell-level diff between two snapshots (A → B). Compares the
+ * union of cell keys per shared sheet (before/after, null when absent on one
+ * side), reports rows added/removed/renamed, and scenario / sheet membership
+ * changes by display name. Pure + deterministic — vitest-covered.
+ */
+export function diffSnapshots(a: PlanSnapshot, b: PlanSnapshot): PlanSnapshotDiff {
+  const aSheets = new Map((a.sheets || []).map((s) => [s.id, s]));
+  const bSheets = new Map((b.sheets || []).map((s) => [s.id, s]));
+
+  const sheetsAdded = [...bSheets.values()].filter((s) => !aSheets.has(s.id)).map((s) => s.name || s.id);
+  const sheetsRemoved = [...aSheets.values()].filter((s) => !bSheets.has(s.id)).map((s) => s.name || s.id);
+
+  const aScen = new Map((a.scenarios || []).map((s) => [s.id, s]));
+  const bScen = new Map((b.scenarios || []).map((s) => [s.id, s]));
+  const scenariosAdded = [...bScen.values()].filter((s) => !aScen.has(s.id)).map((s) => s.name || s.id);
+  const scenariosRemoved = [...aScen.values()].filter((s) => !bScen.has(s.id)).map((s) => s.name || s.id);
+
+  const scenarioName = (id: string) => bScen.get(id)?.name || aScen.get(id)?.name || id;
+
+  const cells: PlanCellChange[] = [];
+  const rows: PlanRowChange[] = [];
+
+  for (const [sheetId, sa] of aSheets) {
+    const sb = bSheets.get(sheetId);
+    if (!sb) continue; // whole-sheet removal already reported
+    const sheetName = sb.name || sa.name || sheetId;
+
+    // ---- row (line-item) changes ----
+    const aRows = new Map((sa.lineItems || []).map((li) => [li.id, li]));
+    const bRows = new Map((sb.lineItems || []).map((li) => [li.id, li]));
+    for (const [rid, rb] of bRows) {
+      const ra = aRows.get(rid);
+      if (!ra) rows.push({ sheetId, sheetName, lineItemId: rid, name: rb.name || rid, change: 'added' });
+      else if ((ra.name || '') !== (rb.name || '')) {
+        rows.push({ sheetId, sheetName, lineItemId: rid, name: rb.name || rid, change: 'renamed', before: ra.name, after: rb.name });
+      }
+    }
+    for (const [rid, ra] of aRows) {
+      if (!bRows.has(rid)) rows.push({ sheetId, sheetName, lineItemId: rid, name: ra.name || rid, change: 'removed' });
+    }
+
+    // ---- cell changes (union of keys across both snapshots) ----
+    const keys = new Set([...Object.keys(sa.cells || {}), ...Object.keys(sb.cells || {})]);
+    const periodLabel = (pid: string) =>
+      (sb.periods || []).find((p) => p.id === pid)?.label || (sa.periods || []).find((p) => p.id === pid)?.label || pid;
+    const rowName = (rid: string) => bRows.get(rid)?.name || aRows.get(rid)?.name || rid;
+    for (const key of keys) {
+      const parts = key.split('|');
+      if (parts.length !== 3) continue;
+      const [lineItemId, periodId, scenarioId] = parts;
+      const va = typeof sa.cells?.[key] === 'number' ? (sa.cells[key] as number) : null;
+      const vb = typeof sb.cells?.[key] === 'number' ? (sb.cells[key] as number) : null;
+      if (va === vb) continue;
+      cells.push({
+        sheetId, sheetName,
+        lineItemId, lineItemName: rowName(lineItemId),
+        periodId, periodLabel: periodLabel(periodId),
+        scenarioId, scenarioName: scenarioName(scenarioId),
+        before: va, after: vb,
+      });
+    }
+  }
+
+  const identical =
+    cells.length === 0 && rows.length === 0 &&
+    sheetsAdded.length === 0 && sheetsRemoved.length === 0 &&
+    scenariosAdded.length === 0 && scenariosRemoved.length === 0;
+  return { cells, rows, scenariosAdded, scenariosRemoved, sheetsAdded, sheetsRemoved, identical };
+}
+
+/**
+ * Restore a snapshot onto the plan state. The CURRENT state is auto-snapshotted
+ * first (label `Before restore of "<label>"`) so a restore is always reversible,
+ * then sheets + scenarios are replaced with deep copies of the target snapshot
+ * (the snapshot itself stays immutable — future edits can't corrupt it).
+ * `activeSheetId` / `activeScenarioId` are re-pointed when they no longer exist
+ * in the restored data. Unknown snapshot id → the input state is returned
+ * unchanged. Returns a NEW state object; never mutates the input.
+ */
+export function restoreSnapshot<T extends PlanVersionedState>(state: T, snapshotId: string, author?: string): T {
+  const snaps = Array.isArray(state.snapshots) ? state.snapshots : [];
+  const target = snaps.find((s) => s && s.id === snapshotId);
+  if (!target) return state;
+
+  const withBackup = takeSnapshot(state, `Before restore of "${target.label}"`, author);
+  const sheets = deepCopyJson(target.sheets || []);
+  const scenarios = deepCopyJson(target.scenarios || []);
+  const activeSheetId = sheets.some((s) => s.id === state.activeSheetId) ? state.activeSheetId : sheets[0]?.id;
+  const activeScenarioId = scenarios.some((s) => s.id === state.activeScenarioId) ? state.activeScenarioId : scenarios[0]?.id;
+  return { ...withBackup, sheets, scenarios, activeSheetId, activeScenarioId };
+}

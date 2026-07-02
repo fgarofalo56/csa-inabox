@@ -32,7 +32,7 @@ import {
   Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
-  Send20Regular, ArrowSplit20Regular,
+  Send20Regular, ArrowSplit20Regular, History20Regular, Camera20Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -101,6 +101,9 @@ import {
   qfSum, qfAverage, qfDifference, qfRatioPct, qfGrowthPct,
   // Spreading / breakback / driver-based topological recompute.
   spread, breakback, driverRows, topoOrderLineItems, type SpreadMode,
+  // Versions / snapshots (immutable plan versions persisted in Cosmos state).
+  captureSnapshot, takeSnapshot, diffSnapshots, restoreSnapshot, MAX_PLAN_SNAPSHOTS,
+  type PlanSnapshot, type PlanSnapshotDiff,
   type PlanScenario, type PlanScenarioKind,
   type PlanningSheet, type PlanSemanticModelRef, type PlanBackingDb,
   type PlanCellRow, type PlanRowSortKey, type PeriodPoint, type GanttBar,
@@ -136,6 +139,9 @@ interface PlanState {
   infoBridge?: PlanSourceMapping[];
   // Intelligence forecast horizon (periods to project); persisted per plan.
   forecastHorizon?: number;
+  // Versions — immutable snapshots (cells + lineItems + scenarios), persisted
+  // via the ordinary item PATCH (Cosmos). See _plan-model takeSnapshot/restore.
+  snapshots?: PlanSnapshot[];
   [k: string]: unknown;
 }
 
@@ -1737,7 +1743,9 @@ function FormulaBuilderDialog({
   onApply: (tokens: PlanFormulaToken[]) => void;
 }) {
   const s = useStyles();
-  const [tokens, setTokens] = useState<PlanFormulaToken[]>(initial);
+  // NB: named fxTokens (not `tokens`) so the Fluent design-token import isn't
+  // shadowed — `tokens.spacing*` below must resolve to the design tokens.
+  const [fxTokens, setFxTokens] = useState<PlanFormulaToken[]>(initial);
   const [preset, setPreset] = useState<FormulaPreset>('custom');
   const [presetRows, setPresetRows] = useState<string[]>([]);
   const [presetA, setPresetA] = useState('');
@@ -1748,7 +1756,7 @@ function FormulaBuilderDialog({
 
   useEffect(() => {
     if (open) {
-      setTokens(Array.isArray(initial) ? initial : []);
+      setFxTokens(Array.isArray(initial) ? initial : []);
       setPreset('custom'); setPresetRows([]); setPresetA(''); setPresetB('');
       setInsRow(rows[0]?.id || ''); setInsOffset('0'); setInsNum('');
     }
@@ -1756,21 +1764,21 @@ function FormulaBuilderDialog({
   }, [open]);
 
   const labelFor = useCallback((ref: string) => rows.find((r) => r.id === ref)?.name || ref, [rows]);
-  const preview = formulaToText(tokens, labelFor);
+  const preview = formulaToText(fxTokens, labelFor);
   // Structural validity probe — resolve every ref to 1 so only the *shape* is checked.
-  const check = evalFormula(tokens, () => 1);
+  const check = evalFormula(fxTokens, () => 1);
 
-  const push = (t: PlanFormulaToken) => setTokens((p) => [...p, t]);
-  const undo = () => setTokens((p) => p.slice(0, -1));
-  const clear = () => setTokens([]);
+  const push = (t: PlanFormulaToken) => setFxTokens((p) => [...p, t]);
+  const undo = () => setFxTokens((p) => p.slice(0, -1));
+  const clear = () => setFxTokens([]);
 
   const generatePreset = () => {
-    if (preset === 'sum' && presetRows.length) setTokens(qfSum(presetRows));
-    else if (preset === 'avg' && presetRows.length) setTokens(qfAverage(presetRows));
-    else if (preset === 'diff' && presetA && presetB) setTokens(qfDifference(presetA, presetB));
-    else if (preset === 'ratio' && presetA && presetB) setTokens(qfRatioPct(presetA, presetB));
-    else if (preset === 'growthPrev' && presetA) setTokens(qfGrowthPct(presetA, -1));
-    else if (preset === 'growthYoY' && presetA) setTokens(qfGrowthPct(presetA, -4));
+    if (preset === 'sum' && presetRows.length) setFxTokens(qfSum(presetRows));
+    else if (preset === 'avg' && presetRows.length) setFxTokens(qfAverage(presetRows));
+    else if (preset === 'diff' && presetA && presetB) setFxTokens(qfDifference(presetA, presetB));
+    else if (preset === 'ratio' && presetA && presetB) setFxTokens(qfRatioPct(presetA, presetB));
+    else if (preset === 'growthPrev' && presetA) setFxTokens(qfGrowthPct(presetA, -1));
+    else if (preset === 'growthYoY' && presetA) setFxTokens(qfGrowthPct(presetA, -4));
   };
 
   const presetNeedsMulti = preset === 'sum' || preset === 'avg';
@@ -1872,8 +1880,8 @@ function FormulaBuilderDialog({
                   </Field>
                   <Button icon={<Add16Regular />} onClick={() => { const v = Number(insNum); if (Number.isFinite(v)) { push({ k: 'num', value: v }); setInsNum(''); } }} disabled={insNum === ''}>Add number</Button>
                   <div style={{ flex: 1 }} />
-                  <Button appearance="subtle" icon={<ArrowUndo16Regular />} onClick={undo} disabled={tokens.length === 0}>Undo</Button>
-                  <Button appearance="subtle" onClick={clear} disabled={tokens.length === 0}>Clear</Button>
+                  <Button appearance="subtle" icon={<ArrowUndo16Regular />} onClick={undo} disabled={fxTokens.length === 0}>Undo</Button>
+                  <Button appearance="subtle" onClick={clear} disabled={fxTokens.length === 0}>Clear</Button>
                 </div>
                 <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
                   {(['+', '-', '*', '/'] as PlanFormulaOp[]).map((op) => (
@@ -1894,14 +1902,14 @@ function FormulaBuilderDialog({
               <Field label="Preview">
                 <div className={s.planFormulaPreview} aria-live="polite">{preview}</div>
               </Field>
-              {tokens.length > 0 && !check.ok && (
+              {fxTokens.length > 0 && !check.ok && (
                 <MessageBar intent="warning"><MessageBarBody>{check.error || 'Formula is incomplete.'}</MessageBarBody></MessageBar>
               )}
             </div>
           </DialogContent>
           <DialogActions>
             <Button onClick={onClose}>Cancel</Button>
-            <Button appearance="primary" disabled={tokens.length === 0 || !check.ok} onClick={() => { onApply(tokens); onClose(); }}>
+            <Button appearance="primary" disabled={fxTokens.length === 0 || !check.ok} onClick={() => { onApply(fxTokens); onClose(); }}>
               Apply formula
             </Button>
           </DialogActions>
@@ -2358,12 +2366,267 @@ function PlanCopilotPane({ id, sheetName, scenarioName }: { id: string; sheetNam
   );
 }
 
+// ----- Versions — immutable plan snapshots (take / diff / restore) ------------
+// Pure helpers live in _plan-model.ts (takeSnapshot / diffSnapshots /
+// restoreSnapshot — vitest-covered); this panel drives them and persists the
+// returned state via the existing item PATCH (Cosmos). No Microsoft Fabric.
+const fmtCell = (v: number | null) =>
+  v === null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 4 });
+
+function PlanVersionsPanel({
+  state, setState, save, saving,
+}: {
+  state: PlanState;
+  setState: (updater: (prev: PlanState) => PlanState) => void;
+  save: (next?: PlanState) => Promise<boolean>;
+  saving: boolean;
+}) {
+  const s = useStyles();
+  const snapshots = arr<PlanSnapshot>(state.snapshots);
+  const newestFirst = useMemo(() => [...snapshots].reverse(), [snapshots]);
+
+  const [label, setLabel] = useState('');
+  const [author, setAuthor] = useState<string | undefined>(undefined);
+  const [busy, setBusy] = useState<string | null>(null); // 'take' | snapshot id being restored
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [diffFor, setDiffFor] = useState<PlanSnapshot | null>(null);
+
+  // Best-effort author stamp from the signed-in session (same /api/me the shell uses).
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/me')
+      .then((r) => r.json())
+      .then((d: { user?: { name?: string; upn?: string } | null }) => {
+        if (alive && (d?.user?.name || d?.user?.upn)) setAuthor(d.user!.name || d.user!.upn);
+      })
+      .catch(() => { /* author stays undefined — snapshot still works */ });
+    return () => { alive = false; };
+  }, []);
+
+  const take = useCallback(async () => {
+    setBusy('take'); setMsg(null);
+    try {
+      const next = takeSnapshot(state, label, author);
+      const snap = next.snapshots![next.snapshots!.length - 1];
+      setState(() => next);
+      const ok = await save(next);
+      setMsg(ok
+        ? { intent: 'success', text: `Snapshot “${snap.label}” saved.` }
+        : { intent: 'error', text: 'Snapshot captured but the save failed — retry Save to persist it.' });
+      if (ok) setLabel('');
+    } finally { setBusy(null); }
+  }, [state, label, author, setState, save]);
+
+  const restore = useCallback(async (snap: PlanSnapshot) => {
+    if (typeof window !== 'undefined' &&
+        !window.confirm(`Restore “${snap.label}” (${new Date(snap.takenAt).toLocaleString()})?\n\nThe current plan is snapshotted first, so this is reversible.`)) return;
+    setBusy(snap.id); setMsg(null);
+    try {
+      const next = restoreSnapshot(state, snap.id, author);
+      if (next === state) { setMsg({ intent: 'warning', text: 'Snapshot not found — refresh and try again.' }); return; }
+      setState(() => next);
+      const ok = await save(next);
+      setMsg(ok
+        ? { intent: 'success', text: `Restored “${snap.label}”. The pre-restore state was snapshotted as “Before restore of "${snap.label}"”.` }
+        : { intent: 'error', text: 'Restore applied locally but the save failed — retry Save to persist it.' });
+    } finally { setBusy(null); }
+  }, [state, author, setState, save]);
+
+  // Diff a snapshot against the CURRENT plan (ephemeral capture — not persisted).
+  const diff: PlanSnapshotDiff | null = useMemo(
+    () => (diffFor ? diffSnapshots(diffFor, captureSnapshot(state, 'Current plan')) : null),
+    [diffFor, state],
+  );
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, marginTop: tokens.spacingVerticalM }}>
+      <div className={s.daSection}>
+        <div className={s.daSectionHead}>
+          <span className={s.daSectionIcon}><History20Regular /></span>
+          <Subtitle2>Versions</Subtitle2>
+          <Badge appearance="tint" color="brand">{snapshots.length}/{MAX_PLAN_SNAPSHOTS}</Badge>
+        </div>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Take an immutable snapshot of the plan&rsquo;s cells, line items, and scenarios. Snapshots persist with
+          the plan (Cosmos) and can be diffed against the current plan or restored — restoring auto-snapshots the
+          current state first, so it&rsquo;s always reversible.
+        </Caption1>
+
+        {/* Take snapshot */}
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <Field label="Snapshot label" style={{ flex: '1 1 280px', minWidth: 240 }}>
+            <Input
+              value={label}
+              placeholder="e.g. Board submission FY26"
+              maxLength={120}
+              contentBefore={<Camera20Regular />}
+              onChange={(_, d) => setLabel(d.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && busy === null) void take(); }}
+            />
+          </Field>
+          <Button
+            appearance="primary"
+            icon={busy === 'take' ? <Spinner size="tiny" /> : <Camera20Regular />}
+            onClick={() => void take()}
+            disabled={busy !== null || saving}
+          >
+            {busy === 'take' ? 'Snapshotting…' : 'Take snapshot'}
+          </Button>
+        </div>
+        {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+      </div>
+
+      {/* Snapshot list (newest first) */}
+      {newestFirst.length === 0 ? (
+        <EmptyState
+          icon={<History20Regular />}
+          title="No versions yet"
+          body="Take a snapshot to freeze the plan's current cells, rows, and scenarios as an immutable, restorable version."
+          primaryAction={{ label: 'Take snapshot', onClick: () => void take() }}
+        />
+      ) : (
+        newestFirst.map((snap) => {
+          const cellCount = (snap.sheets || []).reduce((acc, sh) => acc + Object.keys(sh.cells || {}).length, 0);
+          const rowCount = (snap.sheets || []).reduce((acc, sh) => acc + (sh.lineItems || []).length, 0);
+          return (
+            <div key={snap.id} className={s.daSrcCard}>
+              <div className={s.daSrcHead}>
+                <span className={s.daSrcIcon}><History20Regular /></span>
+                <strong>{snap.label}</strong>
+                <Badge appearance="tint" color="brand">{(snap.sheets || []).length} sheet{(snap.sheets || []).length === 1 ? '' : 's'}</Badge>
+                <Badge appearance="outline">{rowCount} row{rowCount === 1 ? '' : 's'}</Badge>
+                <Badge appearance="outline">{cellCount} cell{cellCount === 1 ? '' : 's'}</Badge>
+                <Badge appearance="outline">{(snap.scenarios || []).length} scenario{(snap.scenarios || []).length === 1 ? '' : 's'}</Badge>
+                <div style={{ flex: 1 }} />
+                <Button size="small" appearance="outline" icon={<BranchFork20Regular />} onClick={() => setDiffFor(snap)}>
+                  Diff vs current
+                </Button>
+                <Button
+                  size="small"
+                  appearance="outline"
+                  icon={busy === snap.id ? <Spinner size="tiny" /> : <ArrowUndo16Regular />}
+                  onClick={() => void restore(snap)}
+                  disabled={busy !== null || saving}
+                >
+                  {busy === snap.id ? 'Restoring…' : 'Restore'}
+                </Button>
+              </div>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                {new Date(snap.takenAt).toLocaleString()}{snap.author ? ` · by ${snap.author}` : ''}
+              </Caption1>
+            </div>
+          );
+        })
+      )}
+
+      {/* Diff dialog — changed cells + structural changes vs the current plan. */}
+      <Dialog open={!!diffFor} onOpenChange={(_, d) => { if (!d.open) setDiffFor(null); }}>
+        <DialogSurface style={{ maxWidth: 860 }}>
+          <DialogBody>
+            <DialogTitle>
+              Diff: “{diffFor?.label}” → current plan
+            </DialogTitle>
+            <DialogContent>
+              {diff && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    {diffFor && `Snapshot taken ${new Date(diffFor.takenAt).toLocaleString()}${diffFor.author ? ` by ${diffFor.author}` : ''}.`}
+                  </Caption1>
+                  {diff.identical ? (
+                    <MessageBar intent="success"><MessageBarBody>No differences — the current plan matches this snapshot exactly.</MessageBarBody></MessageBar>
+                  ) : (
+                    <>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                        <Badge appearance="filled" color="brand">{diff.cells.length} changed cell{diff.cells.length === 1 ? '' : 's'}</Badge>
+                        {diff.rows.filter((r) => r.change === 'added').length > 0 && (
+                          <Badge appearance="filled" color="success">+{diff.rows.filter((r) => r.change === 'added').length} row{diff.rows.filter((r) => r.change === 'added').length === 1 ? '' : 's'}</Badge>
+                        )}
+                        {diff.rows.filter((r) => r.change === 'removed').length > 0 && (
+                          <Badge appearance="filled" color="danger">−{diff.rows.filter((r) => r.change === 'removed').length} row{diff.rows.filter((r) => r.change === 'removed').length === 1 ? '' : 's'}</Badge>
+                        )}
+                        {diff.rows.filter((r) => r.change === 'renamed').length > 0 && (
+                          <Badge appearance="filled" color="warning">{diff.rows.filter((r) => r.change === 'renamed').length} renamed</Badge>
+                        )}
+                        {diff.scenariosAdded.map((n) => <Badge key={`sa-${n}`} appearance="tint" color="success">+ scenario {n}</Badge>)}
+                        {diff.scenariosRemoved.map((n) => <Badge key={`sr-${n}`} appearance="tint" color="danger">− scenario {n}</Badge>)}
+                        {diff.sheetsAdded.map((n) => <Badge key={`ha-${n}`} appearance="tint" color="success">+ sheet {n}</Badge>)}
+                        {diff.sheetsRemoved.map((n) => <Badge key={`hr-${n}`} appearance="tint" color="danger">− sheet {n}</Badge>)}
+                      </div>
+                      {diff.rows.length > 0 && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+                          {diff.rows.map((r, i) => (
+                            <Caption1 key={i} style={{ color: tokens.colorNeutralForeground2 }}>
+                              {r.change === 'added' && <>Row <strong>{r.name}</strong> added ({r.sheetName}).</>}
+                              {r.change === 'removed' && <>Row <strong>{r.name}</strong> removed ({r.sheetName}).</>}
+                              {r.change === 'renamed' && <>Row renamed <strong>{r.before}</strong> → <strong>{r.after}</strong> ({r.sheetName}).</>}
+                            </Caption1>
+                          ))}
+                        </div>
+                      )}
+                      {diff.cells.length > 0 && (
+                        <div style={{ maxHeight: 380, overflowY: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
+                          <Table aria-label="Changed cells" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Row</TableHeaderCell>
+                              <TableHeaderCell>Period</TableHeaderCell>
+                              <TableHeaderCell>Scenario</TableHeaderCell>
+                              <TableHeaderCell>Snapshot</TableHeaderCell>
+                              <TableHeaderCell>Current</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {diff.cells.slice(0, 200).map((c, i) => (
+                                <TableRow key={i}>
+                                  <TableCell>{c.lineItemName}</TableCell>
+                                  <TableCell>{c.periodLabel}</TableCell>
+                                  <TableCell>{c.scenarioName}</TableCell>
+                                  <TableCell><span style={{ color: tokens.colorNeutralForeground3 }}>{fmtCell(c.before)}</span></TableCell>
+                                  <TableCell>
+                                    <strong style={{ color: (c.after ?? 0) >= (c.before ?? 0) ? tokens.colorPaletteGreenForeground1 : tokens.colorPaletteRedForeground1 }}>
+                                      {fmtCell(c.after)}
+                                    </strong>
+                                  </TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                          {diff.cells.length > 200 && (
+                            <Caption1 style={{ display: 'block', padding: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
+                              Showing the first 200 of {diff.cells.length} changed cells.
+                            </Caption1>
+                          )}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+            </DialogContent>
+            <DialogActions>
+              {diffFor && !diff?.identical && (
+                <Button
+                  appearance="primary"
+                  icon={<ArrowUndo16Regular />}
+                  disabled={busy !== null || saving}
+                  onClick={() => { const target = diffFor; setDiffFor(null); if (target) void restore(target); }}
+                >
+                  Restore this version
+                </Button>
+              )}
+              <Button appearance="secondary" onClick={() => setDiffFor(null)}>Close</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+    </div>
+  );
+}
+
 export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<PlanState>('plan', id, {
     tasks: [{ title: 'Define semantic model', owner: '', due: '', status: 'todo' }],
   });
-  const [tab, setTab] = useState<'planning' | 'model' | 'tasks' | 'powertable' | 'intelligence' | 'infobridge'>('planning');
+  const [tab, setTab] = useState<'planning' | 'model' | 'tasks' | 'powertable' | 'intelligence' | 'infobridge' | 'versions'>('planning');
 
   // ----- Project-tasks helpers (audit-T13 surface, preserved) -----
   const update = (idx: number, patch: Partial<PlanTask>) => {
@@ -2424,6 +2687,7 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
           <Tab value="powertable" icon={<Table20Regular />}>PowerTable</Tab>
           <Tab value="intelligence" icon={<ChartMultiple20Regular />}>Intelligence</Tab>
           <Tab value="infobridge" icon={<Link20Regular />}>InfoBridge</Tab>
+          <Tab value="versions" icon={<History20Regular />}>Versions</Tab>
         </TabList>
 
         {tab === 'planning' && (
@@ -2501,6 +2765,9 @@ export function PlanEditor({ item, id }: { item: FabricItemType; id: string }) {
         )}
         {tab === 'infobridge' && (
           <PlanInfoBridgePanel id={id} state={state} setState={setState} save={save} saving={saving} />
+        )}
+        {tab === 'versions' && (
+          <PlanVersionsPanel state={state} setState={setState} save={save} saving={saving} />
         )}
 
         <SaveBar saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />

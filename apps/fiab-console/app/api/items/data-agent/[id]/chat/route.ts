@@ -37,6 +37,10 @@ function stateToConfig(state: Record<string, unknown>): DataAgentConfig {
       description: s.description ? String(s.description) : undefined,
       instructions: s.instructions ? String(s.instructions) : undefined,
       examples: Array.isArray(s.examples) ? s.examples : undefined,
+      // Typed per-source config (AI Search retrieval options / Graph scope) —
+      // honored by the grounding executor.
+      aiSearch: s.aiSearch && typeof s.aiSearch === 'object' ? s.aiSearch : undefined,
+      graph: s.graph && typeof s.graph === 'object' ? s.graph : undefined,
     })),
   };
 }

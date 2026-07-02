@@ -20,6 +20,9 @@ import {
   qfSum, qfAverage, qfDifference, qfRatioPct, qfGrowthPct,
   // Spreading / breakback / driver topological recompute under test
   spread, breakback, driverRows, topoOrderLineItems, recomputeRowTotals,
+  // Versions / snapshots under test
+  captureSnapshot, takeSnapshot, diffSnapshots, restoreSnapshot, MAX_PLAN_SNAPSHOTS,
+  type PlanVersionedState,
   type PlanLineItem, type PlanMember, type PlanModel, type PlanFormulaToken,
 } from '../_plan-model';
 
@@ -451,5 +454,157 @@ describe('_plan-model drivers + topological recompute', () => {
     const totals = recomputeRowTotals(driverSheet(), 'baseline');
     expect(totals.hc).toBe(20); // 5 × 4 periods
     expect(totals.sal).toBe(2000); // 500 × 4 periods
+  });
+});
+
+// ===================================================================
+// Versions / snapshots — takeSnapshot / diffSnapshots / restoreSnapshot.
+// ===================================================================
+
+describe('_plan-model takeSnapshot', () => {
+  function versionedState(): PlanVersionedState {
+    return { sheets: [seeded()], scenarios: defaultScenarios(), snapshots: [] };
+  }
+
+  it('appends an immutable snapshot with label, timestamp, and author', () => {
+    const state = versionedState();
+    const next = takeSnapshot(state, 'Board submission', 'ada@contoso.com');
+    expect(next).not.toBe(state); // new object, input untouched
+    expect(state.snapshots).toEqual([]);
+    expect(next.snapshots).toHaveLength(1);
+    const snap = next.snapshots![0];
+    expect(snap.label).toBe('Board submission');
+    expect(snap.author).toBe('ada@contoso.com');
+    expect(new Date(snap.takenAt).getTime()).not.toBeNaN();
+    expect(snap.sheets[0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(100);
+    expect(snap.scenarios.map((s) => s.id)).toEqual(['baseline', 'optimistic', 'pessimistic']);
+  });
+
+  it('deep-copies: mutating live state after capture never leaks into the snapshot', () => {
+    const state = versionedState();
+    const next = takeSnapshot(state, 'v1');
+    // Mutate the LIVE sheet the state still references.
+    next.sheets![0].cells[cellKey('revenue', 'q1', 'baseline')] = 999;
+    next.sheets![0].lineItems.push({ id: 'later', name: 'Later row', kind: 'input' });
+    const snap = next.snapshots![0];
+    expect(snap.sheets[0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(100);
+    expect(snap.sheets[0].lineItems.find((li) => li.id === 'later')).toBeUndefined();
+  });
+
+  it('defaults a blank label and falls back to default sheets/scenarios on an empty plan', () => {
+    const next = takeSnapshot({} as PlanVersionedState, '   ');
+    const snap = next.snapshots![0];
+    expect(snap.label).toMatch(/^Snapshot /);
+    expect(snap.author).toBeUndefined();
+    expect(snap.sheets).toHaveLength(1); // defaultPlanningSheet()
+    expect(snap.scenarios).toHaveLength(3); // defaultScenarios()
+  });
+
+  it('caps retention at MAX_PLAN_SNAPSHOTS dropping the oldest first', () => {
+    let state: PlanVersionedState = versionedState();
+    for (let i = 0; i < MAX_PLAN_SNAPSHOTS + 3; i++) state = takeSnapshot(state, `v${i}`);
+    expect(state.snapshots).toHaveLength(MAX_PLAN_SNAPSHOTS);
+    expect(state.snapshots![0].label).toBe('v3'); // v0..v2 dropped
+    expect(state.snapshots![MAX_PLAN_SNAPSHOTS - 1].label).toBe(`v${MAX_PLAN_SNAPSHOTS + 2}`);
+  });
+});
+
+describe('_plan-model diffSnapshots', () => {
+  it('reports changed cells with before/after and resolved labels', () => {
+    const a = captureSnapshot({ sheets: [seeded()], scenarios: defaultScenarios() }, 'A');
+    const edited = seeded();
+    edited.cells[cellKey('revenue', 'q1', 'baseline')] = 150; // changed
+    delete edited.cells[cellKey('cogs', 'q4', 'baseline')];   // removed
+    edited.cells[cellKey('opex', 'q2', 'baseline')] = 25;     // added
+    const b = captureSnapshot({ sheets: [edited], scenarios: defaultScenarios() }, 'B');
+
+    const diff = diffSnapshots(a, b);
+    expect(diff.identical).toBe(false);
+    expect(diff.cells).toHaveLength(3);
+    const changed = diff.cells.find((c) => c.lineItemId === 'revenue' && c.periodId === 'q1')!;
+    expect(changed).toMatchObject({ before: 100, after: 150, lineItemName: 'Revenue', periodLabel: 'Q1', scenarioName: 'Baseline' });
+    expect(diff.cells.find((c) => c.lineItemId === 'cogs' && c.periodId === 'q4')).toMatchObject({ before: 40, after: null });
+    expect(diff.cells.find((c) => c.lineItemId === 'opex' && c.periodId === 'q2')).toMatchObject({ before: null, after: 25 });
+  });
+
+  it('reports row add/remove/rename and scenario membership changes', () => {
+    const a = captureSnapshot({ sheets: [seeded()], scenarios: defaultScenarios() }, 'A');
+    const edited = seeded();
+    edited.lineItems = edited.lineItems.filter((li) => li.id !== 'opex'); // removed row
+    edited.lineItems.push({ id: 'marketing', name: 'Marketing', kind: 'input' }); // added row
+    edited.lineItems = edited.lineItems.map((li) => (li.id === 'cogs' ? { ...li, name: 'COGS (renamed)' } : li));
+    const b = captureSnapshot(
+      { sheets: [edited], scenarios: [...defaultScenarios(), { id: 'stretch', name: 'Stretch', kind: 'custom' as const }] },
+      'B',
+    );
+
+    const diff = diffSnapshots(a, b);
+    expect(diff.rows.find((r) => r.change === 'removed')?.lineItemId).toBe('opex');
+    expect(diff.rows.find((r) => r.change === 'added')?.lineItemId).toBe('marketing');
+    expect(diff.rows.find((r) => r.change === 'renamed')).toMatchObject({ before: 'Cost of goods', after: 'COGS (renamed)' });
+    expect(diff.scenariosAdded).toEqual(['Stretch']);
+    expect(diff.scenariosRemoved).toEqual([]);
+  });
+
+  it('flags identical snapshots and whole-sheet add/remove', () => {
+    const state = { sheets: [seeded()], scenarios: defaultScenarios() };
+    expect(diffSnapshots(captureSnapshot(state, 'A'), captureSnapshot(state, 'B')).identical).toBe(true);
+
+    const second = defaultPlanningSheet();
+    second.id = 'sheet2';
+    second.name = 'FY27 budget';
+    const grown = captureSnapshot({ sheets: [seeded(), second], scenarios: defaultScenarios() }, 'B');
+    const diff = diffSnapshots(captureSnapshot(state, 'A'), grown);
+    expect(diff.sheetsAdded).toEqual(['FY27 budget']);
+    expect(diff.identical).toBe(false);
+  });
+});
+
+describe('_plan-model restoreSnapshot', () => {
+  it('restores sheets + scenarios from the snapshot after auto-snapshotting the current state', () => {
+    let state: PlanVersionedState = { sheets: [seeded()], scenarios: defaultScenarios(), snapshots: [] };
+    state = takeSnapshot(state, 'v1', 'ada');
+    const v1 = state.snapshots![0];
+
+    // Edit the live plan after v1.
+    const edited = JSON.parse(JSON.stringify(state.sheets![0]));
+    edited.cells[cellKey('revenue', 'q1', 'baseline')] = 777;
+    state = { ...state, sheets: [edited] };
+
+    const restored = restoreSnapshot(state, v1.id, 'ada');
+    // Restored cell value is back to the v1 value.
+    expect(restored.sheets![0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(100);
+    // The pre-restore state was auto-snapshotted first (reversible restore).
+    expect(restored.snapshots).toHaveLength(2);
+    const backup = restored.snapshots![1];
+    expect(backup.label).toBe('Before restore of "v1"');
+    expect(backup.sheets[0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(777);
+    // Input state untouched (pure).
+    expect(state.snapshots).toHaveLength(1);
+  });
+
+  it('restore is deep: editing the restored sheet cannot corrupt the snapshot', () => {
+    let state: PlanVersionedState = { sheets: [seeded()], scenarios: defaultScenarios() };
+    state = takeSnapshot(state, 'v1');
+    const restored = restoreSnapshot(state, state.snapshots![0].id);
+    restored.sheets![0].cells[cellKey('revenue', 'q1', 'baseline')] = -1;
+    expect(restored.snapshots![0].sheets[0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(100);
+  });
+
+  it('re-points active sheet/scenario ids that no longer exist and ignores unknown snapshot ids', () => {
+    let state: PlanVersionedState = { sheets: [seeded()], scenarios: defaultScenarios(), activeSheetId: 'sheet1', activeScenarioId: 'baseline' };
+    state = takeSnapshot(state, 'v1');
+    const v1 = state.snapshots![0];
+
+    // Live plan replaced the sheet + scenarios entirely since v1.
+    const other = defaultPlanningSheet();
+    other.id = 'sheetX';
+    state = { ...state, sheets: [other], scenarios: [{ id: 'custom1', name: 'Custom', kind: 'custom' }], activeSheetId: 'sheetX', activeScenarioId: 'custom1' };
+
+    const restored = restoreSnapshot(state, v1.id);
+    expect(restored.activeSheetId).toBe('sheet1');       // sheetX gone → first restored sheet
+    expect(restored.activeScenarioId).toBe('baseline');  // custom1 gone → first restored scenario
+
+    expect(restoreSnapshot(state, 'nope')).toBe(state);  // unknown id → unchanged reference
   });
 });

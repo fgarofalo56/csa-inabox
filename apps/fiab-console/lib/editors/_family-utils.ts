@@ -593,7 +593,44 @@ export type DaSourceType =
   | 'semantic-model'
   | 'ai-search'
   | 'ontology'
-  | 'graph';
+  | 'graph'
+  | 'microsoft-graph';
+
+/** AI Search retrieval mode for a data-agent `ai-search` source. */
+export type DaAiSearchQueryKind = 'keyword' | 'semantic' | 'vector' | 'hybrid';
+
+/**
+ * Typed retrieval options for an `ai-search` source — persisted on the source
+ * and honored 1:1 by the grounding executor (lib/azure/data-agent-execute.ts):
+ * keyword → simple full-text; semantic → semantic ranking (needs a semantic
+ * configuration on the index); vector → integrated-vectorization text query
+ * over the index's vector fields; hybrid → full-text + vector fused (RRF).
+ */
+export interface DaAiSearchConfig {
+  queryKind?: DaAiSearchQueryKind;
+  /** Top-N documents retrieved per query (1–50; executor default 25). */
+  top?: number;
+  /** When true the grounding rows are numbered [1]…[n] and the agent is told to cite them. */
+  citations?: boolean;
+}
+
+/** Which slice of Microsoft 365 a `microsoft-graph` source grounds on. */
+export type DaGraphScopeKind = 'site' | 'drive' | 'mail';
+
+/**
+ * Typed Microsoft Graph grounding scope for a `microsoft-graph` source.
+ * site → SharePoint site (default document library search), drive → a specific
+ * OneDrive/SharePoint drive, mail → an Exchange Online mailbox ($search).
+ */
+export interface DaGraphScope {
+  kind: DaGraphScopeKind;
+  /** SharePoint site id (`contoso.sharepoint.com,guid,guid`) or the full site URL. */
+  site?: string;
+  /** Graph drive id (from the drive's Graph metadata / the shortcut wizard). */
+  driveId?: string;
+  /** Mailbox UPN, e.g. finance-team@contoso.com. */
+  mailbox?: string;
+}
 
 export interface DaSource {
   id: string;
@@ -606,6 +643,10 @@ export interface DaSource {
   /** Per-source description the agent uses to ROUTE a question to this source (Fabric "Data source description"). */
   description?: string;
   examples?: { question: string; query: string }[];
+  /** AI Search retrieval options (type === 'ai-search' only). */
+  aiSearch?: DaAiSearchConfig;
+  /** Microsoft Graph grounding scope (type === 'microsoft-graph' only). */
+  graph?: DaGraphScope;
 }
 
 const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
@@ -617,6 +658,7 @@ const DA_SOURCE_TYPE_VALUES: DaSourceType[] = [
   'ai-search',
   'ontology',
   'graph',
+  'microsoft-graph',
 ];
 
 /**
@@ -640,6 +682,7 @@ export function guessDaSourceType(name: string): DaSourceType {
   if (/kql|kusto|eventhouse|adx/.test(n)) return 'kql';
   if (/ai\s*search|search\s*index|\bindex\b|vector/.test(n)) return 'ai-search';
   if (/ontolog/.test(n)) return 'ontology';
+  if (/sharepoint|onedrive|outlook|mailbox|\bm365\b|microsoft\s*365|microsoft\s*graph/.test(n)) return 'microsoft-graph';
   if (/\bgraph\b|gql|cypher|node|edge/.test(n)) return 'graph';
   if (/warehouse|\bdw\b|\bwh\b|synapse/.test(n)) return 'warehouse';
   return 'warehouse';
@@ -671,6 +714,9 @@ export function normalizeDaSources(raw: unknown): DaSource[] {
           instructions: typeof x.instructions === 'string' ? x.instructions : DA_INSTRUCTION_TEMPLATE,
           description: typeof x.description === 'string' ? x.description : '',
           examples: Array.isArray(x.examples) && daSupportsExampleQueries(type) ? x.examples : [],
+          // Typed per-source config objects survive normalization untouched.
+          ...(x.aiSearch && typeof x.aiSearch === 'object' && !Array.isArray(x.aiSearch) ? { aiSearch: x.aiSearch } : {}),
+          ...(x.graph && typeof x.graph === 'object' && !Array.isArray(x.graph) ? { graph: x.graph } : {}),
         };
       });
   }

@@ -16,7 +16,7 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   Tree, TreeItem, TreeItemLayout, Checkbox,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
-  Field, Dropdown, Option, Switch,
+  Field, Dropdown, Option, Switch, SpinButton,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem, MenuDivider,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -85,6 +85,10 @@ import {
   type DaSourceType,
   type OntologyEntityBinding,
   type DaSource,
+  type DaAiSearchConfig,
+  type DaAiSearchQueryKind,
+  type DaGraphScope,
+  type DaGraphScopeKind,
 } from '../_family-utils';
 import {
   cellKey, getCell, rowTotal, periodTotal, grandTotal,
@@ -156,6 +160,9 @@ const DA_SOURCE_TYPES: { value: DaSourceType; label: string; itemType: string }[
   { value: 'ai-search', label: 'AI Search', itemType: 'ai-search-index' },
   { value: 'ontology', label: 'Ontology', itemType: 'ontology' },
   { value: 'graph', label: 'Graph model', itemType: 'graph-model' },
+  // Not a Loom item — grounds on Microsoft Graph directly (site/drive/mail
+  // scope picked on the source card). itemType '' skips the item picker.
+  { value: 'microsoft-graph', label: 'Microsoft 365 (Graph)', itemType: '' },
 ];
 // Schema-selection for graph/ontology (queried whole) + semantic-model (Power
 // BI "Prep for AI") is a caption; every other type gets the real Tree picker
@@ -196,6 +203,8 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const [pickerLoading, setPickerLoading] = useState(false);
   const loadAvailable = useCallback(async (t: DaSourceType) => {
     const cfg = DA_SOURCE_TYPES.find((x) => x.value === t)!;
+    // microsoft-graph isn't a Loom item type — nothing to fetch for the picker.
+    if (!cfg.itemType) { setAvailable((prev) => ({ ...prev, [t]: [] })); return; }
     setPickerLoading(true);
     try {
       const r = await fetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}`);
@@ -209,7 +218,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
 
   const [pickSel, setPickSel] = useState('');
   const addSource = () => {
-    if (!pickSel || arr<DaSource>(state.sources).length >= 5) return;
+    if (arr<DaSource>(state.sources).length >= 5) return;
+    // Microsoft 365 (Graph) has no backing Loom item — add directly; the scope
+    // (site / drive / mailbox) is configured on the source card below.
+    if (pickerType === 'microsoft-graph') {
+      setState((p) => ({
+        ...p,
+        sources: [...arr<DaSource>(p.sources), {
+          id: `microsoft-graph:m365:${Date.now()}`,
+          type: 'microsoft-graph' as DaSourceType,
+          name: 'Microsoft 365',
+          tables: '', description: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [],
+          graph: { kind: 'site' } as DaGraphScope,
+        }],
+      }));
+      return;
+    }
+    if (!pickSel) return;
     const opts = available[pickerType] || [];
     const chosen = opts.find((o) => o.id === pickSel);
     setState((p) => ({
@@ -219,6 +244,8 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
         type: pickerType,
         name: chosen?.name || pickSel,
         tables: '', description: '', instructions: DA_INSTRUCTION_TEMPLATE, examples: [],
+        // AI Search sources start with the executor defaults made explicit.
+        ...(pickerType === 'ai-search' ? { aiSearch: { queryKind: 'keyword', top: 25, citations: false } as DaAiSearchConfig } : {}),
       }],
     }));
     setPickSel('');
@@ -599,14 +626,23 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       {DA_SOURCE_TYPES.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="Item" style={{ minWidth: 220 }}>
-                    <Dropdown value={(available[pickerType] || []).find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
-                      placeholder={pickerLoading ? 'Loading…' : ((available[pickerType] || []).length ? 'Select…' : 'None found')}
-                      onOptionSelect={(_, d) => d.optionValue && setPickSel(d.optionValue)}>
-                      {(available[pickerType] || []).map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
-                    </Dropdown>
-                  </Field>
-                  <Button appearance="primary" icon={<Add20Regular />} onClick={addSource} disabled={!pickSel || sources.length >= 5}>Add source</Button>
+                  {pickerType === 'microsoft-graph' ? (
+                    <Field label="Scope" style={{ minWidth: 220 }}>
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                        SharePoint site / OneDrive drive / mailbox — configured on the source card after adding.
+                      </Caption1>
+                    </Field>
+                  ) : (
+                    <Field label="Item" style={{ minWidth: 220 }}>
+                      <Dropdown value={(available[pickerType] || []).find((o) => o.id === pickSel)?.name || ''} selectedOptions={pickSel ? [pickSel] : []}
+                        placeholder={pickerLoading ? 'Loading…' : ((available[pickerType] || []).length ? 'Select…' : 'None found')}
+                        onOptionSelect={(_, d) => d.optionValue && setPickSel(d.optionValue)}>
+                        {(available[pickerType] || []).map((o) => <Option key={o.id} value={o.id}>{o.name}</Option>)}
+                      </Dropdown>
+                    </Field>
+                  )}
+                  <Button appearance="primary" icon={<Add20Regular />} onClick={addSource}
+                    disabled={(pickerType !== 'microsoft-graph' && !pickSel) || sources.length >= 5}>Add source</Button>
                 </div>
 
                 {sources.map((src) => (
@@ -621,7 +657,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     <Field label="Description" hint="Helps the agent route questions to this source.">
                       <Input value={src.description || ''} onChange={(_, d) => updateSource(src.id, { description: d.value })} placeholder="Finance facts: revenue, margin, bookings by region & quarter." />
                     </Field>
-                    {src.type === 'ontology' || src.type === 'graph' ? (
+                    {src.type === 'microsoft-graph' ? (
+                      <GraphScopeConfig scope={src.graph} onChange={(graph) => updateSource(src.id, { graph })} />
+                    ) : src.type === 'ontology' || src.type === 'graph' ? (
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                         {src.type === 'graph' ? 'Graphs are queried whole — no node/edge scoping.' : 'Ontologies are queried whole — no subset scoping.'}
                       </Caption1>
@@ -631,6 +669,9 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       </Caption1>
                     ) : (
                       <SourceSchemaTree id={id} src={src} onChange={(tables) => updateSource(src.id, { tables })} />
+                    )}
+                    {src.type === 'ai-search' && (
+                      <AiSearchRetrievalConfig cfg={src.aiSearch} onChange={(aiSearch) => updateSource(src.id, { aiSearch })} />
                     )}
                     <Field label="Source instructions">
                       <Textarea value={src.instructions || ''} rows={4} onChange={(_, d) => updateSource(src.id, { instructions: d.value })} />
@@ -1293,6 +1334,134 @@ function SourceSchemaTree({ id, src, onChange }: { id: string; src: DaSource; on
         )}
       </div>
     </Field>
+  );
+}
+
+// ----- AI Search retrieval options (typed — honored 1:1 by the executor) -------
+// Persisted on the source as `aiSearch` (DaAiSearchConfig) and read by
+// lib/azure/data-agent-execute.ts: keyword → simple full-text; semantic →
+// queryType:'semantic' + the index's semantic configuration (+ extractive
+// captions/answers); vector → integrated-vectorization text query over the
+// index's vector fields (pure vector — no full-text term); hybrid → both,
+// fused with RRF. A mode the index can't serve returns an honest gate naming
+// the missing index feature — never a silent fallback.
+const AI_SEARCH_QUERY_KINDS: { value: DaAiSearchQueryKind; label: string; hint: string }[] = [
+  { value: 'keyword', label: 'Keyword (full-text)', hint: 'Simple full-text query — works on every index.' },
+  { value: 'semantic', label: 'Semantic ranking', hint: 'L2 semantic reranker + extractive captions/answers. The index needs a semantic configuration (Semantic ranking tab in the index editor).' },
+  { value: 'vector', label: 'Vector', hint: 'Integrated-vectorization text query over the index’s vector fields. The index needs a vector field + vectorizer.' },
+  { value: 'hybrid', label: 'Hybrid (text + vector)', hint: 'Full-text and vector rankings fused with RRF. Needs a vector field + vectorizer on the index.' },
+];
+
+function AiSearchRetrievalConfig({ cfg, onChange }: { cfg?: DaAiSearchConfig; onChange: (next: DaAiSearchConfig) => void }) {
+  const kind: DaAiSearchQueryKind = cfg?.queryKind || 'keyword';
+  const active = AI_SEARCH_QUERY_KINDS.find((k) => k.value === kind)!;
+  const patch = (p: Partial<DaAiSearchConfig>) =>
+    onChange({ queryKind: kind, top: cfg?.top ?? 25, citations: !!cfg?.citations, ...p });
+  return (
+    <Field label="Retrieval options" hint="Applied to every query the agent runs against this index — same options as the AI Search data-plane search request.">
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <Field label="Search type" hint={active.hint} style={{ minWidth: 240, maxWidth: 340 }}>
+          <Dropdown
+            value={active.label}
+            selectedOptions={[kind]}
+            onOptionSelect={(_, d) => d.optionValue && patch({ queryKind: d.optionValue as DaAiSearchQueryKind })}
+          >
+            {AI_SEARCH_QUERY_KINDS.map((k) => <Option key={k.value} value={k.value}>{k.label}</Option>)}
+          </Dropdown>
+        </Field>
+        <Field label="Documents per query" hint="Top-N retrieved (1–50).">
+          <SpinButton
+            min={1}
+            max={50}
+            value={cfg?.top ?? 25}
+            onChange={(_, d) => {
+              const v = d.value ?? (d.displayValue !== undefined ? Number(d.displayValue) : NaN);
+              if (typeof v === 'number' && Number.isFinite(v)) patch({ top: Math.min(Math.max(Math.round(v), 1), 50) });
+            }}
+          />
+        </Field>
+        <Switch
+          checked={!!cfg?.citations}
+          label="Require citations ([1], [2], …)"
+          onChange={(_, d) => patch({ citations: d.checked })}
+        />
+      </div>
+    </Field>
+  );
+}
+
+// ----- Microsoft 365 (Graph) grounding scope (typed inputs) --------------------
+// Persisted on the source as `graph` (DaGraphScope) and executed by
+// lib/azure/graph-search-client.ts on the Console UAMI: site → the SharePoint
+// site's document library, drive → a specific Graph drive, mail → an Exchange
+// Online mailbox ($search). The MessageBar below names the exact Graph app-role
+// consent each scope needs; when the tenant app lacks it, chat turns surface
+// the live 403 gate verbatim (see GraphSearchAccessError).
+const GRAPH_SCOPE_KINDS: { value: DaGraphScopeKind; label: string }[] = [
+  { value: 'site', label: 'SharePoint site' },
+  { value: 'drive', label: 'OneDrive / SharePoint drive' },
+  { value: 'mail', label: 'Outlook mailbox' },
+];
+const GRAPH_SCOPE_ROLES: Record<DaGraphScopeKind, string> = {
+  site: 'Sites.Read.All + Files.Read.All',
+  drive: 'Files.Read.All',
+  mail: 'Mail.Read',
+};
+
+function GraphScopeConfig({ scope, onChange }: { scope?: DaGraphScope; onChange: (next: DaGraphScope) => void }) {
+  const kind: DaGraphScopeKind = scope?.kind || 'site';
+  const patch = (p: Partial<DaGraphScope>) =>
+    onChange({ kind, site: scope?.site, driveId: scope?.driveId, mailbox: scope?.mailbox, ...p });
+  const missingValue =
+    (kind === 'site' && !(scope?.site || '').trim()) ||
+    (kind === 'drive' && !(scope?.driveId || '').trim()) ||
+    (kind === 'mail' && !(scope?.mailbox || '').trim());
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+        <Field label="Microsoft 365 scope" style={{ minWidth: 220 }}>
+          <Dropdown
+            value={GRAPH_SCOPE_KINDS.find((k) => k.value === kind)?.label}
+            selectedOptions={[kind]}
+            onOptionSelect={(_, d) => d.optionValue && patch({ kind: d.optionValue as DaGraphScopeKind })}
+          >
+            {GRAPH_SCOPE_KINDS.map((k) => <Option key={k.value} value={k.value}>{k.label}</Option>)}
+          </Dropdown>
+        </Field>
+        {kind === 'site' && (
+          <Field label="SharePoint site (id or URL)" hint="e.g. https://contoso.sharepoint.com/sites/Finance — the agent searches its default document library." style={{ flex: '1 1 320px', minWidth: 280 }}>
+            <Input value={scope?.site || ''} onChange={(_, d) => patch({ site: d.value })} placeholder="https://contoso.sharepoint.com/sites/Finance" />
+          </Field>
+        )}
+        {kind === 'drive' && (
+          <Field label="Drive id (Microsoft Graph)" hint="The Graph drive id (b!…) — from the drive's Graph metadata or the OneLake shortcut wizard." style={{ flex: '1 1 320px', minWidth: 280 }}>
+            <Input value={scope?.driveId || ''} onChange={(_, d) => patch({ driveId: d.value })} placeholder="b!xB3…" />
+          </Field>
+        )}
+        {kind === 'mail' && (
+          <Field label="Mailbox (user UPN)" hint="Messages in this mailbox are searched with Graph $search." style={{ flex: '1 1 320px', minWidth: 280 }}>
+            <Input value={scope?.mailbox || ''} contentBefore={<Mail16Regular />} onChange={(_, d) => patch({ mailbox: d.value })} placeholder="finance-team@contoso.com" />
+          </Field>
+        )}
+      </div>
+      {missingValue && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            Set the {kind === 'site' ? 'site id / URL' : kind === 'drive' ? 'drive id' : 'mailbox UPN'} above — grounding
+            queries against this source are gated until the scope is complete.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      <MessageBar intent="info">
+        <MessageBarBody>
+          Grounding runs on the Console UAMI via Microsoft Graph and needs the admin-consented
+          <strong> {GRAPH_SCOPE_ROLES[kind]}</strong> application permission{kind === 'site' ? 's' : ''}. If consent is
+          missing, chat turns show the live 403 gate naming the exact role — grant file roles with
+          <code> scripts/csa-loom/grant-shortcut-graph-approles.sh</code> and admin-consent in Entra ID → Enterprise
+          applications → Console UAMI → Permissions.
+        </MessageBarBody>
+      </MessageBar>
+    </div>
   );
 }
 
