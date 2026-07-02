@@ -17,7 +17,7 @@
     **Azure-native by default, with no hard Microsoft Fabric dependency**,
     across Azure Commercial and Government.
     [Recent release notes →](releases/2026-05-27-apps-bundles-and-wiring-sweep.md) ·
-    [Walk a test script →](TEST_SCRIPT_2026_05_27.md)
+    [UAT coverage matrix →](uat-coverage.md)
 
 **CSA Loom** is the Cloud Scale Analytics platform that delivers the
 Microsoft Fabric experience inside any Azure tenant where Fabric isn't

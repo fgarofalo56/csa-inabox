@@ -33,6 +33,7 @@ import {
   MessageBarBody,
   RadioGroup,
   Radio,
+  Switch,
   makeStyles,
   tokens,
   Subtitle2,
@@ -91,6 +92,12 @@ function getCreateConfig(i: FabricItemType | null | undefined): CreateConfig | u
 function isSearchOnly(i: FabricItemType): boolean {
   return Boolean((i as unknown as { searchOnly?: boolean }).searchOnly);
 }
+/** Labs / low-usage novelty items are hidden from the default gallery until the
+ *  "Show Labs items" toggle is on. Read structurally so the dialog compiles
+ *  independently of the catalog wave that adds the flag (fully back-compatible). */
+function isLabs(i: FabricItemType): boolean {
+  return Boolean((i as unknown as { labs?: boolean }).labs);
+}
 /** Resolve a picked entry (possibly a searchOnly alias/template) to its head
  *  catalog entry, where the createConfig lives. Falls back to the entry itself. */
 function resolveHead(i: FabricItemType): FabricItemType {
@@ -137,7 +144,14 @@ const useStyles = makeStyles({
     fontWeight: '600',
   },
   rightCol: { display: 'flex', flexDirection: 'column', gap: '12px', minHeight: 0 },
-  search: { marginBottom: '8px' },
+  searchRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    marginBottom: tokens.spacingVerticalS,
+    flexWrap: 'wrap',
+  },
+  search: { flex: 1, minWidth: '200px' },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
@@ -203,6 +217,9 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
   const setOpen = (v: boolean) => { onOpenChange?.(v); if (openProp === undefined) setOpenU(v); };
   const [category, setCategory] = useState<WorkloadCategory>(defaultCategory ?? 'Data Engineering');
   const [query, setQuery] = useState('');
+  // Labs / novelty items (rayfin-app, tapestry, …) are hidden from the gallery
+  // until the user flips this on. They stay fully functional either way.
+  const [showLabs, setShowLabs] = useState(false);
   // Two-step flow when workspaceId is known: pick type → name it inline.
   const [picked, setPicked] = useState<FabricItemType | null>(null);
   const [displayName, setDisplayName] = useState('');
@@ -267,6 +284,9 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
       // fully resolvable so ALREADY-CREATED instances still open their editor +
       // BFF routes. Azure-native default per no-fabric-dependency.md.
       if (i.hiddenFromGallery) return false;
+      // Labs / novelty items stay hidden (browse AND search) until the user
+      // opts in via the "Show Labs items" toggle — they remain fully functional.
+      if (isLabs(i) && !showLabs) return false;
       if (q) {
         // WAVE C — searchOnly items (consolidated presets/templates folded into a
         // single head item in browse) MUST still be findable by keyword. So in
@@ -283,7 +303,7 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
       // configure step.
       return i.category === category && !isSearchOnly(i);
     });
-  }, [category, query]);
+  }, [category, query, showLabs]);
 
   function reset() {
     setPicked(null); setDisplayName(''); setError(null); setCreating(false);
@@ -551,13 +571,20 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
                 ))}
               </div>
               <div className={styles.rightCol}>
-                <Input
-                  className={styles.search}
-                  contentBefore={<Search20Regular />}
-                  placeholder="Search item types"
-                  value={query}
-                  onChange={(_, d) => setQuery(d.value)}
-                />
+                <div className={styles.searchRow}>
+                  <Input
+                    className={styles.search}
+                    contentBefore={<Search20Regular />}
+                    placeholder="Search item types"
+                    value={query}
+                    onChange={(_, d) => setQuery(d.value)}
+                  />
+                  <Switch
+                    label="Show Labs items"
+                    checked={showLabs}
+                    onChange={(_, d) => setShowLabs(d.checked)}
+                  />
+                </div>
                 <div className={styles.grid}>
                   {items.map((i) => (
                     <button
@@ -573,6 +600,8 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
                       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{i.category}</Caption1>
                       <div className={styles.badges}>
                         {i.preview && <Badge appearance="outline" color="warning">Preview</Badge>}
+                        {isLabs(i) && <Badge appearance="tint" color="brand">Labs</Badge>}
+                        {i.deprecated && <Badge appearance="outline" color="danger">Deprecated</Badge>}
                         {i.noRestApi && <Badge appearance="outline" color="informative">UI only</Badge>}
                       </div>
                     </button>

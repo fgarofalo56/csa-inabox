@@ -115,6 +115,7 @@ export default function WorkloadLandingPage(props: Props) {
                 badge={
                   <span className={s.badgeRow}>
                     {t.preview && <Badge appearance="outline" color="warning" size="small">Preview</Badge>}
+                    {t.labs && <Badge appearance="tint" color="brand" size="small">Labs</Badge>}
                     {t.noRestApi && <Badge appearance="outline" color="informative" size="small">UI only</Badge>}
                   </span>
                 }

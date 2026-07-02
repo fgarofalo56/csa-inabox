@@ -105,7 +105,7 @@ export const azureGraphVectorItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/azure/cosmos-db/vector-database"
     } },
-  { slug: 'tapestry',                    displayName: 'Tapestry (investigative graph)', restType: 'Tapestry',           category: 'Azure Graph + Vector', preview: true,
+  { slug: 'tapestry',                    displayName: 'Tapestry (investigative graph)', restType: 'Tapestry',           category: 'Azure Graph + Vector', preview: true, labs: true,
     description: 'Investigative link-analysis + geospatial + timeline workspace over the ADX graph (make-graph / graph-match) and Azure Maps. The Azure-native equivalent of a Gotham-class investigation surface — no Microsoft Fabric required.',
     learnContent: {
       "overview": "Tapestry is an investigative analysis workspace that composes three coordinated views over the SAME materialized Node_*/Edge_* ADX tables the graph editors already query: a Link panel (force-directed graph from KQL make-graph + graph-match / graph-shortest-paths / graph-mark-components), a Geo panel (GeoJSON FeatureCollection projected from node lat/lon props, rendered with the keyless SVG GeoJsonMap and an optional live Azure Maps raster basemap when a key is configured), and a Timeline panel (KQL summarize count() by bin(timestamp, window) over Edge_* events). It is 100% Azure-native — the link + timeline engine is ADX (sovereign across every cloud) and the geo panel renders without any subscription. No Fabric capacity or workspace is required.",

@@ -9,7 +9,7 @@ import type { FabricItemType } from './types';
  */
 export const fabricAppsItems: FabricItemType[] = [
   // Fabric Apps — Rayfin (Build 2026 preview)
-  { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true,
+  { slug: 'rayfin-app', displayName: 'Rayfin app', restType: 'RayfinApp', category: 'Fabric Apps', preview: true, labs: true,
     templateOf: 'slate-app', templateId: 'rayfin-azure-stack',
     description: 'Backed template — scaffolds an Azure-native equivalent of the Fabric Rayfin stack: Azure Functions (user-data-function) + Cosmos DB (azure-cosmos-account) + a Static Web App (slate-app) you can actually run. No Fabric.',
     learnContent: {

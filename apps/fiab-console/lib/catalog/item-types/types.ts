@@ -87,6 +87,15 @@ export interface FabricItemType {
   category: WorkloadCategory;
   /** True when this is a preview-only item type */
   preview?: boolean;
+  /**
+   * True when this is a LABS / low-usage novelty item type. Labs items stay
+   * fully functional (editor + provisioner + BFF routes all work) but are
+   * HIDDEN from the default New-item gallery — they only appear when the user
+   * flips the "Show Labs items" toggle. A "Labs" Badge marks them wherever
+   * they render. Distinct from `preview` (which surfaces by default with a
+   * Preview badge): labs = hidden-by-default novelty, not removed.
+   */
+  labs?: boolean;
   /** True when no Fabric REST API exists (Scorecard, Dataflow Gen1) */
   noRestApi?: boolean;
   /**

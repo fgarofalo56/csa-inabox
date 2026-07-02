@@ -46,6 +46,10 @@ theme:
 exclude_docs: |
   tutorials/_template/
   _includes/
+  # Stale, point-in-time audit / test-script / version-handoff artifacts.
+  # Kept in-repo for history under fiab/archive/ but excluded from the built
+  # site and dropped from nav (2026-07-01 docs cleanup) so the site stays lean.
+  fiab/archive/
   learn/examples/solution-references/azure-realtime-analytics/example_mds/
   learn/examples/solution-references/azure-realtime-analytics/TASK_LIST.md
   learn/images/README.md
@@ -1828,9 +1832,7 @@ nav:
               - Architecture: fiab/help-copilot/architecture.md
               - Prompt patterns: fiab/help-copilot/prompts.md
           - Operator — Interactive Setup Steps: fiab/operator-interactive-setup.md
-          - MSAL Sign-in Handoff: fiab/MSAL-handoff.md
           - Dataverse Application User setup: fiab/dataverse-app-user.md
-          - Console v2 UI Handoff Brief: fiab/console-v2-ui-handoff.md
           - Engine services:
               - Activator Engine: fiab/services/activator-engine.md
               - Mirroring Engine: fiab/services/mirroring-engine.md
@@ -2017,39 +2019,16 @@ nav:
           - Audits & Inventories:
               - Fabric Feature Inventory: fiab/fabric-feature-inventory.md
               - Fabric UI Parity Action Plan: fiab/fabric-ui-parity-action-plan.md
-              - Editor Capability Audit: fiab/editor-capability-audit.md
-              - Editor Wiring Audit: fiab/wiring-audit.md
-              - UI Audit v1.10: fiab/ui-audit-v1.10.md
               - UAT Coverage Matrix: fiab/uat-coverage.md
               - CSA-in-a-Box Alignment + v2 Backlog: fiab/loom-csa-alignment-and-v2-backlog.md
               - Parity Progress (running log): fiab/parity-progress.md
               - Parity Rollup — Every Surface: fiab/parity-rollup.md
-              - PRP Delivery Audit: fiab/prp-audit.md
               - UAT Report (Iteration 1): fiab/uat-report.md
-              - Test Script (2026-05-27): fiab/TEST_SCRIPT_2026_05_27.md
-          - Status Snapshots:
-              - V2 Scope Expansion (2026-05-23 walkthrough): fiab/v2-scope-expansion.md
-              - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
-              - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
           - Releases:
               - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
           - Handoffs & Version State:
-              - "v1.18 GREEN handoff": fiab/v118-handoff.md
-              - "v2.0 handoff (Synapse pools live)": fiab/v2.0-handoff.md
-              - "v2.0 push-button deploy gap audit": fiab/v2.0-pushbutton-gap-audit.md
-              - "v2.1 LIVE state": fiab/v2.1-live-state.md
-              - "v2.1 E2E results": fiab/v2.1-e2e-results.md
-              - "v2.1 handoff": fiab/v2.1-handoff.md
-              - "v2.1 FINAL session state": fiab/v2.1-FINAL.md
-              - "v2.1 absolute final": fiab/v2.1-absolute-final.md
-              - "v2.2 LIVE — ready for v2 work": fiab/v2.2-done.md
-              - "v2.3 — v2 launch complete": fiab/v2.3-launch.md
-              - "v2.4 — final v2 launch": fiab/v2.4-launch.md
-              - "v2.5.1 — zero vaporware": fiab/v2.5.1-zero-vaporware.md
               - "v3 Security Hardening": fiab/v3-security-hardening.md
               - "v3 UI Parity — Chunked Execution Plan": fiab/v3-ui-parity-chunked-plan.md
-              - "v3.0 → v3.1 Handoff": fiab/v30-v31-handoff.md
-              - "v3.1 UAT Receipt": fiab/v31-uat-receipt.md
               - "Next-session kickoff": fiab/next-session-kickoff.md
 
   # ============================================================
