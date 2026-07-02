@@ -38,11 +38,32 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { executeQuery } from '@/lib/azure/kusto-client';
+import {
+  executeQuery, loadKustoItem, resolveDatabase, resolveDashboardDatabase,
+} from '@/lib/azure/kusto-client';
+import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { guardAdxRequest, adxError, validName } from '../_shared';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/**
+ * Resolve the database an OWNED Eventhouse item authorizes the caller to query.
+ * The anomaly composer runs arbitrary make-series KQL against a database on the
+ * SHARED ADX cluster, so the target database MUST be tied to an item the caller
+ * owns (owner-checked via loadKustoItem) — not a free-form `body.database`.
+ * Supports both a kql-database (Eventhouse database) and a kql-dashboard
+ * (Real-Time Dashboard, whose tiles query its bound/sibling database).
+ * Returns the allowed database name, or null when the item isn't owned/found.
+ */
+async function resolveOwnedItemDatabase(itemId: string, tenantId: string): Promise<string | null> {
+  const kdb = await loadKustoItem(itemId, 'kql-database', tenantId);
+  if (kdb) return resolveDatabase(kdb);
+  const dash = await loadKustoItem(itemId, 'kql-dashboard', tenantId);
+  if (dash) return resolveDashboardDatabase(dash);
+  return null;
+}
 
 /** make-series aggregations the composer allows (structured — never free-typed). */
 const AGGREGATIONS = ['avg', 'sum', 'min', 'max', 'count'] as const;
@@ -175,9 +196,40 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: `horizon must be between 1 and ${MAX_HORIZON} points` }, { status: 400 });
   }
 
-  const database = typeof body?.database === 'string' && body.database.trim()
-    ? body.database.trim()
-    : g.ctx.database;
+  // ---- database authorization ------------------------------------------------
+  // guardAdxRequest confirmed a session + config gate, but a session alone must
+  // NOT be able to run make-series KQL against an ARBITRARY database on the
+  // shared cluster via `body.database`. Two authorized paths:
+  //   (a) ITEM CONTEXT — the caller supplied an Eventhouse / KQL-database (or
+  //       Real-Time Dashboard) item id (as ?id=, threaded into g.ctx.itemId, or
+  //       body.itemId). We owner-check it and DERIVE the allowed database; an
+  //       explicit body.database is honored only when it equals that database.
+  //   (b) NO ITEM CONTEXT — an arbitrary-database analyst/admin query, which is
+  //       restricted to tenant admins (requireTenantAdmin). Any other caller 403s.
+  const session = getSession();
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const bodyItemId = typeof body?.itemId === 'string' && body.itemId.trim() ? body.itemId.trim() : '';
+  const itemId = bodyItemId || g.ctx.itemId || '';
+  const requestedDb = typeof body?.database === 'string' && body.database.trim() ? body.database.trim() : '';
+
+  let database: string;
+  if (itemId && itemId !== 'new') {
+    const allowedDb = await resolveOwnedItemDatabase(itemId, session.claims.oid);
+    if (!allowedDb) {
+      return NextResponse.json({ ok: false, error: 'item not found or not owned by you' }, { status: 404 });
+    }
+    database = allowedDb;
+    if (requestedDb && requestedDb !== database) {
+      return NextResponse.json(
+        { ok: false, error: `database "${requestedDb}" is not the database bound to this item (${database}).`, code: 'database_forbidden' },
+        { status: 403 },
+      );
+    }
+  } else {
+    const adminGate = requireTenantAdmin(session);
+    if (adminGate) return adminGate;
+    database = requestedDb || g.ctx.database;
+  }
 
   const composed: AnomalyRequest = { source, timeColumn, valueColumn, aggregation, step, mode, threshold, horizon };
   const kql = mode === 'anomaly' ? buildAnomalyKql(composed) : buildForecastKql(composed);

@@ -19,16 +19,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listSourceObjects } from '@/lib/copilot/agent-config-tools';
+import { loadOwnedItem } from '../../../_lib/item-crud';
 import type { DataAgentSource, DataAgentSourceType } from '@/lib/azure/data-agent-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+const ITEM_TYPE = 'data-agent';
 const KINDS: DataAgentSourceType[] = ['warehouse', 'lakehouse', 'kql', 'semantic-model', 'ai-search', 'ontology', 'graph'];
 
-export async function GET(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  // OWNERSHIP gate — this route probes a caller-supplied source descriptor and
+  // reads its live schema (Synapse INFORMATION_SCHEMA / ADX .show / AI Search).
+  // A bare session is NOT sufficient: without owning the parent data-agent item
+  // any signed-in user could enumerate schema for an arbitrary source by passing
+  // someone else's [id]. Mirror the sibling endorsement/security-roles routes:
+  // 404 (don't leak existence) when the data-agent isn't the caller's.
+  const { id } = await ctx.params;
+  if (id && id !== 'new') {
+    const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
+    if (!item) return NextResponse.json({ ok: false, error: 'data-agent not found or not owned by you' }, { status: 404 });
+  }
 
   const sp = req.nextUrl.searchParams;
   const sourceKind = String(sp.get('sourceKind') || '').trim() as DataAgentSourceType;
