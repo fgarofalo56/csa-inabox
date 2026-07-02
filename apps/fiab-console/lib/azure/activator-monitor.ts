@@ -386,6 +386,55 @@ export async function deleteMonitorActivatorRule(azureRuleName: string): Promise
   await deleteScheduledQueryRule(azureRuleName);
 }
 
+/** True when a rule is an UNSCHEDULED Eventhouse / ADX rule — sourceKind 'adx'
+ *  with no ADX-scoped alert host provisioned (`scheduled !== true`, i.e.
+ *  LOOM_ADX_ALERT_SCOPE was unset at create time) — so NO Azure Monitor
+ *  scheduledQueryRule exists on ARM for it. Lifecycle actions
+ *  (start/stop/enable/disable) must flip the persisted enabled flag on the
+ *  Cosmos record instead of PATCHing ARM (which would 404 and silently no-op),
+ *  and stop must NEVER re-upsert it: a re-PUT without the record's scopes would
+ *  recreate the rule against the default Log Analytics workspace with ADX KQL
+ *  (wrong scope; fails LA query validation). */
+export function isOnDemandAdxRule(
+  rule: { sourceKind?: string; scheduled?: boolean } | null | undefined,
+): boolean {
+  return !!rule && String(rule.sourceKind || '').toLowerCase() === 'adx' && rule.scheduled !== true;
+}
+
+// ── on-demand run history (Trigger / Preview evaluations) ───────────────────
+/** One persisted on-demand evaluation (Trigger now / Preview) of an activator
+ *  rule. Scheduled rules leave fired/resolved alert instances in Azure Monitor
+ *  Alerts Management; on-demand ADX rules (the RTI default when
+ *  LOOM_ADX_ALERT_SCOPE is unset) do NOT — so each evaluation is recorded on
+ *  the Cosmos activator item (state.runHistory, capped) and the /history route
+ *  merges them into its response with source:'on-demand'. */
+export interface OnDemandRunRecord {
+  ruleId: string;
+  ruleName: string;
+  /** ISO timestamp of the evaluation. */
+  at: string;
+  /** Rows the rule's KQL returned. */
+  rowCount: number;
+  /** Whether the rule would have fired (rows > 0). */
+  fired: boolean;
+  /** Query plane the evaluation ran against. */
+  backend: 'adx' | 'log-analytics';
+}
+
+/** Cap on persisted on-demand evaluations per activator item (newest first) so
+ *  the Cosmos document stays bounded. */
+export const RUN_HISTORY_CAP = 100;
+
+/** Prepend a run to an item's persisted on-demand history (state.runHistory),
+ *  newest first, capped at {@link RUN_HISTORY_CAP}. Pure — the caller persists
+ *  the returned array onto the Cosmos item. */
+export function appendRunHistory(state: unknown, run: OnDemandRunRecord): OnDemandRunRecord[] {
+  const prev: OnDemandRunRecord[] = Array.isArray((state as any)?.runHistory)
+    ? (state as any).runHistory.filter((r: any) => r && typeof r.at === 'string')
+    : [];
+  return [run, ...prev].slice(0, RUN_HISTORY_CAP);
+}
+
 /** "Trigger now" / "Preview" on the Azure-native backend = run the rule's KQL
  *  right now and report whether it would fire (rows > 0).
  *

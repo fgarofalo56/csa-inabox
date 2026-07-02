@@ -20,7 +20,8 @@ import {
 import {
   createMonitorActivatorRule, triggerMonitorActivatorRule,
   enableMonitorRule, disableMonitorRule, deleteMonitorActivatorRule,
-  type MonitorRuleRecord,
+  isOnDemandAdxRule, appendRunHistory,
+  type MonitorRuleRecord, type OnDemandRunRecord,
 } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import { KustoError } from '@/lib/azure/kusto-client';
@@ -157,7 +158,29 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
     try {
       const out = await triggerMonitorActivatorRule(rule);
-      return NextResponse.json({ ok: true, ...out });
+      // Persist the evaluation to the item's CAPPED on-demand run history so the
+      // Run history tab shows Trigger/Preview runs — on-demand ADX rules (the
+      // RTI default when LOOM_ADX_ALERT_SCOPE is unset) have NO Azure Monitor
+      // alert instances, so this record is their ONLY history. Best-effort: the
+      // trigger result is still returned if the write fails, and the response
+      // says honestly whether the run was recorded.
+      let historyRecorded = false;
+      try {
+        const run: OnDemandRunRecord = {
+          ruleId: rule.id,
+          ruleName: rule.name || rule.azureRuleName || rule.id,
+          at: new Date().toISOString(),
+          rowCount: out.count,
+          fired: out.fired,
+          backend: out.backend,
+        };
+        const runHistory = appendRunHistory(item.state, run);
+        const items = await itemsContainer();
+        const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), runHistory }, updatedAt: new Date().toISOString() };
+        await items.item(item.id, item.workspaceId).replace(next);
+        historyRecorded = true;
+      } catch { /* run result still returned below */ }
+      return NextResponse.json({ ok: true, ...out, historyRecorded });
     } catch (e: any) {
       return kustoGate(e) || monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
     }
@@ -233,15 +256,29 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
   if (!rule?.azureRuleName) return NextResponse.json({ ok: false, error: `rule '${ruleId}' not found` }, { status: 404 });
 
   try {
-    if (enabled) await enableMonitorRule(rule.azureRuleName);
-    else await disableMonitorRule(rule.azureRuleName);
+    // Unscheduled Eventhouse/ADX rules have NO backing scheduledQueryRule on
+    // ARM (LOOM_ADX_ALERT_SCOPE unset) — the ARM PATCH would 404 and the toggle
+    // would silently no-op. Their enable/disable IS the persisted flag: the
+    // Trigger/Preview path is their evaluation plane. Scheduled rules (LA, or
+    // ADX with an alert host) get the real in-place ARM PATCH.
+    const onDemand = isOnDemandAdxRule(rule);
+    if (!onDemand) {
+      if (enabled) await enableMonitorRule(rule.azureRuleName);
+      else await disableMonitorRule(rule.azureRuleName);
+    }
     // Persist the new state on the Cosmos item.
     const updatedRule: MonitorRuleRecord = { ...rule, state: enabled ? 'Active' : 'Disabled', updatedAt: new Date().toISOString() };
     const nextRules = rules.map((r) => (r.id === rule.id ? updatedRule : r));
     const items = await itemsContainer();
     const next: WorkspaceItem = { ...item, state: { ...(item.state || {}), rules: nextRules }, updatedAt: new Date().toISOString() };
     await items.item(item.id, item.workspaceId).replace(next);
-    return NextResponse.json({ ok: true, rule: updatedRule, backend: 'azure-monitor' });
+    return NextResponse.json({
+      ok: true, rule: updatedRule, backend: 'azure-monitor',
+      ...(onDemand ? {
+        onDemand: true,
+        message: `On-demand Eventhouse/ADX rule — no Azure Monitor scheduledQueryRule to ${enabled ? 'enable' : 'disable'}; enabled flag updated. The rule evaluates via Trigger/Preview.`,
+      } : {}),
+    });
   } catch (e: any) {
     return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
@@ -362,8 +399,12 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       try { await deleteMonitorActivatorRule(old.azureRuleName); } catch { /* best-effort */ }
     }
     // Preserve a paused rule's state — an edit must not surprise-re-enable it.
+    // Unscheduled ADX rules have no ARM rule to PATCH; the persisted flag alone
+    // carries their paused state.
     if (old.state === 'Disabled') {
-      try { await disableMonitorRule(rec.azureRuleName); } catch { /* best-effort */ }
+      if (!isOnDemandAdxRule(rec)) {
+        try { await disableMonitorRule(rec.azureRuleName); } catch { /* best-effort */ }
+      }
       rec.state = 'Disabled';
     }
     // Keep the original creation time; stamp the edit.

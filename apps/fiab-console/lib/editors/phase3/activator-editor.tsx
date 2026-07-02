@@ -148,8 +148,11 @@ interface RuleLite {
 interface HistoryEventLite {
   id: string;
   alertRule: string;
-  monitorCondition: string;       // Fired | Resolved
-  alertState: string;             // New | Acknowledged | Closed
+  monitorCondition: string;       // Fired | Resolved | Did not fire (on-demand)
+  alertState: string;             // New | Acknowledged | Closed | Evaluated (on-demand)
+  /** 'azure-monitor' = fired/resolved alert instance; 'on-demand' = a persisted
+   *  Trigger/Preview evaluation (the only history unscheduled ADX rules have). */
+  source?: 'azure-monitor' | 'on-demand';
   severity?: string;
   startDateTime: string;
   lastModifiedDateTime?: string;
@@ -595,7 +598,10 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
       const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/${kind}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) setReflexMsg(`${kind} failed: ${j.error || 'unknown'}`);
-      else setReflexMsg(`${kind === 'start' ? 'Started' : 'Stopped'} — ${j.updated} trigger(s) updated.`);
+      // Prefer the route's honest per-backend message (e.g. on-demand ADX rules
+      // report "enabled flag updated — evaluate via Trigger/Preview", and ARM
+      // failures are counted, not silently dropped).
+      else setReflexMsg(`${kind === 'start' ? 'Started' : 'Stopped'} — ${j.message || `${j.updated} trigger(s) updated.`}`);
       await loadRules(workspaceId, selectedId);
     } catch (e: any) {
       setReflexMsg(`${kind} failed: ${e?.message || String(e)}`);
@@ -1118,7 +1124,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
               <>
                 <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS}}>
                   <Subtitle2>Run history</Subtitle2>
-                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>fired &amp; resolved events · last 30 days · Azure Monitor</Caption1>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>fired &amp; resolved alerts (Azure Monitor) + on-demand Trigger/Preview runs · last 30 days</Caption1>
                   <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={loadHistory} disabled={historyLoading} style={{ marginLeft: 'auto' }}>
                     {historyLoading ? 'Loading…' : 'Refresh'}
                   </Button>
@@ -1127,7 +1133,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                 {historyNote && !historyErr && <MessageBar intent="info"><MessageBarBody>{historyNote}</MessageBarBody></MessageBar>}
                 {historyLoading && <Spinner size="tiny" label="Loading run history…" />}
                 {!historyLoading && historyEvents && historyEvents.length === 0 && !historyNote && !historyErr && (
-                  <Caption1>No fired or resolved alerts in the last 30 days for this reflex&apos;s rules. Trigger a rule, or wait for a scheduled evaluation, then refresh.</Caption1>
+                  <Caption1>No run history in the last 30 days for this reflex&apos;s rules. Trigger a rule (recorded as an on-demand run) or wait for a scheduled evaluation, then refresh.</Caption1>
                 )}
                 {!historyLoading && historyEvents && historyEvents.length > 0 && (
                   <div className={s.tableWrap}>
@@ -1135,6 +1141,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                       <TableHeader><TableRow>
                         <TableHeaderCell>Timestamp</TableHeaderCell>
                         <TableHeaderCell>Rule</TableHeaderCell>
+                        <TableHeaderCell>Source</TableHeaderCell>
                         <TableHeaderCell>State</TableHeaderCell>
                         <TableHeaderCell>Severity</TableHeaderCell>
                         <TableHeaderCell>Target</TableHeaderCell>
@@ -1146,6 +1153,12 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                           <TableRow key={ev.id}>
                             <TableCell className={s.cell}>{ev.startDateTime ? new Date(ev.startDateTime).toLocaleString() : '—'}</TableCell>
                             <TableCell className={s.cell}>{ev.alertRule || '—'}</TableCell>
+                            <TableCell>
+                              <Badge size="small" appearance="tint" color={ev.source === 'on-demand' ? 'brand' : 'informative'}
+                                title={ev.source === 'on-demand' ? 'Persisted Trigger/Preview evaluation — on-demand ADX rules have no Azure Monitor alert instances' : 'Azure Monitor fired/resolved alert instance'}>
+                                {ev.source === 'on-demand' ? 'On-demand' : 'Azure Monitor'}
+                              </Badge>
+                            </TableCell>
                             <TableCell>
                               <Badge appearance="filled" color={ev.monitorCondition === 'Fired' ? 'danger' : ev.monitorCondition === 'Resolved' ? 'success' : 'informative'}>
                                 {ev.monitorCondition || ev.alertState || '—'}
