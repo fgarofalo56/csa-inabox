@@ -38,6 +38,8 @@ export class OboNotConfiguredError extends Error {
   }
 }
 
+import { fetchWithTimeout } from './fetch-with-timeout';
+
 /** True only when the OBO confidential client (id + secret) is configured. */
 export function isOboConfigured(): boolean {
   return !!(process.env.LOOM_OBO_CLIENT_ID && process.env.LOOM_OBO_CLIENT_SECRET);
@@ -88,7 +90,7 @@ export async function acquireOboToken(userAssertion: string, scope: string): Pro
     scope,
     requested_token_use: 'on_behalf_of',
   });
-  const res = await fetch(`${authorityHost()}/${tenant}/oauth2/v2.0/token`, {
+  const res = await fetchWithTimeout(`${authorityHost()}/${tenant}/oauth2/v2.0/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
