@@ -31,6 +31,7 @@ import {
 } from '@fluentui/react-icons';
 import { FullNetworkTopologyCanvas } from './full-topology-canvas';
 import { ManagedPrivateEndpointsCard } from './managed-private-endpoints';
+import { TrustedWorkspaceAccessCard } from './trusted-workspace-access';
 
 interface DnsRecord { fqdn: string; ips: string[]; zone: string; }
 interface PrivateEndpoint {
@@ -469,6 +470,13 @@ export function NetworkPane() {
           / not authorized, so it shows the create + approval surface independently
           of the read-only inventory above. */}
       <ManagedPrivateEndpointsCard />
+
+      {/* 1c · Trusted access — storage resource-instance rules (Phase 4 G6).
+          The Fabric "trusted workspace access" equivalent: authorize the Console
+          UAMI / a per-workspace identity through a firewalled storage account's
+          networkAcls.resourceAccessRules over real ARM. Tenant-admin gated;
+          renders its own honest MessageBars. */}
+      <TrustedWorkspaceAccessCard />
 
       {/* 2 · Hosts-file override */}
       {!loading && data?.ok && hostsBlock && (

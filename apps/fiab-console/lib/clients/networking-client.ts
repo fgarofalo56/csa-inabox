@@ -159,6 +159,7 @@ async function armReq<T>(method: string, path: string, body?: unknown): Promise<
 
 const armGet = <T>(p: string) => armReq<T>('GET', p);
 const armPut = <T>(p: string, b: unknown) => armReq<T>('PUT', p, b);
+const armPatch = <T>(p: string, b: unknown) => armReq<T>('PATCH', p, b);
 const armDelete = (p: string) => armReq<void>('DELETE', p);
 
 function nsgBase(cfg: NetworkingConfig): string {
@@ -798,4 +799,183 @@ export async function createManagedPrivateEndpoint(
 export async function deleteManagedPrivateEndpoint(name: string): Promise<void> {
   const cfg = readNetworkingConfig();
   await armDelete(`${peBase(cfg, name)}?api-version=${PE_API}`);
+}
+
+// ---------------------------------------------------------------------------
+// Storage RESOURCE-INSTANCE rules — trusted workspace access (Phase 4 G6)
+// ---------------------------------------------------------------------------
+//
+// The Azure-native equivalent of Fabric's "trusted workspace access": authorize
+// a specific Azure resource INSTANCE (by ARM id + tenant) to reach a firewalled
+// ADLS Gen2 / Blob storage account whose networkAcls.defaultAction is Deny.
+// ARM models these as `properties.networkAcls.resourceAccessRules[]` entries of
+// `{ tenantId, resourceId }` on Microsoft.Storage/storageAccounts (the portal
+// calls them "resource instances"). Enforcement matches the managed-identity
+// token's `xms_mirid` claim against the rule's resourceId — so a user-assigned
+// managed identity (Console UAMI / per-workspace uami-ws-<id>) is authorized by
+// adding ITS OWN ARM resource id as a rule.
+//
+// Real ARM (GET + PATCH, api-version 2023-05-01), no mocks. The PATCH always
+// carries the COMPLETE networkAcls object read back from the live account
+// (bypass / defaultAction / ipRules / virtualNetworkRules preserved verbatim)
+// so a rules-only update can never clobber the rest of the firewall.
+//
+// The Console UAMI needs **Storage Account Contributor**
+// (17d1049b-9a84-46fb-8f53-869881c3d3ab) — or Owner — on the target storage
+// account to PATCH networkAcls; a 403 surfaces as an honest MessageBar via
+// storageTrustedAccessErrorResponse in _gate.ts.
+//
+// Learn:
+//   https://learn.microsoft.com/azure/storage/common/storage-network-security-resource-instances
+//   https://learn.microsoft.com/rest/api/storagerp/storage-accounts/update
+
+/** Storage-account ARM api-version (matches storage-discovery.ts). */
+const STORAGE_ACCOUNTS_API = '2023-05-01';
+
+const STORAGE_ACCOUNT_ID_RE =
+  /^\/subscriptions\/[^/]+\/resourceGroups\/[^/]+\/providers\/Microsoft\.Storage\/storageAccounts\/[^/]+$/i;
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** One `networkAcls.resourceAccessRules[]` entry ("resource instance" in the portal). */
+export interface StorageResourceInstanceRule {
+  tenantId: string;
+  resourceId: string;
+}
+
+/** Live trusted-access posture of a storage account (shaped from ARM GET/PATCH). */
+export interface StorageTrustedAccessState {
+  accountId: string;
+  accountName: string;
+  location?: string;
+  /** Enabled | Disabled | SecuredByPerimeter — rules only take effect when Enabled. */
+  publicNetworkAccess?: string;
+  /** networkAcls.defaultAction: Allow | Deny — rules only matter under Deny. */
+  defaultAction?: string;
+  /** networkAcls.bypass, e.g. 'AzureServices'. */
+  bypass?: string;
+  resourceInstances: StorageResourceInstanceRule[];
+}
+
+/** Validate + normalize a full storage-account ARM id; honest 400 otherwise. */
+export function assertStorageAccountArmId(id: string): string {
+  const trimmed = (id || '').trim().replace(/\/+$/, '');
+  if (!STORAGE_ACCOUNT_ID_RE.test(trimmed)) {
+    throw new NetworkingArmError(
+      'storageAccountId must be a full ARM id: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/storageAccounts/{name}',
+      400,
+    );
+  }
+  return trimmed;
+}
+
+function shapeTrustedAccess(raw: any): StorageTrustedAccessState {
+  const props = raw?.properties || {};
+  const acls = props.networkAcls || {};
+  const id: string = raw?.id || '';
+  return {
+    accountId: id,
+    accountName: raw?.name || id.split('/').pop() || '',
+    location: raw?.location,
+    publicNetworkAccess: props.publicNetworkAccess,
+    defaultAction: acls.defaultAction,
+    bypass: acls.bypass,
+    resourceInstances: (acls.resourceAccessRules || []).map((r: any) => ({
+      tenantId: r?.tenantId || '',
+      resourceId: r?.resourceId || '',
+    })),
+  };
+}
+
+/** The complete networkAcls object to PATCH back — every sibling field the live
+ * account carries is preserved verbatim so a rules-only edit never widens or
+ * narrows the rest of the firewall. */
+function aclsForPatch(acls: any, resourceAccessRules: StorageResourceInstanceRule[]): any {
+  return {
+    bypass: acls?.bypass ?? 'AzureServices',
+    defaultAction: acls?.defaultAction ?? 'Allow',
+    ipRules: acls?.ipRules ?? [],
+    virtualNetworkRules: acls?.virtualNetworkRules ?? [],
+    resourceAccessRules,
+  };
+}
+
+/** Read the live resource-instance rules (+ firewall posture) of a storage account. */
+export async function getStorageTrustedAccess(storageAccountId: string): Promise<StorageTrustedAccessState> {
+  const id = assertStorageAccountArmId(storageAccountId);
+  const raw = await armGet<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`);
+  return shapeTrustedAccess(raw);
+}
+
+/**
+ * Authorize a resource instance (identity) on the storage account: GET the live
+ * networkAcls, append `{ tenantId, resourceId }` to resourceAccessRules, then
+ * PATCH the account with the complete acls object. Idempotent — an entry that
+ * already exists (case-insensitive) returns the current state without a PATCH.
+ */
+export async function addStorageResourceInstance(
+  storageAccountId: string,
+  rule: StorageResourceInstanceRule,
+): Promise<StorageTrustedAccessState> {
+  const id = assertStorageAccountArmId(storageAccountId);
+  const resourceId = (rule.resourceId || '').trim().replace(/\/+$/, '');
+  if (!resourceId.startsWith('/subscriptions/')) {
+    throw new NetworkingArmError('resourceId must be a full ARM id (/subscriptions/…)', 400);
+  }
+  if (!GUID_RE.test((rule.tenantId || '').trim())) {
+    throw new NetworkingArmError('tenantId must be an Entra tenant GUID', 400);
+  }
+  const tenantId = rule.tenantId.trim();
+  const raw = await armGet<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`);
+  const acls = raw?.properties?.networkAcls || {};
+  const existing: any[] = acls.resourceAccessRules || [];
+  const dup = existing.some((r) =>
+    String(r?.resourceId || '').toLowerCase() === resourceId.toLowerCase() &&
+    String(r?.tenantId || '').toLowerCase() === tenantId.toLowerCase());
+  if (dup) return shapeTrustedAccess(raw);
+  const next = [
+    ...existing.map((r) => ({ tenantId: r?.tenantId, resourceId: r?.resourceId })),
+    { tenantId, resourceId },
+  ];
+  const patched = await armPatch<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`, {
+    properties: { networkAcls: aclsForPatch(acls, next) },
+  });
+  return shapeTrustedAccess(patched);
+}
+
+/**
+ * Revoke a resource-instance rule: GET the live networkAcls, drop the matching
+ * `{ resourceId (, tenantId) }` entry, PATCH the complete acls back. Honest 404
+ * when no rule matches (nothing is PATCHed).
+ */
+export async function removeStorageResourceInstance(
+  storageAccountId: string,
+  resourceId: string,
+  tenantId?: string,
+): Promise<StorageTrustedAccessState> {
+  const id = assertStorageAccountArmId(storageAccountId);
+  const target = (resourceId || '').trim().replace(/\/+$/, '').toLowerCase();
+  if (!target.startsWith('/subscriptions/')) {
+    throw new NetworkingArmError('resourceId must be a full ARM id (/subscriptions/…)', 400);
+  }
+  const raw = await armGet<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`);
+  const acls = raw?.properties?.networkAcls || {};
+  const existing: any[] = acls.resourceAccessRules || [];
+  const remaining = existing.filter((r) => {
+    const ridMatch = String(r?.resourceId || '').replace(/\/+$/, '').toLowerCase() === target;
+    const tidMatch = !tenantId ||
+      String(r?.tenantId || '').toLowerCase() === tenantId.trim().toLowerCase();
+    return !(ridMatch && tidMatch);
+  });
+  if (remaining.length === existing.length) {
+    throw new NetworkingArmError('Resource-instance rule not found on the storage account', 404);
+  }
+  const patched = await armPatch<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`, {
+    properties: {
+      networkAcls: aclsForPatch(
+        acls,
+        remaining.map((r) => ({ tenantId: r?.tenantId, resourceId: r?.resourceId })),
+      ),
+    },
+  });
+  return shapeTrustedAccess(patched);
 }

@@ -18,6 +18,8 @@ import { workspacesContainer } from '@/lib/azure/cosmos-client';
 
 /** Network Contributor built-in role definition id. */
 export const NETWORK_CONTRIBUTOR_ROLE_ID = '4d97b98b-1d4f-4787-a291-c67834d212e7';
+/** Storage Account Contributor built-in role definition id (PATCH networkAcls). */
+export const STORAGE_ACCOUNT_CONTRIBUTOR_ROLE_ID = '17d1049b-9a84-46fb-8f53-869881c3d3ab';
 
 export function networkingErrorResponse(e: unknown): NextResponse {
   if (e instanceof NetworkingNotConfiguredError) {
@@ -48,6 +50,28 @@ export function networkingErrorResponse(e: unknown): NextResponse {
   }
   const msg = e instanceof Error ? e.message : String(e);
   return NextResponse.json({ ok: false, error: msg }, { status: 502 });
+}
+
+/**
+ * Honest-gate mapper for the trusted-resources (storage resource-instance rules)
+ * route. Identical to {@link networkingErrorResponse} except the 401/403 branch:
+ * that route PATCHes `networkAcls` on a STORAGE ACCOUNT (not the networking RG),
+ * so the role the Console UAMI is missing is **Storage Account Contributor**
+ * (or Owner) on the target storage account — not Network Contributor.
+ */
+export function storageTrustedAccessErrorResponse(e: unknown): NextResponse {
+  if (e instanceof NetworkingArmError && (e.status === 401 || e.status === 403)) {
+    return NextResponse.json({
+      ok: false,
+      error: `Azure Resource Manager ${e.status}: not authorized to update the storage account's network rules.`,
+      gate: {
+        reason: 'Trusted workspace access PATCHes networkAcls.resourceAccessRules on the target storage account over ARM.',
+        remediation: `Grant the Console UAMI "Storage Account Contributor" (${STORAGE_ACCOUNT_CONTRIBUTOR_ROLE_ID}) — or Owner — on the target storage account (platform/fiab/bicep/modules/landing-zone/storage-lifecycle-rbac.bicep grants it on the DLZ lake).`,
+        roleId: STORAGE_ACCOUNT_CONTRIBUTOR_ROLE_ID,
+      },
+    }, { status: 403 });
+  }
+  return networkingErrorResponse(e);
 }
 
 /**
