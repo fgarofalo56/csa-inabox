@@ -45,7 +45,6 @@ const ORPHAN_ALLOWLIST = new Map([
   ['platform/fiab/bicep/modules/admin-plane/cost-management-rbac.bicep', 'opt-in cost-management chargeback RBAC; deployed on demand'],
   ['platform/fiab/bicep/modules/admin-plane/devcenter.bicep', 'opt-in Deployment Environments DevCenter; TODO wire into orchestrator (release-environment honest-gate documents it)'],
   ['platform/fiab/bicep/modules/admin-plane/mcp-catalog-app.bicep', 'opt-in MCP-catalog ACA app; deployed when the MCP catalog is enabled'],
-  ['platform/fiab/bicep/modules/admin-plane/report-accel.bicep', 'opt-in report query-acceleration; deployed on demand'],
   ['platform/fiab/bicep/modules/admin-plane/spark-session-pool.bicep', 'opt-in Synapse spark session pool; deployed when Spark is enabled'],
   ['platform/fiab/bicep/modules/admin-plane/udf-runtime.bicep', 'TODO wire: Loom-managed Functions UDF host (main.bicep documents the pending default)'],
   ['platform/fiab/bicep/modules/landing-zone/azure-maps.bicep', 'legacy landing-zone Azure Maps variant; admin-plane/azure-maps.bicep is the wired one'],

@@ -3,7 +3,7 @@
  * results. This is the always-on, no-infra half of the Loom report query
  * ACCELERATION layer (the pragmatic 80% of Fabric "Direct Lake": import-mode
  * speed on Delta without a Fabric capacity). Its sibling is
- * `report-accel-client.ts` (the opt-in DuckDB-over-Delta fast path).
+ * `report-accel-client.ts` (the opt-in Databricks SQL / Photon over-Delta fast path).
  *
  * ── What it buys ───────────────────────────────────────────────────────────
  * Report visuals re-issue the SAME aggregate query constantly — page loads,
@@ -80,7 +80,7 @@ export interface CachedQueryResult {
   rows: Record<string, unknown>[];
   /** Result column order, when known. */
   columns?: string[];
-  /** The SQL (or DuckDB SQL) that produced the rows — surfaced for the SQL pane. */
+  /** The SQL (Synapse T-SQL or Databricks SQL) that produced the rows — for the SQL pane. */
   sql?: string;
   /** Row count, when the backend reported it. */
   rowCount?: number;

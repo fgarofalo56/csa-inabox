@@ -27,7 +27,6 @@ on:
     branches: [main]
     paths:
       - 'apps/fiab-*/**'
-      - 'platform/report-accel/**'
       - '.github/workflows/build-fiab-images-acr-tasks.yml'
 
 permissions:
@@ -74,20 +73,10 @@ jobs:
         run: |
           INPUT="${{ inputs.apps || 'all' }}"
           if [[ "$INPUT" == "all" ]]; then
-            # report-accel (DuckDB-over-Delta report fast path) is a CUSTOM image
-            # built from ./platform/report-accel and pushed under the csa-loom/
-            # namespace (csa-loom/report-accel:<tag>) — the ref the admin-plane
-            # bicep expects (reportAccelImageReady gate). Building it here means it
-            # is present in ACR on a normal deploy, so the accel host activates
-            # out-of-the-box instead of falling back to Synapse Serverless.
-            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"},{"name":"csa-loom/report-accel","ctx":"./platform/report-accel"}]'
+            APPS='[{"name":"loom-console","ctx":"./apps/fiab-console"},{"name":"loom-setup-orchestrator","ctx":"./apps/fiab-setup-orchestrator"},{"name":"loom-mcp","ctx":"./apps/fiab-mcp-config"},{"name":"loom-mcp-bridge","ctx":"./apps/fiab-mcp-bridge"},{"name":"loom-activator","ctx":"./apps/fiab-activator-engine"},{"name":"loom-mirroring","ctx":"./apps/fiab-mirroring-engine"},{"name":"loom-direct-lake-shim","ctx":"./apps/fiab-direct-lake-shim"},{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
           elif [[ "$INPUT" == "loom-copilot-maf" ]]; then
             # MAF tier lives at ./apps/copilot-maf (not the ./apps/fiab-* convention).
             APPS='[{"name":"loom-copilot-maf","ctx":"./apps/copilot-maf"}]'
-          elif [[ "$INPUT" == "report-accel" || "$INPUT" == "csa-loom/report-accel" ]]; then
-            # report-accel lives at ./platform/report-accel and is pushed as
-            # csa-loom/report-accel (namespaced), not ./apps/fiab-* — special-case it.
-            APPS='[{"name":"csa-loom/report-accel","ctx":"./platform/report-accel"}]'
           else
             APPS=$(echo "$INPUT" | jq -R 'split(",") | map({name: ., ctx: ("./apps/fiab-" + (sub("^loom-"; "") | sub("loom-mcp"; "mcp-config") | sub("loom-setup-orchestrator"; "setup-orchestrator") | sub("loom-activator"; "activator-engine") | sub("loom-mirroring"; "mirroring-engine") | sub("loom-direct-lake-shim"; "direct-lake-shim")))})')
           fi

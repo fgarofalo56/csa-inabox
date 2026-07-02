@@ -1928,8 +1928,9 @@ export async function buildConnectionExecutor(
 // route routes to when present (`cacheReady`), with a live fallback otherwise.
 //
 // This helper surfaces that cache's Delta URL from a resolved `SourceGroupSqlSource`
-// so the report-accel client can point DuckDB's `delta_scan` at the SAME Delta the
-// refresh route wrote — interactive-speed aggregations over the pre-materialized
+// so the report-accel client can point Databricks SQL (Photon) at the SAME Delta the
+// refresh route wrote (SELECT … FROM delta.`<url>`, in-place) — interactive-speed
+// aggregations over the pre-materialized
 // summary, no Fabric capacity (no-fabric-dependency.md), no mock (no-vaporware.md).
 //
 // A dedicated NAMED pre-aggregation designer (distinct summary tables at a coarser

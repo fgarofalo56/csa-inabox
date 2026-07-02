@@ -2889,13 +2889,13 @@ exact env var to set and warms nothing — it never fakes a warm session.
 
 ---
 
-## Report query acceleration — result cache + DuckDB-over-Delta (Direct-Lake-ish)
+## Report query acceleration — result cache + Databricks SQL / Photon over Delta
 
 The Loom report / semantic layer has a two-tier query **accelerator** that gives
 import-mode speed on the lakehouse Delta *without* a Microsoft Fabric capacity —
-Loom's Azure-native equivalent of Fabric **Direct Lake**. Out of the box (no new
-infra) reports run **cache + Synapse Serverless**; deploying the optional accel
-host lights up a DuckDB-over-Delta fast path.
+Loom's true Azure-native analog of Fabric **Direct Lake**. Out of the box (no new
+infra) reports run **cache + Synapse Serverless**; binding a **Databricks SQL
+warehouse (Photon)** lights up an in-place, Delta-native fast path.
 
 ### Tier 1 — result cache (always on, no infra)
 
@@ -2913,81 +2913,43 @@ In-process by default; an **optional Cosmos tier** shares hits across replicas.
 | `LOOM_QUERY_CACHE_MAX` | `500` | Max in-process cached results (LRU). |
 | `LOOM_QUERY_CACHE_COSMOS_CONTAINER` | *(unset)* | Enable the shared Cosmos tier — the container id to use (in `LOOM_COSMOS_DATABASE`, PK `/modelId`, native TTL). Reuses `LOOM_COSMOS_ENDPOINT` + the Console UAMI. |
 
-### Tier 2 — DuckDB-over-Delta accel host (opt-in)
+### Tier 2 — Databricks SQL (Photon) over Delta, in-place (opt-in)
 
-`platform/report-accel/` (Dockerfile + `server.py`) is a scale-to-zero Container
-App running DuckDB with the `delta` + `azure` extensions. It reads the lakehouse
-Delta files **directly from ADLS Gen2** and answers aggregating visuals at
-interactive speed. The console (`lib/azure/report-accel-client.ts`) folds each
-visual's wells + filters into a compact semantic query and POSTs it; the service
-compiles that to DuckDB SQL over `delta_scan('<url>')`. Deployed by
-`platform/fiab/bicep/modules/admin-plane/report-accel.bicep`.
+The accelerated tier runs on a **Databricks SQL warehouse (Photon)** — the
+first-party Azure-native "Direct Lake" analog, already in the Loom stack. It reads
+the lakehouse Delta files **in-place from ADLS Gen2** (no copy, no materialization)
+via `SELECT … FROM delta.` + the backtick-quoted `abfss://…` path, so the same
+Delta the pipelines write is queried at Photon speed. The console
+(`lib/azure/report-accel-client.ts`) folds each aggregating visual's wells +
+filters into a compact semantic query and `compileAccelSql` compiles it to
+Databricks SQL (ANSI, Delta-native, backtick-quoted identifiers, named parameter
+markers bound by the Statement Execution API — injection-safe). It reaches the
+warehouse through the existing `lib/azure/databricks-client.ts`
+(`runWarehouseStatement` → `POST /api/2.0/sql/statements`). **No dedicated
+accelerator container / image / ingress is deployed** — this replaced the former
+DuckDB `report-accel` Container App.
 
 The report query route prefers **accel → cache → Serverless**: on any accel
-miss/timeout/503 (or when the source isn't a Delta table) it runs the same real
-Synapse Serverless query it always did — the honest fallback.
+miss/timeout/error, a truncated warehouse result, or when the source isn't a Delta
+table, it runs the same real Synapse Serverless query it always did — the honest
+fallback (never a wrong or partial accel result).
 
 | Env var | Set on | Purpose |
 | --- | --- | --- |
-| `LOOM_REPORT_ACCEL_URL` | `loom-console` | Internal `https://<report-accel FQDN>` (the module's `accelUrl` output). Unset ⇒ accel disabled, cache + Serverless only. |
-| `LOOM_REPORT_ACCEL_AUDIENCE` | `loom-console` | Optional — token audience so the console attaches a Bearer token (Console UAMI) to the accel call. Omit for VNet-only trust. |
-| `LOOM_REPORT_ACCEL_TIMEOUT_MS` | `loom-console` | Optional — accel call timeout (default `20000`) before falling back to Serverless. |
-| `LOOM_ADLS_ACCOUNT` | `report-accel` | Optional — scope the DuckDB azure credential to one ADLS account name. |
-| `PORT` | `report-accel` | Listen port (default `8080`). |
+| `LOOM_DATABRICKS_HOSTNAME` | `loom-console` | The Databricks workspace URL (e.g. `adb-<id>.<n>.azuredatabricks.net`). Same var the SQL Warehouse editor + Databricks navigator use. Unset ⇒ accel disabled, cache + Serverless only. |
+| `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` | `loom-console` | The SQL warehouse (Photon) id the accelerated query runs on. Same var `runWarehouseStatement` / the SQL Warehouse editor read. Unset ⇒ accel disabled. |
 
-**Required role.** The `report-accel` Container App's managed identity (the
-Console UAMI or a dedicated accel UAMI) needs **Storage Blob Data Reader** on the
-lakehouse ADLS Gen2 account. When the lake is in the same resource group, the
-bicep module grants it (`grantStorageReader` + `lakeStorageAccountName`). For a
-**cross-subscription DLZ lake**, grant it out-of-band:
+Both env vars are already emitted to `loom-console` by
+`modules/admin-plane/main.bicep` (the Databricks navigator + SQL warehouse
+bindings), so no new env plumbing is required — binding a warehouse lights up the
+accelerated tier.
 
-```bash
-az role assignment create \
-  --assignee-object-id <accel-uami-principal-id> --assignee-principal-type ServicePrincipal \
-  --role "Storage Blob Data Reader" \
-  --scope /subscriptions/<dlz-sub>/resourceGroups/<dlz-rg>/providers/Microsoft.Storage/storageAccounts/<lake-account>
-```
-
-**Integration (done):** `report-accel.bicep` is wired into
-`modules/admin-plane/main.bicep` (module `reportAccel`), which passes the CAE +
-accel UAMI + lake account and sets the console's `LOOM_REPORT_ACCEL_URL` to the
-module's `accelUrl` output. It is deployed only when `reportAccelActive`
-(`reportAccelEnabled && reportAccelImageReady`, Container Apps platform,
-`deployAppsEnabled`).
-
-#### Image build + activation (out-of-the-box)
-
-The accel host runs a **custom image** — `csa-loom/report-accel:v0.1` — built from
-`platform/report-accel/` (unlike the stock-image UDF/warm-pool hosts). That image
-is now built + pushed by the **`build-fiab-images-acr-tasks`** pipeline
-(`.github/workflows/build-fiab-images-acr-tasks.yml`) alongside every other Loom
-component: it is in the default `all` matrix and the workflow's `push` trigger
-also fires on changes under `platform/report-accel/**`. The build runs
-server-side inside ACR (`az acr build`) so it works even when the Loom ACR has
-`publicNetworkAccess=Disabled` (private endpoint), tagging
-`csa-loom/report-accel` `:v0.1` + `:<sha>` + `:latest`.
-
-Because the image is produced by the standard component build, the root
-`reportAccelImageReady` param now **defaults to `true`** — the admin-plane
-activates the accel Container App on a normal deploy instead of falling back to
-Synapse Serverless. On a **clean deploy against an ACR that has never run the
-image build**, set `reportAccelImageReady=false` (or run the image build first)
-so the deployment does not reference an image that is not yet present; the report
-route stays on cache + Serverless until the image exists.
-
-One-time / on-demand image build (any boundary):
-
-```bash
-# Manual dispatch — build just report-accel:
-gh workflow run build-fiab-images-acr-tasks.yml -f apps=report-accel
-
-# ...or server-side directly against the resolved ACR (private-endpoint safe):
-az acr build --registry <acrloom...> \
-  --image csa-loom/report-accel:v0.1 \
-  --image csa-loom/report-accel:latest \
-  --file platform/report-accel/Dockerfile \
-  platform/report-accel
-```
+**Required access.** The Console UAMI must be a Databricks workspace user with
+**CAN USE** on the SQL warehouse and read access to the lakehouse Delta (the
+workspace's storage credential / access connector already grants ADLS read for the
+lakehouse — see the Databricks SCIM bootstrap + storage-RBAC steps). No extra role
+beyond the standard Databricks workspace wiring is needed for the report accel
+path. Absent a configured warehouse the report route stays on cache + Serverless.
 
 ## Unified capacity + chargeback dashboard (Cost Management + Monitor)
 

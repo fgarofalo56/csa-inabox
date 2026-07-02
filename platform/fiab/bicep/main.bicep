@@ -392,12 +392,6 @@ param dbtRunnerEnabled bool = true
 @description('Set true once the loom-dbt-runner image has been built + pushed to ACR (scripts/csa-loom/build-dbt-runner.sh). Gates the live loom-dbt-runner Container App deployment so a clean first deploy (no image yet) does not fail on an unresolvable image ref — the dbt-job run surface honest-gates until the image is ready, then this flips on. Default false.')
 param dbtRunnerImageReady bool = false
 
-@description('Deploy the report-accel Container App (DuckDB-over-Delta query accelerator) — Loom\'s Azure-native "Direct Lake"-speed report fast path (LOOM_REPORT_ACCEL_URL). Default on (opt-out), but the admin-plane only activates it when the csa-loom/report-accel image is present in ACR (reportAccelImageReady); otherwise the report query route falls back to Synapse Serverless. Container Apps only. No Fabric dependency.')
-param reportAccelEnabled bool = true
-
-@description('Set true once the csa-loom/report-accel image has been built + pushed to ACR (platform/report-accel/). Gates the live report-accel Container App so a clean first deploy (no image yet) does not fail on an unresolvable image ref — the report path uses Synapse Serverless until this flips on. Default true: the image is now built + pushed by the build-fiab-images-acr-tasks pipeline (csa-loom/report-accel) alongside every other Loom component, so it is present in ACR on a normal deploy. If you deploy against an ACR that has never run that image build, set this false to keep the report path on Synapse Serverless until the image exists.')
-param reportAccelImageReady bool = true
-
 @description('Deploy the loom-udf-runtime Container App (User Data Functions execution host, stock MCR image on the dab-runtime.bicep pattern) so the user-data-function invoke path (LOOM_UDF_FUNCTION_BASE) works day-one. Default on (opt-out); set false to leave the UDF invoke route honestly 503-gated (or supply a BYO host via loomUdfFunctionBase). Container Apps only. No Fabric dependency.')
 param udfRuntimeEnabled bool = true
 
@@ -1068,13 +1062,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       // under admin-plane's 256-param ceiling.
       swaResourceGroup: loomSwaResourceGroup
       udfFunctionBase: loomUdfFunctionBase
-      // report-accel (DuckDB-over-Delta accelerator), UDF runtime host, and warm
-      // Spark session pool enable-gates. Folded onto the BYO object (not scalar
-      // params) to stay under admin-plane's 256-param ceiling. report-accel is
-      // additionally image-gated here (reportAccelImageReady) so a first deploy
-      // with no image in ACR doesn't fail — the report path uses Synapse
-      // Serverless until then.
-      reportAccelEnabled: (reportAccelEnabled && reportAccelImageReady)
+      // UDF runtime host + warm Spark session pool enable-gates. Folded onto the
+      // BYO object (not scalar params) to stay under admin-plane's 256-param
+      // ceiling. (Report query acceleration now runs on the Databricks SQL
+      // warehouse — Photon over Delta in-place — via the existing Databricks
+      // bindings, so no accelerator host/gate is threaded here.)
       udfRuntimeEnabled: udfRuntimeEnabled
       sparkPoolEnabled: sparkPoolEnabled
     }

@@ -829,17 +829,11 @@ var effectiveSwaRg = !empty(loomSwaResourceGroup) ? loomSwaResourceGroup : resou
 // 256-param-ceiling treatment. Empty → the invoke route serves its honest
 // 503 gate naming this var.
 var loomUdfFunctionBase = string(byoExisting.?udfFunctionBase ?? '')
-// Enable-gates for the three integration modules wired below. Folded on the
-// byoExisting object (root params reportAccelEnabled&&reportAccelImageReady /
-// udfRuntimeEnabled / sparkPoolEnabled) to stay under the 256-param ceiling.
-var reportAccelEnabled = bool(byoExisting.?reportAccelEnabled ?? false)
+// Enable-gates for the integration modules wired below. Folded on the
+// byoExisting object (root params udfRuntimeEnabled / sparkPoolEnabled) to stay
+// under the 256-param ceiling.
 var udfRuntimeEnabled = bool(byoExisting.?udfRuntimeEnabled ?? true)
 var sparkPoolEnabled = bool(byoExisting.?sparkPoolEnabled ?? false)
-// report-accel is an ACA app built from a custom image → only meaningful on
-// Container Apps + when apps deploy (the invocation is image-gated by the root
-// reportAccelImageReady already folded into reportAccelEnabled above).
-var reportAccelActive = reportAccelEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
-var loomReportAccelUrl = reportAccelActive ? reportAccel!.outputs.accelUrl : ''
 // user-data-function invoke base: a BYO Functions host (loomUdfFunctionBase)
 // wins; otherwise default to the Loom-managed udf-runtime Container App host
 // (mirrors how LOOM_DAB_PREVIEW_URL defaults to the dab-runtime output). Empty
@@ -2001,23 +1995,12 @@ module udfRuntime 'udf-runtime.bicep' = if (udfRuntimeEnabled) {
   }
 }
 
-// DuckDB-over-Delta report accelerator (loom report-accel) — opt-in latency
-// fast path over the lakehouse Delta files. Image-gated (root
-// reportAccelImageReady, folded into reportAccelActive) so a clean first deploy
-// with no image in ACR does not fail on an unresolvable ref; until the image is
-// ready the report query route falls back to Synapse Serverless. Azure-native,
-// no Fabric dependency.
-module reportAccel 'report-accel.bicep' = if (reportAccelActive) {
-  name: 'report-accel'
-  params: {
-    reportAccelEnabled: true
-    location: location
-    environmentId: containerPlatformModule.outputs.caeId
-    accelUamiId: identity.outputs.uamiConsoleId
-    image: '${registry.outputs.acrLoginServer}/csa-loom/report-accel:${appImageTags.?reportAccel ?? 'v0.1'}'
-    complianceTags: complianceTags
-  }
-}
+// Report query acceleration ("Direct Lake"-speed) runs on the Databricks SQL
+// warehouse (Photon) reading the lakehouse Delta in-place — no dedicated
+// accelerator resource is deployed. The console reaches it via the existing
+// Databricks bindings (LOOM_DATABRICKS_HOSTNAME + LOOM_DATABRICKS_SQL_WAREHOUSE_ID
+// emitted below); absent a warehouse, the report query route falls back to
+// Synapse Serverless. Azure-native, no Fabric dependency.
 
 // Warm Spark session pool (config-only — no Azure resource is deployed). The
 // pool lives in the console process (lib/azure/spark-session-pool.ts) and warms
@@ -3168,13 +3151,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(effectiveUdfFunctionBase) ? [
             { name: 'LOOM_UDF_FUNCTION_BASE', value: effectiveUdfFunctionBase }
           ] : [],
-          // report-accel (DuckDB-over-Delta) URL — set only when the image-gated
-          // accelerator Container App deployed (report-accel.bicep); absence →
-          // the report query route falls back to Synapse Serverless
-          // (no-vaporware.md; Azure-native, no Fabric dependency).
-          !empty(loomReportAccelUrl) ? [
-            { name: 'LOOM_REPORT_ACCEL_URL', value: loomReportAccelUrl }
-          ] : [],
+          // Report query acceleration runs on the Databricks SQL warehouse
+          // (Photon) via LOOM_DATABRICKS_HOSTNAME + LOOM_DATABRICKS_SQL_WAREHOUSE_ID
+          // (emitted with the other Databricks bindings above); no dedicated
+          // accelerator env/host is required. Absent a warehouse the report query
+          // route falls back to Synapse Serverless (no-vaporware.md; Azure-native,
+          // no Fabric dependency).
           // Warm Spark session pool config (spark-session-pool.bicep, config-only)
           // — warms Azure-native Synapse Livy sessions to kill notebook cold
           // start. Always emitted (defaults: disabled / 1 / 3 / 900s); tenant

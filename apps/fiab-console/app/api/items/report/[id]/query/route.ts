@@ -980,14 +980,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // set no override and keep the resolver-pinned target, byte-for-byte.
       const runTarget = projected.target ?? resolved.sqlSource.target;
 
-      // ── QUERY ACCELERATION (Direct-Lake-ish) — accel → cache → Serverless ────
+      // ── QUERY ACCELERATION (Direct Lake) — accel → cache → Serverless ────────
       // The result cache is ALWAYS on (in-process + optional Cosmos): a repeat of
       // this exact logical query (same compiled SQL + params, same freshness
-      // token) collapses to a Map read. The DuckDB-over-Delta accel fast path is
-      // offered ONLY when LOOM_REPORT_ACCEL_URL is deployed AND the chosen
-      // relation is a serverless Delta OPENROWSET (lakehouse / Import-Dual-Direct
-      // Lake cache) — i.e. the exact aggregating-visual shape Direct Lake speeds
-      // up. It is NOT offered when a Power Query transform folded the source
+      // token) collapses to a Map read. The Databricks-SQL (Photon) over-Delta
+      // accel fast path is offered ONLY when a Databricks SQL warehouse is
+      // configured (LOOM_DATABRICKS_HOSTNAME + LOOM_DATABRICKS_SQL_WAREHOUSE_ID)
+      // AND the chosen relation is a serverless Delta OPENROWSET (lakehouse /
+      // Import-Dual-Direct Lake cache) — i.e. the exact aggregating-visual shape
+      // Direct Lake speeds up; the warehouse reads the SAME ADLS Delta in-place.
+      // It is NOT offered when a Power Query transform folded the source
       // (fold.kind==='folded') or drill/what-if rewrote the query (compileOpts),
       // because the narrow accel compiler wouldn't reflect those — those still run
       // on Synapse. On ANY accel miss/failure the orchestrator runs the SAME real
