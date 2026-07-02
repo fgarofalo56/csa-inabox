@@ -30,6 +30,7 @@ import {
   Copy20Regular, Info16Regular, ChevronDown20Regular, ChevronUp20Regular, Server20Regular,
   Notebook16Regular, Database16Regular, History16Regular, Database24Regular, Stop20Regular,
   FolderAdd20Regular, Folder20Filled, FolderArrowRight20Regular, ArrowSort20Regular,
+  Flash16Regular,
 } from '@fluentui/react-icons';
 import { EmptyState } from '@/lib/components/empty-state';
 import {
@@ -466,6 +467,33 @@ export function NotebookEditor({ item, id }: Props) {
   // (dbutils vs mssparkutils vs azure.ai.ml) + Copilot grounding. Defaults to
   // Synapse Spark (the validated Livy path) when nothing is selected yet.
   const clusterRuntime: ClusterRuntime = runtimeFromComputeKind(selectedCompute?.kind);
+
+  // Warm Spark session-pool indicator. Honest about whether the next run gets a
+  // pre-warmed session (⚡ instant) or will cold-start the Synapse Spark pool
+  // (~2 min). Polls the pool BFF; only meaningful for a Synapse Spark compute
+  // (computeId `spark:<pool>`). Silent when the pool is disabled or the backend
+  // isn't Spark — never implies capability that isn't there.
+  const [warmPool, setWarmPool] = useState<{ enabled: boolean; warmForPool: boolean } | null>(null);
+  const sparkPoolName = computeId.startsWith('spark:') ? computeId.slice('spark:'.length) : '';
+  useEffect(() => {
+    if (!sparkPoolName) { setWarmPool(null); return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/spark/session-pool');
+        const j = await r.json();
+        if (cancelled || !j?.ok) return;
+        const st = j.status;
+        const warm = Array.isArray(st?.groups)
+          ? st.groups.some((gp: any) => gp?.poolName === sparkPoolName && gp?.warm > 0)
+          : false;
+        setWarmPool({ enabled: !!st?.enabled, warmForPool: warm });
+      } catch { /* silent — indicator is best-effort */ }
+    };
+    load();
+    const t = setInterval(load, 15000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [sparkPoolName, running]);
   const startCompute = useCallback(async () => {
     if (!computeId) return;
     setStartingCompute(true); setRunMsg('Starting compute…');
@@ -2067,6 +2095,23 @@ export function NotebookEditor({ item, id }: Props) {
                 <Badge appearance="outline" size="small" color={clusterRuntime === 'databricks' ? 'important' : clusterRuntime === 'azure-ml' ? 'success' : 'brand'}>
                   {RUNTIME_LABEL[clusterRuntime]} syntax
                 </Badge>
+                {sparkPoolName && warmPool?.enabled && (
+                  <Tooltip
+                    relationship="label"
+                    content={warmPool.warmForPool
+                      ? 'A pre-warmed Spark session is on standby — your next run starts instantly instead of cold-starting the pool.'
+                      : 'No warm session on standby yet — the next run cold-starts the Synapse Spark pool (~2 min). The warm pool refills in the background so later runs are instant.'}
+                  >
+                    <Badge
+                      appearance="tint"
+                      size="small"
+                      color={warmPool.warmForPool ? 'success' : 'warning'}
+                      icon={<Flash16Regular />}
+                    >
+                      {warmPool.warmForPool ? 'Warm session ready' : 'Cold start (~2 min)'}
+                    </Badge>
+                  </Tooltip>
+                )}
               </span>
             ) : (
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No compute selected</Caption1>

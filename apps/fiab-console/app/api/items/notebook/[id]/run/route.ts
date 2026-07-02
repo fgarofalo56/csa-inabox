@@ -226,6 +226,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       let sessState = 'starting';
       let reused = false;
       let displayLoaded = false;
+      let freshSession = false; // fresh cold-create OR a warm pool hand-off — both need the preamble
+      let fromPool = false;
+      let poolLeaseId: string | undefined;
       let sessionReceipt: Record<string, unknown> | null = null;
       const saved = state.sparkSession;
       const savedKey = saved && typeof saved.sizingKey === 'string' ? saved.sizingKey : '';
@@ -239,26 +242,55 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           }
         } catch { /* stale/expired → fall through to create */ }
       }
+
+      // Warm-pool hand-off (kills the 2-4 min Synapse cold start). When the
+      // notebook has no reusable session yet, try to lease a pre-warmed idle
+      // Livy session from the pool instead of cold-starting one. The lease/
+      // return model guarantees the session is handed to exactly THIS run (never
+      // shared concurrently); the pool refills itself in the background. Pool
+      // disabled / empty → acquireWarmSession returns null and we cold-start
+      // below exactly as before (pure accelerator, no hard dependency).
+      if (sessionId === undefined) {
+        try {
+          const { sparkPoolEnabled, acquireWarmSession } = await import('@/lib/azure/spark-session-pool');
+          if (sparkPoolEnabled()) {
+            const lease = await acquireWarmSession({
+              backend: 'synapse', poolName: pool, kind: effectiveSessKind, sizingKey, sizing, userOid: s.claims?.oid,
+            });
+            if (lease && typeof lease.sessionId === 'number') {
+              sessionId = lease.sessionId; sessState = 'idle';
+              fromPool = true; freshSession = true; poolLeaseId = lease.leaseId;
+              sessionReceipt = lease.request || null;
+            }
+          }
+        } catch { /* pool best-effort — fall through to cold create */ }
+      }
+
       if (sessionId === undefined) {
         const sess = await createLivySessionAsync(pool, effectiveSessKind, undefined, sizing);
         sessionId = sess.id; sessState = sess.state;
         sessionReceipt = sess.request;
+        freshSession = true;
+      }
 
+      // Auto-mount attached lakehouses + display helper on any FRESH session —
+      // whether cold-created just now OR leased warm from the pool (a pooled
+      // session is a blank kernel, so it needs the same preamble a cold one
+      // gets). Skipped on notebook-level reuse (already injected once).
+      if (freshSession && sessKind === 'pyspark' && typeof sessionId === 'number') {
         // Auto-mount attached lakehouses (issue #655) — inject the
         // `loom_lakehouses` abfss preamble as a session statement on a FRESH
         // pyspark session so every cell can read the lake without typing paths.
         // Skipped on reuse (defined once per session) + non-pyspark kinds.
         // Honest: unresolvable sources are omitted; empty preamble injects
         // nothing. Non-fatal — a failure here must not break the run.
-        if (sessKind === 'pyspark') {
-          try {
-            const preamble = await buildAutoMountPreamble(state.attachedSources || [], workspaceId);
-            if (preamble) {
-              const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
-              await submitLivyStatement(pool, sessionId, { code: preamble, kind: 'pyspark' });
-            }
-          } catch { /* non-fatal — user can still type paths manually */ }
-        }
+        try {
+          const preamble = await buildAutoMountPreamble(state.attachedSources || [], workspaceId);
+          if (preamble) {
+            const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
+            await submitLivyStatement(pool, sessionId, { code: preamble, kind: 'pyspark' });
+          }
+        } catch { /* non-fatal — user can still type paths manually */ }
       }
 
       // Rich display() helper — ensure it is loaded ONCE per session, for BOTH
@@ -290,7 +322,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           state: {
             ...state,
             pendingRuns,
-            sparkSession: { pool, id: sessionId, kind: effectiveSessKind, sizingKey, request: redactReceiptSecrets(sessionReceipt), displayLoaded },
+            sparkSession: { pool, id: sessionId, kind: effectiveSessKind, sizingKey, request: redactReceiptSecrets(sessionReceipt), displayLoaded, ...(poolLeaseId ? { poolLeaseId } : {}) },
             ...(rawCfg ? { sparkSessionSizing: rawCfg } : {}),
           },
           updatedAt: new Date().toISOString(),
@@ -302,6 +334,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         runId: runIdStr,
         status: sessState,
         reusedSession: reused,
+        // True when this session was handed off warm from the pool (no cold
+        // start). Surfaced so the editor can show "warm session ready ⚡".
+        fromWarmPool: fromPool,
         compute: { kind: 'synapse-spark', pool },
         cellId: cellId || null,
         // Honest receipt: the real Livy session-create body that provisioned

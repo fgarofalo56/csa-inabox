@@ -2832,3 +2832,123 @@ udfRuntime.outputs.hostUrl }` into the console `apps[]` env; surface
 identity any data-plane role a function needs (SQL, ADLS, Cosmos). If a function
 uses an unwired Fabric binding placeholder the host returns HTTP 409 naming the
 remediation — never a faked result.
+
+## Warm Spark session pool (kill notebook cold starts)
+
+A Synapse Spark pool cold-starts in **~2-4 minutes**; Fabric's "starter pools"
+feel instant because Microsoft keeps a warm pool of pre-provisioned sessions on
+standby. The warm Spark session pool gives CSA Loom the same behaviour on the
+**Azure-native default backend**: it keeps N idle Livy (Synapse) sessions — or a
+warmed Databricks all-purpose cluster — on standby, and on a notebook run the
+console **leases a warm session** instead of paying the cold start. The pool
+**refills itself in the background** so the next run is warm too. No Fabric
+dependency: Synapse is the default backend and the Fabric APIs are never on this
+path (per `.claude/rules/no-fabric-dependency.md`).
+
+**Lease / return model (safe hand-off).** Every pooled session is a slot that
+moves `warming → warm → leased → (returned→warm | dead)`. Acquiring a session
+atomically flips exactly ONE warm slot to `leased` and stamps it with the acting
+user's oid — so a session is **never shared across users concurrently**. On a
+miss the run cold-starts exactly as it does today (the pool is a pure
+accelerator, never a hard dependency, per `no-vaporware.md`). A background
+sweeper keepalives warm Synapse sessions (so Livy's own idle timeout doesn't
+reap them), evicts warm-above-min sessions idle past the TTL, and refills to
+`min`.
+
+**Source of truth.** Manager: `apps/fiab-console/lib/azure/spark-session-pool.ts`
+(warms REAL sessions via `createLivySessionAsync` / `getLivySession` /
+`keepaliveLivySession` / `killLivySession`). BFF:
+`app/api/spark/session-pool/route.ts` (GET status; POST `warm` to pre-provision,
+POST `config` — tenant-admin — to set min/max/TTL/enabled live). Run wiring:
+`app/api/items/notebook/[id]/run/route.ts` acquires-from-pool → falls back to
+cold create. Editor: the notebook compute bar shows **"Warm session ready ⚡"**
+or **"Cold start (~2 min)"** honestly per pool state. Config-only bicep:
+`modules/admin-plane/spark-session-pool.bicep`.
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `LOOM_SPARK_POOL_ENABLED` | `false` | Master switch. `false` → notebooks keep today's cold-start behaviour (out-of-box). `true`/`1` → warm hand-off. |
+| `LOOM_SPARK_POOL_MIN` | `1` | Minimum warm sessions kept on standby per pool/kind/sizing group. Each idle warm session consumes Spark-pool capacity — size against the node budget. |
+| `LOOM_SPARK_POOL_MAX` | `3` | Max total sessions per group (warm + leased). Clamped to ≥ min. |
+| `LOOM_SPARK_POOL_IDLE_TTL` | `900` | Seconds a warm-above-min session may sit idle before its Livy session is killed to reclaim capacity. |
+| `LOOM_DATABRICKS_DEFAULT_CLUSTER` | *(unset)* | Optional — the all-purpose cluster id to keep warm when the Databricks backend is opted into (`LOOM_NOTEBOOK_BACKEND=databricks`). |
+
+**Wiring (integration pass, done in `modules/admin-plane/main.bicep`):** invoke
+`spark-session-pool.bicep`, then spread its `sparkPoolEnv` output (or the four
+`*Env` outputs) onto the `loom-console` `apps[]` env list — the same place
+`LOOM_AZURE_MAPS_CLIENT_ID` et al. are wired. The module deploys **no Azure
+resource** (the pool lives in the console process and warms sessions against the
+already-provisioned Synapse Spark pool / Databricks workspace); it only produces
+the env values. Tenant admins can flip enabled/min/max/TTL live via the
+`/api/spark/session-pool` config action (per-replica, in-memory) without a
+redeploy.
+
+**Honest gate.** When no Spark backend is configured (`synapseConfigGate()` /
+`LOOM_DATABRICKS_HOSTNAME` unmet), the warm action returns a message naming the
+exact env var to set and warms nothing — it never fakes a warm session.
+
+---
+
+## Report query acceleration — result cache + DuckDB-over-Delta (Direct-Lake-ish)
+
+The Loom report / semantic layer has a two-tier query **accelerator** that gives
+import-mode speed on the lakehouse Delta *without* a Microsoft Fabric capacity —
+Loom's Azure-native equivalent of Fabric **Direct Lake**. Out of the box (no new
+infra) reports run **cache + Synapse Serverless**; deploying the optional accel
+host lights up a DuckDB-over-Delta fast path.
+
+### Tier 1 — result cache (always on, no infra)
+
+`lib/azure/query-result-cache.ts` caches report/semantic query **results** keyed
+by `(modelId, compiled-SQL + params hash, execution-surface, freshness token)`.
+The freshness token is the Delta commit version when resolvable, else a proxy
+derived from the report item's `_ts` + `state.lastRefresh` + `state.dataSource`,
+so a report **Refresh rotates the key and transparently invalidates** the cache.
+In-process by default; an **optional Cosmos tier** shares hits across replicas.
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `LOOM_QUERY_CACHE_DISABLED` | *(unset)* | Set `1` to turn the result cache off entirely. |
+| `LOOM_QUERY_CACHE_TTL_MS` | `60000` | Result time-to-live in ms. |
+| `LOOM_QUERY_CACHE_MAX` | `500` | Max in-process cached results (LRU). |
+| `LOOM_QUERY_CACHE_COSMOS_CONTAINER` | *(unset)* | Enable the shared Cosmos tier — the container id to use (in `LOOM_COSMOS_DATABASE`, PK `/modelId`, native TTL). Reuses `LOOM_COSMOS_ENDPOINT` + the Console UAMI. |
+
+### Tier 2 — DuckDB-over-Delta accel host (opt-in)
+
+`platform/report-accel/` (Dockerfile + `server.py`) is a scale-to-zero Container
+App running DuckDB with the `delta` + `azure` extensions. It reads the lakehouse
+Delta files **directly from ADLS Gen2** and answers aggregating visuals at
+interactive speed. The console (`lib/azure/report-accel-client.ts`) folds each
+visual's wells + filters into a compact semantic query and POSTs it; the service
+compiles that to DuckDB SQL over `delta_scan('<url>')`. Deployed by
+`platform/fiab/bicep/modules/admin-plane/report-accel.bicep`.
+
+The report query route prefers **accel → cache → Serverless**: on any accel
+miss/timeout/503 (or when the source isn't a Delta table) it runs the same real
+Synapse Serverless query it always did — the honest fallback.
+
+| Env var | Set on | Purpose |
+| --- | --- | --- |
+| `LOOM_REPORT_ACCEL_URL` | `loom-console` | Internal `https://<report-accel FQDN>` (the module's `accelUrl` output). Unset ⇒ accel disabled, cache + Serverless only. |
+| `LOOM_REPORT_ACCEL_AUDIENCE` | `loom-console` | Optional — token audience so the console attaches a Bearer token (Console UAMI) to the accel call. Omit for VNet-only trust. |
+| `LOOM_REPORT_ACCEL_TIMEOUT_MS` | `loom-console` | Optional — accel call timeout (default `20000`) before falling back to Serverless. |
+| `LOOM_ADLS_ACCOUNT` | `report-accel` | Optional — scope the DuckDB azure credential to one ADLS account name. |
+| `PORT` | `report-accel` | Listen port (default `8080`). |
+
+**Required role.** The `report-accel` Container App's managed identity (the
+Console UAMI or a dedicated accel UAMI) needs **Storage Blob Data Reader** on the
+lakehouse ADLS Gen2 account. When the lake is in the same resource group, the
+bicep module grants it (`grantStorageReader` + `lakeStorageAccountName`). For a
+**cross-subscription DLZ lake**, grant it out-of-band:
+
+```bash
+az role assignment create \
+  --assignee-object-id <accel-uami-principal-id> --assignee-principal-type ServicePrincipal \
+  --role "Storage Blob Data Reader" \
+  --scope /subscriptions/<dlz-sub>/resourceGroups/<dlz-rg>/providers/Microsoft.Storage/storageAccounts/<lake-account>
+```
+
+**Integration pass (not done here):** add `report-accel.bicep` to
+`modules/admin-plane/main.bicep`, pass the CAE + UAMI + lake account, and set the
+console's `LOOM_REPORT_ACCEL_URL` to the module's `accelUrl` output. The module
+is standalone and does not edit `main.bicep`.
