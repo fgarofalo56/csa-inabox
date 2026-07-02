@@ -48,6 +48,8 @@ interface ManagedPe {
   connectionState?: string; connectionDescription?: string; actionsRequired?: string;
   privateLinkServiceId?: string; targetResourceName?: string; groupIds?: string[];
   requestMessage?: string; loomManaged?: boolean; createdBy?: string; createdAt?: string;
+  /** Private-DNS zone-group registration state (from the create / poll BFF paths). */
+  dnsRegistered?: boolean; dnsZoneName?: string; dnsNote?: string;
 }
 interface Gate { reason?: string; remediation?: string; missing?: string[]; roleId?: string }
 interface ListResp {
@@ -73,6 +75,29 @@ function stateBadge(state?: string) {
   }
   if (s === 'pending') return <Badge appearance="tint" color="warning" icon={<Warning16Filled />}>Pending approval</Badge>;
   return <Badge appearance="tint" color="informative" icon={<Info16Filled />}>{state || '—'}</Badge>;
+}
+
+/** Private-DNS registration badge/caption — known only after create or a poll
+ * (the BFF attaches the privatelink zone group and reports the outcome). */
+function dnsIndicator(e: ManagedPe) {
+  if (e.dnsRegistered === true) {
+    return (
+      <Badge appearance="outline" color="success" title={e.dnsZoneName ? `Registered in ${e.dnsZoneName}` : undefined}>
+        DNS registered
+      </Badge>
+    );
+  }
+  if (e.dnsRegistered === false) {
+    return (
+      <Caption1
+        title={e.dnsNote}
+        style={{ color: tokens.colorPaletteDarkOrangeForeground1 }}
+      >
+        DNS not registered{e.dnsZoneName ? ` — ${e.dnsZoneName} missing` : ''}
+      </Caption1>
+    );
+  }
+  return null;
 }
 
 /** Suggest an ARM-safe PE name from the target + sub-resource. */
@@ -384,7 +409,12 @@ export function ManagedPrivateEndpointsCard() {
                     <TableCell><span style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{e.name}</span></TableCell>
                     <TableCell>{e.targetResourceName || '—'}</TableCell>
                     <TableCell>{(e.groupIds || []).join(', ') || '—'}</TableCell>
-                    <TableCell>{stateBadge(e.connectionState)}</TableCell>
+                    <TableCell>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                        {stateBadge(e.connectionState)}
+                        {dnsIndicator(e)}
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <Badge appearance="tint" color={e.provisioningState === 'Succeeded' ? 'success' : 'warning'}>
                         {e.provisioningState || '—'}
@@ -421,7 +451,10 @@ export function ManagedPrivateEndpointsCard() {
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
         Backed by <code>Microsoft.Network/privateEndpoints</code> in the managed network over ARM. Approval is a
         separate action the target resource owner performs (portal → the resource → Networking → Private endpoint
-        connections → Approve). Tenant-admin only — private endpoints touch the shared landing-zone network.
+        connections → Approve). Loom registers the endpoint in the matching <code>privatelink.*</code> private DNS
+        zone automatically (on create, retried on refresh after approval) so the FQDN resolves privately — a
+        &ldquo;DNS not registered&rdquo; note means the zone is missing from the networking resource group.
+        Tenant-admin only — private endpoints touch the shared landing-zone network.
       </Caption1>
     </div>
   );

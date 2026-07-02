@@ -59,6 +59,33 @@ function err(error: string, status: number, code?: string, gate?: { reason: stri
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}), ...(gate ? { gate } : {}) }, { status });
 }
 
+/**
+ * True when `hostname` is a literal loopback / private / link-local address
+ * (localhost, 127.x, 10.x, 172.16-31.x, 192.168.x, 169.254.x, 0.0.0.0, ::1,
+ * fc00::/7, fe80::/10). A server-side rest-dab fetch must never be pointed at
+ * these unless the URL is this console itself — otherwise a query becomes an
+ * SSRF probe into the private VNet (adversarial-audit finding).
+ */
+function isPrivateHost(hostname: string): boolean {
+  const h = hostname.replace(/^\[|\]$/g, '').toLowerCase();
+  if (h === 'localhost' || h.endsWith('.localhost')) return true;
+  if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
+  // IPv4 literal (including the IPv4-mapped IPv6 form ::ffff:a.b.c.d).
+  const v4 = /^(?:::ffff:)?(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (v4) {
+    const a = Number(v4[1]);
+    const b = Number(v4[2]);
+    if (a === 0 || a === 10 || a === 127) return true;
+    if (a === 172 && b >= 16 && b <= 31) return true;
+    if (a === 192 && b === 168) return true;
+    if (a === 169 && b === 254) return true;
+    return false;
+  }
+  // IPv6 unique-local (fc00::/7) + link-local (fe80::/10) literals.
+  if (/^f[cd][0-9a-f]{2}:/.test(h) || h.startsWith('fe80:')) return true;
+  return false;
+}
+
 /** Dig a dot/bracket path (`data.items[0].rows`) out of a parsed JSON body. */
 function digPath(obj: unknown, path: string): unknown {
   if (!path) return obj;
@@ -204,6 +231,30 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   } catch {
     return err('could not resolve the REST query URL from the API base + path', 400, 'bad_url');
   }
+
+  // ── SSRF / credential-forwarding guard (adversarial-audit finding) ─────────
+  // The caller's session cookie + Authorization header are forwarded ONLY when
+  // the resolved URL's origin is trusted: this console itself (same-origin /api
+  // DAB) or the deployment-configured DAB runtime (LOOM_DAB_PREVIEW_URL / the
+  // item's published serviceUrl). Any other absolute host is fetched WITHOUT
+  // credentials — a rest-dab query configured with an external URL must never
+  // exfiltrate the runner's Loom session cookie. Literal private / link-local
+  // hosts are refused outright unless same-origin (no VNet SSRF probing).
+  const sameOrigin = url.origin === req.nextUrl.origin;
+  const trustedOrigins = new Set<string>([req.nextUrl.origin]);
+  for (const base of [process.env.LOOM_DAB_PREVIEW_URL, String(state.serviceUrl || '')]) {
+    const v = (base || '').trim();
+    if (!v) continue;
+    try { trustedOrigins.add(new URL(v).origin); } catch { /* unparseable base — ignore */ }
+  }
+  const forwardCredentials = trustedOrigins.has(url.origin);
+  if (!sameOrigin && isPrivateHost(url.hostname)) {
+    return err(
+      `REST query target "${url.hostname}" is a private/link-local address and not this console — refusing the request.`,
+      400, 'private_host_blocked',
+    );
+  }
+
   const method = String(q.method || 'GET').toUpperCase() === 'POST' ? 'POST' : 'GET';
   const started = Date.now();
   try {
@@ -211,10 +262,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       method,
       headers: {
         accept: 'application/json',
-        // Forward the caller's session so a same-origin Loom /api DAB call (or an
-        // APIM endpoint that accepts the cookie) authenticates as this user.
-        ...(req.headers.get('cookie') ? { cookie: req.headers.get('cookie') as string } : {}),
-        ...(req.headers.get('authorization') ? { authorization: req.headers.get('authorization') as string } : {}),
+        // Forward the caller's session ONLY to trusted origins (this console's
+        // own /api DAB or the configured DAB runtime) so a same-origin call
+        // authenticates as this user — never to an arbitrary external host.
+        ...(forwardCredentials && req.headers.get('cookie') ? { cookie: req.headers.get('cookie') as string } : {}),
+        ...(forwardCredentials && req.headers.get('authorization') ? { authorization: req.headers.get('authorization') as string } : {}),
       },
       cache: 'no-store',
     });

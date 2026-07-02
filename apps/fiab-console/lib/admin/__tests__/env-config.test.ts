@@ -122,13 +122,33 @@ describe('admin/env-config registry', () => {
     expect(aliasSatisfiedKeys((k) => adminRgSet.has(k)).has('LOOM_ALERT_RG')).toBe(true);
   });
 
-  it('exposes exactly the 45 editable runtime variables (catalog completeness)', () => {
+  it('exposes exactly the 60 editable runtime variables (catalog completeness)', () => {
     // The env-config catalog is the union of every required + anyOf key across
-    // ENV_CHECKS. The /admin/env-config coverage badge reads N-of-45; this pins
-    // the catalog size so a drift in ENV_CHECKS is caught in CI. Bumped to 45 by
-    // the day-one self-audit expansion (MCP deploy/built-in, Warp SQL engine,
-    // Databricks, Purview UC endpoint, DLP enable, ACA env coords).
-    expect(EDITABLE_ENV.length).toBe(45);
+    // ENV_CHECKS. The /admin/env-config coverage badge reads N-of-<count>; this
+    // pins the catalog size so a drift in ENV_CHECKS is caught in CI. Bumped to
+    // 60 by the wave-2 coverage fix (SWA publish, Activator ADX scope, managed-PE
+    // subnet, Plan SQL writeback, DAB preview runtime, UDF invoke base, OneLake
+    // ACL enforcement, Azure Maps backend/credential) — previously these keys
+    // were silently DROPPED by PUT /api/admin/env-config.
+    expect(EDITABLE_ENV.length).toBe(60);
+  });
+
+  it('surfaces the wave-2 env vars as settable (previously dropped by the whitelist)', () => {
+    for (const k of [
+      'LOOM_SWA_SUBSCRIPTION_ID', 'LOOM_SWA_RESOURCE_GROUP', 'LOOM_SWA_LOCATION',
+      'LOOM_ADX_ALERT_SCOPE', 'LOOM_PE_SUBNET_ID',
+      'LOOM_PLAN_BACKING_SQL_SERVER', 'LOOM_PLAN_BACKING_SQL_DATABASE',
+      'LOOM_DAB_PREVIEW_URL', 'LOOM_UDF_FUNCTION_BASE',
+      'LOOM_ONELAKE_SECURITY_ACL', 'LOOM_MAPS_BACKEND', 'LOOM_AZURE_MAPS_CLIENT_ID',
+    ]) {
+      expect(isEditableEnvKey(k), k).toBe(true);
+    }
+    // The Maps shared key is secret-typed (never echoed); the client id is not.
+    expect(getEditableEnv('LOOM_AZURE_MAPS_KEY')?.secret).toBe(true);
+    expect(getEditableEnv('LOOM_AZURE_MAPS_CLIENT_ID')?.secret).toBe(false);
+    // SWA sub/rg/location fall back to the deployment-wide vars (alias groups).
+    expect(aliasSatisfiedKeys((k) => k === 'LOOM_SUBSCRIPTION_ID').has('LOOM_SWA_SUBSCRIPTION_ID')).toBe(true);
+    expect(aliasSatisfiedKeys((k) => k === 'LOOM_LOCATION').has('LOOM_SWA_LOCATION')).toBe(true);
   });
 
   it('flags bicep-derived vars (org-visuals, LA workspace) with derived=true', () => {

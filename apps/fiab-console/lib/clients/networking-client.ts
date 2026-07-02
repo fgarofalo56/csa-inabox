@@ -40,7 +40,8 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { randomUUID } from 'node:crypto';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { networkingConfigContainer } from '@/lib/azure/cosmos-client';
-import { normalizePrivateLinkTargetId } from '@/lib/azure/pe-subresource-groups';
+import { normalizePrivateLinkTargetId, privateDnsZoneNameForGroupId } from '@/lib/azure/pe-subresource-groups';
+import { listPrivateDnsZones } from '@/lib/azure/network-discovery';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -635,6 +636,15 @@ export interface ManagedPrivateEndpoint {
   createdBy?: string;
   /** ISO timestamp the PE was created (loom-created-at tag). */
   createdAt?: string;
+  /** True once a privateDnsZoneGroups config points the matching privatelink.*
+   * zone at this PE (so its FQDN actually resolves after approval). Populated
+   * by the create / poll paths — undefined when not yet checked. */
+  dnsRegistered?: boolean;
+  /** The privatelink.* zone the PE registers (or should register) into. */
+  dnsZoneName?: string;
+  /** Honest note when DNS registration could not be completed (e.g. the
+   * matching privatelink zone does not exist in the networking RG). */
+  dnsNote?: string;
 }
 
 /** Shape one ARM privateEndpoint resource into a {@link ManagedPrivateEndpoint}. */
@@ -799,6 +809,69 @@ export async function createManagedPrivateEndpoint(
 export async function deleteManagedPrivateEndpoint(name: string): Promise<void> {
   const cfg = readNetworkingConfig();
   await armDelete(`${peBase(cfg, name)}?api-version=${PE_API}`);
+}
+
+export interface ManagedPeDnsResult {
+  registered: boolean;
+  zoneName?: string;
+  zoneId?: string;
+  note?: string;
+}
+
+/**
+ * Ensure the managed PE carries a `privateDnsZoneGroups` config referencing the
+ * matching `privatelink.*` zone — WITHOUT it the endpoint never resolves, even
+ * after the target owner approves the connection (adversarial-audit finding:
+ * createManagedPrivateEndpoint created the PE but never registered DNS).
+ *
+ * Idempotent: an already-attached matching zone config is reported without a
+ * re-PUT (the PUT itself is also a safe upsert on .../privateDnsZoneGroups/default).
+ * Honest when the zone is missing: returns registered:false + a note naming the
+ * exact privatelink zone to deploy in the networking RG — never a silent no-op.
+ */
+export async function ensureManagedPeDnsZoneGroup(
+  peName: string,
+  groupId: string,
+  targetResourceId?: string,
+): Promise<ManagedPeDnsResult> {
+  const cfg = readNetworkingConfig();
+  const expected = privateDnsZoneNameForGroupId(groupId, targetResourceId);
+  if (!expected) {
+    return {
+      registered: false,
+      note: `No documented privatelink DNS zone for sub-resource "${groupId}" — register the endpoint's FQDN in your hub private DNS manually.`,
+    };
+  }
+  // Already attached? Report it without another PUT.
+  try {
+    const j = await armGet<{ value?: any[] }>(`${peBase(cfg, peName)}/privateDnsZoneGroups?api-version=${PE_API}`);
+    for (const g of j?.value || []) {
+      for (const c of g?.properties?.privateDnsZoneConfigs || []) {
+        const zoneId = String(c?.properties?.privateDnsZoneId || '');
+        if (zoneId.toLowerCase().endsWith(`/privatednszones/${expected.toLowerCase()}`)) {
+          return { registered: true, zoneName: expected, zoneId };
+        }
+      }
+    }
+  } catch { /* zone-group list failed — fall through to the attach attempt */ }
+  // Resolve the zone's ARM id from the live private DNS zones the Console
+  // identity can read (hub networking RG preferred when the zone exists twice).
+  const zones = await listPrivateDnsZones();
+  const matches = zones.filter((z) => z.name.toLowerCase() === expected.toLowerCase());
+  const zone =
+    matches.find((z) => (z.resourceGroup || '').toLowerCase() === cfg.networkingRg.toLowerCase()) || matches[0];
+  if (!zone?.resourceGroup) {
+    return {
+      registered: false,
+      zoneName: expected,
+      note: `Private DNS zone "${expected}" does not exist in the networking resource group "${cfg.networkingRg}" (or anywhere the Console identity can read) — the endpoint will NOT resolve privately. Deploy the zone (platform/fiab/bicep/modules/admin-plane/network.bicep private DNS zones) and link it to the hub VNet, then refresh this endpoint.`,
+    };
+  }
+  const zoneId =
+    `/subscriptions/${zone.subscriptionId}/resourceGroups/${encodeURIComponent(zone.resourceGroup)}` +
+    `/providers/Microsoft.Network/privateDnsZones/${zone.name}`;
+  await createPrivateDnsZoneGroup(peName, zoneId);
+  return { registered: true, zoneName: expected, zoneId };
 }
 
 // ---------------------------------------------------------------------------

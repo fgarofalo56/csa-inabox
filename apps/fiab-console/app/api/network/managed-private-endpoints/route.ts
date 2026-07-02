@@ -34,6 +34,8 @@ import {
   createManagedPrivateEndpoint,
   deleteManagedPrivateEndpoint,
   getPrivateEndpointConnectionState,
+  ensureManagedPeDnsZoneGroup,
+  type ManagedPeDnsResult,
 } from '@/lib/clients/networking-client';
 import { networkingErrorResponse } from '@/app/api/admin/workspaces/[id]/networking/_gate';
 import { ALL_PE_GROUP_IDS, normalizePrivateLinkTargetId } from '@/lib/azure/pe-subresource-groups';
@@ -75,6 +77,24 @@ export async function GET(req: NextRequest) {
       const endpoint = await getPrivateEndpointConnectionState(poll);
       if (!endpoint) {
         return NextResponse.json({ ok: false, error: 'managed private endpoint not found' }, { status: 404 });
+      }
+      // Once the owner has APPROVED the connection, make sure the matching
+      // privatelink.* DNS zone group is attached — without it the endpoint
+      // never resolves privately even though the connection is live.
+      if ((endpoint.connectionState || '').toLowerCase() === 'approved') {
+        try {
+          const dns = await ensureManagedPeDnsZoneGroup(
+            endpoint.name,
+            (endpoint.groupIds || [])[0] || '',
+            endpoint.privateLinkServiceId,
+          );
+          endpoint.dnsRegistered = dns.registered;
+          endpoint.dnsZoneName = dns.zoneName;
+          endpoint.dnsNote = dns.note;
+        } catch (e) {
+          endpoint.dnsRegistered = false;
+          endpoint.dnsNote = `Private DNS registration failed: ${e instanceof Error ? e.message : String(e)}`;
+        }
       }
       return NextResponse.json({ ok: true, endpoint });
     }
@@ -139,8 +159,27 @@ export async function POST(req: NextRequest) {
       justification,
       createdBy: session!.claims.oid,
     });
+    // Register the PE FQDN in the matching privatelink.* private DNS zone right
+    // away (best-effort) — without a privateDnsZoneGroups config the endpoint
+    // never resolves, even after approval. A transient failure here is retried
+    // automatically on the ?poll path once the connection shows Approved.
+    let dns: ManagedPeDnsResult;
+    try {
+      dns = await ensureManagedPeDnsZoneGroup(endpoint.name, groupId, target);
+    } catch (e) {
+      dns = {
+        registered: false,
+        note: `Private DNS zone group not attached yet (${e instanceof Error ? e.message : String(e)}) — it is retried automatically when you refresh the endpoint after approval.`,
+      };
+    }
+    endpoint.dnsRegistered = dns.registered;
+    endpoint.dnsZoneName = dns.zoneName;
+    endpoint.dnsNote = dns.note;
     const nextStep = approvalNextStep(target, endpoint.name);
-    return NextResponse.json({ ok: true, endpoint, nextStep, message: nextStep.note });
+    const message = dns.registered
+      ? `${nextStep.note} Private DNS: registered in ${dns.zoneName}.`
+      : `${nextStep.note} Private DNS: ${dns.note || 'not registered yet.'}`;
+    return NextResponse.json({ ok: true, endpoint, dns, nextStep, message });
   } catch (e) {
     return networkingErrorResponse(e);
   }

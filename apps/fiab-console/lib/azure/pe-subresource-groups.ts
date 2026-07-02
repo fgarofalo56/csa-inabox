@@ -1,17 +1,25 @@
 /**
  * PURE mapping: Azure ARM resource type → the private-link "group ids"
- * (sub-resources) a private endpoint can target on that resource.
+ * (sub-resources) a private endpoint can target on that resource, plus the
+ * groupId → `privatelink.*` private DNS zone each needs for FQDN resolution.
  *
  * This module is intentionally free of the Azure SDK / node credential chain so
  * it can be imported by BOTH the managed-private-endpoints BFF route (server-side
  * groupId validation + SQL target normalization) AND the create-dialog client
  * component (the sub-resource Dropdown). Same split as connectable-types.ts.
+ * (cloud-endpoints is a pure env-reading module — no SDK — so importing its
+ * suffix helpers keeps that property.)
  *
  * Sub-resource ("groupId") names are the documented private-link resource
  * sub-resources per service.
  * Learn: https://learn.microsoft.com/azure/private-link/private-endpoint-overview
  *        #private-link-resource
+ *        https://learn.microsoft.com/azure/private-link/private-endpoint-dns
  */
+import {
+  isGovCloud, getBlobSuffix, dfsSuffix, getFileSuffix, getSqlSuffix,
+  serviceBusSuffix, cosmosSuffix, synapseSqlSuffix,
+} from './cloud-endpoints';
 
 export interface PeGroupOption {
   /** The ARM `groupIds` value written on the private-link connection. */
@@ -88,4 +96,68 @@ export function normalizePrivateLinkTargetId(resourceId: string, armType?: strin
     if (m) return m[1];
   }
   return id;
+}
+
+/**
+ * The `privatelink.*` private DNS zone NAME a private endpoint with this
+ * sub-resource (groupId) registers its FQDN into — the zone a
+ * privateDnsZoneGroups config must reference for the endpoint to resolve after
+ * approval. Cloud-aware: Gov (GCC-High / IL5 / DoD) variants come from the
+ * cloud-endpoints suffix helpers (or the documented Gov literals where no
+ * helper exists). Returns undefined for a groupId with no documented zone.
+ *
+ * `targetResourceId` disambiguates the one colliding groupId: `Sql` is BOTH
+ * Cosmos DB Core API (privatelink.documents.*) and Synapse dedicated pools
+ * (privatelink.sql.azuresynapse.*).
+ *
+ * Zone names per Learn: azure/private-link/private-endpoint-dns (+ the
+ * Azure Government DNS-zone values in azure/azure-government/compare-azure-government-global-azure).
+ */
+export function privateDnsZoneNameForGroupId(groupId: string, targetResourceId?: string): string | undefined {
+  const gov = isGovCloud();
+  const target = (targetResourceId || '').toLowerCase();
+  // Storage sibling zones share the blob suffix shape (queue/table/web swap the
+  // service label): blob.core.windows.net → queue.core.windows.net etc.
+  const storageZone = (svc: string) => `privatelink.${getBlobSuffix().replace(/^blob\./, `${svc}.`)}`;
+  const cosmosApiZone = (api: string) =>
+    gov ? `privatelink.${api}.cosmos.azure.us` : `privatelink.${api}.cosmos.azure.com`;
+  switch (groupId) {
+    // ── Storage (per-service zones) ──
+    case 'blob': return `privatelink.${getBlobSuffix()}`;
+    case 'dfs': return `privatelink.${dfsSuffix()}`;
+    case 'file': return `privatelink.${getFileSuffix()}`;
+    case 'queue': return storageZone('queue');
+    case 'table': return storageZone('table');
+    case 'web': return storageZone('web');
+    // ── SQL / PostgreSQL ──
+    case 'sqlServer': return `privatelink.${getSqlSuffix()}`;
+    case 'postgresqlServer':
+      return gov ? 'privatelink.postgres.database.usgovcloudapi.net' : 'privatelink.postgres.database.azure.com';
+    // ── Cosmos DB (per-API zones; NOTE 'Table' ≠ storage 'table') ──
+    case 'Sql':
+      // Synapse dedicated pools reuse the 'Sql' groupId — key off the target type.
+      return target.includes('/providers/microsoft.synapse/')
+        ? `privatelink.${synapseSqlSuffix()}`
+        : `privatelink.${cosmosSuffix()}`;
+    case 'MongoDB': return cosmosApiZone('mongo');
+    case 'Cassandra': return cosmosApiZone('cassandra');
+    case 'Gremlin': return cosmosApiZone('gremlin');
+    case 'Table': return cosmosApiZone('table');
+    case 'Analytical': return cosmosApiZone('analytics');
+    // ── Synapse ──
+    case 'SqlOnDemand': return `privatelink.${synapseSqlSuffix()}`;
+    case 'Dev':
+      return gov ? 'privatelink.dev.azuresynapse.usgovcloudapi.net' : 'privatelink.dev.azuresynapse.net';
+    // ── Databricks (one zone covers both sub-resources) ──
+    case 'databricks_ui_api':
+    case 'browser_authentication':
+      return gov ? 'privatelink.databricks.azure.us' : 'privatelink.azuredatabricks.net';
+    // ── Event Hubs / Service Bus (shared zone) ──
+    case 'namespace': return `privatelink.${serviceBusSuffix()}`;
+    // ── Key Vault ──
+    case 'vault':
+      return gov ? 'privatelink.vaultcore.usgovcloudapi.net' : 'privatelink.vaultcore.azure.net';
+    default:
+      return undefined;
+  }
 }
