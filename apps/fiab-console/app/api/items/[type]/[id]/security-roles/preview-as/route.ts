@@ -37,6 +37,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { loadOwnedItem } from '../../../../_lib/item-crud';
 import {
   getRole,
   roleDocId,
@@ -242,6 +244,16 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
 
+  // OWNERSHIP gate — this route returns LIVE rows from the item's backing store
+  // under the Console UAMI, so a bare session + the default-off PDP shadow gate
+  // is NOT sufficient authorization. The caller must own the item (same
+  // loadOwnedItem check as the sibling endorsement/share routes) or be a tenant
+  // admin; otherwise 404 (don't leak item existence).
+  if (!isTenantAdmin(session)) {
+    const owned = await loadOwnedItem(params.id, params.type, session.claims.oid);
+    if (!owned) return NextResponse.json({ ok: false, error: 'item not found' }, { status: 404 });
+  }
+
   // PDP gate (default-off / shadow-ready). Previewing role data is a read.
   const blocked = await pdpCheck(session, { level: 'item', id: params.id, itemType: params.type }, 'read');
   if (blocked) return blocked;
@@ -263,6 +275,15 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
     if (!table) {
       return NextResponse.json(
         { ok: false, error: 'This role has no row- or column-level rules to preview. Add a Row/Column security rule first.' },
+        { status: 400 },
+      );
+    }
+    // Only tables the role actually governs may be previewed — the query runs
+    // as the Console UAMI (db_owner) with the owner-bypass intentionally NOT
+    // appended, so an arbitrary table name would read unfiltered rows.
+    if (!tables.some((t) => t.toLowerCase() === table.toLowerCase())) {
+      return NextResponse.json(
+        { ok: false, error: `table "${table}" carries no RLS/CLS rule on role "${roleName}" — preview-as can only read tables the role governs.` },
         { status: 400 },
       );
     }

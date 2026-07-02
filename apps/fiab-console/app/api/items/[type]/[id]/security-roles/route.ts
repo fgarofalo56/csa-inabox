@@ -18,8 +18,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { loadOwnedItem } from '../../../_lib/item-crud';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import {
@@ -66,6 +68,24 @@ function defaultContainer(itemType: OneLakeSecurityItemType): string {
  *  (the Console UAMI has Storage Blob Data Owner — wired by Bicep). */
 function aclBackendEnabled(): boolean {
   return process.env.LOOM_ONELAKE_SECURITY_ACL === 'true';
+}
+
+/**
+ * OWNERSHIP gate — these handlers read role definitions and grant/revoke REAL
+ * ADLS Gen2 POSIX ACLs on the shared DLZ storage, so a bare session + the
+ * default-off PDP shadow gate is NOT sufficient authorization. The caller must
+ * own the item (same loadOwnedItem check as the sibling endorsement/share
+ * routes) or be a tenant admin; otherwise 404 (don't leak item existence).
+ */
+async function assertItemAccess(
+  session: SessionPayload,
+  itemId: string,
+  itemType: string,
+): Promise<NextResponse | null> {
+  if (isTenantAdmin(session)) return null;
+  const owned = await loadOwnedItem(itemId, itemType, session.claims.oid);
+  if (!owned) return NextResponse.json({ ok: false, error: 'item not found' }, { status: 404 });
+  return null;
 }
 
 /** Honest infra-gate when the ADLS-ACL backend isn't enabled / configured. */
@@ -219,6 +239,9 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ type: st
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
 
+  const denied = await assertItemAccess(session, params.id, params.type);
+  if (denied) return denied;
+
   const sp = _req.nextUrl.searchParams;
   // PDP gate (default-off / shadow-ready). Reading OneLake security roles.
   const blockedGet = await pdpCheck(session, { level: 'item', id: params.id, itemType: params.type }, 'read');
@@ -260,6 +283,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
+  const deniedPost = await assertItemAccess(session, params.id, params.type);
+  if (deniedPost) return deniedPost;
   // PDP gate (default-off / shadow-ready). Creating/updating a OneLake security role is admin.
   const blockedPost = await pdpCheck(session, { level: 'item', id: params.id, itemType: params.type }, 'admin');
   if (blockedPost) return blockedPost;
@@ -339,6 +364,8 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ type: 
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const itemType = parseItemType(params.type);
   if (!itemType) return NextResponse.json({ ok: false, error: `unsupported item type: ${params.type}` }, { status: 400 });
+  const deniedDel = await assertItemAccess(session, params.id, params.type);
+  if (deniedDel) return deniedDel;
   // PDP gate (default-off / shadow-ready). Deleting a OneLake security role is admin.
   const blockedDel = await pdpCheck(session, { level: 'item', id: params.id, itemType: params.type }, 'admin');
   if (blockedDel) return blockedDel;
