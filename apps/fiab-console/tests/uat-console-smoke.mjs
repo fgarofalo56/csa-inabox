@@ -44,9 +44,6 @@ async function runUAT() {
   // 2. Each pane
   const panes = [
     { path: '/', name: 'workspaces' },
-    { path: '/lakehouse', name: 'lakehouse' },
-    { path: '/warehouse', name: 'warehouse' },
-    { path: '/notebook', name: 'notebook' },
     { path: '/semantic-model', name: 'semantic-model' },
     { path: '/activator', name: 'activator' },
     { path: '/data-agent', name: 'data-agent' },

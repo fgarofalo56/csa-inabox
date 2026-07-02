@@ -31,8 +31,10 @@ import {
   Add20Regular, Edit20Regular, Delete20Regular, Copy20Regular,
   DatabaseArrowUp20Regular, ArrowReset20Regular, ArrowSync20Regular, History20Regular,
   Open16Regular,
+  Earth24Regular, Table24Regular, AppsList24Regular, Flow24Regular, GlobeShield24Regular, BrainCircuit24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { PowerPlatformTree } from '@/lib/components/powerplatform/powerplatform-tree';
 import { PowerAppsStudioTab } from '@/lib/power-platform/power-apps-editor';
 import { PowerAutomateDesignerTab, NewFlowAuthor } from '@/lib/power-platform/power-automate-editor';
@@ -49,12 +51,12 @@ const DV_REQUIRED_LEVELS = ['None', 'Recommended', 'ApplicationRequired'] as con
 import { aiStateLabel, aiStatusLabel } from './_family-utils';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', alignItems: 'baseline' },
-  metaKey: { color: tokens.colorNeutralForeground3, fontSize: 12 },
-  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   // Keep the header visible while scrolling long metadata lists (up to 500 rows).
   stickyHead: {
     position: 'sticky', top: 0, zIndex: 1,
@@ -62,25 +64,25 @@ const useStyles = makeStyles({
     boxShadow: `inset 0 -1px 0 ${tokens.colorNeutralStroke2}`,
   },
   // Filter row above a table — search box + live result count, right-aligned count.
-  filterRow: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+  filterRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   filterCount: { color: tokens.colorNeutralForeground3, marginLeft: 'auto' },
-  cell: { fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
+  cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
   cellClickable: {
-    fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
+    fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis',
     cursor: 'pointer', color: tokens.colorBrandForegroundLink,
   },
-  empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
   // Environment lifecycle command bar + dialog form — string-valued per the
   // Griffel makeStyles convention used for all new Loom surfaces.
-  cmdBar: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '4px' },
-  dialogForm: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: '420px' },
+  cmdBar: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingVerticalXS },
+  dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px' },
   dvBox: {
-    display: 'flex', flexDirection: 'column', gap: '12px',
-    padding: '12px', borderRadius: '4px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  row2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' },
+  row2: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingVerticalM },
 });
 
 // SKU options the BAP create API accepts (Microsoft Learn: New-AdminPowerAppEnvironment
@@ -641,7 +643,13 @@ export function PowerPlatformEnvironmentEditor({ item, id }: { item: FabricItemT
         {env.loading && <Spinner size="small" label="Loading environments…" labelPosition="after" />}
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
         {!env.loading && !env.error && env.envs.length === 0 && (
-          <EmptyText>No Power Platform environments visible to this service principal.</EmptyText>
+          <EmptyState
+            icon={<Earth24Regular />}
+            title="No environments visible"
+            body="No Power Platform environments are visible to this service principal. Create one with New above, or add the Console UAMI to the Power Platform Administrators role to widen the view."
+            primaryAction={{ label: 'Reload', appearance: 'secondary', onClick: env.reload }}
+            secondaryAction={{ label: 'Open admin centre', appearance: 'transparent', href: 'https://admin.powerplatform.microsoft.com/environments' }}
+          />
         )}
         {current && (
           <>
@@ -893,11 +901,22 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
           )}
         </div>
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
-        {!env.selected && !env.loading && <EmptyText>Select an environment to list its Dataverse tables.</EmptyText>}
+        {!env.selected && !env.loading && (
+          <EmptyState
+            icon={<Earth24Regular />}
+            title="Select an environment"
+            body="Pick a Power Platform environment above to list its Dataverse tables, then click a table to inspect columns, keys, relationships, views, business rules, and live data."
+          />
+        )}
         {tablesState.loading && <Spinner size="small" label="Loading tables…" labelPosition="after" />}
         {tablesState.error && <ErrorBar msg={tablesState.error} hint={tablesState.hint} />}
         {!selectedTable && !tablesState.loading && !tablesState.error && env.selected && tablesState.data && filtered.length === 0 && (
-          <EmptyText>No custom or key system tables in this environment.</EmptyText>
+          <EmptyState
+            icon={<Table24Regular />}
+            title="No tables yet"
+            body="This environment has no custom or key system tables. Create one with New table to author a brand-new Dataverse table in-product."
+            primaryAction={{ label: 'New table', onClick: () => { resetTbl(); setTblOpen(true); } }}
+          />
         )}
         {!selectedTable && filtered.length > 0 && (
           <>
@@ -992,8 +1011,8 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
                             <TableRow key={a.MetadataId}>
                               <TableCell className={s.cell}>
                                 <strong>{a.LogicalName}</strong>
-                                {a.IsPrimaryId && <Badge size="small" appearance="tint" color="brand" style={{ marginLeft: 6 }}>PK</Badge>}
-                                {a.IsPrimaryName && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: 6 }}>Name</Badge>}
+                                {a.IsPrimaryId && <Badge size="small" appearance="tint" color="brand" style={{ marginLeft: tokens.spacingHorizontalXS }}>PK</Badge>}
+                                {a.IsPrimaryName && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: tokens.spacingHorizontalXS }}>Name</Badge>}
                               </TableCell>
                               <TableCell className={s.cell}>{a.DisplayName?.UserLocalizedLabel?.Label || '—'}</TableCell>
                               <TableCell className={s.cell}>{a.AttributeType || '—'}</TableCell>
@@ -1538,7 +1557,13 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
           )}
         </div>
         {env.loading && <Spinner size="small" label="Loading environments…" labelPosition="after" />}
-        {!env.selected && !env.loading && !env.error && <EmptyText>Select an environment to list its Power Apps.</EmptyText>}
+        {!env.selected && !env.loading && !env.error && (
+          <EmptyState
+            icon={<Earth24Regular />}
+            title="Select an environment"
+            body="Pick a Power Platform environment above to list its Power Apps, then choose one to bind, inspect, embed, and publish."
+          />
+        )}
 
         {/* ===== Bound (or previewing) app detail ===== */}
         {(isBound || pick) && (
@@ -1571,7 +1596,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       <span className={s.metaKey}>Play URL</span><span>{app.playerEmbedUri ? <a href={app.playerEmbedUri} target="_blank" rel="noreferrer">{app.playerEmbedUri}</a> : '—'}</span>
                     </div>
 
-                    <Subtitle2 style={{ marginTop: 8 }}>Connectors / data sources</Subtitle2>
+                    <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Connectors / data sources</Subtitle2>
                     {(app.connectionReferences && app.connectionReferences.length > 0)
                       ? (
                         <div className={s.tableWrap}>
@@ -1637,7 +1662,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                       <iframe
                         title={`Power App player — ${app.displayName}`}
                         src={app.playerEmbedUri}
-                        style={{ width: '100%', height: 720, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}
+                        style={{ width: '100%', height: 720, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}
                         allow="geolocation; microphone; camera; clipboard-write; clipboard-read"
                         onError={() => setEmbedBlocked(true)}
                       />
@@ -1676,7 +1701,12 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
             {listSt.loading && <Spinner size="small" label="Loading apps…" labelPosition="after" />}
             {listSt.error && <ErrorBar msg={listSt.error} hint={listSt.hint} />}
             {apps.length === 0 && !listSt.loading && !listSt.error && (
-              <EmptyText>No Power Apps in this environment.</EmptyText>
+              <EmptyState
+                icon={<AppsList24Regular />}
+                title="No Power Apps here"
+                body="This environment has no Power Apps. Author a new canvas or model-driven app in the Power Apps maker, then return to bind it to this Loom item."
+                primaryAction={makerHref ? { label: 'Open Power Apps maker', appearance: 'secondary', href: makerHref } : undefined}
+              />
             )}
             {apps.length > 0 && (
               <>
@@ -1706,7 +1736,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
                         <TableRow key={a.name}>
                           <TableCell className={s.cellClickable} onClick={() => { setPick({ appId: a.name, appType: a.appType }); setTab('detail'); setEmbedBlocked(false); }}>
                             <strong>{a.displayName}</strong>
-                            {a.name === boundAppId && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: 6 }}>Bound</Badge>}
+                            {a.name === boundAppId && <Badge size="small" appearance="tint" color="success" style={{ marginLeft: tokens.spacingHorizontalXS }}>Bound</Badge>}
                           </TableCell>
                           <TableCell className={s.cell}>{a.appType || '—'}</TableCell>
                           <TableCell className={s.cell}>{a.owner?.displayName || a.owner?.email || '—'}</TableCell>
@@ -1844,11 +1874,22 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
         </Dialog>
         {runMsg && <MessageBar intent={runMsg.startsWith('Run failed') ? 'error' : 'success'}><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
-        {!env.selected && !env.loading && <EmptyText>Select an environment to list its flows.</EmptyText>}
+        {!env.selected && !env.loading && (
+          <EmptyState
+            icon={<Earth24Regular />}
+            title="Select an environment"
+            body="Pick a Power Platform environment above to list its cloud flows, then create, author, run, or inspect run history in-product."
+          />
+        )}
         {listSt.loading && <Spinner size="small" label="Loading flows…" labelPosition="after" />}
         {listSt.error && <ErrorBar msg={listSt.error} hint={listSt.hint} />}
         {!selected && flows.length === 0 && !listSt.loading && env.selected && !listSt.error && (
-          <EmptyText>No flows in this environment.</EmptyText>
+          <EmptyState
+            icon={<Flow24Regular />}
+            title="No cloud flows yet"
+            body="This environment has no cloud flows. Use New flow to create a modern cloud flow in-product, then author its definition on the Designer tab."
+            primaryAction={env.selected ? { label: 'New flow', onClick: () => setNewFlowOpen(true) } : undefined}
+          />
         )}
         {!selected && flows.length > 0 && (
           <>
@@ -1910,7 +1951,7 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
 
             {flowTab === 'runs' && (
               <>
-                <Subtitle2 style={{ marginTop: 12 }}>Recent runs</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Recent runs</Subtitle2>
                 {runsSt.loading && <Spinner size="small" label="Loading runs…" labelPosition="after" />}
                 {runsSt.error && <ErrorBar msg={runsSt.error} hint={runsSt.hint} />}
                 {runsSt.data && (
@@ -2003,11 +2044,22 @@ export function PowerPageEditor({ item, id }: { item: FabricItemType; id: string
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>
         </div>
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
-        {!env.selected && !env.loading && <EmptyText>Select an environment to list its Power Pages sites.</EmptyText>}
+        {!env.selected && !env.loading && (
+          <EmptyState
+            icon={<Earth24Regular />}
+            title="Select an environment"
+            body="Pick a Power Platform environment above to list its deployed Power Pages sites, then click a site for its live URL and metadata."
+          />
+        )}
         {listSt.loading && <Spinner size="small" label="Loading sites…" labelPosition="after" />}
         {listSt.error && <ErrorBar msg={listSt.error} hint={listSt.hint} />}
         {!selected && pages.length === 0 && !listSt.loading && env.selected && !listSt.error && (
-          <EmptyText>No Power Pages sites in this environment.</EmptyText>
+          <EmptyState
+            icon={<GlobeShield24Regular />}
+            title="No Power Pages sites"
+            body="This environment has no deployed Power Pages sites. Author and provision a site in the Power Pages design studio, then it will appear here."
+            primaryAction={{ label: 'Open Power Pages', appearance: 'secondary', href: 'https://make.powerpages.microsoft.com' }}
+          />
         )}
         {!selected && pages.length > 0 && (
           <>
@@ -2174,11 +2226,22 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
           <Button appearance="secondary" onClick={reloadList}>Reload</Button>
         </div>
         {env.error && <ErrorBar msg={env.error} hint={env.hint} />}
-        {!env.selected && !env.loading && <EmptyText>Select an environment to list its AI Builder models.</EmptyText>}
+        {!env.selected && !env.loading && (
+          <EmptyState
+            icon={<Earth24Regular />}
+            title="Select an environment"
+            body="Pick a Power Platform environment above to list its AI Builder models, then run the real Train, Publish, and Predict lifecycle actions."
+          />
+        )}
         {listSt.loading && <Spinner size="small" label="Loading models…" labelPosition="after" />}
         {listSt.error && <ErrorBar msg={listSt.error} hint={listSt.hint} />}
         {!selected && models.length === 0 && !listSt.loading && env.selected && !listSt.error && (
-          <EmptyText>No AI Builder models in this environment.</EmptyText>
+          <EmptyState
+            icon={<BrainCircuit24Regular />}
+            title="No AI Builder models"
+            body="This environment has no AI Builder models. Choose a model type and configure training data in the Maker portal AI hub, then it will appear here to train, publish, and predict."
+            primaryAction={env.selected ? { label: 'Open AI hub', appearance: 'secondary', href: `https://make.powerapps.com/environments/${encodeURIComponent(env.selected)}/aibuilder/models` } : undefined}
+          />
         )}
         {!selected && models.length > 0 && (
           <>
@@ -2246,7 +2309,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
             )}
             {detailSt.data?.model && (
               <>
-                <Subtitle2 style={{ marginTop: 12 }}>Lifecycle</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Lifecycle</Subtitle2>
                 <div className={s.toolbar}>
                   <Button appearance="primary" disabled={busy !== null} onClick={() => runAction('train')}>
                     {busy === 'train' ? 'Training…' : 'Train'}
@@ -2260,7 +2323,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                     <MessageBarBody>{actionMsg.text}</MessageBarBody>
                   </MessageBar>
                 )}
-                <Subtitle2 style={{ marginTop: 12 }}>Real-time prediction</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Real-time prediction</Subtitle2>
                 <Caption1>
                   POSTs to the Dataverse <code>Predict</code> action. The input shape is model-specific — e.g. a
                   prediction model expects <code>{'{ "V2": { "&lt;column&gt;": value } }'}</code>. Only published
@@ -2269,9 +2332,10 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                 <Field label="Predict request (JSON)">
                   <Textarea
                     rows={6}
+                    resize="vertical"
                     value={predictJson}
                     onChange={(_, d) => setPredictJson(d.value)}
-                    style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                    style={{ fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 }}
                   />
                 </Field>
                 <div>
@@ -2280,8 +2344,8 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                   </Button>
                 </div>
                 {predictResult && (
-                  <div className={s.tableWrap} style={{ padding: 8 }}>
-                    <pre style={{ margin: 0, fontSize: 12, whiteSpace: 'pre-wrap' }}>{predictResult}</pre>
+                  <div className={s.tableWrap} style={{ padding: tokens.spacingVerticalS }}>
+                    <pre style={{ margin: 0, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{predictResult}</pre>
                   </div>
                 )}
               </>

@@ -43,6 +43,11 @@ regexes = [
     '''0{8}-0{4}-0{4}-0{4}-0{12}''',                          # all-zeros example subscription/tenant GUID
     '''[a-z]+-csa-loom-[a-z0-9]+''',                          # CSA Loom Azure resource names (apim-csa-loom-eastus2)
     '''(syn|adf|dbx|kv|st|cosmos|fd|acr|loom)-?loom[a-z0-9-]*-[a-z0-9]+''',  # other Loom resource-name shapes
+
+    # Container Apps secretRef values in udf-runtime.bicep name a CA/KV secret
+    # (APP_PY_B64 -> secretRef 'app-py-b64', etc.) — a reference to a secret BY
+    # NAME, never a secret value. Trips the generic-api-key entropy heuristic.
+    '''(app-py|fabric-funcs|default-src)-b64''',
 ]
 
 paths = [
@@ -93,4 +98,10 @@ paths = [
     # apim-csa-loom-eastus2 (override LOOM_APIM_NAME)"). Non-secret resource
     # identifiers in generated inventory tables; trip the entropy heuristic.
     '''docs/fiab/parity/.*\.md$''',
+
+    # Connector catalog — a STATIC catalog of connector field DEFINITIONS
+    # ({ key: 'office365TenantId', label, kind, required }). The `key` values are
+    # form-field identifiers, never credentials (real secrets go to Key Vault at
+    # runtime). Camel-case ids trip the generic-api-key entropy heuristic.
+    '''apps/fiab-console/lib/pipeline/connector-catalog\.ts$''',
 ]

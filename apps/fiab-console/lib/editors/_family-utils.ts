@@ -189,6 +189,68 @@ export function buildDeleteSql(table: string, keyColumn: string, keyValue: strin
   return { sql: `DELETE FROM [${table}] WHERE [${keyColumn}] = @k`, params: [{ name: 'k', value: keyValue }] };
 }
 
+/** Comparison operators a Workshop (Atelier) filter / object-set-filter variable can emit. */
+export type AtelierFilterOp = 'eq' | 'ne' | 'gt' | 'lt' | 'gte' | 'lte' | 'contains' | 'startsWith';
+
+/** A single column predicate carried by a Workshop object-set-filter variable. */
+export interface AtelierFilter {
+  /** Column to filter on (validated as a safe identifier before use). */
+  column: string;
+  /** Comparison operator. */
+  op: AtelierFilterOp;
+  /** The value to compare against (bound via TDS — never concatenated). */
+  value: string;
+}
+
+/** The clause + bound params produced from a list of Atelier filters. */
+export interface AtelierWhere {
+  /** Either '' (no predicates) or ` WHERE [a] = @f0 AND [b] LIKE @f1` (leading space included). */
+  clause: string;
+  params: Array<{ name: string; value: string | null }>;
+}
+
+const ATELIER_FILTER_SQL_OP: Record<Exclude<AtelierFilterOp, 'contains' | 'startsWith'>, string> = {
+  eq: '=', ne: '<>', gt: '>', lt: '<', gte: '>=', lte: '<=',
+};
+
+/**
+ * Build a parameterised, injection-safe WHERE clause for a Workshop read
+ * (`list` / `aggregate` / `distinct`) from a list of object-set-filter
+ * predicates. Each column is validated with {@link safeSqlIdent} and
+ * bracket-quoted; every value is bound (`@f0`, `@f1`, …) — never spliced into
+ * the SQL. Predicates with an invalid column / operator, or an empty value, are
+ * skipped (an empty filter is "no constraint", the Workshop runtime semantics).
+ *
+ * `startIndex` lets a caller reserve earlier `@f<i>` names if it composes
+ * multiple clauses; defaults to 0. Pure + side-effect-free → vitest-coverable.
+ */
+export function buildAtelierWhere(filters: AtelierFilter[] | undefined, startIndex = 0): AtelierWhere {
+  const clauses: string[] = [];
+  const params: Array<{ name: string; value: string | null }> = [];
+  let i = startIndex;
+  for (const f of Array.isArray(filters) ? filters : []) {
+    const col = safeSqlIdent(String(f?.column || ''));
+    if (!col) continue;
+    const raw = f?.value;
+    if (raw === undefined || raw === null || String(raw) === '') continue; // empty ⇒ no constraint
+    const value = String(raw);
+    const name = `f${i++}`;
+    if (f.op === 'contains') {
+      clauses.push(`[${col}] LIKE @${name}`);
+      params.push({ name, value: `%${value}%` });
+    } else if (f.op === 'startsWith') {
+      clauses.push(`[${col}] LIKE @${name}`);
+      params.push({ name, value: `${value}%` });
+    } else {
+      const sqlOp = ATELIER_FILTER_SQL_OP[f.op];
+      if (!sqlOp) continue;
+      clauses.push(`[${col}] ${sqlOp} @${name}`);
+      params.push({ name, value });
+    }
+  }
+  return { clause: clauses.length ? ` WHERE ${clauses.join(' AND ')}` : '', params };
+}
+
 /**
  * Given a parsed ontology class list and a list of physical table names from a
  * Lakehouse/Warehouse schema, return the classes whose names match a table name
@@ -531,7 +593,44 @@ export type DaSourceType =
   | 'semantic-model'
   | 'ai-search'
   | 'ontology'
-  | 'graph';
+  | 'graph'
+  | 'microsoft-graph';
+
+/** AI Search retrieval mode for a data-agent `ai-search` source. */
+export type DaAiSearchQueryKind = 'keyword' | 'semantic' | 'vector' | 'hybrid';
+
+/**
+ * Typed retrieval options for an `ai-search` source — persisted on the source
+ * and honored 1:1 by the grounding executor (lib/azure/data-agent-execute.ts):
+ * keyword → simple full-text; semantic → semantic ranking (needs a semantic
+ * configuration on the index); vector → integrated-vectorization text query
+ * over the index's vector fields; hybrid → full-text + vector fused (RRF).
+ */
+export interface DaAiSearchConfig {
+  queryKind?: DaAiSearchQueryKind;
+  /** Top-N documents retrieved per query (1–50; executor default 25). */
+  top?: number;
+  /** When true the grounding rows are numbered [1]…[n] and the agent is told to cite them. */
+  citations?: boolean;
+}
+
+/** Which slice of Microsoft 365 a `microsoft-graph` source grounds on. */
+export type DaGraphScopeKind = 'site' | 'drive' | 'mail';
+
+/**
+ * Typed Microsoft Graph grounding scope for a `microsoft-graph` source.
+ * site → SharePoint site (default document library search), drive → a specific
+ * OneDrive/SharePoint drive, mail → an Exchange Online mailbox ($search).
+ */
+export interface DaGraphScope {
+  kind: DaGraphScopeKind;
+  /** SharePoint site id (`contoso.sharepoint.com,guid,guid`) or the full site URL. */
+  site?: string;
+  /** Graph drive id (from the drive's Graph metadata / the shortcut wizard). */
+  driveId?: string;
+  /** Mailbox UPN, e.g. finance-team@contoso.com. */
+  mailbox?: string;
+}
 
 export interface DaSource {
   id: string;
@@ -544,6 +643,10 @@ export interface DaSource {
   /** Per-source description the agent uses to ROUTE a question to this source (Fabric "Data source description"). */
   description?: string;
   examples?: { question: string; query: string }[];
+  /** AI Search retrieval options (type === 'ai-search' only). */
+  aiSearch?: DaAiSearchConfig;
+  /** Microsoft Graph grounding scope (type === 'microsoft-graph' only). */
+  graph?: DaGraphScope;
 }
 
 const DA_INSTRUCTION_TEMPLATE = '## General knowledge\n\n## Table descriptions\n\n## When asked about\n';
@@ -555,6 +658,7 @@ const DA_SOURCE_TYPE_VALUES: DaSourceType[] = [
   'ai-search',
   'ontology',
   'graph',
+  'microsoft-graph',
 ];
 
 /**
@@ -578,6 +682,7 @@ export function guessDaSourceType(name: string): DaSourceType {
   if (/kql|kusto|eventhouse|adx/.test(n)) return 'kql';
   if (/ai\s*search|search\s*index|\bindex\b|vector/.test(n)) return 'ai-search';
   if (/ontolog/.test(n)) return 'ontology';
+  if (/sharepoint|onedrive|outlook|mailbox|\bm365\b|microsoft\s*365|microsoft\s*graph/.test(n)) return 'microsoft-graph';
   if (/\bgraph\b|gql|cypher|node|edge/.test(n)) return 'graph';
   if (/warehouse|\bdw\b|\bwh\b|synapse/.test(n)) return 'warehouse';
   return 'warehouse';
@@ -609,6 +714,9 @@ export function normalizeDaSources(raw: unknown): DaSource[] {
           instructions: typeof x.instructions === 'string' ? x.instructions : DA_INSTRUCTION_TEMPLATE,
           description: typeof x.description === 'string' ? x.description : '',
           examples: Array.isArray(x.examples) && daSupportsExampleQueries(type) ? x.examples : [],
+          // Typed per-source config objects survive normalization untouched.
+          ...(x.aiSearch && typeof x.aiSearch === 'object' && !Array.isArray(x.aiSearch) ? { aiSearch: x.aiSearch } : {}),
+          ...(x.graph && typeof x.graph === 'object' && !Array.isArray(x.graph) ? { graph: x.graph } : {}),
         };
       });
   }

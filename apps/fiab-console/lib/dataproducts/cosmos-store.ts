@@ -20,6 +20,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { dataProductsContainer } from '@/lib/azure/cosmos-client';
+import type { SqlParameter } from '@azure/cosmos';
 import type { DataProductStore } from './store';
 import type {
   PurviewDataProduct,
@@ -93,7 +94,7 @@ export class CosmosDataProductStore implements DataProductStore {
           query: 'SELECT * FROM c WHERE c.domain = @d ORDER BY c.name',
           parameters: [{ name: '@d', value: domain }],
         }
-      : { query: 'SELECT * FROM c ORDER BY c.name', parameters: [] as { name: string; value: unknown }[] };
+      : { query: 'SELECT * FROM c ORDER BY c.name', parameters: [] as SqlParameter[] };
     const { resources } = await c.items.query<DataProductDoc>(spec).fetchAll();
     return (resources ?? []).map(toProduct);
   }

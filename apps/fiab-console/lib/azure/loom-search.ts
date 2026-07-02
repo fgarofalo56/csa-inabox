@@ -125,16 +125,18 @@ export async function upsertLoomDoc(doc: LoomDoc): Promise<void> {
   } catch { /* swallow — index is best-effort */ }
 }
 
-/** Best-effort delete. */
+/** Best-effort delete. Tolerates the legacy colon-prefixed ids (`it:`/`ws:`):
+ *  AI Search keys forbid colons, so the stored key uses `_` — sanitize. */
 export async function deleteLoomDoc(id: string): Promise<void> {
   if (!isSearchConfigured()) return;
   try {
     const svc = searchService();
     const tok = await searchToken();
+    const key = id.replace(/:/g, '_');
     await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ value: [{ '@search.action': 'delete', id }] }),
+      body: JSON.stringify({ value: [{ '@search.action': 'delete', id: key }] }),
     });
   } catch { /* swallow */ }
 }
@@ -176,7 +178,9 @@ export async function searchLoomItems(opts: {
 /** Convenience for callers that just want a doc shape from a workspace / item record. */
 export function docForWorkspace(ws: { id: string; tenantId: string; name: string; description?: string; updatedAt?: string; createdAt: string }): LoomDoc {
   return {
-    id: `ws:${ws.id}`,
+    // AI Search keys forbid colons (letters/digits/_/-/= only); a `ws:` key
+    // 400'd every upsert ("Invalid document key") → the index never populated.
+    id: `ws_${ws.id}`,
     kind: 'workspace',
     tenantId: ws.tenantId,
     workspaceId: ws.id,
@@ -193,7 +197,8 @@ export function docForItem(it: {
   updatedAt?: string; createdAt: string;
 }, tenantId: string): LoomDoc {
   return {
-    id: `it:${it.id}`,
+    // AI Search keys forbid colons — use `_` (was `it:`, which 400'd silently).
+    id: `it_${it.id}`,
     kind: 'item',
     itemType: it.itemType,
     tenantId,

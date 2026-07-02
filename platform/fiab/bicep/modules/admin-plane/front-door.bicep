@@ -156,7 +156,8 @@ resource fdOriginGroup 'Microsoft.Cdn/profiles/originGroups@2024-02-01' = {
       additionalLatencyInMilliseconds: 50
     }
     healthProbeSettings: {
-      probePath: '/'
+      // Probe the cheap liveness endpoint (no SSR render) rather than '/'.
+      probePath: '/api/health'
       probeRequestType: 'GET'
       probeProtocol: 'Https'
       probeIntervalInSeconds: 30

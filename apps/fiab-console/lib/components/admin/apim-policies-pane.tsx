@@ -7,7 +7,7 @@ import {
 } from '@fluentui/react-components';
 import { Section } from '@/lib/components/ui/section';
 import type { ApimApiSummary, ApimProductSummary } from '@/lib/azure/apim-client';
-import { apimFetchJson } from './apim-pane-fetch';
+import { apimFetchJson, type ApimJsonOk } from './apim-pane-fetch';
 
 const useStyles = makeStyles({
   container: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
@@ -70,8 +70,8 @@ export function ApimPoliciesPane() {
   useEffect(() => {
     setListLoading(true);
     Promise.all([
-      apimFetchJson('/api/apim/apis').catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) })),
-      apimFetchJson('/api/apim/products').catch((e) => ({ ok: false, error: e instanceof Error ? e.message : String(e) })),
+      apimFetchJson('/api/apim/apis').catch((e): ApimJsonOk => ({ ok: false, error: e instanceof Error ? e.message : String(e) })),
+      apimFetchJson('/api/apim/products').catch((e): ApimJsonOk => ({ ok: false, error: e instanceof Error ? e.message : String(e) })),
     ])
       .then(([a, p]) => {
         if (a.ok && Array.isArray(a.apis)) setApis(a.apis as ApimApiSummary[]);
@@ -197,7 +197,7 @@ export function ApimPoliciesPane() {
       {error && (
         <MessageBar intent="error">
           <MessageBarTitle>Policy error</MessageBarTitle>
-          <MessageBarBody>{error}</MessageBarBody>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{error}</MessageBarBody>
         </MessageBar>
       )}
       {savedNote && (
@@ -235,6 +235,7 @@ export function ApimPoliciesPane() {
             borderRadius: tokens.borderRadiusMedium,
             border: `1px solid ${tokens.colorNeutralStroke2}`,
             minHeight: '400px',
+            maxWidth: '100%',
             resize: 'vertical',
             backgroundColor: tokens.colorNeutralBackground1,
             color: tokens.colorNeutralForeground1,

@@ -23,7 +23,7 @@ const APPLY = process.argv.includes('--apply');
 const KEY = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(SECRET, 'utf-8'), Buffer.alloc(32), Buffer.from('loom-session-v1'), 32));
 const payload = {
   claims: {
-    oid: process.env.UAT_OID || '866a2e12-0fee-4c99-923c-7cdfd61e08cd',
+    oid: process.env.UAT_OID || '00000000-0000-0000-0000-00000000000e',
     name: 'Cleanup', email: 'cleanup@loom', upn: 'cleanup@loom',
   },
   exp: Math.floor(Date.now() / 1000) + 3600,

@@ -52,27 +52,33 @@ interface Msg {
 interface Connection { name: string; type: string; capable: Array<'source' | 'sink'> }
 
 const useStyles = makeStyles({
-  pane: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: 8 },
+  pane: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, gap: tokens.spacingVerticalS },
   header: {
-    display: 'flex', alignItems: 'center', gap: 8, paddingBottom: 8,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, paddingBottom: tokens.spacingVerticalS,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  body: { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8, paddingRight: 4 },
-  msg: { padding: '8px 12px', borderRadius: 12, maxWidth: '95%', fontSize: 13 },
-  msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: 4 },
-  msgYou: { backgroundColor: tokens.colorBrandBackground2, alignSelf: 'flex-end', borderTopRightRadius: 4 },
-  stepRow: {
-    display: 'flex', alignItems: 'center', gap: 6,
-    color: tokens.colorNeutralForeground3, fontSize: 12, paddingLeft: 2, marginTop: 4,
+  body: { flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, paddingRight: tokens.spacingHorizontalXS },
+  msg: {
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusXLarge,
+    maxWidth: '95%', fontSize: tokens.fontSizeBase300, minWidth: 0,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
-  composer: { display: 'flex', flexDirection: 'column', gap: 6, paddingTop: 8, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
+  msgCopilot: { backgroundColor: tokens.colorNeutralBackground2, alignSelf: 'flex-start', borderTopLeftRadius: tokens.borderRadiusSmall },
+  msgYou: { backgroundColor: tokens.colorBrandBackground2, alignSelf: 'flex-end', borderTopRightRadius: tokens.borderRadiusSmall },
+  stepRow: {
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, minWidth: 0,
+    color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, paddingLeft: tokens.spacingHorizontalXXS, marginTop: tokens.spacingVerticalXS,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
+  composer: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
   picker: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
-    maxHeight: 168, overflowY: 'auto', backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    maxHeight: '168px', overflowY: 'auto', backgroundColor: tokens.colorNeutralBackground1,
   },
   pickItem: {
-    display: 'flex', alignItems: 'center', gap: 6, padding: '5px 8px',
-    cursor: 'pointer', fontSize: 12,
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, minWidth: 0,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    cursor: 'pointer', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
 });
@@ -267,7 +273,7 @@ export function PipelineCopilotPane({ apiBase, bound, onApplySpec }: PipelineCop
               tabIndex={0}
               onClick={() => pickConnection(c.name)}
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pickConnection(c.name); } }}>
-              <PlugConnected20Regular style={{ fontSize: 14 }} />
+              <PlugConnected20Regular style={{ fontSize: tokens.fontSizeBase300 }} />
               <strong>{c.name}</strong>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{c.type}</Caption1>
               {c.capable.map((cap) => (

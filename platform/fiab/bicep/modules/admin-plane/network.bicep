@@ -62,6 +62,8 @@ param firewallPolicyReconcile bool = false
 // 10.0.6.0/24    - Reserved (future agent runtimes)
 // 10.0.7.0/27    - GatewaySubnet (P2S/S2S VPN; /27 is the AzureRM minimum)
 // 10.0.8.0/24    - snet-appgw (App Gateway v2 + WAF)
+// 10.0.9.0/28    - snet-dns-inbound (DNS Private Resolver inbound)
+// 10.0.10.0/24   - snet-pp-vnet-gateway (Power Platform VNet data gateway — delegated)
 
 var firstOctets = take(split(hubVnetCidr, '.'), 2)
 var prefix = '${firstOctets[0]}.${firstOctets[1]}'
@@ -133,6 +135,39 @@ var subnets = [
       }
     ]
   }
+  {
+    // DNS Private Resolver inbound endpoint subnet. Pushed to P2S VPN clients
+    // as the DNS server (via the hub VNet's custom DNS, set post-deploy by
+    // scripts/csa-loom/ensure-vpn-dns-resolver.sh) so they resolve every
+    // private FQDN automatically. Delegated + dedicated per resolver reqs.
+    name: 'snet-dns-inbound'
+    addressPrefix: '${prefix}.9.0/28'
+    delegations: [
+      {
+        name: 'Microsoft.Network/dnsResolvers'
+        properties: { serviceName: 'Microsoft.Network/dnsResolvers' }
+      }
+    ]
+  }
+  {
+    // Power Platform VNet data gateway subnet — a DEDICATED subnet delegated to
+    // Microsoft.PowerPlatform/vnetaccesslinks is required to link a Power
+    // Platform enterprise policy (VNet integration) so Power BI / Power Apps /
+    // Power Automate / VNet data gateways can reach private Loom data sources.
+    // Provisioned day-one so the admin → Network → "Data gateway" readiness
+    // check is green out of the box (the GatewaySubnet/VPN subnet cannot be used
+    // for this; PP requires its own delegated subnet). The remaining step —
+    // creating the enterprise policy + granting its principal subnets/join/action
+    // — is a Power Platform admin action surfaced as an honest gate.
+    name: 'snet-pp-vnet-gateway'
+    addressPrefix: '${prefix}.10.0/24'
+    delegations: [
+      {
+        name: 'Microsoft.PowerPlatform/vnetaccesslinks'
+        properties: { serviceName: 'Microsoft.PowerPlatform/vnetaccesslinks' }
+      }
+    ]
+  }
 ]
 
 // =====================================================================
@@ -163,7 +198,7 @@ resource hubVnet 'Microsoft.Network/virtualNetworks@2024-05-01' = {
 // Network Security Groups (per non-system subnet)
 // =====================================================================
 
-var nsgSubnets = filter(subnets, s => !startsWith(s.name, 'Azure') && s.name != 'GatewaySubnet')
+var nsgSubnets = filter(subnets, s => !startsWith(s.name, 'Azure') && s.name != 'GatewaySubnet' && s.name != 'snet-dns-inbound')
 
 // Associate NSGs with their corresponding subnets (required by APIM,
 // recommended for all workload subnets). One subnet/NSG update per
@@ -472,6 +507,42 @@ resource diagBastion 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' 
     ]
   }
 }
+
+// =====================================================================
+// DNS Private Resolver — lets P2S VPN clients resolve every privatelink.*
+// zone linked to the hub VNet (admin-plane + DLZ Databricks). The hub VNet's
+// custom DNS is pointed at the inbound endpoint by the post-deploy bootstrap
+// (scripts/csa-loom/ensure-vpn-dns-resolver.sh) — NOT here, because setting it
+// at VNet-create time (before the endpoint is up) would break DNS for every
+// other resource provisioning in the VNet. The resolver forwards non-private
+// names to Azure DNS, so public URLs (incl. the gateway control plane) resolve.
+// =====================================================================
+
+resource dnsResolver 'Microsoft.Network/dnsResolvers@2022-07-01' = {
+  name: 'dnspr-loom-${location}'
+  location: location
+  tags: complianceTags
+  properties: {
+    virtualNetwork: { id: hubVnet.id }
+  }
+}
+
+resource dnsResolverInbound 'Microsoft.Network/dnsResolvers/inboundEndpoints@2022-07-01' = {
+  parent: dnsResolver
+  name: 'inbound'
+  location: location
+  properties: {
+    ipConfigurations: [
+      {
+        privateIpAllocationMethod: 'Static'
+        privateIpAddress: '${prefix}.9.4'
+        subnet: { id: '${hubVnet.id}/subnets/snet-dns-inbound' }
+      }
+    ]
+  }
+}
+
+output dnsResolverInboundIp string = '${prefix}.9.4'
 
 output hubVnetId string = hubVnet.id
 output hubVnetName string = hubVnet.name

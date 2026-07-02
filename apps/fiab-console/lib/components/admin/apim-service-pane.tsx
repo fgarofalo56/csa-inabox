@@ -18,13 +18,14 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalL,
   },
   stat: {
+    minWidth: 0,
     padding: tokens.spacingVerticalL,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   statLabel: { fontSize: tokens.fontSizeBase100, textTransform: 'uppercase', letterSpacing: '0.06em', color: tokens.colorNeutralForeground3, fontWeight: 600 },
-  statValue: { fontSize: tokens.fontSizeBase500, fontWeight: 700, marginTop: tokens.spacingVerticalS, lineHeight: 1.1 },
+  statValue: { fontSize: tokens.fontSizeBase500, fontWeight: 700, marginTop: tokens.spacingVerticalS, lineHeight: 1.1, overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 const SKU_OPTIONS = ['Developer', 'Basic', 'Standard', 'Premium', 'BasicV2', 'StandardV2'];

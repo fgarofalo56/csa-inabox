@@ -19,6 +19,16 @@ So for any `*.crm.dynamics.com` scope, Loom routes the token request through a *
 
 These are wired automatically by `platform/fiab/bicep/modules/admin-plane/main.bicep` — no manual step.
 
+> **Day-one resilience (2026-06-23):** the console no longer *requires* the explicit
+> `LOOM_DATAVERSE_CLIENT_ID` / `LOOM_DATAVERSE_CLIENT_SECRET` vars. If they're unset,
+> `powerplatform-client.ts` falls back to `LOOM_MSAL_CLIENT_ID` / `LOOM_MSAL_CLIENT_SECRET`
+> automatically — i.e. the SAME MSAL Web App SP that the post-deploy bootstrap
+> (`scripts/csa-loom/dataverse-add-appuser.sh`) registers as the Dataverse Application
+> User. So Dataverse-scoped features work even on deployments where the explicit bicep
+> wiring didn't land. Setting a dedicated Dataverse app via the `LOOM_DATAVERSE_*` vars
+> still takes precedence. The only remaining one-time action is the **Promote To Admin**
+> click on the Default env (Step 1 below) so the bootstrap caller can register the App User.
+
 ## Publish a data agent to Microsoft 365 Copilot
 
 Once the App User above exists in a **Copilot Studio-enabled** environment, the

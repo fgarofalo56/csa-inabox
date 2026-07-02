@@ -167,7 +167,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
       <div className={styles.card}>
         <div className={styles.hubRow}>
           <Building24Regular />
-          <div>
+          <div style={{ minWidth: 0 }}>
             <Body1Strong>CSA Loom hub</Body1Strong>
             <div>
               <Caption1 className={styles.summary}>
@@ -317,7 +317,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
                     </MessageBarTitle>
                     <div className={styles.preWrap}>{grant.remediation || grant.error || 'Unknown error.'}</div>
                     {grant.commands?.length ? (
-                      <pre className={mergeClasses(styles.mono, styles.preWrap)} style={{ marginTop: 8 }}>{grant.commands.join('\n')}</pre>
+                      <pre className={mergeClasses(styles.mono, styles.preWrap)} style={{ marginTop: 8, maxHeight: 240, maxWidth: '100%', overflow: 'auto', overflowWrap: 'anywhere' }}>{grant.commands.join('\n')}</pre>
                     ) : null}
                   </MessageBarBody>
                 </MessageBar>

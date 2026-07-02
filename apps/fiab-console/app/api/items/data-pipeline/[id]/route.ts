@@ -7,6 +7,7 @@
  * v3.25: backed by ADF, not Fabric REST.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getPipeline, upsertPipeline, deletePipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf-client';
@@ -16,17 +17,17 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!resource || resource.itemType !== 'data-pipeline') return err('pipeline not found', 404);
+    if (!resource || resource.itemType !== 'data-pipeline') return apiError('pipeline not found', 404);
     const state = (resource.state as any) || {};
     const adfName = state?.adfPipelineName;
     let definition: AdfPipeline | null = null;
@@ -53,21 +54,21 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       definition,
     });
   } catch (e: any) {
-    if (e?.code === 404) return err('pipeline not found', 404);
-    return err(e?.message || String(e), 500);
+    if (e?.code === 404) return apiError('pipeline not found', 404);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   try {
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!existing || existing.itemType !== 'data-pipeline') return err('pipeline not found', 404);
+    if (!existing || existing.itemType !== 'data-pipeline') return apiError('pipeline not found', 404);
     let adfName = (existing.state as any)?.adfPipelineName;
     const props = body?.definition ? (body.definition.properties || body.definition) : null;
     // Save = publish: when ADF is configured, ensure a LIVE ADF pipeline backs
@@ -85,7 +86,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       }
       try {
         await upsertPipeline(adfName, { name: adfName, properties: props });
-      } catch (e: any) { return err(`ADF write failed: ${e?.message || e}`, 502); }
+      } catch (e: any) { return apiError(`ADF write failed: ${e?.message || e}`, 502); }
     }
     const next: WorkspaceItem = {
       ...existing,
@@ -100,14 +101,14 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     };
     const { resource } = await items.item(existing.id, workspaceId).replace(next);
     return NextResponse.json({ ok: true, pipeline: resource, adfPipelineName: adfName, published: !!adfName });
-  } catch (e: any) { return err(e?.message || String(e), 500); }
+  } catch (e: any) { return apiError(e?.message || String(e), 500); }
 }
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
@@ -117,6 +118,6 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

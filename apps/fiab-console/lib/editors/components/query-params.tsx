@@ -39,15 +39,15 @@ export type { QueryParam, QueryParamType } from './query-params-utils';
 const useStyles = makeStyles({
   wrap: {
     display: 'flex',
-    gap: '10px',
+    gap: tokens.spacingVerticalS,
     flexWrap: 'wrap',
     alignItems: 'flex-end',
-    padding: '8px 10px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px',
+    borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  head: { display: 'flex', alignItems: 'center', gap: '6px', alignSelf: 'center' },
+  head: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, alignSelf: 'center' },
   field: { minWidth: '140px' },
   typePicker: { minWidth: '110px' },
 });
@@ -101,7 +101,7 @@ export function QueryParamsBar({ sql, onChange, showTypePicker = true }: Props) 
         </Tooltip>
       </div>
       {names.map((n) => (
-        <div key={n} style={{ display: 'flex', gap: 6, alignItems: 'flex-end' }}>
+        <div key={n} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'flex-end' }}>
           <Field label={n} className={s.field}>
             <Input
               size="small"

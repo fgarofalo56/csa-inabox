@@ -43,9 +43,11 @@ import {
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import { buildAoaiBody } from '@/lib/azure/aoai-model-contract';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { cogScope, getOpenAiSuffix } from '@/lib/azure/cloud-endpoints';
 import { executeQuery } from '@/lib/azure/azure-sql-client';
+import { iterateAoaiDeltas } from '@/lib/api/aoai-sse';
 
 // ---------- Command allowlist ----------
 const COMMANDS = ['fix', 'explain', 'nl2sql'] as const;
@@ -256,12 +258,14 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           fetch(url, {
             method: 'POST',
             headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-            body: JSON.stringify({
-              messages,
-              stream: true,
-              ...(temp !== undefined ? { temperature: temp } : {}),
-              max_tokens: 4096,
-            }),
+            body: JSON.stringify(
+              buildAoaiBody({
+                messages,
+                maxCompletionTokens: 4096,
+                temperature: temp,
+                stream: true,
+              }),
+            ),
           });
 
         let res = await callWithTemperature(0.2);
@@ -288,31 +292,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
           return;
         }
 
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          let nl: number;
-          while ((nl = buffer.indexOf('\n')) >= 0) {
-            const line = buffer.slice(0, nl).trim();
-            buffer = buffer.slice(nl + 1);
-            if (!line.startsWith('data:')) continue;
-            const payload = line.slice(5).trim();
-            if (payload === '[DONE]') continue;
-            try {
-              const j = JSON.parse(payload);
-              const delta: string = j?.choices?.[0]?.delta?.content ?? '';
-              if (delta) {
-                full += delta;
-                send('chunk', { delta });
-              }
-            } catch {
-              /* partial JSON across a chunk boundary — next read completes it */
-            }
-          }
+        for await (const delta of iterateAoaiDeltas(res)) {
+          full += delta;
+          send('chunk', { delta });
         }
 
         send('done', { sessionId, content: full });

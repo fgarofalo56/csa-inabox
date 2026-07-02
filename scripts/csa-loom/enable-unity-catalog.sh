@@ -25,7 +25,7 @@
 #   ./enable-unity-catalog.sh \
 #     --region eastus2 \
 #     --workspace-id 7405613013893759 \
-#     --uami-app-id  c6272de5-3c4e-4b72-8b57-71b2e950209b \
+#     --uami-app-id  00000000-0000-0000-0000-00000000000b \
 #     [--workspace-host adb-7405613013893759.19.azuredatabricks.net] \
 #     [--default-catalog main] \
 #     [--account-host accounts.azuredatabricks.net] \

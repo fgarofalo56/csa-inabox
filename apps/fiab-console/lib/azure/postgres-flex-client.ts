@@ -259,9 +259,14 @@ export async function deleteFirewallRule(serverNameOrId: string, ruleName: strin
 // honest gate when LOOM_POSTGRES_AAD_USER is unset (per no-vaporware.md).
 // ============================================================
 
-/** Entra token scope for Azure DB for PostgreSQL (Commercial default; Gov override via env). */
+/** Entra token scope for Azure DB for PostgreSQL (Commercial default; Gov override via env).
+ *  Resource = the Microsoft-documented OSS-RDBMS app `ossrdbms-aad.database.windows.net`.
+ *  (The `.azure.com` variant is NOT registered as a first-party app in some tenants →
+ *  AADSTS500011 "resource principal not found" at token time, breaking every Postgres
+ *  AAD connection incl. mirroring + Weave. Verified live: switching to .windows.net let
+ *  the Console UAMI connect to the source. Gov override stays via LOOM_POSTGRES_AAD_SCOPE.) */
 function pgAadScope(): string {
-  return process.env.LOOM_POSTGRES_AAD_SCOPE || 'https://ossrdbms-aad.database.azure.com/.default';
+  return process.env.LOOM_POSTGRES_AAD_SCOPE || 'https://ossrdbms-aad.database.windows.net/.default';
 }
 
 export interface PgQueryResult {
@@ -347,6 +352,73 @@ export async function executePostgresQuery(fqdn: string, database: string, sql: 
       command: (res as any).command,
       executionMs: Date.now() - started,
     };
+  } catch (e: any) {
+    throw new PostgresError(e?.message || String(e), e?.code === '28000' || e?.code === '28P01' ? 401 : 502, e?.code);
+  } finally {
+    await client.end().catch(() => { /* already closed */ });
+  }
+}
+
+export interface PgBatchStatement {
+  sql: string;
+  /** Extended (parameterized) protocol when present; simple protocol otherwise. */
+  params?: unknown[];
+}
+
+/**
+ * Execute an ordered list of statements over a SINGLE PostgreSQL connection
+ * (real `pg` wire protocol + Entra token — identical auth to
+ * executePostgresQuery). Statements carrying `params` use the extended
+ * (parameterized) protocol; statements without run via the simple protocol, so
+ * multi-statement DDL strings (e.g. "CREATE EXTENSION …; CREATE TABLE …") are
+ * allowed. Returns one PgQueryResult per statement, in order.
+ *
+ * Used by the pgvector vector-store backend (pgvector-client.ts): create
+ * extension/table/index, run kNN search, and upsert documents — all real,
+ * no mock. Throws PostgresError on failure (surfaced verbatim by the route).
+ */
+export async function executePostgresBatch(
+  fqdn: string,
+  database: string,
+  statements: PgBatchStatement[],
+): Promise<PgQueryResult[]> {
+  const user = process.env.LOOM_POSTGRES_AAD_USER;
+  if (!user) throw new PostgresError('LOOM_POSTGRES_AAD_USER is not set; cannot authenticate to PostgreSQL.', 503);
+  const tok = await credential.getToken(pgAadScope());
+  if (!tok?.token) throw new PostgresError('Failed to acquire an Entra token for PostgreSQL.', 401);
+
+  const { Client } = await import('pg');
+  const client = new Client({
+    host: fqdn,
+    port: 5432,
+    database: database || 'postgres',
+    user,
+    password: tok.token,
+    ssl: { rejectUnauthorized: true },
+    statement_timeout: 60_000,
+    connectionTimeoutMillis: 20_000,
+    application_name: 'csa-loom-console',
+  });
+  const out: PgQueryResult[] = [];
+  try {
+    await client.connect();
+    for (const st of statements) {
+      const started = Date.now();
+      const res = st.params && st.params.length
+        ? await client.query(st.sql, st.params as any[])
+        : await client.query(st.sql);
+      const fields = (res as any).fields || [];
+      const columns: string[] = fields.map((f: any) => f.name);
+      const rows: unknown[][] = (res.rows || []).map((r: any) => columns.map((c) => r[c]));
+      out.push({
+        columns,
+        rows,
+        rowCount: typeof res.rowCount === 'number' ? res.rowCount : rows.length,
+        command: (res as any).command,
+        executionMs: Date.now() - started,
+      });
+    }
+    return out;
   } catch (e: any) {
     throw new PostgresError(e?.message || String(e), e?.code === '28000' || e?.code === '28P01' ? 401 : 502, e?.code);
   } finally {

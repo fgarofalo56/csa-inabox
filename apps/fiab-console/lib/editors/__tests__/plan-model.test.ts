@@ -14,6 +14,16 @@ import {
   flattenPlanCells, filterPlanRows, sortPlanRows,
   periodSeries, linearFit, forecastPeriods, ganttLayout,
   planInsights, applyMappingsToActuals, type PlanSourceMapping,
+  // EPM core under test
+  leafInputItems, orderMembers, orderedLineItems, lineItemValueAt, lineItemRowTotal,
+  evalFormula, formulaToText, formulaRefs, validateModel, validateFormulaRows,
+  qfSum, qfAverage, qfDifference, qfRatioPct, qfGrowthPct,
+  // Spreading / breakback / driver topological recompute under test
+  spread, breakback, driverRows, topoOrderLineItems, recomputeRowTotals,
+  // Versions / snapshots under test
+  captureSnapshot, takeSnapshot, diffSnapshots, restoreSnapshot, MAX_PLAN_SNAPSHOTS,
+  type PlanVersionedState,
+  type PlanLineItem, type PlanMember, type PlanModel, type PlanFormulaToken,
 } from '../_plan-model';
 
 function seeded(): PlanningSheet {
@@ -188,5 +198,413 @@ describe('_plan-model InfoBridge mappings', () => {
     const lines = planInsights(s, 'baseline', v);
     expect(lines.length).toBeGreaterThan(1);
     expect(lines.join(' ')).toMatch(/variance|period/i);
+  });
+});
+
+// ===================================================================
+// EPM core — cube model, hierarchies, roll-ups, guided formulas, validation.
+// ===================================================================
+
+/** A seeded sheet with a Revenue→{Product A, Product B} roll-up hierarchy. */
+function hierSheet(): PlanningSheet {
+  const s = defaultPlanningSheet();
+  // Make "revenue" a roll-up parent of two new leaf inputs.
+  s.lineItems = [
+    { id: 'revenue', name: 'Revenue', kind: 'input' },
+    { id: 'pa', name: 'Product A', kind: 'input', parentId: 'revenue' },
+    { id: 'pb', name: 'Product B', kind: 'input', parentId: 'revenue' },
+  ];
+  for (const p of s.periods) {
+    s.cells[cellKey('pa', p.id, 'baseline')] = 30;
+    s.cells[cellKey('pb', p.id, 'baseline')] = 20;
+  }
+  return s;
+}
+
+describe('_plan-model hierarchy + roll-up', () => {
+  it('leafInputItems excludes roll-up parents', () => {
+    const s = hierSheet();
+    expect(leafInputItems(s.lineItems).map((li) => li.id).sort()).toEqual(['pa', 'pb']);
+  });
+  it('orderedLineItems nests children under parents with depth + hasChildren', () => {
+    const ord = orderedLineItems(hierSheet().lineItems);
+    expect(ord.map((o) => o.item.id)).toEqual(['revenue', 'pa', 'pb']);
+    expect(ord[0]).toMatchObject({ depth: 0, hasChildren: true });
+    expect(ord[1]).toMatchObject({ depth: 1, hasChildren: false });
+  });
+  it('lineItemValueAt rolls children up into the parent per period', () => {
+    const s = hierSheet();
+    expect(lineItemValueAt(s, 'baseline', 'revenue', 0)).toBe(50); // 30 + 20
+    expect(lineItemValueAt(s, 'baseline', 'pa', 0)).toBe(30);
+    expect(lineItemRowTotal(s, 'baseline', 'revenue')).toBe(200); // 50 × 4 periods
+  });
+  it('periodTotal counts only leaf inputs (no double-count of the parent)', () => {
+    const s = hierSheet();
+    expect(periodTotal(s, 'baseline', 'q1')).toBe(50); // pa+pb, not revenue too
+  });
+  it('flattenPlanCells emits only leaf inputs', () => {
+    const rows = flattenPlanCells([hierSheet()], defaultScenarios());
+    expect(rows.every((r) => r.lineItemId === 'pa' || r.lineItemId === 'pb')).toBe(true);
+  });
+});
+
+describe('_plan-model member ordering', () => {
+  it('orderMembers depth-first with depth + hasChildren', () => {
+    const members: PlanMember[] = [
+      { id: 'r', label: 'Region' },
+      { id: 'us', label: 'US', parentId: 'r' },
+      { id: 'wa', label: 'WA', parentId: 'us' },
+      { id: 'eu', label: 'EU', parentId: 'r' },
+    ];
+    const ord = orderMembers(members);
+    expect(ord.map((o) => o.member.id)).toEqual(['r', 'us', 'wa', 'eu']);
+    expect(ord.find((o) => o.member.id === 'us')!.depth).toBe(1);
+    expect(ord.find((o) => o.member.id === 'wa')!.depth).toBe(2);
+    expect(ord.find((o) => o.member.id === 'r')!.hasChildren).toBe(true);
+  });
+  it('surfaces orphan members at top level rather than dropping them', () => {
+    const ord = orderMembers([{ id: 'a', label: 'A', parentId: 'ghost' }]);
+    expect(ord.map((o) => o.member.id)).toEqual(['a']);
+  });
+});
+
+describe('_plan-model guided formula evaluator', () => {
+  const resolve = (ref: string, offset: number) => {
+    const base: Record<string, number> = { rev: 100, cost: 40 };
+    // previous period = ×0.9 for the test
+    return (base[ref] ?? 0) * (offset === -1 ? 0.9 : 1);
+  };
+  it('evaluates arithmetic with precedence + parens', () => {
+    const tk: PlanFormulaToken[] = [
+      { k: 'row', ref: 'rev' }, { k: 'op', op: '-' }, { k: 'row', ref: 'cost' },
+      { k: 'op', op: '*' }, { k: 'num', value: 2 },
+    ];
+    expect(evalFormula(tk, resolve)).toMatchObject({ ok: true, value: 20 }); // 100 - 40*2
+  });
+  it('evaluates functions (SUM/AVG/MIN/MAX/ABS)', () => {
+    const sum: PlanFormulaToken[] = [{ k: 'fn', fn: 'SUM' }, { k: 'lp' }, { k: 'row', ref: 'rev' }, { k: 'comma' }, { k: 'row', ref: 'cost' }, { k: 'rp' }];
+    expect(evalFormula(sum, resolve).value).toBe(140);
+    const avg: PlanFormulaToken[] = [{ k: 'fn', fn: 'AVG' }, { k: 'lp' }, { k: 'row', ref: 'rev' }, { k: 'comma' }, { k: 'row', ref: 'cost' }, { k: 'rp' }];
+    expect(evalFormula(avg, resolve).value).toBe(70);
+  });
+  it('honours period offsets (growth-style refs)', () => {
+    const tk: PlanFormulaToken[] = [{ k: 'row', ref: 'rev', offset: -1 }];
+    expect(evalFormula(tk, resolve).value).toBe(90);
+  });
+  it('flags divide-by-zero and malformed input without throwing', () => {
+    expect(evalFormula([{ k: 'num', value: 1 }, { k: 'op', op: '/' }, { k: 'num', value: 0 }], resolve).ok).toBe(false);
+    expect(evalFormula([{ k: 'op', op: '+' }], resolve).ok).toBe(false);
+    expect(evalFormula([], resolve).ok).toBe(false);
+  });
+  it('formulaRefs + formulaToText render the structure', () => {
+    const tk = qfGrowthPct('rev', -1);
+    expect(formulaRefs(tk)).toEqual(['rev']);
+    expect(formulaToText(tk, (r) => (r === 'rev' ? 'Revenue' : r))).toMatch(/Revenue/);
+  });
+});
+
+describe('_plan-model quick formulas', () => {
+  const resolve = (ref: string) => ({ a: 120, b: 100 } as Record<string, number>)[ref] ?? 0;
+  it('qfSum / qfAverage / qfDifference / qfRatioPct compute correctly', () => {
+    expect(evalFormula(qfSum(['a', 'b']), resolve).value).toBe(220);
+    expect(evalFormula(qfAverage(['a', 'b']), resolve).value).toBe(110);
+    expect(evalFormula(qfDifference('a', 'b'), resolve).value).toBe(20);
+    expect(evalFormula(qfRatioPct('a', 'b'), resolve).value).toBe(120); // 120/100*100
+  });
+  it('qfGrowthPct uses the previous-period offset', () => {
+    const r = (ref: string, off: number) => (ref === 'a' ? (off === -1 ? 100 : 120) : 0);
+    expect(evalFormula(qfGrowthPct('a', -1), r).value).toBe(20); // (120-100)/100*100
+  });
+});
+
+describe('_plan-model formula rows in a sheet', () => {
+  it('lineItemValueAt evaluates a formula row referencing other rows', () => {
+    const s = defaultPlanningSheet();
+    s.cells[cellKey('revenue', 'q1', 'baseline')] = 100;
+    s.cells[cellKey('cogs', 'q1', 'baseline')] = 40;
+    s.lineItems.push({ id: 'gm', name: 'Gross margin', kind: 'formula', formula: qfDifference('revenue', 'cogs') });
+    expect(lineItemValueAt(s, 'baseline', 'gm', 0)).toBe(60);
+  });
+});
+
+describe('_plan-model validation', () => {
+  it('validateModel flags missing parent, cycle, and duplicate names', () => {
+    const model: PlanModel = {
+      dimensions: [
+        { id: 'd1', name: 'Account', axis: 'row', members: [{ id: 'm1', label: 'A', parentId: 'ghost' }] },
+        { id: 'd2', name: 'account', axis: 'row', members: [] }, // dup name (case-insensitive)
+      ],
+      measures: [{ id: 'x', name: '', agg: 'sum' }], // missing name
+    };
+    const res = validateModel(model);
+    expect(res.ok).toBe(false);
+    const msgs = res.issues.map((i) => i.message).join(' | ');
+    expect(msgs).toMatch(/missing parent/i);
+    expect(msgs).toMatch(/duplicate dimension/i);
+    expect(msgs).toMatch(/measure has no name/i);
+  });
+  it('validateModel passes a clean cube', () => {
+    const model: PlanModel = {
+      dimensions: [{ id: 'd', name: 'Region', axis: 'row', members: [{ id: 'r', label: 'Root' }, { id: 'c', label: 'Child', parentId: 'r' }] }],
+      measures: [{ id: 'm', name: 'Total', agg: 'sum' }],
+    };
+    expect(validateModel(model).ok).toBe(true);
+  });
+  it('validateFormulaRows flags missing refs, self-refs, and cycles', () => {
+    const s = defaultPlanningSheet();
+    s.lineItems = [
+      { id: 'a', name: 'A', kind: 'formula', formula: [{ k: 'row', ref: 'b' }] },
+      { id: 'b', name: 'B', kind: 'formula', formula: [{ k: 'row', ref: 'a' }] }, // a↔b cycle
+      { id: 'c', name: 'C', kind: 'formula', formula: [{ k: 'row', ref: 'ghost' }] }, // missing
+    ];
+    const res = validateFormulaRows(s);
+    expect(res.ok).toBe(false);
+    const msgs = res.issues.map((i) => i.message).join(' | ');
+    expect(msgs).toMatch(/missing row|cycle/i);
+  });
+});
+
+// ===================================================================
+// Spreading / allocation, breakback, and driver topological recompute.
+// ===================================================================
+
+describe('_plan-model spread (allocation)', () => {
+  it('spreads evenly and the parts sum to the total', () => {
+    const out = spread(100, [0, 0, 0, 0], 'evenly');
+    expect(out).toEqual([25, 25, 25, 25]);
+    expect(out.reduce((a, b) => a + b, 0)).toBe(100);
+  });
+  it('spreads by growth % as a geometric ramp scaled to the total', () => {
+    const out = spread(100, [0, 0], 'growth', { growthPct: 1 }); // ramp 1,2 → 1/3,2/3
+    expect(out[0]).toBeCloseTo(33.333333, 4);
+    expect(out[1]).toBeCloseTo(66.666667, 4);
+    expect(out.reduce((a, b) => a + b, 0)).toBeCloseTo(100, 6);
+    expect(out[1]).toBeGreaterThan(out[0]); // later periods grow
+  });
+  it('spreads by weight proportional to current values', () => {
+    const out = spread(100, [30, 10], 'weight'); // 3:1 → 75, 25
+    expect(out).toEqual([75, 25]);
+  });
+  it('weight mode with all-zero weights degrades to evenly', () => {
+    expect(spread(100, [0, 0, 0, 0], 'weight')).toEqual([25, 25, 25, 25]);
+  });
+  it('honors explicit weights over current values', () => {
+    expect(spread(100, [1, 1], 'weight', { weights: [3, 1] })).toEqual([75, 25]);
+  });
+  it('folds the rounding remainder into the last cell so Σ is exact', () => {
+    const out = spread(100, [0, 0, 0], 'evenly'); // 33.333333 ×3
+    expect(out.reduce((a, b) => a + b, 0)).toBe(100);
+  });
+  it('returns [] for an empty target set', () => {
+    expect(spread(100, [], 'evenly')).toEqual([]);
+  });
+});
+
+describe('_plan-model breakback', () => {
+  it('pushes the delta proportionally so children sum to the new parent value', () => {
+    const out = breakback([60, 40], 200); // was 100 → scale ×2
+    expect(out).toEqual([120, 80]);
+    expect(out.reduce((a, b) => a + b, 0)).toBe(200);
+  });
+  it('splits evenly when the children are all zero', () => {
+    expect(breakback([0, 0, 0, 0], 100)).toEqual([25, 25, 25, 25]);
+  });
+  it('handles a decrease (negative delta) keeping the proportion', () => {
+    const out = breakback([75, 25], 40); // ×0.4
+    expect(out[0]).toBeCloseTo(30, 6);
+    expect(out[1]).toBeCloseTo(10, 6);
+    expect(out.reduce((a, b) => a + b, 0)).toBeCloseTo(40, 6);
+  });
+  it('equals a weight-spread when the children have a non-zero sum', () => {
+    const children = [30, 20, 50];
+    expect(breakback(children, 400)).toEqual(spread(400, children, 'weight'));
+  });
+});
+
+describe('_plan-model drivers + topological recompute', () => {
+  /** headcount (driver) → salaries formula = headcount × 100. */
+  function driverSheet(): PlanningSheet {
+    const s = defaultPlanningSheet();
+    s.lineItems = [
+      { id: 'hc', name: 'Headcount', kind: 'input', driver: true },
+      { id: 'sal', name: 'Salaries', kind: 'formula', formula: [{ k: 'row', ref: 'hc' }, { k: 'op', op: '*' }, { k: 'num', value: 100 }] },
+    ];
+    for (const p of s.periods) s.cells[cellKey('hc', p.id, 'baseline')] = 5;
+    return s;
+  }
+  it('driverRows returns only flagged rows', () => {
+    expect(driverRows(driverSheet().lineItems).map((li) => li.id)).toEqual(['hc']);
+  });
+  it('topoOrderLineItems places a driver before the formula that references it', () => {
+    const { order, cycle } = topoOrderLineItems(driverSheet());
+    expect(cycle).toBe(false);
+    expect(order.indexOf('hc')).toBeLessThan(order.indexOf('sal'));
+  });
+  it('topoOrderLineItems flags a reference cycle without dropping rows', () => {
+    const s = defaultPlanningSheet();
+    s.lineItems = [
+      { id: 'a', name: 'A', kind: 'formula', formula: [{ k: 'row', ref: 'b' }] },
+      { id: 'b', name: 'B', kind: 'formula', formula: [{ k: 'row', ref: 'a' }] },
+    ];
+    const { order, cycle } = topoOrderLineItems(s);
+    expect(cycle).toBe(true);
+    expect(order.sort()).toEqual(['a', 'b']);
+  });
+  it('recomputeRowTotals evaluates driver → formula in order (5×100 = 500/period)', () => {
+    const totals = recomputeRowTotals(driverSheet(), 'baseline');
+    expect(totals.hc).toBe(20); // 5 × 4 periods
+    expect(totals.sal).toBe(2000); // 500 × 4 periods
+  });
+});
+
+// ===================================================================
+// Versions / snapshots — takeSnapshot / diffSnapshots / restoreSnapshot.
+// ===================================================================
+
+describe('_plan-model takeSnapshot', () => {
+  function versionedState(): PlanVersionedState {
+    return { sheets: [seeded()], scenarios: defaultScenarios(), snapshots: [] };
+  }
+
+  it('appends an immutable snapshot with label, timestamp, and author', () => {
+    const state = versionedState();
+    const next = takeSnapshot(state, 'Board submission', 'ada@contoso.com');
+    expect(next).not.toBe(state); // new object, input untouched
+    expect(state.snapshots).toEqual([]);
+    expect(next.snapshots).toHaveLength(1);
+    const snap = next.snapshots![0];
+    expect(snap.label).toBe('Board submission');
+    expect(snap.author).toBe('ada@contoso.com');
+    expect(new Date(snap.takenAt).getTime()).not.toBeNaN();
+    expect(snap.sheets[0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(100);
+    expect(snap.scenarios.map((s) => s.id)).toEqual(['baseline', 'optimistic', 'pessimistic']);
+  });
+
+  it('deep-copies: mutating live state after capture never leaks into the snapshot', () => {
+    const state = versionedState();
+    const next = takeSnapshot(state, 'v1');
+    // Mutate the LIVE sheet the state still references.
+    next.sheets![0].cells[cellKey('revenue', 'q1', 'baseline')] = 999;
+    next.sheets![0].lineItems.push({ id: 'later', name: 'Later row', kind: 'input' });
+    const snap = next.snapshots![0];
+    expect(snap.sheets[0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(100);
+    expect(snap.sheets[0].lineItems.find((li) => li.id === 'later')).toBeUndefined();
+  });
+
+  it('defaults a blank label and falls back to default sheets/scenarios on an empty plan', () => {
+    const next = takeSnapshot({} as PlanVersionedState, '   ');
+    const snap = next.snapshots![0];
+    expect(snap.label).toMatch(/^Snapshot /);
+    expect(snap.author).toBeUndefined();
+    expect(snap.sheets).toHaveLength(1); // defaultPlanningSheet()
+    expect(snap.scenarios).toHaveLength(3); // defaultScenarios()
+  });
+
+  it('caps retention at MAX_PLAN_SNAPSHOTS dropping the oldest first', () => {
+    let state: PlanVersionedState = versionedState();
+    for (let i = 0; i < MAX_PLAN_SNAPSHOTS + 3; i++) state = takeSnapshot(state, `v${i}`);
+    expect(state.snapshots).toHaveLength(MAX_PLAN_SNAPSHOTS);
+    expect(state.snapshots![0].label).toBe('v3'); // v0..v2 dropped
+    expect(state.snapshots![MAX_PLAN_SNAPSHOTS - 1].label).toBe(`v${MAX_PLAN_SNAPSHOTS + 2}`);
+  });
+});
+
+describe('_plan-model diffSnapshots', () => {
+  it('reports changed cells with before/after and resolved labels', () => {
+    const a = captureSnapshot({ sheets: [seeded()], scenarios: defaultScenarios() }, 'A');
+    const edited = seeded();
+    edited.cells[cellKey('revenue', 'q1', 'baseline')] = 150; // changed
+    delete edited.cells[cellKey('cogs', 'q4', 'baseline')];   // removed
+    edited.cells[cellKey('opex', 'q2', 'baseline')] = 25;     // added
+    const b = captureSnapshot({ sheets: [edited], scenarios: defaultScenarios() }, 'B');
+
+    const diff = diffSnapshots(a, b);
+    expect(diff.identical).toBe(false);
+    expect(diff.cells).toHaveLength(3);
+    const changed = diff.cells.find((c) => c.lineItemId === 'revenue' && c.periodId === 'q1')!;
+    expect(changed).toMatchObject({ before: 100, after: 150, lineItemName: 'Revenue', periodLabel: 'Q1', scenarioName: 'Baseline' });
+    expect(diff.cells.find((c) => c.lineItemId === 'cogs' && c.periodId === 'q4')).toMatchObject({ before: 40, after: null });
+    expect(diff.cells.find((c) => c.lineItemId === 'opex' && c.periodId === 'q2')).toMatchObject({ before: null, after: 25 });
+  });
+
+  it('reports row add/remove/rename and scenario membership changes', () => {
+    const a = captureSnapshot({ sheets: [seeded()], scenarios: defaultScenarios() }, 'A');
+    const edited = seeded();
+    edited.lineItems = edited.lineItems.filter((li) => li.id !== 'opex'); // removed row
+    edited.lineItems.push({ id: 'marketing', name: 'Marketing', kind: 'input' }); // added row
+    edited.lineItems = edited.lineItems.map((li) => (li.id === 'cogs' ? { ...li, name: 'COGS (renamed)' } : li));
+    const b = captureSnapshot(
+      { sheets: [edited], scenarios: [...defaultScenarios(), { id: 'stretch', name: 'Stretch', kind: 'custom' as const }] },
+      'B',
+    );
+
+    const diff = diffSnapshots(a, b);
+    expect(diff.rows.find((r) => r.change === 'removed')?.lineItemId).toBe('opex');
+    expect(diff.rows.find((r) => r.change === 'added')?.lineItemId).toBe('marketing');
+    expect(diff.rows.find((r) => r.change === 'renamed')).toMatchObject({ before: 'Cost of goods', after: 'COGS (renamed)' });
+    expect(diff.scenariosAdded).toEqual(['Stretch']);
+    expect(diff.scenariosRemoved).toEqual([]);
+  });
+
+  it('flags identical snapshots and whole-sheet add/remove', () => {
+    const state = { sheets: [seeded()], scenarios: defaultScenarios() };
+    expect(diffSnapshots(captureSnapshot(state, 'A'), captureSnapshot(state, 'B')).identical).toBe(true);
+
+    const second = defaultPlanningSheet();
+    second.id = 'sheet2';
+    second.name = 'FY27 budget';
+    const grown = captureSnapshot({ sheets: [seeded(), second], scenarios: defaultScenarios() }, 'B');
+    const diff = diffSnapshots(captureSnapshot(state, 'A'), grown);
+    expect(diff.sheetsAdded).toEqual(['FY27 budget']);
+    expect(diff.identical).toBe(false);
+  });
+});
+
+describe('_plan-model restoreSnapshot', () => {
+  it('restores sheets + scenarios from the snapshot after auto-snapshotting the current state', () => {
+    let state: PlanVersionedState = { sheets: [seeded()], scenarios: defaultScenarios(), snapshots: [] };
+    state = takeSnapshot(state, 'v1', 'ada');
+    const v1 = state.snapshots![0];
+
+    // Edit the live plan after v1.
+    const edited = JSON.parse(JSON.stringify(state.sheets![0]));
+    edited.cells[cellKey('revenue', 'q1', 'baseline')] = 777;
+    state = { ...state, sheets: [edited] };
+
+    const restored = restoreSnapshot(state, v1.id, 'ada');
+    // Restored cell value is back to the v1 value.
+    expect(restored.sheets![0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(100);
+    // The pre-restore state was auto-snapshotted first (reversible restore).
+    expect(restored.snapshots).toHaveLength(2);
+    const backup = restored.snapshots![1];
+    expect(backup.label).toBe('Before restore of "v1"');
+    expect(backup.sheets[0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(777);
+    // Input state untouched (pure).
+    expect(state.snapshots).toHaveLength(1);
+  });
+
+  it('restore is deep: editing the restored sheet cannot corrupt the snapshot', () => {
+    let state: PlanVersionedState = { sheets: [seeded()], scenarios: defaultScenarios() };
+    state = takeSnapshot(state, 'v1');
+    const restored = restoreSnapshot(state, state.snapshots![0].id);
+    restored.sheets![0].cells[cellKey('revenue', 'q1', 'baseline')] = -1;
+    expect(restored.snapshots![0].sheets[0].cells[cellKey('revenue', 'q1', 'baseline')]).toBe(100);
+  });
+
+  it('re-points active sheet/scenario ids that no longer exist and ignores unknown snapshot ids', () => {
+    let state: PlanVersionedState = { sheets: [seeded()], scenarios: defaultScenarios(), activeSheetId: 'sheet1', activeScenarioId: 'baseline' };
+    state = takeSnapshot(state, 'v1');
+    const v1 = state.snapshots![0];
+
+    // Live plan replaced the sheet + scenarios entirely since v1.
+    const other = defaultPlanningSheet();
+    other.id = 'sheetX';
+    state = { ...state, sheets: [other], scenarios: [{ id: 'custom1', name: 'Custom', kind: 'custom' }], activeSheetId: 'sheetX', activeScenarioId: 'custom1' };
+
+    const restored = restoreSnapshot(state, v1.id);
+    expect(restored.activeSheetId).toBe('sheet1');       // sheetX gone → first restored sheet
+    expect(restored.activeScenarioId).toBe('baseline');  // custom1 gone → first restored scenario
+
+    expect(restoreSnapshot(state, 'nope')).toBe(state);  // unknown id → unchanged reference
   });
 });

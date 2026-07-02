@@ -1,0 +1,40 @@
+# ---------------------------------------------------------------------------
+# CSA Loom — Power BI-parity R/Python "script visual" executor (ACA app)
+# platform/runners/script-runner/requirements.txt
+# ---------------------------------------------------------------------------
+# These are the Python RUNTIME deps for the sandboxed executor (app.py). The
+# executor is a REAL FastAPI service deployed as an internal-ingress Azure
+# Container App (script-runner-app.bicep): it receives a dataset + user R/Python
+# script, runs the script in a resource-limited, env-scrubbed subprocess, and
+# returns the active-figure as a static PNG — mirroring Power BI's R/Python
+# visual contract (Values well -> grouped+deduped `dataset`; active device ->
+# out.png). No Fabric / Power BI service is involved (no-fabric-dependency):
+# the data comes from the existing Synapse /query Path-3, Azure-native.
+#
+# Bump policy (mirrors the github-actions runner image's pin + checksum rigor):
+#   * EXACT pins only ("=="), one direct dependency per line. Bump a line
+#     deliberately, rebuild the image, and re-run the executor smoke test
+#     (a 1-row dataset -> 1x1 PNG) before rolling.
+#   * Do NOT add transitive pins here — pip resolves the (already pinned-major)
+#     transitive graph; the container is rebuilt reproducibly from this file.
+#   * The R side (ggplot2 + base R graphics) is NOT installed via pip. It is
+#     baked by the image's apt layer (r-base-core / r-cran-ggplot2) in
+#     script-runner/Dockerfile, pinned by the Ubuntu release the base image
+#     pins — keep the two layers' versions noted together when bumping.
+#
+# Minimal-but-complete: only what app.py imports at runtime. No test/lint deps
+# (those belong in a separate dev-requirements if ever needed) — the runtime
+# image stays small to shrink the sandbox's attack surface.
+# ---------------------------------------------------------------------------
+
+# --- web framework + ASGI server (internal-ingress BFF target) -------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+
+# --- dataframe + numerics (PBI `dataset` is a pandas DataFrame) -------------
+pandas==2.2.3
+numpy==2.2.1
+
+# --- plotting (Agg backend -> active figure captured as PNG @96dpi) --------
+# MPLBACKEND=Agg is forced in the scrubbed subprocess env (headless, no display).
+matplotlib==3.10.0

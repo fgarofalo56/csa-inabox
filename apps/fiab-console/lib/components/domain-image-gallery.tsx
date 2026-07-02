@@ -64,7 +64,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
-  iconTileSel: { borderColor: tokens.colorBrandStroke1, borderWidth: '2px', backgroundColor: tokens.colorBrandBackground2 },
+  iconTileSel: { border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2 },
   iconArt: {
     width: '56px', height: '56px', borderRadius: tokens.borderRadiusMedium,
     display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#fff',
@@ -79,7 +79,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     overflow: 'hidden', padding: 0, background: tokens.colorNeutralBackground2,
   },
-  blobTileSel: { borderColor: tokens.colorBrandStroke1, borderWidth: '2px' },
+  blobTileSel: { border: `2px solid ${tokens.colorBrandStroke1}` },
   blobImg: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' },
   selBadge: {
     position: 'absolute', top: '4px', right: '4px', width: '18px', height: '18px',

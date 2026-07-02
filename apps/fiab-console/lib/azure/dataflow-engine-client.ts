@@ -20,6 +20,7 @@
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { cogScope } from './cloud-endpoints';
+import { buildAoaiBody } from './aoai-model-contract';
 import type { AoaiTarget } from './copilot-orchestrator';
 import { DATAFLOW_COPILOT_PERSONA } from './copilot-personas-dataflow';
 import {
@@ -147,18 +148,24 @@ async function chat(target: AoaiTarget, messages: ChatMessage[], jsonObject: boo
     target.deployment,
   )}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
-  const base: Record<string, unknown> = { messages, max_tokens: 2048 };
-  if (jsonObject) base.response_format = { type: 'json_object' };
 
+  // Body built via the single-source-of-truth contract (buildAoaiBody centralizes
+  // the max_completion_tokens cap + canonical key order). The dual send() keeps
+  // this client's unique double-fallback: on a sampling/response_format 400 we
+  // retry once dropping BOTH temperature AND response_format — a shape the unified
+  // aoaiChatJson cannot reproduce (its retry omits temperature/top_p only).
   const send = (withTemperature: boolean, withJson: boolean) =>
     fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({
-        ...base,
-        ...(withJson ? {} : { response_format: undefined }),
-        ...(withTemperature ? { temperature: 0.1 } : {}),
-      }),
+      body: JSON.stringify(
+        buildAoaiBody({
+          messages,
+          maxCompletionTokens: 2048,
+          temperature: withTemperature ? 0.1 : undefined,
+          responseFormat: withJson ? 'json_object' : undefined,
+        }),
+      ),
     });
 
   let res = await send(true, jsonObject);

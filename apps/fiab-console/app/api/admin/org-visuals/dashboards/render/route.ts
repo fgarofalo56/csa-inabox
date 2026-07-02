@@ -17,6 +17,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { getDashboard } from '@/lib/coe-library/builder/dashboard-store';
 import {
@@ -31,9 +32,7 @@ import type { SampleData, SampleTable } from '@/lib/coe-library/report-render/tm
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 const VALID_VISUALS = new Set<TileVisual>(['kpi', 'bar', 'line', 'donut', 'table']);
 
@@ -114,10 +113,10 @@ function placeholderTable(columns: string[], tile: { category?: string; value: s
 
 export async function GET(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const url = new URL(req.url);
   const id = url.searchParams.get('id')?.trim();
-  if (!id) return err('id is required', 400);
+  if (!id) return apiError('id is required', 400);
   const live = url.searchParams.get('mode') === 'live';
   const overrides: ReportParamOverrides = {
     subscriptionId: url.searchParams.get('subscriptionId')?.trim() || undefined,
@@ -127,20 +126,20 @@ export async function GET(req: NextRequest) {
   };
   try {
     const dash = await getDashboard(s.claims.oid, id);
-    if (!dash) return err(`unknown dashboard: ${id}`, 404);
+    if (!dash) return apiError(`unknown dashboard: ${id}`, 404);
     return buildPayload(dash.spec, live, overrides);
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   let body: any = {};
   try { body = await req.json(); } catch { /* empty */ }
   const spec = coerceSpec(body?.spec);
-  if (!spec) return err('spec is required', 400);
+  if (!spec) return apiError('spec is required', 400);
   const live = body?.mode === 'live';
   const p = body?.params || {};
   const overrides: ReportParamOverrides = {

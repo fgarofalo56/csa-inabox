@@ -322,8 +322,8 @@ export async function grantItemPermission(input: GrantItemPermissionInput): Prom
 
   // 1. Persist (source of truth) — last so the row reflects mirror outcomes.
   const c = await itemPermissionsContainer();
-  const { resource } = await c.items.upsert(doc);
-  return (resource as ItemPermission) ?? doc;
+  const { resource } = await c.items.upsert<ItemPermission>(doc);
+  return resource ?? doc;
 }
 
 // ============================================================

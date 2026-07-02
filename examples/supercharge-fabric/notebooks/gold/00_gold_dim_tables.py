@@ -84,9 +84,9 @@ DIM_DATE_START = _get_arg("dim_date_start", "2020-01-01")
 DIM_DATE_END = _get_arg("dim_date_end", "2030-12-31")
 
 # Source and target tables (three-part names for schema-enabled Lakehouses)
-slot_source_table = "lh_silver.dbo.silver_slot_cleansed"
-dim_date_table = "lh_gold.dbo.dim_date"
-dim_machine_table = "lh_gold.dbo.dim_machine"
+slot_source_table = "lh_silver.silver_slot_cleansed"
+dim_date_table = "lh_gold.dim_date"
+dim_machine_table = "lh_gold.dim_machine"
 
 print(f"Processing batch: {batch_id}")
 print(f"dim_date range: {DIM_DATE_START} -> {DIM_DATE_END}")

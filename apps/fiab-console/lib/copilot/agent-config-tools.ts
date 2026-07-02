@@ -17,16 +17,10 @@
  * against the live source on the next test-chat turn.
  */
 
-import {
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-  ChainedTokenCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { resolveAoaiTarget, NoAoaiDeploymentError } from '../azure/copilot-orchestrator';
-import { cogScope } from '../azure/cloud-endpoints';
+import { aoaiChat } from '../azure/aoai-chat-client';
+import { NoAoaiDeploymentError } from '../azure/copilot-orchestrator';
 import { executeQuery as synapseExecute, dedicatedTarget, serverlessTarget } from '../azure/synapse-sql-client';
-import { listTableDetails, getTableSchema, kustoConfigGate, defaultDatabase, clusterUri } from '../azure/kusto-client';
+import { listTableDetails, listTables, listFunctions, getTableSchema, kustoConfigGate, defaultDatabase, clusterUri } from '../azure/kusto-client';
 import { getIndex, searchConfigGate } from '../azure/search-index-client';
 import { AGENT_CONFIG_COPILOT } from '../azure/copilot-personas';
 import { mergeSuggestionIntoSources } from '../editors/_da-config-merge';
@@ -34,15 +28,6 @@ import type { DataAgentSource } from '../azure/data-agent-client';
 
 export { NoAoaiDeploymentError };
 export { mergeSuggestionIntoSources, mergeInstructions, descriptionsToBlock } from '../editors/_da-config-merge';
-
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
-  ? new ChainedTokenCredential(
-      new AcaManagedIdentityCredential(),
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
 
 const SCHEMA_CHAR_CAP = 8_000;
 
@@ -190,6 +175,114 @@ async function searchSchema(src: DataAgentSource): Promise<SchemaResult> {
   return { schemaText: cap(lines.join('\n')) };
 }
 
+// ── structured object listing (real backends) — powers the Tree source picker ─
+
+export interface SourceObject {
+  /** Owning schema (SQL only). */
+  schema?: string;
+  /** Bare object name — persisted verbatim into `src.tables` (matches the
+   *  comma-separated selection filter `selectedTables` reads back). */
+  name: string;
+  kind: 'table' | 'view' | 'function' | 'field';
+}
+
+export interface SourceObjectsResult {
+  objects: SourceObject[];
+  /** Honest gate when the backend is unreachable / unconfigured / schema-less. */
+  gate?: string;
+}
+
+/**
+ * List the REAL selectable schema objects (tables / views / functions / AI
+ * Search index fields) for one source from its Azure-native backend — the
+ * structured counterpart of `fetchSourceSchema`, powering the data-agent typed
+ * Tree source picker (replaces the freeform comma-separated table Input).
+ * Never throws for an unreachable backend — the `gate` carries the reason.
+ */
+export async function listSourceObjects(src: DataAgentSource): Promise<SourceObjectsResult> {
+  try {
+    switch (src.type) {
+      case 'warehouse':
+        return await sqlObjects(dedicatedTarget(), 'warehouse (Synapse dedicated SQL pool)');
+      case 'lakehouse': {
+        const db = src.name && /^[A-Za-z0-9_]+$/.test(src.name) ? src.name : 'master';
+        return await sqlObjects(serverlessTarget(db), `lakehouse (Synapse serverless over ${db})`);
+      }
+      case 'kql':
+        return await kqlObjects(src);
+      case 'ai-search':
+        return await searchObjects(src);
+      case 'semantic-model':
+        return {
+          objects: [],
+          gate: 'Semantic models are scoped in Power BI "Prep for AI" Verified Answers — there is no table selection here.',
+        };
+      case 'ontology':
+      case 'graph':
+        return { objects: [], gate: `${src.type === 'graph' ? 'Graphs' : 'Ontologies'} are queried whole — no table scoping.` };
+      default:
+        return { objects: [], gate: `Schema introspection for source type "${src.type}" is not wired.` };
+    }
+  } catch (e: any) {
+    return { objects: [], gate: `Could not read schema from ${src.name || src.type}: ${e?.message || String(e)}` };
+  }
+}
+
+async function sqlObjects(target: ReturnType<typeof dedicatedTarget>, label: string): Promise<SourceObjectsResult> {
+  // INFORMATION_SCHEMA.TABLES gives real tables + views (TABLE_TYPE); ROUTINES
+  // gives scalar/table functions. Both are read-only metadata on dedicated AND
+  // serverless SQL. No Fabric.
+  const res = await synapseExecute(
+    target,
+    'SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM INFORMATION_SCHEMA.TABLES ORDER BY TABLE_SCHEMA, TABLE_NAME',
+  );
+  const objects: SourceObject[] = [];
+  for (const row of res.rows) {
+    const [schema, name, type] = row as [string, string, string];
+    if (!name) continue;
+    objects.push({ schema: schema || undefined, name, kind: /view/i.test(String(type)) ? 'view' : 'table' });
+  }
+  // Functions are best-effort — a serverless endpoint may not expose ROUTINES.
+  try {
+    const fres = await synapseExecute(
+      target,
+      "SELECT ROUTINE_SCHEMA, ROUTINE_NAME FROM INFORMATION_SCHEMA.ROUTINES WHERE ROUTINE_TYPE = 'FUNCTION' ORDER BY ROUTINE_SCHEMA, ROUTINE_NAME",
+    );
+    for (const row of fres.rows) {
+      const [schema, name] = row as [string, string];
+      if (name) objects.push({ schema: schema || undefined, name, kind: 'function' });
+    }
+  } catch { /* functions optional */ }
+  if (!objects.length) return { objects: [], gate: `No tables / views / functions found in ${label}.` };
+  return { objects };
+}
+
+async function kqlObjects(src: DataAgentSource): Promise<SourceObjectsResult> {
+  const gate = kustoConfigGate();
+  if (gate) return { objects: [], gate: `ADX not configured: set ${gate.missing}. Cluster: ${clusterUri()}.` };
+  const db = src.name && /^[A-Za-z0-9_-]+$/.test(src.name) ? src.name : defaultDatabase();
+  const tables = await listTables(db); // real `.show tables`
+  const objects: SourceObject[] = tables.map((t) => ({ name: t.name, kind: 'table' as const })).filter((o) => o.name);
+  try {
+    const fns = await listFunctions(db); // real `.show functions`
+    for (const f of fns) if (f.name) objects.push({ name: f.name, kind: 'function' });
+  } catch { /* functions optional */ }
+  if (!objects.length) return { objects: [], gate: `No tables / functions found in ADX database "${db}".` };
+  return { objects };
+}
+
+async function searchObjects(src: DataAgentSource): Promise<SourceObjectsResult> {
+  const gate = searchConfigGate();
+  if (gate) return { objects: [], gate: `AI Search not configured: set ${gate.missing}.` };
+  const index = src.name || (src.tables ? src.tables.split(',')[0].trim() : '');
+  if (!index) return { objects: [], gate: 'No AI Search index name on this source.' };
+  const def: any = await getIndex(index); // real getIndex
+  if (!def) return { objects: [], gate: `AI Search index "${index}" not found.` };
+  const fields: any[] = Array.isArray(def.fields) ? def.fields : [];
+  if (!fields.length) return { objects: [], gate: `AI Search index "${index}" has no fields.` };
+  return { objects: fields.map((f) => ({ name: String(f.name), kind: 'field' as const })).filter((o) => o.name) };
+}
+
 // ── AOAI generation ──────────────────────────────────────────────────────────
 
 /** Build the grounding user message for a source + its real schema text. */
@@ -249,47 +342,20 @@ export function parseSuggestion(content: string, schemaText: string): AgentConfi
   return { examples, descriptions, schemaUsed: schemaText };
 }
 
-async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken(cogScope());
-  if (!t?.token) throw new Error('Failed to acquire AOAI token for the config copilot');
-  return t.token;
-}
-
 /**
  * Ask the live AOAI deployment to generate examples + descriptions grounded on
  * `schemaText`. Throws NoAoaiDeploymentError when no model is deployed (the BFF
  * turns that into a 503 + Foundry-hub remediation).
  */
 export async function generateSuggestions(src: DataAgentSource, schemaText: string): Promise<AgentConfigSuggestion> {
-  const target = await resolveAoaiTarget();
-  const token = await aoaiToken();
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const messages = [
-    { role: 'system', content: AGENT_CONFIG_COPILOT.systemPrompt },
-    { role: 'user', content: buildUserMessage(src, schemaText) },
-  ];
-  const base: Record<string, unknown> = { messages, max_tokens: 1500 };
-  const send = (withTemp: boolean) =>
-    fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
-    });
-  let res = await send(true);
-  if (res.status === 400) {
-    const t = await res.text();
-    if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(t) && /temperature|top_p/i.test(t)) {
-      res = await send(false);
-    } else {
-      throw new Error(`Config copilot generation failed (400): ${t.slice(0, 400)}`);
-    }
-  }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`Config copilot generation failed (${res.status}): ${t.slice(0, 400)}`);
-  }
-  const j: any = await res.json();
-  const content = j?.choices?.[0]?.message?.content || '';
+  const content = await aoaiChat({
+    messages: [
+      { role: 'system', content: AGENT_CONFIG_COPILOT.systemPrompt },
+      { role: 'user', content: buildUserMessage(src, schemaText) },
+    ],
+    maxCompletionTokens: 1500,
+    temperature: 0.2,
+  });
   return parseSuggestion(content, schemaText);
 }
 

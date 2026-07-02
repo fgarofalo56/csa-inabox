@@ -44,13 +44,19 @@ const uamiCredential: TokenCredential = uamiClientId
   : new DefaultAzureCredential();
 
 // Dataverse credential — UAMIs aren't valid Dataverse Application Users
-// (Microsoft platform restriction), so we use the MSAL Web App SP
-// (LOOM_DATAVERSE_CLIENT_ID / _CLIENT_SECRET / _TENANT_ID) for any
-// `<org>.crm.dynamics.com/.default` scope. The SP must be registered as
-// a Dataverse Application User with the System Administrator (or
-// equivalent) security role on every env Loom needs to read.
-const dataverseClientId = process.env.LOOM_DATAVERSE_CLIENT_ID;
-const dataverseClientSecret = process.env.LOOM_DATAVERSE_CLIENT_SECRET;
+// (Microsoft platform restriction), so we use a confidential SP for any
+// `<org>.crm.dynamics.com/.default` scope. The SP must be registered as a
+// Dataverse Application User (System Administrator) on every env Loom reads —
+// which the day-one bootstrap does for the MSAL Web App SP
+// (scripts/csa-loom/dataverse-add-appuser.sh, run from the post-deploy
+// workflow). So by DEFAULT we reuse that SAME MSAL app + secret here (no
+// gate, works day-one): LOOM_DATAVERSE_CLIENT_ID/_SECRET are honored when set
+// (a dedicated Dataverse app), otherwise we fall back to LOOM_MSAL_CLIENT_ID /
+// LOOM_MSAL_CLIENT_SECRET (the registered app-user). See docs/fiab/dataverse-app-user.md.
+const dataverseClientId =
+  process.env.LOOM_DATAVERSE_CLIENT_ID || process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
+const dataverseClientSecret =
+  process.env.LOOM_DATAVERSE_CLIENT_SECRET || process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
 const dataverseTenantId = process.env.LOOM_DATAVERSE_TENANT_ID || process.env.AZURE_TENANT_ID;
 const dataverseCredential: TokenCredential | null =
   (dataverseClientId && dataverseClientSecret && dataverseTenantId)
@@ -96,9 +102,14 @@ export function powerPlatformConfigGate(): { missing: string } | null {
  * plane is reachable.
  */
 export function dataverseConfigGate(): { missing: string } | null {
-  if (process.env.LOOM_DATAVERSE_CLIENT_ID && process.env.LOOM_DATAVERSE_CLIENT_SECRET) return null;
-  if (!process.env.LOOM_DATAVERSE_CLIENT_ID) return { missing: 'LOOM_DATAVERSE_CLIENT_ID' };
-  return { missing: 'LOOM_DATAVERSE_CLIENT_SECRET' };
+  // Honors a dedicated Dataverse app when set, else falls back to the MSAL Web
+  // App SP (which the bootstrap registers as the Dataverse Application User) —
+  // so this is satisfied day-one with no extra config.
+  const id = process.env.LOOM_DATAVERSE_CLIENT_ID || process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
+  const secret = process.env.LOOM_DATAVERSE_CLIENT_SECRET || process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
+  if (id && secret) return null;
+  if (!id) return { missing: 'LOOM_DATAVERSE_CLIENT_ID (or LOOM_MSAL_CLIENT_ID)' };
+  return { missing: 'LOOM_DATAVERSE_CLIENT_SECRET (or LOOM_MSAL_CLIENT_SECRET)' };
 }
 
 /**
@@ -1219,8 +1230,13 @@ function mapPowerApp(a: any, opts?: { instanceUrl?: string }): PowerApp {
 const FLOW_API_VERSION = '2016-11-01';
 
 export async function listFlows(envId: string): Promise<PowerAutomateFlow[]> {
+  // List Flows as Admin (V2). The V1 path (.../environments/{env}/flows) was
+  // retired by Microsoft ("The List Flows as Admin API is no longer supported.
+  // Please use the List Flows as Admin (V2) API."). V2 inserts /v2/ before
+  // /flows and returns identifying info only (displayName/state/timestamps);
+  // the full definition is fetched per-flow via getFlow/getFlowDefinition.
   const j = await call<{ value: any[] }>(
-    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/flows`,
+    `${FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/${encodeURIComponent(envId)}/v2/flows`,
     FLOW_SCOPE,
     { query: { 'api-version': FLOW_API_VERSION } },
   );

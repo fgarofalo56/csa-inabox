@@ -15,15 +15,15 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     overflow: 'hidden',
     flex: 1, minHeight: 0,
   },
   tabs: {
-    paddingLeft: 12,
+    paddingLeft: tokens.spacingHorizontalM,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
-    display: 'flex', alignItems: 'center', gap: 4,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
   },
   body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' },
 });

@@ -67,8 +67,8 @@ interface GridRow {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '8px', minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', padding: '4px 0' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', padding: `${tokens.spacingVerticalXS} 0` },
   spacer: { flex: 1 },
   filterInput: { maxWidth: '260px' },
   gridWrap: {
@@ -77,7 +77,7 @@ const useStyles = makeStyles({
     flex: 1, minHeight: 0,
   },
   monoCell: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
     whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis',
     cursor: 'pointer',
   },
@@ -87,25 +87,25 @@ const useStyles = makeStyles({
     background: tokens.colorNeutralBackground2,
   },
   statsHeader: {
-    display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, cursor: 'pointer',
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   statsGrid: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: '8px', padding: '12px',
+    gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalM,
   },
   statCard: {
-    padding: '10px', background: tokens.colorNeutralBackground1,
+    padding: tokens.spacingVerticalS, background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    display: 'flex', flexDirection: 'column', gap: '6px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
   },
-  statRow: { display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' },
-  hist: { display: 'flex', alignItems: 'flex-end', gap: '1px', height: '32px', marginTop: '4px' },
+  statRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' },
+  hist: { display: 'flex', alignItems: 'flex-end', gap: '1px', height: '32px', marginTop: tokens.spacingVerticalXS },
   histBar: { flex: 1, background: tokens.colorBrandBackground, borderRadius: '1px', minHeight: '1px' },
   dialogValue: {
-    fontFamily: 'Consolas, monospace', fontSize: '12px', whiteSpace: 'pre-wrap',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
     wordBreak: 'break-all', maxHeight: '50vh', overflow: 'auto',
-    background: tokens.colorNeutralBackground3, padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
   },
 });
 

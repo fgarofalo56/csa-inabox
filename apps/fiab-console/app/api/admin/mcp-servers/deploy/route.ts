@@ -28,8 +28,10 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { saveMcpServer } from '@/lib/azure/mcp-config-store';
 import {
@@ -76,9 +78,7 @@ export async function GET(_req: NextRequest) {
   }
 }
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 /** Honest infra gate — names the missing env var / role / bicep module. */
 function gate(entry: McpCatalogEntry, missing: string, detail: string, appName: string) {
@@ -122,7 +122,7 @@ interface MountBody {
 
 export async function POST(req: NextRequest) {
   const session = getSession();
-  if (!session) return err('unauthenticated', 401);
+  if (!session) return apiError('unauthenticated', 401);
 
   const body = (await req.json().catch(() => ({}))) as DeployBody & MountBody;
 
@@ -142,17 +142,21 @@ async function deployCatalogServer(
   if (denied) return denied;
 
   const tenantId = session.claims.oid;
+  // PDP gate (default-off / shadow-ready). Admin write — deploy a catalog MCP server.
+  const blocked = await pdpCheck(session, { level: 'domain', id: tenantId }, 'admin');
+  if (blocked) return blocked;
+
   const who = session.claims.upn || session.claims.email || tenantId;
 
   const entry = getCatalogEntry(String(body.catalogId || ''));
-  if (!entry) return err(`Unknown catalog server: ${body.catalogId}`, 400);
+  if (!entry) return apiError(`Unknown catalog server: ${body.catalogId}`, 400);
 
   // Validate the wizard's field values against the schema (typed + required).
   let values: Record<string, string>;
   try {
     values = validateConfigValues(entry, body.values || {});
   } catch (e: any) {
-    return err(e?.message || String(e), 400);
+    return apiError(e?.message || String(e), 400);
   }
 
   // Derive a DNS-label-safe, unique Container App name (<= 32 chars).
@@ -324,7 +328,7 @@ async function deployCatalogServer(
         { status: 502 },
       );
     }
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 

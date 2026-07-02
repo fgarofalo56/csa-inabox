@@ -68,13 +68,13 @@ const SCAN_LABELS: Record<ScanMode, string> = {
 };
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: '14px', minWidth: '520px', minHeight: '320px' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '520px', minHeight: '320px' },
   hint: { color: tokens.colorNeutralForeground3 },
-  row: { display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   grow: { flexGrow: 1, minWidth: '180px' },
-  section: { display: 'flex', flexDirection: 'column', gap: '8px' },
-  ops: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '4px' },
-  empty: { padding: '12px', textAlign: 'center', color: tokens.colorNeutralForeground3 },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  ops: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
+  empty: { padding: tokens.spacingVerticalM, textAlign: 'center', color: tokens.colorNeutralForeground3 },
 });
 
 interface StatRow { statsName?: string; columnName?: string; updatedAt?: string }
@@ -204,7 +204,7 @@ export function StatsMaintenanceDialog(props: StatsMaintenanceDialogProps) {
       <DialogSurface>
         <DialogBody>
           <DialogTitle>
-            <DataHistogram20Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />
+            <DataHistogram20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />
             Statistics &amp; maintenance — {tableName}
           </DialogTitle>
           <DialogContent>
@@ -410,7 +410,7 @@ export function StatsMaintenanceDialog(props: StatsMaintenanceDialogProps) {
                   )}
 
                   {/* V-Order honest gate — always shown, never functional (no Azure 1:1) */}
-                  <div className={s.section} style={{ marginTop: 8 }}>
+                  <div className={s.section} style={{ marginTop: tokens.spacingVerticalS }}>
                     <Switch disabled checked={false} label="V-Order (spark.sql.parquet.vorder.default)" />
                     <MessageBar intent="warning">
                       <MessageBarBody>

@@ -25,7 +25,7 @@ on:
       admin_sub:
         description: Hub admin subscription id
         required: false
-        default: e093f4fd-5047-4ee4-968d-a56942c665f3
+        default: ''
       cae:
         description: Console Container App Environment name (VNet-integrated)
         required: false
@@ -33,7 +33,7 @@ on:
       dlz_sub:
         description: Subscription holding the Synapse workspace
         required: false
-        default: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+        default: ''
       synapse_ws:
         description: Synapse workspace name (PE-only)
         required: false
@@ -41,11 +41,11 @@ on:
       console_uami_principal:
         description: Console UAMI object (principal) id — Studio-UI display assignment
         required: false
-        default: 85e5d083-7fd9-4588-9a28-6c035bea11a3
+        default: ''
       console_uami_appid:
         description: Console UAMI application (client) id — the FUNCTIONAL serverless/warehouse login
         required: false
-        default: f4f25dd9-e7aa-4ba0-ae18-6c902217964d
+        default: ''
 
 permissions:
   contents: read

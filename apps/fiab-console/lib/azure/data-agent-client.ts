@@ -21,6 +21,8 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from './copilot-orchestrator';
+import { buildAoaiBody, type AoaiChatMessage } from './aoai-model-contract';
+import { cogScope } from './cloud-endpoints';
 import { executeSourceQuery, executionToText, type SourceExecution } from './data-agent-execute';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -41,7 +43,26 @@ export type DataAgentSourceType =
   | 'semantic-model'
   | 'ai-search'
   | 'ontology'
-  | 'graph';
+  | 'graph'
+  | 'microsoft-graph';
+
+/** Typed AI Search retrieval options persisted on an `ai-search` source. */
+export interface DataAgentAiSearchConfig {
+  /** keyword (simple) | semantic (needs a semantic config) | vector (integrated vectorization) | hybrid. */
+  queryKind?: 'keyword' | 'semantic' | 'vector' | 'hybrid';
+  /** Top-N documents per retrieval (1–50). */
+  top?: number;
+  /** Number grounding rows [1]…[n] and instruct the model to cite them. */
+  citations?: boolean;
+}
+
+/** Typed Microsoft Graph grounding scope persisted on a `microsoft-graph` source. */
+export interface DataAgentGraphScope {
+  kind: 'site' | 'drive' | 'mail';
+  site?: string;     // SharePoint site id or https URL
+  driveId?: string;  // Graph drive id
+  mailbox?: string;  // mailbox UPN
+}
 
 export interface DataAgentSource {
   id: string;
@@ -51,6 +72,8 @@ export interface DataAgentSource {
   description?: string;  // routing description — helps the agent decide if this source answers a question
   instructions?: string; // per-source grounding (## General knowledge / ## Table descriptions / ## When asked about)
   examples?: { question: string; query: string }[]; // few-shot pairs (lakehouse/warehouse/kql/graph/ai-search only)
+  aiSearch?: DataAgentAiSearchConfig;  // ai-search retrieval options (honored by the executor)
+  graph?: DataAgentGraphScope;         // microsoft-graph scope (site/drive/mail)
 }
 
 export interface DataAgentConfig {
@@ -67,6 +90,7 @@ const QUERY_LANG: Record<DataAgentSourceType, string> = {
   'ai-search': 'an Azure AI Search query',
   ontology: 'an ontology / Fabric IQ semantic query',
   graph: 'a GQL / Cypher graph traversal',
+  'microsoft-graph': 'a plain full-text Microsoft Graph search phrase (no operators)',
 };
 
 function composeSystemPrompt(cfg: DataAgentConfig): string {
@@ -92,6 +116,22 @@ function composeSystemPrompt(cfg: DataAgentConfig): string {
     lines.push(`### ${src.name} — ${src.type} (queries expressed as ${QUERY_LANG[src.type] ?? 'the source-native query language'})`);
     if (src.description?.trim()) lines.push(`When to use this source: ${src.description.trim()}`);
     if (src.tables?.trim()) lines.push(`Selected tables / model: ${src.tables.trim()}`);
+    if (src.type === 'ai-search' && src.aiSearch) {
+      const kind = src.aiSearch.queryKind || 'keyword';
+      lines.push(`Retrieval mode: ${kind}${src.aiSearch.top ? ` · top ${src.aiSearch.top} documents` : ''}. Emit a plain search phrase as the query — the platform runs it in ${kind} mode.`);
+      if (src.aiSearch.citations) {
+        lines.push('CITATIONS REQUIRED: retrieved documents arrive numbered [1]…[n]; cite the matching [n] inline for every claim grounded on this source.');
+      }
+    }
+    if (src.type === 'microsoft-graph' && src.graph) {
+      const g = src.graph;
+      const scopeDesc = g.kind === 'mail'
+        ? `the ${g.mailbox || '(unset)'} Exchange Online mailbox`
+        : g.kind === 'drive'
+          ? `the OneDrive/SharePoint drive ${g.driveId || '(unset)'}`
+          : `the SharePoint site ${g.site || '(unset)'}`;
+      lines.push(`Scope: ${scopeDesc}. Emit a short plain-text search phrase as the query — the platform runs it against Microsoft Graph and returns the matching ${g.kind === 'mail' ? 'messages' : 'files'}.`);
+    }
     if (src.instructions?.trim()) {
       lines.push('Grounding instructions:');
       lines.push(src.instructions.trim());
@@ -104,12 +144,12 @@ function composeSystemPrompt(cfg: DataAgentConfig): string {
     }
     lines.push('');
   }
-  lines.push('Route financial / aggregated metrics to a semantic model when present; raw exploration to lakehouse / warehouse; log / telemetry analysis to KQL; document retrieval to AI Search.');
+  lines.push('Route financial / aggregated metrics to a semantic model when present; raw exploration to lakehouse / warehouse; log / telemetry analysis to KQL; document retrieval to AI Search; SharePoint/OneDrive files and mailbox content to a Microsoft 365 (Graph) source.');
   return lines.join('\n');
 }
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token for data agent');
   return t.token;
 }
@@ -216,11 +256,10 @@ export async function chatGrounded(cfg: DataAgentConfig, history: ChatTurn[], qu
 
   // One AOAI round-trip with the reasoning-model temperature fallback.
   const runChat = async (messages: Array<{ role: string; content: string }>): Promise<{ content: string; usage: any }> => {
-    const base: Record<string, unknown> = { messages, max_tokens: 1200 };
     const send = async (withTemp: boolean) => fetchWithTimeout(url, {
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(withTemp ? { ...base, temperature: 0.2 } : base),
+      body: JSON.stringify(buildAoaiBody({ messages: messages as AoaiChatMessage[], maxCompletionTokens: 1200, temperature: withTemp ? 0.2 : undefined })),
     }, LLM_FETCH_TIMEOUT_MS);
     let res = await send(true);
     if (res.status === 400) {
@@ -318,5 +357,7 @@ export function sourcesToFoundryTools(sources: DataAgentSource[]): Array<Record<
     description: s.description || undefined,
     instructions: s.instructions || undefined,
     examples: s.examples && s.examples.length ? s.examples : undefined,
+    aiSearch: s.aiSearch || undefined,
+    graph: s.graph || undefined,
   }));
 }

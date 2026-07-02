@@ -26,6 +26,7 @@
  */
 
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { buildRuleQuery, safeRuleName } from '@/lib/azure/activator-monitor';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import type {
   AiSearchIndexContent,
@@ -245,25 +246,80 @@ export function mlModelContentFromItem(item: WorkspaceItem) {
 // ── Activator rule ───────────────────────────────────────────────────────────
 
 /**
- * Build the editor's rule-list entry from ActivatorContent.rule. The editor's
- * Rules table reads `{ id, name, condition:{operator,value}, action:{kind,config}
- * }`. We map the bundle's `{ metric, op, threshold }` condition onto the
- * editor's `{ operator, value }` shape (keeping the metric in objectName so the
- * table still shows what's watched), and surface the window + action verbatim.
+ * Build the editor's rule-list entry from ActivatorContent.rule, projected onto
+ * the canonical Azure-Monitor `MonitorRuleRecord` shape (lib/azure/activator-
+ * monitor.ts) so a bundle-installed rule round-trips through the same controls a
+ * provisioned rule does.
+ *
+ * The editor's Rules table reads `{ id, name, condition:{operator,value},
+ * action:{kind,config} }`, so we map the bundle's `{ metric, op, threshold }`
+ * condition onto `{ property, operator, value }` (keeping the metric in
+ * objectName so the table still shows what's watched) and surface the window +
+ * action verbatim. On top of that we add the round-trip fields the BFF routes
+ * key off:
+ *   • `query`        — the KQL the scheduledQueryRule would run (Trigger reads it).
+ *   • `azureRuleName`— the ARM scheduledQueryRule name, derived BYTE-IDENTICALLY
+ *                      to the provisioner / createMonitorActivatorRule() so it
+ *                      resolves to the SAME real ARM rule (Enable/Disable/Delete/
+ *                      Start/Stop key off it).
+ *   • `severity`, `evaluationFrequency`, `windowSize`, `backend`.
+ *   • a NON-LIVE `state: 'NotDeployed'` + a `source: 'bundle'` marker. This row
+ *     ONLY renders when state.rules is empty — i.e. NO ARM scheduledQueryRule
+ *     exists yet (install with deploy=off, or provisioning hit an infra-gate).
+ *     Stamping it 'Active' would misrepresent an un-deployed template, and the
+ *     per-row ARM actions (Enable/Disable/Delete/Edit/Trigger) would dead-end on
+ *     a 404 against the empty state.rules. The editor keys off `__loomContent` /
+ *     `source === 'bundle'` to DISABLE those actions until the rule is actually
+ *     provisioned.
+ *
+ * Once the provisioner persists the real MonitorRuleRecord[] to state.rules, the
+ * live rows (state 'Active') replace this preview and this fallback no longer
+ * fires. We still carry `azureRuleName` + `query`, derived BYTE-IDENTICALLY to
+ * the provisioner / createMonitorActivatorRule(), so the preview names the same
+ * ARM rule the provisioner will create (no-vaporware: an honest not-yet-deployed
+ * state, never a stub 'Active'; no-fabric-dependency: Azure Monitor path, no
+ * Fabric). We keep `id = loom:<item.id>`; the routes resolve by id | name |
+ * azureRuleName.
  */
 export function activatorRuleFromContent(item: WorkspaceItem) {
   const content = contentOf<ActivatorContent>(item, 'activator');
   if (!content?.rule) return null;
   const r = content.rule;
+  // Project onto the canonical structured condition so buildRuleQuery composes
+  // the SAME KQL a re-create (createMonitorActivatorRule) would, and the editor
+  // table still reads operator/value.
+  const condition = {
+    property: r.condition?.metric,
+    operator: r.condition?.op,
+    value: r.condition?.threshold,
+  };
+  const action = { kind: r.action?.kind, config: r.action?.config || {} };
+  const { query } = buildRuleQuery({ name: r.name, condition, action });
+  // BYTE-IDENTICAL to the provisioner / createMonitorActivatorRule derivation
+  // (activator-monitor.ts:196-197) so this row resolves to the real ARM rule.
+  const ruleSuffix = (r.name || 'rule').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 16) || 'rule';
+  const azureRuleName = safeRuleName(item.displayName, ruleSuffix);
+  const severity = typeof (r.condition as any)?.severity === 'number' ? (r.condition as any).severity : 3;
   return {
     id: `loom:${item.id}`,
     name: r.name,
     objectName: r.condition?.metric,
     propertyName: r.condition?.metric,
-    condition: { operator: r.condition?.op, value: r.condition?.threshold },
+    condition,
     window: r.window,
-    action: { kind: r.action?.kind, config: r.action?.config || {} },
-    state: 'Stopped' as const,
+    action,
+    query,
+    azureRuleName,
+    severity,
+    evaluationFrequency: 'PT5M',
+    windowSize: 'PT5M',
+    backend: 'azure-monitor' as const,
+    // Non-live: this row only renders when NO ARM rule exists yet, so it must NOT
+    // claim to be evaluating. The editor disables its per-row ARM actions (keyed
+    // off source / __loomContent) until the activator is provisioned — preventing
+    // an Enable/Disable/Delete/Edit/Trigger 404 dead-end against empty state.rules.
+    state: 'NotDeployed' as const,
+    source: 'bundle' as const,
     __loomContent: true as const,
   };
 }

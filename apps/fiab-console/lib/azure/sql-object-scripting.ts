@@ -46,7 +46,7 @@ WHERE p.is_ms_shipped = 0
 ORDER BY s.name, p.name`;
 
 const Q_FUNCS = `
-SELECT TOP 500 s.name AS [schema], o.name AS name, o.type AS type
+SELECT TOP 500 s.name AS [schema], o.name AS name, o.type AS [type]
 FROM sys.objects o
 JOIN sys.schemas s ON s.schema_id = o.schema_id
 WHERE o.type IN ('FN','IF','TF') AND o.is_ms_shipped = 0

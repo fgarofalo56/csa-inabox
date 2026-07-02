@@ -47,8 +47,8 @@ const useStyles = makeStyles({
   root: {
     display: 'flex',
     flexDirection: 'column',
-    rowGap: '16px',
-    padding: '16px',
+    rowGap: tokens.spacingVerticalL,
+    padding: tokens.spacingVerticalL,
   },
   header: {
     display: 'flex',
@@ -58,25 +58,25 @@ const useStyles = makeStyles({
   fieldRow: {
     display: 'flex',
     alignItems: 'center',
-    columnGap: '8px',
+    columnGap: tokens.spacingHorizontalS,
   },
   inputWide: { flexGrow: 1 },
   codeBlock: {
     flexGrow: 1,
     margin: 0,
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     backgroundColor: tokens.colorNeutralBackground3,
     borderRadius: tokens.borderRadiusMedium,
-    padding: '8px 12px',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-all',
   },
   authBadge: {
     display: 'flex',
     alignItems: 'center',
-    columnGap: '6px',
-    marginTop: '8px',
+    columnGap: tokens.spacingHorizontalS,
+    marginTop: tokens.spacingVerticalS,
   },
 });
 

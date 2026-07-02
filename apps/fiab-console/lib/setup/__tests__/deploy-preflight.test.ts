@@ -116,11 +116,11 @@ describe('missingProviders', () => {
 describe('buildContributorGrantCommand', () => {
   it('embeds the real subscription id + principal object id', () => {
     const cmd = buildContributorGrantCommand({
-      subscriptionId: '363ef5d1-0e77-4594-a530-f51af23dbf8c',
+      subscriptionId: '22222222-2222-2222-2222-222222222222',
       principalObjectId: '41d32562-f864-4450-8b84-cd3d59f58bf4',
     });
     expect(cmd).toContain('--role Contributor');
-    expect(cmd).toContain('--scope /subscriptions/363ef5d1-0e77-4594-a530-f51af23dbf8c');
+    expect(cmd).toContain('--scope /subscriptions/22222222-2222-2222-2222-222222222222');
     expect(cmd).toContain('--assignee-object-id 41d32562-f864-4450-8b84-cd3d59f58bf4');
     expect(cmd).not.toContain('az cloud set'); // commercial default
   });
@@ -147,7 +147,7 @@ describe('buildProviderRegisterCommands', () => {
 });
 
 describe('checkSubscriptionDeployPermission (live shape, stubbed I/O)', () => {
-  const TARGET = '363ef5d1-0e77-4594-a530-f51af23dbf8c';
+  const TARGET = '22222222-2222-2222-2222-222222222222';
   afterEach(() => vi.restoreAllMocks());
 
   it('rejects an invalid subscription id without calling ARM', async () => {
@@ -186,7 +186,7 @@ describe('checkSubscriptionDeployPermission (live shape, stubbed I/O)', () => {
 });
 
 describe('checkResourceGroupManagePermission (live shape, stubbed I/O)', () => {
-  const TARGET = '363ef5d1-0e77-4594-a530-f51af23dbf8c';
+  const TARGET = '22222222-2222-2222-2222-222222222222';
   const RG = 'rg-csa-loom-dlz-default-centralus';
   afterEach(() => vi.restoreAllMocks());
 
@@ -237,7 +237,7 @@ describe('checkResourceGroupManagePermission (live shape, stubbed I/O)', () => {
   it('evaluates the RG in the DLZ OWN subscription, not a hard-coded admin sub', async () => {
     // Multi-sub: the DLZ lives in 363ef5d1…; the admin/hub sub is e093f4fd…. The
     // scope must be built from the DLZ's own subscription id passed in.
-    const ADMIN_SUB = 'e093f4fd-5047-4ee4-968d-a56942c665f3';
+    const ADMIN_SUB = '11111111-1111-1111-1111-111111111111';
     const fetchMock = vi.fn((..._args: Parameters<typeof fetch>) =>
       Promise.resolve(new Response(JSON.stringify({ value: CONTRIBUTOR }), { status: 200 })),
     );
@@ -258,7 +258,7 @@ describe('checkResourceGroupManagePermission (live shape, stubbed I/O)', () => {
 });
 
 describe('checkSubscriptionDeployPermission uses GET (regression)', () => {
-  const TARGET = '363ef5d1-0e77-4594-a530-f51af23dbf8c';
+  const TARGET = '22222222-2222-2222-2222-222222222222';
   afterEach(() => vi.restoreAllMocks());
 
   it('uses GET — Permissions - List is GET, POST 405s', async () => {

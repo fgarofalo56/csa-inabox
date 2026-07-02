@@ -73,10 +73,8 @@ async function runUAT() {
     { path: '/items/data-pipeline/new', name: 'item-editor-pipeline-new' },
     { path: '/items/eventstream/new', name: 'item-editor-eventstream-new' },
     { path: '/items/activator/new', name: 'item-editor-activator-new' },
-    // Legacy stub panes (kept until Phase 2-3 replace them)
-    { path: '/lakehouse', name: 'lakehouse-legacy' },
-    { path: '/warehouse', name: 'warehouse-legacy' },
-    { path: '/notebook', name: 'notebook-legacy' },
+    // Workspace-level rollup surfaces (per-item lakehouse/notebook/warehouse
+    // panes were retired — reach those via /items/<type>/new above).
     { path: '/semantic-model', name: 'semantic-model-legacy' },
     { path: '/activator', name: 'activator-legacy' },
     { path: '/data-agent', name: 'data-agent-legacy' },

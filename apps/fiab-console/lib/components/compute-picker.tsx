@@ -25,9 +25,12 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Select, Caption1, Button, Badge, Spinner, MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  Field, Input, makeStyles,
+  Field, Input, Switch, Divider, Tooltip, tokens, makeStyles,
 } from '@fluentui/react-components';
-import { Play16Regular, Pause16Regular, ArrowSync16Regular, Add16Regular } from '@fluentui/react-icons';
+import {
+  Play16Regular, Pause16Regular, ArrowSync16Regular, Add16Regular, Delete16Regular,
+} from '@fluentui/react-icons';
+import { SPARK_PRESETS, findPreset, databricksConfFor, COMMON_SPARK_CONF_KEYS } from '@/lib/spark/config-presets';
 
 export type ComputeKind = 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql';
 
@@ -48,6 +51,31 @@ interface UseComputes {
   reload: () => void;
 }
 
+// Module-level shared fetch for /api/loom/compute-targets: dedupe concurrent
+// callers + a short TTL so the many ComputePickers a heavy editor mounts at once
+// share ONE request instead of storming the BFF (~74 calls were observed on the
+// lakehouse editor open). Explicit reload() forces past the cache. rel-T09e.
+let _computesCache: { at: number; data: ComputeTarget[] } | null = null;
+let _computesInFlight: Promise<ComputeTarget[]> | null = null;
+const COMPUTES_TTL_MS = 15_000;
+
+function fetchComputesShared(force = false): Promise<ComputeTarget[]> {
+  if (!force && _computesCache && Date.now() - _computesCache.at < COMPUTES_TTL_MS) {
+    return Promise.resolve(_computesCache.data);
+  }
+  if (_computesInFlight) return _computesInFlight;
+  _computesInFlight = fetch('/api/loom/compute-targets')
+    .then(r => r.json())
+    .then(j => {
+      if (!j.ok) throw new Error(j.error || 'failed');
+      const all = (j.computes || []) as ComputeTarget[];
+      _computesCache = { at: Date.now(), data: all };
+      return all;
+    })
+    .finally(() => { _computesInFlight = null; });
+  return _computesInFlight;
+}
+
 /**
  * Subscribe to /api/loom/compute-targets. Optional `filter` narrows the
  * returned list to specific kinds (e.g. only Databricks clusters).
@@ -56,22 +84,25 @@ export function useComputes(filter?: ComputeKind[]): UseComputes {
   const [computes, setComputes] = useState<ComputeTarget[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Depend on the filter CONTENTS (a stable string), not the array identity —
+  // callers pass a fresh `[...]` literal each render, which otherwise churned
+  // `reload`'s identity and re-fired the effect on every render (rel-T09e).
+  const filterKey = filter ? filter.join(',') : '';
 
-  const reload = useCallback(() => {
+  const reload = useCallback((force = false) => {
     setLoading(true); setError(null);
-    fetch('/api/loom/compute-targets')
-      .then(r => r.json())
-      .then(j => {
-        if (!j.ok) { setError(j.error || 'failed'); return; }
-        const all = (j.computes || []) as ComputeTarget[];
-        setComputes(filter ? all.filter(c => filter.includes(c.kind)) : all);
+    fetchComputesShared(force)
+      .then(all => {
+        const kinds = filterKey ? filterKey.split(',') : null;
+        setComputes(kinds ? all.filter(c => kinds.includes(c.kind)) : all);
       })
       .catch(e => setError(e?.message || String(e)))
       .finally(() => setLoading(false));
-  }, [filter]);
+  }, [filterKey]);
 
+  const forceReload = useCallback(() => reload(true), [reload]);
   useEffect(() => { reload(); }, [reload]);
-  return { computes, loading, error, reload };
+  return { computes, loading, error, reload: forceReload };
 }
 
 function isPaused(state?: string): boolean {
@@ -89,11 +120,40 @@ function isRunning(state?: string): boolean {
 interface NodeTypeOption { node_type_id: string; label: string; category?: string }
 interface SparkVersionOption { key: string; name: string }
 
+interface DbxConfRow { id: number; key: string; value: string; }
+let dbxRowSeq = 1;
+const dbxRecordToRows = (rec: Record<string, string> | undefined): DbxConfRow[] =>
+  Object.entries(rec || {}).map(([key, value]) => ({ id: dbxRowSeq++, key, value }));
+const dbxRowsToRecord = (rows: DbxConfRow[]): Record<string, string> => {
+  const out: Record<string, string> = {};
+  for (const r of rows) { const k = r.key.trim(); if (k) out[k] = r.value; }
+  return out;
+};
+
+const useDialogStyles = makeStyles({
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalS, maxHeight: '70vh', overflowY: 'auto', minWidth: '460px' },
+  twoCol: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  col: { flex: '1 1 200px', minWidth: 0 },
+  toggles: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap', alignItems: 'center' },
+  presetDesc: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  confHeader: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
+  confRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  confKey: { flex: '1 1 55%', minWidth: 0 },
+  confVal: { flex: '1 1 45%', minWidth: 0 },
+  confList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  empty: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, fontStyle: 'italic' },
+});
+
+const DBX_PRESETS = SPARK_PRESETS.filter((p) => p.targets.includes('databricks'));
+
 /**
  * NewClusterDialog — guided (no-JSON) creation of a Databricks interactive
- * cluster. Every field is a dropdown sourced from real Databricks metadata
- * (spark-versions, list-node-types); only the cluster name is free text (the
- * one field the global no-freeform rule allows). POSTs to
+ * cluster. A best-practice PRESET picker (different cluster shapes per work
+ * type) applies autoscale bounds + Photon + Spot + auto-terminate + curated
+ * spark_conf in one click; every field below is a dropdown/toggle sourced from
+ * real Databricks metadata (spark-versions, list-node-types), and a structured
+ * key/value spark_conf builder fine-tunes the confs (no JSON). Only the cluster
+ * name is free text (the one field the global no-freeform rule allows). POSTs to
  * /api/loom/compute-targets and hands the new id back so the picker selects it.
  */
 function NewClusterDialog({
@@ -103,17 +163,48 @@ function NewClusterDialog({
   onOpenChange: (v: boolean) => void;
   onCreated: (newId: string) => void;
 }) {
+  const s = useDialogStyles();
   const [loadingOpts, setLoadingOpts] = useState(false);
   const [optError, setOptError] = useState<string | null>(null);
   const [nodeTypes, setNodeTypes] = useState<NodeTypeOption[]>([]);
   const [versions, setVersions] = useState<SparkVersionOption[]>([]);
   const [name, setName] = useState('');
+  const [presetId, setPresetId] = useState('balanced');
   const [sparkVersion, setSparkVersion] = useState('');
   const [nodeType, setNodeType] = useState('');
-  const [workers, setWorkers] = useState('2');
+  const [minWorkers, setMinWorkers] = useState('2');
+  const [maxWorkers, setMaxWorkers] = useState('4');
+  const [photon, setPhoton] = useState(true);
+  const [spot, setSpot] = useState(false);
   const [autoterm, setAutoterm] = useState('30');
+  const [confRows, setConfRows] = useState<DbxConfRow[]>([]);
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+
+  // Apply a preset's cluster shape + curated spark_conf to the form.
+  const applyPreset = useCallback((id: string) => {
+    setPresetId(id);
+    const p = findPreset(id);
+    if (!p) { setConfRows([]); return; }
+    const sh = p.databricks;
+    setMinWorkers(String(sh.minWorkers));
+    setMaxWorkers(String(sh.maxWorkers));
+    setPhoton(sh.photon);
+    setSpot(!!sh.spot);
+    setAutoterm(String(sh.autoterminationMinutes));
+    setConfRows(dbxRecordToRows(databricksConfFor(p)));
+    // Try to honor the preset's runtime channel (lts/ml/latest) against the
+    // discovered versions; fall back to whatever is selected.
+    setVersions((vs) => {
+      const want = sh.runtimeChannel;
+      if (want && vs.length) {
+        const re = want === 'ml' ? /ml/i : want === 'latest' ? /./ : /lts/i;
+        const hit = vs.find((v) => re.test(v.name));
+        if (hit) setSparkVersion(hit.key);
+      }
+      return vs;
+    });
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -125,17 +216,20 @@ function NewClusterDialog({
         const nt = (j.nodeTypes || []) as NodeTypeOption[];
         const vs = (j.sparkVersions || []) as SparkVersionOption[];
         setNodeTypes(nt); setVersions(vs);
-        // Sensible defaults: first LTS-ish runtime + smallest node.
         if (vs.length) setSparkVersion(prev => prev || vs[0].key);
         if (nt.length) setNodeType(prev => prev || nt[0].node_type_id);
+        // Seed the form from the default preset on first open.
+        applyPreset(presetId);
       })
       .catch(e => setOptError(e?.message || String(e)))
       .finally(() => setLoadingOpts(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
   const create = useCallback(async () => {
     setCreating(true); setCreateError(null);
     try {
+      const minW = Number(minWorkers), maxW = Number(maxWorkers);
       const r = await fetch('/api/loom/compute-targets', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -144,7 +238,12 @@ function NewClusterDialog({
           cluster_name: name.trim(),
           spark_version: sparkVersion,
           node_type_id: nodeType,
-          num_workers: Number(workers),
+          presetId: presetId || undefined,
+          spark_conf: dbxRowsToRecord(confRows),
+          photon,
+          spot,
+          min_workers: minW,
+          max_workers: maxW,
           autotermination_minutes: Number(autoterm),
         }),
       });
@@ -154,8 +253,9 @@ function NewClusterDialog({
       onOpenChange(false);
     } catch (e: any) { setCreateError(e?.message || String(e)); }
     finally { setCreating(false); }
-  }, [name, sparkVersion, nodeType, workers, autoterm, onCreated, onOpenChange]);
+  }, [name, sparkVersion, nodeType, presetId, confRows, photon, spot, minWorkers, maxWorkers, autoterm, onCreated, onOpenChange]);
 
+  const activePreset = findPreset(presetId);
   const ready = name.trim() && sparkVersion && nodeType && !creating;
 
   return (
@@ -174,27 +274,45 @@ function NewClusterDialog({
               </MessageBar>
             )}
             {!loadingOpts && !optError && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 }}>
+              <div className={s.body}>
+                {/* Best-practice preset — different cluster shapes per work type */}
+                <Field label="Configuration preset" hint={activePreset ? activePreset.whenToUse : 'Pick a best-practice cluster profile, then fine-tune below.'}>
+                  <Select value={presetId} onChange={(_, d) => applyPreset(d.value)}>
+                    <option value="">Custom (no preset)</option>
+                    {DBX_PRESETS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+                  </Select>
+                </Field>
+                {activePreset && <Caption1 className={s.presetDesc}>{activePreset.summary}</Caption1>}
+
+                <Divider />
+
                 <Field label="Cluster name" required>
                   <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="e.g. loom-interactive-01" />
                 </Field>
-                <Field label="Databricks runtime" required>
-                  <Select value={sparkVersion} onChange={(_, d) => setSparkVersion(d.value)}>
-                    {versions.map(v => <option key={v.key} value={v.key}>{v.name}</option>)}
-                  </Select>
-                </Field>
-                <Field label="Node type" required>
-                  <Select value={nodeType} onChange={(_, d) => setNodeType(d.value)}>
-                    {nodeTypes.map(n => <option key={n.node_type_id} value={n.node_type_id}>{n.label}</option>)}
-                  </Select>
-                </Field>
-                <Field label="Workers">
-                  <Select value={workers} onChange={(_, d) => setWorkers(d.value)}>
-                    {['0', '1', '2', '4', '8', '16'].map(w => (
-                      <option key={w} value={w}>{w === '0' ? 'Single node (0 workers)' : `${w} workers`}</option>
-                    ))}
-                  </Select>
-                </Field>
+                <div className={s.twoCol}>
+                  <Field label="Databricks runtime" required className={s.col}>
+                    <Select value={sparkVersion} onChange={(_, d) => setSparkVersion(d.value)}>
+                      {versions.map(v => <option key={v.key} value={v.key}>{v.name}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Node type" required className={s.col}>
+                    <Select value={nodeType} onChange={(_, d) => setNodeType(d.value)}>
+                      {nodeTypes.map(n => <option key={n.node_type_id} value={n.node_type_id}>{n.label}</option>)}
+                    </Select>
+                  </Field>
+                </div>
+                <div className={s.twoCol}>
+                  <Field label="Min workers (autoscale)" className={s.col}>
+                    <Select value={minWorkers} onChange={(_, d) => setMinWorkers(d.value)}>
+                      {['0', '1', '2', '4', '8'].map(w => <option key={w} value={w}>{w}</option>)}
+                    </Select>
+                  </Field>
+                  <Field label="Max workers (autoscale)" className={s.col}>
+                    <Select value={maxWorkers} onChange={(_, d) => setMaxWorkers(d.value)}>
+                      {['1', '2', '4', '8', '12', '16'].map(w => <option key={w} value={w}>{w}</option>)}
+                    </Select>
+                  </Field>
+                </div>
                 <Field label="Auto-terminate after">
                   <Select value={autoterm} onChange={(_, d) => setAutoterm(d.value)}>
                     {['10', '30', '60', '120', '0'].map(m => (
@@ -202,6 +320,50 @@ function NewClusterDialog({
                     ))}
                   </Select>
                 </Field>
+                <div className={s.toggles}>
+                  <Switch checked={photon} onChange={(_, d) => setPhoton(d.checked)} label="Photon (vectorized engine)" />
+                  <Switch checked={spot} onChange={(_, d) => setSpot(d.checked)} label="Spot workers (cost-optimized)" />
+                </div>
+
+                <Divider />
+
+                {/* Structured spark_conf builder (key/value rows — no JSON) */}
+                <div className={s.confHeader}>
+                  <Caption1 style={{ fontWeight: tokens.fontWeightSemibold }}>Spark configuration</Caption1>
+                  <Button size="small" appearance="outline" icon={<Add16Regular />}
+                    onClick={() => setConfRows((r) => [...r, { id: dbxRowSeq++, key: '', value: '' }])}>
+                    Add property
+                  </Button>
+                </div>
+                {confRows.length === 0 ? (
+                  <Caption1 className={s.empty}>No custom Spark properties. Pick a preset above or add a property.</Caption1>
+                ) : (
+                  <div className={s.confList}>
+                    <datalist id="loom-dbx-conf-keys">
+                      {COMMON_SPARK_CONF_KEYS.filter((k) => k.key !== 'spark.dynamicAllocation.enabled').map((k) => (
+                        <option key={k.key} value={k.key}>{k.hint}</option>
+                      ))}
+                    </datalist>
+                    {confRows.map((row, i) => {
+                      const known = COMMON_SPARK_CONF_KEYS.find((k) => k.key === row.key.trim());
+                      return (
+                        <div key={row.id} className={s.confRow}>
+                          <Tooltip content={known ? known.hint : 'spark.* property key'} relationship="label">
+                            <Input className={s.confKey} aria-label={`Spark property key ${i + 1}`} placeholder="spark.sql.shuffle.partitions"
+                              list="loom-dbx-conf-keys" value={row.key}
+                              onChange={(_, d) => setConfRows(confRows.map((r) => r.id === row.id ? { ...r, key: d.value } : r))} />
+                          </Tooltip>
+                          <Input className={s.confVal} aria-label={`Spark property value ${i + 1}`} placeholder="value"
+                            value={row.value}
+                            onChange={(_, d) => setConfRows(confRows.map((r) => r.id === row.id ? { ...r, value: d.value } : r))} />
+                          <Button size="small" appearance="subtle" icon={<Delete16Regular />} aria-label="Remove property"
+                            onClick={() => setConfRows(confRows.filter((r) => r.id !== row.id))} />
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
                 {createError && (
                   <MessageBar intent="error"><MessageBarBody>{createError}</MessageBarBody></MessageBar>
                 )}

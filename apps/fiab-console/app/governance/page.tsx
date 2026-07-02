@@ -35,6 +35,7 @@ import {
   History20Regular, type FluentIcon,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -89,7 +90,7 @@ const useStyles = makeStyles({
     boxShadow: tokens.shadow2,
     minWidth: 0,
   },
-  statHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  statHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, minWidth: 0 },
   chip: {
     flexShrink: 0,
     display: 'inline-flex',
@@ -104,8 +105,16 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
     lineHeight: 1.1,
     color: tokens.colorNeutralForeground1,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
-  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  statLabel: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
   bar: {
     height: '6px',
     backgroundColor: tokens.colorNeutralBackground3,
@@ -158,8 +167,8 @@ const useStyles = makeStyles({
     },
   },
   navBody: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 },
-  navTitle: { fontWeight: tokens.fontWeightSemibold },
-  navDesc: { color: tokens.colorNeutralForeground3 },
+  navTitle: { fontWeight: tokens.fontWeightSemibold, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  navDesc: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   typeChip: {
     display: 'inline-flex',
     alignItems: 'center',
@@ -198,13 +207,13 @@ const SECTIONS: {
     group: 'Catalog management',
     items: [
       { href: '/governance/catalog', label: 'Data catalog', desc: 'Unified inventory across OneLake, Synapse, Databricks, ADLS.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-teal)' },
-      { href: '/catalog/domains', label: 'Governance domains', desc: 'Domains, data products, glossary terms.', icon: DocumentBulletList20Regular, color: 'var(--loom-accent-indigo)' },
+      { href: '/admin/domains', label: 'Governance domains', desc: 'Business domains, subdomains, workspace assignment, delegated settings.', icon: DocumentBulletList20Regular, color: 'var(--loom-accent-indigo)' },
     ],
   },
   {
     group: 'Discovery & lineage',
     items: [
-      { href: '/governance/lineage', label: 'Lineage', desc: 'End-to-end column & item lineage graph.', icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
+      { href: '/governance/lineage', label: 'Purview lineage', desc: 'End-to-end column & item lineage graph.', icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
       { href: '/catalog', label: 'Search', desc: 'Federated search across Purview, Unity, OneLake.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-blue)' },
     ],
   },
@@ -220,6 +229,7 @@ const SECTIONS: {
     group: 'Governance & health',
     items: [
       { href: '/governance/policies', label: 'Access policies', desc: 'DLP, masking, RLS, retention, access.', icon: Shield20Regular, color: 'var(--loom-accent-orange)' },
+      { href: '/governance/protection-policies', label: 'Protection policies', desc: 'Label-driven restrict-only allow-lists → real RBAC reconcile (sovereign, no Fabric).', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-red)' },
       { href: '/governance/access-requests', label: 'Access requests', desc: 'Multi-tier approval inbox → real Azure RBAC grant.', icon: ShieldCheckmark20Regular, color: 'var(--loom-accent-violet)' },
       { href: '/governance/data-quality', label: 'Data quality', desc: 'Author rules, run on your engine, results + Delta/Lakehouse monitors.', icon: Beaker20Regular, color: 'var(--loom-accent-cyan)' },
       { href: '/governance/mdm', label: 'Master data', desc: 'Golden-record match/merge + reference data (Azure-native).', icon: Box20Regular, color: 'var(--loom-accent-indigo)' },
@@ -470,9 +480,12 @@ export default function GovernancePage() {
           searchPlaceholder="Find a governance surface…"
         />
         {nav.length === 0 && (
-          <Caption1 className={s.muted}>
-            No governance surface matches &quot;{navQuery}&quot;.
-          </Caption1>
+          <EmptyState
+            icon={<DatabaseSearch20Regular className={s.chipIcon20} />}
+            title="No matching governance surface"
+            body={`Nothing matches "${navQuery}". Try a broader term, or clear the search to see every catalog, discovery, Data Map, and health surface.`}
+            primaryAction={{ label: 'Clear search', appearance: 'secondary', onClick: () => setNavQuery('') }}
+          />
         )}
         {nav.map((grp) => (
           <div key={grp.group} className={s.navGroup}>

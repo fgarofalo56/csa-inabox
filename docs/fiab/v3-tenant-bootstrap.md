@@ -1131,6 +1131,204 @@ honest gate (deploy via the AKS/Helm path instead). For an existing Container
 Apps deployment, the three env vars are set automatically by a redeploy; no extra
 manual grant is needed beyond the bicep-wired roles above.
 
+## Microsoft MCP servers + agent skills (remote built-in + deployable) {#microsoft-mcp-servers}
+
+CSA Loom integrates the curated **Microsoft MCP servers** (`github.com/microsoft/mcp`)
+and the **~30 Microsoft agent skills** (`github.com/microsoft/skills`) by
+**extending the already-committed Power BI remote-MCP plumbing** — it is **not** a
+parallel system. The remote servers register as the same `McpServerConfig` shape
+the Power BI path uses (`lib/types/mcp-config.ts`, `source: 'remote-builtin'`),
+are reached by the same client (`lib/azure/mcp-client.ts` `resolveAuthHeader` +
+threaded per-user `userToken`), advertised by the same `buildMcpShim()` as
+`mcp_<slug>_<tool>`, and gated exactly like `isPbiMcpConfigured()` —
+per-server `configured()` in `lib/mcp/catalog.ts` `REMOTE_BUILTIN_MCP_CATALOG`.
+The skills (`lib/copilot/ms-skills.ts`, mirroring `lib/copilot/powerbi-skills.ts`)
+are **Azure-native by default** and bind to a server's MCP tool prefix only once
+that server is connected — they need **no bicep toggle and no tenant action**.
+
+Admin surface: **Admin → Tenant settings → External MCP Tools → "Microsoft MCP
+servers"** (`lib/components/admin/mcp-servers-panel.tsx`, BFF
+`app/api/admin/mcp-servers/ms-remote/route.ts` — `GET` returns the honest gate
+when unconfigured, `?probe=1` makes a **real** `initialize → tools/list`
+handshake). Deployable Microsoft entries appear automatically in the existing
+**Browse library** picker (`McpCatalogBrowser`).
+
+### Rule posture (read first)
+
+Per [`no-fabric-dependency.md`](../../.claude/rules/no-fabric-dependency.md):
+**Microsoft Learn is the SOLE default-on server** — Microsoft-hosted, GA, **no
+auth, zero config**, zero Fabric/Power BI dependency — so a clean deploy ships
+live MCP tools day-one. **Every other server is strictly opt-in** and is never
+reached on a default code path. **Microsoft Fabric** and **Fabric RTI** are
+present only as explicit Fabric-family opt-ins in the deployable catalog
+(`govSafe:false`, `externalHosts:['api.fabric.microsoft.com']`,
+`defaultRecommended:false`) — `api.fabric.microsoft.com` / `api.powerbi.com` are
+touched **only** when one of those is explicitly enabled.
+
+Per [`no-vaporware.md`](../../.claude/rules/no-vaporware.md): each opt-in server
+is gated on **both** its `*Enabled` toggle **and** a confirmed endpoint. Where a
+Microsoft remote host is not yet GA the `defaultEndpoint` is empty, so the
+Console renders the honest Fluent `MessageBar` gate (naming the exact env var /
+OBO scope / Key Vault secret / tenant consent) rather than calling an unconfirmed
+host. Secrets are **never literals** — the OBO servers carry no static secret
+(they reuse the existing confidential client), and GitHub's PAT is a Key Vault
+`secretRef` only.
+
+### Microsoft Learn — on by default, NO action {#ms-mcp-learn}
+
+`LOOM_MS_LEARN_MCP_ENABLED` defaults `'true'` and `listMcpServers` /
+`buildMcpShim` inject a **synthetic enabled Learn row**, so
+`microsoft_docs_search` / `microsoft_docs_fetch` / `microsoft_code_sample_search`
+tools are advertised to the Copilot orchestrator with zero config. Endpoint:
+`https://learn.microsoft.com/api/mcp` (no `Authorization` header). Nothing to do.
+
+- To **disable** it (or in air-gapped IL5, where `learn.microsoft.com` is
+  external egress — `il5.bicepparam` sets it off): `loomBackends.mcp.learnEnabled = 'false'`.
+- To **override** the endpoint (e.g. add `?maxTokenBudget=2000`):
+  `loomBackends.mcp.learnEndpoint = '<url>'`.
+
+### Per-server opt-in — Entra On-Behalf-Of servers {#ms-mcp-obo}
+
+ARM, Foundry, Microsoft Graph, Microsoft 365, Teams, OneDrive/SharePoint,
+Sentinel, Admin Center, and Dataverse authenticate with **per-user Microsoft
+Entra On-Behalf-Of** (`authMethod: 'entra-obo'`). They **reuse the existing Loom
+confidential client** (`LOOM_MSAL_CLIENT_ID` + the `loom-msal-client-secret` Key
+Vault secret already wired for sign-in and for Power BI) to exchange the
+signed-in user's token for each server's `oboResource` — **no new secret, no new
+param**. Each runs under the signed-in user's own RBAC.
+
+To turn one on you do **two** things: (1) **enable it** (set the
+`loomBackends.mcp.*Enabled` key — and the `*Endpoint` key where the host is not
+yet GA), and (2) **admin-consent the delegated scopes** on the Loom app
+registration for that server's OBO resource (the one-time tenant action that ARM
+RBAC cannot perform). Until both are done the server's card shows the honest gate.
+
+| Server | `loomBackends.mcp.*` keys | OBO resource | Delegated scope(s) to consent on the Loom app | Endpoint (provenance) |
+|---|---|---|---|---|
+| Azure Resources (ARM) | `armEnabled='true'`, `armEndpoint` (self-hosted) | `https://management.azure.com` | `user_impersonation` (= [Prerequisite B](#prereq-azure-svc-mgmt-consent), already consented for Connections) | self-host the Azure MCP server with OBO on Container Apps → set `armEndpoint` |
+| Microsoft Foundry | `foundryEnabled='true'` | `https://ai.azure.com` | `.default` (the app's Foundry perms) | `https://mcp.ai.azure.com` (preview; public endpoint only) |
+| Microsoft Graph (Enterprise) | `graphEnabled='true'` | `https://graph.microsoft.com` | the `MCP.*` delegated Graph permissions + admin consent (read-only) | `https://mcp.svc.cloud.microsoft/enterprise` (preview) |
+| Microsoft Sentinel | `sentinelEnabled='true'` | `https://sentinel.microsoft.com` | `.default` + the **Security Reader** role (or higher) on the Sentinel data lake (Azure RBAC) | `https://sentinel.microsoft.com/mcp/data-exploration` (preview) |
+| Microsoft 365 | `m365Enabled='true'`, `m365Endpoint` (required) | `https://graph.microsoft.com` | `Mail.Read`, `Calendars.Read`, `Files.Read.All` | endpoint **not yet GA** — supply `m365Endpoint` |
+| Microsoft Teams | `teamsEnabled='true'`, `teamsEndpoint` (required) | `https://graph.microsoft.com` | `Team.ReadBasic.All`, `Channel.ReadBasic.All`, `ChannelMessage.Read.All`, `Chat.Read` | endpoint **not yet GA** — supply `teamsEndpoint` |
+| OneDrive & SharePoint | `onedriveEnabled='true'`, `onedriveEndpoint` (required) | `https://graph.microsoft.com` | `Files.Read.All`, `Sites.Read.All` | endpoint **not yet GA** — supply `onedriveEndpoint` |
+| Microsoft 365 Admin Center | `adminCenterEnabled='true'`, `adminCenterEndpoint` (required) | `https://graph.microsoft.com` | `Directory.Read.All` | endpoint **not yet GA** — supply `adminCenterEndpoint` |
+| Microsoft Dataverse | `LOOM_DATAVERSE_MCP_ENABLED='true'`, `LOOM_DATAVERSE_MCP_ENDPOINT` (per-org, required) | your org origin (derived from the endpoint) | `.default` + the [Power Platform SP grant](#usage-analytics-embed) + the Dataverse **MCP tenant setting** (admin center → Environment → Settings → Product → Features) | per-org `https://<org>.crm.dynamics.com/api/mcp` |
+
+> ARM reuses the **same** `Azure Service Management / user_impersonation` consent
+> already required by Connections ([Prerequisite B](#prereq-azure-svc-mgmt-consent))
+> — if Connections cross-sub discovery works, ARM-MCP OBO will too. Sentinel's
+> requirement is an **Azure RBAC role** (Security Reader on the data lake), an
+> honest Azure infra gate, not a Fabric one.
+
+**One-time delegated-scope consent (generic recipe).** A Global / Application
+Administrator adds the scopes to the Loom app registration and grants admin
+consent **once per OBO resource**. Example for the Microsoft 365 server (Graph
+delegated scopes); repeat the `for` loop with the scope set from the table above
+for Teams / OneDrive-SharePoint / Admin Center:
+
+```bash
+# Loom MSAL app registration (the confidential client reused for OBO):
+LOOM_APP_ID=$LOOM_MSAL_CLIENT_ID
+GRAPH=00000003-0000-0000-c000-000000000000
+GRAPH_SP=$(az ad sp list --filter "appId eq '$GRAPH'" --query "[0].id" -o tsv)
+
+# Resolve each delegated scope's id by value and add it to the app reg:
+for SCOPE in Mail.Read Calendars.Read Files.Read.All; do
+  SID=$(az ad sp show --id "$GRAPH_SP" \
+    --query "oauth2PermissionScopes[?value=='$SCOPE'].id | [0]" -o tsv)
+  az ad app permission add --id "$LOOM_APP_ID" --api "$GRAPH" \
+    --api-permissions "$SID=Scope"
+done
+
+# Grant admin consent once (covers every scope added above):
+az ad app permission admin-consent --id "$LOOM_APP_ID"
+```
+
+For ARM (`https://management.azure.com`, `user_impersonation`) use the
+[Prerequisite B](#prereq-azure-svc-mgmt-consent) recipe verbatim
+(resource app `797f4846-ba00-4fd7-ba43-dac1f8f63013`). For Microsoft Graph
+(Enterprise), add the tenant's `MCP.*` delegated Graph permissions in the same
+way and admin-consent.
+
+**Sovereign clouds.** The OBO resource hosts above are Commercial. In GCC-High /
+IL5, point the resource/endpoint at the sovereign equivalents (`graph.microsoft.us`
+/ `dod-graph.microsoft.us`, `management.usgovcloudapi.net`) via the `*Scope` /
+`*Endpoint` keys; most of these remote servers are Commercial-only in preview, so
+leave them off until a sovereign endpoint is published (the honest gate stays up).
+
+### Per-server opt-in — GitHub (Key Vault PAT, NOT Entra) {#ms-mcp-github}
+
+The GitHub remote MCP server (`https://api.githubcopilot.com/mcp`) uses **GitHub
+OAuth / PAT — not Entra**, so there is **no OBO exchange**. Supply a PAT via Key
+Vault `secretRef` **only** (never a literal):
+
+1. Store a fine-grained GitHub PAT in the Loom Key Vault, e.g.:
+
+   ```bash
+   az keyvault secret set --vault-name <loom-vault> \
+     --name loom-github-mcp-pat --value '<ghp_...>'
+   ```
+
+2. Point the Console at it: `loomBackends.mcp.githubPatKvSecret = 'loom-github-mcp-pat'`
+   and `loomBackends.mcp.githubEnabled = 'true'` (override `githubEndpoint` for
+   GitHub Enterprise). Bicep wires `LOOM_GITHUB_MCP_PAT_SECRET` as a `secretRef`
+   to the KV-backed Container App secret `loom-github-mcp-pat`; the client sends
+   `Authorization: Bearer <PAT>`. Absent the secret name ⇒ honest KV-secret gate.
+
+### Deployable Microsoft servers (catalog browser) {#ms-mcp-deployable}
+
+Azure MCP, Microsoft SQL (Data API builder), Azure DevOps, AKS, MarkItDown,
+NuGet, and Playwright are **stdio** servers in `MCP_CATALOG` (`source:'microsoft'`,
+`hostVia:'container-apps'`). They appear in the Browse library and follow the
+existing [deploy wizard](#mcp-catalog-deploy): host as an internal Container App
+(stdio → HTTPS), then auto-register. Where Microsoft does not yet publish a
+first-party **public** container image (AKS, NuGet, the Fabric servers), the
+entry carries a required **`IMAGE_REF`** field → honest "build from source, push
+to your ACR, set the image ref" gate (no fabricated image). **Microsoft Fabric**
+and **Fabric RTI** are listed here **only** as explicit Fabric-family opt-ins
+(category `Analytics`, `govSafe:false`) — filtered out of gov boundaries and never
+auto-deployed; Loom's Azure-native ADX / Synapse / Data API builder analytics
+stays the day-one default.
+
+### Verify
+
+Open **Admin → External MCP Tools → Microsoft MCP servers**. Microsoft Learn
+shows **Connected (default-on, no auth)**. Each opt-in card shows either its
+honest gate (naming the exact `*Enabled` / `*Endpoint` / scope / KV secret /
+tenant consent) or **Connected** once configured; click **Test connection**
+(`?probe=1`) for a real `initialize → tools/list` handshake. In a Copilot pane,
+the relevant Microsoft skill (e.g. a Sentinel hunting or Graph lookup skill)
+appears and, when its server is connected, calls the `mcp_<slug>_<tool>` surface.
+
+### Bicep sync
+
+- **Toggles + endpoints + scopes** are folded into the **`loomBackends.mcp`**
+  sub-object (same single-object trick as `loomBackends.warehouse` /
+  `loomBackends.pipeline` / `loomBackends.powerBiMcpClientId`, to stay under the
+  ARM 256-parameter limit): keys `learnEnabled` / `learnEndpoint`,
+  `armEnabled` / `armEndpoint` / `armScope`, `foundryEnabled` / `foundryEndpoint` /
+  `foundryScope`, `graphEnabled` / `graphEndpoint` / `graphScope`, `m365*`,
+  `teams*`, `onedrive*`, `sentinel*`, `adminCenter*`, `githubEnabled` /
+  `githubEndpoint` / `githubPatKvSecret`. Read at runtime (no `.bicepparam` edit
+  needed) and wired to the Console as the `LOOM_*_MCP_*` env vars in
+  `platform/fiab/bicep/modules/admin-plane/main.bicep` (apps[].env). See the
+  catalog comment block in `params/commercial-full.bicepparam`.
+- **`LOOM_MS_LEARN_MCP_ENABLED` defaults `'true'`** (the synthetic Learn row);
+  `il5.bicepparam` sets it `'false'` (external-egress air-gap).
+- **OBO reuses the existing confidential client** — `LOOM_MSAL_CLIENT_ID` + the
+  `loom-msal-client-secret` Key Vault `secretRef` already emitted by the MSAL
+  block. **No new secret literal, no new param.**
+- **GitHub PAT** is a Key Vault `secretRef` (ACA secret `loom-github-mcp-pat`),
+  emitted only when `githubPatKvSecret` is set — never a literal.
+- The **delegated-scope admin consent** per OBO resource and the **Dataverse /
+  Power Platform tenant settings** are directory/tenant grants that intentionally
+  cannot be expressed in ARM/bicep — hence this runbook.
+- **Skills** (`lib/copilot/ms-skills.ts`) need no bicep — they are injected into
+  the pane system prompts by `lib/copilot/copilot-personas.ts` /
+  `lib/azure/copilot-orchestrator.ts` and are Azure-native unless their MS MCP
+  server is connected.
+
 ## Eventstream MQTT/Kafka mTLS certificates (Key Vault) {#eventstream-mtls-certs}
 
 The Real-Time Hub **Connect source → MQTT** dialog (and the Kafka secure-
@@ -1441,18 +1639,38 @@ var / this role.
 
 ---
 
-## Deploy-planner ML workspace — LOOM_AML_WORKSPACE env patch {#aml-workspace-env-patch}
+## Deploy-planner ML workspace — zero-gate default + LOOM_AML_WORKSPACE retarget {#aml-workspace-env-patch}
 
-By default the `ml-experiment` "Runs & metrics" tab tracks against the AI Foundry
-hub workspace (via the `LOOM_FOUNDRY_NAME` / `LOOM_FOUNDRY_REGION` fallback in
-`mlflow-client.ts`) — so it works out of the box. When you deploy a **dedicated**
-Azure ML workspace alongside the console (deploy-planner `mlWorkspaceEnabled = true`,
-or a BYO AML workspace) and want experiment tracking to target **that** workspace,
-the console's `LOOM_AML_WORKSPACE` env var must be set.
+**As of 2026-06 the Data Science editors work on a clean deploy with zero
+post-deploy steps.** When `mlWorkspaceEnabled = true` (the default),
+`deploy-planner/ml-workspace.bicep` provisions:
 
-The admin-plane Container App env is rendered **before** the deploy-planner
-workspace exists (same ordering constraint as the Databricks hostname), so this
-is a one-time post-deploy patch:
+- a dedicated **Azure ML workspace** alongside the Console;
+- an always-on **default Compute Instance** (`ci-loom-<hash>`) whose
+  `idleTimeBeforeShutdown` is set to `LOOM_AML_COMPUTE_IDLE_TTL` (default
+  `PT30M`), so it **auto-stops when idle** to cap cost;
+- the workspace **system-assigned MI granted Contributor** on the workspace —
+  required by Azure ML for the Compute-Instance idle-shutdown schedule and
+  lifecycle.
+
+`admin-plane/main.bicep` then emits **`LOOM_AML_DEFAULT_COMPUTE`** (the
+deterministic default-CI name) and `LOOM_AML_COMPUTE_IDLE_TTL` onto the Console,
+so the notebook compute picker auto-selects the default instance and the Compute
+Instance stop / create / idle-shutdown lifecycle works out of the box (commits
+`32b5ba1f`, `68ad5335`). When the workspace is not provisioned,
+`LOOM_AML_DEFAULT_COMPUTE` is empty and the AML-compute controls honest-gate as
+before — no fabricated compute.
+
+### Retarget experiment tracking to a different workspace (optional)
+
+`LOOM_AML_WORKSPACE` is now **only** needed to point MLflow experiment tracking
+at a **different** (BYO or secondary) Azure ML workspace than the default one.
+The `ml-experiment` "Runs & metrics" tab tracks against the AI Foundry hub
+workspace by default (via the `LOOM_FOUNDRY_NAME` / `LOOM_FOUNDRY_REGION`
+fallback in `mlflow-client.ts`), so it works unset. The admin-plane Container App
+env is rendered **before** a dedicated deploy-planner workspace exists (same
+ordering constraint as the Databricks hostname), so retargeting is a one-time
+patch:
 
 ```bash
 AML_WS=$(az ml workspace show -g <dlz-rg> -n <aml-workspace-name> --query name -o tsv)
@@ -1465,16 +1683,79 @@ still functional, but runs logged against the dedicated workspace won't appear.
 Also grant the Console UAMI AzureML Data Scientist on that workspace
 ([§AzureML Data Scientist](#aml-data-scientist)).
 
-| Env var | Backs | Fallback when empty |
+| Env var | Backs | Default when empty |
 |---|---|---|
-| `LOOM_AML_WORKSPACE` | MLflow tracking workspace name (`mlflow-client.ts`) | `LOOM_FOUNDRY_NAME` |
+| `LOOM_AML_DEFAULT_COMPUTE` | Default Compute Instance the notebook picker auto-selects (`ci-loom-<hash>`) | empty ⇒ AML-compute controls honest-gate |
+| `LOOM_AML_COMPUTE_IDLE_TTL` | Idle TTL before the default CI auto-stops | `PT30M` |
+| `LOOM_AML_WORKSPACE` | MLflow tracking workspace name to retarget (`mlflow-client.ts`) | `LOOM_FOUNDRY_NAME` (Foundry hub) |
 | `LOOM_AML_RG` | RG of that workspace | `LOOM_FOUNDRY_RG` |
 
 ### Bicep sync
 
-- `LOOM_AML_WORKSPACE` / `LOOM_AML_RG` params + env wiring:
+- Default workspace + idle-TTL Compute Instance + workspace-MI Contributor:
+  `platform/fiab/bicep/modules/deploy-planner/ml-workspace.bicep`.
+- `LOOM_AML_DEFAULT_COMPUTE` / `LOOM_AML_COMPUTE_IDLE_TTL` / `LOOM_AML_WORKSPACE` /
+  `LOOM_AML_RG` params + env wiring:
   `platform/fiab/bicep/modules/admin-plane/main.bicep` (`loomAmlWorkspace` /
-  `loomAmlRg`), threaded from `platform/fiab/bicep/main.bicep`.
+  `loomAmlRg` + the `byoExisting` AML compute carriers), threaded from
+  `platform/fiab/bicep/main.bicep`.
+
+---
+
+## Azure Maps — interactive map visual {#azure-maps-enablement}
+
+The Console `map` editor and the report **Map visual** render on the real
+**Azure Maps Web SDK** (`azure-maps-control` from `atlas.microsoft.com`) — no
+Fabric, no Power BI. The Azure-native map backend is **opt-in**: with it unset
+the aggregated location rows still render on the offline SVG fallback, and the
+canvas shows an honest MessageBar naming the env var + bicep module.
+
+Three things enable the interactive map:
+
+1. **Select the Azure Maps backend.** Set **`LOOM_MAPS_BACKEND=azure-maps`** on
+   the Console. This is the opt-in switch `resolveMapsBackend()`
+   (`apps/fiab-console/lib/azure/maps-client.ts`) reads; any other value keeps
+   the map on the offline fallback.
+
+2. **Point at the account (AAD path, preferred).** Set
+   **`LOOM_AZURE_MAPS_CLIENT_ID`** to the Azure Maps account **`uniqueId`** (the
+   `mapsClientId` bicep output). The Console UAMI mints an
+   `atlas.microsoft.com` token and sends it with `x-ms-client-id = uniqueId` —
+   no subscription key on disk. (`LOOM_AZURE_MAPS_KEY` is a commercial-only
+   subscription-key fallback.) For this to work the Console UAMI must hold the
+   **"Azure Maps Data Reader"** data-plane role on the `Microsoft.Maps/accounts`
+   account — granted by the bicep module below.
+
+3. **Allow the SDK host in CSP.** The Console Content-Security-Policy must allow
+   **`atlas.microsoft.com`** (script/style/connect/img) so the Web SDK loads
+   (fixed in commit `984a64e9`). A stock deploy already ships this; a
+   hand-edited CSP must keep the allowance or the map silently fails to load.
+
+```bash
+# Existing deployment — enable the interactive map on the Console
+MAPS_CLIENT_ID=$(az maps account show -g <dlz-rg> -n <maps-account> --query properties.uniqueId -o tsv)
+az containerapp update --name loom-console -g rg-csa-loom-admin-<region> \
+  --set-env-vars LOOM_MAPS_BACKEND=azure-maps LOOM_AZURE_MAPS_CLIENT_ID="$MAPS_CLIENT_ID"
+# then grant the Console UAMI "Azure Maps Data Reader" on the account (bicep does this on a fresh deploy)
+```
+
+### Verify
+
+Open a `map` item → the canvas renders the real Azure Maps basemap with
+BubbleLayer / HeatMapLayer / PolygonLayer over the bound data. If gated, the
+MessageBar names `LOOM_MAPS_BACKEND` / `LOOM_AZURE_MAPS_CLIENT_ID` and the
+"Azure Maps Data Reader" role; the aggregated rows still draw on the fallback.
+
+### Bicep sync
+
+- Account + Data Reader grant + `mapsClientId` (uniqueId) output:
+  `platform/fiab/bicep/modules/landing-zone/azure-maps.bicep` (and the
+  admin-plane variant `modules/admin-plane/azure-maps.bicep`). Deploys the Gen2
+  `Microsoft.Maps/accounts` account and grants the Console UAMI "Azure Maps Data
+  Reader".
+- `LOOM_MAPS_BACKEND` / `LOOM_AZURE_MAPS_CLIENT_ID` env wiring:
+  `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+- CSP `atlas.microsoft.com` allowance: commit `984a64e9`.
 
 ---
 
@@ -2491,3 +2772,300 @@ az role assignment create \
 
 All coordinates are Azure-native resource ids — attach works with
 `LOOM_DEFAULT_FABRIC_WORKSPACE` unset (no Fabric dependency).
+
+## New env vars (2026-07) — bicep-sync audit closure {#env-vars-2026-07}
+
+The 2026-07 no-vaporware bicep-sync audit found Console features reading env
+vars that no bicep emitted (and roles no bicep granted). All are now emitted by
+`platform/fiab/bicep/modules/admin-plane/main.bicep` on a stock deploy — no
+manual step for the defaults; the notes below are only for overrides / BYO.
+
+| Env var | Emitted value (stock deploy) | Backs | Role / grant (bicep) |
+| --- | --- | --- | --- |
+| `LOOM_SWA_SUBSCRIPTION_ID` | the deployment subscription | slate-app / workshop-app **Publish** → real Azure Static Web Apps (`Microsoft.Web/staticSites` PUT + `listSecrets`) | — |
+| `LOOM_SWA_RESOURCE_GROUP` | the admin RG (override: root param `loomSwaResourceGroup` → `byoExisting.swaResourceGroup`) | same | Console UAMI → **Website Contributor** (`de139f84-1756-47ae-9be6-808fbbe706ee`) at the SWA RG scope (`modules/admin-plane/swa-publish-rbac.bicep`) |
+| `LOOM_SWA_LOCATION` | the deployment `location` — **never** the route's `eastus2` fallback (invalid in Azure Government) | same | — |
+| `LOOM_ADX_ALERT_SCOPE` | the ADX cluster ARM id (provisioned `adxCluster.outputs.clusterId`, or the BYO `existingAdxClusterName` id) | Activator continuous scheduled evaluation for Eventhouse/ADX-sourced rules (`lib/azure/activator-monitor.ts` — `Microsoft.Insights/scheduledQueryRules` scoped to the cluster) | Activator UAMI → ADX **AllDatabasesViewer** principalAssignment on the cluster (`modules/admin-plane/adx-cluster.bicep`, the shared-cluster parallel of the DLZ per-database `activator-viewer` grant). BYO clusters: grant it manually — `az kusto cluster-principal-assignment create --cluster-name <name> --principal-id <activator-UAMI-principalId> --principal-type App --role AllDatabasesViewer` |
+| `LOOM_MAPS_BACKEND` | `azure-maps` whenever a Maps account is wired (deployed or BYO `loomAzureMapsAccount`); empty otherwise (honest gate) | the interactive map visual (report designer / geo editors) | Console UAMI → **Azure Maps Data Reader** (already granted in `azure-maps.bicep`) |
+| `LOOM_AZURE_MAPS_CLIENT_ID` | the deployed Maps account `uniqueId` (`azure-maps.bicep` `mapsClientId` output). BYO accounts: set post-deploy (`az maps account show --query properties.uniqueId`) or rely on the key path | Entra (AAD) auth path — sent as `x-ms-client-id` with the UAMI-minted atlas token | same grant as above |
+| `LOOM_REPORT_RENDERER` | `loomPaginatedRenderUrl` — the **same** headless render Functions host as `LOOM_PAGINATED_RENDER_URL` (both POST to `…/api/render`); `LOOM_REPORT_RENDER_KEY` rides the same `loom-paginated-render-key` KV secret | report-designer high-fidelity export (`app/api/items/report/[id]/export`) | — (Function host key via KV secretRef) |
+| `LOOM_PLAN_BACKING_SQL_SERVER` / `LOOM_PLAN_BACKING_SQL_DATABASE` | root params `loomPlanBackingSqlServer` / `loomPlanBackingSqlDatabase` (previously declared on admin-plane but **orphaned** — never surfaced from the root orchestrator, so no `.bicepparam` could set them). Empty → Plan cells persist to Cosmos + honest gate | Plan (preview) EPM/CPM writeback table `dbo.loom_plan_cells` | one-time: grant the Console UAMI `db_ddladmin` + `db_datawriter` on that database |
+| `LOOM_UDF_FUNCTION_BASE` | **derived** from the Loom-managed UDF runtime (`modules/admin-plane/udf-runtime.bicep`, `hostUrl` output) on a stock deploy — no manual step. A BYO Azure Functions host (root param `loomUdfFunctionBase` → `byoExisting.udfFunctionBase`, e.g. `https://my-udf.azurewebsites.net`) still overrides it. Empty only when `udfRuntimeEnabled=false` and no BYO host → the invoke route serves its honest 409 gate | user-data-function **Invoke** | none needed to invoke (the console BFF proxies the host ingress). UDF code runs as the Console UAMI, so grant that UAMI any data-plane role a function needs — see [§ UDF runtime](#udf-runtime) |
+
+---
+
+## User Data Functions (UDF) runtime {#udf-runtime}
+
+The **User Data Function** editor's Test/Run panel invokes
+`POST /api/items/user-data-function/<id>/invoke`, which resolves an Azure-native
+execution host from **`LOOM_UDF_FUNCTION_BASE`** and POSTs
+`{base}/api/<functionName>`. Without a host that path is permanently 409-gated on
+a fresh deploy. `modules/admin-plane/udf-runtime.bicep` deploys a Loom-managed
+host so it works day-one — **no manual step beyond the enable flag**.
+
+**Host kind — Azure Container Apps.** Mirrors the DAB preview runtime
+(`dab-runtime.bicep`): a stock image runs host code delivered as base64 secrets
+and materialized by a busybox init container onto an EmptyDir volume — **no
+custom image build, no ACR dependency**. Broadly available including Azure
+Government / IL5, with **no Fabric or Power BI dependency** (per
+`.claude/rules/no-fabric-dependency.md`). The host runs **real Python**: it
+imports the published UDF source through a bundled `fabric.functions` shim,
+executes the requested `@udf.function()`, and returns its actual value — so the
+Test panel shows a genuinely computed result (no stub, per `no-vaporware.md`).
+Source of truth for the host is `modules/admin-plane/udf-runtime/` (`app.py`,
+`fabric_functions.py`, `default_function_app.py`, `README.md`).
+
+| Param (module) | Default | Purpose |
+| --- | --- | --- |
+| `udfRuntimeEnabled` | `true` | Deploy the host. `false` → module deploys nothing, `hostUrl` empty, invoke path stays honestly 409-gated. |
+| `udfImage` | `mcr.microsoft.com/azure-functions/python:4-python3.11` | Stock image providing `python3` + a shell (MCR, available in Commercial + Gov/IL5). |
+| `hostPort` | `8080` | Host listen port + ACA ingress target. |
+| `corsOrigin` | `*` | Direct-call CORS origin (the BFF-proxy path does not need it). |
+
+**Wiring (done in `modules/admin-plane/main.bicep`):** invoke the module gated by
+`udfRuntimeEnabled`, then emit `{ name:'LOOM_UDF_FUNCTION_BASE', value:
+udfRuntime.outputs.hostUrl }` into the console `apps[]` env; surface
+`udfRuntimeEnabled` + host params from the root `main.bicep`. A BYO Functions host
+(`loomUdfFunctionBase`) still overrides the derived value.
+
+**Data-source bindings.** UDF code runs **as the Console UAMI**, so grant that
+identity any data-plane role a function needs (SQL, ADLS, Cosmos). If a function
+uses an unwired Fabric binding placeholder the host returns HTTP 409 naming the
+remediation — never a faked result.
+
+## Warm Spark session pool (kill notebook cold starts)
+
+A Synapse Spark pool cold-starts in **~2-4 minutes**; Fabric's "starter pools"
+feel instant because Microsoft keeps a warm pool of pre-provisioned sessions on
+standby. The warm Spark session pool gives CSA Loom the same behaviour on the
+**Azure-native default backend**: it keeps N idle Livy (Synapse) sessions — or a
+warmed Databricks all-purpose cluster — on standby, and on a notebook run the
+console **leases a warm session** instead of paying the cold start. The pool
+**refills itself in the background** so the next run is warm too. No Fabric
+dependency: Synapse is the default backend and the Fabric APIs are never on this
+path (per `.claude/rules/no-fabric-dependency.md`).
+
+**Lease / return model (safe hand-off).** Every pooled session is a slot that
+moves `warming → warm → leased → (returned→warm | dead)`. Acquiring a session
+atomically flips exactly ONE warm slot to `leased` and stamps it with the acting
+user's oid — so a session is **never shared across users concurrently**. On a
+miss the run cold-starts exactly as it does today (the pool is a pure
+accelerator, never a hard dependency, per `no-vaporware.md`). A background
+sweeper keepalives warm Synapse sessions (so Livy's own idle timeout doesn't
+reap them), evicts warm-above-min sessions idle past the TTL, and refills to
+`min`.
+
+**Source of truth.** Manager: `apps/fiab-console/lib/azure/spark-session-pool.ts`
+(warms REAL sessions via `createLivySessionAsync` / `getLivySession` /
+`keepaliveLivySession` / `killLivySession`). BFF:
+`app/api/spark/session-pool/route.ts` (GET status; POST `warm` to pre-provision,
+POST `config` — tenant-admin — to set min/max/TTL/enabled live). Run wiring:
+`app/api/items/notebook/[id]/run/route.ts` acquires-from-pool → falls back to
+cold create. Editor: the notebook compute bar shows **"Warm session ready ⚡"**
+or **"Cold start (~2 min)"** honestly per pool state. Config-only bicep:
+`modules/admin-plane/spark-session-pool.bicep`.
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `LOOM_SPARK_POOL_ENABLED` | `false` | Master switch. `false` → notebooks keep today's cold-start behaviour (out-of-box). `true`/`1` → warm hand-off. |
+| `LOOM_SPARK_POOL_MIN` | `1` | Minimum warm sessions kept on standby per pool/kind/sizing group. Each idle warm session consumes Spark-pool capacity — size against the node budget. |
+| `LOOM_SPARK_POOL_MAX` | `3` | Max total sessions per group (warm + leased). Clamped to ≥ min. |
+| `LOOM_SPARK_POOL_IDLE_TTL` | `900` | Seconds a warm-above-min session may sit idle before its Livy session is killed to reclaim capacity. |
+| `LOOM_DATABRICKS_DEFAULT_CLUSTER` | *(unset)* | Optional — the all-purpose cluster id to keep warm when the Databricks backend is opted into (`LOOM_NOTEBOOK_BACKEND=databricks`). |
+
+**Wiring (integration pass, done in `modules/admin-plane/main.bicep`):** invoke
+`spark-session-pool.bicep`, then spread its `sparkPoolEnv` output (or the four
+`*Env` outputs) onto the `loom-console` `apps[]` env list — the same place
+`LOOM_AZURE_MAPS_CLIENT_ID` et al. are wired. The module deploys **no Azure
+resource** (the pool lives in the console process and warms sessions against the
+already-provisioned Synapse Spark pool / Databricks workspace); it only produces
+the env values. Tenant admins can flip enabled/min/max/TTL live via the
+`/api/spark/session-pool` config action (per-replica, in-memory) without a
+redeploy.
+
+**Honest gate.** When no Spark backend is configured (`synapseConfigGate()` /
+`LOOM_DATABRICKS_HOSTNAME` unmet), the warm action returns a message naming the
+exact env var to set and warms nothing — it never fakes a warm session.
+
+---
+
+## Report query acceleration — result cache + Databricks SQL / Photon over Delta
+
+The Loom report / semantic layer has a two-tier query **accelerator** that gives
+import-mode speed on the lakehouse Delta *without* a Microsoft Fabric capacity —
+Loom's true Azure-native analog of Fabric **Direct Lake**. Out of the box (no new
+infra) reports run **cache + Synapse Serverless**; binding a **Databricks SQL
+warehouse (Photon)** lights up an in-place, Delta-native fast path.
+
+### Tier 1 — result cache (always on, no infra)
+
+`lib/azure/query-result-cache.ts` caches report/semantic query **results** keyed
+by `(modelId, compiled-SQL + params hash, execution-surface, freshness token)`.
+The freshness token is the Delta commit version when resolvable, else a proxy
+derived from the report item's `_ts` + `state.lastRefresh` + `state.dataSource`,
+so a report **Refresh rotates the key and transparently invalidates** the cache.
+In-process by default; an **optional Cosmos tier** shares hits across replicas.
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `LOOM_QUERY_CACHE_DISABLED` | *(unset)* | Set `1` to turn the result cache off entirely. |
+| `LOOM_QUERY_CACHE_TTL_MS` | `60000` | Result time-to-live in ms. |
+| `LOOM_QUERY_CACHE_MAX` | `500` | Max in-process cached results (LRU). |
+| `LOOM_QUERY_CACHE_COSMOS_CONTAINER` | *(unset)* | Enable the shared Cosmos tier — the container id to use (in `LOOM_COSMOS_DATABASE`, PK `/modelId`, native TTL). Reuses `LOOM_COSMOS_ENDPOINT` + the Console UAMI. |
+
+### Tier 2 — Databricks SQL (Photon) over Delta, in-place (opt-in)
+
+The accelerated tier runs on a **Databricks SQL warehouse (Photon)** — the
+first-party Azure-native "Direct Lake" analog, already in the Loom stack. It reads
+the lakehouse Delta files **in-place from ADLS Gen2** (no copy, no materialization)
+via `SELECT … FROM delta.` + the backtick-quoted `abfss://…` path, so the same
+Delta the pipelines write is queried at Photon speed. The console
+(`lib/azure/report-accel-client.ts`) folds each aggregating visual's wells +
+filters into a compact semantic query and `compileAccelSql` compiles it to
+Databricks SQL (ANSI, Delta-native, backtick-quoted identifiers, named parameter
+markers bound by the Statement Execution API — injection-safe). It reaches the
+warehouse through the existing `lib/azure/databricks-client.ts`
+(`runWarehouseStatement` → `POST /api/2.0/sql/statements`). **No dedicated
+accelerator container / image / ingress is deployed** — this replaced the former
+DuckDB `report-accel` Container App.
+
+The report query route prefers **accel → cache → Serverless**: on any accel
+miss/timeout/error, a truncated warehouse result, or when the source isn't a Delta
+table, it runs the same real Synapse Serverless query it always did — the honest
+fallback (never a wrong or partial accel result).
+
+| Env var | Set on | Purpose |
+| --- | --- | --- |
+| `LOOM_DATABRICKS_HOSTNAME` | `loom-console` | The Databricks workspace URL (e.g. `adb-<id>.<n>.azuredatabricks.net`). Same var the SQL Warehouse editor + Databricks navigator use. Unset ⇒ accel disabled, cache + Serverless only. |
+| `LOOM_DATABRICKS_SQL_WAREHOUSE_ID` | `loom-console` | The SQL warehouse (Photon) id the accelerated query runs on. Same var `runWarehouseStatement` / the SQL Warehouse editor read. Unset ⇒ accel disabled. |
+
+Both env vars are already emitted to `loom-console` by
+`modules/admin-plane/main.bicep` (the Databricks navigator + SQL warehouse
+bindings), so no new env plumbing is required — binding a warehouse lights up the
+accelerated tier.
+
+**Required access.** The Console UAMI must be a Databricks workspace user with
+**CAN USE** on the SQL warehouse and read access to the lakehouse Delta (the
+workspace's storage credential / access connector already grants ADLS read for the
+lakehouse — see the Databricks SCIM bootstrap + storage-RBAC steps). No extra role
+beyond the standard Databricks workspace wiring is needed for the report accel
+path. Absent a configured warehouse the report route stays on cache + Serverless.
+
+## Unified capacity + chargeback dashboard (Cost Management + Monitor)
+
+`/admin/usage-chargeback` is the Azure-native 1:1 of the Fabric **Capacity
+Metrics** app — "who consumed what" across every engine, in one place. It rolls
+up **real** Azure Cost Management spend (by service, by workspace) and **real**
+Azure Monitor utilization, normalized to a single **Loom Capacity Unit (LCU)**
+with a throttle/surge gauge. The dashboard is tenant-admin gated
+(`requireTenantAdmin`) because it aggregates cost + consumption across every
+workspace in the tenant. Backend: `GET /api/admin/capacity/chargeback`.
+
+### Required role
+
+The Console UAMI needs the built-in **Cost Management Reader** role
+(`72fafb9e-0641-4937-9268-a91bfd8191a3`) at the subscription (or billing) scope
+so the BFF can call `Microsoft.CostManagement/query`,
+`Microsoft.Consumption/*/read`, and read budgets. Without it the dashboard shows
+an **honest 503 gate** naming this exact role + `LOOM_BILLING_SCOPE`; utilization
+(the normalized-CU rollup) still renders once **Monitoring Reader** is granted
+(see the monitoring-reader section above). The role GUID is identical across all
+clouds (Commercial / GCC / GCC-High / IL5 / DoD).
+
+Bicep: `platform/fiab/bicep/modules/admin-plane/cost-management-rbac.bicep`
+(subscription-scoped; grants the role and emits `loomBillingScope`).
+
+```bash
+# Out-of-band grant (e.g. cross-subscription rollup, or deployer lacked UAA):
+az role assignment create \
+  --assignee-object-id <console-uami-principal-id> --assignee-principal-type ServicePrincipal \
+  --role "Cost Management Reader" \
+  --scope /subscriptions/<sub-id>
+```
+
+### Env vars
+
+| Env var | Set on | Purpose |
+| --- | --- | --- |
+| `LOOM_BILLING_SCOPE` | `loom-console` | ARM scope the chargeback rollup covers — set from the `cost-management-rbac.bicep` `loomBillingScope` output. Defaults to the subscription scope; can point at a billing account / management group. |
+| `LOOM_CAPACITY_LCU` | `loom-console` | Optional — pin the LCU capacity ceiling (the Loom analogue of choosing a Fabric F-SKU) so the throttle gauge is absolute. Empty ⇒ auto-derived from observed peak + 25% headroom. |
+
+### Normalized Loom Capacity Unit (LCU)
+
+Loom has **no** single Fabric SKU (every engine is a real Azure service per
+`no-fabric-dependency.md`), so the one-number capacity story is synthesized. Each
+engine's native billable signal from Azure Monitor is mapped to LCU via a
+**published coefficient** (returned in the API model and shown in the UI — nothing
+hidden):
+
+| Engine | Metric (Azure Monitor) | Native unit | LCU per unit |
+| --- | --- | --- | --- |
+| Synapse dedicated SQL | `DWULimit` × `DWUUsedPercent` (per sqlPool) | DWU-hour | 0.5 |
+| Azure Data Explorer / Eventhouse | `CPU` (+ `TotalNumberOfThrottledQueries`) | compute-hour | 100 |
+| Container Apps | `UsageNanoCores` | vCPU-second | 0.01 |
+| Azure OpenAI | `TotalTokens` | token | 0.00002 |
+| Stream Analytics | `ResourceUtilization` | SU-hour | 6 |
+| Azure Databricks | (DBU not in Monitor — see note) | DBU | 10 |
+
+`utilizationPct = totalLcu / capacityLcu × 100` is the Loom CU% throttle gauge.
+`surge` is `critical` when any engine reports throttling or utilization ≥ 100%,
+`elevated` at ≥ 80%, else `none`. Databricks DBU is not emitted to Azure Monitor;
+its **cost** is still captured via Cost Management, only its LCU contribution
+requires the opt-in Databricks billable-usage system-table / Account Usage feed.
+
+### Integration pass (not done in the feature branch)
+
+`cost-management-rbac.bicep` is standalone and does **not** edit `main.bicep`. The
+operator wires it in a dedicated integration commit: add the module (scope
+`subscription()`, pass `consoleIdentity.outputs.principalId`), then set the
+console's `LOOM_BILLING_SCOPE` env to the module's `loomBillingScope` output. The
+module header carries the exact snippet.
+
+## Per-user notebook Compute Instances (multi-user Azure ML)
+
+Azure ML **Compute Instances are single-user**: only the user a CI is assigned
+to (`personalComputeInstanceSettings.assignedUser`) can start or run cells on it.
+A single shared "default" CI therefore cannot make notebooks multi-user. Loom's
+notebook editor gives every signed-in user a **"Create my compute instance"**
+action that provisions a CI named deterministically (`ci-loom-<oid>`) and
+**assigned to that user** (assignedUser = their AAD objectId + tenant id — the
+"create on behalf of" pattern), with an idle-shutdown TTL. Each user runs on
+their OWN compute; the picker surfaces "My compute" first.
+
+This works out of the box once the AML workspace is configured
+(`LOOM_AML_WORKSPACE` + `LOOM_AML_REGION`, Console UAMI holding **AzureML Data
+Scientist** + **AzureML Compute Operator**). No Fabric dependency — Azure-native
+by default.
+
+### Policy env (per-user CI defaults + tenant ceiling)
+
+The `admin-plane/notebook-compute-pool.bicep` module emits four env values that
+tune the flow. All have safe defaults, so the flow works with them unset:
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `LOOM_AML_PERUSER_ENABLED` | `true` | Master switch. `false` hides "Create my compute instance" and 403-gates the `/mine` POST. |
+| `LOOM_AML_CI_SIZE` | `Standard_DS3_v2` | Default VM size for a per-user CI. |
+| `LOOM_AML_CI_IDLE_TTL` | `PT30M` | Idle auto-shutdown TTL (ISO-8601) so an idle CI deallocates and stops billing. |
+| `LOOM_AML_CI_MAX` | `50` | Tenant ceiling on per-user CIs (cost guard). When reached the editor shows an honest quota MessageBar and `/mine` POST returns **409**. |
+
+### BFF surface
+
+- `GET /api/aml/compute-instances/mine` — the caller's own CI (if any), the
+  deterministic name it would be created as, the policy, and the tenant quota
+  state.
+- `POST /api/aml/compute-instances/mine` — creates (or idempotently re-attaches)
+  the caller's per-user CI via a real ARM `PUT …/computes/{ci-loom-<oid>}` with
+  `assignedUser` set, then best-effort applies the idle-shutdown TTL. Enforces
+  `LOOM_AML_CI_MAX` before creating.
+- `GET /api/loom/compute-targets` — surfaces the caller's own CI **first**
+  (labelled "My compute").
+
+### Integration pass (not done in the feature branch)
+
+`notebook-compute-pool.bicep` is standalone and does **not** edit `main.bicep`.
+The operator wires it in a dedicated integration commit: add the module, then map
+its four outputs (`perUserEnabledEnv` / `perUserVmSizeEnv` / `perUserIdleTtlEnv`
+/ `maxPerTenantEnv`) onto the loom-console `env` list as `LOOM_AML_PERUSER_ENABLED`
+/ `LOOM_AML_CI_SIZE` / `LOOM_AML_CI_IDLE_TTL` / `LOOM_AML_CI_MAX`. The module
+header carries the exact snippet.

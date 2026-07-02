@@ -38,40 +38,67 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { CopilotTopicCanvas } from './copilot-topic-canvas';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' },
-  formCol: { display: 'flex', flexDirection: 'column', gap: 12 },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: 12 },
-  card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 8 },
-  kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 },
-  kpi: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, display: 'flex', flexDirection: 'column', gap: 4 },
-  kpiValue: { fontSize: 28, fontWeight: 600 },
-  treePad: { padding: 8 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM, alignItems: 'start' },
+  formCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))', gap: tokens.spacingVerticalM },
+  card: {
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalS, minWidth: 0,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
+  kpiGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: tokens.spacingVerticalM },
+  kpi: {
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, display: 'flex', flexDirection: 'column',
+    gap: tokens.spacingVerticalXS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  kpiValue: { fontSize: tokens.fontSizeHero700, fontWeight: 600 },
+  treePad: { padding: tokens.spacingVerticalS },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground1 },
+  sectionIcon: { color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center' },
   spark: {
-    height: 60, display: 'flex', alignItems: 'flex-end', gap: 2,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 6,
+    height: '60px', display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalXXS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground3,
   },
-  bar: { flex: 1, backgroundColor: tokens.colorBrandBackground, borderRadius: 2 },
-  tagRow: { display: 'flex', flexWrap: 'wrap', gap: 6 },
-  chatWrap: { display: 'flex', flexDirection: 'column', gap: 8, maxWidth: 720 },
+  bar: { flex: 1, backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
+  tagRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
+  chatWrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: '720px' },
   chatLog: {
-    height: 360, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12,
+    height: '360px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   msgUser: {
-    alignSelf: 'flex-end', maxWidth: '75%', padding: '8px 12px', borderRadius: 12,
+    alignSelf: 'flex-end', maxWidth: '75%', paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', whiteSpace: 'pre-wrap',
   },
   msgBot: {
-    alignSelf: 'flex-start', maxWidth: '75%', padding: '8px 12px', borderRadius: 12,
+    alignSelf: 'flex-start', maxWidth: '75%', paddingTop: tokens.spacingVerticalS, paddingBottom: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', whiteSpace: 'pre-wrap',
   },
-  chatInputRow: { display: 'flex', gap: 8, alignItems: 'flex-end' },
+  chatInputRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
 });
 
 // ============================================================
@@ -111,6 +138,22 @@ interface Topic {
   modifiedOn?: string;
 }
 
+// Copilot Studio action input/output parameter — mirrors the portal's
+// "Inputs / Outputs" surface. Grounded in Learn ("Manage topic inputs and
+// outputs"): every parameter has a name, a data type, and a direction; for
+// inputs, "How will the agent fill this input?" is either Dynamically fill
+// (the agent populates it from context, default) or Set as a value (a literal,
+// an existing variable, or a Power Fx formula). Copilot Studio persists the
+// whole mapping as JSON in the action's msdyn_parameterconfiguration Memo
+// column — there is no per-parameter child entity.
+interface ActionParameter {
+  name: string;
+  direction: 'input' | 'output';
+  type: string;
+  valueKind?: 'dynamic' | 'value';
+  value?: string;
+}
+
 interface Action {
   id: string;
   name: string;
@@ -118,6 +161,7 @@ interface Action {
   connectorId?: string;
   flowId?: string;
   enabled?: boolean;
+  parameters?: ActionParameter[];
 }
 
 interface Channel {
@@ -165,7 +209,7 @@ function ErrorBar({ error, hint }: { error: string | null; hint?: string }) {
       <MessageBarBody>
         <MessageBarTitle>Copilot Studio call failed</MessageBarTitle>
         {error}
-        {hint && <div style={{ marginTop: 4 }}><Caption1>{hint}</Caption1></div>}
+        {hint && <div style={{ marginTop: tokens.spacingVerticalXXS }}><Caption1>{hint}</Caption1></div>}
       </MessageBarBody>
     </MessageBar>
   );
@@ -206,7 +250,7 @@ function EnvironmentPicker({
         placeholder={envs ? 'Select an environment' : 'Loading…'}
       >
         {(envs || []).map((e) => (
-          <Option key={e.id} value={e.id} disabled={!e.hasDataverse}>
+          <Option key={e.id} value={e.id} disabled={!e.hasDataverse} text={`${e.displayName}${e.hasDataverse ? '' : ' (no Dataverse)'}`}>
             {e.displayName} {e.hasDataverse ? '' : ' (no Dataverse)'}
           </Option>
         ))}
@@ -270,7 +314,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
   // Phase 4.5 — dirty flag protects in-flight edits from being clobbered by
   // the agents-list reload that runs after save/refresh/publish.
   const [dirty, setDirty] = useState(false);
-  const [tab, setTab] = useState<'edit' | 'knowledge' | 'topics' | 'actions' | 'channels' | 'test'>('edit');
+  const [tab, setTab] = useState<'edit' | 'knowledge' | 'topics' | 'actions' | 'channels' | 'test' | 'analytics'>('edit');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
@@ -416,8 +460,8 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
           { label: 'Channels', onClick: () => setTab('channels') },
           { label: 'Test', onClick: () => setTab('test'), disabled: !selectedId,
             title: selectedId ? undefined : 'Test — save the agent first, then chat with it over Direct Line' },
-          { label: 'Analytics', disabled: true,
-            title: 'Analytics — open the dedicated Copilot Analytics editor (not a tab in the Agent editor)' },
+          { label: 'Analytics', onClick: () => setTab('analytics'), disabled: !selectedId,
+            title: selectedId ? undefined : 'Analytics — select a saved agent first to view conversation KPIs' },
         ]},
       ]},
     ];
@@ -494,6 +538,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
             <Tab value="actions" icon={<Flow20Regular />}>Actions</Tab>
             <Tab value="channels" icon={<Channel20Regular />}>Channels</Tab>
             <Tab value="test" icon={<Chat20Regular />}>Test</Tab>
+            <Tab value="analytics" icon={<DataBarVertical20Regular />}>Analytics</Tab>
           </TabList>
           {tab === 'edit' && (
             <div className={s.form}>
@@ -520,6 +565,7 @@ export function CopilotStudioAgentEditor({ item, id }: { item: FabricItemType; i
           {tab === 'actions' && <InlineActions envId={envId} agentId={selectedId} />}
           {tab === 'channels' && <InlineChannels envId={envId} agentId={selectedId} />}
           {tab === 'test' && <TestChatPanel agentId={selectedId} />}
+          {tab === 'analytics' && <AnalyticsPanel envId={envId} agentId={selectedId} />}
         </div>
       }
     />
@@ -591,7 +637,13 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
     } finally { setBusy(false); }
   }, [envId, refresh]);
 
-  if (!agentId) return <Caption1>Pick an agent to manage knowledge sources.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<BookOpen20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to view and add knowledge sources (URL, file, SharePoint, or Dataverse table)."
+    />
+  );
   return (
     <div className={s.formCol}>
       <ErrorBar error={error} hint={TENANT_HINT} />
@@ -618,9 +670,16 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
           <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !form.type} onClick={add}>Add</Button>
         </div>
       </div>
-      <Subtitle2>Sources ({items?.length ?? 0})</Subtitle2>
-      {items === null ? <Spinner size="tiny" /> : items.length === 0 ? (
-        <Caption1>No knowledge sources yet.</Caption1>
+      <Subtitle2 className={s.sectionHeader}>
+        <span className={s.sectionIcon}><BookOpen20Regular /></span>
+        Sources ({items?.length ?? 0})
+      </Subtitle2>
+      {items === null ? <Spinner size="tiny" label="Loading knowledge sources…" labelPosition="after" /> : items.length === 0 ? (
+        <EmptyState
+          icon={<BookOpen20Regular />}
+          title="No knowledge sources yet"
+          body="Ground this agent's answers in your content. Add a URL, file, SharePoint site, or Dataverse table using the form above."
+        />
       ) : (
         <Table size="small">
           <TableHeader>
@@ -637,7 +696,7 @@ function KnowledgePanel({ envId, agentId }: { envId: string; agentId: string }) 
               <TableRow key={k.id}>
                 <TableCell>{k.name}</TableCell>
                 <TableCell><Badge appearance="outline">{k.type}</Badge></TableCell>
-                <TableCell>{k.uri || '—'}</TableCell>
+                <TableCell><span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{k.uri || '—'}</span></TableCell>
                 <TableCell>{k.status || '—'}</TableCell>
                 <TableCell>
                   <Button size="small" icon={<Delete20Regular />} appearance="subtle" onClick={() => remove(k.id)}>Remove</Button>
@@ -786,7 +845,13 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     } finally { setBusy(false); }
   }, [envId, selectedId, refresh]);
 
-  if (!agentId) return <Caption1>Pick an agent to manage topics.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<Chat20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to author conversation topics — trigger phrases plus a structured topic canvas."
+    />
+  );
   return (
     <div className={s.formCol}>
       <ErrorBar error={error} hint={TENANT_HINT} />
@@ -809,7 +874,14 @@ function TopicsPanel({ envId, agentId }: { envId: string; agentId: string }) {
           <Field label="Topic name" required>
             <Input id="topic-name-input" value={form.name} onChange={(_, d) => setFormField('name', d.value)} />
           </Field>
-          <Subtitle2>Existing topics ({topics?.length ?? 0})</Subtitle2>
+          <Subtitle2 className={s.sectionHeader}>
+            <span className={s.sectionIcon}><Chat20Regular /></span>
+            Existing topics ({topics?.length ?? 0})
+          </Subtitle2>
+          {topics === null && <Spinner size="tiny" label="Loading topics…" labelPosition="after" />}
+          {topics !== null && topics.length === 0 && (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No topics yet — create one above.</Caption1>
+          )}
           {(topics || []).map((t) => (
             <div key={t.id} className={s.card} style={{ cursor: 'pointer', borderColor: t.id === selectedId ? tokens.colorBrandStroke1 : undefined }}
                  onClick={() => {
@@ -886,14 +958,45 @@ export function CopilotTopicEditor({ item, id }: { item: FabricItemType; id: str
 // ActionsPanel + CopilotActionEditor
 // ============================================================
 
+// Action-type labels for the picker (kept out of the render so the Dropdown
+// `value` shows a friendly label rather than the raw slug).
+const ACTION_TYPE_LABELS: Record<string, string> = {
+  'power-automate-flow': 'Power Automate flow',
+  'connector': 'Connector (certified)',
+  'custom-connector': 'Custom connector',
+  'prebuilt': 'Prebuilt action',
+};
+
+// Data types offered for an action input/output parameter, matching the type
+// picker on Copilot Studio's "Inputs / Outputs" surface (Learn: Manage topic
+// inputs and outputs).
+const PARAM_DATA_TYPES = ['String', 'Number', 'Boolean', 'Date', 'Choice', 'Table'];
+
 function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   const s = useStyles();
   const [items, setItems] = useState<Action[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // No-freeform-config: the flow / connector reference is chosen from live
+  // Power Platform resources (a picker), NOT hand-typed GUIDs/ids. The picked
+  // resource's id is mapped into the bind payload — flowId ← a cloud flow's
+  // name (GUID); connectorId ← a connector's name. Lists come from the real
+  // Power Platform admin REST endpoints (/api/powerplatform/flows ·
+  // /api/powerplatform/connectors), which honest-gate with a 503 (naming the
+  // env var to set) when Power Platform isn't configured — surfaced inline as a
+  // warning MessageBar rather than a silent empty picker.
   const [form, setForm] = useState<{ name: string; type: string; connectorId: string; flowId: string }>({
     name: '', type: 'power-automate-flow', connectorId: '', flowId: '',
   });
+  const [flows, setFlows] = useState<{ name: string; displayName: string; state?: string }[] | null>(null);
+  const [connectors, setConnectors] = useState<{ name: string; displayName: string; isCustomApi?: boolean; tier?: string }[] | null>(null);
+  const [flowGate, setFlowGate] = useState<string | null>(null);
+  const [connectorGate, setConnectorGate] = useState<string | null>(null);
+  // Structured input/output parameter mapping for the action being bound — the
+  // portal's "Inputs / Outputs" surface. No-freeform-config: typed rows, never
+  // a JSON textarea. Submitted with the bind so Copilot Studio persists them in
+  // the action's msdyn_parameterconfiguration Memo column.
+  const [params, setParams] = useState<ActionParameter[]>([]);
 
   const refresh = useCallback(async () => {
     if (!envId || !agentId) { setItems(null); return; }
@@ -907,21 +1010,91 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
   }, [envId, agentId]);
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Reset the cached reference lists whenever the environment changes.
+  useEffect(() => { setFlows(null); setConnectors(null); setFlowGate(null); setConnectorGate(null); }, [envId]);
+
+  const loadFlows = useCallback(async () => {
+    if (!envId) return;
+    setFlowGate(null);
+    try {
+      const r = await fetch(`/api/powerplatform/flows?envId=${encodeURIComponent(envId)}`);
+      const j = await r.json();
+      if (!j.ok) { setFlowGate(j.error || 'Failed to load Power Automate flows'); setFlows([]); return; }
+      setFlows(j.flows || []);
+    } catch (e: any) { setFlowGate(e?.message || String(e)); setFlows([]); }
+  }, [envId]);
+
+  const loadConnectors = useCallback(async () => {
+    if (!envId) return;
+    setConnectorGate(null);
+    try {
+      const r = await fetch(`/api/powerplatform/connectors?envId=${encodeURIComponent(envId)}`);
+      const j = await r.json();
+      if (!j.ok) { setConnectorGate(j.error || 'Failed to load connectors'); setConnectors([]); return; }
+      setConnectors(j.connectors || []);
+    } catch (e: any) { setConnectorGate(e?.message || String(e)); setConnectors([]); }
+  }, [envId]);
+
+  // Lazily load the reference list the selected action type needs.
+  useEffect(() => {
+    if (!envId) return;
+    if (form.type === 'power-automate-flow' && flows === null) loadFlows();
+    if ((form.type === 'custom-connector' || form.type === 'connector') && connectors === null) loadConnectors();
+  }, [envId, form.type, flows, connectors, loadFlows, loadConnectors]);
+
+  // Connector choices filtered to match the action type (custom vs certified).
+  const connectorChoices = useMemo(() => {
+    const all = connectors || [];
+    if (form.type === 'custom-connector') return all.filter((c) => c.isCustomApi);
+    if (form.type === 'connector') return all.filter((c) => !c.isCustomApi);
+    return all;
+  }, [connectors, form.type]);
+
+  // A flow/connector reference is mandatory for the binding action types so we
+  // never POST an empty reference (a silent no-op bind). Prebuilt needs none.
+  const refOk =
+    form.type === 'power-automate-flow' ? !!form.flowId
+    : (form.type === 'custom-connector' || form.type === 'connector') ? !!form.connectorId
+    : true;
+
+  // Switching type clears any previously-picked reference so the payload only
+  // ever carries the reference that matches the selected type. Parameters are
+  // action-shaped, so reset them too.
+  const setType = useCallback((type: string) => {
+    setForm((f) => ({ ...f, type, connectorId: '', flowId: '' }));
+    setParams([]);
+  }, []);
+
+  // Parameter-mapping row helpers (structured edits, no hand-typed JSON).
+  const addParam = useCallback(() => {
+    setParams((p) => [...p, { name: '', direction: 'input', type: 'String', valueKind: 'dynamic', value: '' }]);
+  }, []);
+  const updateParam = useCallback((idx: number, patch: Partial<ActionParameter>) => {
+    setParams((p) => p.map((row, i) => (i === idx ? { ...row, ...patch } : row)));
+  }, []);
+  const removeParam = useCallback((idx: number) => {
+    setParams((p) => p.filter((_, i) => i !== idx));
+  }, []);
+
   const bind = useCallback(async () => {
-    if (!envId || !agentId || !form.name) return;
+    if (!envId || !agentId || !form.name || !refOk) return;
     setBusy(true); setError(null);
     try {
       const r = await fetch('/api/items/copilot-studio-action', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ envId, agentId, ...form }),
+        // Submit the structured parameter mapping with the bind. The action
+        // route + client persist it into msdyn_parameterconfiguration (or
+        // honest-gate with a 422 entity-check, surfaced via ErrorBar).
+        body: JSON.stringify({ envId, agentId, ...form, parameters: params }),
       });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'bind failed'); return; }
       setForm({ name: '', type: 'power-automate-flow', connectorId: '', flowId: '' });
+      setParams([]);
       await refresh();
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setBusy(false); }
-  }, [envId, agentId, form, refresh]);
+  }, [envId, agentId, form, params, refOk, refresh]);
 
   const remove = useCallback(async (aid: string) => {
     if (!envId) return;
@@ -932,7 +1105,13 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     } finally { setBusy(false); }
   }, [envId, refresh]);
 
-  if (!agentId) return <Caption1>Pick an agent to manage actions.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<Flow20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to bind actions — Power Automate flows, custom connectors, or prebuilt actions."
+    />
+  );
   return (
     <div className={s.formCol}>
       <ErrorBar error={error} hint={TENANT_HINT} />
@@ -942,28 +1121,191 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
         </Field>
         <Field label="Type">
           <Dropdown
-            value={form.type}
+            value={ACTION_TYPE_LABELS[form.type] || form.type}
             selectedOptions={[form.type]}
-            onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, type: d.optionValue! }))}
+            onOptionSelect={(_, d) => d.optionValue && setType(d.optionValue)}
           >
-            <Option value="power-automate-flow">Power Automate flow</Option>
-            <Option value="custom-connector">Custom connector</Option>
-            <Option value="prebuilt">Prebuilt</Option>
+            <Option value="power-automate-flow" text="Power Automate flow">Power Automate flow</Option>
+            <Option value="connector" text="Connector (certified)">Connector (certified)</Option>
+            <Option value="custom-connector" text="Custom connector">Custom connector</Option>
+            <Option value="prebuilt" text="Prebuilt action">Prebuilt action</Option>
           </Dropdown>
         </Field>
-        <Field label="Flow id" hint="Power Automate flow GUID (when type = power-automate-flow)">
-          <Input value={form.flowId} onChange={(_, d) => setForm((f) => ({ ...f, flowId: d.value }))} />
-        </Field>
-        <Field label="Connector id" hint="Custom connector resource id (when type = custom-connector)">
-          <Input value={form.connectorId} onChange={(_, d) => setForm((f) => ({ ...f, connectorId: d.value }))} />
-        </Field>
+        {form.type === 'power-automate-flow' && (
+          <Field label="Power Automate flow" required hint="Pick a cloud flow in this environment — its id is bound to the action (no hand-typed GUIDs).">
+            {flowGate && (
+              <MessageBar intent="warning">
+                <MessageBarBody><MessageBarTitle>Flows unavailable</MessageBarTitle>{flowGate}</MessageBarBody>
+              </MessageBar>
+            )}
+            <Dropdown
+              value={flows?.find((f) => f.name === form.flowId)?.displayName || ''}
+              selectedOptions={form.flowId ? [form.flowId] : []}
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, flowId: d.optionValue!, connectorId: '' }))}
+              placeholder={flows === null ? 'Loading flows…' : (flows.length === 0 ? 'No cloud flows in this environment' : 'Select a flow')}
+              disabled={!flows || flows.length === 0}
+            >
+              {(flows || []).map((f) => (
+                <Option key={f.name} value={f.name} text={f.displayName}>
+                  {f.displayName}{f.state ? ` · ${f.state}` : ''}
+                </Option>
+              ))}
+            </Dropdown>
+          </Field>
+        )}
+        {(form.type === 'custom-connector' || form.type === 'connector') && (
+          <Field
+            label={form.type === 'custom-connector' ? 'Custom connector' : 'Connector'}
+            required
+            hint="Pick a connector visible in this environment — its id is bound to the action (no hand-typed ids)."
+          >
+            {connectorGate && (
+              <MessageBar intent="warning">
+                <MessageBarBody><MessageBarTitle>Connectors unavailable</MessageBarTitle>{connectorGate}</MessageBarBody>
+              </MessageBar>
+            )}
+            <Dropdown
+              value={connectorChoices.find((c) => c.name === form.connectorId)?.displayName || ''}
+              selectedOptions={form.connectorId ? [form.connectorId] : []}
+              onOptionSelect={(_, d) => d.optionValue && setForm((f) => ({ ...f, connectorId: d.optionValue!, flowId: '' }))}
+              placeholder={connectors === null ? 'Loading connectors…' : (connectorChoices.length === 0 ? 'No matching connectors in this environment' : 'Select a connector')}
+              disabled={!connectors || connectorChoices.length === 0}
+            >
+              {connectorChoices.map((c) => (
+                <Option key={c.name} value={c.name} text={c.displayName}>
+                  {c.displayName}{c.tier ? ` · ${c.tier}` : ''}
+                </Option>
+              ))}
+            </Dropdown>
+          </Field>
+        )}
+        {form.type === 'prebuilt' && (
+          <Field label="Reference">
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Prebuilt actions need no flow/connector reference.
+            </Caption1>
+          </Field>
+        )}
+        {/* Inputs / outputs — the action's parameter mapping, mirroring Copilot
+            Studio's "Inputs / Outputs" surface (Learn: Manage topic inputs and
+            outputs). Structured rows only (no-freeform-config); submitted with
+            the bind and persisted as JSON in msdyn_parameterconfiguration. */}
+        <div style={{ gridColumn: '1 / -1', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 }}>
+          <Subtitle2 className={s.sectionHeader}>
+            <span className={s.sectionIcon}><Flow20Regular /></span>
+            Inputs / outputs ({params.length})
+          </Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Map this action&apos;s input and output parameters. For an input, choose how the agent fills it —
+            &quot;Dynamically fill&quot; lets the agent populate it from context, or &quot;Set as a value&quot; binds a
+            literal, an existing variable, or a Power Fx expression.
+          </Caption1>
+          {params.length > 0 && (
+            <Table size="small">
+              <TableHeader>
+                <TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell>
+                  <TableHeaderCell>Direction</TableHeaderCell>
+                  <TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Fill</TableHeaderCell>
+                  <TableHeaderCell>Value / binding</TableHeaderCell>
+                  <TableHeaderCell />
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {params.map((p, i) => {
+                  const isInput = p.direction === 'input';
+                  const setByValue = isInput && p.valueKind === 'value';
+                  return (
+                    <TableRow key={i}>
+                      <TableCell>
+                        <Input
+                          size="small"
+                          aria-label="Parameter name"
+                          placeholder="e.g. accountId"
+                          value={p.name}
+                          onChange={(_, d) => updateParam(i, { name: d.value })}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Dropdown
+                          size="small"
+                          aria-label="Direction"
+                          value={isInput ? 'Input' : 'Output'}
+                          selectedOptions={[p.direction]}
+                          onOptionSelect={(_, d) => d.optionValue && updateParam(i, { direction: d.optionValue as 'input' | 'output' })}
+                        >
+                          <Option value="input" text="Input">Input</Option>
+                          <Option value="output" text="Output">Output</Option>
+                        </Dropdown>
+                      </TableCell>
+                      <TableCell>
+                        <Dropdown
+                          size="small"
+                          aria-label="Data type"
+                          value={p.type}
+                          selectedOptions={[p.type]}
+                          onOptionSelect={(_, d) => d.optionValue && updateParam(i, { type: d.optionValue })}
+                        >
+                          {PARAM_DATA_TYPES.map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
+                        </Dropdown>
+                      </TableCell>
+                      <TableCell>
+                        <Dropdown
+                          size="small"
+                          aria-label="How will the agent fill this input?"
+                          disabled={!isInput}
+                          value={!isInput ? '—' : (p.valueKind === 'value' ? 'Set as a value' : 'Dynamically fill')}
+                          selectedOptions={[p.valueKind || 'dynamic']}
+                          onOptionSelect={(_, d) => d.optionValue && updateParam(i, { valueKind: d.optionValue as 'dynamic' | 'value' })}
+                        >
+                          <Option value="dynamic" text="Dynamically fill">Dynamically fill</Option>
+                          <Option value="value" text="Set as a value">Set as a value</Option>
+                        </Dropdown>
+                      </TableCell>
+                      <TableCell>
+                        <Input
+                          size="small"
+                          aria-label="Value or binding"
+                          placeholder={setByValue ? 'literal, variable, or Power Fx' : 'agent-filled'}
+                          disabled={!setByValue}
+                          value={p.value || ''}
+                          onChange={(_, d) => updateParam(i, { value: d.value })}
+                        />
+                      </TableCell>
+                      <TableCell>
+                        <Button
+                          size="small"
+                          icon={<Delete20Regular />}
+                          appearance="subtle"
+                          aria-label="Remove parameter"
+                          onClick={() => removeParam(i)}
+                        />
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+          <div>
+            <Button size="small" icon={<Add20Regular />} appearance="outline" onClick={addParam}>Add parameter</Button>
+          </div>
+        </div>
         <div style={{ alignSelf: 'end' }}>
-          <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !form.name} onClick={bind}>Bind action</Button>
+          <Button appearance="primary" icon={<Add20Regular />} disabled={busy || !form.name || !refOk} onClick={bind}>Bind action</Button>
         </div>
       </div>
-      <Subtitle2>Bound actions ({items?.length ?? 0})</Subtitle2>
-      {items === null ? <Spinner size="tiny" /> : items.length === 0 ? (
-        <Caption1>No actions bound to this agent yet.</Caption1>
+      <Subtitle2 className={s.sectionHeader}>
+        <span className={s.sectionIcon}><Flow20Regular /></span>
+        Bound actions ({items?.length ?? 0})
+      </Subtitle2>
+      {items === null ? <Spinner size="tiny" label="Loading actions…" labelPosition="after" /> : items.length === 0 ? (
+        <EmptyState
+          icon={<Flow20Regular />}
+          title="No actions bound yet"
+          body="Let this agent take action by binding a Power Automate flow, a custom connector, or a prebuilt action using the form above."
+        />
       ) : (
         <Table size="small">
           <TableHeader>
@@ -971,6 +1313,7 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
               <TableHeaderCell>Name</TableHeaderCell>
               <TableHeaderCell>Type</TableHeaderCell>
               <TableHeaderCell>Reference</TableHeaderCell>
+              <TableHeaderCell>Parameters</TableHeaderCell>
               <TableHeaderCell>State</TableHeaderCell>
               <TableHeaderCell />
             </TableRow>
@@ -980,7 +1323,20 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
               <TableRow key={a.id}>
                 <TableCell>{a.name}</TableCell>
                 <TableCell><Badge appearance="outline">{a.type || '—'}</Badge></TableCell>
-                <TableCell>{a.flowId || a.connectorId || '—'}</TableCell>
+                <TableCell><span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{a.flowId || a.connectorId || '—'}</span></TableCell>
+                <TableCell>
+                  {a.parameters && a.parameters.length > 0 ? (
+                    <div className={s.tagRow}>
+                      <Badge appearance="outline">{a.parameters.length}</Badge>
+                      {a.parameters.slice(0, 4).map((p, i) => (
+                        <Badge key={i} size="small" appearance="outline" color={p.direction === 'output' ? 'informative' : 'brand'}>
+                          {p.name || '(unnamed)'}
+                        </Badge>
+                      ))}
+                      {a.parameters.length > 4 && <Caption1>+{a.parameters.length - 4}</Caption1>}
+                    </div>
+                  ) : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>}
+                </TableCell>
                 <TableCell>
                   <Badge appearance="outline" color={a.enabled ? 'success' : 'severe'}>{a.enabled ? 'Enabled' : 'Disabled'}</Badge>
                 </TableCell>
@@ -1039,7 +1395,7 @@ const CHANNEL_TYPES: { type: string; label: string; description: string }[] = [
   { type: 'direct-line', label: 'Direct Line', description: 'REST/Websocket endpoint for custom clients.' },
   { type: 'slack', label: 'Slack', description: 'Publish to a Slack workspace via the Bot Framework Slack connector.' },
   { type: 'facebook', label: 'Facebook', description: 'Publish to a Facebook Page via Messenger.' },
-  { type: 'custom', label: 'Custom channel', description: 'Adapter-backed custom channel; provide raw JSON config.' },
+  { type: 'custom', label: 'Custom channel', description: 'Relay to a mobile or custom app via a Direct Line secret/endpoint, or an Azure Bot Service relay bot with a custom adapter — not a Dataverse channel insert.' },
 ];
 
 function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agentId: string; refreshSignal?: number }) {
@@ -1096,7 +1452,13 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
     finally { setBusy(null); }
   }, [envId, agentId, configText, refresh]);
 
-  if (!agentId) return <Caption1>Pick an agent to publish channels.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<Channel20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to publish it to channels — Teams, web chat, Direct Line, Slack, Facebook, or a custom channel."
+    />
+  );
   const byType = new Map((items || []).map((c) => [c.type, c]));
   return (
     <div className={s.formCol}>
@@ -1113,7 +1475,7 @@ function ChannelsPanel({ envId, agentId, refreshSignal }: { envId: string; agent
                   : <Badge appearance="outline">Not published</Badge>}
               </div>
               <Caption1>{ct.description}</Caption1>
-              {existing?.embedUrl && <Caption1>Embed: <code>{existing.embedUrl}</code></Caption1>}
+              {existing?.embedUrl && <Caption1>Embed: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{existing.embedUrl}</code></Caption1>}
               {gates[ct.type] && (
                 <MessageBar intent="warning">
                   <MessageBarBody>
@@ -1254,7 +1616,13 @@ function TestChatPanel({ agentId }: { agentId: string }) {
     finally { setSending(false); }
   }, [token, conversationId, draft, poll]);
 
-  if (!agentId) return <Caption1>Pick an agent to open the test chat.</Caption1>;
+  if (!agentId) return (
+    <EmptyState
+      icon={<Chat20Regular />}
+      title="Save the agent to test it"
+      body="Once an agent is selected and saved, connect over Bot Framework Direct Line to chat with it — the same channel the in-product test panel uses."
+    />
+  );
   return (
     <div className={s.chatWrap}>
       <Caption1>
@@ -1265,7 +1633,7 @@ function TestChatPanel({ agentId }: { agentId: string }) {
         <MessageBar intent={error.includes('Direct Line secret') ? 'warning' : 'error'}>
           <MessageBarBody>
             <MessageBarTitle>{error.includes('Direct Line secret') ? 'Test chat not configured' : 'Test chat error'}</MessageBarTitle>
-            {error}{hint && <div style={{ marginTop: 4 }}><Caption1>{hint}</Caption1></div>}
+            {error}{hint && <div style={{ marginTop: tokens.spacingVerticalXXS }}><Caption1>{hint}</Caption1></div>}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -1299,14 +1667,30 @@ function TestChatPanel({ agentId }: { agentId: string }) {
 }
 
 // ============================================================
-// CopilotAnalyticsEditor
+// AnalyticsPanel + CopilotAnalyticsEditor
 // ============================================================
 
-export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id: string }) {
+/**
+ * AnalyticsPanel — KPI cards + daily-session bar chart over the existing
+ * Azure-native analytics route (/api/items/copilot-studio-analytics/[agentId]).
+ * Extracted verbatim from CopilotAnalyticsEditor's body so it can be reused as
+ * the Agent editor's "Analytics" tab without rewriting any behavior. Owns its
+ * own `days`/`data`/`error`/`loading` state and the in-panel window toolbar.
+ *
+ * `days`/`onDaysChange` are optional: when supplied the window is controlled by
+ * the caller (the standalone editor lifts it so its ribbon timeframe buttons
+ * still drive the fetch); when omitted the panel manages the window internally
+ * (the embedded Agent-editor tab uses this uncontrolled mode).
+ */
+function AnalyticsPanel({
+  envId, agentId, days: daysProp, onDaysChange,
+}: { envId: string; agentId: string; days?: number; onDaysChange?: (d: number) => void }) {
   const s = useStyles();
-  const [envId, setEnvId] = useState('');
-  const [agentId, setAgentId] = useState('');
-  const [days, setDays] = useState(30);
+  const [daysState, setDaysState] = useState(30);
+  const days = daysProp ?? daysState;
+  const setDays = useCallback((d: number) => {
+    if (onDaysChange) onDaysChange(d); else setDaysState(d);
+  }, [onDaysChange]);
   const [data, setData] = useState<Analytics | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1326,8 +1710,86 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
 
   const maxDaily = useMemo(() => Math.max(1, ...(data?.daily || []).map((d) => d.sessions)), [data]);
 
-  // Wire the timeframe ribbon to the inline `days` state. Each window button
-  // sets the days count, which drives the analytics fetch via `refresh`.
+  if (!agentId) return (
+    <EmptyState
+      icon={<DataBarVertical20Regular />}
+      title="Select an agent"
+      body="Pick an environment and agent to view conversation KPIs — sessions, resolution/escalation rates, CSAT, and a daily-session chart."
+    />
+  );
+  return (
+    <div className={s.formCol}>
+      <div className={s.toolbar}>
+        <Caption1>Window:</Caption1>
+        {[7, 30, 90].map((d) => (
+          <Button key={d} size="small" appearance={d === days ? 'primary' : 'outline'} onClick={() => setDays(d)}>{d}d</Button>
+        ))}
+        <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={refresh} disabled={loading}>Refresh</Button>
+      </div>
+      <ErrorBar error={error} hint={TENANT_HINT} />
+      {loading && <Spinner size="small" label="Loading analytics…" labelPosition="after" />}
+      {/* H3 — when no real analytics backend produced data, show an honest
+          gate instead of fabricated all-zero KPI tiles. */}
+      {data && !data.available && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>Analytics backend not available</MessageBarTitle>
+            {data.gateReason ||
+              'No measured telemetry was returned for this agent/window. ' +
+              'Conversation KPIs require the Dataverse session/transcript tables + Application Insights pipeline.'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {data && data.available && (
+        <>
+          <div className={s.kpiGrid}>
+            <div className={s.kpi}>
+              <Caption1>Sessions ({data.windowDays}d)</Caption1>
+              <div className={s.kpiValue}>{(data.sessions ?? 0).toLocaleString()}</div>
+            </div>
+            <div className={s.kpi}>
+              <Caption1>Resolved</Caption1>
+              <div className={s.kpiValue}>{(data.resolvedSessions ?? 0).toLocaleString()}</div>
+              {data.resolutionRate !== undefined && <Caption1>{(data.resolutionRate * 100).toFixed(1)}% resolution rate</Caption1>}
+            </div>
+            <div className={s.kpi}>
+              <Caption1>Escalated</Caption1>
+              <div className={s.kpiValue}>{(data.escalatedSessions ?? 0).toLocaleString()}</div>
+              {data.escalationRate !== undefined && <Caption1>{(data.escalationRate * 100).toFixed(1)}% escalation rate</Caption1>}
+            </div>
+            <div className={s.kpi}>
+              <Caption1>CSAT</Caption1>
+              <div className={s.kpiValue}>{data.satisfactionScore !== undefined ? data.satisfactionScore.toFixed(2) : '—'}</div>
+            </div>
+          </div>
+          <Subtitle2 className={s.sectionHeader}>
+            <span className={s.sectionIcon}><DataBarVertical20Regular /></span>
+            Daily sessions
+          </Subtitle2>
+          {(data.daily && data.daily.length > 0) ? (
+            <div className={s.spark} aria-label="Daily session bar chart">
+              {data.daily.map((d, i) => (
+                <div key={i} className={s.bar} style={{ height: `${(d.sessions / maxDaily) * 100}%` }} title={`${d.date}: ${d.sessions}`} />
+              ))}
+            </div>
+          ) : (
+            <Caption1>No daily data returned for this window.</Caption1>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const s = useStyles();
+  const [envId, setEnvId] = useState('');
+  const [agentId, setAgentId] = useState('');
+  const [days, setDays] = useState(30);
+
+  // Wire the timeframe ribbon to the lifted `days` state. Each window button
+  // sets the days count, which drives the analytics fetch inside AnalyticsPanel
+  // via its controlled `days`/`onDaysChange` props.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [{ label: 'Window', actions: [
       { label: '7d', onClick: () => setDays(7) },
@@ -1345,61 +1807,7 @@ export function CopilotAnalyticsEditor({ item, id }: { item: FabricItemType; id:
         <div className={s.pad}>
           <EnvironmentPicker value={envId} onChange={(v) => { setEnvId(v); setAgentId(''); }} />
           <AgentPicker envId={envId} value={agentId} onChange={setAgentId} />
-          <div className={s.toolbar}>
-            <Caption1>Window:</Caption1>
-            {[7, 30, 90].map((d) => (
-              <Button key={d} size="small" appearance={d === days ? 'primary' : 'outline'} onClick={() => setDays(d)}>{d}d</Button>
-            ))}
-            <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={refresh} disabled={loading}>Refresh</Button>
-          </div>
-          <ErrorBar error={error} hint={TENANT_HINT} />
-          {loading && <Spinner size="small" label="Loading analytics…" labelPosition="after" />}
-          {/* H3 — when no real analytics backend produced data, show an honest
-              gate instead of fabricated all-zero KPI tiles. */}
-          {data && !data.available && (
-            <MessageBar intent="warning">
-              <MessageBarBody>
-                <MessageBarTitle>Analytics backend not available</MessageBarTitle>
-                {data.gateReason ||
-                  'No measured telemetry was returned for this agent/window. ' +
-                  'Conversation KPIs require the Dataverse session/transcript tables + Application Insights pipeline.'}
-              </MessageBarBody>
-            </MessageBar>
-          )}
-          {data && data.available && (
-            <>
-              <div className={s.kpiGrid}>
-                <div className={s.kpi}>
-                  <Caption1>Sessions ({data.windowDays}d)</Caption1>
-                  <div className={s.kpiValue}>{(data.sessions ?? 0).toLocaleString()}</div>
-                </div>
-                <div className={s.kpi}>
-                  <Caption1>Resolved</Caption1>
-                  <div className={s.kpiValue}>{(data.resolvedSessions ?? 0).toLocaleString()}</div>
-                  {data.resolutionRate !== undefined && <Caption1>{(data.resolutionRate * 100).toFixed(1)}% resolution rate</Caption1>}
-                </div>
-                <div className={s.kpi}>
-                  <Caption1>Escalated</Caption1>
-                  <div className={s.kpiValue}>{(data.escalatedSessions ?? 0).toLocaleString()}</div>
-                  {data.escalationRate !== undefined && <Caption1>{(data.escalationRate * 100).toFixed(1)}% escalation rate</Caption1>}
-                </div>
-                <div className={s.kpi}>
-                  <Caption1>CSAT</Caption1>
-                  <div className={s.kpiValue}>{data.satisfactionScore !== undefined ? data.satisfactionScore.toFixed(2) : '—'}</div>
-                </div>
-              </div>
-              <Subtitle2>Daily sessions</Subtitle2>
-              {(data.daily && data.daily.length > 0) ? (
-                <div className={s.spark} aria-label="Daily session bar chart">
-                  {data.daily.map((d, i) => (
-                    <div key={i} className={s.bar} style={{ height: `${(d.sessions / maxDaily) * 100}%` }} title={`${d.date}: ${d.sessions}`} />
-                  ))}
-                </div>
-              ) : (
-                <Caption1>No daily data returned for this window.</Caption1>
-              )}
-            </>
-          )}
+          <AnalyticsPanel envId={envId} agentId={agentId} days={days} onDaysChange={setDays} />
         </div>
       }
     />
@@ -1479,10 +1887,20 @@ export function CopilotTemplateLibraryEditor({ item, id }: { item: FabricItemTyp
           <EnvironmentPicker value={envId} onChange={setEnvId} label="Target environment" />
           <ErrorBar error={error} hint={TENANT_HINT} />
           {result && <MessageBar intent="success"><MessageBarBody><MessageBarTitle>Template instantiated</MessageBarTitle>{result.msg}</MessageBarBody></MessageBar>}
-          {templates === null ? <Spinner size="small" label="Loading templates…" labelPosition="after" /> : (
+          {templates === null ? <Spinner size="small" label="Loading templates…" labelPosition="after" /> : templates.length === 0 ? (
+            <EmptyState
+              icon={<Library20Regular />}
+              title="No templates available"
+              body="The CSA template library is empty for this deployment. Templates are seeded into Cosmos — check the catalog seed or refresh."
+              primaryAction={{ label: 'Refresh', onClick: refresh, appearance: 'outline' }}
+            />
+          ) : (
             byCategory.map(([cat, tmpls]) => (
               <div key={cat} className={s.formCol}>
-                <Subtitle2>{cat}</Subtitle2>
+                <Subtitle2 className={s.sectionHeader}>
+                  <span className={s.sectionIcon}><Library20Regular /></span>
+                  {cat}
+                </Subtitle2>
                 <div className={s.cardGrid}>
                   {tmpls.map((t) => (
                     <div key={t.id} className={s.card}>

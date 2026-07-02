@@ -665,6 +665,196 @@ export async function deleteDataFlow(name: string): Promise<void> {
 }
 
 // ============================================================
+// Data flow debug sessions — the Azure-native backend for the Mapping Data
+// Flow designer's live "Data preview" (the ADF Studio debug toggle). A debug
+// session spins up a short-lived Spark cluster on a Managed IR, accepts an
+// in-memory data-flow package (the flow + its referenced datasets / linked
+// services), and runs preview queries against any stream — the SAME thing
+// Fabric's data-flow preview does, but on plain ADF (no Fabric).
+//
+// Real ARM REST (Microsoft.DataFactory/factories, api-version 2018-06-01),
+// grounded in @azure/arm-datafactory DataFlowDebugSessions + the Az.DataFactory
+// Start/Add/Invoke/Stop cmdlet sequence:
+//   1. createDataFlowDebugSession  → long-running (202) → { sessionId }
+//   2. addDataFlowToDebugSession   → { jobVersion }
+//   3. executeDataFlowDebugCommand → long-running (202) → { status, data }
+//        where `data` is a JSON string { schema, data:[[...]] }
+//   4. deleteDataFlowDebugSession  (stop / release the cluster)
+//
+// createDataFlowDebugSession and executeDataFlowDebugCommand are async ARM
+// operations: the initial POST returns 202 with a Location (or
+// Azure-AsyncOperation) header that we poll via `pollAdfLro` until the
+// operation reaches a terminal state and the final result body is available.
+//
+// No mocks (per no-vaporware.md): preview rows come straight from the live
+// debug session. When the factory env vars are missing the route honest-gates
+// via `dataFlowDebugConfigGate()` instead of fabricating rows.
+// ============================================================
+
+/**
+ * Honest config gate for the data-flow debug path. The debug session lives
+ * under the same env-pinned factory as every other ADF op, so it needs exactly
+ * the same three env vars — reuse {@link adfConfigGate}. Returns the missing
+ * var or null when fully configured.
+ */
+export function dataFlowDebugConfigGate(): { missing: string } | null {
+  return adfConfigGate();
+}
+
+/**
+ * Follow an ADF long-running 202 response via its Location (or
+ * Azure-AsyncOperation) header, polling with GET until the operation reaches a
+ * terminal state, then return the final Response carrying the result body.
+ * Non-202 responses pass straight through (synchronous completions). Bounded by
+ * a max attempt count so a stuck operation surfaces as an honest failure rather
+ * than hanging forever. Uses `callRaw` (raw UAMI ARM token, no self-heal — the
+ * polling URL ARM hands back is already authoritative).
+ */
+async function pollAdfLro(res: Response): Promise<Response> {
+  let current = res;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (current.status !== 202) return current;
+    const pollUrl =
+      current.headers.get('location') || current.headers.get('azure-asyncoperation');
+    if (!pollUrl) return current;
+    const retryAfter = Number(current.headers.get('retry-after'));
+    const waitSec = Math.min(
+      Math.max(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter : 2, 1),
+      15,
+    );
+    await new Promise((r) => setTimeout(r, waitSec * 1000));
+    current = await callRaw(pollUrl, { method: 'GET' });
+  }
+  return current;
+}
+
+/**
+ * (1) Start a data-flow debug session — provisions the short-lived Spark
+ * cluster. Long-running: POSTs `createDataFlowDebugSession`, follows the 202 to
+ * completion, and returns the assigned `sessionId` (used by every later call).
+ * Defaults mirror ADF Studio: General compute, 8 cores, 60-minute TTL.
+ */
+export async function createDataFlowDebugSession(opts?: {
+  timeToLiveMinutes?: number;
+  coreCount?: number;
+  computeType?: string;
+}): Promise<{ sessionId: string }> {
+  const res = await call(`${base()}/createDataFlowDebugSession?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      computeType: opts?.computeType || 'General',
+      coreCount: opts?.coreCount ?? 8,
+      timeToLive: opts?.timeToLiveMinutes ?? 60,
+    }),
+  });
+  const final = await pollAdfLro(res);
+  const out = await jsonOrThrow<{ status?: string; sessionId?: string }>(
+    final,
+    'createDataFlowDebugSession',
+  );
+  if (!out.sessionId) {
+    throw new Error(
+      `createDataFlowDebugSession returned no sessionId (status=${out.status ?? 'unknown'}).`,
+    );
+  }
+  return { sessionId: out.sessionId };
+}
+
+/**
+ * (2) Add the data-flow package to a running debug session — the in-memory
+ * flow definition plus every dataset / linked service it references and
+ * optional `debugSettings` (source row limits, parameters). Returns the
+ * `jobVersion` the session assigns to this package revision.
+ */
+export async function addDataFlowToDebugSession(req: {
+  sessionId: string;
+  dataFlow: AdfDataFlow;
+  datasets?: AdfDataset[];
+  linkedServices?: AdfLinkedService[];
+  debugSettings?: unknown;
+}): Promise<{ jobVersion?: string }> {
+  const body: Record<string, unknown> = {
+    sessionId: req.sessionId,
+    dataFlow: req.dataFlow,
+  };
+  if (req.datasets) body.datasets = req.datasets;
+  if (req.linkedServices) body.linkedServices = req.linkedServices;
+  if (req.debugSettings !== undefined) body.debugSettings = req.debugSettings;
+  const res = await call(`${base()}/addDataFlowToDebugSession?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify(body),
+  });
+  const final = await pollAdfLro(res);
+  return jsonOrThrow<{ jobVersion?: string }>(final, 'addDataFlowToDebugSession');
+}
+
+/**
+ * (3) Execute a debug command against an added package — defaults to
+ * `executePreviewQuery`, which returns a data preview for `streamName` (a
+ * transform/source/sink name in the flow) capped at `rowLimits` (default 100,
+ * ADF Studio's preview cap). Long-running: follows the 202, then JSON-parses
+ * the command result's `data` string into `{ schema, data:[[...]] }` and maps
+ * it to `{ schema, rows }`. Real preview rows from the live session — never a
+ * mock. Some api-versions nest the payload under an `output` key; both shapes
+ * are normalized.
+ */
+export async function executeDataFlowDebugCommand(req: {
+  sessionId: string;
+  command?: string;
+  streamName: string;
+  rowLimits?: number;
+}): Promise<{ schema?: string; rows: unknown[][] }> {
+  const res = await call(`${base()}/executeDataFlowDebugCommand?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId: req.sessionId,
+      command: req.command || 'executePreviewQuery',
+      commandPayload: {
+        streamName: req.streamName,
+        rowLimits: req.rowLimits ?? 100,
+      },
+    }),
+  });
+  const final = await pollAdfLro(res);
+  const out = await jsonOrThrow<{ status?: string; data?: string }>(
+    final,
+    'executeDataFlowDebugCommand',
+  );
+  let schema: string | undefined;
+  let rows: unknown[][] = [];
+  if (out.data) {
+    try {
+      let parsed = JSON.parse(out.data) as { output?: unknown; schema?: unknown; data?: unknown };
+      // Az.DataFactory's cmdlet output nests the payload under `output`; the raw
+      // REST shape carries { schema, data } at the top level. Unwrap when present.
+      if (parsed && typeof parsed === 'object' && parsed.output && typeof parsed.output === 'object') {
+        parsed = parsed.output as typeof parsed;
+      }
+      schema = typeof parsed.schema === 'string' ? parsed.schema : undefined;
+      rows = Array.isArray(parsed.data) ? (parsed.data as unknown[][]) : [];
+    } catch {
+      // Non-JSON `data` payload — return no rows rather than fabricate any.
+      rows = [];
+    }
+  }
+  return { schema, rows };
+}
+
+/**
+ * (4) Stop a data-flow debug session — releases the Spark cluster. Idempotent /
+ * best-effort: a 200/202/204 (or an already-gone session) is success.
+ */
+export async function deleteDataFlowDebugSession(sessionId: string): Promise<void> {
+  const r = await call(`${base()}/deleteDataFlowDebugSession?api-version=${API}`, {
+    method: 'POST',
+    body: JSON.stringify({ sessionId }),
+  });
+  if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
+    throw new Error(`deleteDataFlowDebugSession failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
 // Power Query (Wrangling) Data Flows — the Azure-native backend for
 // Dataflow Gen2 (Power Query Online). The Fabric "RefreshDataflow"
 // activity does not exist in ADF's ARM schema; ADF instead models a
@@ -861,6 +1051,8 @@ export interface AdfLinkedService {
     annotations?: unknown[];
     parameters?: Record<string, { type: string; defaultValue?: unknown }>;
     typeProperties?: Record<string, unknown>;
+    /** Integration-runtime binding (SHIR / managed VNet IR) for the linked service. */
+    connectVia?: { referenceName: string; type: string; parameters?: Record<string, unknown> };
   };
 }
 
@@ -889,6 +1081,29 @@ export async function deleteLinkedService(name: string): Promise<void> {
   if (!r.ok && r.status !== 200 && r.status !== 204) {
     throw new Error(`deleteLinkedService failed ${r.status}: ${await r.text()}`);
   }
+}
+
+/**
+ * Validate a linked-service spec against the REAL factory before the user
+ * commits it. ADF has no synchronous "test connectivity" REST for an UNSAVED
+ * linked service (connectivity tests run through an IR data-plane endpoint), so
+ * this does the honest next best thing: it PUTs a transient linked service
+ * under a temp name and immediately deletes it. The PUT is a real ARM call that
+ * rejects a malformed `typeProperties` shape, an unknown connector `type`, or a
+ * spec the factory can't accept — surfacing those as a real error — and the
+ * round-trip also proves the factory is reachable with the Console identity's
+ * token. Returns `{ ok: true }` on a clean accept; throws with the ARM error
+ * text otherwise. No mocks (per no-vaporware.md).
+ */
+export async function testLinkedService(spec: AdfLinkedService): Promise<{ ok: true }> {
+  const tempName = `loom_test_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    await upsertLinkedService(tempName, { name: tempName, properties: spec.properties });
+  } finally {
+    // Best-effort cleanup — never let a failed delete mask the validation result.
+    try { await deleteLinkedService(tempName); } catch { /* leave no-op */ }
+  }
+  return { ok: true };
 }
 
 // ============================================================
@@ -1002,6 +1217,25 @@ export async function deleteIntegrationRuntime(name: string): Promise<void> {
   if (!r.ok && r.status !== 200 && r.status !== 204) {
     throw new Error(`deleteIntegrationRuntime failed ${r.status}: ${await r.text()}`);
   }
+}
+
+export interface AdfIntegrationRuntimeAuthKeys { authKey1?: string; authKey2?: string }
+
+/**
+ * Retrieve the registration ("install") keys for a Self-Hosted IR. These are
+ * the keys an operator pastes into the Microsoft Integration Runtime gateway
+ * installed on the on-prem/VM node to register it with this factory.
+ *
+ * ADF management-plane action:
+ *   POST .../integrationruntimes/{name}/listAuthKeys
+ *
+ * Grounded in @azure/arm-datafactory IntegrationRuntimes.listAuthKeys →
+ * IntegrationRuntimeAuthKeys { authKey1, authKey2 }. The keys are secrets — the
+ * BFF returns them only to an authenticated session and never persists them.
+ */
+export async function listIntegrationRuntimeAuthKeys(name: string): Promise<AdfIntegrationRuntimeAuthKeys> {
+  const r = await call(`${base()}/integrationruntimes/${encodeURIComponent(name)}/listAuthKeys?api-version=${API}`, { method: 'POST' });
+  return jsonOrThrow<AdfIntegrationRuntimeAuthKeys>(r, `listIntegrationRuntimeAuthKeys(${name})`);
 }
 
 /**
@@ -1399,6 +1633,182 @@ export async function previewAdfCdcTarget(
 }
 
 // ============================================================
+// Global parameters (Microsoft.DataFactory/factories/globalParameters)
+//
+// ADF stores every factory-level global parameter in a SINGLE child resource
+// conventionally named `default`, whose `properties` is the full
+// { paramName -> { type, value } } dictionary. `type` is one of
+// Bool|String|Int|Float|Object|Array. This is a pure ADF ARM resource
+// (api-version 2018-06-01) — no Fabric dependency, works Commercial + Gov.
+//
+// The editor manages add/edit/remove on the whole dict client-side and PUTs
+// the entire set in one call — exactly how ADF Studio's Manage → Global
+// parameters publish works. Grounded in the ADF REST reference
+// (GlobalParameters_CreateOrUpdate) + @azure/arm-datafactory FactoryProperties.
+// ============================================================
+
+export type AdfGlobalParameterType = 'Bool' | 'String' | 'Int' | 'Float' | 'Object' | 'Array';
+
+export interface AdfGlobalParameterSpec {
+  /** Global Parameter type — Bool | String | Int | Float | Object | Array. */
+  type: AdfGlobalParameterType | string;
+  /** Value of the parameter (shape depends on `type`). */
+  value: unknown;
+}
+
+/** All global parameters live under one child resource conventionally named `default`. */
+const GLOBAL_PARAMS_RESOURCE = 'default';
+
+/**
+ * Read the factory's global parameters (the { name -> { type, value } } dict
+ * from the `default` globalParameters child resource). Returns {} when no
+ * global parameters are defined (the resource 404s) rather than throwing —
+ * so the navigator renders an empty group instead of an error.
+ */
+export async function getGlobalParameters(): Promise<Record<string, AdfGlobalParameterSpec>> {
+  const r = await call(`${base()}/globalParameters/${GLOBAL_PARAMS_RESOURCE}?api-version=${API}`);
+  if (r.status === 404) return {};
+  const body = await jsonOrThrow<{ properties?: Record<string, AdfGlobalParameterSpec> }>(r, 'getGlobalParameters');
+  return body.properties || {};
+}
+
+/**
+ * Replace the factory's ENTIRE global-parameter set (idempotent PUT of the
+ * `default` globalParameters resource). The editor supplies the full dict after
+ * applying add/edit/remove; PUTting it replaces the set (an empty dict clears
+ * all global parameters). Returns the persisted dict. Real ARM REST — no mocks.
+ */
+export async function updateGlobalParameters(
+  params: Record<string, AdfGlobalParameterSpec>,
+): Promise<Record<string, AdfGlobalParameterSpec>> {
+  const r = await call(`${base()}/globalParameters/${GLOBAL_PARAMS_RESOURCE}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties: params }),
+  });
+  const body = await jsonOrThrow<{ properties?: Record<string, AdfGlobalParameterSpec> }>(r, 'updateGlobalParameters');
+  return body.properties || {};
+}
+
+// ============================================================
+// Managed Virtual Network + Managed Private Endpoints
+// (Microsoft.DataFactory/factories/managedVirtualNetworks/{mvnet}/managedPrivateEndpoints)
+//
+// A managed private endpoint lets the factory's Managed VNet Azure IR reach a
+// PE-locked data source (ADLS, Azure SQL, Key Vault, …) privately — the ADF
+// analogue of the Purview managed-VNet PE path. ADF's managed VNet is
+// conventionally named `default`; managed PEs live under it. A newly-created PE
+// lands in a **Pending** connection state — the OWNER of the target resource
+// must APPROVE the private-endpoint connection (a separate ARM action on the
+// source) before traffic can traverse it. Loom surfaces that as a next step; it
+// does not auto-approve. Pure ADF ARM (2018-06-01), no Fabric. Grounded in the
+// ADF REST reference + @azure/arm-datafactory ManagedPrivateEndpoints.
+// ============================================================
+
+/** ADF's managed virtual network is conventionally named `default`. */
+export const DEFAULT_MANAGED_VNET = 'default';
+
+export interface AdfManagedVnet {
+  name: string;
+  id?: string;
+}
+
+export interface AdfManagedPrivateEndpoint {
+  name: string;
+  /** ARM resource id of the private-link resource the PE targets. */
+  privateLinkResourceId?: string;
+  /** Sub-resource group id (e.g. `dfs`/`blob` for ADLS Gen2, `sqlServer` for Azure SQL). */
+  groupId?: string;
+  provisioningState?: string;
+  /** Owner-reported approval status: Pending | Approved | Rejected | Disconnected. */
+  connectionStatus?: string;
+  fqdns?: string[];
+  isReserved?: boolean;
+}
+
+function mapManagedPe(raw: any): AdfManagedPrivateEndpoint {
+  return {
+    name: raw?.name,
+    privateLinkResourceId: raw?.properties?.privateLinkResourceId,
+    groupId: raw?.properties?.groupId,
+    provisioningState: raw?.properties?.provisioningState,
+    connectionStatus: raw?.properties?.connectionState?.status,
+    fqdns: raw?.properties?.fqdns,
+    isReserved: raw?.properties?.isReserved,
+  };
+}
+
+/** List the managed virtual networks on the env-pinned factory (usually 0 or 1 — `default`). */
+export async function listManagedVnets(): Promise<AdfManagedVnet[]> {
+  const r = await call(`${base()}/managedVirtualNetworks?api-version=${API}`);
+  if (r.status === 404) return [];
+  const body = await jsonOrThrow<{ value?: Array<{ name: string; id?: string }> }>(r, 'listManagedVnets');
+  return (body.value || []).map((v) => ({ name: v.name, id: v.id }));
+}
+
+/**
+ * Create (idempotent PUT) the factory's managed virtual network — the
+ * prerequisite for managed private endpoints. Safe to call when it already
+ * exists. Returns the managed VNet. Real ARM REST.
+ */
+export async function ensureManagedVnet(mvnet: string = DEFAULT_MANAGED_VNET): Promise<AdfManagedVnet> {
+  const r = await call(`${base()}/managedVirtualNetworks/${encodeURIComponent(mvnet)}?api-version=${API}`, {
+    method: 'PUT',
+    body: JSON.stringify({ properties: {} }),
+  });
+  const raw = await jsonOrThrow<{ name?: string; id?: string }>(r, `ensureManagedVnet(${mvnet})`);
+  return { name: raw.name || mvnet, id: raw.id };
+}
+
+/** List the managed private endpoints in a managed VNet (empty when the VNet doesn't exist). */
+export async function listManagedPrivateEndpoints(
+  mvnet: string = DEFAULT_MANAGED_VNET,
+): Promise<AdfManagedPrivateEndpoint[]> {
+  const r = await call(`${base()}/managedVirtualNetworks/${encodeURIComponent(mvnet)}/managedPrivateEndpoints?api-version=${API}`);
+  if (r.status === 404) return [];
+  const body = await jsonOrThrow<{ value?: any[] }>(r, 'listManagedPrivateEndpoints');
+  return (body.value || []).map(mapManagedPe);
+}
+
+/**
+ * Create (idempotent PUT) a managed private endpoint to a target resource.
+ * `privateLinkResourceId` is the ARM id of the source (e.g. the DLZ lake's
+ * storage account) and `groupId` its sub-resource (`dfs`/`blob`, `sqlServer`,
+ * `vault`, …). The PE is created **Pending** — the resource owner must approve
+ * the private-endpoint connection on the target before it carries traffic. Real
+ * ARM REST; throws the raw ARM error on non-2xx so the route can surface it.
+ */
+export async function upsertManagedPrivateEndpoint(
+  name: string,
+  opts: { privateLinkResourceId: string; groupId: string; fqdns?: string[]; mvnet?: string },
+): Promise<AdfManagedPrivateEndpoint> {
+  const mvnet = opts.mvnet || DEFAULT_MANAGED_VNET;
+  const properties: Record<string, unknown> = {
+    privateLinkResourceId: opts.privateLinkResourceId,
+    groupId: opts.groupId,
+  };
+  if (opts.fqdns && opts.fqdns.length) properties.fqdns = opts.fqdns;
+  const r = await call(
+    `${base()}/managedVirtualNetworks/${encodeURIComponent(mvnet)}/managedPrivateEndpoints/${encodeURIComponent(name)}?api-version=${API}`,
+    { method: 'PUT', body: JSON.stringify({ properties }) },
+  );
+  const raw = await jsonOrThrow<any>(r, `upsertManagedPrivateEndpoint(${name})`);
+  return mapManagedPe(raw);
+}
+
+export async function deleteManagedPrivateEndpoint(
+  name: string,
+  mvnet: string = DEFAULT_MANAGED_VNET,
+): Promise<void> {
+  const r = await call(
+    `${base()}/managedVirtualNetworks/${encodeURIComponent(mvnet)}/managedPrivateEndpoints/${encodeURIComponent(name)}?api-version=${API}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 204) {
+    throw new Error(`deleteManagedPrivateEndpoint failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+// ============================================================
 // Cross-factory helpers — back the MountedDataFactory editor which
 // targets an externally-referenced ADF by (subscriptionId, resourceGroup,
 // factoryName) rather than the env-pinned default factory above.
@@ -1459,4 +1869,78 @@ export async function runMountedFactoryPipeline(
     { method: 'POST', body: JSON.stringify(params || {}) },
   );
   return jsonOrThrow<PipelineRunResponse>(r, `runMountedFactoryPipeline(${pipelineName})`);
+}
+
+// ============================================================
+// Factory provisioning — create a NEW ADF-standalone factory (Wave A
+// binder "Create new factory" flow). The unified Data pipeline editor's
+// runtime selector lets the operator target a non-default ADF factory; the
+// binder UI can provision one inline rather than only reusing an existing
+// one via AzureResourcePicker.
+//
+// This is the ONE op in this client that targets an OPERATOR-CHOSEN
+// (subscription, resourceGroup, name) — NOT the env-pinned default factory.
+// It therefore builds its own cross-sub/rg ARM URL from ARM_BASE and goes
+// through `callRaw` (raw UAMI ARM token, NO self-heal): `call()`'s
+// 404/403 → Resource-Graph-by-name self-heal keys on LOOM_ADF_NAME, which is
+// only correct for the default factory — applying it to a brand-new factory
+// name would be wrong (and the resource intentionally doesn't exist yet).
+//
+// Real ARM REST (no mock, per no-vaporware.md):
+//   PUT .../Microsoft.DataFactory/factories/{name}?api-version=2018-06-01
+//   body { location, properties: {} }
+// Azure-native default per no-fabric-dependency.md — ADF is the default
+// pipeline runtime; no Fabric workspace is involved.
+// ============================================================
+
+/** Lightweight view of a created/resolved ADF factory (binder create-new). */
+export interface AdfFactoryLite {
+  id: string;
+  name: string;
+  subscriptionId: string;
+  resourceGroup: string;
+  location: string;
+}
+
+/**
+ * Create (idempotent PUT) an ADF-standalone factory at an operator-chosen
+ * (subscription, resourceGroup, name, location). Backs
+ * `POST /api/adf/factories/create` for the unified pipeline editor's binder.
+ *
+ * Builds its OWN ARM URL (NOT `base()`, which is pinned to the env factory)
+ * and uses `callRaw` so the default-factory self-heal in `call()` never
+ * rewrites the target. Throws with the raw ARM error text on a non-2xx so the
+ * route can map it to an honest 403 (Console UAMI lacks Contributor on the RG)
+ * or 502 — never a mock.
+ */
+export async function createFactory(args: {
+  name: string;
+  location: string;
+  subscriptionId: string;
+  resourceGroup: string;
+}): Promise<AdfFactoryLite> {
+  const url =
+    `${ARM_BASE}/subscriptions/${encodeURIComponent(args.subscriptionId)}` +
+    `/resourceGroups/${encodeURIComponent(args.resourceGroup)}` +
+    `/providers/Microsoft.DataFactory/factories/${encodeURIComponent(args.name)}` +
+    `?api-version=${API}`;
+  const r = await callRaw(url, {
+    method: 'PUT',
+    body: JSON.stringify({ location: args.location, properties: {} }),
+  });
+  if (!r.ok && r.status !== 202) {
+    throw new Error(`createFactory(${args.name}) failed ${r.status}: ${await r.text()}`);
+  }
+  const body = await jsonOrThrow<{
+    id?: string;
+    name?: string;
+    location?: string;
+  }>(r, `createFactory(${args.name})`);
+  return {
+    id: body.id || `/subscriptions/${args.subscriptionId}/resourceGroups/${args.resourceGroup}/providers/Microsoft.DataFactory/factories/${args.name}`,
+    name: body.name || args.name,
+    subscriptionId: args.subscriptionId,
+    resourceGroup: args.resourceGroup,
+    location: body.location || args.location,
+  };
 }

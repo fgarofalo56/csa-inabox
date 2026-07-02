@@ -37,36 +37,52 @@ const useStyles = makeStyles({
     marginTop: tokens.spacingVerticalS,
   },
   head: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS,
     padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
     background: tokens.colorNeutralBackground3,
   },
-  headTitle: { fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, fontSize: tokens.fontSizeBase200 },
+  headTitle: {
+    fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, fontSize: tokens.fontSizeBase200,
+    minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+  },
   spacer: { flex: 1 },
-  toggle: { display: 'inline-flex', gap: '2px' },
+  toggle: { display: 'inline-flex', gap: tokens.spacingHorizontalXXS },
   body: { padding: tokens.spacingHorizontalM },
   // KPI
   kpiWrap: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalL },
   kpi: {
-    display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '120px',
-    padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: '120px', maxWidth: '100%',
+    padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusLarge,
     background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, border-color', transitionDuration: tokens.durationNormal,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      borderTopColor: tokens.colorBrandStroke1,
+      borderRightColor: tokens.colorBrandStroke1,
+      borderBottomColor: tokens.colorBrandStroke1,
+      borderLeftColor: tokens.colorBrandStroke1,
+    },
   },
   kpiValue: {
-    fontSize: '30px', lineHeight: '34px', fontWeight: tokens.fontWeightBold,
+    fontSize: tokens.fontSizeBase500, fontWeight: tokens.fontWeightBold,
     color: tokens.colorBrandForeground1, fontVariantNumeric: 'tabular-nums',
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
-  kpiLabel: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textTransform: 'uppercase', letterSpacing: '0.04em' },
+  kpiLabel: {
+    color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textTransform: 'uppercase', letterSpacing: '0.04em',
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
   // table
   tableWrap: { overflowX: 'auto', maxHeight: '320px', overflowY: 'auto' },
   table: { borderCollapse: 'collapse', width: '100%', fontSize: tokens.fontSizeBase200 },
   th: {
-    textAlign: 'left', padding: '6px 12px 6px 0', position: 'sticky', top: 0,
+    textAlign: 'left', padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM} ${tokens.spacingVerticalS} 0`, position: 'sticky', top: 0,
     background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground3,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, whiteSpace: 'nowrap',
   },
-  td: { padding: '5px 12px 5px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
+  td: { padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM} ${tokens.spacingVerticalXS} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' },
 });
 
 type VizKind = 'kpi' | 'chart' | 'table';

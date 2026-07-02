@@ -26,6 +26,7 @@
  */
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
+import { loomDocUrl } from '@/lib/learn/content';
 import {
   PowerBiError,
   POWERBI_SP_HINT,
@@ -502,7 +503,7 @@ async function provisionLoomNative(input: any, steps: string[]): Promise<Provisi
       gate: {
         reason: 'Semantic model has no tables defined.',
         remediation: 'Add at least one table (mapped to a warehouse/lakehouse table) in the semantic-model editor. No Microsoft Fabric or Power BI workspace required.',
-        link: '/docs/fiab/operations/app-install-provisioning',
+        link: loomDocUrl('fiab/operations/app-install-provisioning'),
       },
       steps,
     };

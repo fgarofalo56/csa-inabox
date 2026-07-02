@@ -35,7 +35,7 @@ interface ItemPermissionRow {
 }
 
 const useStyles = makeStyles({
-  badges: { display: 'flex', flexWrap: 'wrap', gap: '4px' },
+  badges: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, minWidth: 0 },
   caption: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM, display: 'block' },
 });
 
@@ -141,7 +141,7 @@ export default function ItemPermissionsPage(props: Props) {
       }
     >
       {dlpRestricted && (
-        <MessageBar intent="warning" icon={<ShieldKeyholeRegular />} style={{ marginBottom: 12 }}>
+        <MessageBar intent="warning" icon={<ShieldKeyholeRegular />} style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>
             <MessageBarTitle>DLP-restricted item</MessageBarTitle>
             Sharing is limited by the active Data Loss Prevention policy
@@ -157,8 +157,8 @@ export default function ItemPermissionsPage(props: Props) {
       </Caption1>
 
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 12 }}>
-          <MessageBarBody>{error}</MessageBarBody>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{error}</MessageBarBody>
         </MessageBar>
       )}
 

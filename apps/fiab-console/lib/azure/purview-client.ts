@@ -487,58 +487,42 @@ export interface DataMapSearchOpts {
   collectionName?: string;
   /** Atlas typeName list for type-chip filtering. Empty/unset = all types. */
   entityTypes?: string[];
+  /**
+   * Filter to assets carrying this Purview classification (system or custom),
+   * e.g. "MICROSOFT.GOVERNMENT.US.SOCIAL_SECURITY_NUMBER" or "MICROSOFT.PERSONAL.US.PHYSICAL_ADDRESS".
+   * Maps to the leaf filter `{ classification }`. Unset = all classifications.
+   */
+  classification?: string;
+  /**
+   * Filter to assets a glossary term is applied to (the term's name). Maps to
+   * the leaf filter `{ term }`. Unset = all terms.
+   */
+  term?: string;
+  /**
+   * Facet fields to compute server-side (e.g. ['classification', 'term']).
+   * Only honored by searchDataMapWithFacets; ignored by searchDataMapAssets.
+   */
+  facets?: string[];
   limit?: number;
   offset?: number;
 }
 
-/**
- * Domain-scoped + type-filtered asset search for the F9 "Add data assets"
- * panel. Same Discovery endpoint as searchPurview, but builds the structured
- * `filter` the Data Map search supports so results can be constrained to a
- * single collection (the classic equivalent of a governance domain) and to a
- * set of Atlas entity types (the Table/View/File chips).
- *
- *   POST {base}/datamap/api/search/query?api-version=2023-09-01
- *   body: {
- *     keywords, limit, offset,
- *     filter: { and: [ { collectionId: "<ref>" }, { or: [ { entityType: "azure_sql_table" }, ... ] } ] }
- *   }
- *
- * The `filter` grammar is the recursive Data Map search filter: leaf terms
- * `{ collectionId }` / `{ entityType }` combined with `and` / `or` / `not`.
- *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
- *
- * The Loom UAMI needs at minimum a Data Map READ role (Data Reader or Data
- * Curator) on the target collection — see consolePurviewRoleGrant in
- * platform/fiab/bicep/modules/admin-plane/catalog.bicep, applied by
- * scripts/csa-loom/grant-purview-datamap-role.sh.
- */
-export async function searchDataMapAssets(opts: DataMapSearchOpts): Promise<PurviewAssetHit[]> {
-  purviewAccount();
-  const { q, collectionName, entityTypes, limit = 20, offset = 0 } = opts;
-  const andClauses: Record<string, unknown>[] = [];
-  if (collectionName) andClauses.push({ collectionId: collectionName });
-  if (entityTypes && entityTypes.length > 0) {
-    andClauses.push(
-      entityTypes.length === 1
-        ? { entityType: entityTypes[0] }
-        : { or: entityTypes.map((t) => ({ entityType: t })) },
-    );
-  }
-  const body: Record<string, unknown> = {
-    keywords: q && q.trim() ? q.trim() : '*',
-    limit,
-    offset,
-  };
-  if (andClauses.length === 1) body.filter = andClauses[0];
-  else if (andClauses.length > 1) body.filter = { and: andClauses };
+/** A single facet bucket from `@search.facets` — a classification/term + its asset count. */
+export interface PurviewFacetBucket {
+  value: string;
+  count: number;
+}
 
-  const res = await purviewFetch('/datamap/api/search/query', {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  const j = await readJson<{ value?: any[] }>(res);
-  return (j?.value || []).map((v: any) => ({
+/** Parsed `@search.facets` — the classification + glossary-term buckets the catalog rail renders. */
+export interface PurviewSearchFacets {
+  classification: PurviewFacetBucket[];
+  term: PurviewFacetBucket[];
+  [field: string]: PurviewFacetBucket[];
+}
+
+/** Map one raw Discovery `value[]` row to the shared PurviewAssetHit shape. */
+function mapPurviewAssetHit(v: any): PurviewAssetHit {
+  return {
     source: 'purview' as const,
     id: v.id || v.guid,
     name: v.name || v.qualifiedName || v.id,
@@ -549,7 +533,110 @@ export async function searchDataMapAssets(opts: DataMapSearchOpts): Promise<Purv
     owner: v.owner || (Array.isArray(v.contact) ? v.contact[0]?.id : undefined),
     domain: v.domain,
     updatedAt: v.updateTime || v.modifiedTime,
-  }));
+  };
+}
+
+/**
+ * Build the Discovery `POST /datamap/api/search/query` request body from the
+ * structured opts. Leaf filter terms `{ collectionId }` / `{ entityType }` /
+ * `{ classification }` / `{ term }` are combined under `and`; `facets` (when
+ * present) requests server-side facet buckets sorted by count desc.
+ *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+ */
+function buildDataMapSearchBody(opts: DataMapSearchOpts): Record<string, unknown> {
+  const { q, collectionName, entityTypes, classification, term, facets, limit = 20, offset = 0 } = opts;
+  const andClauses: Record<string, unknown>[] = [];
+  if (collectionName) andClauses.push({ collectionId: collectionName });
+  if (entityTypes && entityTypes.length > 0) {
+    andClauses.push(
+      entityTypes.length === 1
+        ? { entityType: entityTypes[0] }
+        : { or: entityTypes.map((t) => ({ entityType: t })) },
+    );
+  }
+  if (classification) andClauses.push({ classification });
+  if (term) andClauses.push({ term });
+  const body: Record<string, unknown> = {
+    keywords: q && q.trim() ? q.trim() : '*',
+    limit,
+    offset,
+  };
+  if (andClauses.length === 1) body.filter = andClauses[0];
+  else if (andClauses.length > 1) body.filter = { and: andClauses };
+  if (facets && facets.length > 0) {
+    body.facets = facets.map((f) => ({ count: 25, facet: f, sort: { count: 'desc' } }));
+  }
+  return body;
+}
+
+/**
+ * Domain-scoped + type-filtered asset search for the F9 "Add data assets"
+ * panel. Same Discovery endpoint as searchPurview, but builds the structured
+ * `filter` the Data Map search supports so results can be constrained to a
+ * single collection (the classic equivalent of a governance domain), a set of
+ * Atlas entity types (the Table/View/File chips), and — additively — a
+ * classification or glossary term.
+ *
+ *   POST {base}/datamap/api/search/query?api-version=2023-09-01
+ *   body: {
+ *     keywords, limit, offset,
+ *     filter: { and: [ { collectionId: "<ref>" }, { or: [ { entityType: "azure_sql_table" }, ... ] } ] }
+ *   }
+ *
+ * The `filter` grammar is the recursive Data Map search filter: leaf terms
+ * `{ collectionId }` / `{ entityType }` / `{ classification }` / `{ term }`
+ * combined with `and` / `or` / `not`.
+ *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+ *
+ * The Loom UAMI needs at minimum a Data Map READ role (Data Reader or Data
+ * Curator) on the target collection — see consolePurviewRoleGrant in
+ * platform/fiab/bicep/modules/admin-plane/catalog.bicep, applied by
+ * scripts/csa-loom/grant-purview-datamap-role.sh.
+ */
+export async function searchDataMapAssets(opts: DataMapSearchOpts): Promise<PurviewAssetHit[]> {
+  purviewAccount();
+  const res = await purviewFetch('/datamap/api/search/query', {
+    method: 'POST',
+    body: JSON.stringify(buildDataMapSearchBody(opts)),
+  });
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map(mapPurviewAssetHit);
+}
+
+/**
+ * Faceted Data Map search — same Discovery endpoint as searchDataMapAssets but
+ * additionally requests `facets` and returns the parsed `@search.facets`
+ * buckets alongside the hits. Powers the catalog-search "find assets by
+ * sensitive-info type" rail: classification facets (SSN / physical-address /
+ * credit-card / …, detected by Purview scans) + glossary-term facets.
+ *
+ *   body.facets = [{ count, facet: "classification", sort: { count: "desc" } }, …]
+ *   response["@search.facets"] = { classification: [{ value, count }], term: […] }
+ *   https://learn.microsoft.com/rest/api/purview/datamapdataplane/discovery/query
+ *
+ * Defaults to faceting on classification + term when opts.facets is unset.
+ * Throws PurviewNotConfiguredError (via purviewAccount) when LOOM_PURVIEW_ACCOUNT
+ * is unset — callers translate that into an honest empty-facet gate.
+ */
+export async function searchDataMapWithFacets(
+  opts: DataMapSearchOpts,
+): Promise<{ hits: PurviewAssetHit[]; facets: PurviewSearchFacets }> {
+  purviewAccount();
+  const facetFields = opts.facets && opts.facets.length ? opts.facets : ['classification', 'term'];
+  const res = await purviewFetch('/datamap/api/search/query', {
+    method: 'POST',
+    body: JSON.stringify(buildDataMapSearchBody({ ...opts, facets: facetFields })),
+  });
+  const j = await readJson<{ value?: any[]; '@search.facets'?: Record<string, any[]> }>(res);
+  const rawFacets = j?.['@search.facets'] || {};
+  const pick = (field: string): PurviewFacetBucket[] =>
+    (rawFacets[field] || [])
+      .map((b: any) => ({ value: String(b?.value ?? ''), count: Number(b?.count ?? 0) }))
+      .filter((b: PurviewFacetBucket) => b.value);
+  return {
+    hits: (j?.value || []).map(mapPurviewAssetHit),
+    facets: { classification: pick('classification'), term: pick('term') },
+  };
 }
 //   GET {base}/collections?api-version=2019-11-01-preview
 //   https://learn.microsoft.com/rest/api/purview/accountdataplane/collections/list-collections
@@ -996,6 +1083,16 @@ export async function createAtlasGlossaryTerm(term: AtlasGlossaryTermPayload): P
       ...(term.glossaryGuid ? { anchor: { glossaryGuid: term.glossaryGuid } } : {}),
     }),
   });
+  // Idempotent: Atlas returns 409 when a term with this name already exists in
+  // the glossary. Resolve the existing term's GUID by name so create-then-apply
+  // (the BFF route's apply flow) and re-creating a known term both succeed
+  // instead of surfacing a spurious conflict.
+  if (res.status === 409) {
+    const hit = (await listGlossaryTerms(term.glossaryGuid)).find(
+      (t) => (t.name || '').toLowerCase() === term.name.toLowerCase(),
+    );
+    if (hit?.guid) return { guid: hit.guid, name: hit.name || term.name };
+  }
   const j = await readJson<any>(res);
   return { guid: j?.guid || j?.id, name: j?.name || term.name };
 }
@@ -1134,6 +1231,130 @@ export async function createGlossaryTerm(payload: {
     glossaryGuid: payload.glossaryGuid,
     raw,
   };
+}
+
+// ------------------------------------------------------------
+// Free-form custom tags via Atlas BUSINESS METADATA (a.k.a. managed
+// attributes — the classic Data Map's structured key/value bag).
+//   Typedef create : POST /datamap/api/atlas/v2/types/typedefs   (businessMetadataDefs)
+//   Typedef update : PUT  /datamap/api/atlas/v2/types/typedefs    (add attributes)
+//   Read def       : GET  /datamap/api/atlas/v2/types/businessmetadatadef/name/{name}
+//   Set on entity  : POST /datamap/api/atlas/v2/entity/guid/{guid}/businessmetadata/{bm}?isOverwrite=true
+//   https://learn.microsoft.com/purview/data-gov-api-atlas-2-2
+//
+// Atlas business metadata is schema'd: each key must exist as a string
+// attribute on the business-metadata typedef before a value can be set.
+// ensureBusinessMetadataDef creates the typedef and grows it with any missing
+// attribute keys (idempotent), so a free-form "Custom tags" key/value UI can
+// use arbitrary keys. Needs the Loom UAMI "Data Curator" on the root collection.
+// ------------------------------------------------------------
+
+/** Default business-metadata namespace Loom writes free-form custom tags into. */
+export const LOOM_BUSINESS_METADATA_NAME = 'LoomCustomTags';
+
+/** Normalize a free-form key into a valid Atlas attribute name (letters/digits/_). */
+function businessMetadataAttrName(key: string): string {
+  return (key || '').trim().replace(/[^A-Za-z0-9_]+/g, '_').replace(/^_+|_+$/g, '') || 'tag';
+}
+
+function buildBmAttributeDef(name: string): Record<string, unknown> {
+  return {
+    name,
+    typeName: 'string',
+    isOptional: true,
+    cardinality: 'SINGLE',
+    valuesMinCount: 0,
+    valuesMaxCount: 1,
+    isUnique: false,
+    isIndexable: false,
+    options: { maxStrLength: '500', applicableEntityTypes: '["Referenceable"]' },
+  };
+}
+
+/** GET a business-metadata typedef by name, or null when it does not exist. */
+async function getBusinessMetadataDef(bmName: string): Promise<any | null> {
+  const res = await purviewFetch(
+    `/datamap/api/atlas/v2/types/businessmetadatadef/name/${encodeURIComponent(bmName)}`,
+  );
+  if (res.status === 404) return null;
+  return readJson<any>(res);
+}
+
+/**
+ * Ensure a business-metadata typedef named `bmName` exists and carries every
+ * requested attribute key (as an optional string). Creates the def when absent
+ * and PUTs an updated def to add missing attributes. Idempotent; swallows 409s.
+ */
+export async function ensureBusinessMetadataDef(
+  attributeKeys: string[],
+  bmName: string = LOOM_BUSINESS_METADATA_NAME,
+): Promise<void> {
+  purviewAccount();
+  const wantKeys = [...new Set((attributeKeys || []).map(businessMetadataAttrName).filter(Boolean))];
+  let existing: any = null;
+  try { existing = await getBusinessMetadataDef(bmName); } catch { /* treat as missing → create */ }
+
+  if (!existing) {
+    const attributeDefs = (wantKeys.length ? wantKeys : ['note']).map(buildBmAttributeDef);
+    const body = {
+      businessMetadataDefs: [
+        { category: 'BUSINESS_METADATA', name: bmName, typeVersion: '1.0', attributeDefs },
+      ],
+    };
+    try {
+      const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      if (res.status !== 409) await readJson(res);
+    } catch (e: any) {
+      if (!(e instanceof PurviewError && e.status === 409)) throw e;
+    }
+    return;
+  }
+
+  const have = new Set<string>((existing.attributeDefs || []).map((a: any) => a?.name));
+  const missing = wantKeys.filter((k) => !have.has(k));
+  if (!missing.length) return;
+  const updated = {
+    ...existing,
+    attributeDefs: [...(existing.attributeDefs || []), ...missing.map(buildBmAttributeDef)],
+  };
+  const res = await purviewFetch('/datamap/api/atlas/v2/types/typedefs', {
+    method: 'PUT',
+    body: JSON.stringify({ businessMetadataDefs: [updated] }),
+  });
+  await readJson(res);
+}
+
+/**
+ * Set free-form custom tags (business-metadata attributes) on a catalog asset
+ * (Atlas entity) by GUID. Ensures the typedef + attribute keys exist first, then
+ *   POST /datamap/api/atlas/v2/entity/guid/{guid}/businessmetadata/{bm}?isOverwrite=true
+ *   body: { <attr>: <value>, ... }
+ * Atlas returns 204 on success. Empty `tags` is a no-op.
+ */
+export async function setBusinessMetadata(
+  guid: string,
+  tags: Record<string, string>,
+  bmName: string = LOOM_BUSINESS_METADATA_NAME,
+): Promise<void> {
+  purviewAccount();
+  if (!guid) throw new PurviewError(400, null, 'guid is required');
+  const entries = Object.entries(tags || {})
+    .map(([k, v]) => [businessMetadataAttrName(k), String(v ?? '')] as const)
+    .filter(([k]) => !!k);
+  if (!entries.length) return;
+  await ensureBusinessMetadataDef(entries.map(([k]) => k), bmName);
+  const attributes: Record<string, string> = {};
+  for (const [k, v] of entries) attributes[k] = v;
+  const res = await purviewFetch(
+    `/datamap/api/atlas/v2/entity/guid/${encodeURIComponent(guid)}/businessmetadata/${encodeURIComponent(bmName)}`,
+    { method: 'POST', query: { isOverwrite: 'true' }, body: JSON.stringify(attributes) },
+  );
+  if (res.ok || res.status === 204) return;
+  const t = await res.text();
+  throw new PurviewError(res.status, t, `setBusinessMetadata failed: ${t || res.statusText}`);
 }
 
 // ============================================================
@@ -1402,6 +1623,274 @@ export async function scanUsesSelfHostedIr(sourceName: string, scanName: string)
   } catch {
     return false;
   }
+}
+
+// ------------------------------------------------------------
+// Self-hosted integration runtime (scanning data plane).
+//   PUT  /scan/integrationruntimes/{name}              — create/update an IR
+//   POST /scan/integrationruntimes/{name}/listAuthKeys — read its auth keys
+//   GET  /scan/integrationruntimes/{name}              — read one IR
+//   https://learn.microsoft.com/rest/api/purview/scanningdataplane/integration-runtimes
+//
+// This automates the previously-manual Purview SHIR bootstrap: instead of an
+// operator hand-creating the IR in the portal and pasting an @secure auth key
+// into bicep, the Console PUTs a `SelfHosted` IR and reads its auth key here.
+// The key is handed to the Purview SHIR VMSS node installer (the extension that
+// downloads + registers the gateway) to bind the machine to this account. The
+// key is a node-registration secret — it is NEVER logged or persisted by Loom;
+// callers pass it straight to the VMSS custom-script extension.
+//
+// NOTE: the Purview *managed VNet* IR + managed private endpoints (the no-SHIR
+// path for PE-locked sources) is wired below — see
+// {@link upsertPurviewManagedVnetIr} / {@link upsertPurviewManagedPrivateEndpoint}.
+// ------------------------------------------------------------
+
+export interface PurviewIntegrationRuntime {
+  name?: string;
+  kind?: string;
+  description?: string;
+  state?: string;
+  raw?: unknown;
+}
+
+export interface PurviewIrAuthKeys {
+  authKey1?: string;
+  authKey2?: string;
+}
+
+/**
+ * Create or update a SELF-HOSTED Purview integration runtime (PUT — idempotent).
+ * Returns the IR resource (no keys — read those separately via
+ * {@link listPurviewIrAuthKeys}). Throws PurviewNotConfiguredError when
+ * LOOM_PURVIEW_ACCOUNT is unset and PurviewError on a non-2xx.
+ */
+export async function upsertPurviewIntegrationRuntime(
+  name: string,
+  opts: { description?: string } = {},
+): Promise<PurviewIntegrationRuntime> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'integration runtime name is required');
+  const body = {
+    name,
+    kind: 'SelfHosted',
+    properties: { description: opts.description || 'Loom-managed Purview self-hosted integration runtime' },
+  };
+  const res = await purviewFetch(
+    `/scan/integrationruntimes/${encodeURIComponent(name)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify(body) },
+  );
+  const raw = await readJson<any>(res);
+  return {
+    name: raw?.name || name,
+    kind: raw?.kind || 'SelfHosted',
+    description: raw?.properties?.description,
+    state: raw?.properties?.state || raw?.properties?.provisioningState,
+    raw,
+  };
+}
+
+/**
+ * Read the auth keys for a self-hosted Purview integration runtime
+ * (POST .../integrationruntimes/{name}/listAuthKeys). `authKey1`/`authKey2` are
+ * node-registration secrets — hand them to the SHIR node installer; do NOT log
+ * or persist them. The IR must already exist (create it first via
+ * {@link upsertPurviewIntegrationRuntime}).
+ */
+export async function listPurviewIrAuthKeys(name: string): Promise<PurviewIrAuthKeys> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'integration runtime name is required');
+  const res = await purviewFetch(
+    `/scan/integrationruntimes/${encodeURIComponent(name)}/listAuthKeys`,
+    { method: 'POST', apiVersion: SCAN_API_VERSION },
+  );
+  const raw = await readJson<any>(res);
+  return { authKey1: raw?.authKey1, authKey2: raw?.authKey2 };
+}
+
+/** GET /scan/integrationruntimes — every IR registered on this account (any kind). */
+export async function listPurviewIntegrationRuntimes(): Promise<PurviewIntegrationRuntime[]> {
+  purviewAccount();
+  const res = await purviewFetch('/scan/integrationruntimes', { apiVersion: SCAN_API_VERSION });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewIntegrationRuntime => ({
+    name: raw?.name,
+    kind: raw?.kind || raw?.properties?.type,
+    description: raw?.properties?.description,
+    state: raw?.properties?.state || raw?.properties?.provisioningState,
+    raw,
+  }));
+}
+
+// ------------------------------------------------------------
+// Managed Virtual Network IR + managed private endpoints (scanning data plane).
+//   PUT  /scan/integrationruntimes/{name}                                    — kind 'Managed' (managed-VNet IR)
+//   GET  /scan/managedvirtualnetworks                                        — list managed virtual networks
+//   PUT  /scan/managedvirtualnetworks/{mvnet}                                — create/replace a managed virtual network
+//   GET  /scan/managedvirtualnetworks/{mvnet}/managedprivateendpoints        — list managed private endpoints
+//   PUT  /scan/managedvirtualnetworks/{mvnet}/managedprivateendpoints/{name} — create/replace a managed private endpoint
+//
+//   https://learn.microsoft.com/purview/data-governance-private-endpoints-managed-virtual-network
+//   https://learn.microsoft.com/rest/api/purview/scanningdataplane/managed-virtual-networks
+//   https://learn.microsoft.com/rest/api/purview/scanningdataplane/managed-private-endpoints
+//
+// This is the SERVERLESS, no-SHIR path for scanning PE-locked Azure sources:
+// Microsoft Purview deploys + manages the virtual network and the private
+// endpoints itself — there is no self-hosted IR VMSS for the operator to run,
+// patch, or scale. A managed VNet IR is created against a managed virtual
+// network (auto-created on first IR), and a managed private endpoint is created
+// per data source (e.g. the DLZ lake's storage account, groupId `dfs`/`blob`).
+//
+// IMPORTANT (surfaced to the operator, not auto-performed): a managed private
+// endpoint lands in a "Pending" state. The private-link resource OWNER must
+// APPROVE it (an ARM `privateEndpointConnections` approve on the target
+// resource) before scan traffic can traverse it. That approval is a SEPARATE
+// ARM action against the source resource — Loom surfaces it as a clear next step.
+// ------------------------------------------------------------
+
+export interface PurviewManagedVnet {
+  name?: string;
+  state?: string;
+  raw?: unknown;
+}
+
+export interface PurviewManagedPrivateEndpoint {
+  name?: string;
+  /** ARM resource id of the private-link resource (e.g. the storage account). */
+  privateLinkResourceId?: string;
+  /** Sub-resource group id (e.g. `dfs`/`blob` for ADLS Gen2, `sqlServer` for Azure SQL). */
+  groupId?: string;
+  provisioningState?: string;
+  /** Connection approval status reported by the resource owner: Pending | Approved | Rejected. */
+  connectionState?: string;
+  raw?: unknown;
+}
+
+function mapManagedPrivateEndpoint(raw: any): PurviewManagedPrivateEndpoint {
+  return {
+    name: raw?.name,
+    privateLinkResourceId: raw?.properties?.privateLinkResourceId,
+    groupId: raw?.properties?.groupId,
+    provisioningState: raw?.properties?.provisioningState,
+    connectionState:
+      raw?.properties?.connectionState?.status ??
+      raw?.properties?.privateLinkServiceConnectionState?.status,
+    raw,
+  };
+}
+
+/**
+ * Create or update a MANAGED-VNet Purview integration runtime (PUT — idempotent).
+ * `kind: 'Managed'`, bound to a managed virtual network (created on first use via
+ * {@link upsertPurviewManagedVnet}). This is the no-SHIR path: Purview runs the
+ * scan compute inside its own managed VNet and reaches PE-locked sources through
+ * managed private endpoints — no self-hosted IR VMSS required. Throws
+ * PurviewNotConfiguredError when LOOM_PURVIEW_ACCOUNT is unset, PurviewError on a
+ * non-2xx.
+ */
+export async function upsertPurviewManagedVnetIr(
+  name: string,
+  opts: { managedVnetName?: string; description?: string } = {},
+): Promise<PurviewIntegrationRuntime> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'integration runtime name is required');
+  const properties: Record<string, unknown> = {
+    description: opts.description || 'Loom-managed Purview managed-VNet integration runtime',
+  };
+  if (opts.managedVnetName) {
+    properties.managedVirtualNetworkReference = {
+      referenceName: opts.managedVnetName,
+      type: 'ManagedVirtualNetworkReference',
+    };
+  }
+  const body = { name, kind: 'Managed', properties };
+  const res = await purviewFetch(
+    `/scan/integrationruntimes/${encodeURIComponent(name)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify(body) },
+  );
+  const raw = await readJson<any>(res);
+  return {
+    name: raw?.name || name,
+    kind: raw?.kind || 'Managed',
+    description: raw?.properties?.description,
+    state: raw?.properties?.state || raw?.properties?.provisioningState,
+    raw,
+  };
+}
+
+/** GET /scan/managedvirtualnetworks — managed virtual networks on this account. */
+export async function listPurviewManagedVnets(): Promise<PurviewManagedVnet[]> {
+  purviewAccount();
+  const res = await purviewFetch('/scan/managedvirtualnetworks', { apiVersion: SCAN_API_VERSION });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((raw): PurviewManagedVnet => ({
+    name: raw?.name,
+    state: raw?.properties?.provisioningState || raw?.properties?.state,
+    raw,
+  }));
+}
+
+/**
+ * Create or update a managed virtual network (PUT — idempotent). Purview owns the
+ * VNet's address space + subnets; the body is effectively just the name. Creating
+ * the managed VNet first makes {@link upsertPurviewManagedVnetIr}'s reference resolve.
+ */
+export async function upsertPurviewManagedVnet(name: string): Promise<PurviewManagedVnet> {
+  purviewAccount();
+  if (!name) throw new PurviewError(400, null, 'managed virtual network name is required');
+  const res = await purviewFetch(
+    `/scan/managedvirtualnetworks/${encodeURIComponent(name)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify({ name, properties: {} }) },
+  );
+  const raw = await readJson<any>(res);
+  return { name: raw?.name || name, state: raw?.properties?.provisioningState || raw?.properties?.state, raw };
+}
+
+/** GET /scan/managedvirtualnetworks/{mvnet}/managedprivateendpoints — managed PEs in a managed VNet. */
+export async function listPurviewManagedPrivateEndpoints(
+  managedVnetName: string,
+): Promise<PurviewManagedPrivateEndpoint[]> {
+  purviewAccount();
+  if (!managedVnetName) throw new PurviewError(400, null, 'managed virtual network name is required');
+  const res = await purviewFetch(
+    `/scan/managedvirtualnetworks/${encodeURIComponent(managedVnetName)}/managedprivateendpoints`,
+    { apiVersion: SCAN_API_VERSION },
+  );
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map(mapManagedPrivateEndpoint);
+}
+
+/**
+ * Create or update a managed private endpoint for a data source (PUT — idempotent).
+ * `resourceId` is the ARM id of the private-link resource (e.g. the DLZ lake's
+ * storage account) and `groupId` is its sub-resource (`dfs`/`blob` for ADLS Gen2,
+ * `sqlServer` for Azure SQL, etc.). The PE is created in a **Pending** state — the
+ * resource owner must approve it (ARM `privateEndpointConnections` approve on the
+ * target) before scans can use it; that approval is a separate action the caller
+ * surfaces as a next step.
+ */
+export async function upsertPurviewManagedPrivateEndpoint(
+  managedVnetName: string,
+  name: string,
+  opts: { resourceId: string; groupId: string },
+): Promise<PurviewManagedPrivateEndpoint> {
+  purviewAccount();
+  if (!managedVnetName) throw new PurviewError(400, null, 'managed virtual network name is required');
+  if (!name) throw new PurviewError(400, null, 'managed private endpoint name is required');
+  if (!opts?.resourceId) throw new PurviewError(400, null, 'resourceId is required');
+  if (!opts?.groupId) throw new PurviewError(400, null, 'groupId is required');
+  const body = {
+    name,
+    properties: { privateLinkResourceId: opts.resourceId, groupId: opts.groupId },
+  };
+  const res = await purviewFetch(
+    `/scan/managedvirtualnetworks/${encodeURIComponent(managedVnetName)}/managedprivateendpoints/${encodeURIComponent(name)}`,
+    { method: 'PUT', apiVersion: SCAN_API_VERSION, body: JSON.stringify(body) },
+  );
+  const raw = await readJson<any>(res);
+  return mapManagedPrivateEndpoint(raw);
 }
 
 /** GET /scan/datasources/{name}/scans/{scan}/runs — last N scan runs. */

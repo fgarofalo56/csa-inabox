@@ -28,7 +28,7 @@ permissions:
   contents: read
 
 env:
-  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  SUB: 00000000-0000-0000-0000-000000000000
   DLZ_RG: rg-csa-loom-dlz-default-eastus2
   ADF: adf-loom-default-eastus2
   VMSS: vmss-loom-shir-default

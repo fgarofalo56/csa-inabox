@@ -31,6 +31,7 @@
  * Returns { ok:true, compatible, violations, checkedVia } or { ok:false, error }.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -48,9 +49,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 interface SchemaVersion { id: number; schema: string }
 interface SchemaSubject { name: string; format: SchemaFormat; versions: SchemaVersion[] }
@@ -64,21 +63,21 @@ function srFormat(f: SchemaFormat): 'Avro' | 'Json' | 'Protobuf' {
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   const subject = String(body?.subject || '').trim();
   const newSchema = String(body?.newSchema ?? body?.schema ?? '').trim();
   const format = (String(body?.format || 'AVRO').toUpperCase() as SchemaFormat);
   const dryRunInProcess = body?.dryRunInProcess === true;
-  if (!subject) return err('subject required', 400);
-  if (!newSchema) return err('newSchema required', 400);
+  if (!subject) return apiError('subject required', 400);
+  if (!newSchema) return apiError('newSchema required', 400);
 
   try {
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!existing || existing.itemType !== 'event-schema-set') return err('event schema set not found', 404);
+    if (!existing || existing.itemType !== 'event-schema-set') return apiError('event schema set not found', 404);
     const state = (existing.state || {}) as Record<string, unknown>;
     const mode = ((state.compatibility as string) || 'BACKWARD') as CompatMode;
     const subjects = ((state.subjects as SchemaSubject[]) || []);
@@ -117,7 +116,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         // claiming compatible. The route returns 502 so the caller can retry or
         // fall back; the editor shows the real service error.
         const msg = e instanceof EventHubsArmError ? e.message : (e as Error)?.message || String(e);
-        return err(`Event Hubs Schema Registry check failed: ${msg}`, 502);
+        return apiError(`Event Hubs Schema Registry check failed: ${msg}`, 502);
       }
     }
 
@@ -130,6 +129,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       checkedVia: 'cosmos-inprocess',
     });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

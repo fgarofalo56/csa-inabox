@@ -314,7 +314,7 @@ const useStyles = makeStyles({
     textTransform: 'uppercase',
     letterSpacing: '0.06em',
     fontWeight: tokens.fontWeightSemibold,
-    fontSize: '11px',
+    fontSize: tokens.fontSizeBase100,
     marginBottom: tokens.spacingVerticalXS,
   },
   railItem: {
@@ -343,6 +343,7 @@ const useStyles = makeStyles({
   },
   railItemText: {
     flex: 1,
+    minWidth: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
@@ -365,8 +366,8 @@ const useStyles = makeStyles({
     display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    paddingTop: '4px',
-    paddingBottom: '4px',
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
     paddingLeft: tokens.spacingHorizontalM,
     paddingRight: tokens.spacingHorizontalM,
     borderRadius: tokens.borderRadiusCircular,
@@ -395,18 +396,6 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalS,
     color: tokens.colorNeutralForeground2,
-  },
-  emptyBox: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    gap: tokens.spacingVerticalS,
-    padding: tokens.spacingVerticalXXXL,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
-    color: tokens.colorNeutralForeground2,
-    textAlign: 'center',
   },
 
   // ── right details pane ──
@@ -439,7 +428,7 @@ const useStyles = makeStyles({
   detailsActions: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   metaGrid: {
     display: 'grid',
-    gridTemplateColumns: 'auto 1fr',
+    gridTemplateColumns: 'auto minmax(0, 1fr)',
     columnGap: tokens.spacingHorizontalL,
     rowGap: tokens.spacingVerticalS,
     fontSize: tokens.fontSizeBase300,
@@ -456,7 +445,7 @@ const useStyles = makeStyles({
   detailsChipIcon: { width: '26px', height: '26px' },
   nameIconGlyph: { width: '16px', height: '16px' },
   metaNote: { color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalS },
-  wsEmpty: { padding: '4px 8px', color: tokens.colorNeutralForeground3 },
+  wsEmpty: { paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS, paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
   errorBarSpaced: { marginTop: tokens.spacingVerticalM },
   treeWrap: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -504,9 +493,9 @@ function TablesTab({ itemId }: { itemId: string }) {
   }
   if (tables === null) {
     return (
-      <Skeleton aria-label="Loading Delta tables" style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0' }}>
+      <Skeleton aria-label="Loading Delta tables" style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalS} 0` }}>
         {[...Array(5)].map((_, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, paddingLeft: i % 2 === 0 ? 0 : 20 }}>
+          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, paddingLeft: i % 2 === 0 ? 0 : tokens.spacingHorizontalXL }}>
             <SkeletonItem shape="rectangle" style={{ width: 16, height: 16, flexShrink: 0 }} />
             <SkeletonItem shape="rectangle" style={{ width: `${55 + (i * 11) % 35}%`, height: 14 }} />
           </div>
@@ -1242,14 +1231,24 @@ export default function OneLakeCatalogPage() {
           {activeSection === 'explore' && items === null && <Spinner label="Loading catalog…" />}
 
           {activeSection === 'explore' && items !== null && visible.length === 0 && (
-            <div className={styles.emptyBox}>
-              <Text weight="semibold">No items match your filters.</Text>
-              <Caption1>
-                {(items ?? []).length === 0
-                  ? 'This tenant has no lakehouses, warehouses, or databases yet. Create one from any workspace.'
-                  : 'Try clearing the search, type, or workspace filter.'}
-              </Caption1>
-            </div>
+            (items ?? []).length === 0 ? (
+              <EmptyState
+                icon={<AppsList20Regular />}
+                title="No items in this tenant yet"
+                body="This tenant has no lakehouses, warehouses, or databases yet. Create one from any workspace and it will appear in the OneLake catalog."
+              />
+            ) : (
+              <EmptyState
+                icon={<FolderOpen20Regular />}
+                title="No items match your filters"
+                body="Nothing matches the current search, type, or workspace filter. Clear the filters to see every catalog item again."
+                primaryAction={{
+                  label: 'Clear filters',
+                  appearance: 'secondary',
+                  onClick: () => { setQ(''); setTypeFilter('all'); setWsFilter(null); },
+                }}
+              />
+            )
           )}
 
           {activeSection === 'explore' && items !== null && visible.length > 0 && view === 'tile' && (

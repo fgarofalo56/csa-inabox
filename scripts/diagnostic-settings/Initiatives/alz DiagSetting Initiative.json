@@ -1,10 +1,10 @@
 [
   {
-    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Compute disks",
+    "policyDefinitionId": "/subscriptions/00000000-0000-0000-0000-000000000002/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Compute disks",
     "definitionVersion": "1.*.*",
     "parameters": {
       "logAnalytics": {
-        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+        "value": "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
       },
       "azureRegions": {
         "value": [
@@ -31,11 +31,11 @@
     }
   },
   {
-    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Compute virtualMachines",
+    "policyDefinitionId": "/subscriptions/00000000-0000-0000-0000-000000000002/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Compute virtualMachines",
     "definitionVersion": "1.*.*",
     "parameters": {
       "logAnalytics": {
-        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+        "value": "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
       },
       "azureRegions": {
         "value": [
@@ -62,11 +62,11 @@
     }
   },
   {
-    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network networkInterfaces",
+    "policyDefinitionId": "/subscriptions/00000000-0000-0000-0000-000000000002/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network networkInterfaces",
     "definitionVersion": "1.*.*",
     "parameters": {
       "logAnalytics": {
-        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+        "value": "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
       },
       "azureRegions": {
         "value": [
@@ -93,11 +93,11 @@
     }
   },
   {
-    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network networkSecurityGroups",
+    "policyDefinitionId": "/subscriptions/00000000-0000-0000-0000-000000000002/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network networkSecurityGroups",
     "definitionVersion": "1.*.*",
     "parameters": {
       "logAnalytics": {
-        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+        "value": "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
       },
       "azureRegions": {
         "value": [
@@ -124,11 +124,11 @@
     }
   },
   {
-    "policyDefinitionId": "/subscriptions/ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network virtualNetworks",
+    "policyDefinitionId": "/subscriptions/00000000-0000-0000-0000-000000000002/providers/Microsoft.Authorization/policyDefinitions/alz DiagSetting LA Network virtualNetworks",
     "definitionVersion": "1.*.*",
     "parameters": {
       "logAnalytics": {
-        "value": "/subscriptions/a60a2fdd-c133-4845-9beb-31f470bf3ef5/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
+        "value": "/subscriptions/00000000-0000-0000-0000-000000000003/resourceGroups/rg-alz-dev-logging/providers/Microsoft.OperationalInsights/workspaces/alz-dev-dataObservability-logAnalyticsWorkspace"
       },
       "azureRegions": {
         "value": [

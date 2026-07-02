@@ -23,10 +23,10 @@ const KEY = Buffer.from(crypto.hkdfSync('sha256', Buffer.from(SECRET, 'utf-8'),
   Buffer.alloc(32), Buffer.from('loom-session-v1'), 32));
 const PAYLOAD = {
   claims: {
-    oid: process.env.UAT_OID || '866a2e12-0fee-4c99-923c-7cdfd61e08cd',
-    name: process.env.UAT_NAME || 'Frank Garofalo (UAT)',
-    email: process.env.UAT_EMAIL || 'fgarofalo@limitlessdata.ai',
-    upn: process.env.UAT_UPN || 'fgarofalo@limitlessdata.ai',
+    oid: process.env.UAT_OID || process.env.LOOM_AUTOMATION_OID || '00000000-0000-0000-0000-000000000000',
+    name: process.env.UAT_NAME || process.env.LOOM_AUTOMATION_NAME || 'Loom UAT',
+    email: process.env.UAT_EMAIL || 'uat@example.invalid',
+    upn: process.env.UAT_UPN || 'uat@example.invalid',
   },
   exp: Math.floor(Date.now() / 1000) + 8 * 3600,
 };

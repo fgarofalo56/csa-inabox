@@ -7,13 +7,13 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { Input, makeStyles, tokens } from '@fluentui/react-components';
+import { shorthands, Input, makeStyles, tokens } from '@fluentui/react-components';
 import { Search20Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
   root: {
     flex: 1,
-    maxWidth: 540,
+    maxWidth: '540px',
     margin: '0 16px',
   },
   input: {
@@ -25,12 +25,12 @@ const useStyles = makeStyles({
     height: '32px',
     '::placeholder': { color: 'rgba(255,255,255,0.65)' },
     ':hover': { backgroundColor: 'rgba(255,255,255,0.15)' },
-    ':focus-within': { backgroundColor: 'rgba(255,255,255,0.18)', borderColor: 'rgba(255,255,255,0.4)' },
+    ':focus-within': { backgroundColor: 'rgba(255,255,255,0.18)', ...shorthands.borderColor('rgba(255,255,255,0.4)') },
   },
   shortcut: {
-    fontSize: 11,
+    fontSize: '11px',
     padding: '2px 6px',
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     border: '1px solid rgba(255,255,255,0.25)',
     color: 'rgba(255,255,255,0.7)',
     backgroundColor: 'rgba(0,0,0,0.18)',

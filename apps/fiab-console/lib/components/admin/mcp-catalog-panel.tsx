@@ -404,7 +404,6 @@ export function McpCatalogPanel({
                   value={categoryFilter === 'all' ? 'All categories' : categoryFilter}
                   selectedOptions={[categoryFilter]}
                   onOptionSelect={(_e, d) => setCategoryFilter(d.optionValue || 'all')}
-                  button={{ icon: <Filter20Regular /> }}
                   aria-label="Filter by category"
                 >
                   <Option value="all">All categories</Option>

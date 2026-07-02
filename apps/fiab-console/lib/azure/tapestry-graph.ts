@@ -54,9 +54,11 @@ export function buildGraphPrelude(nodeTables: string[], edgeTables: string[]): s
     .map((t) => `(${t} | extend edgeLabel='${t.slice(5)}')`)
     .join(', ');
   return [
-    `let __nodes = union ${nodeUnion};`,
-    `let __edges = union ${edgeUnion};`,
-    `let G = __edges | make-graph src --> dst with __nodes on id;`,
+    // KQL reserves identifiers that start/end with a double underscore (`__`)
+    // → SEM0041 "Invalid name of let expression". Use plain names instead.
+    `let LoomNodes = union ${nodeUnion};`,
+    `let LoomEdges = union ${edgeUnion};`,
+    `let G = LoomEdges | make-graph src --> dst with LoomNodes on id;`,
   ].join('\n');
 }
 
@@ -155,12 +157,13 @@ export function buildGeoKql(nodeTables: string[], limit = 5000): string {
     .map((t) => `(${t} | extend nodeLabel='${t.slice(5)}')`)
     .join(', ');
   // Coalesce lat/lon across the property bag spellings ADX nodes commonly use.
+  // (Column names avoid a `__` prefix — KQL reserves double-underscore identifiers.)
   return [
     `union ${union}`,
-    `| extend __lat = todouble(coalesce(column_ifexists('lat', real(null)), column_ifexists('latitude', real(null)), column_ifexists('Latitude', real(null))))`,
-    `| extend __lon = todouble(coalesce(column_ifexists('lon', real(null)), column_ifexists('lng', real(null)), column_ifexists('longitude', real(null)), column_ifexists('Longitude', real(null))))`,
-    `| where isnotnull(__lat) and isnotnull(__lon)`,
-    `| project Id=id, Label=nodeLabel, Name=tostring(coalesce(column_ifexists('name', ''), column_ifexists('Name', ''), id)), Latitude=__lat, Longitude=__lon`,
+    `| extend geoLat = todouble(coalesce(column_ifexists('lat', real(null)), column_ifexists('latitude', real(null)), column_ifexists('Latitude', real(null))))`,
+    `| extend geoLon = todouble(coalesce(column_ifexists('lon', real(null)), column_ifexists('lng', real(null)), column_ifexists('longitude', real(null)), column_ifexists('Longitude', real(null))))`,
+    `| where isnotnull(geoLat) and isnotnull(geoLon)`,
+    `| project Id=id, Label=nodeLabel, Name=tostring(coalesce(column_ifexists('name', ''), column_ifexists('Name', ''), id)), Latitude=geoLat, Longitude=geoLon`,
     `| limit ${lim}`,
   ].join('\n');
 }
@@ -186,9 +189,9 @@ export function buildTimelineKql(edgeTables: string[], window: TimelineWindow): 
     .join(', ');
   return [
     `union ${union}`,
-    `| extend __ts = todatetime(coalesce(column_ifexists('timestamp', datetime(null)), column_ifexists('ts', datetime(null)), column_ifexists('Timestamp', datetime(null)), column_ifexists('eventTime', datetime(null)), column_ifexists('EventTime', datetime(null)), column_ifexists('since', datetime(null)), column_ifexists('Since', datetime(null))))`,
-    `| where isnotnull(__ts)`,
-    `| summarize Count=count() by Bucket=bin(__ts, ${span}), Relationship=edgeLabel`,
+    `| extend evtTs = todatetime(coalesce(column_ifexists('timestamp', datetime(null)), column_ifexists('ts', datetime(null)), column_ifexists('Timestamp', datetime(null)), column_ifexists('eventTime', datetime(null)), column_ifexists('EventTime', datetime(null)), column_ifexists('since', datetime(null)), column_ifexists('Since', datetime(null))))`,
+    `| where isnotnull(evtTs)`,
+    `| summarize Count=count() by Bucket=bin(evtTs, ${span}), Relationship=edgeLabel`,
     `| sort by Bucket asc`,
     `| limit 5000`,
   ].join('\n');

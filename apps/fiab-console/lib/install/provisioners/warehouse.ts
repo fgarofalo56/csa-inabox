@@ -21,6 +21,7 @@ import { executeQuery as synapseExec, dedicatedTarget, type SynapseTarget } from
 import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 import type { Provisioner, ProvisionResult, RemediationGate } from './types';
 import { resolveInfraResidual } from './types';
+import { loomDocUrl } from '@/lib/learn/content';
 
 const BACKEND = process.env.LOOM_WAREHOUSE_BACKEND || 'synapse-dedicated';
 
@@ -549,7 +550,7 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
         reason: 'Fabric Warehouse provisioning is preview.',
         remediation:
           'Set LOOM_WAREHOUSE_BACKEND=synapse-dedicated to use the supported dedicated pool path. Fabric Warehouse TDS proxy is on the v3.4 roadmap.',
-        link: '/docs/fiab/operations/app-install-provisioning',
+        link: loomDocUrl('fiab/operations/app-install-provisioning'),
       },
       steps,
     };

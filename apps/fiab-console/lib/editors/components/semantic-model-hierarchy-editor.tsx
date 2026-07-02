@@ -106,8 +106,8 @@ export function SemanticModelHierarchyEditor({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }} data-testid="hierarchy-editor">
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }} data-testid="hierarchy-editor">
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <Organization20Regular />
         <Subtitle2>Hierarchies ({hierarchies.length})</Subtitle2>
         <Button
@@ -119,7 +119,7 @@ export function SemanticModelHierarchyEditor({
         </Button>
       </div>
 
-      <div style={{ overflow: 'auto', maxHeight: 220, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+      <div style={{ overflow: 'auto', maxHeight: 220, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
         <Table aria-label="Hierarchies" size="small">
           <TableHeader>
             <TableRow>
@@ -138,9 +138,9 @@ export function SemanticModelHierarchyEditor({
                 <TableCell>{h.name}</TableCell>
                 <TableCell>{h.table}</TableCell>
                 <TableCell>
-                  <span style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  <span style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
                     {[...h.levels].sort((a, b) => a.ordinal - b.ordinal).map((l, i, arr) => (
-                      <span key={l.ordinal} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <span key={l.ordinal} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
                         <Badge size="small" appearance="tint" color="brand">{l.name}</Badge>
                         {i < arr.length - 1 && <Text size={200} style={{ color: tokens.colorNeutralForeground3 }}>›</Text>}
                       </span>
@@ -168,11 +168,11 @@ export function SemanticModelHierarchyEditor({
           <DialogBody>
             <DialogTitle>New hierarchy</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 {err && (
                   <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not save</MessageBarTitle>{err}</MessageBarBody></MessageBar>
                 )}
-                <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                   <Field label="Table" style={{ flex: 1 }}>
                     <Dropdown
                       value={table}
@@ -188,11 +188,11 @@ export function SemanticModelHierarchyEditor({
                   </Field>
                 </div>
 
-                <div style={{ display: 'flex', gap: 16 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalL }}>
                   {/* Available columns */}
-                  <div style={{ flex: 1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, minHeight: 180 }}>
+                  <div style={{ flex: 1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, minHeight: 180 }}>
                     <Caption1 style={{ fontWeight: 600 }}>Columns in {table || '—'}</Caption1>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalS }}>
                       {tableCols.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Pick a table to list its columns.</Caption1>}
                       {tableCols.map((c) => {
                         const used = levels.some((l) => l.column === c.name);
@@ -212,12 +212,12 @@ export function SemanticModelHierarchyEditor({
                   </div>
 
                   {/* Drill levels (ordered top = highest grain) */}
-                  <div style={{ flex: 1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 8, minHeight: 180 }}>
+                  <div style={{ flex: 1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS, minHeight: 180 }}>
                     <Caption1 style={{ fontWeight: 600 }}>Drill levels (top → bottom)</Caption1>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS }}>
                       {levels.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Click columns on the left to add levels.</Caption1>}
                       {levels.map((l, i) => (
-                        <div key={l.column} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                        <div key={l.column} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
                           <Badge size="small" appearance="filled" color="brand">{i + 1}</Badge>
                           <Input
                             size="small" value={l.name} aria-label={`Level ${i + 1} display name`}

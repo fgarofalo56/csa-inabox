@@ -35,24 +35,39 @@ import {
 } from '@fluentui/react-components';
 import {
   Dismiss24Regular, Play16Regular, Save16Regular, ArrowSync16Regular,
+  DocumentSettings20Regular, Server20Regular, History20Regular, History24Regular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
+import { EmptyState } from '../components/empty-state';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 12, height: '100%', overflow: 'hidden' },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  tabBody: { display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0, paddingTop: tokens.spacingVerticalS },
-  row: { display: 'flex', gap: 12, flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 200, display: 'flex', flexDirection: 'column', gap: 4 },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%', overflow: 'hidden' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  tabBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0, paddingTop: tokens.spacingVerticalS },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: '200px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300 },
   // Constrain the (long) Spark application id so it never blows out the runs grid.
   appIdCell: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300,
     maxWidth: '220px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
   },
   hint: { color: tokens.colorNeutralForeground3 },
   // Sticky header keeps the runs columns visible while scrolling history.
   runsHeader: { position: 'sticky', top: 0, zIndex: 1, backgroundColor: tokens.colorNeutralBackground1 },
+  // Long backend error / submit-status strings must wrap, never push the drawer wide.
+  statusText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  // The Livy result string can be long; let it wrap inside its cell.
+  resultCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '220px' },
+  // Centered loading panes (initial load + runs grid) — never a bare flush-left spinner.
+  loadingPane: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minHeight: '240px', padding: tokens.spacingVerticalXXL,
+  },
+  runsLoading: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    minHeight: '200px', padding: tokens.spacingVerticalL,
+  },
 });
 
 type SparkLanguage = 'PySpark' | 'Spark' | 'SparkR';
@@ -224,11 +239,11 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
       </DrawerHeader>
       <DrawerBody>
         {loading ? (
-          <div style={{ padding: 16 }}><Spinner label="Loading Spark job definition…" /></div>
+          <div className={s.loadingPane}><Spinner label="Loading Spark job definition…" /></div>
         ) : (
           <div className={s.body}>
             {error && (
-              <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+              <MessageBar intent="error"><MessageBarBody className={s.statusText}><MessageBarTitle>Error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
             )}
 
             <div className={s.toolbar}>
@@ -242,16 +257,16 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
             </div>
 
             {submitGate && (
-              <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Cannot submit yet</MessageBarTitle>{submitGate}</MessageBarBody></MessageBar>
+              <MessageBar intent="warning"><MessageBarBody className={s.statusText}><MessageBarTitle>Cannot submit yet</MessageBarTitle>{submitGate}</MessageBarBody></MessageBar>
             )}
             {submitMsg && (
-              <MessageBar intent="info"><MessageBarBody>{submitMsg}</MessageBarBody></MessageBar>
+              <MessageBar intent="info"><MessageBarBody className={s.statusText}>{submitMsg}</MessageBarBody></MessageBar>
             )}
 
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
-              <Tab value="definition">Definition</Tab>
-              <Tab value="compute">Spark compute</Tab>
-              <Tab value="runs">Runs</Tab>
+              <Tab value="definition" icon={<DocumentSettings20Regular />}>Definition</Tab>
+              <Tab value="compute" icon={<Server20Regular />}>Spark compute</Tab>
+              <Tab value="runs" icon={<History20Regular />}>Runs</Tab>
             </TabList>
 
             {tab === 'definition' && (
@@ -328,8 +343,15 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
                   <Button appearance="subtle" icon={<ArrowSync16Regular />} disabled={runsLoading} onClick={loadRuns}>Refresh runs</Button>
                   {runsLoading && <Spinner size="tiny" />}
                 </div>
-                {runs.length === 0 ? (
-                  <Caption1>No batch runs yet. Submit the definition to start one.</Caption1>
+                {runsLoading && runs.length === 0 ? (
+                  <div className={s.runsLoading}><Spinner label="Loading batch runs…" /></div>
+                ) : runs.length === 0 ? (
+                  <EmptyState
+                    icon={<History24Regular />}
+                    title="No batch runs yet"
+                    body="Submit the definition to start a Livy batch run against the target Spark pool. Runs and their state will appear here."
+                    primaryAction={{ label: submitting ? 'Submitting…' : 'Submit', onClick: submit }}
+                  />
                 ) : (
                   <Table size="small" aria-label="Spark batch runs">
                     <TableHeader className={s.runsHeader}>
@@ -348,7 +370,7 @@ export function SynapseSparkEditor({ name, onClose }: SynapseSparkEditorProps) {
                           <TableCell>
                             <Badge size="small" appearance="tint" color={r.state === 'success' ? 'success' : r.state === 'error' || r.state === 'dead' || r.state === 'killed' ? 'danger' : 'informative'}>{r.state || '—'}</Badge>
                           </TableCell>
-                          <TableCell>{r.result || '—'}</TableCell>
+                          <TableCell className={s.resultCell}>{r.result || '—'}</TableCell>
                           <TableCell className={s.appIdCell} title={r.appId || undefined}>{r.appId || '—'}</TableCell>
                           <TableCell>{r.submittedAt || '—'}</TableCell>
                         </TableRow>

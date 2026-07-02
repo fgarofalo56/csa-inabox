@@ -63,14 +63,14 @@ const CATEGORY_LABEL: Record<Category, string> = {
 const CATEGORY_ORDER: Category[] = ['identity', 'data-plane', 'permissions', 'azure-services', 'enrichment', 'security'];
 
 const card: React.CSSProperties = {
-  padding: 20, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  padding: tokens.spacingVerticalXL, border: `1px solid ${tokens.colorNeutralStroke2}`,
   borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
-  marginBottom: 20, boxShadow: tokens.shadow4,
+  marginBottom: tokens.spacingVerticalXL, boxShadow: tokens.shadow4, minWidth: 0,
 };
-const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 };
+const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: 14, flexWrap: 'wrap' };
 const codeBox: React.CSSProperties = {
-  marginTop: 6, padding: 10, borderRadius: 6, background: tokens.colorNeutralBackground4,
-  color: tokens.colorNeutralForeground1, overflowX: 'auto', fontSize: 12,
+  marginTop: 6, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground4,
+  color: tokens.colorNeutralForeground1, overflow: 'auto', maxWidth: '100%', maxHeight: 360, fontSize: 12,
   fontFamily: 'Consolas, "Cascadia Code", monospace', whiteSpace: 'pre', lineHeight: 1.5,
 };
 
@@ -444,9 +444,9 @@ export function EnvConfigPane() {
                       </div>
                     )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 280 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 280, flex: 1, maxWidth: '100%' }}>
                     <Input
-                      style={{ width: 280 }}
+                      style={{ width: 280, maxWidth: '100%', flex: 1, minWidth: 0 }}
                       aria-label={`Value for ${e.key}`}
                       type={e.secret && !shown ? 'password' : 'text'}
                       placeholder={e.secret ? (cur?.set ? '•••••• (set — enter to replace)' : (e.valueHint || 'enter secret value')) : (cur?.value || e.valueHint || `set ${e.key}`)}

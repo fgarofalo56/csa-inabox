@@ -24,7 +24,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import {
+import { shorthands,
   TabList, Tab, type SelectTabData, type SelectTabEvent,
   Spinner, Button, Badge,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -57,10 +57,10 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
   },
   grow: { marginRight: 'auto' },
-  filter: { minWidth: 220 },
+  filter: { minWidth: '220px' },
   fieldStack: {
     display: 'flex', flexDirection: 'column',
-    gap: tokens.spacingVerticalM, minWidth: 360,
+    gap: tokens.spacingVerticalM, minWidth: '360px',
   },
   linkOut: {
     display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
@@ -74,7 +74,7 @@ const useStyles = makeStyles({
     transitionProperty: 'background-color, border-color',
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
-      borderColor: tokens.colorNeutralStroke1,
+      ...shorthands.borderColor(tokens.colorNeutralStroke1),
     },
   },
   muted: { color: tokens.colorNeutralForeground3 },

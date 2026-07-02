@@ -20,14 +20,19 @@
  */
 
 import { clientFetch } from '@/lib/client-fetch';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   Spinner, Caption1, Body1, Subtitle2, Button, Badge,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dropdown, Option, Link as FluentLink,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular, Dismiss16Regular, Open24Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync24Regular, Open16Regular, Dismiss16Regular, Open24Regular,
+  Building24Regular, Apps24Regular, DataPie24Regular, People24Regular,
+  Edit24Regular, Pulse24Regular, DataHistogram24Regular, DataTrending24Regular,
+  type FluentIcon,
+} from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section } from '@/lib/components/ui/section';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
@@ -89,7 +94,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalXS,
   },
   filterLabel: {
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
@@ -103,22 +108,44 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalL,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
+    backgroundColor: tokens.colorNeutralBackground1,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 120ms ease, transform 120ms ease',
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-2px)',
+    },
+  },
+  statIconRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    color: tokens.colorBrandForeground1,
   },
   statVal: {
-    fontSize: '30px',
-    lineHeight: '34px',
+    fontSize: tokens.fontSizeHero800,
+    lineHeight: tokens.lineHeightHero800,
     fontWeight: tokens.fontWeightSemibold,
     color: tokens.colorBrandForeground1,
   },
   statLabel: {
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground3,
     textTransform: 'uppercase',
     letterSpacing: '0.04em',
+  },
+  /** Icon + label sub-header inside a Distribution panel (replaces bare Subtitle2). */
+  panelHead: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+  },
+  panelHeadIcon: {
+    color: tokens.colorBrandForeground1,
+    flexShrink: 0,
   },
   twoCol: {
     display: 'grid',
@@ -144,7 +171,7 @@ const useStyles = makeStyles({
   },
   barActive: { backgroundColor: tokens.colorNeutralBackground2Selected },
   barLabel: {
-    fontSize: '13px',
+    fontSize: tokens.fontSizeBase300,
     minWidth: '150px',
     maxWidth: '150px',
     overflow: 'hidden',
@@ -153,6 +180,7 @@ const useStyles = makeStyles({
   },
   barTrack: {
     flex: 1,
+    minWidth: 0,
     height: '8px',
     backgroundColor: tokens.colorNeutralBackground3,
     borderRadius: tokens.borderRadiusSmall,
@@ -169,7 +197,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusSmall,
   },
   barCount: {
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorNeutralForeground2,
     minWidth: '64px',
     textAlign: 'right',
@@ -177,7 +205,7 @@ const useStyles = makeStyles({
   sparkRow: {
     display: 'flex',
     alignItems: 'flex-end',
-    gap: '2px',
+    gap: tokens.spacingHorizontalXXS,
     height: '80px',
     marginTop: tokens.spacingVerticalS,
   },
@@ -203,7 +231,7 @@ const useStyles = makeStyles({
     display: 'inline-flex',
     alignItems: 'center',
     gap: tokens.spacingHorizontalXS,
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     color: tokens.colorBrandForeground1,
   },
   loadingBox: {
@@ -215,11 +243,35 @@ const useStyles = makeStyles({
     width: '100%',
     height: '640px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
   },
   featureSelect: { minWidth: '180px' },
-  docIcon: { fontSize: '14px', verticalAlign: 'middle' },
+  docIcon: { fontSize: tokens.fontSizeBase300, verticalAlign: 'middle' },
+  /** Inline env-var token inside a MessageBar — long unbroken names must wrap
+   * rather than force horizontal overflow on narrow viewports. */
+  codeToken: {
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+  },
 });
+
+type UsageStyles = ReturnType<typeof useStyles>;
+
+/** Elevated KPI tile with a leading Fluent icon, big brand value, and uppercase label. */
+function StatCard({
+  className: s, icon: Icon, value, label,
+}: { className: UsageStyles; icon: FluentIcon; value: ReactNode; label: string }) {
+  return (
+    <div className={s.statCard}>
+      <div className={s.statIconRow}>
+        <Icon />
+        <span className={s.statLabel}>{label}</span>
+      </div>
+      <div className={s.statVal}>{value}</div>
+    </div>
+  );
+}
 
 export default function UsagePage() {
   const s = useStyles();
@@ -412,37 +464,22 @@ export default function UsagePage() {
         <>
           <Section title="Tenant inventory" bare>
             <div className={s.statsRow}>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{data.totals.workspaces}</div>
-                <div className={s.statLabel}>workspaces</div>
-              </div>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{data.totals.items}</div>
-                <div className={s.statLabel}>items</div>
-              </div>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{data.totals.itemTypes}</div>
-                <div className={s.statLabel}>distinct types</div>
-              </div>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{peakDau || '—'}</div>
-                <div className={s.statLabel}>peak daily active users ({data.days}d)</div>
-              </div>
-              <div className={s.statCard}>
-                <div className={s.statVal}>{data.totals.auditEvents30d}</div>
-                <div className={s.statLabel}>edits ({data.days}d)</div>
-              </div>
+              <StatCard className={s} icon={Building24Regular} value={data.totals.workspaces} label="workspaces" />
+              <StatCard className={s} icon={Apps24Regular} value={data.totals.items} label="items" />
+              <StatCard className={s} icon={DataPie24Regular} value={data.totals.itemTypes} label="distinct types" />
+              <StatCard className={s} icon={People24Regular} value={peakDau || '—'} label={`peak daily active users (${data.days}d)`} />
+              <StatCard className={s} icon={Edit24Regular} value={data.totals.auditEvents30d} label={`edits (${data.days}d)`} />
             </div>
           </Section>
 
           {/* Active users — Log Analytics DAU */}
-          <Section title="Active users">
+          <Section title={<span className={s.panelHead}><Pulse24Regular className={s.panelHeadIcon} />Active users</span>}>
             <div className={s.panel}>
               {!data.laConfigured ? (
                 <MessageBar intent="info">
                   <MessageBarBody>
                     <MessageBarTitle>Active-user telemetry not connected</MessageBarTitle>
-                    Set <code>LOOM_LOG_ANALYTICS_WORKSPACE_ID</code> (and grant the Console UAMI{' '}
+                    Set <code className={s.codeToken}>LOOM_LOG_ANALYTICS_WORKSPACE_ID</code> (and grant the Console UAMI{' '}
                     <strong>Log Analytics Reader</strong> on the workspace) to read daily active users from the
                     Loom Console request telemetry. Inventory and edit activity below come from Cosmos and are
                     always live.
@@ -474,13 +511,13 @@ export default function UsagePage() {
           </Section>
 
           {/* Feature adoption — Log Analytics events/users per route prefix */}
-          <Section title="Feature adoption">
+          <Section title={<span className={s.panelHead}><DataTrending24Regular className={s.panelHeadIcon} />Feature adoption</span>}>
             <div className={s.panel}>
               {!data.laConfigured ? (
                 <MessageBar intent="info">
                   <MessageBarBody>
                     <MessageBarTitle>Feature-adoption telemetry not connected</MessageBarTitle>
-                    Set <code>LOOM_LOG_ANALYTICS_WORKSPACE_ID</code> to break down requests + distinct users by
+                    Set <code className={s.codeToken}>LOOM_LOG_ANALYTICS_WORKSPACE_ID</code> to break down requests + distinct users by
                     feature. Click a feature to drill the most-active-items table to that feature&apos;s traffic.
                   </MessageBarBody>
                 </MessageBar>
@@ -520,43 +557,45 @@ export default function UsagePage() {
 
           <Section title="Distribution" bare>
             <div className={s.twoCol}>
-              <Section title={undefined}>
-                <div className={s.panel}>
+              <div className={s.panel}>
+                <span className={s.panelHead}>
+                  <DataPie24Regular className={s.panelHeadIcon} />
                   <Subtitle2>Items by type</Subtitle2>
-                  {data.itemsByType.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
-                  {data.itemsByType.slice(0, 15).map((row) => (
-                    <div key={row.type} className={s.bar}>
-                      <span className={s.barLabel}>{itemVisual(row.type).label}</span>
-                      <div className={s.barTrack}>
-                        {/* dynamic: fill width scales with the item count */}
-                        <div className={s.barFill} style={{ width: `${(row.count / maxType) * 100}%` }} />
-                      </div>
-                      <span className={s.barCount}>{row.count}</span>
+                </span>
+                {data.itemsByType.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
+                {data.itemsByType.slice(0, 15).map((row) => (
+                  <div key={row.type} className={s.bar}>
+                    <span className={s.barLabel}>{itemVisual(row.type).label}</span>
+                    <div className={s.barTrack}>
+                      {/* dynamic: fill width scales with the item count */}
+                      <div className={s.barFill} style={{ width: `${(row.count / maxType) * 100}%` }} />
                     </div>
-                  ))}
-                </div>
-              </Section>
+                    <span className={s.barCount}>{row.count}</span>
+                  </div>
+                ))}
+              </div>
 
-              <Section title={undefined}>
-                <div className={s.panel}>
+              <div className={s.panel}>
+                <span className={s.panelHead}>
+                  <Building24Regular className={s.panelHeadIcon} />
                   <Subtitle2>Items by workspace (top 20)</Subtitle2>
-                  {data.itemsByWorkspace.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
-                  {data.itemsByWorkspace.map((row) => (
-                    <div key={row.workspaceId} className={s.bar}>
-                      <span className={s.barLabel}>{row.workspaceName}</span>
-                      <div className={s.barTrack}>
-                        {/* dynamic: fill width scales with the item count */}
-                        <div className={s.barFill} style={{ width: `${(row.count / maxWs) * 100}%` }} />
-                      </div>
-                      <span className={s.barCount}>{row.count}</span>
+                </span>
+                {data.itemsByWorkspace.length === 0 && <Caption1 className={s.muted}>No items yet.</Caption1>}
+                {data.itemsByWorkspace.map((row) => (
+                  <div key={row.workspaceId} className={s.bar}>
+                    <span className={s.barLabel}>{row.workspaceName}</span>
+                    <div className={s.barTrack}>
+                      {/* dynamic: fill width scales with the item count */}
+                      <div className={s.barFill} style={{ width: `${(row.count / maxWs) * 100}%` }} />
                     </div>
-                  ))}
-                </div>
-              </Section>
+                    <span className={s.barCount}>{row.count}</span>
+                  </div>
+                ))}
+              </div>
             </div>
           </Section>
 
-          <Section title={`Activity (last ${data.days} days)`}>
+          <Section title={<span className={s.panelHead}><DataHistogram24Regular className={s.panelHeadIcon} />Activity (last {data.days} days)</span>}>
             <div className={s.panel}>
               <Caption1 className={s.muted}>
                 Since {new Date(data.since).toLocaleDateString()} · {data.totals.auditEvents30d} edits
@@ -622,7 +661,7 @@ export default function UsagePage() {
                   <MessageBarBody>
                     <MessageBarTitle>Embedded analytics not configured</MessageBarTitle>
                     The native charts above are fully live. To embed a curated report, set{' '}
-                    <code>{embed.hint?.missingEnvVar || 'LOOM_USAGE_REPORT_KIND'}</code>
+                    <code className={s.codeToken}>{embed.hint?.missingEnvVar || 'LOOM_USAGE_REPORT_KIND'}</code>
                     {embed.hint?.followUp ? ` — ${embed.hint.followUp}` : '.'}
                   </MessageBarBody>
                   {embed.hint?.bicepStatus && (

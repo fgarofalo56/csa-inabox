@@ -21,14 +21,18 @@
  *   - External tables     → /api/adx/external-tables       (.show external tables / .create-or-alter external table / .drop external table)
  *   - Row-level security  → /api/adx/rls                  (.show / .alter table T policy row_level_security — authored inline or via the parent editor)
  *   - Update policy       → /api/adx/policies (POST)       (.alter table T policy update — transform-on-ingest ETL)
+ *   - Retention/caching   → /api/adx/policy-authoring (POST) (.alter table|database policy retention|caching — real authoring dialogs)
+ *   - Continuous export   → /api/adx/continuous-exports    (.show / .create-or-alter / .drop continuous-export — create/edit/drop)
  *   - Database schema     → /api/adx/overview             (.show database schema as json — read-only)
- *   - Continuous export   → /api/adx/overview             (.show continuous-exports — read-only)
- *   - Database policies   → /api/adx/policies             (.show database <db> policy <kind> — read-only)
+ *   - Database policies   → /api/adx/policies             (.show database <db> policy <kind> — current values, display)
  *
- * Capabilities the ADX/Fabric UI still surfaces read-only here (database
- * retention/caching/sharding policy *authoring* via `.alter database policy`,
- * and continuous-export *authoring*) render as honest ⚠️ rows naming the
- * control command + role required — never a fake list. No mocks.
+ * Retention/caching policy *authoring* (`.alter table|database policy …`, from
+ * the Policies group's ⚙ menu) and continuous-export *authoring* (`.create-or-alter`
+ * / `.drop continuous-export`, from the Continuous export group's ＋ / row
+ * actions) are fully wired — the same authoring the ADX portal / Fabric RTI
+ * dialogs perform. A principal lacking Database Admin gets the cluster's
+ * 403/Forbidden surfaced as an honest "needs Database Admin" MessageBar in the
+ * dialog. No mocks.
  *
  * The database is resolved per kql-database item; when the cluster env var
  * (LOOM_KUSTO_CLUSTER_URI) is unset the routes 503 and the whole tree shows a
@@ -47,10 +51,10 @@ import {
 import {
   Add20Regular, ArrowSync16Regular, Delete16Regular, Edit16Regular,
   DocumentTable20Regular, Table20Regular, MathFormula20Regular,
-  ArrowImport20Regular, Open16Regular, Search20Regular, Warning20Regular,
+  ArrowImport20Regular, Open16Regular, Search20Regular,
   Database20Regular, DataUsage20Regular, ShieldKeyhole20Regular,
   DataHistogram16Regular, Code16Regular, ChartMultiple16Regular,
-  ShieldKeyhole16Regular, CloudLink20Regular,
+  ShieldKeyhole16Regular, CloudLink20Regular, Settings16Regular,
 } from '@fluentui/react-icons';
 import { IngestionMappingWizardDialog } from './ingestion-mapping-wizard';
 import {
@@ -95,6 +99,8 @@ const useStyles = makeStyles({
   surfaceSm: { maxWidth: '480px' },
   surfaceMd: { maxWidth: '560px' },
   surfaceLg: { maxWidth: '620px' },
+  inlineRow: { display: 'flex', alignItems: 'flex-end', columnGap: tokens.spacingHorizontalS },
+  grow: { flex: '1 1 auto', minWidth: 0 },
 });
 
 async function readJson(res: Response): Promise<any> {
@@ -106,7 +112,7 @@ interface TableRow { name: string; totalRowCount?: number; totalExtentSizeMb?: n
 interface FnRow { name: string; parameters?: string; body?: string; folder?: string }
 interface MvRow { name: string; sourceTable?: string }
 interface MapRow { name: string; kind: string; table?: string; mapping?: string }
-interface ExportRow { name: string; externalTableName?: string; isRunning?: boolean; isDisabled?: boolean; lastRunResult?: string }
+interface ExportRow { name: string; externalTableName?: string; isRunning?: boolean; isDisabled?: boolean; lastRunResult?: string; query?: string; intervalBetweenRuns?: string }
 interface PolicyRow { kind: string; policy?: unknown; raw?: string }
 interface ExtTableRow { name: string; tableType?: string; folder?: string; docString?: string }
 
@@ -195,6 +201,45 @@ function insertScriptKql(table: string): string {
   ].join('\n');
 }
 
+/**
+ * Best-effort parse of an `IntervalBetweenRuns` timespan (returned by
+ * `.show continuous-exports` as `hh:mm:ss` or `d.hh:mm:ss`, or a KQL literal)
+ * into a {value, unit} pair for the edit dialog's structured interval input.
+ */
+function parseIntervalParts(raw?: string): { value: string; unit: 'm' | 'h' | 'd' } {
+  const str = (raw || '').trim();
+  let m = str.match(/^(\d+)([smhd])$/);
+  if (m) return { value: m[1], unit: (m[2] === 's' ? 'm' : (m[2] as 'm' | 'h' | 'd')) };
+  m = str.match(/^(\d+)\.(\d{2}):(\d{2}):(\d{2})$/); // d.hh:mm:ss
+  if (m) {
+    const days = parseInt(m[1], 10);
+    if (days > 0) return { value: String(days), unit: 'd' };
+    const hh = parseInt(m[2], 10);
+    if (hh > 0) return { value: String(hh), unit: 'h' };
+    return { value: String(Math.max(parseInt(m[3], 10), 1)), unit: 'm' };
+  }
+  m = str.match(/^(\d{2}):(\d{2}):(\d{2})$/); // hh:mm:ss
+  if (m) {
+    const hh = parseInt(m[1], 10);
+    const mm = parseInt(m[2], 10);
+    if (hh > 0 && mm === 0) return { value: String(hh), unit: 'h' };
+    if (hh > 0) return { value: String(hh * 60 + mm), unit: 'm' };
+    return { value: String(Math.max(mm, 1)), unit: 'm' };
+  }
+  return { value: '1', unit: 'h' };
+}
+
+/** Find the first known table name referenced in a continuous-export query
+ *  (bracket-quoted or bare), so the edit dialog can prefill the `over` source. */
+function inferSourceTable(query: string | undefined, tables: { name: string }[]): string {
+  const q = query || '';
+  for (const t of tables) {
+    const esc = t.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`(^|[^A-Za-z0-9_])${esc}([^A-Za-z0-9_]|$)`).test(q)) return t.name;
+  }
+  return '';
+}
+
 /** A typed, ADX/Fabric-faithful KQL database object navigator. */
 export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTable, onDropTable, refreshKey = 0, onGetData, onCreateDashboard, onEditRls }: AdxDatabaseTreeProps) {
   const s = useStyles();
@@ -207,6 +252,8 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
   const OVERVIEW = `/api/adx/overview?${idq}`;
   const POLICIES = `/api/adx/policies?${idq}`;
   const EXTERNAL = `/api/adx/external-tables?${idq}`;
+  const POLICY_AUTHORING = `/api/adx/policy-authoring?${idq}`;
+  const CONTINUOUS_EXPORTS = `/api/adx/continuous-exports?${idq}`;
 
   const [filter, setFilter] = useState('');
   const [gate, setGate] = useState<{ missing: string } | null>(null);
@@ -258,6 +305,40 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
   const [rlsBusy, setRlsBusy] = useState(false);
   const [rlsError, setRlsError] = useState<string | null>(null);
   const [rlsNotice, setRlsNotice] = useState<string | null>(null);
+
+  // ---- continuous-export create/edit dialog + drop-confirm ----
+  const [ceOpen, setCeOpen] = useState(false);
+  const [ceEditing, setCeEditing] = useState<string | null>(null);
+  const [ceName, setCeName] = useState('');
+  const [ceSource, setCeSource] = useState('');
+  const [ceTarget, setCeTarget] = useState('');
+  const [ceIntervalValue, setCeIntervalValue] = useState('1');
+  const [ceIntervalUnit, setCeIntervalUnit] = useState<'m' | 'h' | 'd'>('h');
+  const [ceQuery, setCeQuery] = useState('');
+  const [ceBusy, setCeBusy] = useState(false);
+  const [ceError, setCeError] = useState<string | null>(null);
+  const [ceNotice, setCeNotice] = useState<string | null>(null);
+  const [ceDropTarget, setCeDropTarget] = useState<string | null>(null);
+
+  // ---- retention policy dialog (table | database scope) ----
+  const [retOpen, setRetOpen] = useState(false);
+  const [retScope, setRetScope] = useState<'database' | 'table'>('database');
+  const [retTable, setRetTable] = useState('');
+  const [retDays, setRetDays] = useState('365');
+  const [retRecoverability, setRetRecoverability] = useState(true);
+  const [retBusy, setRetBusy] = useState(false);
+  const [retError, setRetError] = useState<string | null>(null);
+  const [retNotice, setRetNotice] = useState<string | null>(null);
+
+  // ---- caching policy dialog (table | database scope) ----
+  const [cacheOpen, setCacheOpen] = useState(false);
+  const [cacheScope, setCacheScope] = useState<'database' | 'table'>('database');
+  const [cacheTable, setCacheTable] = useState('');
+  const [cacheValue, setCacheValue] = useState('31');
+  const [cacheUnit, setCacheUnit] = useState<'h' | 'd'>('d');
+  const [cacheBusy, setCacheBusy] = useState(false);
+  const [cacheError, setCacheError] = useState<string | null>(null);
+  const [cacheNotice, setCacheNotice] = useState<string | null>(null);
 
   const RLS = `/api/adx/rls?${idq}`;
 
@@ -416,6 +497,122 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
   }, [extName, extKind, extUri, extSchema, extFormat, extMi, extHotDays, EXTERNAL, loadAll]);
 
   // ---------------------------------------------------------------
+  // Policy + continuous-export authoring (real .alter / .create-or-alter)
+  // ---------------------------------------------------------------
+  /** Turn a 403/Forbidden from the cluster into the honest Database-Admin gate. */
+  const describeAdminError = useCallback((status: number, msg: string): string => {
+    const forbidden = status === 403 ||
+      /forbidden|unauthorized|not authorized|permission|access denied|principal .*(isn'?t|not) authorized/i.test(msg || '');
+    if (forbidden) {
+      return `Needs Database Admin on ${database || 'this database'}. The signed-in principal (or the Loom Console UAMI) lacks it — grant Database Admin (add the principal to the database "admins" role, or AllDatabasesAdmin on the cluster) and retry. Cluster said: ${msg}`;
+    }
+    return msg;
+  }, [database]);
+
+  const openRetention = useCallback(() => {
+    setRetOpen(true); setRetError(null); setRetNotice(null);
+    setRetScope('database'); setRetTable(tables[0]?.name || '');
+    setRetDays('365'); setRetRecoverability(true);
+  }, [tables]);
+
+  const submitRetention = useCallback(async () => {
+    setRetBusy(true); setRetError(null); setRetNotice(null);
+    try {
+      const res = await fetch(POLICY_AUTHORING, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'retention', scope: retScope,
+          table: retScope === 'table' ? retTable : undefined,
+          softDeleteDays: parseInt(retDays, 10),
+          recoverability: retRecoverability ? 'Enabled' : 'Disabled',
+        }),
+      });
+      const b = await readJson(res);
+      if (applyGate(b)) { setRetBusy(false); return; }
+      if (!b.ok) { setRetError(describeAdminError(res.status, b.error || 'failed to set retention policy')); setRetBusy(false); return; }
+      setRetNotice(`Retention policy applied on ${retScope === 'table' ? retTable : (database || 'the database')}.`);
+      await loadAll();
+    } catch (e: any) { setRetError(e?.message || String(e)); }
+    finally { setRetBusy(false); }
+  }, [POLICY_AUTHORING, retScope, retTable, retDays, retRecoverability, database, loadAll, describeAdminError]);
+
+  const openCaching = useCallback(() => {
+    setCacheOpen(true); setCacheError(null); setCacheNotice(null);
+    setCacheScope('database'); setCacheTable(tables[0]?.name || '');
+    setCacheValue('31'); setCacheUnit('d');
+  }, [tables]);
+
+  const submitCaching = useCallback(async () => {
+    setCacheBusy(true); setCacheError(null); setCacheNotice(null);
+    try {
+      const res = await fetch(POLICY_AUTHORING, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'caching', scope: cacheScope,
+          table: cacheScope === 'table' ? cacheTable : undefined,
+          hotValue: parseInt(cacheValue, 10), hotUnit: cacheUnit,
+        }),
+      });
+      const b = await readJson(res);
+      if (applyGate(b)) { setCacheBusy(false); return; }
+      if (!b.ok) { setCacheError(describeAdminError(res.status, b.error || 'failed to set caching policy')); setCacheBusy(false); return; }
+      setCacheNotice(`Hot-cache policy set to ${parseInt(cacheValue, 10)}${cacheUnit} on ${cacheScope === 'table' ? cacheTable : (database || 'the database')}.`);
+      await loadAll();
+    } catch (e: any) { setCacheError(e?.message || String(e)); }
+    finally { setCacheBusy(false); }
+  }, [POLICY_AUTHORING, cacheScope, cacheTable, cacheValue, cacheUnit, database, loadAll, describeAdminError]);
+
+  const openCeCreate = useCallback(() => {
+    setCeOpen(true); setCeEditing(null); setCeError(null); setCeNotice(null);
+    setCeName(''); setCeSource(tables[0]?.name || ''); setCeTarget(extTables[0]?.name || '');
+    setCeIntervalValue('1'); setCeIntervalUnit('h'); setCeQuery('');
+  }, [tables, extTables]);
+
+  const openCeEdit = useCallback((ce: ExportRow) => {
+    setCeOpen(true); setCeEditing(ce.name); setCeError(null); setCeNotice(null);
+    setCeName(ce.name);
+    setCeTarget(ce.externalTableName || extTables[0]?.name || '');
+    const { value, unit } = parseIntervalParts(ce.intervalBetweenRuns);
+    setCeIntervalValue(value); setCeIntervalUnit(unit);
+    setCeQuery(ce.query || '');
+    setCeSource(inferSourceTable(ce.query, tables) || tables[0]?.name || '');
+  }, [tables, extTables]);
+
+  const submitCe = useCallback(async () => {
+    const name = ceName.trim();
+    if (!name || !ceSource || !ceTarget) return;
+    setCeBusy(true); setCeError(null); setCeNotice(null);
+    try {
+      const res = await fetch(CONTINUOUS_EXPORTS, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name, sourceTable: ceSource, externalTable: ceTarget,
+          interval: `${ceIntervalValue}${ceIntervalUnit}`,
+          query: ceQuery.trim() || undefined,
+        }),
+      });
+      const b = await readJson(res);
+      if (applyGate(b)) { setCeBusy(false); return; }
+      if (!b.ok) { setCeError(describeAdminError(res.status, b.error || 'failed to save continuous export')); setCeBusy(false); return; }
+      setCeOpen(false);
+      await loadAll();
+    } catch (e: any) { setCeError(e?.message || String(e)); }
+    finally { setCeBusy(false); }
+  }, [ceName, ceSource, ceTarget, ceIntervalValue, ceIntervalUnit, ceQuery, CONTINUOUS_EXPORTS, loadAll, describeAdminError]);
+
+  const dropCe = useCallback(async (name: string) => {
+    setBusy(true); setError(null);
+    try {
+      const res = await fetch(`${CONTINUOUS_EXPORTS}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const b = await readJson(res);
+      if (applyGate(b)) { setBusy(false); return; }
+      if (!b.ok) { setError(describeAdminError(res.status, b.error || 'drop failed')); setBusy(false); return; }
+      await loadAll();
+    } catch (e: any) { setError(e?.message || String(e)); }
+    finally { setBusy(false); }
+  }, [CONTINUOUS_EXPORTS, loadAll, describeAdminError]);
+
+  // ---------------------------------------------------------------
   // Filtering
   // ---------------------------------------------------------------
   const f = filter.trim().toLowerCase();
@@ -432,7 +629,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
 
   const groupHeader = (
     label: string, icon: React.ReactElement, count: number,
-    onAdd?: () => void, addTitle?: string, shown?: number,
+    onAdd?: () => void, addTitle?: string, shown?: number, extra?: React.ReactNode,
   ) => {
     // When a filter is active and hides some rows, show "matched / total".
     const filtered = f && typeof shown === 'number' && shown !== count;
@@ -449,6 +646,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
           {filtered ? `${shown}/${count}` : count}
         </Badge>
         <span className={s.groupActions} onClick={(e) => e.stopPropagation()}>
+          {extra}
           {onAdd && (
             <Tooltip content={addTitle || `New ${label.toLowerCase()}`} relationship="label">
               <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={onAdd} disabled={busy} aria-label={addTitle || `New ${label}`} />
@@ -660,16 +858,15 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
             </Tree>
           </TreeItem>
 
-          {/* Continuous export (read-only) */}
+          {/* Continuous export (authorable: create/edit/drop) */}
           <TreeItem itemType="branch" value="g-exports">
-            {groupHeader('Continuous export', <DataUsage20Regular />, exports.length, undefined, undefined, fExports.length)}
+            {groupHeader('Continuous export', <DataUsage20Regular />, exports.length, openCeCreate, 'New continuous export', fExports.length)}
             <Tree>
               {fExports.length === 0 && (
                 <TreeItem itemType="leaf" value="ce-empty">
-                  <Tooltip content="Authoring a continuous export needs an external table + Database Admin: .create-or-alter continuous-export NAME over (T) to ExternalTable <| query. Listed read-only here." relationship="description">
-                    <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span className={s.muted}>{f ? 'No matches' : 'No continuous exports'}</span>{' '}
-                      <Badge size="small" appearance="tint" color="warning">read-only</Badge>
+                  <Tooltip content="A continuous export periodically writes new rows from a source table into an existing external table (.create-or-alter continuous-export). Create an external table first, then ＋ to author one. Requires Database Admin." relationship="description">
+                    <TreeItemLayout iconBefore={<DataUsage20Regular />}>
+                      <Caption1 className={s.muted}>{f ? 'No matches' : 'No continuous exports — ＋ to create one over an external table'}</Caption1>
                     </TreeItemLayout>
                   </Tooltip>
                 </TreeItem>
@@ -679,11 +876,13 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                   <TreeItemLayout iconBefore={<DataUsage20Regular />}>
                     <span className={s.leafRow}>
                       <span className={s.leafLabel}>{ce.name}</span>
-                      <span className={s.leafActions}>
+                      <span className={s.leafActions} onClick={(e) => e.stopPropagation()}>
                         {ce.externalTableName && <Caption1>→ {ce.externalTableName}</Caption1>}
                         <Badge size="small" appearance="tint" color={ce.isDisabled ? 'warning' : ce.isRunning ? 'success' : 'informative'}>
                           {ce.isDisabled ? 'disabled' : ce.isRunning ? 'running' : (ce.lastRunResult || 'idle')}
                         </Badge>
+                        <Tooltip content="Edit continuous export (.create-or-alter)" relationship="label"><Button size="small" appearance="subtle" icon={<Edit16Regular />} disabled={busy} onClick={() => openCeEdit(ce)} aria-label={`Edit continuous export ${ce.name}`} /></Tooltip>
+                        <Tooltip content="Drop continuous export" relationship="label"><Button size="small" appearance="subtle" icon={<Delete16Regular />} disabled={busy} onClick={() => setCeDropTarget(ce.name)} aria-label={`Drop continuous export ${ce.name}`} /></Tooltip>
                       </span>
                     </span>
                   </TreeItemLayout>
@@ -692,16 +891,29 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
             </Tree>
           </TreeItem>
 
-          {/* Database policies (read-only) */}
+          {/* Database policies (current values shown; retention/caching authorable via ⚙) */}
           <TreeItem itemType="branch" value="g-policies">
-            {groupHeader('Policies', <ShieldKeyhole20Regular />, policies.length, undefined, undefined, fPolicies.length)}
+            {groupHeader('Policies', <ShieldKeyhole20Regular />, policies.length, undefined, undefined, fPolicies.length, (
+              <Menu>
+                <MenuTrigger disableButtonEnhancement>
+                  <Tooltip content="Author retention / caching policy" relationship="label">
+                    <Button size="small" appearance="subtle" icon={<Settings16Regular />} aria-label="Author retention or caching policy" />
+                  </Tooltip>
+                </MenuTrigger>
+                <MenuPopover>
+                  <MenuList>
+                    <MenuItem icon={<DataHistogram16Regular />} onClick={openRetention}>Retention policy…</MenuItem>
+                    <MenuItem icon={<DataUsage20Regular />} onClick={openCaching}>Caching policy…</MenuItem>
+                  </MenuList>
+                </MenuPopover>
+              </Menu>
+            ))}
             <Tree>
               {fPolicies.length === 0 && (
                 <TreeItem itemType="leaf" value="pol-empty">
-                  <Tooltip content="Database policies are read from .show database <db> policy <kind> (retention, caching, sharding, mergepolicy, streamingingestion). Altering a policy needs Database Admin (.alter database <db> policy ...) and is not wired here. Listed read-only." relationship="description">
-                    <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span className={s.muted}>{f ? 'No matches' : 'No policies set'}</span>{' '}
-                      <Badge size="small" appearance="tint" color="warning">read-only</Badge>
+                  <Tooltip content="Database policies are read from .show database <db> policy <kind> (retention, caching, sharding, mergepolicy, streamingingestion). Author retention/caching (table or database scope) via the ⚙ menu above — real .alter policy commands, Database Admin required." relationship="description">
+                    <TreeItemLayout iconBefore={<ShieldKeyhole20Regular />}>
+                      <span className={s.muted}>{f ? 'No matches' : 'No policies set — author via the ⚙ menu'}</span>
                     </TreeItemLayout>
                   </Tooltip>
                 </TreeItem>
@@ -735,26 +947,6 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                   >Show full schema (.show database schema)</span>
                 </TreeItemLayout>
               </TreeItem>
-            </Tree>
-          </TreeItem>
-
-          {/* Honest gate rows — ADX/Fabric exposes these; we don't author them yet. */}
-          <TreeItem itemType="branch" value="g-not-wired">
-            <TreeItemLayout iconBefore={<Warning20Regular />}>Not yet wired</TreeItemLayout>
-            <Tree>
-              {[
-                ['Retention / caching policy authoring', '.alter table T policy retention / .alter database policy caching — per-table & per-db hot-cache + soft-delete tuning. Database policies are surfaced read-only in the Policies group above (.show database <db> policy <kind>); authoring (.alter …) needs Database Admin and is not wired.'],
-                ['Continuous-export authoring', '.create-or-alter continuous-export over an external table; needs an external table (now authorable above) + Database Admin. Listed read-only in the Continuous export group.'],
-              ].map(([label, why]) => (
-                <TreeItem key={label} itemType="leaf" value={`nw-${label}`}>
-                  <Tooltip content={why} relationship="description">
-                    <TreeItemLayout iconBefore={<Warning20Regular />}>
-                      <span className={s.muted}>{label}</span>{' '}
-                      <Badge size="small" appearance="tint" color="warning">coming</Badge>
-                    </TreeItemLayout>
-                  </Tooltip>
-                </TreeItem>
-              ))}
             </Tree>
           </TreeItem>
         </Tree>
@@ -1014,6 +1206,250 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
                 }}
               >
                 {busy ? 'Dropping…' : 'Drop external table'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Retention policy authoring dialog (.alter table|database policy retention) */}
+      <Dialog open={retOpen} onOpenChange={(_, d) => { if (!d.open) setRetOpen(false); }}>
+        <DialogSurface className={s.surfaceMd}>
+          <DialogBody>
+            <DialogTitle>Retention policy (.alter {retScope} policy retention)</DialogTitle>
+            <DialogContent>
+              <div className={s.dialogStack}>
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    Sets the <strong>soft-delete period</strong> (how long data stays queryable before ADX
+                    deletes it) via <code>.alter {retScope} policy retention</code>. Requires{' '}
+                    <strong>Database Admin</strong> (table scope also accepts Table Admin). Pure ADX — no Fabric.
+                  </MessageBarBody>
+                </MessageBar>
+                <Field label="Scope" required>
+                  <Dropdown
+                    value={retScope === 'table' ? 'Table' : 'Database'}
+                    selectedOptions={[retScope]}
+                    onOptionSelect={(_, d) => setRetScope((d.optionValue as 'database' | 'table') || 'database')}
+                  >
+                    <Option value="database" text="Database">Database{database ? ` (${database})` : ''}</Option>
+                    <Option value="table" text="Table">Table</Option>
+                  </Dropdown>
+                </Field>
+                {retScope === 'table' && (
+                  <Field label="Table" required>
+                    <Dropdown
+                      placeholder={tables.length ? 'Select a table' : 'No tables — create one first'}
+                      value={retTable} selectedOptions={retTable ? [retTable] : []}
+                      onOptionSelect={(_, d) => setRetTable(d.optionValue || '')}
+                      disabled={!tables.length}
+                    >
+                      {tables.map((t) => <Option key={t.name} value={t.name} text={t.name}>{t.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                )}
+                <Field label="Soft-delete period (days)" required hint="How many days data stays queryable. 0 = delete immediately.">
+                  <Input type="number" min={0} value={retDays} onChange={(_, d) => setRetDays(d.value)} />
+                </Field>
+                <Field label="Recoverability">
+                  <Switch
+                    checked={retRecoverability}
+                    label={retRecoverability ? 'Enabled — soft-deleted data recoverable for ~14 days' : 'Disabled — no recovery window'}
+                    onChange={(_, d) => setRetRecoverability(!!d.checked)}
+                  />
+                </Field>
+                {retNotice && <MessageBar intent="success"><MessageBarBody>{retNotice}</MessageBarBody></MessageBar>}
+                {retError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Retention policy failed</MessageBarTitle>{retError}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setRetOpen(false)} disabled={retBusy}>Close</Button>
+              <Button
+                appearance="primary"
+                onClick={submitRetention}
+                disabled={retBusy || (retScope === 'table' && !retTable) || !/^\d+$/.test(retDays.trim())}
+              >
+                {retBusy ? 'Applying…' : 'Apply retention'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Caching policy authoring dialog (.alter table|database policy caching) */}
+      <Dialog open={cacheOpen} onOpenChange={(_, d) => { if (!d.open) setCacheOpen(false); }}>
+        <DialogSurface className={s.surfaceMd}>
+          <DialogBody>
+            <DialogTitle>Caching policy (.alter {cacheScope} policy caching)</DialogTitle>
+            <DialogContent>
+              <div className={s.dialogStack}>
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    Sets the <strong>hot-cache window</strong> — how much recent data is kept on local SSD for
+                    sub-second KQL — via <code>.alter {cacheScope} policy caching hot = …</code>. Requires{' '}
+                    <strong>Database Admin</strong> (table scope also accepts Table Admin). Pure ADX — no Fabric.
+                  </MessageBarBody>
+                </MessageBar>
+                <Field label="Scope" required>
+                  <Dropdown
+                    value={cacheScope === 'table' ? 'Table' : 'Database'}
+                    selectedOptions={[cacheScope]}
+                    onOptionSelect={(_, d) => setCacheScope((d.optionValue as 'database' | 'table') || 'database')}
+                  >
+                    <Option value="database" text="Database">Database{database ? ` (${database})` : ''}</Option>
+                    <Option value="table" text="Table">Table</Option>
+                  </Dropdown>
+                </Field>
+                {cacheScope === 'table' && (
+                  <Field label="Table" required>
+                    <Dropdown
+                      placeholder={tables.length ? 'Select a table' : 'No tables — create one first'}
+                      value={cacheTable} selectedOptions={cacheTable ? [cacheTable] : []}
+                      onOptionSelect={(_, d) => setCacheTable(d.optionValue || '')}
+                      disabled={!tables.length}
+                    >
+                      {tables.map((t) => <Option key={t.name} value={t.name} text={t.name}>{t.name}</Option>)}
+                    </Dropdown>
+                  </Field>
+                )}
+                <Field label="Hot-cache period" required>
+                  <span className={s.inlineRow}>
+                    <span className={s.grow}>
+                      <Input type="number" min={0} value={cacheValue} onChange={(_, d) => setCacheValue(d.value)} />
+                    </span>
+                    <Dropdown
+                      value={cacheUnit === 'h' ? 'Hours' : 'Days'}
+                      selectedOptions={[cacheUnit]}
+                      onOptionSelect={(_, d) => setCacheUnit((d.optionValue as 'h' | 'd') || 'd')}
+                    >
+                      <Option value="h" text="Hours">Hours</Option>
+                      <Option value="d" text="Days">Days</Option>
+                    </Dropdown>
+                  </span>
+                </Field>
+                {cacheNotice && <MessageBar intent="success"><MessageBarBody>{cacheNotice}</MessageBarBody></MessageBar>}
+                {cacheError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Caching policy failed</MessageBarTitle>{cacheError}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCacheOpen(false)} disabled={cacheBusy}>Close</Button>
+              <Button
+                appearance="primary"
+                onClick={submitCaching}
+                disabled={cacheBusy || (cacheScope === 'table' && !cacheTable) || !/^\d+$/.test(cacheValue.trim())}
+              >
+                {cacheBusy ? 'Applying…' : 'Apply caching'}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Continuous-export create/edit dialog (.create-or-alter continuous-export) */}
+      <Dialog open={ceOpen} onOpenChange={(_, d) => { if (!d.open) setCeOpen(false); }}>
+        <DialogSurface className={s.surfaceLg}>
+          <DialogBody>
+            <DialogTitle>{ceEditing ? `Edit continuous export · ${ceEditing}` : 'New continuous export (.create-or-alter continuous-export)'}</DialogTitle>
+            <DialogContent>
+              <div className={s.dialogStack}>
+                <MessageBar intent="info">
+                  <MessageBarBody>
+                    Periodically exports new rows from a source table into an existing <strong>external table</strong>{' '}
+                    via <code>.create-or-alter continuous-export</code> (<code>managedIdentity=system</code>). Create
+                    the external-table target first in the <strong>External tables</strong> group. Requires{' '}
+                    <strong>Database Admin</strong>. Pure ADX ↔ ADLS Gen2 — no Fabric.
+                  </MessageBarBody>
+                </MessageBar>
+                <Field label="Name" required>
+                  <Input value={ceName} onChange={(_, d) => setCeName(d.value)} placeholder="export_events" disabled={!!ceEditing} />
+                </Field>
+                <Field label="Source table (over)" required>
+                  <Dropdown
+                    placeholder={tables.length ? 'Select the source table' : 'No tables — create one first'}
+                    value={ceSource} selectedOptions={ceSource ? [ceSource] : []}
+                    onOptionSelect={(_, d) => setCeSource(d.optionValue || '')}
+                    disabled={!tables.length}
+                  >
+                    {tables.map((t) => <Option key={t.name} value={t.name} text={t.name}>{t.name}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="External table target" required hint={extTables.length ? undefined : 'No external tables — create one in the External tables group first.'}>
+                  <Dropdown
+                    placeholder={extTables.length ? 'Select an external table' : 'No external tables'}
+                    value={ceTarget} selectedOptions={ceTarget ? [ceTarget] : []}
+                    onOptionSelect={(_, d) => setCeTarget(d.optionValue || '')}
+                    disabled={!extTables.length}
+                  >
+                    {extTables.map((x) => <Option key={x.name} value={x.name} text={x.name}>{x.name}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Run interval" required>
+                  <span className={s.inlineRow}>
+                    <span className={s.grow}>
+                      <Input type="number" min={1} value={ceIntervalValue} onChange={(_, d) => setCeIntervalValue(d.value)} />
+                    </span>
+                    <Dropdown
+                      value={ceIntervalUnit === 'm' ? 'Minutes' : ceIntervalUnit === 'h' ? 'Hours' : 'Days'}
+                      selectedOptions={[ceIntervalUnit]}
+                      onOptionSelect={(_, d) => setCeIntervalUnit((d.optionValue as 'm' | 'h' | 'd') || 'h')}
+                    >
+                      <Option value="m" text="Minutes">Minutes</Option>
+                      <Option value="h" text="Hours">Hours</Option>
+                      <Option value="d" text="Days">Days</Option>
+                    </Dropdown>
+                  </span>
+                </Field>
+                <Field label="Export query (optional)" hint="KQL after <| — leave blank to export the whole source table. Project/filter before export, e.g. T | project ts, tenant, value.">
+                  <Textarea
+                    value={ceQuery} onChange={(_, d) => setCeQuery(d.value)} rows={4} className={s.kqlInput}
+                    placeholder={ceSource ? `${ceSource} | project ...` : 'source | project ...'}
+                  />
+                </Field>
+                {ceNotice && <MessageBar intent="success"><MessageBarBody>{ceNotice}</MessageBarBody></MessageBar>}
+                {ceError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Continuous export failed</MessageBarTitle>{ceError}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCeOpen(false)} disabled={ceBusy}>Cancel</Button>
+              <Button
+                appearance="primary"
+                onClick={submitCe}
+                disabled={ceBusy || !ceName.trim() || !ceSource || !ceTarget || !/^\d+$/.test(ceIntervalValue.trim())}
+              >
+                {ceBusy ? 'Saving…' : (ceEditing ? 'Save changes' : 'Create')}
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Continuous-export drop-confirm dialog */}
+      <Dialog open={ceDropTarget !== null} onOpenChange={(_, d) => { if (!d.open) setCeDropTarget(null); }}>
+        <DialogSurface className={s.surfaceSm}>
+          <DialogBody>
+            <DialogTitle>Drop continuous export {ceDropTarget}?</DialogTitle>
+            <DialogContent>
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Stops future exports</MessageBarTitle>
+                  Removes the job via <code>.drop continuous-export [&quot;{ceDropTarget}&quot;]</code>. The
+                  external table and already-exported data are <strong>not</strong> deleted.
+                </MessageBarBody>
+              </MessageBar>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setCeDropTarget(null)} disabled={busy}>Cancel</Button>
+              <Button
+                appearance="primary"
+                disabled={busy}
+                onClick={async () => {
+                  const name = ceDropTarget;
+                  if (!name) return;
+                  setCeDropTarget(null);
+                  await dropCe(name);
+                }}
+              >
+                {busy ? 'Dropping…' : 'Drop continuous export'}
               </Button>
             </DialogActions>
           </DialogBody>

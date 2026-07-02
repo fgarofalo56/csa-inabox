@@ -28,8 +28,9 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Save20Regular, Play20Regular, Stop20Regular, Open16Regular } from '@fluentui/react-icons';
+import { Save20Regular, Play20Regular, Stop20Regular, Open16Regular, ChevronDown20Regular, ChevronUp20Regular } from '@fluentui/react-icons';
 import { openMaker } from './maker-studio';
+import { FlowBuilder, parseDefinition } from './flow-builder';
 
 const useStyles = makeStyles({
   wrap: { display: 'flex', flexDirection: 'column', gap: '12px' },
@@ -48,6 +49,28 @@ const useStyles = makeStyles({
   },
   cell: { fontSize: '12px', whiteSpace: 'nowrap', maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis' },
   connRow: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr auto', gap: '8px', alignItems: 'end' },
+  advancedToggle: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    cursor: 'pointer',
+    color: tokens.colorNeutralForeground2,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.06em',
+    userSelect: 'none' as const,
+    padding: `${tokens.spacingVerticalXS} 0`,
+  },
+  advancedSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalM,
+    backgroundColor: tokens.colorNeutralBackground2,
+  },
 });
 
 export interface DesignerFlowMeta {
@@ -96,6 +119,8 @@ export function PowerAutomateDesignerTab({ envId, flowId, flow }: PowerAutomateD
   const [conns, setConns] = useState<ConnRefRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ kind: 'success' | 'error' | 'info'; text: string } | null>(null);
+  // Advanced (JSON) section — auto-opens when flow is complex or defText cannot be parsed.
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   const apiBase = (flowId && envId)
     ? `/api/items/power-automate-flow/${encodeURIComponent(flowId)}/definition?envId=${encodeURIComponent(envId)}`
@@ -176,6 +201,24 @@ export function PowerAutomateDesignerTab({ envId, flowId, flow }: PowerAutomateD
     } finally { setBusy(false); }
   }, [apiBase, load]);
 
+  // Derive a parsed view of defText for the FlowBuilder.
+  // parsedDef is undefined when defText is empty or not valid JSON.
+  const parsedDef = useMemo<Record<string, any> | undefined>(() => {
+    if (!defText.trim()) return undefined;
+    try { return JSON.parse(defText); } catch { return undefined; }
+  }, [defText]);
+
+  const isComplex = useMemo<boolean>(() => {
+    if (!parsedDef) return false;
+    return parseDefinition(parsedDef).complex;
+  }, [parsedDef]);
+
+  // Auto-open the Advanced JSON panel whenever the flow is complex or unparseable.
+  useEffect(() => {
+    if (!defText.trim()) return;
+    if (!parsedDef || isComplex) setAdvancedOpen(true);
+  }, [defText, parsedDef, isComplex]);
+
   if (!flowId || !envId) {
     return (
       <div className={s.wrap}>
@@ -241,18 +284,64 @@ export function PowerAutomateDesignerTab({ envId, flowId, flow }: PowerAutomateD
         </div>
       )}
 
-      <Field
-        label="Workflow definition (Logic Apps JSON)"
-        hint="The triggers/actions definition the flow runs. Validated against the Logic Apps workflowdefinition.json schema on save."
-      >
-        <Textarea
-          className={s.editor}
-          value={defText}
-          onChange={(_, d) => setDefText(d.value)}
-          resize="vertical"
-          placeholder='{ "$schema": "...workflowdefinition.json#", "triggers": { ... }, "actions": { ... } }'
+      {/* ------------------------------------------------------------------ */}
+      {/* PRIMARY: Flow builder (guided, no-freeform). Hidden when complex.  */}
+      {/* ------------------------------------------------------------------ */}
+      {parsedDef && !isComplex && (
+        <FlowBuilder
+          definition={parsedDef}
+          onChange={(next) => setDefText(JSON.stringify(next, null, 2))}
         />
-      </Field>
+      )}
+
+      {/* ------------------------------------------------------------------ */}
+      {/* SECONDARY: Advanced (JSON) — collapsed by default for linear flows, */}
+      {/* auto-expanded for complex/unparseable flows.                        */}
+      {/* ------------------------------------------------------------------ */}
+      <div>
+        {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/interactive-supports-focus */}
+        <div
+          role="button"
+          tabIndex={0}
+          className={s.advancedToggle}
+          onClick={() => setAdvancedOpen((v) => !v)}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setAdvancedOpen((v) => !v); }}
+          aria-expanded={advancedOpen}
+        >
+          {advancedOpen ? <ChevronUp20Regular /> : <ChevronDown20Regular />}
+          {isComplex
+            ? 'Workflow definition JSON (complex flow — edit here)'
+            : !parsedDef && defText.trim()
+              ? 'Workflow definition JSON (parse error — edit here)'
+              : 'Advanced: Workflow definition JSON'}
+        </div>
+
+        {advancedOpen && (
+          <div className={s.advancedSection}>
+            {isComplex && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>Complex flow — guided builder unavailable</MessageBarTitle>
+                  This flow uses branches, loops, or scopes ({parseDefinition(parsedDef ?? {}).complexReason ?? ''}).
+                  Edit the full JSON below, or open the visual designer to restructure it.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            <Field
+              label="Workflow definition (Logic Apps JSON)"
+              hint="The triggers/actions definition the flow runs. Validated against the Logic Apps workflowdefinition.json schema on save."
+            >
+              <Textarea
+                className={s.editor}
+                value={defText}
+                onChange={(_, d) => setDefText(d.value)}
+                resize="vertical"
+                placeholder='{ "$schema": "...workflowdefinition.json#", "triggers": { ... }, "actions": { ... } }'
+              />
+            </Field>
+          </div>
+        )}
+      </div>
 
       <Body1><strong>Connection references</strong></Body1>
       <Caption1>

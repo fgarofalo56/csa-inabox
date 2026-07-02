@@ -418,7 +418,7 @@ export async function searchRuns(opts: {
  */
 export async function searchRunsByExperimentName(
   experimentName: string,
-  opts: { filter?: string; maxResults?: number } = {},
+  opts: { filter?: string; maxResults?: number; runViewType?: 'ACTIVE_ONLY' | 'DELETED_ONLY' | 'ALL' } = {},
 ): Promise<{ experiment: MlflowExperiment | null; runs: MlflowRun[] }> {
   const experiment = await getExperimentByName(experimentName);
   if (!experiment) return { experiment: null, runs: [] };
@@ -490,6 +490,65 @@ export async function listArtifacts(runId: string, path?: string): Promise<Mlflo
     isDir: f.is_dir ?? f.isDir ?? false,
     fileSize: numOrUndef(f.file_size ?? f.fileSize),
   }));
+}
+
+/**
+ * GET <base>/api/2.0/mlflow/artifacts/get-artifact?run_id=...&path=...
+ * Returns the raw artifact bytes (small text artifacts: metrics.json, MLmodel,
+ * conda.yaml, *.txt). The editor's Artifacts tab previews + downloads files via
+ * this proxy. Caps at maxBytes so we never stream a multi-GB model file into the
+ * browser; larger files surface a "too large to preview" gate.
+ */
+export async function getArtifactBlob(runId: string, path: string, maxBytes = 1_048_576): Promise<{ body: ArrayBuffer; contentType: string; truncated: boolean }> {
+  const res = await mlflowFetch('/artifacts/get-artifact', { method: 'GET', query: { run_id: runId, path } });
+  if (!res.ok) throw new MlflowError(res.status, undefined, `get-artifact ${res.status}`);
+  const buf = await res.arrayBuffer();
+  const truncated = buf.byteLength > maxBytes;
+  return { body: truncated ? buf.slice(0, maxBytes) : buf, contentType: res.headers.get('content-type') || 'application/octet-stream', truncated };
+}
+
+/**
+ * POST <base>/api/2.0/mlflow/runs/delete — soft-delete (lifecycle → DELETED).
+ * https://mlflow.org/docs/latest/rest-api.html#delete-run
+ */
+export async function deleteRun(runId: string): Promise<void> {
+  const res = await mlflowFetch('/runs/delete', { method: 'POST', body: JSON.stringify({ run_id: runId }) });
+  await readMlflowJson(res);
+}
+
+/** POST <base>/api/2.0/mlflow/runs/restore — un-delete an archived run. */
+export async function restoreRun(runId: string): Promise<void> {
+  const res = await mlflowFetch('/runs/restore', { method: 'POST', body: JSON.stringify({ run_id: runId }) });
+  await readMlflowJson(res);
+}
+
+/** POST <base>/api/2.0/mlflow/runs/set-tag — used for archive flag + clone metadata. */
+export async function setRunTag(runId: string, key: string, value: string): Promise<void> {
+  const res = await mlflowFetch('/runs/set-tag', { method: 'POST', body: JSON.stringify({ run_id: runId, key, value }) });
+  await readMlflowJson(res);
+}
+
+/**
+ * Clone a run: create a new run in the same experiment and copy the source
+ * run's params + tags so it can be re-launched. Real MLflow create + log-batch.
+ * https://mlflow.org/docs/latest/rest-api.html#create-run
+ */
+export async function cloneRun(srcRunId: string): Promise<MlflowRun> {
+  const src = await getRun(srcRunId);
+  if (!src) throw new MlflowError(404, undefined, `source run ${srcRunId} not found`);
+  const createRes = await mlflowFetch('/runs/create', {
+    method: 'POST',
+    body: JSON.stringify({ experiment_id: src.experimentId, start_time: Date.now(), tags: [{ key: 'mlflow.note.clonedFrom', value: srcRunId }] }),
+  });
+  const cj = await readMlflowJson<{ run?: any }>(createRes);
+  const newId = cj.run?.info?.run_id || cj.run?.info?.runId;
+  if (!newId) throw new MlflowError(createRes.status, cj, 'runs/create returned no run_id');
+  const params = (src.params || []).slice(0, 100);
+  if (params.length) {
+    await mlflowFetch('/runs/log-batch', { method: 'POST', body: JSON.stringify({ run_id: newId, params }) }).then(readMlflowJson).catch(() => {});
+  }
+  const cloned = await getRun(newId);
+  return cloned || shapeRun(cj.run);
 }
 
 // ---------------- Model Registry (stages live HERE, not in ARM) ----------------

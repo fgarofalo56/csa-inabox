@@ -119,24 +119,24 @@ function deriveWorkspaceId(href: string): string | undefined {
 const useStyles = makeStyles({
   root: {
     display: 'flex', alignItems: 'flex-end',
-    gap: 2, flex: '1 1 0', minWidth: 0, maxWidth: '100%',
+    gap: tokens.spacingHorizontalXXS, flex: '1 1 0', minWidth: 0, maxWidth: '100%',
     overflow: 'hidden',
-    height: '100%', paddingTop: 4,
+    height: '100%', paddingTop: tokens.spacingVerticalXS,
     position: 'relative',
   },
   scroller: {
     display: 'flex', alignItems: 'flex-end',
-    gap: 2, minWidth: 0, flex: '1 1 0',
+    gap: tokens.spacingHorizontalXXS, minWidth: 0, flex: '1 1 0',
     overflow: 'hidden',
   },
   tab: {
     display: 'inline-flex', alignItems: 'center',
-    gap: 6, padding: '6px 10px 6px 12px',
+    gap: tokens.spacingHorizontalSNudge, padding: '6px 10px 6px 12px',
     backgroundColor: 'rgba(255,255,255,0.08)',
     color: 'rgba(255,255,255,0.78)',
     borderTopLeftRadius: 'var(--loom-radius-md)',
     borderTopRightRadius: 'var(--loom-radius-md)',
-    fontSize: 12, maxWidth: 180, minWidth: 0,
+    fontSize: tokens.fontSizeBase200, maxWidth: '180px', minWidth: 0,
     flex: '0 1 auto',
     cursor: 'pointer', whiteSpace: 'nowrap',
     border: '1px solid transparent',
@@ -146,7 +146,7 @@ const useStyles = makeStyles({
     textDecoration: 'none',
   },
   pinIcon: {
-    fontSize: 12,
+    fontSize: tokens.fontSizeBase200,
     color: 'rgba(255,255,255,0.85)',
     flex: '0 0 auto',
   },
@@ -155,9 +155,9 @@ const useStyles = makeStyles({
   },
   groupHeader: {
     display: 'inline-flex', alignItems: 'center',
-    gap: 4, padding: '4px 8px',
-    fontSize: 11, textTransform: 'uppercase',
-    letterSpacing: 0.4, fontWeight: 600,
+    gap: tokens.spacingHorizontalXS, padding: '4px 8px',
+    fontSize: '11px', textTransform: 'uppercase',
+    letterSpacing: '0.4px', fontWeight: 600,
     color: 'rgba(255,255,255,0.55)',
     flex: '0 0 auto',
     cursor: 'default',
@@ -166,14 +166,14 @@ const useStyles = makeStyles({
   groupCount: {
     display: 'inline-flex', alignItems: 'center',
     justifyContent: 'center',
-    minWidth: 16, height: 14, padding: '0 4px',
-    borderRadius: 7, fontSize: 10,
+    minWidth: tokens.spacingHorizontalL, height: '14px', padding: '0 4px',
+    borderRadius: '7px', fontSize: tokens.fontSizeBase100,
     backgroundColor: 'rgba(255,255,255,0.18)',
     color: 'rgba(255,255,255,0.85)',
   },
   overflowBtn: {
     color: 'rgba(255,255,255,0.78)',
-    marginLeft: 4,
+    marginLeft: tokens.spacingHorizontalXS,
     flex: '0 0 auto',
   },
   groupToggleBtn: {
@@ -185,18 +185,18 @@ const useStyles = makeStyles({
     backgroundColor: 'rgba(255,255,255,0.12)',
   },
   overflowMenu: {
-    display: 'flex', flexDirection: 'column', gap: 2,
-    minWidth: 260, maxHeight: 420, overflowY: 'auto',
-    padding: 4,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS,
+    minWidth: '260px', maxHeight: '420px', overflowY: 'auto',
+    padding: tokens.spacingHorizontalXS,
   },
   overflowItem: {
-    display: 'flex', alignItems: 'center', gap: 6,
-    padding: '6px 10px', cursor: 'pointer', borderRadius: 4,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge,
+    padding: '6px 10px', cursor: 'pointer', borderRadius: tokens.borderRadiusMedium,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
-    fontSize: 13,
+    fontSize: '13px',
   },
   overflowSep: {
-    height: 1, margin: '4px 0',
+    height: '1px', margin: '4px 0',
     backgroundColor: tokens.colorNeutralStroke2,
   },
   overflowDestructive: {
@@ -210,7 +210,7 @@ const useStyles = makeStyles({
   },
   title: { overflow: 'hidden', textOverflow: 'ellipsis', minWidth: 0 },
   close: {
-    minWidth: 18, height: 18, padding: 0,
+    minWidth: '18px', height: '18px', padding: 0,
     color: 'inherit',
   },
 });

@@ -29,23 +29,32 @@
  * MessageBar so the editor stays honest.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input,
   Tree, TreeItem, TreeItemLayout, Select, Field, Textarea,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  RadioGroup, Radio,
   makeStyles, mergeClasses, tokens,
   Toast, ToastTitle, useToastController, Toaster, useId,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Flow20Regular,
   Checkmark20Regular, Bug20Regular, Clock20Regular, Settings20Regular, CloudArrowUp20Regular,
   ArrowDownload20Regular, ArrowUpload20Regular, AppsList20Regular,
+  PlugConnected20Regular, Database20Regular,
+  Flow24Regular, NumberSymbol20Regular, Tag20Regular, Code20Regular, CalendarClock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
+import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
 import { ActivityPalette } from '@/lib/components/pipeline/palette';
 import { PipelineCanvas, type CanvasHandle } from '@/lib/components/pipeline/canvas';
 import { PropertiesPanel } from '@/lib/components/pipeline/properties-panel';
@@ -54,69 +63,143 @@ import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
 import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
 import { OutputPane } from '@/lib/components/pipeline/output-pane';
 import { TemplateGalleryFlyout } from '@/lib/components/pipeline/templates/gallery';
-import type { PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
+import { PIPELINE_TEMPLATES, type PipelineTemplate } from '@/lib/components/pipeline/templates/catalog';
 import {
   ACTIVITY_CATALOG, findByKey, nextNameSuffix, type ActivityTypeDef,
 } from '@/lib/components/pipeline/activity-catalog';
 import {
   type PipelineActivity, type PipelineSpec, type PipelineParameter, type PipelineVariable,
-  type PipelineParameterType,
+  type PipelineParameterType, type PipelineRuntime, DEFAULT_PIPELINE_RUNTIME,
   textToSpec, specToText, paramsFromSpec, paramsToSpec, varsFromSpec, varsToSpec,
 } from '@/lib/components/pipeline/types';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+// Azure-native runtime delegates (Contract B): when this unified editor is the
+// one mounted for a slug — `data-pipeline`, or `adf-pipeline` (the ONLY slug
+// that carries `aliasOf:'data-pipeline'` in the catalog, so the item page resolves
+// it to THIS editor with runtimePreset 'adf') — its 'adf'/'synapse' runtime paths
+// delegate to the SAME purpose-built editors so bind/run/save/validate/debug/
+// runs/triggers reuse the EXISTING `/api/items/{adf-pipeline|synapse-pipeline}/{id}/*`
+// routes (no new routes, no duplicated binding logic).
+//
+// IMPORTANT — `synapse-pipeline` is NOT an alias of `data-pipeline`. Its catalog
+// entry has `runtimePreset:'synapse'` but no `aliasOf`, so the item page opens
+// `SynapsePipelineEditor` DIRECTLY; that editor's `{item,id}` signature does not
+// accept (and so ignores) runtimePreset. Back-compat for existing
+// adf-pipeline / synapse-pipeline / geo-pipeline instances still holds because
+// `SynapsePipelineEditor` is PipelineEditorCore-backed — the same core this file
+// delegates to. 'fabric' keeps this file's existing body.
+import { AdfPipelineEditor, SynapsePipelineEditor } from './azure-services-editors';
+// A12 — dock the Pipeline Copilot in the flagship editor's right rail (same pane
+// the alias editors mount via pipeline-editor-core.tsx:755). It POSTs the real
+// SSE orchestrator at /api/items/data-pipeline/{id}/copilot (Azure-native ADF
+// backend per no-fabric-dependency.md) and applies the generated spec to THIS
+// file's canvas via onApplySpec.
+import { PipelineCopilotPane } from './pipeline-editor';
 
 const useStyles = makeStyles({
   shell: {
-    display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', flex: 1, minHeight: 0,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalM, flex: 1, minHeight: 0,
   },
-  topbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
-  threePane: { display: 'flex', flex: 1, minHeight: '480px', gap: '8px' },
+  topbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  threePane: { display: 'flex', flex: 1, minHeight: '480px', gap: tokens.spacingHorizontalS },
   paletteCol: {
     flexShrink: 0,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusSmall,
     overflow: 'hidden',
     display: 'flex',
   },
-  centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0 },
-  treePad: { padding: '8px' },
-  tabBody: { padding: '12px', overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: '8px' },
+  centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  treePad: { padding: tokens.spacingVerticalS },
+  tabBody: { padding: tokens.spacingHorizontalM, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 
   // ── ADF-Studio designer layout: palette | (canvas over a resizable config dock) ──
   // The canvas FILLS the space above the dock; the dock has an explicit,
   // user-dragged height with its own internal scroll, so expanding/collapsing
   // sections inside the activity config NEVER resizes the canvas.
-  designerRow: { display: 'flex', flex: 1, minHeight: '560px', gap: '8px', minWidth: 0 },
+  designerRow: { display: 'flex', flex: 1, minHeight: '560px', gap: tokens.spacingHorizontalS, minWidth: 0 },
   designerMain: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
   canvasWrap: { flex: 1, minHeight: '180px', display: 'flex', overflow: 'hidden' },
   splitter: {
     flexShrink: 0,
-    height: '10px',
+    height: '10px',  // inherent: drag-grip bar thickness — no spacing token is this thin
     cursor: 'row-resize',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
     touchAction: 'none',
     ':hover': { backgroundColor: tokens.colorNeutralBackground3 },
+    // Keyboard-focus affordance — the handle is focusable (tabIndex=0) and
+    // Arrow/Page/Home/End resizable, matching the canvas handle above it.
+    ':focus-visible': {
+      outline: `2px solid ${tokens.colorStrokeFocus2}`,
+      outlineOffset: '-2px',
+    },
   },
   splitterActive: { backgroundColor: tokens.colorBrandBackground2 },
   splitterGrip: {
-    width: '44px',
-    height: '4px',
-    borderRadius: '2px',
+    width: '44px',   // inherent: grip-pill width (decorative drag affordance — no token expresses it)
+    height: '4px',   // inherent: grip-pill thickness
+    borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorNeutralStroke1,
+    pointerEvents: 'none',  // pointer events belong to the separator, not the grip
   },
   configDock: {
     flexShrink: 0,
     overflow: 'auto',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
-    minHeight: '120px',
+    borderRadius: tokens.borderRadiusSmall,
+    minHeight: '240px',  // inherent: matches DOCK_MIN_PX floor
+    // Smooth keyboard-driven height changes; during a pointer drag the
+    // transition is suppressed inline (onPointerDown) so dragging stays direct.
+    transitionProperty: 'height',
+    transitionDuration: tokens.durationFast,
+    transitionTimingFunction: tokens.curveEasyEase,
+    '@media (prefers-reduced-motion: reduce)': { transitionProperty: 'none' },
   },
+
+  // ── Web-5.0 polish: elevated, interactive start-cards (blank / practice /
+  //    templates). Flat→shadow4, hover→shadow16, brand-accented hairline. ──
+  startCard: {
+    cursor: 'pointer',
+    padding: tokens.spacingHorizontalXL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    minWidth: 0,
+    overflowWrap: 'anywhere',
+    transitionProperty: 'box-shadow, border-color, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      borderTopColor: tokens.colorBrandStroke1,
+      borderRightColor: tokens.colorBrandStroke1,
+      borderBottomColor: tokens.colorBrandStroke1,
+      borderLeftColor: tokens.colorBrandStroke1,
+    },
+  },
+  startCardDisabled: {
+    cursor: 'not-allowed',
+    opacity: 0.6,
+    ':hover': {
+      boxShadow: tokens.shadow4,
+      borderTopColor: tokens.colorNeutralStroke2,
+      borderRightColor: tokens.colorNeutralStroke2,
+      borderBottomColor: tokens.colorNeutralStroke2,
+      borderLeftColor: tokens.colorNeutralStroke2,
+    },
+  },
+  cardIcon: { color: tokens.colorBrandForeground1, fontSize: '24px' },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -131,6 +214,25 @@ function fromB64(b: string): string {
     return typeof window === 'undefined' ? Buffer.from(b, 'base64').toString('utf-8')
       : decodeURIComponent(escape(atob(b)));
   } catch { return ''; }
+}
+
+// ── Activity-config dock divider — inherent layout dimensions ───────────────
+// Raw px below are layout bounds / drag-steps that no Fluent token expresses
+// (mirrors resizable-canvas.tsx). They are the documented carve-out from the
+// web3-ui token-discipline rule (resize min/max bounds + step sizes). The
+// ceiling is NOT a fixed px: it tracks 80vh of the viewport (recomputed on
+// resize, exactly like the shared primitive); the const below is only the
+// SSR-safe placeholder used until the first client measurement.
+const DOCK_MIN_PX = 240;          // floor — below this the config form is unusable
+const DOCK_MAX_FALLBACK = 680;    // SSR-safe ceiling placeholder; corrected to 80vh on mount
+const DOCK_DEFAULT_PX = 300;      // initial dock height
+const DOCK_STEP = 24;             // Arrow-key resize step (px)
+const DOCK_STEP_LARGE = 96;       // Shift+Arrow / PageUp-Down resize step (px)
+// Per-surface persistence (matches the canvas region's storageKey).
+const DOCK_STORAGE_KEY = 'loom.dockHeight.adf-data-pipeline';
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(Math.round(value), min), Math.max(min, max));
 }
 
 const STARTER: PipelineSpec = {
@@ -161,11 +263,44 @@ function useWorkspaces() {
   return { workspaces, error, hint, loading };
 }
 
-interface Props { item: FabricItemType; id: string; }
+interface Props {
+  item: FabricItemType;
+  id: string;
+  /**
+   * Lock the runtime selector to this backend (Contract D). Set by the item
+   * page when the opened slug is an alias/preset (e.g. `adf-pipeline` →
+   * runtimePreset 'adf', `synapse-pipeline` → 'synapse'). When undefined the
+   * selector defaults to the Azure-native ADF runtime and stays user-changeable.
+   */
+  runtimePreset?: PipelineRuntime;
+  /**
+   * Instantiate this template's spec onto the canvas on mount when creating a
+   * NEW pipeline (Contract F — e.g. the geo-pipeline alias passes 'geo-enrich').
+   */
+  templateId?: string;
+}
 
-export function DataPipelineEditor({ item, id }: Props) {
+export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
+
+  // ── Runtime selector (Contract A/B) — the ONE unified pipeline authoring
+  //    experience. 'adf' (Azure-native ADF, standalone factory) is the DEFAULT
+  //    per no-fabric-dependency.md. 'synapse' is the Azure-native Synapse path.
+  //    'fabric' is STRICTLY opt-in: selectable only when a Fabric workspace is
+  //    bound, never auto-selected, never a gate. When a runtimePreset prop is
+  //    set, the selector is locked. In practice the only slug that reaches THIS
+  //    editor with a preset is `adf-pipeline` (aliasOf:'data-pipeline' → preset
+  //    'adf'); `synapse-pipeline` has no aliasOf and opens SynapsePipelineEditor
+  //    directly, so its preset never flows in here. geo-pipeline (templateOf →
+  //    'adf' preset + templateId) also reaches this editor and locks to ADF.
+  const [runtime, setRuntime] = useState<PipelineRuntime>(runtimePreset ?? DEFAULT_PIPELINE_RUNTIME);
+  useEffect(() => { if (runtimePreset) setRuntime(runtimePreset); }, [runtimePreset]);
+  const runtimeLocked = !!runtimePreset;
+  // The Fabric path reuses the existing /api/loom/workspaces picker below; the
+  // 'fabric' option is enabled only once at least one Fabric workspace is
+  // reachable (i.e. a workspace IS bound). We never auto-select it.
+  const fabricAvailable = (ws.workspaces?.length ?? 0) > 0;
   const toastId = useId('pipeline-toaster');
   const { dispatchToast } = useToastController(toastId);
   const canvasRef = useRef<CanvasHandle>(null);
@@ -192,26 +327,127 @@ export function DataPipelineEditor({ item, id }: Props) {
   // Activity-config dock height (ADF Studio docks config at the bottom of the
   // canvas with a draggable divider). Explicit height + internal scroll means
   // expanding/collapsing sections never resizes the canvas above it.
-  const [configHeight, setConfigHeight] = useState(300);
+  //
+  // The divider matches the canvas handle's accessible Pointer-Events standard
+  // (see ResizableCanvasRegion): pointer-capture drag that works for mouse /
+  // touch / pen and survives the pointer leaving the handle; rAF-coalesced,
+  // DOM-direct height writes during drag (no per-frame React re-render →
+  // smooth, no layout thrash); keyboard resize (Arrow ±24 / Shift+Arrow /
+  // PageUp-Down ±96 / Home=min / End=max); full ARIA; and a height persisted
+  // per-surface in localStorage. Dragging UP grows the dock.
+  const configDockRef = useRef<HTMLDivElement | null>(null);
+  const [configHeight, setConfigHeight] = useState(DOCK_DEFAULT_PX);
   const [resizing, setResizing] = useState(false);
-  const startResize = useCallback((e: React.MouseEvent) => {
+  // Ceiling tracks 80vh of the viewport (recomputed on resize); the fallback
+  // keeps SSR and the first client render identical (no hydration mismatch).
+  const [dockMax, setDockMax] = useState(DOCK_MAX_FALLBACK);
+  const configHeightRef = useRef(configHeight);
+  configHeightRef.current = configHeight;
+  // Render-synced mirror so pointer/keyboard handlers read the live ceiling
+  // without being torn down and rebuilt on every resize.
+  const dockMaxRef = useRef(dockMax);
+  dockMaxRef.current = dockMax;
+  const dockDragRef = useRef(false);
+  const dockStartYRef = useRef(0);
+  const dockStartHRef = useRef(0);
+  const dockPendingYRef = useRef(0);
+  const dockRafRef = useRef<number | null>(null);
+
+  // Commit a dock height: clamp into bounds → state → localStorage.
+  const commitDockHeight = useCallback((next: number) => {
+    const clamped = clamp(next, DOCK_MIN_PX, dockMaxRef.current);
+    setConfigHeight(clamped);
+    try { window.localStorage.setItem(DOCK_STORAGE_KEY, String(clamped)); }
+    catch { /* storage unavailable (private mode / quota) — height still applies */ }
+  }, []);
+
+  // Track the 80vh ceiling — recomputed on viewport resize (mirrors the shared
+  // canvas primitive). SSR keeps the fallback; the client corrects on mount.
+  useEffect(() => {
+    const recompute = () => setDockMax(Math.round(window.innerHeight * 0.8));
+    recompute();
+    window.addEventListener('resize', recompute);
+    return () => window.removeEventListener('resize', recompute);
+  }, []);
+
+  // Apply the persisted dock height once, after mount. Init stays at the
+  // default so SSR and first client render match (avoids a hydration mismatch).
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(DOCK_STORAGE_KEY);
+      if (raw != null) {
+        const parsed = parseInt(raw, 10);
+        if (Number.isFinite(parsed)) setConfigHeight(clamp(parsed, DOCK_MIN_PX, dockMaxRef.current));
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  // Re-clamp the current height whenever the ceiling changes (e.g. viewport shrank).
+  useEffect(() => { setConfigHeight((h) => clamp(h, DOCK_MIN_PX, dockMax)); }, [dockMax]);
+
+  const startResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const startY = e.clientY;
-    const startH = configHeight;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* pointer capture best-effort */ }
+    dockStartYRef.current = e.clientY;
+    dockStartHRef.current = configDockRef.current?.offsetHeight ?? configHeightRef.current;
+    dockDragRef.current = true;
     setResizing(true);
-    const onMove = (ev: MouseEvent) => {
-      // Dragging up (clientY decreases) grows the bottom dock.
-      const next = Math.max(120, Math.min(680, startH - (ev.clientY - startY)));
-      setConfigHeight(next);
-    };
-    const onUp = () => {
-      setResizing(false);
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-  }, [configHeight]);
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+    // Suppress the keyboard transition so direct DOM writes never lag the drag.
+    if (configDockRef.current) configDockRef.current.style.transition = 'none';
+  }, []);
+
+  const onDockPointerMove = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dockDragRef.current) return;
+    dockPendingYRef.current = e.clientY;
+    if (dockRafRef.current != null) return;
+    dockRafRef.current = requestAnimationFrame(() => {
+      dockRafRef.current = null;
+      // Dragging UP (clientY decreases) grows the bottom dock.
+      const dy = dockPendingYRef.current - dockStartYRef.current;
+      const next = clamp(dockStartHRef.current - dy, DOCK_MIN_PX, dockMaxRef.current);
+      // Write height DIRECTLY — no setState during drag → smooth, no thrash.
+      if (configDockRef.current) configDockRef.current.style.height = `${next}px`;
+    });
+  }, []);
+
+  const endDockResize = useCallback((e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dockDragRef.current) return;
+    dockDragRef.current = false;
+    if (dockRafRef.current != null) { cancelAnimationFrame(dockRafRef.current); dockRafRef.current = null; }
+    setResizing(false);
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+    // Read back what the drag painted, restore the transition (revert the inline
+    // override to the stylesheet), then commit to state + storage.
+    const committed = configDockRef.current?.offsetHeight ?? configHeightRef.current;
+    if (configDockRef.current) configDockRef.current.style.transition = '';
+    commitDockHeight(committed);
+  }, [commitDockHeight]);
+
+  const onDockKeyDown = useCallback((e: ReactKeyboardEvent<HTMLDivElement>) => {
+    let next: number | null = null;
+    switch (e.key) {
+      // Dragging the divider UP grows the dock, so ArrowUp/PageUp grow it.
+      case 'ArrowUp':   next = configHeightRef.current + (e.shiftKey ? DOCK_STEP_LARGE : DOCK_STEP); break;
+      case 'ArrowDown': next = configHeightRef.current - (e.shiftKey ? DOCK_STEP_LARGE : DOCK_STEP); break;
+      case 'PageUp':    next = configHeightRef.current + DOCK_STEP_LARGE; break;
+      case 'PageDown':  next = configHeightRef.current - DOCK_STEP_LARGE; break;
+      case 'Home':      next = DOCK_MIN_PX; break;
+      case 'End':       next = dockMaxRef.current; break;
+      default: return;
+    }
+    e.preventDefault();
+    commitDockHeight(next);
+  }, [commitDockHeight]);
+
+  // Cancel any in-flight rAF on unmount; restore body styles defensively.
+  useEffect(() => () => {
+    if (dockRafRef.current != null) cancelAnimationFrame(dockRafRef.current);
+    if (dockDragRef.current) { document.body.style.cursor = ''; document.body.style.userSelect = ''; }
+  }, []);
 
   // Lifecycle state
   const [saving, setSaving] = useState(false);
@@ -232,6 +468,13 @@ export function DataPipelineEditor({ item, id }: Props) {
   // Manage hub (linked services / datasets) — Synapse-backed, the Azure-native
   // default for the Fabric data pipeline item.
   const [manageOpen, setManageOpen] = useState(false);
+  // Catalog-driven Manage hub (connector gallery + dataset wizard + IR manager)
+  // — the Wave-2 authoring foundation, surfaced additively alongside ManagePanel.
+  const [manageHubOpen, setManageHubOpen] = useState(false);
+  const [manageHubTab, setManageHubTab] = useState<'linked-services' | 'datasets' | 'integration-runtimes'>('linked-services');
+  const openManageHub = useCallback((tab: 'linked-services' | 'datasets' | 'integration-runtimes') => {
+    setManageHubTab(tab); setManageHubOpen(true);
+  }, []);
   const [triggerName, setTriggerName] = useState('');
   const [triggerBusy, setTriggerBusy] = useState(false);
   const [triggerErr, setTriggerErr] = useState<string | null>(null);
@@ -283,6 +526,17 @@ export function DataPipelineEditor({ item, id }: Props) {
           const decoded = fromB64(part.payload);
           nextSpec = textToSpec(decoded);
         }
+      }
+      // Contract F race-guard: on the primary inline-create flow loadDetail
+      // resolves the just-persisted (still-empty) definition. If the template
+      // seed has already fired, an empty load here would clobber the seeded
+      // geo-enrich canvas — so never overwrite a seeded template with an empty
+      // spec. A real saved pipeline (non-empty activities) always loads.
+      const loadedActivities = nextSpec?.properties?.activities?.length ?? 0;
+      if (templateSeeded.current && loadedActivities === 0) {
+        setDirty(false);
+        setSelectedActivity(null);
+        return;
       }
       setSpec(nextSpec || STARTER);
       setDirty(false);
@@ -708,6 +962,33 @@ export function DataPipelineEditor({ item, id }: Props) {
     );
   }, [dispatchToast]);
 
+  // ── Contract F: when opened with a templateId (e.g. the geo-pipeline alias →
+  //    'geo-enrich'), instantiate that template's complete, ADF-runnable spec
+  //    onto the canvas once. This must fire for BOTH the legacy no-workspace
+  //    flow (id==='new', router.push('/items/geo-pipeline/new')) AND the primary
+  //    Wave-C inline-create flow, where new-item-dialog.tsx persists the
+  //    data-pipeline item FIRST then navigates to
+  //    /items/data-pipeline/<REAL_ID>?runtime=adf&templateId=geo-enrich. In that
+  //    case `id` is a real persisted id and loadDetail loads the still-empty
+  //    STARTER definition — so the seed MUST run on a freshly-created item too,
+  //    else the user gets a BLANK pipeline instead of the geo-enrichment they
+  //    picked (a no-vaporware violation). We no longer gate on id==='new';
+  //    instead we seed whenever the loaded canvas is still empty. Re-seeding is
+  //    impossible (templateSeeded ref) and a saved pipeline is never clobbered
+  //    (activities.length>0 guard). `activities.length` is in the deps so the
+  //    seed re-evaluates AFTER loadDetail resolves the empty persisted spec.
+  const templateSeeded = useRef(false);
+  useEffect(() => {
+    if (templateSeeded.current) return;
+    if (!templateId) return;
+    if (activities.length > 0) return;
+    const t = PIPELINE_TEMPLATES.find((x) => x.id === templateId);
+    if (!t) return;
+    templateSeeded.current = true;
+    instantiateTemplate(t.spec, t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [templateId, id, activities.length, instantiateTemplate]);
+
   // Create any ADF trigger type from the guided wizard's payload (no JSON/cron).
   // paramBindings carry per-parameter value sources (direct / Key Vault / App
   // Config); the BFF route resolves KV/App Config server-side at creation time.
@@ -767,7 +1048,9 @@ export function DataPipelineEditor({ item, id }: Props) {
           { label: validating ? 'Validating…' : 'Validate', icon: <Checkmark20Regular />, onClick: canValidate ? validate : undefined, disabled: !canValidate },
         ]},
         { label: 'Manage', actions: [
-          { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services and datasets' },
+          { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: 'Linked services and datasets (quick)' },
+          { label: 'Linked services', icon: <PlugConnected20Regular />, onClick: () => openManageHub('linked-services'), title: 'Connector gallery — browse 30+ connectors and create a connection' },
+          { label: 'Datasets', icon: <Database20Regular />, onClick: () => openManageHub('datasets'), title: 'New dataset wizard — connector → connection → shape → schema' },
         ]},
         { label: 'Run', actions: [
           { label: publishing ? 'Publishing…' : 'Publish', icon: <CloudArrowUp20Regular />, onClick: pipelineId && !publishing ? publish : undefined, disabled: !pipelineId || publishing, title: 'Deploy this pipeline to Azure Data Factory so it can Run / Debug / schedule' },
@@ -813,15 +1096,137 @@ export function DataPipelineEditor({ item, id }: Props) {
     validating, canValidate, validate, running, canRun, run, debugging, canDebug, debug,
     publish, publishing,
     pipelineId, canDelete, del, showGrid, snapToGrid, outputPinned,
-    exportPipeline,
+    exportPipeline, openManageHub,
   ]);
 
   // ============ Render ============
+  // Runtime selector (Contract A/B) — rendered at the top of EVERY runtime path
+  // so this stays the single, unified pipeline authoring experience. Fluent v9
+  // RadioGroup, Loom tokens only (web3-ui), no JSON/freeform. Locked (read-only
+  // Caption) when the editor was opened from an alias/preset slug.
+  const runtimeSelector = (
+    <div
+      style={{
+        display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+        padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+        backgroundColor: tokens.colorNeutralBackground1,
+        border: `1px solid ${tokens.colorNeutralStroke2}`,
+        borderRadius: tokens.borderRadiusMedium,
+      }}
+    >
+      <div className={s.sectionHead}>
+        <Flow20Regular style={{ color: tokens.colorBrandForeground1 }} />
+        <Subtitle2>Runtime</Subtitle2>
+        {runtimeLocked && <Badge size="small" appearance="outline" color="brand">{runtime === 'adf' ? 'ADF preset' : runtime === 'synapse' ? 'Synapse preset' : 'preset'}</Badge>}
+      </div>
+      <RadioGroup
+        layout="horizontal"
+        value={runtime}
+        disabled={runtimeLocked}
+        onChange={(_, d) => {
+          const next = d.value as PipelineRuntime;
+          // Never auto-/force-select fabric without a bound workspace.
+          if (next === 'fabric' && !fabricAvailable) return;
+          setRuntime(next);
+        }}
+        aria-label="Pipeline runtime"
+      >
+        <Radio value="adf" label="Azure Data Factory (standalone)" />
+        <Radio value="synapse" label="Synapse workspace" />
+        <Radio value="fabric" label="Microsoft Fabric (opt-in)" disabled={!fabricAvailable} />
+      </RadioGroup>
+      {runtimeLocked ? (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Runtime is locked to the{' '}
+          {runtime === 'synapse' ? 'Synapse' : 'Azure Data Factory'} preset for this item type.
+        </Caption1>
+      ) : !fabricAvailable ? (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Azure Data Factory is the default. Bind a Fabric workspace to enable the Microsoft Fabric runtime (opt-in).
+        </Caption1>
+      ) : (
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          Azure-native by default — ADF or Synapse. Microsoft Fabric is opt-in.
+        </Caption1>
+      )}
+    </div>
+  );
+
+  // For the Azure-native runtimes ('adf' / 'synapse') delegate the full
+  // bind/run/save/validate/debug/runs/triggers surface to the SAME purpose-built
+  // editors (Contract B) — they consume the existing
+  // `/api/items/{adf-pipeline|synapse-pipeline}/{id}/*` routes and ship the same
+  // rich three-pane designer. We only prepend the runtime selector so the user
+  // can switch backends. (Note: the `synapse-pipeline` SLUG itself isn't routed
+  // here — it has no aliasOf and opens SynapsePipelineEditor directly; this
+  // delegation only fires when the user picks the 'synapse' runtime inside the
+  // unified editor.) 'fabric' keeps this file's existing body below.
+  //
+  // Exception (Contract F): when this editor is hosting a TEMPLATE instantiation
+  // (templateId set, e.g. the geo-pipeline alias → 'geo-enrich'), we stay on
+  // THIS file's own canvas so the seeded, ADF-runnable spec is visible and
+  // editable here (the delegate editors take no spec/template prop). This holds
+  // for the legacy id==='new' flow AND the primary Wave-C inline-create flow,
+  // where the data-pipeline item is persisted FIRST and we arrive with a real
+  // id plus ?templateId=… — delegating to <AdfPipelineEditor> there would show a
+  // BLANK pipeline (it has no spec prop), dropping the geo-enrichment the user
+  // picked. A `templateId` is only present for templated creates (geo-pipeline /
+  // templated data-pipeline); plain adf-pipeline / synapse-pipeline instances
+  // carry none, so they still delegate exactly as before (back-compat intact).
+  const hostTemplate = !!templateId;
+  if (!hostTemplate && (runtime === 'adf' || runtime === 'synapse')) {
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minHeight: 0, flex: 1 }}>
+        <Toaster toasterId={toastId} />
+        {runtimeSelector}
+        <div style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          {runtime === 'adf'
+            ? <AdfPipelineEditor item={item} id={id} />
+            : <SynapsePipelineEditor item={item} id={id} />}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      rightPanelLabel="Copilot"
+      rightPanel={
+        // A12 — docked Pipeline Copilot. ItemEditorChrome renders this in a
+        // collapsible right rail (Fluent v9 CollapseToggle / CollapsedRail,
+        // per-surface persisted, dark-legible) exactly like the alias editors
+        // (pipeline-editor-core.tsx:755), so the palette|canvas|properties
+        // designer below is untouched. The pane streams real SSE from
+        // /api/items/data-pipeline/{id}/copilot and applies the generated spec
+        // to THIS file's canvas (setSpec is the spec source-of-truth at :311);
+        // mirrors applyGeneratedSpec at pipeline-editor-core.tsx:594.
+        //
+        // A12 id-mismatch fix: the canvas and EVERY real action (Save/Run/
+        // Debug/Triggers) operate on `pipelineId` — the selected pipeline,
+        // which defaults to the first in the workspace (loadList :506), NOT the
+        // route `id`. Anchoring the Copilot to the route `id` let it generate /
+        // run against a DIFFERENT pipeline than the one on the canvas. Bind the
+        // pane to the SAME `pipelineId` (falling back to the route `id` only
+        // while unbound, when `bound` is null and no request fires anyway) so
+        // Copilot always targets the pipeline the user sees.
+        <PipelineCopilotPane
+          apiBase={`/api/items/data-pipeline/${encodeURIComponent(pipelineId || id)}`}
+          bound={pipelineId || null}
+          onApplySpec={(genSpec) => {
+            setSpec(genSpec);
+            setDirty(true);
+            setSelectedActivity(null);
+            setTopTab('pipeline');
+            setTimeout(() => canvasRef.current?.fitToScreen(), 150);
+          }}
+        />
+      }
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Pipelines</Subtitle2>
+          <div className={s.sectionHead} style={{ marginBottom: tokens.spacingVerticalS }}>
+            <Flow24Regular style={{ color: tokens.colorBrandForeground1 }} />
+            <Subtitle2>Pipelines</Subtitle2>
+          </div>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && pipelines === null && <Spinner size="tiny" label="Loading…" />}
           {pipelines && pipelines.length === 0 && !listErr && <Caption1>No pipelines.</Caption1>}
@@ -839,9 +1244,12 @@ export function DataPipelineEditor({ item, id }: Props) {
       main={
         <div className={s.shell}>
           <Toaster toasterId={toastId} />
+          {runtimeSelector}
           <div className={s.topbar}>
-            <Badge appearance="filled" color="brand">Fabric Data Pipeline</Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <Badge appearance="filled" color="brand">
+              {runtime === 'adf' ? 'Azure Data Factory' : runtime === 'synapse' ? 'Synapse pipeline' : 'Microsoft Fabric'}
+            </Badge>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -883,42 +1291,33 @@ export function DataPipelineEditor({ item, id }: Props) {
           {!pipelineId && activities.length === 0 && (
             <div>
               {seedErr && (
-                <MessageBar intent={seedErrIntent} style={{ marginBottom: 8 }}>
+                <MessageBar intent={seedErrIntent} style={{ marginBottom: tokens.spacingVerticalS }}>
                   <MessageBarBody>
                     <MessageBarTitle>Practice with sample data</MessageBarTitle>
                     {seedErr}
                   </MessageBarBody>
                 </MessageBar>
               )}
-              <MessageBar intent="info" style={{ marginBottom: 8 }}>
+              <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalS }}>
                 <MessageBarBody>
-                  Design your pipeline below — drag activities from the palette onto the canvas and wire them
-                  up. To <strong>Save / Validate / Run</strong> against the live backing, pick a workspace
-                  and pipeline from the left rail, click <strong>New pipeline</strong>, or start from a card below.
+                  Pipelines run Azure-native by default — switch the <strong>Runtime</strong> above to
+                  <strong> Azure Data Factory</strong> (the default) or <strong>Synapse</strong> to author against
+                  Azure with no Fabric capacity required. The <strong>Microsoft Fabric</strong> runtime shown here
+                  is opt-in. Design your pipeline below — drag activities from the palette onto the canvas and wire
+                  them up. To <strong>Save / Validate / Run</strong> against the Fabric backing, pick a workspace and
+                  pipeline from the left rail, click <strong>New pipeline</strong>, or start from a card below.
                 </MessageBarBody>
               </MessageBar>
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-                gap: 12,
-              }}>
+              <TileGrid minTileWidth={220}>
                 {/* Card: Start with a blank canvas */}
                 <div
                   role="button"
                   tabIndex={0}
-                  style={{
-                    cursor: canCreate ? 'pointer' : 'not-allowed',
-                    opacity: canCreate ? 1 : 0.6,
-                    padding: 18,
-                    border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: 8,
-                    backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: 6,
-                  }}
+                  className={mergeClasses(s.startCard, !canCreate && s.startCardDisabled)}
                   onClick={canCreate ? () => setCreateOpen(true) : undefined}
                   onKeyDown={(e) => { if (canCreate && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setCreateOpen(true); } }}
                 >
-                  <Add20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                  <Add20Regular className={s.cardIcon} />
                   <Subtitle2>Start with blank canvas</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                     Create an empty pipeline and drag activities from the palette.
@@ -931,20 +1330,14 @@ export function DataPipelineEditor({ item, id }: Props) {
                   role="button"
                   tabIndex={0}
                   aria-busy={seeding}
-                  style={{
-                    cursor: seeding ? 'default' : 'pointer',
-                    padding: 18,
-                    border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: 8,
-                    backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: 6,
-                  }}
+                  className={s.startCard}
+                  style={seeding ? { cursor: 'default' } : undefined}
                   onClick={seeding ? undefined : practiceWithSampleData}
                   onKeyDown={(e) => { if (!seeding && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); practiceWithSampleData(); } }}
                 >
                   {seeding
                     ? <Spinner size="extra-small" label="Seeding ADLS…" />
-                    : <CloudArrowUp20Regular style={{ color: tokens.colorBrandForeground1 }} />}
+                    : <CloudArrowUp20Regular className={s.cardIcon} />}
                   <Subtitle2>Practice with sample data</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                     Seed a real CSV to ADLS Gen2, run an auto-generated copy pipeline,
@@ -956,24 +1349,17 @@ export function DataPipelineEditor({ item, id }: Props) {
                 <div
                   role="button"
                   tabIndex={0}
-                  style={{
-                    cursor: 'pointer',
-                    padding: 18,
-                    border: `1px solid ${tokens.colorNeutralStroke2}`,
-                    borderRadius: 8,
-                    backgroundColor: tokens.colorNeutralBackground1,
-                    display: 'flex', flexDirection: 'column', gap: 6,
-                  }}
+                  className={s.startCard}
                   onClick={() => setGalleryOpen(true)}
                   onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setGalleryOpen(true); } }}
                 >
-                  <AppsList20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                  <AppsList20Regular className={s.cardIcon} />
                   <Subtitle2>Templates gallery</Subtitle2>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                     Curated templates: incremental copy, metadata-driven, ForEach patterns.
                   </Caption1>
                 </div>
-              </div>
+              </TileGrid>
             </div>
           )}
 
@@ -993,36 +1379,57 @@ export function DataPipelineEditor({ item, id }: Props) {
                     <ActivityPalette onInsert={(d) => insertActivity(d)} />
                   </div>
                   <div className={s.designerMain}>
-                    {/* Canvas FILLS the space above the dock — fixed relative to
-                        the dock height, never resized by config expand/collapse. */}
-                    <div className={s.canvasWrap}>
-                      <PipelineCanvas
-                        ref={canvasRef}
-                        activities={activities}
-                        selectedName={selectedActivity || undefined}
-                        onSelect={setSelectedActivity}
-                        snapToGrid={snapToGrid}
-                        showGrid={showGrid}
-                        onDropPaletteKey={(key) => {
-                          const def = findByKey(key);
-                          if (def) insertActivity(def);
-                        }}
-                        onConnect={connect}
-                      />
-                    </div>
-                    {/* Draggable divider — drag up/down to resize the config dock. */}
+                    {/* Canvas region — user-resizable height (drag the grip below
+                        the canvas, or focus it and use Arrow keys). Height is
+                        persisted per-surface; the canvas FILLS this region and is
+                        never resized by config expand/collapse. The dock divider
+                        below is complementary and resizes only the config dock. */}
+                    <ResizableCanvasRegion
+                      storageKey="adf-data-pipeline"
+                      defaultPx={460}
+                      minPx={300}
+                      ariaLabel="Resize pipeline canvas height"
+                    >
+                      <div className={s.canvasWrap} style={{ flex: 1, height: '100%', minHeight: 0 }}>
+                        <PipelineCanvas
+                          ref={canvasRef}
+                          activities={activities}
+                          selectedName={selectedActivity || undefined}
+                          onSelect={setSelectedActivity}
+                          snapToGrid={snapToGrid}
+                          showGrid={showGrid}
+                          onDropPaletteKey={(key) => {
+                            const def = findByKey(key);
+                            if (def) insertActivity(def);
+                          }}
+                          onConnect={connect}
+                        />
+                      </div>
+                    </ResizableCanvasRegion>
+                    {/* Draggable divider — same accessible Pointer-Events standard
+                        as the canvas handle above: pointer-capture drag (mouse /
+                        touch / pen), Arrow/Page/Home/End keyboard resize, full
+                        ARIA. Drag UP (or ArrowUp) grows the dock below. */}
                     <div
                       className={mergeClasses(s.splitter, resizing && s.splitterActive)}
-                      onMouseDown={startResize}
                       role="separator"
                       aria-orientation="horizontal"
-                      aria-label="Resize activity configuration panel"
-                      title="Drag to resize the configuration panel"
+                      aria-label="Resize activity configuration panel. Use Arrow Up and Arrow Down keys."
+                      aria-valuemin={DOCK_MIN_PX}
+                      aria-valuemax={dockMax}
+                      aria-valuenow={configHeight}
+                      tabIndex={0}
+                      title="Drag, or focus and use Arrow keys, to resize the configuration panel"
+                      onPointerDown={startResize}
+                      onPointerMove={onDockPointerMove}
+                      onPointerUp={endDockResize}
+                      onLostPointerCapture={endDockResize}
+                      onKeyDown={onDockKeyDown}
                     >
                       <div className={s.splitterGrip} />
                     </div>
                     {/* Bottom-docked activity configuration — explicit height + own scroll. */}
-                    <div className={s.configDock} style={{ height: configHeight }}>
+                    <div ref={configDockRef} className={s.configDock} style={{ height: configHeight }}>
                       <PropertiesPanel
                         activity={selected}
                         allActivities={activities}
@@ -1043,7 +1450,10 @@ export function DataPipelineEditor({ item, id }: Props) {
 
               {topTab === 'parameters' && (
                 <div className={s.tabBody}>
-                  <Subtitle2>Pipeline parameters</Subtitle2>
+                  <div className={s.sectionHead}>
+                    <NumberSymbol20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Pipeline parameters</Subtitle2>
+                  </div>
                   <Caption1>Typed inputs passed in at run time. Reference with <code>@pipeline().parameters.&lt;name&gt;</code>.</Caption1>
                   <Table size="small">
                     <TableHeader>
@@ -1112,7 +1522,10 @@ export function DataPipelineEditor({ item, id }: Props) {
 
               {topTab === 'variables' && (
                 <div className={s.tabBody}>
-                  <Subtitle2>Pipeline variables</Subtitle2>
+                  <div className={s.sectionHead}>
+                    <Tag20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Pipeline variables</Subtitle2>
+                  </div>
                   <Caption1>Scoped variables you can SetVariable / AppendVariable from activities.</Caption1>
                   <Table size="small">
                     <TableHeader>
@@ -1177,7 +1590,10 @@ export function DataPipelineEditor({ item, id }: Props) {
 
               {topTab === 'settings' && (
                 <div className={s.tabBody}>
-                  <Subtitle2>Pipeline settings</Subtitle2>
+                  <div className={s.sectionHead}>
+                    <Settings20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Pipeline settings</Subtitle2>
+                  </div>
                   <Field label="Description">
                     <Textarea value={spec.properties.description || ''} rows={3}
                       onChange={(_, d) => patchSpec((prev) => ({
@@ -1197,13 +1613,16 @@ export function DataPipelineEditor({ item, id }: Props) {
                       }))} />
                   </Field>
 
-                  <Subtitle2 style={{ marginTop: 16 }}>Active triggers ({triggers.length})</Subtitle2>
+                  <div className={s.sectionHead} style={{ marginTop: tokens.spacingVerticalL }}>
+                    <CalendarClock20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Active triggers ({triggers.length})</Subtitle2>
+                  </div>
                   {triggers.length === 0 && <Caption1>No triggers wired to this pipeline yet.</Caption1>}
                   <Table size="small">
                     <TableBody>
                       {triggers.map((t) => (
                         <TableRow key={t.name}>
-                          <TableCell><code>{t.name}</code></TableCell>
+                          <TableCell><code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{t.name}</code></TableCell>
                           <TableCell>{t.type}</TableCell>
                           <TableCell>
                             <Badge size="small" color={t.runtimeState === 'Started' ? 'success' : 'subtle'}>
@@ -1220,7 +1639,10 @@ export function DataPipelineEditor({ item, id }: Props) {
                     </TableBody>
                   </Table>
 
-                  <Subtitle2 style={{ marginTop: 16 }}>Raw spec</Subtitle2>
+                  <div className={s.sectionHead} style={{ marginTop: tokens.spacingVerticalL }}>
+                    <Code20Regular style={{ color: tokens.colorBrandForeground1 }} />
+                    <Subtitle2>Raw spec</Subtitle2>
+                  </div>
                   <Caption1>Edit pipeline JSON directly. Saved on Save.</Caption1>
                   <MonacoTextarea
                     value={specToText(spec)}
@@ -1238,13 +1660,31 @@ export function DataPipelineEditor({ item, id }: Props) {
               )}
 
               {topTab === 'output' && (
-                <OutputPane workspaceId={workspaceId} pipelineId={pipelineId} />
+                <OutputPane
+                  workspaceId={workspaceId}
+                  pipelineId={pipelineId}
+                  pipelineParams={parameters}
+                  paramNames={parameters.map((p) => p.name)}
+                  variableNames={variables.map((v) => v.name)}
+                  activityNames={activities.map((a) => a.name)}
+                />
               )}
             </TopTabs>
           )}
 
           {/* Manage hub — linked services / datasets (Synapse-backed) */}
           <ManagePanel open={manageOpen} backend="synapse" onOpenChange={setManageOpen} />
+
+          {/* Catalog-driven Manage hub — connector gallery + dataset wizard
+              (Synapse-backed; IR tab is ADF-only and stays hidden here). */}
+          <PipelineManageHub
+            open={manageHubOpen}
+            onOpenChange={setManageHubOpen}
+            engine="synapse"
+            initialTab={manageHubTab}
+            itemId={pipelineId || undefined}
+            workspaceId={workspaceId || undefined}
+          />
 
           {/* Create dialog */}
           <Dialog open={createOpen} onOpenChange={(_, d) => setCreateOpen(d.open)}>
@@ -1253,7 +1693,7 @@ export function DataPipelineEditor({ item, id }: Props) {
                 <DialogTitle>Create Fabric data pipeline</DialogTitle>
                 <DialogContent>
                   <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                  {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                  {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -1268,6 +1708,7 @@ export function DataPipelineEditor({ item, id }: Props) {
             open={scheduleOpen}
             onClose={() => { setScheduleOpen(false); setTriggerErr(null); }}
             onCreate={createTriggerWith}
+            onActivate={(name) => startStopTrigger(name, 'start')}
             pipelineParams={parameters}
             kvAvailable={paramSources.kvAvailable}
             appConfigAvailable={paramSources.appConfigAvailable}

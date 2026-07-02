@@ -46,7 +46,7 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: 240 },
+  root: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
   header: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
   headerActions: { display: 'flex', columnGap: tokens.spacingHorizontalXXS },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },

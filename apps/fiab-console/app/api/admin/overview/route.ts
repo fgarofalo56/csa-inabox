@@ -36,6 +36,7 @@ import {
   attributeGroupsContainer,
   labelAssignmentsContainer,
 } from '@/lib/azure/cosmos-client';
+import type { SqlParameter } from '@azure/cosmos';
 import { getGraphHost, getGraphScope } from '@/lib/azure/cloud-endpoints';
 import { listResources, listAlertHistory } from '@/lib/azure/monitor-client';
 import { listSensitivityLabels } from '@/lib/azure/mip-graph-client';
@@ -95,7 +96,7 @@ async function countWhereTenant(
   container: () => Promise<import('@azure/cosmos').Container>,
   tenantId: string,
   extra = '',
-  params: { name: string; value: unknown }[] = [],
+  params: SqlParameter[] = [],
 ): Promise<number> {
   const c = await container();
   const { resources } = await c.items.query<number>({

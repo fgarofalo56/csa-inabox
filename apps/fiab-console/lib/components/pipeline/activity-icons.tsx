@@ -9,6 +9,14 @@
  * The ADF Studio activity icons themselves are Studio-internal; until the
  * tools/adf-icon-scraper run swaps in the exact glyphs, these Fluent icons
  * are the closest first-party stand-ins (real icons, semantically matched).
+ *
+ * COVERAGE CONTRACT: every distinct activity `type` string produced by
+ * activity-catalog.ts — both the palette/build() `ACTIVITY_CATALOG[].type`
+ * AND the data-driven settings inventory `ACTIVITIES[].type` — has a DISTINCT
+ * mapping here (no two unrelated activity types collapse to the same glyph),
+ * with a single generic fallback (<Apps20Regular/>) for anything unmapped.
+ * activityIcon(type) is called with the ADF wire `type` (see palette.tsx +
+ * flow-activity-node.tsx), so the keys below are wire types, not palette keys.
  */
 
 import {
@@ -20,11 +28,16 @@ import {
   PlugConnected20Regular, ErrorCircle20Regular, CheckmarkCircle20Regular,
   Mail20Regular, Apps20Regular,
   DataUsage20Regular, Flash20Regular, Server20Regular, Stream20Regular,
+  // Added (Wave-2) so every catalog/inventory activity type has a DISTINCT glyph:
+  DocumentJava20Regular, LocalLanguage20Regular, BrainCircuit20Regular,
+  Beaker20Regular, LayerDiagonal20Regular, DataFunnel20Regular,
+  BracesVariable20Regular,
 } from '@fluentui/react-icons';
 import type { JSX } from 'react';
 
 // Keyed by ADF activity `type`. Anything unmapped falls back to a generic glyph.
 const ICONS: Record<string, JSX.Element> = {
+  // ── Move & transform ──────────────────────────────────────────────────
   Copy: <DocumentArrowRight20Regular />,
   RefreshDataflow: <ArrowFlowUpRight20Regular />,
   ExecuteWranglingDataflow: <ArrowFlowUpRight20Regular />,
@@ -32,14 +45,28 @@ const ICONS: Record<string, JSX.Element> = {
   Lookup: <SearchInfo20Regular />,
   GetMetadata: <DocumentText20Regular />,
   Delete: <Delete20Regular />,
+
+  // ── Notebooks (Fabric / Synapse / Databricks notebook activities) ─────
   DatabricksNotebook: <Notebook20Regular />,
   Notebook: <Notebook20Regular />,
-  SparkJob: <Rocket20Regular />,
   SynapseNotebook: <Notebook20Regular />,
+
+  // ── Spark jobs (distinct from notebooks) ──────────────────────────────
+  SparkJob: <Rocket20Regular />,
+  // Synapse Spark Job Definition activity wire type (build()s in ACTIVITY_CATALOG).
+  SynapseSparkJobDefinitionActivity: <Rocket20Regular />,
+
+  // ── Databricks Jar / Python (distinct glyphs vs the notebook) ─────────
+  DatabricksSparkJar: <DocumentJava20Regular />,
+  DatabricksSparkPython: <LocalLanguage20Regular />,
+
+  // ── Orchestration ─────────────────────────────────────────────────────
   ExecutePipeline: <Flowchart20Regular />,
   Script: <Code20Regular />,
   SqlServerStoredProcedure: <Database20Regular />,
   StoredProcedure: <Database20Regular />,
+
+  // ── Control flow / iteration ──────────────────────────────────────────
   ForEach: <ArrowRepeatAll20Regular />,
   IfCondition: <BranchFork20Regular />,
   Switch: <Branch20Regular />,
@@ -53,11 +80,25 @@ const ICONS: Record<string, JSX.Element> = {
   WebHook: <PlugConnected20Regular />,
   Fail: <ErrorCircle20Regular />,
   Validation: <CheckmarkCircle20Regular />,
+
+  // ── Office 365 Outlook (send email) ──────────────────────────────────
   Office365Outlook: <Mail20Regular />,
+  Office365OutlookSendEmail: <Mail20Regular />,
+
+  // ── HDInsight family ──────────────────────────────────────────────────
   HDInsightHive: <DataUsage20Regular />,
   HDInsightSpark: <Flash20Regular />,
   HDInsightMapReduce: <Server20Regular />,
   HDInsightStreaming: <Stream20Regular />,
+  HDInsightPig: <DataFunnel20Regular />,
+
+  // ── Azure Function & ML ───────────────────────────────────────────────
+  AzureFunctionActivity: <BracesVariable20Regular />,
+  AzureMLExecutePipeline: <BrainCircuit20Regular />,
+  AzureMLBatchExecution: <Beaker20Regular />,
+
+  // ── U-SQL (Data Lake Analytics) ───────────────────────────────────────
+  'DataLakeAnalyticsU-SQL': <LayerDiagonal20Regular />,
 };
 
 /** Return the Fluent icon element for an activity type (generic fallback). */

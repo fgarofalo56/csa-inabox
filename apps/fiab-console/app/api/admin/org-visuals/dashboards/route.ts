@@ -15,6 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -27,9 +28,7 @@ import { getBuilderSource } from '@/lib/coe-library/report-render/live-bindings'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 const BLOB_GATE = {
   missingEnvVar: 'LOOM_ORG_VISUALS_URL',
@@ -90,7 +89,7 @@ async function audit(tenantId: string, who: string, kind: string, fields: Record
 
 export async function GET() {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   try {
     const dashboards = await listDashboards(tenantId);
@@ -102,7 +101,7 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const body = await req.json().catch(() => ({}));
@@ -110,7 +109,7 @@ export async function POST(req: NextRequest) {
 
   if (action === 'publish' || action === 'unpublish') {
     const id = String(body.id || '').trim();
-    if (!id) return err('id is required', 400);
+    if (!id) return apiError('id is required', 400);
     const publish = action === 'publish';
     try {
       const dashboard = await setDashboardPublished(tenantId, who, id, publish);
@@ -118,53 +117,53 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, dashboard });
     } catch (e: any) {
       const msg = e?.message || String(e);
-      return err(msg, /not found/i.test(msg) ? 404 : 500);
+      return apiError(msg, /not found/i.test(msg) ? 404 : 500);
     }
   }
 
   const spec = parseSpec(body);
-  if (typeof spec === 'string') return err(spec, 400);
+  if (typeof spec === 'string') return apiError(spec, 400);
   try {
     const dashboard = await createDashboard(tenantId, who, spec);
     await audit(tenantId, who, 'loom-dashboard.create', { id: dashboard.id, name: dashboard.name, tileCount: dashboard.tileCount, blobCopied: dashboard.blobCopied });
     return NextResponse.json({ ok: true, dashboard, ...(dashboard.blobCopied ? {} : { blobGate: BLOB_GATE }) });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function PUT(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return err('id required', 400);
+  if (!id) return apiError('id required', 400);
   const body = await req.json().catch(() => ({}));
   const spec = parseSpec(body);
-  if (typeof spec === 'string') return err(spec, 400);
+  if (typeof spec === 'string') return apiError(spec, 400);
   try {
     const dashboard = await updateDashboard(tenantId, who, id, spec);
     await audit(tenantId, who, 'loom-dashboard.update', { id, tileCount: dashboard.tileCount });
     return NextResponse.json({ ok: true, dashboard, ...(dashboard.blobCopied ? {} : { blobGate: BLOB_GATE }) });
   } catch (e: any) {
     const msg = e?.message || String(e);
-    return err(msg, /not found/i.test(msg) ? 404 : 500);
+    return apiError(msg, /not found/i.test(msg) ? 404 : 500);
   }
 }
 
 export async function DELETE(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const id = new URL(req.url).searchParams.get('id');
-  if (!id) return err('id required', 400);
+  if (!id) return apiError('id required', 400);
   try {
     await deleteDashboard(tenantId, id);
     await audit(tenantId, who, 'loom-dashboard.delete', { id });
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

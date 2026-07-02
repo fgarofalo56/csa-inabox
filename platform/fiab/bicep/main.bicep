@@ -351,6 +351,12 @@ param loomEventHubEnabled bool = true
 @description('Provision the per-DLZ Azure Stream Analytics starter job (backs the stream-analytics-job editor + the Eventstream transform node). Default true (opt-out). Set false to skip the streaming-units cost — the editor then surfaces an honest infra-gate naming LOOM_ASA_RG. Distinct from streamAnalyticsEnabled (the deploy-planner tile), which provisions a separate planner job.')
 param loomStreamAnalyticsEnabled bool = true
 
+@description('Provision a per-DLZ Service Bus namespace (Standard) backing the service-bus-namespace navigator (queues + topics). Default true (opt-out). Set false to skip the namespace cost — the editor then honest-gates (admin-plane blanks LOOM_SERVICEBUS_NAMESPACE). Azure-native, no Fabric.')
+param deployServiceBus bool = true
+
+@description('Provision a per-DLZ dedicated PE-locked Event Grid custom topic backing the event-grid-topic navigator. Default true (opt-out). Set false to skip it — the navigator still lists the always-on business-events topic in the same DLZ RG. Azure-native, no Fabric.')
+param deployEventGrid bool = true
+
 // =====================================================================
 // Data-engineering backend opt-out flags (default ON — provision new).
 // Forwarded to BOTH the admin-plane (env-blank mirror) and every DLZ
@@ -385,6 +391,12 @@ param dbtRunnerEnabled bool = true
 
 @description('Set true once the loom-dbt-runner image has been built + pushed to ACR (scripts/csa-loom/build-dbt-runner.sh). Gates the live loom-dbt-runner Container App deployment so a clean first deploy (no image yet) does not fail on an unresolvable image ref — the dbt-job run surface honest-gates until the image is ready, then this flips on. Default false.')
 param dbtRunnerImageReady bool = false
+
+@description('Deploy the loom-udf-runtime Container App (User Data Functions execution host, stock MCR image on the dab-runtime.bicep pattern) so the user-data-function invoke path (LOOM_UDF_FUNCTION_BASE) works day-one. Default on (opt-out); set false to leave the UDF invoke route honestly 503-gated (or supply a BYO host via loomUdfFunctionBase). Container Apps only. No Fabric dependency.')
+param udfRuntimeEnabled bool = true
+
+@description('Enable the warm Spark session pool (config-only — no Azure resource; warms Azure-native Synapse Livy sessions to kill notebook cold start, LOOM_SPARK_POOL_ENABLED). Default false so notebooks keep today\'s cold-start behaviour until an operator opts in. Min/max/idle-TTL use the module defaults (1 / 3 / 900s).')
+param sparkPoolEnabled bool = false
 
 @description('Wire the org-visuals Blob container backing Embed codes (F22) + Organizational visuals (F23): the Console UAMI data-plane grants (Storage Blob Data Contributor on the container + Storage Blob Delegator at account scope for getUserDelegationKey) and the LOOM_ORG_VISUALS_URL env var. Default on (opt-out) — the org-visuals container itself is always created by landing-zone/storage.bicep (it is part of the foundational medallion account); this flag governs only the grant + env wiring. Set false to leave Embed codes / Org visuals honestly config-gated (no SAS minting). No Fabric/Power BI dependency.')
 param loomOrgVisualsEnabled bool = true
@@ -575,8 +587,8 @@ param speechServicesEnabled bool = false
 @description('Deploy a single-kind Language (CognitiveServices TextAnalytics) account, Entra-only.')
 param languageServicesEnabled bool = false
 
-@description('Deploy an Azure Machine Learning workspace + its KV/Storage/AppInsights dependencies.')
-param mlWorkspaceEnabled bool = false
+@description('Deploy an Azure Machine Learning workspace + its KV/Storage/AppInsights dependencies. Default ON (zero-gate notebook AML path) — opt OUT for GCC-High/DoD or cost-sensitive deploys.')
+param mlWorkspaceEnabled bool = true
 
 @description('Enable Microsoft Defender for Cloud Standard pricing tiers on the subscription.')
 param defenderCloudEnabled bool = false
@@ -673,6 +685,10 @@ param containerInstancesMemoryInGB int = 1
 @allowed(['Standard_DS3_v2', 'Standard_DS4_v2', 'Standard_D4s_v3', 'Standard_E4s_v3'])
 param mlComputeVmSize string = 'Standard_DS3_v2'
 
+@description('Idle time before the always-on default AML Compute Instance auto-shuts-down (ISO 8601 duration). Caps cost on the zero-gate notebook AML path.')
+@allowed(['PT15M', 'PT30M', 'PT1H', 'PT3H'])
+param mlComputeIdleTtl string = 'PT30M'
+
 @description('Azure AI Search tier (deploy-planner). Free = dev/test (3 indexes); Basic = low-volume production; Standard S1/S2/S3 = progressively more capacity. Replica + partition counts scale the unit cost.')
 @allowed(['free', 'basic', 'standard', 'standard2', 'standard3'])
 param aiSearchTier string = 'standard'
@@ -724,8 +740,8 @@ var redisSkuCapacity = redisIsPremium ? 1 : 0
 
 // ---------- User access patterns ----------
 
-@description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet. ~30 min provisioning, ~$30/mo. Default off.')
-param vpnGatewayEnabled bool = false
+@description('Deploy a P2S VPN Gateway (AAD-auth, OpenVPN) in the hub VNet so admins can reach the private-by-default estate (private endpoints, Internal APIM, firewall services) day-one via the admin Network & DNS page. ~30 min provisioning, ~$30/mo.')
+param vpnGatewayEnabled bool = true
 
 @description('Deploy Application Gateway v2 + WAF in front of the Console. ~15 min provisioning, ~$250/mo. Default off.')
 param appGatewayEnabled bool = false
@@ -812,6 +828,18 @@ param loomMirrorCopyCadence string = '1h'
 
 @description('Default Fabric/Power BI workspace id (LOOM_DEFAULT_FABRIC_WORKSPACE). Leave EMPTY (default) for the Azure-native path — Fabric is strictly opt-in (per no-fabric-dependency.md) and only used when a *-backend env is also set to fabric.')
 param loomDefaultFabricWorkspace string = ''
+
+@description('audit-T64: Azure SQL logical server (name or FQDN) holding the Plan (preview) writeback table dbo.loom_plan_cells (LOOM_PLAN_BACKING_SQL_SERVER). Empty → planning cells persist to Cosmos (always works) and the Plan editor shows the honest "set LOOM_PLAN_BACKING_SQL_*" gate. Azure-native parity of Fabric\'s auto-provisioned SQL DB — no Microsoft Fabric dependency. Passed through to the admin-plane module (its params were previously declared there but never surfaced here).')
+param loomPlanBackingSqlServer string = ''
+
+@description('audit-T64: Azure SQL database name for the Plan (preview) writeback store (LOOM_PLAN_BACKING_SQL_DATABASE). Pairs with loomPlanBackingSqlServer; grant the Console UAMI db_ddladmin + db_datawriter on it (see modules/admin-plane/main.bicep plan-backing notes). Empty → Cosmos-only.')
+param loomPlanBackingSqlDatabase string = ''
+
+@description('Resource group where the slate-app / workshop-app Publish routes create Azure Static Web Apps (LOOM_SWA_RESOURCE_GROUP). Empty (default) → the admin-plane RG. The Console UAMI is granted Website Contributor at this RG scope (modules/admin-plane/swa-publish-rbac.bicep). Folded into byoExisting.swaResourceGroup — admin-plane/main.bicep sits at the ARM 256-param ceiling.')
+param loomSwaResourceGroup string = ''
+
+@description('user-data-function invoke base URL — a BYO Azure Functions host, e.g. https://my-udf.azurewebsites.net (LOOM_UDF_FUNCTION_BASE). Empty → the UDF invoke route serves its honest 503 gate naming this var. Folded into byoExisting.udfFunctionBase (256-param ceiling). TODO udf-runtime.bicep: a Loom-managed Functions host on the dab-runtime.bicep pattern will default this.')
+param loomUdfFunctionBase string = ''
 
 @description('Local admin password for the scaled self-hosted IR (SHIR) VMSS nodes in each DLZ. Empty → a strong password is auto-generated into the deployment (effShirAdminPassword) so the SHIR provisions by default per deploy-readiness; supply a Key-Vault-backed secret to override. The VMSS stays at capacity 0 (scale-to-0) so the credential is never used interactively — nothing needs to RDP.')
 @secure()
@@ -1012,6 +1040,35 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
       deDatabricks: loomDatabricksEnabled
       deAdf: loomDataFactoryEnabled
       deShir: loomSelfHostedIrEnabled
+      // Service Bus navigator binding (service-bus-namespace item). Single-sub:
+      // the namespace name is deterministic over the DLZ (matches servicebus.bicep's
+      // sbns-loom-<domain>-<region>, domain 'default'), so the Console binds to the
+      // real namespace. Empty in tenant/multi-sub (no local DLZ) or when Service Bus
+      // is disabled → the editor honest-gates. Carried here (not a scalar param) to
+      // stay under admin-plane's 256-param ceiling.
+      serviceBusNamespace: (useSingleDlz && deployServiceBus) ? 'sbns-loom-default-${location}' : ''
+      // Always-on default AML Compute Instance name (LOOM_AML_DEFAULT_COMPUTE) +
+      // its idle TTL (LOOM_AML_COMPUTE_IDLE_TTL). Name is derived the SAME way as
+      // ml-workspace.bicep's defaultCiName (take('ci-loom-<uniqueString(rg.id)>',24))
+      // so the Console auto-selects the real CI and the notebook "No Compute
+      // Instance available" gate clears with zero post-deploy steps. Carried on
+      // byoExisting (not scalar params) to stay under admin-plane's 256-param ceiling.
+      amlDefaultCompute: (useSingleDlz && mlWorkspaceEnabled) ? take('ci-loom-${uniqueString(singleDlzRg.id)}', 24) : ''
+      amlComputeIdleTtl: mlComputeIdleTtl
+      // Slate-app / Workshop-app Publish → Azure Static Web Apps target RG
+      // (LOOM_SWA_RESOURCE_GROUP; empty → the admin RG) + the BYO
+      // user-data-function Functions host (LOOM_UDF_FUNCTION_BASE; empty →
+      // honest gate). Carried on the BYO object (not scalar params) to stay
+      // under admin-plane's 256-param ceiling.
+      swaResourceGroup: loomSwaResourceGroup
+      udfFunctionBase: loomUdfFunctionBase
+      // UDF runtime host + warm Spark session pool enable-gates. Folded onto the
+      // BYO object (not scalar params) to stay under admin-plane's 256-param
+      // ceiling. (Report query acceleration now runs on the Databricks SQL
+      // warehouse — Photon over Delta in-place — via the existing Databricks
+      // bindings, so no accelerator host/gate is threaded here.)
+      udfRuntimeEnabled: udfRuntimeEnabled
+      sparkPoolEnabled: sparkPoolEnabled
     }
     // Azure ML workspace for the notebook AML path. Name is the deterministic
     // deploy-planner ml-workspace.bicep name (uniqueString over the DLZ RG), so
@@ -1117,6 +1174,11 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // it the binding silently relies on the admin-plane default matching.
     loomSynapseWorkspace: 'syn-loom-default-${location}'
     loomSynapseDedicatedPool: 'loompool'
+    // audit-T64 orphan closure: these admin-plane params existed (and were
+    // wired to LOOM_PLAN_BACKING_SQL_* in the Console env) but were never
+    // passed from this orchestrator, so no .bicepparam could set them.
+    loomPlanBackingSqlServer: loomPlanBackingSqlServer
+    loomPlanBackingSqlDatabase: loomPlanBackingSqlDatabase
     loomPurviewAccount: loomPurviewAccount
     loomMipEnabled: loomMipEnabled
     loomMipAdminEnabled: loomMipAdminEnabled
@@ -1370,6 +1432,10 @@ module singleDlz 'modules/landing-zone/main.bicep' = if (useSingleDlz) {
     loomEventHubEnabled: loomEventHubEnabled
     existingEventHubNamespaceName: existingEventHubNamespace
     enableStreamAnalytics: loomStreamAnalyticsEnabled && empty(existingAsaJob)
+    // Service Bus + Event Grid navigators (queues/topics + custom topics). Both
+    // default-on (opt-out). Single-sub binds the admin-plane env to these names.
+    deployServiceBus: deployServiceBus
+    deployEventGrid: deployEventGrid
   }
 }
 
@@ -1573,6 +1639,10 @@ module dlzAttach 'modules/landing-zone/main.bicep' = if (topology == 'dlz-attach
     // — see adxEnabled:false above), so only the enable flags forward.
     loomEventHubEnabled: loomEventHubEnabled
     enableStreamAnalytics: loomStreamAnalyticsEnabled
+    // Service Bus + Event Grid navigators on the attached DLZ (default-on). The
+    // names flow back via dlzAttach outputs into the hub-console env patch above.
+    deployServiceBus: deployServiceBus
+    deployEventGrid: deployEventGrid
   }
 }
 
@@ -1674,6 +1744,14 @@ module dlzAttachHubConsoleEnv 'modules/landing-zone/hub-console-dlz-env.bicep' =
     // the cross-sub DLZ rather than the admin/single-sub defaults baked at deploy.
     dlzDatabricksWorkspaceUrl: loomDatabricksEnabled ? dlzAttach!.outputs.databricksWorkspaceUrl : ''
     dlzAdfFactoryName: loomDataFactoryEnabled ? dlzAttach!.outputs.adfFactoryName : ''
+    // Service Bus + Event Grid navigators on the attached DLZ. The dlzAttach
+    // landing-zone deploys these by default (deployServiceBus/deployEventGrid);
+    // the eventgrid.bicep/servicebus.bicep modules already grant the hub Console
+    // UAMI the data/control-plane roles (consolePrincipalId = effHubConsolePrincipalId).
+    // Thread the names so the console env is re-pointed at the attached DLZ; empty
+    // (service disabled) => the var is skipped and the editor honest-gates.
+    dlzServiceBusNamespace: dlzAttach!.outputs.serviceBusNamespaceName
+    dlzEventGridTopic: dlzAttach!.outputs.eventGridTopicName
     complianceTags: complianceTags
   }
 }
@@ -2000,6 +2078,7 @@ module dpMlWorkspace 'modules/deploy-planner/ml-workspace.bicep' = if (useSingle
   params: {
     location: location
     richDisplayComputeVmSize: mlComputeVmSize
+    mlComputeIdleTtl: mlComputeIdleTtl
     consolePrincipalId: dpConsolePrincipalId
     skipRoleGrants: skipRoleGrants
     complianceTags: complianceTags

@@ -22,7 +22,9 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
+import type { SqlParameter } from '@azure/cosmos';
 import {
   queryAuditLog,
   PurviewNotConfiguredError,
@@ -70,6 +72,14 @@ function isCredentialError(err: unknown): boolean {
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // HARD admin gate. Two of the three sources below (Purview Data Map audit,
+  // Log Analytics AppTraces) are NOT tenant-scoped (they emit tenantId:'' and
+  // query estate-wide governance / app telemetry via the Console UAMI's
+  // app-level roles). A bare session check would let ANY authenticated user read
+  // org-wide audit. Restrict the whole surface to tenant admins before invoking
+  // the cross-tenant Purview/LA queries.
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid; // scopes Cosmos to this user's OID (existing design)
 
   const p = req.nextUrl.searchParams;
@@ -87,7 +97,7 @@ export async function GET(req: NextRequest) {
   async function fetchCosmos(): Promise<AuditRow[]> {
     const c = await auditLogContainer();
     const where: string[] = ['c.tenantId = @tenant'];
-    const params: { name: string; value: unknown }[] = [{ name: '@tenant', value: tenantId }];
+    const params: SqlParameter[] = [{ name: '@tenant', value: tenantId }];
     if (type)  { where.push('c.kind = @kind'); params.push({ name: '@kind',  value: type  }); }
     if (since) { where.push('c.at >= @since'); params.push({ name: '@since', value: since }); }
     if (until) { where.push('c.at <= @until'); params.push({ name: '@until', value: until }); }

@@ -34,12 +34,14 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { Button, Caption1, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
-import { Organization20Regular, FullScreenMaximize20Regular, Flowchart20Regular } from '@fluentui/react-icons';
+import { Organization20Regular, FullScreenMaximize20Regular, Flowchart20Regular, Flow24Regular } from '@fluentui/react-icons';
 import { FlowActivityNode, FLOW_NODE_W, type ActivityNodeData } from './flow-activity-node';
 import { LoomBezierEdge, type LoomEdgeData } from './loom-bezier-edge';
 import { elkLayout, topoFallback, shouldVirtualize, type XY } from './flow-layout';
 import { CONNECTOR_COLORS, type ConnectorCondition } from './connector';
 import { isContainerType } from './drill-path';
+import { getActivityVisual, accentTint } from '@/lib/components/canvas/canvas-node-kit';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { PipelineActivity } from './types';
 
 const NODE_H = 84;
@@ -56,15 +58,46 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     flex: 1,
-    minHeight: 400,
+    minHeight: '400px',
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    // Tokenized React Flow chrome — float the zoom Controls + MiniMap as
+    // elevated, rounded, theme-aware cards that match the palette tiles.
+    '& .react-flow__controls': {
+      boxShadow: tokens.shadow16,
+      borderRadius: tokens.borderRadiusLarge,
+      overflow: 'hidden',
+      border: `1px solid ${tokens.colorNeutralStroke2}`,
+      backgroundColor: tokens.colorNeutralBackground1,
+    },
+    '& .react-flow__controls-button': {
+      backgroundColor: tokens.colorNeutralBackground1,
+      borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+      color: tokens.colorNeutralForeground2,
+      width: '28px',
+      height: '28px',
+    },
+    '& .react-flow__controls-button:hover': {
+      backgroundColor: tokens.colorNeutralBackground1Hover,
+    },
+    '& .react-flow__controls-button svg': {
+      fill: 'currentColor',
+      maxWidth: '14px',
+      maxHeight: '14px',
+    },
+    '& .react-flow__minimap': {
+      boxShadow: tokens.shadow16,
+      borderRadius: tokens.borderRadiusLarge,
+      overflow: 'hidden',
+      border: `1px solid ${tokens.colorNeutralStroke2}`,
+    },
   },
   hint: {
     position: 'absolute',
-    left: 12, bottom: 12,
+    left: tokens.spacingHorizontalM, bottom: tokens.spacingVerticalM,
     maxWidth: '55%',
     zIndex: 5,
     pointerEvents: 'none',
@@ -72,10 +105,15 @@ const useStyles = makeStyles({
   hintText: {
     color: tokens.colorNeutralForeground3,
     backgroundColor: tokens.colorNeutralBackground1,
-    padding: '2px 6px',
-    borderRadius: 4,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow2,
   },
+  // Centered, non-interactive empty-state overlay above the canvas surface.
   empty: {
     position: 'absolute',
     inset: 0,
@@ -83,8 +121,26 @@ const useStyles = makeStyles({
     alignItems: 'center',
     justifyContent: 'center',
     pointerEvents: 'none',
-    color: tokens.colorNeutralForeground3,
+    padding: tokens.spacingHorizontalXL,
     zIndex: 1,
+  },
+  emptyCard: {
+    maxWidth: '420px',
+    width: '100%',
+  },
+  // Floating toolbar chrome (top-right Panel) — elevated, rounded, tokenized.
+  toolbar: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXXS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow16,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalXXS,
+    paddingRight: tokens.spacingHorizontalXXS,
   },
 });
 
@@ -137,7 +193,7 @@ function buildEdges(activities: PipelineActivity[]): Edge[] {
       const conds = (dep.dependencyConditions || []) as ConnectorCondition[];
       const list = conds.length ? conds : (['Succeeded'] as ConnectorCondition[]);
       for (const c of list) {
-        const color = CONNECTOR_COLORS[c] || '#888888';
+        const color = CONNECTOR_COLORS[c] || tokens.colorNeutralStroke1;
         edges.push({
           id: `${dep.activity}->${a.name}:${c}`,
           source: dep.activity,
@@ -331,9 +387,18 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         deleteKeyCode={null}
         onlyRenderVisibleElements={shouldVirtualize(activities.length)}
       >
-        {showGrid && <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />}
+        {showGrid && (
+          <Background
+            variant={BackgroundVariant.Dots}
+            gap={20}
+            size={1}
+            // Theme-aware accent-tinted grid dots (matches the .loom-app-grid-bg
+            // product grid) — resolves light/dark via the --loom-accent-blue var.
+            color={accentTint('var(--loom-accent-blue)', 30)}
+          />
+        )}
         <Panel position="top-right">
-          <div style={{ display: 'flex', gap: 4, background: tokens.colorNeutralBackground1, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, padding: 2 }}>
+          <div className={s.toolbar}>
             <Tooltip content={`${showNestedPreviews ? 'Hide' : 'Show'} nested activity preview (N)`} relationship="label">
               <Button
                 size="small"
@@ -358,14 +423,29 @@ const PipelineCanvasInner = forwardRef<CanvasHandle, PipelineCanvasProps>(functi
         <MiniMap
           pannable
           zoomable
-          nodeColor={(n) => (n.selected ? tokens.colorBrandBackground : tokens.colorNeutralForeground3)}
+          // Reuse the kit's per-category accent so the minimap reads the same
+          // colour language as the canvas nodes; selected nodes get the brand
+          // stroke. (SVG fill resolves the --loom-accent-* var theme-aware.)
+          nodeColor={(n) => {
+            if (n.selected) return tokens.colorBrandBackground;
+            const a = (n.data as ActivityNodeData)?.activity;
+            return getActivityVisual(a?.type).accent;
+          }}
+          nodeStrokeColor={tokens.colorNeutralStroke2}
+          maskColor={accentTint(tokens.colorNeutralBackground3, 70)}
           style={{ backgroundColor: tokens.colorNeutralBackground1 }}
         />
       </ReactFlow>
 
       {activities.length === 0 && (
         <div className={s.empty}>
-          <Caption1>Drag an activity from the left palette onto the canvas to begin.</Caption1>
+          <div className={s.emptyCard}>
+            <EmptyState
+              icon={<Flow24Regular />}
+              title="Design your pipeline"
+              body="Drag an activity from the left palette onto the canvas — or click a palette tile to insert it at center. Connect the four coloured output ports to set Succeeded / Failed / Completed / Skipped dependencies."
+            />
+          </div>
         </div>
       )}
       <div className={s.hint}>

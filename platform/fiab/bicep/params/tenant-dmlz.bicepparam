@@ -8,15 +8,15 @@
 // params/dlz-attach.bicepparam — see docs/fiab/topology-migration.md.
 //
 // FedCiv estate (Azure Commercial / AzureCloud):
-//   • DMLZ sub  e093f4fd-5047-4ee4-968d-a56942c665f3  ← THIS deploy (console+shared)
-//   • DLZ  sub  363ef5d1-0e77-4594-a530-f51af23dbf8c  ← bureau DLZ (dlz-attach)
-//   • Main sub  ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea  ← optional 2nd demo domain (dlz-attach)
-//   • ALZ  sub  a60a2fdd-c133-4845-9beb-31f470bf3ef5  ← platform/connectivity hub + DNS
+//   • DMLZ sub  <YOUR_SUBSCRIPTION_ID>  ← THIS deploy (console+shared)
+//   • DLZ  sub  <YOUR_DLZ_SUBSCRIPTION_ID>  ← bureau DLZ (dlz-attach)
+//   • Main sub  <YOUR_DEMO_SUBSCRIPTION_ID>  ← optional 2nd demo domain (dlz-attach)
+//   • ALZ  sub  <YOUR_CONNECTIVITY_SUBSCRIPTION_ID>  ← platform/connectivity hub + DNS
 //
 // Deploy (sub-scoped — the --subscription IS what lands the admin plane in DMLZ;
 // main.bicep always emits the admin-plane RG, adminPlaneSubId is default-only):
 //   az deployment sub create \
-//     --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+//     --subscription <YOUR_SUBSCRIPTION_ID> \
 //     --location eastus2 \
 //     -f platform/fiab/bicep/main.bicep \
 //     -p platform/fiab/bicep/params/tenant-dmlz.bicepparam

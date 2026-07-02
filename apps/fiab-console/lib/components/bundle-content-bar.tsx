@@ -12,6 +12,7 @@
  * least browse what the app's bundle contains and copy snippets out.
  */
 
+import type React from 'react';
 import { useEffect, useMemo, useState } from 'react';
 import {
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -25,28 +26,28 @@ import { Open16Regular, AppFolder20Regular } from '@fluentui/react-icons';
 const useStyles = makeStyles({
   preWrap: {
     backgroundColor: tokens.colorNeutralBackground3,
-    padding: 12,
-    borderRadius: 4,
+    padding: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: 12,
+    fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre',
     overflowX: 'auto',
-    maxHeight: 360,
+    maxHeight: '360px',
     overflowY: 'auto',
     color: tokens.colorNeutralForeground1,
     margin: 0,
   },
-  section: { display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 16 },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalL },
   sectionTitle: { fontWeight: 600 },
   tileRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: 8,
+    gap: tokens.spacingHorizontalS,
   },
   tile: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    padding: 12,
-    borderRadius: 4,
+    padding: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   tabPane: { padding: '12px 0' },
@@ -215,7 +216,7 @@ function BundleDialog({
 interface RenderableTab {
   id: string;
   label: string;
-  render: (styles: ReturnType<typeof useStyles>) => JSX.Element;
+  render: (styles: ReturnType<typeof useStyles>) => React.JSX.Element;
 }
 
 function pre(text: string, styles: ReturnType<typeof useStyles>) {

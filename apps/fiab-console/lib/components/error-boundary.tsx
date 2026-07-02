@@ -52,12 +52,12 @@ export async function autoReport(err: Error | { name?: string; message?: string;
 
 const useStyles = makeStyles({
   shell: {
-    padding: 32, margin: 16, borderRadius: 8,
+    padding: '32px', margin: tokens.spacingHorizontalL, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorPaletteRedBorder1}`,
     backgroundColor: tokens.colorPaletteRedBackground1,
-    maxWidth: 720, marginInline: 'auto', marginTop: 80,
+    maxWidth: '720px', marginInline: 'auto', marginTop: '80px',
   },
-  hint: { color: tokens.colorNeutralForeground3, marginTop: 8, fontSize: 12 },
+  hint: { color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase200 },
 });
 
 interface State { err: Error | null }

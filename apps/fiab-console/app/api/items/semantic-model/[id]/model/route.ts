@@ -43,6 +43,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withQueryCache } from '@/lib/azure/query-cache';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
@@ -61,6 +62,25 @@ import {
   upsertSmHierarchy, removeSmHierarchy,
   type SmModelState, type SmStoredRelationship,
 } from '../../../_lib/semantic-model-store';
+// Wave-3 modeling objects (what-if parameters, calculated tables, mark-as-date-
+// table) persist Azure-native onto the OWNED Cosmos item's `state.model`
+// (LoomModelState — the same slot dax-tools + the warehouse/lakehouse model
+// route + the /query DAX path read). No Fabric/Power BI/AAS workspace required.
+import {
+  readModelState, writeModelState,
+  normalizeWhatIfParameter, normalizeCalculatedTable,
+  upsertWhatIfParameter, upsertCalculatedTable, upsertDateTableMark,
+  // Wave-3 measure save (QuickMeasureDialog "Create measure"). `upsertMeasure`
+  // is aliased to avoid colliding with the AAS-XMLA `upsertMeasure` imported from
+  // aas-client below — this one persists Azure-native onto state.model.measures.
+  normalizeMeasure, upsertMeasure as upsertModelMeasure,
+  type WhatIfParameter, type CalculatedTable, type DateTableMark, type LoomModelState,
+  type StoredMeasure,
+} from '../../../_lib/model-store';
+// Opt-in provision-time TMSL emit for a what-if parameter (calculated single-
+// column table + SELECTEDVALUE measure). Imported directly from aas-tmsl (not
+// re-exported by aas-client) — pure, network-free builder.
+import { buildWhatIfParameterTmsl } from '@/lib/azure/aas-tmsl';
 import {
   buildModelBimTmsl, buildCreateOrReplaceRelationshipTmsl, buildDeleteRelationshipTmsl,
   buildAlterTableHierarchyTmsl, executeAasXmla, updateFabricSemanticModelTmsl,
@@ -96,6 +116,8 @@ interface ModelRelationship {
   source: 'cosmos';
   /** false for source-derived (read-only) base relationships. */
   editable: boolean;
+  /** Wave-3 RI switch — assume referential integrity (TMSL relyOnReferentialIntegrity). */
+  assumeReferentialIntegrity?: boolean;
 }
 
 // ── Mapping helpers (canvas ⇄ TMSL) ─────────────────────────────────────────
@@ -118,6 +140,10 @@ function relToTmsl(r: ModelRelationship | SmStoredRelationship): TmslRelationshi
     fromCardinality: ends.from, toCardinality: ends.to,
     crossFilteringBehavior: r.crossFilter === 'both' ? 'bothDirections' : 'oneDirection',
     isActive: r.active,
+    // Wave-3 RI — emitted as `relyOnReferentialIntegrity` only when truthy (the
+    // builder drops it otherwise, keeping pre-Wave-3 output byte-identical).
+    relyOnReferentialIntegrity:
+      (r as { assumeReferentialIntegrity?: boolean }).assumeReferentialIntegrity || undefined,
   };
 }
 
@@ -128,6 +154,8 @@ function storedToCanvas(r: SmStoredRelationship): ModelRelationship {
     fromTable: r.fromTable, fromColumn: r.fromColumn, toTable: r.toTable, toColumn: r.toColumn,
     cardinality: r.cardinality, crossFilter: r.crossFilter, active: r.active,
     source: 'cosmos', editable: true,
+    // Wave-3 RI flag round-trips from the store (normalizeSmRelationship preserves it).
+    assumeReferentialIntegrity: (r as { assumeReferentialIntegrity?: boolean }).assumeReferentialIntegrity,
   };
 }
 
@@ -246,12 +274,16 @@ function tmslTables(tables: ModelTable[]): TmslTable[] {
   }));
 }
 
-function buildPreview(ctx: ModelContext, merged: ModelRelationship[], state: SmModelState): string {
+function buildPreview(
+  ctx: ModelContext, merged: ModelRelationship[], state: SmModelState,
+  dateTables: Array<{ table: string; dateColumn: string }> = [],
+): string {
   return buildModelBimTmsl(
     ctx.modelName,
     tmslTables(ctx.tables),
     merged.map(relToTmsl),
     state.hierarchies.map((h) => ({ name: h.name, table: h.table, levels: h.levels })),
+    dateTables,
   );
 }
 
@@ -695,7 +727,157 @@ async function handlePlanMetricsPost(
   return NextResponse.json({ ok: true, backend: 'aas-xmla', applied: true, database, tasks: tasks.length, approvalStatus, steps });
 }
 
+// ── Wave-3 modeling objects — what-if / calculated table / mark-as-date-table ─
+//
+// Persisted Azure-native onto the OWNED Cosmos item's `state.model`
+// (LoomModelState — the SAME slot dax-tools + the warehouse/lakehouse model
+// route + the /query DAX path already read), via model-store.ts. NO Fabric /
+// Power BI / AAS workspace is required: the write is the source of truth and
+// succeeds independent of any tabular backend, so a what-if parameter or a
+// calculated table immediately drives real query results (no-vaporware). The
+// opt-in TMSL emit (buildWhatIfParameterTmsl / dataCategory:'Time') runs only
+// when a tabular engine is selected (LOOM_AAS_XMLA_ENDPOINT) — never on the
+// default path. A live-only dataset id (no Loom-owned item) returns
+// persisted:false with an honest notice rather than a fake success.
+
+async function readLoomModelState(
+  id: string, tenantId: string,
+): Promise<{ state: LoomModelState; itemFound: boolean }> {
+  try {
+    return await readModelState(cosmosIdFromLoomId(id), 'semantic-model', tenantId);
+  } catch {
+    return { state: { relationships: [], measures: [] }, itemFound: false };
+  }
+}
+
+function notPersistedNotice(itemFound: boolean): string {
+  return itemFound
+    ? 'Could not persist to this model item.'
+    : 'This id is a live-only dataset (not a Loom-owned semantic model); nothing was persisted. Open a Loom-native semantic model to author modeling objects.';
+}
+
+/** POST { whatIfParameter } — structured 5-field what-if (GENERATESERIES table +
+ *  SELECTEDVALUE measure + slicer binding). normalizeWhatIfParameter generates
+ *  the DAX from the structured input (no freeform). */
+async function handleWhatIfPost(id: string, tenantId: string, raw: unknown): Promise<NextResponse> {
+  let param: WhatIfParameter;
+  try { param = normalizeWhatIfParameter(raw); }
+  catch (e: any) { return NextResponse.json({ ok: false, error: e?.message || 'invalid what-if parameter' }, { status: 400 }); }
+
+  const { state, itemFound } = await readLoomModelState(id, tenantId);
+  const next = upsertWhatIfParameter(state, param);
+  const persisted = await writeModelState(cosmosIdFromLoomId(id), 'semantic-model', tenantId, next);
+
+  const steps: string[] = [];
+  if (persisted) steps.push(`Saved what-if parameter '${param.name}' (GENERATESERIES table + SELECTEDVALUE measure) to this model.`);
+
+  // Opt-in: push the parameter to a LIVE Azure Analysis Services tabular model
+  // when an XMLA endpoint is configured (azure-native, no Fabric). Best-effort —
+  // a failed XMLA write never drops the Cosmos write that already succeeded.
+  let backend: { target: string; ok: boolean; error?: string } | undefined;
+  if (aasConfig().available) {
+    const database = aasDefaultDatabase() || 'model';
+    try {
+      const r = await executeAasXmla(JSON.stringify(buildWhatIfParameterTmsl(database, param), null, 2), database);
+      backend = { target: 'aas-xmla', ...r };
+      steps.push(r.ok
+        ? `Created/replaced what-if table + value measure '${param.name}' on AAS model ${database}.`
+        : `AAS XMLA write failed (saved to model content): ${r.error}`);
+    } catch (e: any) {
+      backend = { target: 'aas-xmla', ok: false, error: e?.message || String(e) };
+    }
+  }
+
+  return NextResponse.json({
+    ok: true,
+    whatIfParameter: param,
+    whatIfParameters: next.whatIfParameters || [],
+    persisted,
+    steps,
+    ...(backend ? { backend } : {}),
+    ...(persisted ? {} : { notice: notPersistedNotice(itemFound) }),
+  });
+}
+
+/** POST { calculatedTable } — the sanctioned freeform expression surface
+ *  (1:1 ADF/Synapse-style). Persists the structured definition; a live XMLA
+ *  push for a DAX calc table remains available via PATCH {op:'add-calculated-table'}. */
+async function handleCalculatedTablePost(id: string, tenantId: string, raw: unknown): Promise<NextResponse> {
+  let table: CalculatedTable;
+  try { table = normalizeCalculatedTable(raw); }
+  catch (e: any) { return NextResponse.json({ ok: false, error: e?.message || 'invalid calculated table' }, { status: 400 }); }
+
+  const { state, itemFound } = await readLoomModelState(id, tenantId);
+  const next = upsertCalculatedTable(state, table);
+  const persisted = await writeModelState(cosmosIdFromLoomId(id), 'semantic-model', tenantId, next);
+
+  return NextResponse.json({
+    ok: true,
+    calculatedTable: table,
+    calculatedTables: next.calculatedTables || [],
+    persisted,
+    ...(persisted ? {} : { notice: notPersistedNotice(itemFound) }),
+  });
+}
+
+/** POST { dateTableMark } | { markAsDateTable } — mark a table as the model date
+ *  table (dataCategory:'Time'; its date column becomes the key). Reflected in the
+ *  model.bim preview and at provision time; no separate live write needed. */
+async function handleDateTableMarkPost(id: string, tenantId: string, raw: unknown): Promise<NextResponse> {
+  const src = (raw || {}) as Record<string, unknown>;
+  const table = String(src.table || '').trim();
+  const dateColumn = String(src.dateColumn || '').trim();
+  if (!table || !dateColumn) {
+    return NextResponse.json({ ok: false, error: 'mark-as-date-table requires table and dateColumn' }, { status: 400 });
+  }
+  const mark: DateTableMark = { table, dateColumn, updatedAt: new Date().toISOString() };
+
+  const { state, itemFound } = await readLoomModelState(id, tenantId);
+  const next = upsertDateTableMark(state, mark);
+  const persisted = await writeModelState(cosmosIdFromLoomId(id), 'semantic-model', tenantId, next);
+
+  return NextResponse.json({
+    ok: true,
+    dateTableMark: mark,
+    dateTables: next.dateTables || [],
+    persisted,
+    ...(persisted ? {} : { notice: notPersistedNotice(itemFound) }),
+  });
+}
+
 // ── Handlers ────────────────────────────────────────────────────────────────
+
+/** POST { measure } (the QuickMeasureDialog "Create measure" save, also reached
+ *  via `?kind=measure`). Persists a generated/quick DAX measure Azure-native onto
+ *  `state.model.measures` — the SAME slot dax-tools + the `/query` DAX path read —
+ *  so the measure immediately drives real query results (no-vaporware). NO Fabric
+ *  / Power BI / AAS workspace required. normalizeMeasure validates the structured
+ *  payload (identifier-safe name + non-empty expression). The dialog tags its
+ *  payload `kind:'dax'`, which is NOT a storage MeasureKind, so we default to
+ *  'cosmos' (a DAX measure persisted in Cosmos, no SQL schema). A live-only dataset
+ *  id (no Loom-owned item) returns persisted:false with an honest notice. */
+async function handleMeasurePost(id: string, tenantId: string, raw: unknown): Promise<NextResponse> {
+  let measure: StoredMeasure;
+  try { measure = normalizeMeasure(raw, 'cosmos'); }
+  catch (e: any) { return NextResponse.json({ ok: false, error: e?.message || 'invalid measure' }, { status: 400 }); }
+
+  const { state, itemFound } = await readLoomModelState(id, tenantId);
+  const next = upsertModelMeasure(state, measure);
+  const persisted = await writeModelState(cosmosIdFromLoomId(id), 'semantic-model', tenantId, next);
+
+  const steps: string[] = [];
+  if (persisted) steps.push(`Saved measure '${measure.name}' to this model (state.model.measures) — usable in queries immediately.`);
+
+  return NextResponse.json({
+    ok: true,
+    backend: 'loom-native',
+    measure,
+    measures: next.measures,
+    persisted,
+    steps,
+    ...(persisted ? {} : { notice: notPersistedNotice(itemFound) }),
+  });
+}
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
@@ -706,16 +888,29 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       ok: true, tables: [], relationships: [], hierarchies: [], tmslPreview: '',
       xmlaAvailable: false, fabricAvailable: false,
       calculationGroups: [], fieldParameters: [], backend: backendName(),
+      whatIfParameters: [], calculatedTables: [], dateTables: [],
     });
   }
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const tenantId = session.claims.oid;
 
-  const mctx = await loadModelContext(id, workspaceId, tenantId);
-  const state = await readSmModelState(id, tenantId);
+  // Expensive Fields-pane read (Cosmos/PBI tables + relationships + calc objects)
+  // wrapped in withQueryCache — passthrough unless LOOM_QUERY_CACHE=on (identical
+  // when off); oid-prefixed key so no cross-tenant bleed.
+  const { mctx, state, modelState, calc } = await withQueryCache(
+    tenantId,
+    `sm:model:${id}:${workspaceId || ''}`,
+    30_000,
+    async () => {
+      const mctx = await loadModelContext(id, workspaceId, tenantId);
+      const state = await readSmModelState(id, tenantId);
+      const modelState = await readLoomModelState(id, tenantId);
+      const calc = await loadCalcObjects(req, id, tenantId);
+      return { mctx, state, modelState, calc };
+    },
+  );
   const merged = mergeRelationships(mctx.baseRels, state.relationships);
-  const tmslPreview = buildPreview(mctx, merged, state);
-  const calc = await loadCalcObjects(req, id, tenantId);
+  const tmslPreview = buildPreview(mctx, merged, state, modelState.state.dateTables || []);
 
   return NextResponse.json({
     ok: true,
@@ -727,6 +922,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     calculationGroups: calc.calculationGroups,
     fieldParameters: calc.fieldParameters,
     backend: calc.backend,
+    // Wave-3 modeling objects (from state.model — Azure-native, no Fabric/AAS).
+    whatIfParameters: modelState.state.whatIfParameters || [],
+    calculatedTables: modelState.state.calculatedTables || [],
+    dateTables: modelState.state.dateTables || [],
     ...(mctx.notice ? { notice: mctx.notice } : {}),
     ...backendAvailability(mctx.liveDataset, workspaceId),
   });
@@ -883,6 +1082,30 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // XMLA `alternateOf` write surface (PR #974).
   if ((body as any)?.action === 'aggregation' || Array.isArray((body as any)?.altMaps)) {
     return handleAggregationPost(req, id, workspaceId, body as AggregationRequest);
+  }
+
+  // Wave-3 modeling objects (Modeling tab). Each persists Azure-native onto
+  // state.model (no Fabric/AAS workspace required) BEFORE the relationship /
+  // hierarchy canvas paths below.
+  if ((body as any)?.whatIfParameter && typeof (body as any).whatIfParameter === 'object') {
+    return handleWhatIfPost(id, tenantId, (body as any).whatIfParameter);
+  }
+  if ((body as any)?.calculatedTable && typeof (body as any).calculatedTable === 'object') {
+    return handleCalculatedTablePost(id, tenantId, (body as any).calculatedTable);
+  }
+  const dateMarkBody = (body as any)?.dateTableMark || (body as any)?.markAsDateTable;
+  if (dateMarkBody && typeof dateMarkBody === 'object') {
+    return handleDateTableMarkPost(id, tenantId, dateMarkBody);
+  }
+
+  // QuickMeasureDialog "Create measure" posts { measure } (also via ?kind=measure).
+  // Must dispatch BEFORE the relationship/hierarchy canvas paths below — otherwise
+  // the body falls through to the relationship-create path and
+  // normalizeSmRelationship({}) throws 'fromTable, fromColumn, toTable and
+  // toColumn are all required' → 400 (every measure save errored before this).
+  if (((body as any)?.measure && typeof (body as any).measure === 'object')
+    || req.nextUrl.searchParams.get('kind') === 'measure') {
+    return handleMeasurePost(id, tenantId, (body as any)?.measure);
   }
 
   const mctx = await loadModelContext(id, workspaceId, tenantId);

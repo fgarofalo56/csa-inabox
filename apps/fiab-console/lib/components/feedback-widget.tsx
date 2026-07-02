@@ -37,15 +37,15 @@ export function openFeedback() {
 }
 
 const useStyles = makeStyles({
-  surface: { maxWidth: 560, width: '95vw' },
-  form: { display: 'flex', flexDirection: 'column', gap: 10, marginTop: 8 },
+  surface: { maxWidth: '560px', width: '95vw' },
+  form: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalMNudge, marginTop: tokens.spacingVerticalS },
   privacy: {
-    padding: 10, borderRadius: 6,
+    padding: tokens.spacingHorizontalMNudge, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground2,
-    fontSize: 12, color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  ok: { padding: 12, borderRadius: 6, backgroundColor: tokens.colorPaletteGreenBackground2, color: tokens.colorPaletteGreenForeground1 },
+  ok: { padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorPaletteGreenBackground2, color: tokens.colorPaletteGreenForeground1 },
 });
 
 interface Result { status: string; issueNumber?: number; issueUrl?: string; forwarded?: boolean }

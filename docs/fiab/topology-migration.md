@@ -25,10 +25,10 @@ operator go/no-go before teardown.
 
 | Role | Subscription | What lands here | Deployed by |
 |------|--------------|-----------------|-------------|
-| **DMLZ** — management/console | `e093f4fd-5047-4ee4-968d-a56942c665f3` | Admin plane: console + shared services + the **NEW** Front Door (`rg-csa-loom-admin-eastus2`) | `params/tenant-dmlz.bicepparam` |
-| **DLZ** — bureau data | `363ef5d1-0e77-4594-a530-f51af23dbf8c` | Bureau Data Landing Zone (`rg-csa-loom-dlz-bureau-eastus2`) — also the **OLD single-sub** home, retained as the UAT ring | `params/dlz-attach.bicepparam` (`domainName=bureau`) |
-| **Main** — 2nd demo | `ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea` | Optional 2nd demo DLZ (`rg-csa-loom-dlz-demo2-eastus2`) | `params/dlz-attach.bicepparam` (`domainName=demo2`) |
-| **ALZ** — platform/connectivity | `a60a2fdd-c133-4845-9beb-31f470bf3ef5` | Connectivity hub VNet + privatelink DNS zones the DLZ spokes peer to / register in | (existing ALZ landing zone — referenced, not deployed here) |
+| **DMLZ** — management/console | `<YOUR_SUBSCRIPTION_ID>` | Admin plane: console + shared services + the **NEW** Front Door (`rg-csa-loom-admin-eastus2`) | `params/tenant-dmlz.bicepparam` |
+| **DLZ** — bureau data | `<YOUR_DLZ_SUBSCRIPTION_ID>` | Bureau Data Landing Zone (`rg-csa-loom-dlz-bureau-eastus2`) — also the **OLD single-sub** home, retained as the UAT ring | `params/dlz-attach.bicepparam` (`domainName=bureau`) |
+| **Main** — 2nd demo | `<YOUR_DEMO_SUBSCRIPTION_ID>` | Optional 2nd demo DLZ (`rg-csa-loom-dlz-demo2-eastus2`) | `params/dlz-attach.bicepparam` (`domainName=demo2`) |
+| **ALZ** — platform/connectivity | `<YOUR_CONNECTIVITY_SUBSCRIPTION_ID>` | Connectivity hub VNet + privatelink DNS zones the DLZ spokes peer to / register in | (existing ALZ landing zone — referenced, not deployed here) |
 
 **ALZ seam.** The two cross-sub seams are `adminPlaneHubVnetId` (the VNet the
 DLZ spoke peers to) and `adminPlanePrivateDnsZoneIds` (the privatelink zones the
@@ -68,7 +68,7 @@ services + Front Door deploy here.
 ```bash
 az deployment sub create \
   --name loom-tenant-dmlz \
-  --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+  --subscription <YOUR_SUBSCRIPTION_ID> \
   --location eastus2 \
   -f platform/fiab/bicep/main.bicep \
   -p platform/fiab/bicep/params/tenant-dmlz.bicepparam
@@ -82,7 +82,7 @@ re-exported by `main.bicep` (audit-t162):
 
 ```bash
 OUT=$(az deployment sub show -n loom-tenant-dmlz \
-  --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+  --subscription <YOUR_SUBSCRIPTION_ID> \
   --query properties.outputs -o json)
 
 export LOOM_ADMIN_HUB_VNET_ID=$(jq -r '.adminPlaneHubVnetId.value'   <<<"$OUT")
@@ -112,7 +112,7 @@ bootstrap them first:
 
 ```bash
 bash scripts/csa-loom/bootstrap-dlz-rgs.sh eastus2 \
-  "363ef5d1-0e77-4594-a530-f51af23dbf8c,ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea" \
+  "<YOUR_DLZ_SUBSCRIPTION_ID>,<YOUR_DEMO_SUBSCRIPTION_ID>" \
   "bureau,demo2"
 ```
 
@@ -126,7 +126,7 @@ non-overlapping spoke CIDR; the DMLZ hub is `10.0.0.0/16`).
 # Bureau DLZ → DLZ sub
 az deployment group create \
   --name loom-dlz-bureau \
-  --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+  --subscription <YOUR_DLZ_SUBSCRIPTION_ID> \
   -g rg-csa-loom-dlz-bureau-eastus2 \
   -f platform/fiab/bicep/modules/landing-zone/main.bicep \
   -p platform/fiab/bicep/params/dlz-attach.bicepparam \
@@ -135,7 +135,7 @@ az deployment group create \
 # Optional 2nd demo DLZ → Main sub
 az deployment group create \
   --name loom-dlz-demo2 \
-  --subscription ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea \
+  --subscription <YOUR_DEMO_SUBSCRIPTION_ID> \
   -g rg-csa-loom-dlz-demo2-eastus2 \
   -f platform/fiab/bicep/modules/landing-zone/main.bicep \
   -p platform/fiab/bicep/params/dlz-attach.bicepparam \
@@ -161,9 +161,9 @@ the console against the bureau DLZ, set:
 
 ```bash
 az containerapp update -g rg-csa-loom-admin-eastus2 -n loom-console \
-  --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+  --subscription <YOUR_SUBSCRIPTION_ID> \
   --set-env-vars \
-    LOOM_SUBSCRIPTION_ID=e093f4fd-5047-4ee4-968d-a56942c665f3 \
+    LOOM_SUBSCRIPTION_ID=<YOUR_SUBSCRIPTION_ID> \
     LOOM_ADMIN_RG=rg-csa-loom-admin-eastus2 \
     LOOM_DLZ_RG=rg-csa-loom-dlz-bureau-eastus2
 ```
@@ -187,7 +187,7 @@ echo "New console: $NEW_FD"
    ```bash
    gh workflow run csa-loom-validate.yml \
      -f loom_url="$NEW_FD" \
-     -f sub=e093f4fd-5047-4ee4-968d-a56942c665f3 \
+     -f sub=<YOUR_SUBSCRIPTION_ID> \
      -f admin_rg=rg-csa-loom-admin-eastus2
    ```
 
@@ -241,7 +241,7 @@ profile while the old profile still owns it. Plan accordingly:
 
    ```bash
    az afd custom-domain show -g rg-csa-loom-admin-eastus2 \
-     --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+     --subscription <YOUR_SUBSCRIPTION_ID> \
      --profile-name <new-afd-profile> --custom-domain-name <vanity-cd> \
      --query domainValidationState -o tsv   # expect: Approved
    ```
@@ -300,7 +300,7 @@ blocks teardown). See `.github/scripts/fiab-orphan-sweep.sh` (`--cosmos-export`)
 
 ```bash
 RG_NAME=rg-csa-loom-admin-eastus2 \
-DLZ_SUBS=363ef5d1-0e77-4594-a530-f51af23dbf8c \
+DLZ_SUBS=<YOUR_DLZ_SUBSCRIPTION_ID> \
   bash .github/scripts/fiab-teardown.sh
 ```
 
@@ -317,12 +317,12 @@ custom-domain + endpoint on the old profile, and orphan Entra app artifacts
 
 ```bash
 # Dry-run first (default) — lists what WOULD be deleted, touches nothing:
-SUBS=363ef5d1-0e77-4594-a530-f51af23dbf8c,e093f4fd-5047-4ee4-968d-a56942c665f3 \
+SUBS=<YOUR_DLZ_SUBSCRIPTION_ID>,<YOUR_SUBSCRIPTION_ID> \
   bash .github/scripts/fiab-orphan-sweep.sh
 
 # Execute after reviewing the dry-run:
 APPLY=1 \
-SUBS=363ef5d1-0e77-4594-a530-f51af23dbf8c,e093f4fd-5047-4ee4-968d-a56942c665f3 \
+SUBS=<YOUR_DLZ_SUBSCRIPTION_ID>,<YOUR_SUBSCRIPTION_ID> \
 VANITY_DOMAIN=$LOOM_VANITY_DOMAIN \
 DNS_ZONE_RG=<dns-zone-rg> DNS_ZONE=<vanity-zone> \
 OLD_AFD_RG=rg-csa-loom-admin-eastus2 OLD_AFD_PROFILE=<old-afd-profile> \

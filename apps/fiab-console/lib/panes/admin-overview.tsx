@@ -17,7 +17,7 @@
  */
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import {
+import { shorthands,
   makeStyles, mergeClasses, tokens, Badge, Tooltip, Spinner,
   MessageBar, MessageBarBody,
 } from '@fluentui/react-components';
@@ -71,13 +71,13 @@ const useStyles = makeStyles({
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-    gap: '16px',
+    gap: tokens.spacingHorizontalL,
   },
   tile: {
-    display: 'flex', flexDirection: 'column', gap: '10px',
-    paddingTop: '20px', paddingRight: '20px', paddingBottom: '20px', paddingLeft: '20px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
+    paddingTop: tokens.spacingVerticalL, paddingRight: tokens.spacingHorizontalL, paddingBottom: tokens.spacingVerticalL, paddingLeft: tokens.spacingHorizontalL,
     minHeight: '140px',
-    borderRadius: '12px',
+    borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     color: tokens.colorNeutralForeground1,
@@ -86,15 +86,15 @@ const useStyles = makeStyles({
     ':hover': {
       transform: 'translateY(-2px)',
       boxShadow: tokens.shadow8,
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
     },
   },
-  tileHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' },
+  tileHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
   tileIcon: { display: 'flex', fontSize: '24px', color: tokens.colorNeutralForeground2 },
-  tileName: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3 },
-  tileDesc: { fontSize: '12px', color: tokens.colorNeutralForeground3, lineHeight: 1.4, marginTop: 'auto' },
+  tileName: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  tileDesc: { fontSize: '12px', color: tokens.colorNeutralForeground3, lineHeight: 1.4, marginTop: 'auto', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   skeleton: {
-    minHeight: '140px', borderRadius: '12px',
+    minHeight: '140px', borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },

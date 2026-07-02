@@ -61,16 +61,16 @@ const METRIC_META: Record<string, { label: string; unit: string }> = {
 };
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '14px', minHeight: 0 },
-  controls: { display: 'flex', alignItems: 'flex-end', gap: '10px', flexWrap: 'wrap' },
-  scope: { display: 'flex', alignItems: 'center', gap: '6px', flexWrap: 'wrap' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0 },
+  controls: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
+  scope: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   grid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))',
-    gap: '12px',
+    gap: tokens.spacingHorizontalM,
   },
-  sectionHead: { display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
 });
 
 function metaFor(name: string): { label: string; unit: string } {

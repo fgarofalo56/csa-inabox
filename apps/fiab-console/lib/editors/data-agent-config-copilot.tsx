@@ -20,6 +20,7 @@ import {
 } from '@fluentui/react-components';
 import { Sparkle20Regular, Add20Regular, Database20Regular, Dismiss16Regular } from '@fluentui/react-icons';
 import { safeModelJson } from './model-fetch';
+import { EmptyState } from '../components/empty-state';
 import type { DaSource, DaSourceType } from './_family-utils';
 
 const useStyles = makeStyles({
@@ -33,20 +34,37 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
+    minWidth: 0,
+    maxWidth: '100%',
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16 },
   },
-  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  cardHead: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, minWidth: 0 },
   spacer: { flex: 1 },
   preview: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   pairList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  pairRow: { display: 'grid', gridTemplateColumns: '1fr 1fr auto', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  pairRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr) auto', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
   addBtn: { alignSelf: 'flex-start' },
   summary: { cursor: 'pointer', fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground2 },
   summarySmall: { cursor: 'pointer', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
-  descBlock: { marginTop: tokens.spacingVerticalXS },
-  descTable: { marginBottom: tokens.spacingVerticalXS },
-  descCol: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 },
-  schema: { fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS },
-  hintRow: { marginTop: tokens.spacingVerticalXS },
+  descBlock: { marginTop: tokens.spacingVerticalXS, maxHeight: '300px', overflowY: 'auto', minWidth: 0, maxWidth: '100%' },
+  descTable: { marginBottom: tokens.spacingVerticalXS, minWidth: 0 },
+  descCol: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  schema: {
+    fontSize: tokens.fontSizeBase100,
+    whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    color: tokens.colorNeutralForeground3,
+    marginTop: tokens.spacingVerticalXS,
+    maxHeight: '320px',
+    overflowY: 'auto',
+    maxWidth: '100%',
+  },
+  hintRow: { marginTop: tokens.spacingVerticalXS, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   idleText: { fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground3 },
 });
 
@@ -143,12 +161,11 @@ export function DataAgentConfigCopilotPanel({ id, sources, ensureSaved, onApply 
 
   if (!sources.length) {
     return (
-      <MessageBar intent="info">
-        <MessageBarBody>
-          <Sparkle20Regular className={styles.headIcon} />
-          Add at least one source in the <strong>Build</strong> tab before using Config Copilot.
-        </MessageBarBody>
-      </MessageBar>
+      <EmptyState
+        icon={<Sparkle20Regular />}
+        title="No sources to ground on yet"
+        body="Add at least one source in the Build tab before using Config Copilot. The copilot reads each source's real schema to generate example question → query pairs and per-field descriptions."
+      />
     );
   }
 

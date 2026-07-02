@@ -20,11 +20,14 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Title3, Caption1, Body1, Badge, Spinner, Button, Textarea,
+  Title3, Subtitle2, Caption1, Body1, Badge, Spinner, Button, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  makeStyles, tokens,
+  InfoLabel, Tooltip, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { BotSparkle24Filled, Send20Filled } from '@fluentui/react-icons';
+import {
+  BotSparkle24Filled, Send20Filled, DataPie24Regular, Open16Regular,
+  ChevronDown16Regular, ChevronRight16Regular, Sparkle16Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -32,6 +35,11 @@ import { SessionList } from '@/lib/components/copilot/session-list';
 import { ToolsPanel } from '@/lib/components/copilot/tools-panel';
 import { Transcript } from '@/lib/components/copilot/transcript';
 import { groupTurns, type Step, type Tool, type SessionSummary, type Turn } from '@/lib/components/copilot/types';
+import {
+  POWERBI_AUTHORING_SKILLS,
+  POWERBI_MCP_CLIENT_ID_ENV,
+  POWERBI_MCP_TENANT_SETTING,
+} from '@/lib/copilot/powerbi-skills';
 
 const useStyles = makeStyles({
   // Full-screen page wrapper — bounded height so panels scroll INTERNALLY and
@@ -54,12 +62,13 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalL} ${tokens.spacingHorizontalXXL}`,
     color: tokens.colorNeutralForegroundOnBrand,
     background:
-      'radial-gradient(900px 300px at 10% -40%, #7c3aed 0%, transparent 55%),' +
-      'radial-gradient(700px 320px at 98% 140%, #0078d4 0%, transparent 55%),' +
-      'linear-gradient(135deg, #2a1458 0%, #1a1342 55%, #0b1e3f 100%)',
+      'radial-gradient(900px 300px at 10% -40%, var(--loom-accent-violet) 0%, transparent 55%),' +
+      'radial-gradient(700px 320px at 98% 140%, var(--loom-accent-blue) 0%, transparent 55%),' +
+      'linear-gradient(135deg, #2a1458 0%, var(--loom-navy-800) 55%, #0b1e3f 100%)',
     boxShadow: tokens.shadow8,
     display: 'flex',
     alignItems: 'center',
+    flexWrap: 'wrap',
     gap: tokens.spacingHorizontalL,
   },
   heroIcon: {
@@ -70,7 +79,7 @@ const useStyles = makeStyles({
     background: 'linear-gradient(135deg, rgba(255,255,255,0.25), rgba(255,255,255,0.08))',
     border: '1px solid rgba(255,255,255,0.25)',
   },
-  heroText: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0, flex: 1 },
+  heroText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 },
   heroTitle: { color: tokens.colorNeutralForegroundOnBrand, margin: 0, lineHeight: 1.1 },
   heroLead: { color: 'rgba(255,255,255,0.82)' },
 
@@ -88,6 +97,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
     padding: tokens.spacingVerticalM,
     minHeight: 0,
     overflow: 'hidden',
@@ -96,6 +106,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
     display: 'flex',
     flexDirection: 'column',
     minWidth: 0,
@@ -129,6 +140,11 @@ const useStyles = makeStyles({
     background: 'linear-gradient(135deg, rgba(124,58,237,0.18), rgba(0,120,212,0.12))',
     color: tokens.colorBrandForeground1,
   },
+  emptyBody: { maxWidth: '520px' },
+  exampleRow: {
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS,
+    justifyContent: 'center', marginTop: tokens.spacingVerticalS,
+  },
   composer: {
     flexShrink: 0,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -138,7 +154,65 @@ const useStyles = makeStyles({
     gap: tokens.spacingVerticalXS,
   },
   composerRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
-  composerFoot: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
+  composerFoot: { display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground3 },
+  // Long backend error / remediation strings (AOAI errors, URLs) must wrap
+  // inside the status MessageBar rather than force horizontal overflow.
+  bannerText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+
+  // Right rail variant — same chrome as `rail`, but a flex column so the Power BI
+  // authoring card sits above the (internally-scrolling) ToolsPanel.
+  rightRail: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    padding: tokens.spacingVerticalM,
+    minHeight: 0,
+    overflow: 'hidden',
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalM,
+  },
+  rightRailTools: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' },
+
+  // Power BI authoring group — a card inside the right rail, styled like the
+  // ToolsPanel persona card for a cohesive look (web3-ui).
+  pbiCard: {
+    flexShrink: 0,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalM,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    background: 'linear-gradient(135deg, rgba(124,58,237,0.12), rgba(0,120,212,0.08))',
+  },
+  pbiHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  pbiHeadIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
+  pbiHeadText: { display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 },
+  pbiNote: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere' },
+  chipLink: {
+    textDecoration: 'none', flexShrink: 0,
+    borderRadius: tokens.borderRadiusCircular,
+    ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '2px' },
+  },
+  pbiSkillList: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    maxHeight: '260px', overflowY: 'auto', marginTop: tokens.spacingVerticalXS,
+  },
+  // Mirrors ToolsPanel's toolRow/toolText so the skill list reads as the same
+  // catalog rail — text block + a small "Use" action.
+  pbiSkillRow: {
+    display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-start',
+    padding: tokens.spacingVerticalS,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorNeutralBackground1,
+  },
+  pbiSkillText: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: '2px' },
+  pbiSkillName: { fontSize: tokens.fontSizeBase200, fontWeight: tokens.fontWeightSemibold },
+  pbiSkillWhen: {
+    color: tokens.colorNeutralForeground3,
+    fontSize: tokens.fontSizeBase100,
+    lineHeight: tokens.lineHeightBase100,
+  },
 });
 
 /**
@@ -182,6 +256,151 @@ const EXAMPLE_PROMPTS = [
   'Trigger the nightly ADF ingestion pipeline and report its run status.',
   'Refresh the Sales semantic model, then tell me when it last completed.',
 ];
+
+/**
+ * Starter prompts that seed the composer for each Power BI authoring skill. The
+ * skill `guidance` (the actual best-practice system text from the open-source
+ * powerbi-authoring skills) is injected server-side by the orchestrator's
+ * per-pane persona path — these are just human-friendly kick-off prompts so a
+ * click does something real (fills the composer), consistent with the
+ * ToolsPanel suggested-prompt chips. Keyed by the skill `id`.
+ */
+const PBI_SKILL_STARTERS: Record<string, string> = {
+  'semantic-model-authoring':
+    'Help me author a semantic model: propose a star schema (fact + dimension tables), the key DAX measures, and AI-ready descriptions so it answers natural-language questions well.',
+  'power-bi-report-authoring':
+    'Help me build a report: create a page and suggest visuals grounded on real aggregates from my semantic model, one visual at a time.',
+  'power-bi-report-design':
+    'Draft a design brief for a report — the audience, the top business questions, page layout, visual hierarchy, color, and typography.',
+  'power-bi-report-planner':
+    'Plan a complete report from my existing semantic model: inspect its tables and measures, then propose pages and visuals grounded in real fields.',
+  'power-bi-report-management':
+    'List my reports and help me organize, rename, and re-bind them — and (opt-in) publish to a Power BI workspace if connected.',
+};
+
+interface PbiMcpStatus { configured: boolean; registered: boolean; tokenReady: boolean }
+
+/**
+ * PowerBiAuthoringPanel — the "Power BI authoring" group in the Copilot right
+ * rail. Lists the 5 powerbi-authoring skills (name + when-to-use) and surfaces
+ * the opt-in remote Power BI MCP connect state as a chip.
+ *
+ * RULE COMPLIANCE
+ *  - no-fabric-dependency: the skills work day-one on Loom's Azure-native
+ *    semantic-model / report path — NO behavioural coupling to the chip state.
+ *    The remote Power BI MCP is strictly opt-in; the chip merely reflects whether
+ *    it is configured + registered + has a per-user OBO token, and deep-links to
+ *    /admin/mcp-servers to connect it.
+ *  - no-vaporware: the chip is driven by a REAL GET /api/admin/mcp-servers/powerbi
+ *    (no mock); when not connected the note names the exact env var + the Power BI
+ *    tenant setting (the full honest gate — Entra app reg, scopes — lives on the
+ *    admin page the chip links to). Each "Use" fills the composer with a real
+ *    starter prompt that drives the orchestrator.
+ */
+function PowerBiAuthoringPanel({ onSuggestedPrompt }: { onSuggestedPrompt: (p: string) => void }) {
+  const s = useStyles();
+  const [open, setOpen] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [pbi, setPbi] = useState<PbiMcpStatus | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/admin/mcp-servers/powerbi');
+        const j = await r.json().catch(() => ({} as any));
+        if (!alive) return;
+        setPbi(
+          j && j.ok
+            ? { configured: !!j.configured, registered: !!j.registered, tokenReady: !!j.tokenReady }
+            : { configured: false, registered: false, tokenReady: false },
+        );
+      } catch {
+        if (alive) setPbi({ configured: false, registered: false, tokenReady: false });
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => { alive = false; };
+  }, []);
+
+  // "Connected" = opted in (env var set) + registered as an McpServerConfig row +
+  // a per-user OBO token cached (so calls won't 401). Anything less is a partial
+  // setup the operator finishes in admin.
+  const connected = !!pbi && pbi.configured && pbi.registered && pbi.tokenReady;
+  const chipColor: 'success' | 'warning' | 'brand' =
+    connected ? 'success' : pbi?.configured ? 'warning' : 'brand';
+  const chipLabel = connected ? 'Connected' : pbi?.configured ? 'Finish connecting' : 'Connect Power BI';
+
+  return (
+    <div className={s.pbiCard}>
+      <div className={s.pbiHead}>
+        <DataPie24Regular className={s.pbiHeadIcon} aria-hidden />
+        <div className={s.pbiHeadText}>
+          <Subtitle2>
+            <InfoLabel info="5 cloud-native semantic-model & report authoring skills; Azure-native by default, Power BI MCP is opt-in">
+              Power BI authoring
+            </InfoLabel>
+          </Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            {POWERBI_AUTHORING_SKILLS.length} skills · Azure-native by default
+          </Caption1>
+        </div>
+        {loading ? (
+          <Tooltip relationship="label" content="Verifying Power BI MCP connection state">
+            <Badge appearance="tint" color="informative">Checking…</Badge>
+          </Tooltip>
+        ) : (
+          <a
+            className={s.chipLink}
+            href="/admin/mcp-servers"
+            aria-label={connected ? 'Power BI MCP connected — manage in admin' : 'Connect the Power BI MCP in admin'}
+          >
+            <Badge appearance="tint" color={chipColor} icon={<Open16Regular />}>{chipLabel}</Badge>
+          </a>
+        )}
+        <Button
+          appearance="subtle"
+          size="small"
+          icon={open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+          aria-expanded={open}
+          aria-label={open ? 'Collapse Power BI skills' : 'Expand Power BI skills'}
+          onClick={() => setOpen((v) => !v)}
+        />
+      </div>
+
+      {!loading && (
+        <Caption1 className={s.pbiNote}>
+          {connected
+            ? 'Connected — schema-aware query + Copilot DAX run read-only under your Power BI RBAC. These skills also drive Loom’s Azure-native authoring.'
+            : `Opt-in: set ${POWERBI_MCP_CLIENT_ID_ENV} and enable the “${POWERBI_MCP_TENANT_SETTING}” tenant setting to add schema-aware query + Copilot DAX. These skills already work on Loom’s Azure-native semantic-model & report path.`}
+        </Caption1>
+      )}
+
+      {open && (
+        <div className={s.pbiSkillList}>
+          {POWERBI_AUTHORING_SKILLS.map((skill) => (
+            <div key={skill.id} className={s.pbiSkillRow}>
+              <div className={s.pbiSkillText}>
+                <span className={s.pbiSkillName}>{skill.name}</span>
+                <span className={s.pbiSkillWhen}>{skill.whenToUse}</span>
+              </div>
+              <Button
+                size="small"
+                appearance="subtle"
+                icon={<Sparkle16Regular />}
+                onClick={() => onSuggestedPrompt(PBI_SKILL_STARTERS[skill.id] ?? skill.whenToUse)}
+                aria-label={`Use the ${skill.name} skill`}
+              >
+                Use
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function CopilotConsoleView({ embedded = false, contextSlug = 'default', onBack }: { embedded?: boolean; contextSlug?: string; onBack?: () => void }) {
   const s = useStyles();
@@ -429,12 +648,12 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
           <div className={s.banners}>
             {status && !status.ready && (
               <MessageBar intent={status.aoai?.ok ? 'warning' : 'info'}>
-                <MessageBarBody>
+                <MessageBarBody className={s.bannerText}>
                   <MessageBarTitle>Orchestrator status</MessageBarTitle>
                   {status.aoai?.ok
                     ? `AOAI reachable (${status.aoai.deployment}) · ${status.tools?.count ?? 0} tools registered.`
                     : `AOAI not reachable — ${status.aoai?.error || 'unknown'}. ${status.tools?.count ?? 0} tools still callable directly via the right rail.`}
-                  {status.aoai?.remediation && <div style={{ marginTop: 6, fontSize: 12 }}>{status.aoai.remediation}</div>}
+                  {status.aoai?.remediation && <div style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase200 }}>{status.aoai.remediation}</div>}
                 </MessageBarBody>
                 <MessageBarActions>
                   {!status.aoai?.ok && (
@@ -448,7 +667,7 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
             )}
             {aoaiUnavailable && (
               <MessageBar intent="warning">
-                <MessageBarBody>
+                <MessageBarBody className={s.bannerText}>
                   <MessageBarTitle>No AOAI deployment</MessageBarTitle>
                   {aoaiUnavailable}
                 </MessageBarBody>
@@ -459,7 +678,7 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
             )}
             {topError && (
               <MessageBar intent="error">
-                <MessageBarBody><MessageBarTitle>Orchestrator error</MessageBarTitle>{topError}</MessageBarBody>
+                <MessageBarBody className={s.bannerText}><MessageBarTitle>Orchestrator error</MessageBarTitle>{topError}</MessageBarBody>
               </MessageBar>
             )}
           </div>
@@ -470,12 +689,12 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
             <div className={s.emptyState}>
               <span className={s.emptyIcon}><BotSparkle24Filled fontSize={30} /></span>
               <Title3>Ask CSA Loom Copilot</Title3>
-              <Body1 style={{ maxWidth: 520 }}>
+              <Body1 className={s.emptyBody}>
                 One prompt, orchestrated across every wired service — Synapse, Lakehouse,
                 Databricks, APIM, ADX, ADF, Power BI, and the AI Foundry hub. Copilot picks
                 the right tools and runs them against real backends.
               </Body1>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, justifyContent: 'center', marginTop: tokens.spacingVerticalS }}>
+              <div className={s.exampleRow}>
                 {EXAMPLE_PROMPTS.map((ex) => (
                   <Button key={ex} appearance="outline" size="small" onClick={() => setComposer(ex)}>{ex}</Button>
                 ))}
@@ -527,16 +746,19 @@ export function CopilotConsoleView({ embedded = false, contextSlug = 'default', 
         </div>
       </section>
 
-      {/* Right rail — tools + persona */}
-      <aside className={s.rail}>
-        <ToolsPanel
-          contextSlug={contextSlug}
-          tools={tools}
-          toolCount={toolCount}
-          ready={status?.ready}
-          deployment={status?.aoai?.deployment}
-          onSuggestedPrompt={(p) => setComposer(p)}
-        />
+      {/* Right rail — Power BI authoring · tools + persona */}
+      <aside className={s.rightRail}>
+        <PowerBiAuthoringPanel onSuggestedPrompt={(p) => setComposer(p)} />
+        <div className={s.rightRailTools}>
+          <ToolsPanel
+            contextSlug={contextSlug}
+            tools={tools}
+            toolCount={toolCount}
+            ready={status?.ready}
+            deployment={status?.aoai?.deployment}
+            onSuggestedPrompt={(p) => setComposer(p)}
+          />
+        </div>
       </aside>
     </div>
   );

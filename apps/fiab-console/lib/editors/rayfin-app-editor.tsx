@@ -27,8 +27,26 @@
  * equivalent that does real in-Loom CRUD over the ontology's Synapse warehouse.
  * For write-back inside Loom use Atelier. See docs/fiab/parity/rayfin-app.md.
  *
+ * Demote-to-template (no-vaporware / no-fabric-dependency): NEW Rayfin apps are
+ * no longer created as a single empty `rayfin-app` shell. The `rayfin-azure-stack`
+ * app-template scaffolds a fully-backed, Azure-native stack — a Static Web App
+ * (`slate-app`, the runnable web tier), an Azure Functions API
+ * (`user-data-function`), and a Cosmos store (`azure-cosmos-account`), wired
+ * together server-side — so a new pick lands the user in real, runnable items
+ * (no Fabric/Power BI dependency on the default path). THIS editor is retained
+ * unchanged as the authoring surface for **existing** `rayfin-app` instances and
+ * the opt-in Rayfin SDK + CLI path: define the backend model, bind it to a real
+ * semantic model (Azure Analysis Services default), and assemble the read-view
+ * visual app. Existing instances open here directly (isNew=false → no template
+ * indirection); the model-binding / preview / render backends are untouched.
+ *
  * Everything renders with an honest Fluent MessageBar when AAS is unset — never
  * an empty picker (no-vaporware.md).
+ *
+ * Chrome: wraps the shared ItemEditorChrome like every registered editor, so
+ * the surface carries Share, Endorsement, sensitivity, the lineage drawer, and
+ * the Thread menu (the "Share + endorsement on every editor" invariant). The
+ * three-mode TabList and all surfaces live in the chrome's main panel.
  *
  * Refs (preview): https://learn.microsoft.com/fabric/apps/overview ·
  *   https://github.com/microsoft/rayfin · npm @microsoft/rayfin-cli
@@ -36,7 +54,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
-  makeStyles, tokens, Button, Input, Field, Switch, Subtitle2, Body1, Caption1,
+  makeStyles, tokens, Button, Input, Field, InfoLabel, Switch, Subtitle2, Body1, Caption1,
   Badge, MessageBar, MessageBarBody, MessageBarTitle, Dropdown, Option, Divider,
   Spinner, Tooltip, useId, useToastController, Toast, ToastTitle, Toaster,
   Checkbox, SpinButton, Table, TableHeader, TableHeaderCell, TableRow, TableBody, TableCell,
@@ -49,7 +67,10 @@ import {
   Apps20Regular, Table20Regular, Gauge20Regular, DataBarVertical20Regular,
   Form20Regular, TextT20Regular, Wand20Regular, DocumentAdd20Regular,
 } from '@fluentui/react-icons';
+import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import type { RibbonTab } from '@/lib/components/ribbon';
 import {
   DEFAULT_SPEC, DEFAULT_BINDING, COMPONENT_KINDS, WIZARD_TEMPLATES,
   gbParse, gbKey, buildBindingDax, buildComponentDax,
@@ -84,36 +105,44 @@ const KIND_ICON: Record<ComponentKind, ReactElement> = {
 const KIND_LABEL: Record<ComponentKind, string> = {
   table: 'Table', metric: 'Metric', chart: 'Chart', form: 'Form', text: 'Text',
 };
+const KIND_HINT: Record<ComponentKind, string> = {
+  table: 'Add a data table bound to the model — rows from your selected measures and group-by fields.',
+  metric: 'Add a single-value KPI tile showing one measure (a big number).',
+  chart: 'Add a bar chart — one measure plotted across a category column.',
+  form: 'Add a create/edit form bound to a backend entity (write-back runs in the deployed app, not in Loom).',
+  text: 'Add a static text block for a heading, caption, or notes.',
+};
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '12px', minWidth: 0, maxWidth: '100%' },
-  row: { display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' },
-  cols: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: '16px', minWidth: 0 },
-  builderCols: { display: 'grid', gridTemplateColumns: '260px minmax(0,1fr)', gap: '16px', minWidth: 0 },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
+  row: { display: 'flex', gap: tokens.spacingVerticalM, flexWrap: 'wrap', alignItems: 'flex-end' },
+  cols: { display: 'grid', gridTemplateColumns: 'minmax(0,1fr) minmax(0,1fr)', gap: tokens.spacingVerticalL, minWidth: 0 },
+  builderCols: { display: 'grid', gridTemplateColumns: '260px minmax(0,1fr)', gap: tokens.spacingVerticalL, minWidth: 0 },
   card: {
-    padding: '16px', border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalL, border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground1,
-    display: 'flex', flexDirection: 'column', gap: '10px', minWidth: 0,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
   },
   entity: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    padding: '10px', display: 'flex', flexDirection: 'column', gap: '6px',
+    padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  fieldRow: { display: 'flex', gap: '8px', alignItems: 'center', minWidth: 0 },
-  fieldRowNested: { paddingLeft: '16px' },
+  fieldRow: { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', minWidth: 0 },
+  fieldRowNested: { paddingLeft: tokens.spacingHorizontalL },
   fieldName: { flex: 1, minWidth: 0 },
   code: {
-    fontFamily: tokens.fontFamilyMonospace, fontSize: '12px', whiteSpace: 'pre', overflowX: 'auto',
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre', overflowX: 'auto',
+    maxHeight: '320px', overflowY: 'auto',
     backgroundColor: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium, padding: '12px', margin: 0,
+    borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalM, margin: 0,
   },
-  head: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  head: { display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, flexWrap: 'wrap' },
   spacer: { marginLeft: 'auto' },
-  headActions: { marginLeft: 'auto', display: 'flex', gap: '8px' },
+  headActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingVerticalS },
   pickList: {
-    maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: '8px',
+    maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS,
     backgroundColor: tokens.colorNeutralBackground1,
     '& .fui-Checkbox': { borderRadius: tokens.borderRadiusSmall, paddingInline: '4px' },
     '& .fui-Checkbox:hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
@@ -123,33 +152,33 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium,
     '& thead th': { position: 'sticky', top: 0, zIndex: 1, backgroundColor: tokens.colorNeutralBackground2 },
   },
-  metaRow: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', color: tokens.colorNeutralForeground3 },
+  metaRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, flexWrap: 'wrap', color: tokens.colorNeutralForeground3 },
   // builder
-  palette: { display: 'flex', flexDirection: 'column', gap: '6px' },
+  palette: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   pageRow: {
-    display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, cursor: 'pointer',
   },
   pageRowActive: {
-    display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 8px',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     border: `2px solid ${tokens.colorBrandStroke1}`, borderRadius: tokens.borderRadiusMedium,
     background: tokens.colorBrandBackground2, cursor: 'pointer',
   },
-  canvas: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: 0 },
+  canvas: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
   compCard: {
-    padding: '12px', border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorNeutralBackground2,
-    display: 'flex', flexDirection: 'column', gap: '8px', minWidth: 0,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
   },
-  metricValue: { fontSize: '28px', fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: '32px' },
-  barRow: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
+  metricValue: { fontSize: '28px', fontWeight: tokens.fontWeightBold, color: tokens.colorBrandForeground1, lineHeight: '32px' },
+  barRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS, minWidth: 0 },
   barLabel: { width: '140px', flexShrink: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   barTrack: { flex: 1, height: '14px', background: tokens.colorNeutralBackground3, borderRadius: '7px', overflow: 'hidden' },
   barFill: { height: '100%', background: tokens.colorBrandBackground, borderRadius: '7px', transition: 'width 240ms ease' },
   barValue: { width: '70px', textAlign: 'right', flexShrink: 0, fontVariantNumeric: 'tabular-nums' },
   // shared layout helpers
-  vstack: { display: 'flex', flexDirection: 'column', gap: '6px', minWidth: 0 },
-  wizForm: { display: 'flex', flexDirection: 'column', gap: '12px', minWidth: 0 },
+  vstack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
+  wizForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
   pageName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   compTitle: { flex: 1, minWidth: 0 },
 });
@@ -170,7 +199,7 @@ function fmtCell(v: unknown): string {
   return String(v);
 }
 
-export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
+export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const toasterId = useId('rayfin-toaster');
   const { dispatchToast } = useToastController(toasterId);
@@ -369,7 +398,33 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
     setWizardOpen(false);
   }, [wizTemplate, binding.model, wizMeasure, wizMeasures, wizGroupBy, wizEntity]);
 
-  if (loading) return <div className={s.root}><Spinner label="Loading Rayfin app…" /></div>;
+  // Shared editor-chrome ribbon (chrome invariant: every registered editor
+  // wraps ItemEditorChrome, which carries Share / Endorse / lineage / Thread).
+  // Mirrors the header actions so they're reachable from the standard ribbon
+  // like sibling editors; the in-canvas header keeps its primary Save button.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'App', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => { void save(); }, disabled: saving || loading },
+      ]},
+      { label: 'View', actions: [
+        { label: 'Backend definition', onClick: () => setTab('backend') },
+        { label: 'Model binding', onClick: () => setTab('binding') },
+        { label: 'App builder', onClick: () => setTab('app') },
+      ]},
+      { label: 'Help', actions: [
+        { label: 'Docs', onClick: () => window.open('https://learn.microsoft.com/fabric/apps/overview', '_blank', 'noopener,noreferrer') },
+        { label: 'Repo', onClick: () => window.open('https://github.com/microsoft/rayfin', '_blank', 'noopener,noreferrer') },
+      ]},
+    ]},
+  ], [saving, loading, save]);
+
+  if (loading) {
+    return (
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+        main={<div className={s.root}><Spinner label="Loading Rayfin app…" /></div>} />
+    );
+  }
 
   const activePage = appPages.find((p) => p.id === activePageId) || null;
 
@@ -382,7 +437,11 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
     : !!wizMeasure;
   const wizardReady = !!binding.model && wizInputValid && (!wizNeedsObjects || !!objects);
 
+  // Everything (mode TabList + tab surfaces + wizard dialog) renders inside the
+  // chrome's main panel — the chrome supplies Share, Endorse, sensitivity,
+  // lineage, and the Thread menu like every other registered editor.
   return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
     <div className={s.root}>
       <Toaster toasterId={toasterId} />
       <div className={s.head}>
@@ -404,13 +463,22 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
           Define the backend and bind it to a real semantic model below, then assemble a visual app in the App builder.
           Loom generates the real <code>@microsoft/rayfin-core</code> model, a model-bound connector, a typed
           <code> app.config.ts</code>, and the exact CLI commands. Run them locally (<code>npx rayfin up</code>) to deploy.
+          New Rayfin apps are now scaffolded as a fully-backed Azure-native stack (Static Web App + Azure Functions + Cosmos)
+          via the <strong>Rayfin Azure stack</strong> template — this surface remains the authoring tool for existing apps
+          and the opt-in Rayfin SDK / CLI path.
         </MessageBarBody>
       </MessageBar>
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'backend' | 'binding' | 'app')}>
-        <Tab value="backend">Backend definition</Tab>
-        <Tab value="binding" icon={<Database20Regular />}>Model binding</Tab>
-        <Tab value="app" icon={<Apps20Regular />}>App builder</Tab>
+        <Tooltip relationship="description" content="Define the entities and services your app manages.">
+          <Tab value="backend">Backend definition</Tab>
+        </Tooltip>
+        <Tooltip relationship="description" content="Bind your app to a real semantic model — Azure Analysis Services by default.">
+          <Tab value="binding" icon={<Database20Regular />}>Model binding</Tab>
+        </Tooltip>
+        <Tooltip relationship="description" content="Low-code visual builder — pages, components, and a live data preview.">
+          <Tab value="app" icon={<Apps20Regular />}>App builder</Tab>
+        </Tooltip>
       </TabList>
 
       {tab === 'backend' ? (
@@ -556,7 +624,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
                       </div>
                     )}
 
-                    <Field label="Max rows (preview & read view)">
+                    <Field label={<InfoLabel info="Max rows returned in the preview and the deployed read view (caps the DAX TOPN).">Max rows (preview &amp; read view)</InfoLabel>}>
                       <SpinButton min={1} max={1000} value={binding.topN}
                         onChange={(_, d) => patchBinding({ topN: d.value ?? (Number(d.displayValue) || 100) })} />
                     </Field>
@@ -736,6 +804,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
         </DialogSurface>
       </Dialog>
     </div>
+    } />
   );
 }
 
@@ -833,8 +902,10 @@ function AppBuilder(props: AppBuilderProps) {
         <Caption1>Adds to the selected page.</Caption1>
         <div className={s.palette}>
           {COMPONENT_KINDS.map((k) => (
-            <Button key={k} size="small" appearance="outline" icon={KIND_ICON[k]} disabled={!activePageId}
-              onClick={() => addComponent(k)}>{KIND_LABEL[k]}</Button>
+            <Tooltip key={k} relationship="description" content={KIND_HINT[k]}>
+              <Button size="small" appearance="outline" icon={KIND_ICON[k]} disabled={!activePageId}
+                onClick={() => addComponent(k)}>{KIND_LABEL[k]}</Button>
+            </Tooltip>
           ))}
         </div>
 
@@ -1002,11 +1073,11 @@ function ComponentEditor({ s, comp, objects, entities, rendered, onChange, onDel
             </div>
           </div>
           {kind !== 'metric' ? (
-            <Field label="Max rows"><SpinButton min={1} max={1000} value={b.topN}
+            <Field label={<InfoLabel info="Max rows this component returns in preview and the deployed app (caps the DAX TOPN).">Max rows</InfoLabel>}><SpinButton min={1} max={1000} value={b.topN}
               onChange={(_, d) => setBinding({ topN: d.value ?? (Number(d.displayValue) || 50) })} /></Field>
           ) : null}
           <details>
-            <summary><Caption1>Read-view DAX</Caption1></summary>
+            <summary><Caption1><InfoLabel info="The generated DAX query Loom runs against the bound semantic model for this component; read-only.">Read-view DAX</InfoLabel></Caption1></summary>
             <pre className={s.code}>{dax}</pre>
           </details>
         </>

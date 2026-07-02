@@ -135,6 +135,41 @@ export async function checkCapability(
   }
 }
 
+/** Convenience gate for tenant-admin-only BFF routes.
+ *
+ * Use on surfaces that administer ORG-WIDE / SHARED-TENANT state where the
+ * per-user Cosmos self-scoping (`tenantId == oid`) gives ZERO protection —
+ * e.g. Microsoft Purview scans/sources/glossary, MIP sensitivity-label
+ * policies, and DLP policies. Those backends hit the shared M365/Purview
+ * tenant via the Console UAMI's app-level roles, so a session-only check would
+ * let ANY authenticated user read + mutate estate-wide policy.
+ *
+ * Returns null when the caller is a tenant admin (so the handler proceeds), or
+ * a structured honest-gate 403 (naming the exact bootstrap remediation) when
+ * not. Synchronous — `isTenantAdmin` is a claims-only check, no Cosmos round
+ * trip. Mirrors `enforceCapability`'s contract for the admin-tier case. */
+export function requireTenantAdmin(session: SessionPayload | null): NextResponse | null {
+  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  if (isTenantAdmin(session)) return null;
+  return NextResponse.json(
+    {
+      ok: false,
+      error: 'forbidden',
+      code: 'admin_only',
+      reason:
+        'This surface administers org-wide / shared-tenant policy (sensitivity labels, ' +
+        'DLP, Purview) and is restricted to tenant admins.',
+      remediation:
+        'Set LOOM_TENANT_ADMIN_OID to your user OID (or add yourself to ' +
+        'LOOM_TENANT_ADMIN_GROUP_ID) — both are deploy params wired into the Console app ' +
+        'env. Members bypass the gate with full Admin. Alternatively, an existing tenant ' +
+        'admin can grant you access at /admin/permissions.',
+      bootstrapEnv: { oid: 'LOOM_TENANT_ADMIN_OID', group: 'LOOM_TENANT_ADMIN_GROUP_ID' },
+    },
+    { status: 403 },
+  );
+}
+
 /** Convenience helper for BFF route handlers — call at the top of a
  * route to enforce the capability.  Returns null when allowed (so the
  * handler can proceed), or a NextResponse 403 when blocked. */

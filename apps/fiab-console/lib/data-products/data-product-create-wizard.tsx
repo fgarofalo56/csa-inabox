@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
+import { shorthands,
   Badge, Body1, Button, Caption1, Checkbox, Divider, Dropdown, Field, Input, Option,
   Persona, Spinner, Subtitle2, Text, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -41,37 +41,46 @@ import {
   DATA_PRODUCT_TYPES, DATA_PRODUCT_AUDIENCES, DATA_PRODUCT_DESCRIPTION_MAX,
 } from '@/lib/catalog/data-product-enums';
 
+// NOTE: every length value MUST carry a unit or come from a token. Griffel
+// silently DROPS unitless numeric values (e.g. `gap: 16`, `maxWidth: 760`,
+// `width: 22`) in this project's setup — which previously made the form sprawl
+// full-width, collapsed the step-number circles, and removed chip gaps. Use
+// Loom spacing/radius tokens (web3-ui rule) and explicit px strings for
+// structural sizes.
+const FORM_MAX = '760px';
 const useStyles = makeStyles({
-  steps: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 4 },
+  steps: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalXS },
   stepChip: {
-    display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 16,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge,
+    padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusCircular,
     border: `1px solid ${tokens.colorNeutralStroke2}`, cursor: 'pointer',
   },
-  stepActive: { background: tokens.colorBrandBackground2, borderColor: tokens.colorBrandStroke1 },
-  stepDone: { borderColor: tokens.colorPaletteGreenBorder2 },
+  stepActive: { backgroundColor: tokens.colorBrandBackground2, ...shorthands.borderColor(tokens.colorBrandStroke1) },
+  stepDone: { ...shorthands.borderColor(tokens.colorPaletteGreenBorder2) },
   stepNum: {
-    width: 22, height: 22, borderRadius: '50%', display: 'inline-flex', alignItems: 'center',
-    justifyContent: 'center', fontSize: 12, fontWeight: 600,
-    background: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
+    width: '22px', height: '22px', borderRadius: '50%', display: 'inline-flex', alignItems: 'center',
+    justifyContent: 'center', fontSize: tokens.fontSizeBase200, fontWeight: tokens.fontWeightSemibold, flexShrink: 0,
+    backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
   },
-  stepNumActive: { background: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand },
-  page: { display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 760 },
+  stepNumActive: { backgroundColor: tokens.colorBrandBackground, color: tokens.colorNeutralForegroundOnBrand },
+  page: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: FORM_MAX },
   counter: { alignSelf: 'flex-end' },
   ownerRow: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    padding: '6px 8px', borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   ownerResults: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, maxHeight: 220, overflow: 'auto',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, maxHeight: '220px', overflow: 'auto',
   },
   ownerResult: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-    padding: '6px 10px', cursor: 'pointer',
-    ':hover': { background: tokens.colorNeutralBackground1Hover },
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalM}`, cursor: 'pointer',
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
-  chips: { display: 'flex', flexDirection: 'column', gap: 6 },
-  footer: { display: 'flex', gap: 8, justifyContent: 'space-between', marginTop: 12, maxWidth: 760 },
-  attrGroup: { display: 'flex', flexDirection: 'column', gap: 12, padding: 12, borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  chips: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  footer: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'space-between', marginTop: tokens.spacingVerticalM, maxWidth: FORM_MAX },
+  attrGroup: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
 });
 
 type Step = 1 | 2 | 3;

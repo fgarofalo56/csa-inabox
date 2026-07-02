@@ -24,9 +24,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Subtitle1, Subtitle2, Body1, Body1Strong, Caption1, Badge, Spinner, Button,
+  Subtitle1, Subtitle2, Body1Strong, Caption1, Badge, Spinner, Button,
   SearchBox, Dropdown, Option, Slider, Label, Field, Input, Textarea, Tooltip,
-  Card, Avatar, Divider, Tag,
+  Card, Avatar, Divider, Tag, Radio, RadioGroup,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, shorthands,
@@ -35,7 +35,11 @@ import {
   Search24Regular, Rocket20Regular, ChatMultiple24Regular, Image24Regular,
   MicRecord24Regular, Speaker224Regular, Send24Filled, Delete20Regular,
   Code20Regular, ChevronLeft20Regular, Trophy20Regular, ArrowSwap20Regular,
+  Apps24Regular, Options24Regular, Grid24Regular, DocumentText24Regular,
+  Database24Regular, Add16Regular, Dismiss16Regular, DocumentText16Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '../components/empty-state';
+import { TileGrid } from '../components/ui/tile-grid';
 
 // ============================================================ shared
 
@@ -91,32 +95,33 @@ const TASK_LABEL: Record<string, string> = {
 const PAGE_SIZE = 12;
 
 const useCatalogStyles = makeStyles({
-  root: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1, overflow: 'auto' },
-  header: { display: 'flex', flexDirection: 'column', gap: 4 },
+  root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1, overflow: 'auto' },
+  header: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   leaderboard: {
-    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 14px', flexWrap: 'wrap',
-    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, flexWrap: 'wrap',
+    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
   },
-  filterBar: { display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' },
-  filterField: { minWidth: 150 },
-  countRow: { display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: 12 },
+  filterBar: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'flex-end' },
+  filterField: { minWidth: '150px' },
+  countRow: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingVerticalM },
   card: {
-    display: 'flex', flexDirection: 'column', gap: 8, padding: 14, cursor: 'pointer',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, cursor: 'pointer',
+    boxShadow: tokens.shadow4, borderRadius: tokens.borderRadiusLarge,
     ...shorthands.transition('box-shadow', '120ms'),
-    ':hover': { boxShadow: tokens.shadow8 },
+    ':hover': { boxShadow: tokens.shadow16 },
   },
   cardSelectable: { outline: `2px solid ${tokens.colorBrandStroke1}` },
-  cardTop: { display: 'flex', alignItems: 'center', gap: 10 },
+  cardTop: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   cardTitle: { display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0 },
-  tagRow: { display: 'flex', gap: 6, flexWrap: 'wrap' },
-  pager: { display: 'flex', gap: 8, alignItems: 'center', justifyContent: 'center', paddingTop: 8 },
+  tagRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  pager: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', justifyContent: 'center', paddingTop: tokens.spacingVerticalS },
   // detail panel
-  detail: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1, overflow: 'auto' },
-  detailHead: { display: 'flex', alignItems: 'center', gap: 12 },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', alignItems: 'baseline', maxWidth: 640 },
-  metaKey: { color: tokens.colorNeutralForeground3, fontSize: 12 },
-  empty: { padding: 24, color: tokens.colorNeutralForeground3, fontStyle: 'italic', textAlign: 'center' },
+  detail: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1, overflow: 'auto' },
+  detailHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', maxWidth: '640px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  empty: { padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontStyle: 'italic', textAlign: 'center' },
 });
 
 function providerColor(p?: string): 'brand' | 'success' | 'warning' | 'danger' | 'important' | 'informative' | 'subtle' {
@@ -210,7 +215,7 @@ function DeployDialog({ model, open, onClose, onDeployed, acct }: {
         <DialogBody>
           <DialogTitle>Deploy {model?.name}</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Caption1>{model?.publisher} · {model?.inferenceTasks.map((t) => TASK_LABEL[t] || t).join(', ')}</Caption1>
               <Field label="Deployment name" required>
                 <Input value={deploymentName} onChange={(_, d) => setDeploymentName(d.value)} placeholder={model?.name} />
@@ -376,7 +381,10 @@ export function ModelCatalogPanel({ active, nonce, acct = null }: { active: bool
   return (
     <div className={s.root}>
       <div className={s.header}>
-        <Subtitle1>Model catalog</Subtitle1>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <Apps24Regular />
+          <Subtitle1>Model catalog</Subtitle1>
+        </div>
         <Caption1>Explore and deploy foundation models{state.account?.name ? ` to ${state.account.name}` : ''}{state.account?.location ? ` · ${state.account.location}` : ''}.</Caption1>
       </div>
 
@@ -407,14 +415,21 @@ export function ModelCatalogPanel({ active, nonce, acct = null }: { active: bool
       </div>
 
       <div className={s.countRow}>
-        <Subtitle2>Models {filtered.length}</Subtitle2>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+          <Grid24Regular />
+          <Subtitle2>Models {filtered.length}</Subtitle2>
+        </div>
         {filtered.length !== models.length ? <Caption1>of {models.length} deployable to this account</Caption1> : null}
         <div style={{ flex: 1 }} />
         <Button size="small" onClick={load}>Reload</Button>
       </div>
 
       {pageModels.length === 0 ? (
-        <div className={s.empty}>No models match the current filters.</div>
+        <EmptyState
+          icon={<Search24Regular />}
+          title="No models match the current filters"
+          body="No deployable models match your search and filter selection. Clear a filter or broaden your search term to see more of the catalog."
+        />
       ) : (
         <div className={s.grid}>
           {pageModels.map((m) => <ModelCard key={m.id} m={m} onClick={() => setSelected(m)} />)}
@@ -435,29 +450,49 @@ export function ModelCatalogPanel({ active, nonce, acct = null }: { active: bool
 // ============================================================ Chat playground
 
 const useChatStyles = makeStyles({
-  root: { display: 'grid', gridTemplateColumns: '280px 1fr 300px', gap: 0, minHeight: 0, flex: 1, overflow: 'hidden' },
-  pane: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, overflow: 'auto', minHeight: 0 },
+  root: { display: 'grid', gridTemplateColumns: '280px minmax(0, 1fr) 300px', gap: 0, minHeight: 0, flex: 1, overflow: 'hidden' },
+  pane: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, overflow: 'auto', minHeight: 0 },
   leftPane: { borderRight: `1px solid ${tokens.colorNeutralStroke2}` },
   rightPane: { borderLeft: `1px solid ${tokens.colorNeutralStroke2}` },
   centerPane: { padding: 0 },
-  paneTitle: { display: 'flex', alignItems: 'center', gap: 8 },
-  thread: { flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 0 },
-  bubbleRow: { display: 'flex', gap: 10, maxWidth: '85%' },
+  paneTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  thread: { flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: 0 },
+  bubbleRow: { display: 'flex', gap: tokens.spacingHorizontalS, maxWidth: '85%' },
   bubbleRowUser: { alignSelf: 'flex-end', flexDirection: 'row-reverse' },
   bubble: {
-    padding: '10px 14px', borderRadius: 10, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    minWidth: 0, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusLarge, whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere',
     backgroundColor: tokens.colorNeutralBackground3,
   },
   bubbleUser: { backgroundColor: tokens.colorBrandBackground2, color: tokens.colorNeutralForeground1 },
-  composer: { display: 'flex', gap: 8, alignItems: 'flex-end', padding: 16, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
+  composer: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', padding: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}` },
   composerInput: { flex: 1 },
-  sliderRow: { display: 'flex', flexDirection: 'column', gap: 2 },
+  sliderRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   sliderHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' },
-  centerHead: { display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, flexWrap: 'wrap' },
-  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', maxWidth: 420 },
+  centerHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, flexWrap: 'wrap' },
+  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', maxWidth: '420px' },
+  // Add-your-data (On-Your-Data grounding) — active source rows + citations.
+  dsList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  dsRow: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`,
+    backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  dsRowName: { flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  citations: {
+    marginTop: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalXS,
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+  },
+  citationItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  citationLink: { color: tokens.colorBrandForeground1, textDecoration: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 },
 });
 
-interface ChatMsg { role: 'user' | 'assistant'; content: string; pending?: boolean; error?: boolean }
+interface ChatCitation { content?: string; title?: string; url?: string; filepath?: string; chunkId?: string }
+interface ChatMsg { role: 'user' | 'assistant'; content: string; pending?: boolean; error?: boolean; citations?: ChatCitation[] }
+
+/** An active On-Your-Data grounding source selected in the playground. */
+interface ActiveDataSource { indexName: string; authType: 'system_assigned_managed_identity' | 'api_key'; apiKey?: string }
 
 export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: boolean; nonce: number; acct?: FoundryAccount | null }) {
   const s = useChatStyles();
@@ -474,6 +509,35 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
   const [sending, setSending] = useState(false);
   const [showCode, setShowCode] = useState(false);
   const threadRef = useRef<HTMLDivElement>(null);
+
+  // ---- On-Your-Data grounding (Add your data) ----
+  const [dsAvail, setDsAvail] = useState<{
+    loading: boolean; loaded: boolean; configured: boolean;
+    service?: string; indexes: { name: string; vectorEnabled?: boolean }[]; missing?: string; hint?: string;
+  }>({ loading: false, loaded: false, configured: false, indexes: [] });
+  const [dataSources, setDataSources] = useState<ActiveDataSource[]>([]);
+  const [dsDialogOpen, setDsDialogOpen] = useState(false);
+  const [dsIndex, setDsIndex] = useState('');
+  const [dsAuth, setDsAuth] = useState<'system_assigned_managed_identity' | 'api_key'>('system_assigned_managed_identity');
+  const [dsKey, setDsKey] = useState('');
+
+  const loadDataSources = useCallback(async () => {
+    setDsAvail((p) => ({ ...p, loading: true }));
+    try {
+      const r = await fetch('/api/foundry/data-sources');
+      const j = await r.json();
+      if (j.ok) {
+        setDsAvail({
+          loading: false, loaded: true, configured: !!j.configured, service: j.service,
+          indexes: Array.isArray(j.indexes) ? j.indexes : [], missing: j.missing, hint: j.hint,
+        });
+      } else {
+        setDsAvail({ loading: false, loaded: true, configured: false, indexes: [], missing: j.missing, hint: j.error || j.hint });
+      }
+    } catch (e: any) {
+      setDsAvail({ loading: false, loaded: true, configured: false, indexes: [], hint: e?.message || String(e) });
+    }
+  }, []);
 
   const loadDeps = useCallback(async () => {
     setDeps({ loading: true, list: null });
@@ -496,6 +560,10 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
   // Reset deployments + selection when the selected account changes.
   useEffect(() => { setDeps({ loading: false, list: null }); setDeployment(''); }, [acct]);
   useEffect(() => { if (threadRef.current) threadRef.current.scrollTop = threadRef.current.scrollHeight; }, [thread]);
+  // Load AI Search grounding sources (independent of the AOAI account — the
+  // search service is env-pinned via LOOM_AI_SEARCH_SERVICE).
+  useEffect(() => { if (active && !dsAvail.loaded && !dsAvail.loading) loadDataSources(); }, [active, dsAvail.loaded, dsAvail.loading, loadDataSources]);
+  useEffect(() => { if (nonce > 0) setDsAvail({ loading: false, loaded: false, configured: false, indexes: [] }); }, [nonce]);
 
   const deployments = deps.list || [];
 
@@ -517,6 +585,13 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
           deployment, messages,
           temperature, maxTokens, topP,
           stop: stopSeq.split(',').map((x) => x.trim()).filter(Boolean),
+          ...(dataSources.length ? {
+            dataSources: dataSources.map((d) => ({
+              indexName: d.indexName,
+              authType: d.authType,
+              ...(d.authType === 'api_key' ? { apiKey: d.apiKey } : {}),
+            })),
+          } : {}),
           ...acctBody(acct),
         }),
       });
@@ -524,14 +599,51 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
       if (!j.ok) {
         setThread([...next, { role: 'assistant', content: `${j.error}${j.hint ? `\n\n${j.hint}` : ''}`, error: true }]);
       } else {
-        setThread([...next, { role: 'assistant', content: j.result.content || '(empty response)' }]);
+        setThread([...next, { role: 'assistant', content: j.result.content || '(empty response)', citations: j.result.citations }]);
       }
     } catch (e: any) {
       setThread([...next, { role: 'assistant', content: e?.message || String(e), error: true }]);
     } finally { setSending(false); }
   };
 
-  const codeSnippet = useMemo(() => `from openai import AzureOpenAI
+  // Add / remove active grounding sources.
+  const openDsDialog = () => {
+    setDsIndex(dsAvail.indexes[0]?.name || '');
+    setDsAuth('system_assigned_managed_identity');
+    setDsKey('');
+    setDsDialogOpen(true);
+  };
+  const addDataSource = () => {
+    if (!dsIndex) return;
+    if (dsAuth === 'api_key' && !dsKey.trim()) return;
+    setDataSources((prev) => (
+      prev.some((p) => p.indexName === dsIndex && p.authType === dsAuth)
+        ? prev
+        : [...prev, { indexName: dsIndex, authType: dsAuth, apiKey: dsAuth === 'api_key' ? dsKey.trim() : undefined }]
+    ));
+    setDsDialogOpen(false);
+  };
+  const removeDataSource = (idx: number) => setDataSources((prev) => prev.filter((_, i) => i !== idx));
+
+  const codeSnippet = useMemo(() => {
+    const grounding = dataSources.length
+      ? {
+          data_sources: dataSources.map((d) => ({
+            type: 'azure_search',
+            parameters: {
+              endpoint: `https://${dsAvail.service || '<search-service>'}.search.windows.net`,
+              index_name: d.indexName,
+              authentication: d.authType === 'api_key'
+                ? { type: 'api_key', key: '<search-key>' }
+                : { type: 'system_assigned_managed_identity' },
+            },
+          })),
+        }
+      : null;
+    const extraBody = grounding
+      ? `\n    extra_body=${JSON.stringify(grounding, null, 4).split('\n').join('\n    ')},`
+      : '';
+    return `from openai import AzureOpenAI
 
 client = AzureOpenAI(
     azure_endpoint="https://<your-account>.openai.azure.com",
@@ -547,12 +659,13 @@ response = client.chat.completions.create(
     ],
     temperature=${temperature},
     max_tokens=${maxTokens},
-    top_p=${topP},${stopSeq ? `\n    stop=${JSON.stringify(stopSeq.split(',').map((x) => x.trim()).filter(Boolean))},` : ''}
+    top_p=${topP},${stopSeq ? `\n    stop=${JSON.stringify(stopSeq.split(',').map((x) => x.trim()).filter(Boolean))},` : ''}${extraBody}
 )
-print(response.choices[0].message.content)`, [deployment, system, temperature, maxTokens, topP, stopSeq]);
+print(response.choices[0].message.content)${grounding ? '\n# response.choices[0].message.context["citations"] holds the grounded sources' : ''}`;
+  }, [deployment, system, temperature, maxTokens, topP, stopSeq, dataSources, dsAvail.service]);
 
   if (!active) return null;
-  if (deps.loading) return <div style={{ padding: 16 }}><Spinner size="small" label="Loading deployments…" labelPosition="after" /></div>;
+  if (deps.loading) return <div style={{ padding: tokens.spacingVerticalL }}><Spinner size="small" label="Loading deployments…" labelPosition="after" /></div>;
 
   const noChatModel = !deps.error && deployments.length === 0;
 
@@ -566,9 +679,61 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
             placeholder="You are an AI assistant that helps people find information." />
         </Field>
         <Divider />
-        <Body1Strong>Add your data</Body1Strong>
-        <Caption1>Ground answers in Azure AI Search or Blob. Configure a data connection on the Connections tab, then reference it here.</Caption1>
-        <Button size="small" onClick={() => window.open('https://ai.azure.com/resource/playground/chat', '_blank', 'noopener,noreferrer')}>Add a data source</Button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+          <Database24Regular />
+          <Body1Strong>Add your data</Body1Strong>
+        </div>
+        <Caption1>
+          Ground answers in your Azure AI Search index (Azure OpenAI &ldquo;On Your Data&rdquo;). Replies
+          cite the source documents. Supported on GPT-4o / GPT-4o-mini deployments.
+        </Caption1>
+
+        {dsAvail.loading && <Spinner size="tiny" label="Loading data sources…" labelPosition="after" />}
+
+        {dsAvail.loaded && !dsAvail.configured && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Azure AI Search not configured</MessageBarTitle>
+              {dsAvail.hint || `Set ${dsAvail.missing || 'LOOM_AI_SEARCH_SERVICE'} to ground answers on your data.`}
+            </MessageBarBody>
+          </MessageBar>
+        )}
+
+        {dsAvail.loaded && dsAvail.configured && (
+          <>
+            {dataSources.length > 0 && (
+              <div className={s.dsList}>
+                {dataSources.map((d, i) => (
+                  <div key={`${d.indexName}-${d.authType}-${i}`} className={s.dsRow}>
+                    <Search24Regular style={{ fontSize: 16, flexShrink: 0 }} />
+                    <Caption1 className={s.dsRowName}>{d.indexName}</Caption1>
+                    <Badge size="small" appearance="tint" color={d.authType === 'api_key' ? 'warning' : 'brand'}>
+                      {d.authType === 'api_key' ? 'API key' : 'Managed identity'}
+                    </Badge>
+                    <Tooltip content={`Remove ${d.indexName}`} relationship="label">
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${d.indexName}`} onClick={() => removeDataSource(i)} />
+                    </Tooltip>
+                  </div>
+                ))}
+              </div>
+            )}
+            <Button size="small" appearance={dataSources.length ? 'secondary' : 'primary'} icon={<Add16Regular />}
+              disabled={dsAvail.indexes.length === 0} onClick={openDsDialog}>
+              {dataSources.length ? 'Add another data source' : 'Add data source'}
+            </Button>
+            {dsAvail.indexes.length === 0 && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                No indexes on <strong>{dsAvail.service}</strong> yet. Create one from the AI Search index editor, then it appears here.
+              </Caption1>
+            )}
+            {dsAvail.service && dsAvail.indexes.length > 0 && (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                Search service: <strong>{dsAvail.service}</strong>. Managed-identity auth requires the Azure OpenAI account&rsquo;s identity to
+                hold &ldquo;Search Index Data Reader&rdquo; on the service.
+              </Caption1>
+            )}
+          </>
+        )}
         <Divider />
         <Body1Strong>Tools</Body1Strong>
         <Caption1>Function tools and the code interpreter attach per-deployment in the Foundry agent surface.</Caption1>
@@ -577,6 +742,7 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
       {/* CENTER — Chat */}
       <div className={`${s.pane} ${s.centerPane}`}>
         <div className={s.centerHead}>
+          <ChatMultiple24Regular />
           <Subtitle2>Chat</Subtitle2>
           <div style={{ flex: 1 }} />
           <Button size="small" icon={<Delete20Regular />} appearance="subtle" onClick={() => setThread([])} disabled={!thread.length}>Clear chat</Button>
@@ -584,12 +750,12 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
         </div>
 
         {deps.error && (
-          <div style={{ padding: 16 }}>
+          <div style={{ padding: tokens.spacingVerticalL }}>
             <GateBar title="Could not list deployments" msg={deps.error} hint={deps.hint} intent={deps.notDeployed ? 'warning' : 'error'} />
           </div>
         )}
         {noChatModel && (
-          <div style={{ padding: 16 }}>
+          <div style={{ padding: tokens.spacingVerticalL }}>
             <GateBar title="No model deployed" intent="warning"
               msg="There are no model deployments on this account yet."
               hint="Open the Model catalog tab, pick a chat-completion model (e.g. gpt-4o-mini) and Deploy it, then return here to chat." />
@@ -598,17 +764,40 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
 
         <div className={s.thread} ref={threadRef}>
           {thread.length === 0 && !noChatModel && (
-            <div className={s.empty}>
-              <ChatMultiple24Regular fontSize={32} />
-              <Body1 block style={{ marginTop: 8 }}>Start chatting with your deployed model.</Body1>
-              <Caption1>Messages call the real Azure OpenAI chat/completions endpoint for the selected deployment.</Caption1>
-            </div>
+            <EmptyState
+              icon={<ChatMultiple24Regular />}
+              title="Start chatting with your deployed model"
+              body="Messages call the real Azure OpenAI chat/completions endpoint for the selected deployment. Type below and press Enter to begin."
+            />
           )}
           {thread.map((m, i) => (
             <div key={i} className={`${s.bubbleRow} ${m.role === 'user' ? s.bubbleRowUser : ''}`}>
               <Avatar size={28} color={m.role === 'user' ? 'brand' : 'colorful'} name={m.role === 'user' ? 'You' : 'Assistant'} aria-hidden />
               <div className={`${s.bubble} ${m.role === 'user' ? s.bubbleUser : ''}`} style={m.error ? { color: tokens.colorPaletteRedForeground1 } : undefined}>
                 {m.pending ? <Spinner size="tiny" label="Thinking…" labelPosition="after" /> : m.content}
+                {!m.pending && m.role === 'assistant' && m.citations && m.citations.length > 0 && (
+                  <div className={s.citations}>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      <DocumentText16Regular style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+                      Citations ({m.citations.length})
+                    </Caption1>
+                    {m.citations.map((c, ci) => (
+                      <Tooltip key={ci} relationship="description" withArrow
+                        content={(c.content || c.filepath || c.title || 'Source document').slice(0, 600)}>
+                        <div className={s.citationItem}>
+                          <Badge size="small" appearance="tint" color="brand">{ci + 1}</Badge>
+                          {c.url ? (
+                            <a className={s.citationLink} href={c.url} target="_blank" rel="noopener noreferrer">
+                              {c.title || c.filepath || c.url}
+                            </a>
+                          ) : (
+                            <Caption1 className={s.dsRowName}>{c.title || c.filepath || `Document ${ci + 1}`}</Caption1>
+                          )}
+                        </div>
+                      </Tooltip>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           ))}
@@ -625,7 +814,7 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
 
       {/* RIGHT — Configuration */}
       <div className={`${s.pane} ${s.rightPane}`}>
-        <Subtitle2>Configuration</Subtitle2>
+        <div className={s.paneTitle}><Options24Regular /><Subtitle2>Configuration</Subtitle2></div>
         <Field label="Deployment">
           <Dropdown value={deployment} selectedOptions={deployment ? [deployment] : []}
             placeholder={deployments.length ? 'Select a deployment' : 'No deployments'}
@@ -654,19 +843,72 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
           <Input value={stopSeq} onChange={(_, d) => setStopSeq(d.value)} placeholder="e.g. \n, ###" />
         </Field>
         <Divider />
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
           <Button size="small" icon={<Code20Regular />} onClick={() => setShowCode(true)}>View code</Button>
           <Button size="small" appearance="primary" icon={<Rocket20Regular />}
             onClick={() => window.open('https://ai.azure.com/resource/deployments', '_blank', 'noopener,noreferrer')}>Deploy</Button>
         </div>
       </div>
 
+      <Dialog open={dsDialogOpen} onOpenChange={(_, d) => { if (!d.open) setDsDialogOpen(false); }}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>Add data source</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                <Caption1>
+                  Ground the model in an Azure AI Search index (Azure OpenAI &ldquo;On Your Data&rdquo;) on
+                  {dsAvail.service ? <> <strong>{dsAvail.service}</strong></> : ' the configured search service'}.
+                </Caption1>
+                <Field label="Azure AI Search index" required>
+                  <Dropdown value={dsIndex} selectedOptions={dsIndex ? [dsIndex] : []}
+                    placeholder={dsAvail.indexes.length ? 'Select an index' : 'No indexes available'}
+                    onOptionSelect={(_, d) => d.optionValue && setDsIndex(d.optionValue)}>
+                    {dsAvail.indexes.map((ix) => (
+                      <Option key={ix.name} value={ix.name} text={ix.name}>
+                        {ix.name}{ix.vectorEnabled ? '  (vector)' : ''}
+                      </Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+                <Field label="Authentication">
+                  <RadioGroup value={dsAuth} onChange={(_, d) => setDsAuth(d.value as ActiveDataSource['authType'])}>
+                    <Radio value="system_assigned_managed_identity" label="System-assigned managed identity (recommended)" />
+                    <Radio value="api_key" label="API key" />
+                  </RadioGroup>
+                </Field>
+                {dsAuth === 'api_key' ? (
+                  <Field label="Search admin / query key" required>
+                    <Input type="password" value={dsKey} onChange={(_, d) => setDsKey(d.value)} placeholder="Paste an AI Search key" />
+                  </Field>
+                ) : (
+                  <MessageBar intent="info">
+                    <MessageBarBody>
+                      The Azure OpenAI account&rsquo;s managed identity must hold <strong>Search Index Data Reader</strong> +
+                      <strong> Search Service Contributor</strong> on the search service. If grounding returns an auth error,
+                      grant those roles or switch to API-key auth.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setDsDialogOpen(false)}>Cancel</Button>
+              <Button appearance="primary" icon={<Add16Regular />}
+                disabled={!dsIndex || (dsAuth === 'api_key' && !dsKey.trim())} onClick={addDataSource}>
+                Add
+              </Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
       <Dialog open={showCode} onOpenChange={(_, d) => { if (!d.open) setShowCode(false); }}>
         <DialogSurface>
           <DialogBody>
             <DialogTitle>View code — Python (Azure OpenAI SDK)</DialogTitle>
             <DialogContent>
-              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3, padding: 12, borderRadius: 6 }}>{codeSnippet}</pre>
+              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: '60vh', overflow: 'auto', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }}>{codeSnippet}</pre>
             </DialogContent>
             <DialogActions>
               <Button onClick={() => navigator.clipboard?.writeText(codeSnippet)}>Copy</Button>
@@ -682,10 +924,15 @@ print(response.choices[0].message.content)`, [deployment, system, temperature, m
 // ============================================================ Playgrounds landing
 
 const useLandingStyles = makeStyles({
-  root: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0 },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 12 },
-  tile: { display: 'flex', flexDirection: 'column', gap: 8, padding: 16 },
-  tileHead: { display: 'flex', alignItems: 'center', gap: 10 },
+  root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0 },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  tile: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalL,
+    boxShadow: tokens.shadow4, borderRadius: tokens.borderRadiusLarge,
+    ...shorthands.transition('box-shadow', '120ms'),
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  tileHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
 
 export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOpenAudio }: {
@@ -701,9 +948,12 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
   ];
   return (
     <div className={s.root}>
-      <Subtitle1>Playgrounds</Subtitle1>
+      <div className={s.header}>
+        <Apps24Regular />
+        <Subtitle1>Playgrounds</Subtitle1>
+      </div>
       <Caption1>Try your deployed models before wiring them into an app. Chat, Images and Audio call the real Azure OpenAI data-plane; each gates honestly on a model of that modality being deployed.</Caption1>
-      <div className={s.grid}>
+      <TileGrid minTileWidth={240}>
         {tiles.map((t) => (
           <Card key={t.key} className={s.tile}>
             <div className={s.tileHead}>{t.icon}<Body1Strong>{t.title}</Body1Strong></div>
@@ -712,7 +962,7 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
             {t.action}
           </Card>
         ))}
-      </div>
+      </TileGrid>
     </div>
   );
 }
@@ -720,15 +970,15 @@ export function PlaygroundsLandingPanel({ active, onOpenChat, onOpenImages, onOp
 // ============================================================ Images playground
 
 const useMediaStyles = makeStyles({
-  root: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, overflow: 'auto', flex: 1, minHeight: 0 },
-  twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, alignItems: 'start' },
-  panel: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16 },
+  root: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, overflow: 'auto', flex: 1, minHeight: 0 },
+  twoCol: { display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' },
+  panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, boxShadow: tokens.shadow4, borderRadius: tokens.borderRadiusLarge },
   // Result panel keeps a stable height so the empty / loading placeholder reads
   // as an intentional, centered drop-zone rather than a collapsed card.
-  resultPanel: { display: 'flex', flexDirection: 'column', gap: 12, padding: 16, minHeight: 320 },
-  resultGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
-  img: { width: '100%', maxHeight: 360, objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: 8, border: `1px solid ${tokens.colorNeutralStroke2}` },
-  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', padding: 24 },
+  resultPanel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalL, minHeight: '320px', boxShadow: tokens.shadow4, borderRadius: tokens.borderRadiusLarge },
+  resultGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
+  img: { width: '100%', maxHeight: '360px', objectFit: 'contain', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  empty: { margin: 'auto', color: tokens.colorNeutralForeground3, textAlign: 'center', padding: tokens.spacingVerticalXXL },
 });
 
 /** Heuristic: which deployed models can generate images. */
@@ -808,7 +1058,7 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
 
   return (
     <div className={s.root}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <Image24Regular /><Subtitle1>Images playground</Subtitle1>
         <Badge appearance="tint" color="brand">Preview</Badge>
       </div>
@@ -852,20 +1102,24 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
             <Field label="Number of images">
               <Input type="number" value={n} onChange={(_, d) => setN(d.value)} min={1} max={4} />
             </Field>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
               <Button appearance="primary" icon={<Image24Regular />} disabled={busy || !deployment || !prompt.trim()} onClick={generate}>{busy ? 'Generating…' : 'Generate'}</Button>
               <Button icon={<Code20Regular />} onClick={() => setShowCode(true)}>View code</Button>
             </div>
             {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
           </Card>
           <Card className={s.resultPanel}>
-            <Subtitle2>Result</Subtitle2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}><Image24Regular /><Subtitle2>Result</Subtitle2></div>
             {busy ? <div className={s.empty}><Spinner size="small" label="Generating image…" labelPosition="after" /></div> : images.length === 0 ? (
-              <div className={s.empty}><Image24Regular fontSize={32} /><Body1 block style={{ marginTop: 8 }}>Generated images appear here.</Body1></div>
+              <EmptyState
+                icon={<Image24Regular />}
+                title="Generated images appear here"
+                body="Enter a prompt and select a size, quality and style, then Generate to render images from the deployed image model."
+              />
             ) : (
               <div className={s.resultGrid}>
                 {images.map((img, i) => (
-                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                     <img className={s.img} alt={img.revised_prompt || `Generated image ${i + 1}`}
                       src={img.url || (img.b64_json ? `data:image/png;base64,${img.b64_json}` : '')} />
                     {img.revised_prompt ? <Caption1>{img.revised_prompt}</Caption1> : null}
@@ -882,7 +1136,7 @@ print(result.data[0].url)`, [deployment, prompt, n, size, quality, style]);
           <DialogBody>
             <DialogTitle>View code — Python (Azure OpenAI SDK)</DialogTitle>
             <DialogContent>
-              <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3, padding: 12, borderRadius: 6 }}>{codeSnippet}</pre>
+              <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: '60vh', overflow: 'auto', fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge }}>{codeSnippet}</pre>
             </DialogContent>
             <DialogActions>
               <Button onClick={() => navigator.clipboard?.writeText(codeSnippet)}>Copy</Button>
@@ -936,7 +1190,7 @@ export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: b
 
   return (
     <div className={s.root}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <MicRecord24Regular /><Subtitle1>Audio playground</Subtitle1>
         <Badge appearance="tint" color="brand">Preview</Badge>
       </div>
@@ -958,12 +1212,12 @@ export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: b
             <Field label="Audio file (mp3 / wav / m4a / ogg / flac)" required>
               <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg,.flac,.webm" onChange={(e) => setFile(e.target.files?.[0] || null)} />
             </Field>
-            {file ? <Caption1>{file.name} · {(file.size / 1024).toFixed(0)} KB</Caption1> : null}
+            {file ? <Caption1 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{file.name} · {(file.size / 1024).toFixed(0)} KB</Caption1> : null}
             <Button appearance="primary" icon={<MicRecord24Regular />} disabled={busy || !deployment || !file} onClick={transcribe}>{busy ? 'Transcribing…' : 'Transcribe'}</Button>
             {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
           </Card>
           <Card className={s.resultPanel}>
-            <Subtitle2>Transcript</Subtitle2>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}><DocumentText24Regular /><Subtitle2>Transcript</Subtitle2></div>
             {busy ? <div className={s.empty}><Spinner size="small" label="Transcribing…" labelPosition="after" /></div> : (
               <Textarea value={text} readOnly resize="vertical" rows={12} placeholder="The transcript appears here after you upload an audio file and click Transcribe." />
             )}

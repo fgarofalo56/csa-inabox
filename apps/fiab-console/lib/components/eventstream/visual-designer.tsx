@@ -21,7 +21,12 @@
  */
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode,
+  type PointerEvent as ReactPointerEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   useReactFlow, useNodesState,
@@ -46,8 +51,10 @@ import {
   MessageBarTitle,
   tokens,
   makeStyles,
+  mergeClasses,
   shorthands,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Add20Regular,
   Delete20Regular,
@@ -121,7 +128,11 @@ const useStyles = makeStyles({
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     overflow: 'hidden',
-    minHeight: '440px',
+    // Fills the ResizableCanvasRegion body; the region supplies the definite
+    // height React Flow needs (replaces the former fixed minHeight:440px).
+    height: '100%',
+    minHeight: 0,
+    width: '100%',
   },
   addButtonsPanel: {
     display: 'flex',
@@ -474,39 +485,46 @@ function EventstreamCanvasInner({
   }, [onSelect]);
 
   return (
-    <div className={s.canvas} data-canvas="eventstream" aria-label="Eventstream canvas">
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        nodeTypes={esNodeTypes}
-        onNodesChange={handleNodesChange}
-        onNodeClick={handleNodeClick}
-        onPaneClick={() => onSelect(null)}
-        minZoom={0.3}
-        maxZoom={2}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        proOptions={{ hideAttribution: true }}
-        nodesConnectable={false}
-        deleteKeyCode={null}
-      >
-        <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
-        <Controls showInteractive={false} />
-        <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
-        <Panel position="top-left">
-          <div className={s.addButtonsPanel} data-palette="eventstream" role="toolbar" aria-label="Node palette">
-            <Button size="small" icon={<Add20Regular />} onClick={onAddSource} data-palette-item="source">Add source</Button>
-            <Button size="small" icon={<Add20Regular />} onClick={onAddTransform} data-palette-item="transform">Add transform</Button>
-            <Button size="small" icon={<Add20Regular />} onClick={onAddSink} data-palette-item="destination">Add destination</Button>
+    <ResizableCanvasRegion
+      storageKey="eventstream"
+      defaultPx={480}
+      minPx={320}
+      ariaLabel="Resize eventstream canvas height"
+    >
+      <div className={s.canvas} data-canvas="eventstream" aria-label="Eventstream canvas">
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          nodeTypes={esNodeTypes}
+          onNodesChange={handleNodesChange}
+          onNodeClick={handleNodeClick}
+          onPaneClick={() => onSelect(null)}
+          minZoom={0.3}
+          maxZoom={2}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          proOptions={{ hideAttribution: true }}
+          nodesConnectable={false}
+          deleteKeyCode={null}
+        >
+          <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+          <Controls showInteractive={false} />
+          <MiniMap pannable zoomable style={{ backgroundColor: tokens.colorNeutralBackground1 }} />
+          <Panel position="top-left">
+            <div className={s.addButtonsPanel} data-palette="eventstream" role="toolbar" aria-label="Node palette">
+              <Button size="small" icon={<Add20Regular />} onClick={onAddSource} data-palette-item="source">Add source</Button>
+              <Button size="small" icon={<Add20Regular />} onClick={onAddTransform} data-palette-item="transform">Add transform</Button>
+              <Button size="small" icon={<Add20Regular />} onClick={onAddSink} data-palette-item="destination">Add destination</Button>
+            </div>
+          </Panel>
+        </ReactFlow>
+        {total === 0 && (
+          <div className={s.emptyHint}>
+            <Caption1>Click “Add source”, then “Add transform” / “Add destination” to build the stream.</Caption1>
           </div>
-        </Panel>
-      </ReactFlow>
-      {total === 0 && (
-        <div className={s.emptyHint}>
-          <Caption1>Click “Add source”, then “Add transform” / “Add destination” to build the stream.</Caption1>
-        </div>
-      )}
-    </div>
+        )}
+      </div>
+    </ResizableCanvasRegion>
   );
 }
 

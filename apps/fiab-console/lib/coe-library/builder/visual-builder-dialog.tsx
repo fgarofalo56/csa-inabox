@@ -28,6 +28,7 @@ import {
 } from '@fluentui/react-icons';
 import { ReportCanvas } from '../report-render/report-canvas';
 import { useReportModel } from '../report-render/use-report';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   newDashboardSpec, newTile, validateSpec, accentBadgeColor,
   TILE_VISUALS, BUILDER_SOURCE_META, getSourceMeta, DASHBOARD_CATEGORIES,
@@ -61,9 +62,14 @@ const useStyles = makeStyles({
   tileHeadRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   tileGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalS },
   sourceHint: { color: tokens.colorNeutralForeground3 },
+  // The definite height is now supplied by the wrapping <ResizableCanvasRegion>
+  // (user-resizable, persisted). The wrap just fills it: height:100% claims the
+  // region's resolved height; minHeight:0 + overflow:auto let the preview scroll
+  // inside the bounded region instead of forcing overflow. Was minHeight:420px.
   previewWrap: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
-    padding: tokens.spacingHorizontalM, backgroundColor: tokens.colorNeutralBackground1, minHeight: '420px',
+    padding: tokens.spacingHorizontalM, backgroundColor: tokens.colorNeutralBackground1,
+    height: '100%', minHeight: 0, overflow: 'auto',
   },
   previewHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: tokens.spacingVerticalS },
   emptyTiles: {
@@ -312,9 +318,16 @@ export function VisualBuilderDialog({ open, onClose, onSaved, edit }: VisualBuil
                   <Text weight="semibold">Preview</Text>
                   <Switch checked={livePreview} onChange={(_, d) => setLivePreview(!!d.checked)} label={livePreview ? 'Live data' : 'Sample data'} />
                 </div>
-                <div className={s.previewWrap}>
-                  <BuilderPreview spec={spec} live={livePreview} />
-                </div>
+                <ResizableCanvasRegion
+                  storageKey="org-visuals-builder"
+                  defaultPx={420}
+                  minPx={280}
+                  ariaLabel="Resize report builder canvas height"
+                >
+                  <div className={s.previewWrap}>
+                    <BuilderPreview spec={spec} live={livePreview} />
+                  </div>
+                </ResizableCanvasRegion>
                 <Caption1 className={s.sourceHint}>
                   Live preview renders against this deployment&apos;s own Azure estate. Each tile is labelled with its
                   true provenance (live / sample / honest gate). No Microsoft Fabric or Power BI workspace is used.

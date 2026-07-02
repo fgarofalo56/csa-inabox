@@ -201,7 +201,7 @@ For every PR merged to `main` today the operator chain was:
 5. Roll container app to the new SHA: `az containerapp update -n loom-console -g rg-csa-loom-admin-eastus2 --image acrloomm56yejezt7bjo.azurecr.io/loom-console:<sha>`
 6. Verify revision: `az containerapp revision show ... --query "{health:properties.healthState,running:properties.runningState}"`
 
-The SP `95ca491e-f841-43ba-93f2-3315804f55e7` (`limitlessdata_deploy`)
+The SP `<YOUR_DEPLOY_SP_APP_ID>` (`limitlessdata_deploy`)
 secret was rotated once during the chain when the cached value
 expired. The new secret was pushed to the GitHub secret
 `AZURE_CLIENT_SECRET` via `gh secret set` — never written to disk.

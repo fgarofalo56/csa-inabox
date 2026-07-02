@@ -986,3 +986,313 @@ export async function regenerateKey(keyKind: CosmosKeyKind): Promise<void> {
   if (res.ok || res.status === 202) return;
   await readJson<unknown>(res); // throws CosmosArmError with ARM's message
 }
+
+// ---------------------------------------------------------------------------
+// Account-level MANAGEMENT — the portal Cosmos DB *account* blade, editable via
+// the ARM "Database Accounts - Update" PATCH on …/databaseAccounts/{acct}
+// (api-version 2024-11-15). This is the management surface the Data Explorer
+// studio (data plane) does NOT expose: Replicate-data-globally, default
+// Consistency, Backup & Restore, and Networking (firewall / VNet / private
+// endpoints / public access). Grounded in Microsoft Learn:
+//   https://learn.microsoft.com/azure/templates/microsoft.documentdb/2024-11-15/databaseaccounts
+// (properties: locations, consistencyPolicy, backupPolicy, ipRules,
+//  virtualNetworkRules, isVirtualNetworkFilterEnabled, publicNetworkAccess,
+//  enableMultipleWriteLocations, enableAutomaticFailover).
+//
+// UAMI role: "DocumentDB Account Contributor" (5bd9cd88-…) grants
+// databaseAccounts/write; a read-only principal gets ARM 403 which the BFF
+// surfaces as an honest Contributor gate (per no-vaporware.md). Account updates
+// are long-running (202 + Azure-AsyncOperation); we poll the account's own
+// provisioningState with a bounded budget, then re-read the shape so the UI
+// shows the confirmed (or still-in-progress) state — never a fake receipt.
+// ---------------------------------------------------------------------------
+
+export type CosmosConsistencyLevel =
+  'Strong' | 'BoundedStaleness' | 'Session' | 'ConsistentPrefix' | 'Eventual';
+
+export interface CosmosConsistencyPolicy {
+  defaultConsistencyLevel: CosmosConsistencyLevel;
+  /** BoundedStaleness only — max number of stale operations tolerated. */
+  maxStalenessPrefix?: number;
+  /** BoundedStaleness only — max staleness interval in seconds. */
+  maxIntervalInSeconds?: number;
+}
+
+export interface CosmosAccountLocation {
+  id?: string;
+  locationName: string;
+  failoverPriority: number;
+  isZoneRedundant?: boolean;
+  provisioningState?: string;
+  documentEndpoint?: string;
+}
+
+export type CosmosBackupStorageRedundancy = 'Geo' | 'Local' | 'Zone';
+export type CosmosContinuousTier = 'Continuous7Days' | 'Continuous30Days';
+
+export interface CosmosBackupPolicy {
+  type: 'Periodic' | 'Continuous';
+  // Periodic mode
+  backupIntervalInMinutes?: number;
+  backupRetentionIntervalInHours?: number;
+  backupStorageRedundancy?: CosmosBackupStorageRedundancy;
+  // Continuous mode (point-in-time restore)
+  tier?: CosmosContinuousTier;
+}
+
+export interface CosmosVirtualNetworkRule {
+  /** Subnet ARM resource id. */
+  id: string;
+  ignoreMissingVNetServiceEndpoint?: boolean;
+}
+
+export interface CosmosPrivateEndpointConnection {
+  id: string;
+  name: string;
+  privateEndpointId?: string;
+  /** Approved / Pending / Rejected / Disconnected. */
+  status?: string;
+  description?: string;
+  actionsRequired?: string;
+  provisioningState?: string;
+  groupIds?: string[];
+}
+
+export interface CosmosAccountManagement {
+  name: string;
+  location?: string;
+  provisioningState?: string;
+  capabilities: string[];
+  serverless: boolean;
+  // Global distribution
+  locations: CosmosAccountLocation[];
+  writeLocations: CosmosAccountLocation[];
+  readLocations: CosmosAccountLocation[];
+  enableMultipleWriteLocations: boolean;
+  enableAutomaticFailover: boolean;
+  // Consistency
+  consistencyPolicy: CosmosConsistencyPolicy;
+  // Backup & restore
+  backupPolicy: CosmosBackupPolicy;
+  // Networking
+  publicNetworkAccess: string;
+  isVirtualNetworkFilterEnabled: boolean;
+  ipRules: string[];
+  virtualNetworkRules: CosmosVirtualNetworkRule[];
+  privateEndpointConnections: CosmosPrivateEndpointConnection[];
+}
+
+function shapeLocation(raw: any): CosmosAccountLocation {
+  return {
+    id: raw?.id,
+    locationName: raw?.locationName,
+    failoverPriority: typeof raw?.failoverPriority === 'number' ? raw.failoverPriority : 0,
+    isZoneRedundant: raw?.isZoneRedundant === true,
+    provisioningState: raw?.provisioningState,
+    documentEndpoint: raw?.documentEndpoint,
+  };
+}
+
+function shapeConsistency(raw: any): CosmosConsistencyPolicy {
+  const lvl = (raw?.defaultConsistencyLevel || 'Session') as CosmosConsistencyLevel;
+  return {
+    defaultConsistencyLevel: lvl,
+    maxStalenessPrefix: typeof raw?.maxStalenessPrefix === 'number' ? raw.maxStalenessPrefix : undefined,
+    maxIntervalInSeconds: typeof raw?.maxIntervalInSeconds === 'number' ? raw.maxIntervalInSeconds : undefined,
+  };
+}
+
+function shapeBackup(raw: any): CosmosBackupPolicy {
+  if (raw?.type === 'Continuous') {
+    return { type: 'Continuous', tier: raw?.continuousModeProperties?.tier || 'Continuous30Days' };
+  }
+  const p = raw?.periodicModeProperties || {};
+  return {
+    type: 'Periodic',
+    backupIntervalInMinutes: typeof p.backupIntervalInMinutes === 'number' ? p.backupIntervalInMinutes : 240,
+    backupRetentionIntervalInHours: typeof p.backupRetentionIntervalInHours === 'number' ? p.backupRetentionIntervalInHours : 8,
+    backupStorageRedundancy: (p.backupStorageRedundancy as CosmosBackupStorageRedundancy) || 'Geo',
+  };
+}
+
+/** GET …/privateEndpointConnections — tolerant of 403/404 so the Networking
+ *  panel still renders (the rest of the account read succeeded). */
+async function getPrivateEndpointConnectionsSafe(): Promise<CosmosPrivateEndpointConnection[]> {
+  try {
+    const res = await armFetch('/privateEndpointConnections');
+    const j = await readJson<{ value: any[] }>(res);
+    return (j?.value || []).map((raw) => {
+      const p = raw?.properties || {};
+      return {
+        id: raw?.id,
+        name: raw?.name,
+        privateEndpointId: p?.privateEndpoint?.id,
+        status: p?.privateLinkServiceConnectionState?.status,
+        description: p?.privateLinkServiceConnectionState?.description,
+        actionsRequired: p?.privateLinkServiceConnectionState?.actionsRequired,
+        provisioningState: p?.provisioningState,
+        groupIds: Array.isArray(p?.groupIds) ? p.groupIds : undefined,
+      } as CosmosPrivateEndpointConnection;
+    });
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Read the account's full management shape (global distribution + consistency +
+ * backup + networking + private-endpoint connections). Returns null on 404.
+ */
+export async function getAccountManagement(): Promise<CosmosAccountManagement | null> {
+  const res = await armFetch('');
+  const j = await readJson<any>(res);
+  if (!j) return null;
+  const props = j?.properties || {};
+  const caps: string[] = (props.capabilities || []).map((c: any) => c?.name).filter(Boolean);
+  const locations = (props.locations || [])
+    .map(shapeLocation)
+    .sort((a: CosmosAccountLocation, b: CosmosAccountLocation) => a.failoverPriority - b.failoverPriority);
+  const privateEndpointConnections = await getPrivateEndpointConnectionsSafe();
+  return {
+    name: j?.name,
+    location: j?.location,
+    provisioningState: props.provisioningState,
+    capabilities: caps,
+    serverless: caps.includes('EnableServerless'),
+    locations,
+    writeLocations: (props.writeLocations || []).map(shapeLocation),
+    readLocations: (props.readLocations || []).map(shapeLocation),
+    enableMultipleWriteLocations: props.enableMultipleWriteLocations === true,
+    enableAutomaticFailover: props.enableAutomaticFailover === true,
+    consistencyPolicy: shapeConsistency(props.consistencyPolicy),
+    backupPolicy: shapeBackup(props.backupPolicy),
+    publicNetworkAccess: props.publicNetworkAccess || 'Enabled',
+    isVirtualNetworkFilterEnabled: props.isVirtualNetworkFilterEnabled === true,
+    ipRules: (props.ipRules || []).map((r: any) => r?.ipAddressOrRange).filter(Boolean),
+    virtualNetworkRules: (props.virtualNetworkRules || [])
+      .map((r: any) => ({ id: r?.id, ignoreMissingVNetServiceEndpoint: r?.ignoreMissingVNetServiceEndpoint === true }))
+      .filter((r: CosmosVirtualNetworkRule) => r.id),
+    privateEndpointConnections,
+  };
+}
+
+/**
+ * Partial account update (ARM PATCH — Database Accounts - Update). Sends only
+ * the properties being changed; ARM merges the rest. Long-running: polls the
+ * account provisioningState with a bounded budget (region topology changes can
+ * exceed it — the caller re-reads to surface the in-progress state honestly).
+ */
+async function patchAccount(properties: Record<string, unknown>, waitMs = 45_000): Promise<void> {
+  const res = await armFetch('', { method: 'PATCH', body: JSON.stringify({ properties }) });
+  if (!res.ok && res.status !== 202) {
+    await readJson<unknown>(res); // throws CosmosArmError with ARM's own message (403 → role gate)
+  }
+  await waitForProvisioned('', waitMs);
+}
+
+/** Set the account's default consistency policy (+ bounded-staleness bounds). */
+export async function updateAccountConsistency(policy: CosmosConsistencyPolicy): Promise<CosmosAccountManagement | null> {
+  const consistencyPolicy: any = { defaultConsistencyLevel: policy.defaultConsistencyLevel };
+  if (policy.defaultConsistencyLevel === 'BoundedStaleness') {
+    const prefix = policy.maxStalenessPrefix;
+    const interval = policy.maxIntervalInSeconds;
+    if (!(typeof prefix === 'number' && prefix >= 10)) {
+      throw new CosmosArmError(400, null, 'Bounded staleness requires maxStalenessPrefix ≥ 10 operations.');
+    }
+    if (!(typeof interval === 'number' && interval >= 5)) {
+      throw new CosmosArmError(400, null, 'Bounded staleness requires maxIntervalInSeconds ≥ 5 seconds.');
+    }
+    consistencyPolicy.maxStalenessPrefix = prefix;
+    consistencyPolicy.maxIntervalInSeconds = interval;
+  }
+  await patchAccount({ consistencyPolicy });
+  return getAccountManagement();
+}
+
+/**
+ * Replace the account's region topology (add/remove regions, zone-redundancy).
+ * Callers pass the FULL desired locations array (including the write region at
+ * failoverPriority 0). Long-running — poll a bit then re-read.
+ */
+export async function updateAccountLocations(locations: CosmosAccountLocation[]): Promise<CosmosAccountManagement | null> {
+  if (!locations.length) throw new CosmosArmError(400, null, 'at least one region (the write region) is required');
+  const payload = locations
+    .slice()
+    .sort((a, b) => a.failoverPriority - b.failoverPriority)
+    .map((l) => {
+      const o: any = { locationName: l.locationName, failoverPriority: l.failoverPriority };
+      if (l.isZoneRedundant) o.isZoneRedundant = true;
+      return o;
+    });
+  await patchAccount({ locations: payload }, 60_000);
+  return getAccountManagement();
+}
+
+/** Toggle multi-region writes and/or service-managed automatic failover. */
+export async function updateAccountReplication(
+  opts: { enableMultipleWriteLocations?: boolean; enableAutomaticFailover?: boolean },
+): Promise<CosmosAccountManagement | null> {
+  const properties: Record<string, unknown> = {};
+  if (typeof opts.enableMultipleWriteLocations === 'boolean') properties.enableMultipleWriteLocations = opts.enableMultipleWriteLocations;
+  if (typeof opts.enableAutomaticFailover === 'boolean') properties.enableAutomaticFailover = opts.enableAutomaticFailover;
+  if (!Object.keys(properties).length) throw new CosmosArmError(400, null, 'nothing to update');
+  await patchAccount(properties, 60_000);
+  return getAccountManagement();
+}
+
+/**
+ * Set the account backup policy. Periodic ↔ Continuous is a ONE-WAY migration
+ * in Azure (Periodic → Continuous cannot be reversed); the UI discloses this.
+ */
+export async function updateAccountBackupPolicy(policy: CosmosBackupPolicy): Promise<CosmosAccountManagement | null> {
+  let backupPolicy: any;
+  if (policy.type === 'Continuous') {
+    backupPolicy = { type: 'Continuous', continuousModeProperties: { tier: policy.tier || 'Continuous30Days' } };
+  } else {
+    const interval = policy.backupIntervalInMinutes ?? 240;
+    const retention = policy.backupRetentionIntervalInHours ?? 8;
+    if (!(interval >= 60 && interval <= 1440)) throw new CosmosArmError(400, null, 'Periodic backup interval must be 60–1440 minutes.');
+    if (!(retention >= 8 && retention <= 720)) throw new CosmosArmError(400, null, 'Periodic backup retention must be 8–720 hours.');
+    // Retention (hours) must be ≥ the interval (converted to hours).
+    if (retention * 60 < interval) throw new CosmosArmError(400, null, 'Backup retention must be at least one backup interval long.');
+    backupPolicy = {
+      type: 'Periodic',
+      periodicModeProperties: {
+        backupIntervalInMinutes: interval,
+        backupRetentionIntervalInHours: retention,
+        backupStorageRedundancy: policy.backupStorageRedundancy || 'Geo',
+      },
+    };
+  }
+  await patchAccount({ backupPolicy });
+  return getAccountManagement();
+}
+
+export interface UpdateNetworkingInput {
+  publicNetworkAccess?: 'Enabled' | 'Disabled';
+  isVirtualNetworkFilterEnabled?: boolean;
+  /** IP addresses / CIDR ranges for the firewall (replaces the current list). */
+  ipRules?: string[];
+  /** Subnet rules (replaces the current list). */
+  virtualNetworkRules?: CosmosVirtualNetworkRule[];
+}
+
+/** Set the account's networking: firewall IP rules, VNet rules, public access. */
+export async function updateAccountNetworking(input: UpdateNetworkingInput): Promise<CosmosAccountManagement | null> {
+  const properties: Record<string, unknown> = {};
+  if (input.publicNetworkAccess) properties.publicNetworkAccess = input.publicNetworkAccess;
+  if (typeof input.isVirtualNetworkFilterEnabled === 'boolean') properties.isVirtualNetworkFilterEnabled = input.isVirtualNetworkFilterEnabled;
+  if (input.ipRules) {
+    properties.ipRules = input.ipRules
+      .map((r) => ({ ipAddressOrRange: (r || '').trim() }))
+      .filter((r) => r.ipAddressOrRange);
+  }
+  if (input.virtualNetworkRules) {
+    properties.virtualNetworkRules = input.virtualNetworkRules
+      .map((r) => ({ id: (r.id || '').trim(), ignoreMissingVNetServiceEndpoint: r.ignoreMissingVNetServiceEndpoint === true }))
+      .filter((r) => r.id);
+  }
+  if (!Object.keys(properties).length) throw new CosmosArmError(400, null, 'nothing to update');
+  await patchAccount(properties);
+  return getAccountManagement();
+}

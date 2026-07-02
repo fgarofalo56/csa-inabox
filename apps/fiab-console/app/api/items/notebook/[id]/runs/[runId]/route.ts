@@ -13,6 +13,7 @@
  *   - For Databricks: runId = "databricks:<runId>", just polls Jobs API.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -22,22 +23,45 @@ import { buildLoomDisplay, enrichChartRecs } from '@/lib/notebook/display-stats'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
+
+
+interface RunRecord {
+  id: string; status: string; jobType: string; invokeType: string;
+  startTimeUtc: string; endTimeUtc: string;
+  failureReason?: { errorCode?: string; message?: string } | null;
+}
+
+/**
+ * Append a terminal run to the notebook's Cosmos run history (drained by
+ * /jobs). Idempotent by runId, capped at 50, non-fatal — a write failure must
+ * never break a poll. Azure-native: this is the DEFAULT history backend, no
+ * Fabric required.
+ */
+async function recordRun(items: any, nb: WorkspaceItem, workspaceId: string, runId: string, rec: Omit<RunRecord, 'id' | 'jobType' | 'invokeType' | 'startTimeUtc'>): Promise<void> {
+  try {
+    const state = (nb.state as any) || {};
+    const history: RunRecord[] = Array.isArray(state.runHistory) ? state.runHistory : [];
+    if (history.some((h) => h.id === runId)) return;
+    const startedAt = state.pendingRuns?.[runId]?.startedAt || new Date(Date.now() - 1000).toISOString();
+    history.push({ id: runId, jobType: 'NotebookRun', invokeType: 'Manual', startTimeUtc: startedAt, ...rec });
+    await items.item(nb.id, workspaceId).replace({
+      ...nb, state: { ...state, runHistory: history.slice(-50) }, updatedAt: new Date().toISOString(),
+    } as WorkspaceItem);
+  } catch { /* non-fatal — history is best-effort */ }
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; runId: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
 
   const runId = decodeURIComponent((await ctx.params).runId);
   try {
     // Load notebook for code/lang context
     const items = await itemsContainer();
     const { resource: nb } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!nb || nb.itemType !== 'notebook') return err('notebook not found', 404);
+    if (!nb || nb.itemType !== 'notebook') return apiError('notebook not found', 404);
     const state = (nb.state as any) || {};
     // Per-cell run uses pendingRuns[runId] cached at dispatch; fall back to whole-notebook code.
     const pending = state.pendingRuns?.[runId];
@@ -63,6 +87,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       if (!job) return NextResponse.json({ ok: true, status: 'NotStarted', runId, phase: 'job-pending' });
       const terminal = amlJobIsTerminal(job.status);
       const ok = job.status === 'Completed';
+      if (terminal) await recordRun(items, nb, workspaceId, runId, {
+        status: ok ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
+        failureReason: ok ? null : { errorCode: job.status, message: `AML job ${jobName} ended with status '${job.status}'` },
+      });
       return NextResponse.json({
         ok: true,
         status: job.status || 'NotStarted',
@@ -160,6 +188,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         richDisplay = buildLoomDisplay(sqlJson, sampleRows) || undefined;
       }
 
+      if (out.status === 'ok' || out.status === 'error') await recordRun(items, nb, workspaceId, runId, {
+        status: out.status === 'ok' ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
+        failureReason: out.status === 'error' ? { errorCode: out.ename, message: out.evalue } : null,
+      });
       return NextResponse.json({
         ok: true,
         status: stmt.state,
@@ -192,6 +224,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
           const o = await getRunOutput(dbxRunId);
           output = { status: resultState === 'SUCCESS' ? 'ok' : 'error', ...o };
         } catch { /* keep null */ }
+        await recordRun(items, nb, workspaceId, runId, {
+          status: resultState === 'SUCCESS' ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
+          failureReason: resultState === 'SUCCESS' ? null : { errorCode: resultState, message: (run as any).state?.state_message },
+        });
       }
       return NextResponse.json({
         ok: true,
@@ -203,8 +239,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       });
     }
 
-    return err(`unsupported runId format: ${runId}`, 400);
+    return apiError(`unsupported runId format: ${runId}`, 400);
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502);
+    return apiError(e?.message || String(e), e?.status || 502);
   }
 }

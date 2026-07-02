@@ -69,6 +69,7 @@ import {
   PinOff16Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { EmptyState } from '@/lib/components/empty-state';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
@@ -148,7 +149,7 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusCircular,
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground2,
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   chipBtn: {
@@ -166,8 +167,8 @@ const useStyles = makeStyles({
     background: 'transparent',
     cursor: 'pointer',
     color: tokens.colorBrandForeground1,
-    fontSize: '12px',
-    fontWeight: 600,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
     paddingTop: tokens.spacingVerticalXS,
     paddingBottom: tokens.spacingVerticalXS,
     paddingLeft: tokens.spacingHorizontalXS,
@@ -208,33 +209,25 @@ const useStyles = makeStyles({
     alignItems: 'center',
     gap: tokens.spacingHorizontalXXS,
   },
-  empty: {
-    paddingTop: tokens.spacingVerticalXXXL,
-    paddingRight: tokens.spacingHorizontalXXL,
-    paddingBottom: tokens.spacingVerticalXXXL,
-    paddingLeft: tokens.spacingHorizontalXXL,
-    textAlign: 'center',
-    color: tokens.colorNeutralForeground3,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusXLarge,
-    backgroundColor: tokens.colorNeutralBackground2,
-    lineHeight: 1.6,
+  emptyWrap: {
     display: 'flex',
     flexDirection: 'column',
-    gap: tokens.spacingVerticalM,
     alignItems: 'center',
+    gap: tokens.spacingVerticalL,
   },
-  emptyIcon: {
-    display: 'inline-flex',
-    alignItems: 'center',
+  emptyCta: {
+    display: 'flex',
     justifyContent: 'center',
-    width: '56px',
-    height: '56px',
-    borderRadius: tokens.borderRadiusCircular,
-    marginBottom: tokens.spacingVerticalXS,
   },
-  emptyHint: {
-    color: tokens.colorNeutralForeground3,
+  confirmScroll: {
+    maxHeight: '180px',
+    overflowY: 'auto',
+  },
+  confirmList: {
+    margin: 0,
+    paddingLeft: tokens.spacingHorizontalXL,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
   dialogHint: {
     color: tokens.colorNeutralForeground3,
@@ -1157,7 +1150,7 @@ export default function WorkspacesPage() {
       {/* Bulk-delete result */}
       {bulkResult && (
         <MessageBar intent={bulkResult.failed.length > 0 ? 'warning' : 'success'}>
-          <MessageBarBody>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
             Deleted {bulkResult.deleted.length} workspace
             {bulkResult.deleted.length === 1 ? '' : 's'}.
             {bulkResult.failed.length > 0 && (
@@ -1180,8 +1173,8 @@ export default function WorkspacesPage() {
                   This permanently deletes the selected workspaces and every item inside them
                   (lakehouses, notebooks, reports, etc.) from Cosmos. This cannot be undone.
                 </Body1>
-                <div style={{ maxHeight: 180, overflowY: 'auto' }}>
-                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                <div className={styles.confirmScroll}>
+                  <ul className={styles.confirmList}>
                     {Array.from(selected).slice(0, 50).map(id => (
                       <li key={id}>{nameById.get(id) ?? id}</li>
                     ))}
@@ -1232,42 +1225,31 @@ export default function WorkspacesPage() {
 
       {/* Empty state — no workspaces at all */}
       {!isLoading && !error && data && data.length === 0 && (
-        <div className={styles.empty}>
-          {(() => {
-            const v = itemVisual('workspace');
-            return (
-              <span
-                className={styles.emptyIcon}
-                style={{ backgroundColor: `${v.color}1f` }}
-                aria-hidden
-              >
-                <v.icon style={{ width: 28, height: 28, color: v.color }} />
-              </span>
-            );
-          })()}
-          <Body1>
-            No workspaces yet. Click <b>+ New workspace</b> to create your first one.
-          </Body1>
-          <Caption1 className={styles.emptyHint}>
-            A workspace is a Cosmos-backed container that owns items, permissions, and SCM bindings.
-          </Caption1>
-          <CreateWorkspaceDialog
-            onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })}
+        <div className={styles.emptyWrap}>
+          <EmptyState
+            icon={(() => {
+              const v = itemVisual('workspace');
+              return <v.icon style={{ width: 44, height: 44 }} aria-hidden />;
+            })()}
+            title="No workspaces yet"
+            body="A workspace is a Cosmos-backed container that owns items, permissions, and SCM bindings. Create your first one to get started."
           />
+          <div className={styles.emptyCta}>
+            <CreateWorkspaceDialog
+              onCreated={() => qc.invalidateQueries({ queryKey: ['workspaces', 'withCounts'] })}
+            />
+          </div>
         </div>
       )}
 
       {/* Empty after filtering */}
       {!isLoading && !error && data && data.length > 0 && sorted.length === 0 && (
-        <div className={styles.empty}>
-          <span className={styles.emptyIcon} style={{ backgroundColor: tokens.colorNeutralBackground3 }} aria-hidden>
-            <Filter20Regular style={{ width: 26, height: 26, color: tokens.colorNeutralForeground3 }} />
-          </span>
-          <Body1>No workspaces match these filters.</Body1>
-          <Button appearance="primary" onClick={clearAll}>
-            Clear filters
-          </Button>
-        </div>
+        <EmptyState
+          icon={<Filter20Regular style={{ width: 40, height: 40 }} aria-hidden />}
+          title="No workspaces match these filters"
+          body="Try adjusting your search or clearing the active filters to see more workspaces."
+          primaryAction={{ label: 'Clear filters', onClick: clearAll }}
+        />
       )}
 
       {/* Pinned section (floats above All when anything is pinned) */}

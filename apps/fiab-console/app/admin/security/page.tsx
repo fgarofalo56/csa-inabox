@@ -24,7 +24,13 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Shield24Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync24Regular, Shield24Regular,
+  ShieldRegular, DataUsageRegular, TagRegular,
+  LockClosedRegular, EyeRegular, HistoryRegular,
+  DatabaseRegular, TagMultipleRegular, ShieldCheckmarkRegular,
+  DocumentBulletListRegular, KeyMultipleRegular, ClipboardTaskRegular,
+} from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { PurviewPanel } from '@/lib/components/admin-security/purview-panel';
 import { MipPanel } from '@/lib/components/admin-security/mip-panel';
@@ -32,8 +38,11 @@ import { DlpPanel } from '@/lib/components/admin-security/dlp-panel';
 import { AuditPanel } from '@/lib/components/admin-security/audit-panel';
 import { DspmAiPanel } from '@/lib/components/admin-security/dspm-ai-panel';
 import { Section } from '@/lib/components/ui/section';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { EmptyState } from '@/lib/components/empty-state';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 
 interface Insights {
   kpis: { totalItems: number; sensitiveCoveragePct: number; classificationCoveragePct: number; activePolicies: number; auditEvents30d: number };
@@ -52,26 +61,30 @@ interface AuditRow {
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalL },
+  explainer: { marginBottom: tokens.spacingVerticalL },
+  explainerList: { marginTop: tokens.spacingVerticalS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   topTabs: { marginBottom: tokens.spacingVerticalL },
   statsRow: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: tokens.spacingHorizontalM,
-  },
-  statCard: {
-    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-  },
-  statVal: { fontSize: '24px', fontWeight: 600, color: tokens.colorBrandForeground1 },
-  statLabel: { fontSize: '12px', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS },
-  bar: { height: '6px', backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden', marginTop: tokens.spacingVerticalS },
-  barFill: { height: '100%', backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
-  twoCol: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(360px, 1fr))',
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(180px, 100%), 1fr))',
     gap: tokens.spacingHorizontalL,
   },
+  statCard: {
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
+  },
+  statHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },
+  statIcon: { fontSize: '22px', color: tokens.colorNeutralForeground3, flexShrink: 0 },
+  statVal: { fontSize: tokens.fontSizeHero700, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1, lineHeight: tokens.lineHeightHero700 },
+  statLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, textTransform: 'uppercase', letterSpacing: '0.04em' },
+  bar: { height: tokens.spacingVerticalS, backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall, overflow: 'hidden', marginTop: tokens.spacingVerticalS },
+  barFill: { height: '100%', backgroundColor: tokens.colorBrandBackground, borderRadius: tokens.borderRadiusSmall },
   chip: {
-    fontSize: '11px',
+    fontSize: tokens.fontSizeBase100,
     paddingTop: tokens.spacingVerticalXS,
     paddingBottom: tokens.spacingVerticalXS,
     paddingLeft: tokens.spacingHorizontalS,
@@ -80,8 +93,10 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorPaletteBlueBackground2,
     color: tokens.colorPaletteBlueForeground2,
     marginRight: tokens.spacingHorizontalXS, display: 'inline-block', marginBottom: tokens.spacingVerticalXS,
+    maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
   refresh: { display: 'flex', justifyContent: 'flex-end', marginBottom: tokens.spacingVerticalM },
+  errText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 function labelColor(l: string): any {
@@ -114,20 +129,69 @@ export default function SecurityPage() {
         module, bootstrap script).
       </Body1>
 
+      <div className={s.explainer}>
+        <SectionExplainer>
+          Each tab configures one layer of your tenant security posture; every action rides a real Microsoft Purview or Microsoft Graph backend, never a Fabric dependency:
+          <ul className={s.explainerList}>
+            <li>
+              <strong>Purview</strong> — register data sources, run scans, and curate the glossary + domains so assets are discovered and governed.{' '}
+              <LearnPopover
+                title="Microsoft Purview"
+                content="The unified data governance plane: the Data Map catalogs your data estate, scans classify it, and the business glossary + domains add ownership and meaning."
+                learnMoreHref="https://learn.microsoft.com/purview/purview"
+              />
+            </li>
+            <li>
+              <strong>Information Protection</strong> — manage tenant <strong>sensitivity labels</strong> and label policies, then apply a label to an item.{' '}
+              <LearnPopover
+                title="Sensitivity labels (MIP)"
+                content="Microsoft Information Protection labels (Public → Highly Confidential) classify how sensitive an item is and drive downstream encryption, access, and DLP enforcement. Labels and their policies are read from Microsoft Graph."
+                tips={['Labels are tenant-wide (compliance.microsoft.com)', 'A label policy scopes which users see which labels', 'Applying a label can enforce encryption + access controls']}
+                learnMoreHref="https://learn.microsoft.com/purview/sensitivity-labels"
+              />
+            </li>
+            <li>
+              <strong>DLP</strong> — author Data Loss Prevention policies + rules, review alerts, and simulate a policy before enforcing.{' '}
+              <LearnPopover
+                title="Data Loss Prevention"
+                content="DLP policies detect and block risky sharing of sensitive information types (PII, PCI, PHI, credentials). Run a policy in simulation mode first to see what it would catch before turning on enforcement."
+                learnMoreHref="https://learn.microsoft.com/purview/dlp-learn-about-dlp"
+              />
+            </li>
+            <li>
+              <strong>DSPM for AI</strong> — Data Security Posture Management surfaces which AI interactions touch sensitive or unlabeled data so you can close gaps.{' '}
+              <LearnPopover
+                title="DSPM for AI"
+                content="Data Security Posture Management for AI reports on prompts and responses that reference sensitive data, unlabeled assets, and oversharing risk across your AI apps and agents."
+                learnMoreHref="https://learn.microsoft.com/purview/dspm-for-ai"
+              />
+            </li>
+            <li>
+              <strong>Audit</strong> — a filterable, CSV-exportable log of every governance and permission event across the platform.{' '}
+              <LearnPopover
+                title="Audit log"
+                content="A searchable trail of tenant-settings flips, item edits, share and role grants, scans, and app installs — sourced from the Loom audit store, Purview Data Map, and Log Analytics. Filter by user, event type, and time range, then export to CSV."
+                learnMoreHref="https://learn.microsoft.com/purview/audit-solutions-overview"
+              />
+            </li>
+          </ul>
+        </SectionExplainer>
+      </div>
+
       <TabList
         className={s.topTabs}
         selectedValue={tab}
         onTabSelect={(_e: SelectTabEvent, d: SelectTabData) => setTab(d.value as TopTab)}
       >
-        <Tab value="overview">Overview</Tab>
-        <Tab value="purview">Purview</Tab>
-        <Tab value="mip">Information Protection</Tab>
-        <Tab value="dlp">DLP</Tab>
-        <Tab value="dspm">DSPM for AI</Tab>
-        <Tab value="audit">Audit</Tab>
+        <Tab value="overview" icon={<ShieldRegular />}>Overview</Tab>
+        <Tab value="purview" icon={<DataUsageRegular />}>Purview</Tab>
+        <Tab value="mip" icon={<TagRegular />}>Information Protection</Tab>
+        <Tab value="dlp" icon={<LockClosedRegular />}>DLP</Tab>
+        <Tab value="dspm" icon={<EyeRegular />}>DSPM for AI</Tab>
+        <Tab value="audit" icon={<HistoryRegular />}>Audit</Tab>
       </TabList>
 
-      {tab === 'overview' && <OverviewTab />}
+      {tab === 'overview' && <OverviewTab onNavigateTab={setTab} />}
       {/* Gated panels own their internal layout/logic; the page only frames them. */}
       {tab === 'purview' && <Section bare><PurviewPanel /></Section>}
       {tab === 'mip' && <Section bare><MipPanel /></Section>}
@@ -138,7 +202,7 @@ export default function SecurityPage() {
   );
 }
 
-function OverviewTab() {
+function OverviewTab({ onNavigateTab }: { onNavigateTab: (t: TopTab) => void }) {
   const s = useStyles();
   const a = useAdminTabStyles();
   const [insights, setInsights] = useState<Insights | null>(null);
@@ -200,7 +264,7 @@ function OverviewTab() {
         <MessageBar intent="error" className={a.messageBar}>
           <MessageBarBody>
             <MessageBarTitle>Could not load security dashboard</MessageBarTitle>
-            {error}
+            <span className={s.errText}>{error}</span>
           </MessageBarBody>
         </MessageBar>
       )}
@@ -210,14 +274,20 @@ function OverviewTab() {
       {!loading && (insights || sensitivity || classifications) && (
         <>
           {insights && (
-            <Section title="Posture">
+            <Section title={<span><ShieldCheckmarkRegular className={a.headIcon} />Posture</span>}>
               <div className={s.statsRow}>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.totalItems}</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.totalItems}</div>
+                    <DatabaseRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>data items</div>
                 </div>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.sensitiveCoveragePct}%</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.sensitiveCoveragePct}%</div>
+                    <TagMultipleRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>sensitivity coverage</div>
                   <div className={s.bar}>
                     {/* dynamic: fill width is the live coverage percentage */}
@@ -225,7 +295,10 @@ function OverviewTab() {
                   </div>
                 </div>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.classificationCoveragePct}%</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.classificationCoveragePct}%</div>
+                    <DocumentBulletListRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>classification coverage</div>
                   <div className={s.bar}>
                     {/* dynamic: fill width is the live coverage percentage */}
@@ -233,18 +306,24 @@ function OverviewTab() {
                   </div>
                 </div>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.activePolicies}</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.activePolicies}</div>
+                    <KeyMultipleRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>active policies</div>
                 </div>
                 <div className={s.statCard}>
-                  <div className={s.statVal}>{insights.kpis.auditEvents30d}</div>
+                  <div className={s.statHead}>
+                    <div className={s.statVal}>{insights.kpis.auditEvents30d}</div>
+                    <ClipboardTaskRegular className={s.statIcon} aria-hidden />
+                  </div>
                   <div className={s.statLabel}>audit events (30d)</div>
                 </div>
               </div>
             </Section>
           )}
 
-          <div className={s.twoCol}>
+          <TileGrid minTileWidth={360}>
             <Section title={<span><Shield24Regular className={a.headIcon} />Sensitivity label distribution</span>}>
               {sensitivity && sensitivity.distribution.length > 0 ? (
                 <LoomDataTable
@@ -256,9 +335,14 @@ function OverviewTab() {
                   empty="No labels applied yet."
                 />
               ) : (
-                <Caption1 className={a.muted}>No labels applied yet.</Caption1>
+                <EmptyState
+                  icon={<TagMultipleRegular />}
+                  title="No sensitivity labels yet"
+                  body="Apply sensitivity labels to your data items to see the distribution here. Labels classify how sensitive each item is and drive protection policies."
+                  primaryAction={{ label: 'Open Information Protection', href: '/governance/sensitivity', appearance: 'primary' }}
+                />
               )}
-              {sensitivity && (
+              {sensitivity && sensitivity.distribution.length > 0 && (
                 <Caption1 className={a.mutedBlock}>
                   {sensitivity.unlabeled} of {sensitivity.total} items are unlabeled.
                   <a href="/governance/sensitivity" className={a.badgeGap}>Open full view</a>
@@ -266,7 +350,7 @@ function OverviewTab() {
               )}
             </Section>
 
-            <Section title="Top classifications">
+            <Section title={<span><DocumentBulletListRegular className={a.headIcon} />Top classifications</span>}>
               {classifications && classifications.classifications.length > 0 ? (
                 <>
                   <div>
@@ -279,12 +363,17 @@ function OverviewTab() {
                   </Caption1>
                 </>
               ) : (
-                <Caption1 className={a.muted}>No classifications applied yet.</Caption1>
+                <EmptyState
+                  icon={<DocumentBulletListRegular />}
+                  title="No classifications yet"
+                  body="Run Purview scans or apply classifications to your data items to surface the most common data categories here."
+                  primaryAction={{ label: 'Open classifications', href: '/governance/classifications', appearance: 'primary' }}
+                />
               )}
             </Section>
-          </div>
+          </TileGrid>
 
-          <Section title="Recent permission changes">
+          <Section title={<span><HistoryRegular className={a.headIcon} />Recent permission changes</span>}>
             {shareEvents.length > 0 ? (
               <LoomDataTable
                 columns={shareColumns}
@@ -294,9 +383,12 @@ function OverviewTab() {
                 empty="No recent permission changes."
               />
             ) : (
-              <Caption1 className={a.muted}>
-                No recent share / permission events in the last 30 days. Use the <strong>Audit</strong> tab for full history + CSV export.
-              </Caption1>
+              <EmptyState
+                icon={<HistoryRegular />}
+                title="No recent permission changes"
+                body="No share, permission, or role-assignment events were recorded in the last 30 days. Open the Audit tab for the full history and a CSV export."
+                primaryAction={{ label: 'Open Audit log', onClick: () => onNavigateTab('audit'), appearance: 'primary' }}
+              />
             )}
           </Section>
         </>

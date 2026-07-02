@@ -60,6 +60,13 @@ import {
 
 /** Stable GA api-version for Microsoft.MachineLearningServices control plane. */
 const ML_API = '2024-10-01';
+/**
+ * api-version that ships the Compute Instance `updateIdleShutdownSetting`
+ * control-plane action (it isn't exposed under the 2024-10-01 GA compute
+ * surface). Used ONLY for that one POST.
+ * https://learn.microsoft.com/rest/api/azureml/compute-instances
+ */
+const ML_IDLE_SHUTDOWN_API = '2021-07-01';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -153,14 +160,14 @@ export function amlConfigGate(): { missing: string } | null {
  */
 async function amlFetch(
   path: string,
-  init: RequestInit & { query?: Record<string, string>; target?: AmlTarget } = {},
+  init: RequestInit & { query?: Record<string, string>; target?: AmlTarget; apiVersion?: string } = {},
 ): Promise<Response> {
   const token = await credential.getToken(armScope());
   if (!token?.token) throw new AmlError(401, undefined, 'Failed to acquire ARM token for Azure ML');
-  const { query, target, ...rest } = init;
+  const { query, target, apiVersion, ...rest } = init;
   const wsPath = amlWorkspaceArmPath(target ?? resolveAmlTarget());
   const extra = query ? '&' + new URLSearchParams(query).toString() : '';
-  const url = `${armBase()}${wsPath}${path}?api-version=${ML_API}${extra}`;
+  const url = `${armBase()}${wsPath}${path}?api-version=${apiVersion ?? ML_API}${extra}`;
   return fetchWithTimeout(url, {
     ...rest,
     headers: {
@@ -225,6 +232,14 @@ export interface AmlCompute {
    * than max node of compute"). Undefined for ComputeInstance / when absent.
    */
   maxNodeCount?: number;
+  /**
+   * The AAD objectId of the user a *personal* Compute Instance is assigned to
+   * (`personalComputeInstanceSettings.assignedUser.objectId`). Azure ML Compute
+   * Instances are single-user: a CI can only be started / used by its assigned
+   * user. This is how Loom makes notebooks genuinely multi-user — every user
+   * provisions a CI owned by *them*. Undefined for shared / unassigned CIs.
+   */
+  assignedUserObjectId?: string;
 }
 
 /** A Compute Instance view (subset of AmlCompute) used by the notebook path. */
@@ -237,6 +252,8 @@ function shapeCompute(raw: any): AmlCompute {
     typeof inner?.scaleSettings?.maxNodeCount === 'number'
       ? inner.scaleSettings.maxNodeCount
       : undefined;
+  const assignedUserObjectId =
+    inner?.personalComputeInstanceSettings?.assignedUser?.objectId || undefined;
   return {
     id: raw?.id,
     name: raw?.name,
@@ -247,6 +264,7 @@ function shapeCompute(raw: any): AmlCompute {
     vmSize: inner.vmSize,
     createdOn: p.createdOn,
     maxNodeCount,
+    assignedUserObjectId,
   };
 }
 
@@ -299,6 +317,172 @@ export async function getCI(name: string): Promise<AmlComputeInstance | null> {
   const res = await amlFetch(`/computes/${encodeURIComponent(name)}`);
   const j = await readAmlJson<any>(res, 'getCI');
   return j ? shapeCompute(j) : null;
+}
+
+/**
+ * The workspace's region (= the ARM `location` a new compute is created in).
+ * Resolved from env via `resolveAmlTarget()` so create requests don't re-read
+ * `LOOM_AML_REGION` in every caller.
+ */
+export function amlRegion(target: AmlTarget = resolveAmlTarget()): string {
+  return target.region;
+}
+
+/**
+ * Stop a running Compute Instance.
+ *   POST {base}/computes/{name}/stop?api-version=2024-10-01  → 202 Accepted
+ * A 4xx that says "already stopped / not running" is swallowed so a redundant
+ * Stop click doesn't surface a scary error (mirrors startCI's idempotence).
+ */
+export async function stopCI(name: string): Promise<void> {
+  const res = await amlFetch(`/computes/${encodeURIComponent(name)}/stop`, { method: 'POST' });
+  if (res.ok || res.status === 202 || res.status === 204) return;
+  const t = await res.text().catch(() => '');
+  if (res.status === 409 || /already|not.*running|stopped|deallocat/i.test(t)) return;
+  throw new AmlError(res.status, t, `Compute Instance stop failed: ${t.slice(0, 240)}`);
+}
+
+/** A user explicitly assigned to a *personal* Compute Instance (AAD ids). */
+export interface AssignedUser {
+  objectId: string;
+  tenantId: string;
+}
+
+/**
+ * Create a Compute Instance.
+ *   PUT {base}/computes/{name}?api-version=2024-10-01
+ *   body { location, properties: { computeType:'ComputeInstance',
+ *          properties: { vmSize, idleTimeBeforeShutdown?,
+ *                        computeInstanceAuthorizationType:'personal',
+ *                        personalComputeInstanceSettings:{assignedUser:{objectId,tenantId}} } } }
+ *
+ * PER-USER OWNERSHIP: when `opts.assignedUser` is supplied, the CI is created as
+ * a *personal* compute instance assigned to that user's AAD objectId + tenantId
+ * (the "create on behalf of" pattern —
+ * https://learn.microsoft.com/azure/machine-learning/how-to-create-compute-instance#create-on-behalf-of).
+ * An AML Compute Instance is single-user by design — only its assigned user can
+ * start / use it — so assigning per-user CIs is exactly what makes Loom notebooks
+ * genuinely multi-user (each user runs on THEIR own CI, not one shared box). The
+ * Console UAMI creates it on their behalf; the assigned user owns it thereafter.
+ *
+ * Provisioning is async — ARM answers 202 (returns a 'Creating' placeholder) or
+ * 200/201 with the resource body. A non-202 failure (e.g. 404 workspace) throws
+ * AmlError so the route surfaces an honest error — never a faked success.
+ */
+export async function createCI(
+  name: string,
+  opts: { vmSize: string; idleTimeBeforeShutdown?: string; assignedUser?: AssignedUser },
+): Promise<AmlComputeInstance> {
+  const target = resolveAmlTarget();
+  const inner: Record<string, unknown> = { vmSize: opts.vmSize };
+  if (opts.idleTimeBeforeShutdown) inner.idleTimeBeforeShutdown = opts.idleTimeBeforeShutdown;
+  if (opts.assignedUser?.objectId && opts.assignedUser?.tenantId) {
+    inner.computeInstanceAuthorizationType = 'personal';
+    inner.personalComputeInstanceSettings = {
+      assignedUser: {
+        objectId: opts.assignedUser.objectId,
+        tenantId: opts.assignedUser.tenantId,
+      },
+    };
+  }
+  const armBody = {
+    location: amlRegion(target),
+    properties: {
+      computeType: 'ComputeInstance',
+      properties: inner,
+    },
+  };
+  const res = await amlFetch(`/computes/${encodeURIComponent(name)}`, {
+    method: 'PUT',
+    body: JSON.stringify(armBody),
+    target,
+  });
+  const assignedUserObjectId = opts.assignedUser?.objectId;
+  if (res.status === 202) {
+    return { id: '', name, computeType: 'ComputeInstance', provisioningState: 'Creating', state: 'Creating', vmSize: opts.vmSize, assignedUserObjectId };
+  }
+  const j = await readAmlJson<any>(res, 'createCI');
+  return j
+    ? shapeCompute(j)
+    : { id: '', name, computeType: 'ComputeInstance', provisioningState: 'Creating', state: 'Creating', vmSize: opts.vmSize, assignedUserObjectId };
+}
+
+// ============================================================
+// Per-user Compute Instance policy (multi-user notebooks)
+// ============================================================
+
+/**
+ * Per-user CI defaults + tenant ceiling, sourced from env (emitted by the
+ * admin-plane/notebook-compute-pool.bicep module). All have safe defaults so
+ * the flow works out of the box when the AML workspace is present:
+ *   LOOM_AML_PERUSER_ENABLED  on/off master switch (default on)
+ *   LOOM_AML_CI_SIZE          default VM size for a per-user CI
+ *   LOOM_AML_CI_IDLE_TTL      default idle-shutdown ISO-8601 duration
+ *   LOOM_AML_CI_MAX           max per-user CIs across the tenant (cost guard)
+ */
+export interface PerUserCiConfig {
+  enabled: boolean;
+  vmSize: string;
+  idleTtl: string;
+  maxPerTenant: number;
+}
+export function perUserCiConfig(): PerUserCiConfig {
+  const max = Number(process.env.LOOM_AML_CI_MAX);
+  return {
+    enabled: (process.env.LOOM_AML_PERUSER_ENABLED ?? 'true').toLowerCase() !== 'false',
+    vmSize: process.env.LOOM_AML_CI_SIZE?.trim() || 'Standard_DS3_v2',
+    idleTtl: process.env.LOOM_AML_CI_IDLE_TTL?.trim() || 'PT30M',
+    maxPerTenant: Number.isFinite(max) && max > 0 ? max : 50,
+  };
+}
+
+/** Prefix every Loom-provisioned per-user CI name carries (for quota + listing). */
+export const PERUSER_CI_PREFIX = 'ci-loom-';
+
+/**
+ * Deterministic per-user Compute Instance name: `ci-loom-<oid-first-12-hex>`.
+ * Derived only from the user's AAD objectId so the same user always resolves to
+ * the same CI (idempotent create/attach) and it satisfies AML's compute naming
+ * rule (3-24 chars, starts with a letter, alnum + hyphen). Compute Instance
+ * names must also be unique within a REGION, so this is best-effort unique —
+ * the oid prefix collision space is negligible in a single tenant.
+ */
+export function perUserCiName(oid: string): string {
+  const short = (oid || '').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12).toLowerCase();
+  return `${PERUSER_CI_PREFIX}${short || 'user'}`;
+}
+
+/** True when a CI is a Loom-managed per-user instance (by assignment or name). */
+export function isPerUserCi(ci: AmlComputeInstance): boolean {
+  return !!ci.assignedUserObjectId || (ci.name || '').startsWith(PERUSER_CI_PREFIX);
+}
+
+/** The subset of CIs owned by (assigned to) a given user oid. */
+export function ciIsOwnedBy(ci: AmlComputeInstance, oid: string): boolean {
+  if (!oid) return false;
+  if (ci.assignedUserObjectId) return ci.assignedUserObjectId === oid;
+  // A per-user CI mid-provision (202 placeholder) may not have surfaced its
+  // assignedUser yet — fall back to the deterministic name match.
+  return (ci.name || '') === perUserCiName(oid);
+}
+
+/**
+ * Update a Compute Instance's idle-shutdown TTL (auto-stop after N idle time).
+ *   POST {base}/computes/{name}/updateIdleShutdownSetting?api-version=2021-07-01
+ *   body { idleTimeBeforeShutdown: "PT30M" }   (ISO-8601 duration)
+ * This action lives only on the 2021-07-01 compute surface, so it overrides the
+ * default ML_API. The workspace's own MI must hold Contributor on itself or the
+ * idle timer won't fire (durable bicep grant; see the AML impl plan A3).
+ */
+export async function updateCiIdleShutdown(name: string, idleTimeBeforeShutdown: string): Promise<void> {
+  const res = await amlFetch(`/computes/${encodeURIComponent(name)}/updateIdleShutdownSetting`, {
+    method: 'POST',
+    apiVersion: ML_IDLE_SHUTDOWN_API,
+    body: JSON.stringify({ idleTimeBeforeShutdown }),
+  });
+  if (res.ok || res.status === 202 || res.status === 204) return;
+  const t = await res.text().catch(() => '');
+  throw new AmlError(res.status, t, `Update idle-shutdown failed: ${t.slice(0, 240)}`);
 }
 
 // ============================================================

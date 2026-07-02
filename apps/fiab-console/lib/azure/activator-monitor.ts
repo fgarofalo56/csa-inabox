@@ -26,6 +26,16 @@ import {
   type WebhookReceiverInput,
   type LogicAppReceiverInput,
 } from './monitor-client';
+// ADX / Eventhouse (Real-Time Intelligence) runtime backend for the Activator.
+// RTI streams land in Azure Data Explorer / Eventhouse, NOT Log Analytics, so a
+// rule authored over Eventhouse data must run its KQL against the ADX cluster to
+// ever fire. These are the real query-plane helpers (no mocks) — see
+// kusto-client.ts for how the cluster/db resolve from LOOM_KUSTO_*.
+import {
+  executeQuery,
+  normalizeClusterUri,
+  defaultDatabase as kustoDefaultDatabase,
+} from './kusto-client';
 
 // Re-export so the BFF route imports its activator surface from one module.
 export type { AlertHistoryEvent };
@@ -78,6 +88,37 @@ export function buildRuleQuery(rule: any): { query: string; note?: string } {
   const note = rule?.sourceTable || rule?.table
     ? undefined
     : `Alert query targets table '${table}' — set the rule's sourceTable (or LOOM_ACTIVATOR_DEFAULT_TABLE) to point at your data.`;
+  return { query, note };
+}
+
+/**
+ * Build the alert KQL for an Eventhouse / ADX (Real-Time Intelligence) source.
+ *
+ * Same contract as {@link buildRuleQuery} (fires when the query returns ≥1 row)
+ * but targets a Kusto database directly — RTI streams land in ADX / Eventhouse,
+ * not Log Analytics, so this is the query the Trigger/Preview + scheduled path
+ * runs against the cluster via kusto-client.executeQuery. A verbatim `query`
+ * wins; otherwise it is composed from the structured condition against the
+ * chosen table. `column_ifexists(...)` resolves the property against the real
+ * ADX table schema so a rule VALIDATES even when the literal column is absent
+ * (predicate is simply false → no rows → won't fire) instead of erroring.
+ */
+export function buildAdxRuleQuery(rule: any): { query: string; note?: string } {
+  if (typeof rule?.query === 'string' && rule.query.trim()) return { query: rule.query.trim() };
+  const cond = rule?.condition || {};
+  const table =
+    rule?.sourceTable || rule?.table || rule?.stream || rule?.eventTable ||
+    process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'Events';
+  const property = cond.property || cond.field || cond.condProperty || 'value';
+  const op = kqlOperator(cond.operator || cond.condOperator);
+  const value = cond.value ?? cond.condValue ?? 0;
+  const safeCol = `column_ifexists("${property}", dynamic(null))`;
+  const numericOp = ['>', '>=', '<', '<=', '==', '!='].includes(op);
+  const lhs = numericOp && typeof value === 'number' ? `todouble(${safeCol})` : safeCol;
+  const query = `${table}\n| extend _v = ${lhs}\n| where _v ${op} ${kqlValue(value)}`;
+  const note = rule?.sourceTable || rule?.table
+    ? undefined
+    : `Alert query targets Eventhouse table '${table}' — set the rule's source table to point at your KQL/ADX data.`;
   return { query, note };
 }
 
@@ -136,6 +177,17 @@ export interface MonitorRuleInput {
   /** ARM id of an EXISTING action group to attach instead of creating one from
    *  the rule's action config (the editor's pick-existing flow). */
   existingActionGroupId?: string;
+  /** Which backend the rule's data lives in and the trigger/preview evaluates
+   *  against. 'log-analytics' (Azure Monitor scheduledQueryRule over LA — the
+   *  original path) or 'adx' (Eventhouse / KQL Database — the RTI DEFAULT).
+   *  Absent ⇒ treated as 'log-analytics' for backward compatibility. */
+  sourceKind?: 'log-analytics' | 'adx';
+  /** ADX/Eventhouse database the rule's table lives in (sourceKind='adx'). When
+   *  absent the kusto-client's LOOM_KUSTO_DEFAULT_DB is used. */
+  adxDatabase?: string;
+  /** Optional ADX cluster URI override (a discovered Eventhouse cluster). When
+   *  absent the kusto-client's LOOM_KUSTO_CLUSTER_URI default is used. */
+  adxClusterUri?: string;
 }
 
 export interface MonitorRuleRecord {
@@ -155,24 +207,51 @@ export interface MonitorRuleRecord {
    *  ('Disabled'). Toggled by enable/disable via an in-place ARM PATCH. */
   state: 'Active' | 'Disabled';
   backend: 'azure-monitor';
+  /** Data-source backend the rule evaluates against — 'log-analytics' (Azure
+   *  Monitor scheduledQueryRule) or 'adx' (Eventhouse / KQL Database, run via
+   *  kusto-client). Absent on legacy records ⇒ treated as 'log-analytics'. */
+  sourceKind?: 'log-analytics' | 'adx';
+  /** ADX/Eventhouse database (sourceKind='adx') the Trigger/Preview re-runs against. */
+  adxDatabase?: string;
+  /** Optional ADX cluster URI override (sourceKind='adx'). */
+  adxClusterUri?: string;
+  /** Whether continuous, hands-off scheduled evaluation is wired. LA rules are
+   *  always true (Azure Monitor evaluates them). ADX rules are true ONLY when an
+   *  ADX-scoped alert host is provisioned (LOOM_ADX_ALERT_SCOPE); otherwise false
+   *  and the rule evaluates on-demand via Trigger/Preview (see `note`). */
+  scheduled?: boolean;
   createdAt: string;
   /** Last enable/disable timestamp, when the rule has been toggled. */
   updatedAt?: string;
   note?: string;
 }
 
-/** Create (or update) the Azure Monitor scheduledQueryRule + action group for a
- *  Loom activator rule. Throws MonitorNotConfiguredError/MonitorError which the
- *  route maps to an honest Azure infra-gate (NOT a Fabric gate). */
+/** Create (or update) the runtime backend for a Loom activator rule.
+ *
+ *  - sourceKind='log-analytics' (the original path): a real Azure Monitor
+ *    scheduledQueryRule (+ action group) over the LA workspace. Evaluates
+ *    continuously via Azure Monitor.
+ *  - sourceKind='adx' (Eventhouse / KQL Database — the RTI DEFAULT): the rule's
+ *    KQL runs against the ADX cluster (kusto-client). Trigger/Preview evaluates
+ *    it on-demand against REAL Eventhouse data. Continuous, hands-off scheduled
+ *    evaluation is wired ONLY when an ADX-scoped alert host is provisioned
+ *    (LOOM_ADX_ALERT_SCOPE = ADX cluster ARM id); otherwise the record carries
+ *    an honest note (per no-vaporware.md) and `scheduled: false`.
+ *
+ *  Throws MonitorNotConfiguredError/MonitorError which the route maps to an
+ *  honest Azure infra-gate (NOT a Fabric gate). */
 export async function createMonitorActivatorRule(
   activatorDisplayName: string,
   input: MonitorRuleInput,
 ): Promise<MonitorRuleRecord> {
-  const { query, note } = buildRuleQuery(input);
+  const sourceKind: 'log-analytics' | 'adx' = input.sourceKind === 'adx' ? 'adx' : 'log-analytics';
+  const { query, note } = sourceKind === 'adx' ? buildAdxRuleQuery(input) : buildRuleQuery(input);
 
   // Pick-existing flow: attach a known action group as-is. Otherwise compose a
   // new action group from the rule's action config (email / SMS / webhook /
   // Logic App). All four receiver kinds are real ARM receivers — no Fabric.
+  // The action group is backend-agnostic: it wires notifications for both the LA
+  // scheduledQueryRule and an ADX-scoped rule when a host is provisioned.
   let actionGroupId: string | undefined = input.existingActionGroupId?.trim() || undefined;
   let receivers: MonitorRuleRecord['actionGroupReceivers'];
   if (!actionGroupId) {
@@ -198,6 +277,62 @@ export async function createMonitorActivatorRule(
   const severity = typeof input.severity === 'number' ? input.severity : 3;
   const evaluationFrequency = input.evaluationFrequency || 'PT5M';
   const windowSize = input.windowSize || 'PT5M';
+
+  // ── Eventhouse / ADX (Real-Time Intelligence) source ──
+  if (sourceKind === 'adx') {
+    // Continuous scheduled eval on ADX needs an ADX-scoped alert host. When the
+    // operator has provisioned one (LOOM_ADX_ALERT_SCOPE = the ADX cluster ARM
+    // resource id, with the alert identity granted Database Viewer) we create a
+    // real scheduledQueryRule scoped to that cluster (skipQueryValidation — the
+    // KQL targets ADX, not LA). Otherwise the rule evaluates on-demand via
+    // Trigger/Preview and the record carries an HONEST gate note.
+    const adxScope = process.env.LOOM_ADX_ALERT_SCOPE?.trim();
+    let scheduled = false;
+    let scheduleNote: string;
+    if (adxScope) {
+      await upsertScheduledQueryRule({
+        name: azureRuleName,
+        description: `Loom Activator rule '${input.name || 'rule'}' (Eventhouse / ADX)`,
+        query,
+        severity,
+        evaluationFrequency,
+        windowSize,
+        scopes: [adxScope],
+        skipQueryValidation: true,
+        actionGroupIds: actionGroupId ? [actionGroupId] : undefined,
+      });
+      scheduled = true;
+      scheduleNote = 'Continuous evaluation runs on the ADX-scoped Azure Monitor alert host (LOOM_ADX_ALERT_SCOPE).';
+    } else {
+      scheduleNote =
+        'Continuous scheduled evaluation for Eventhouse / ADX sources is on-demand: use Trigger/Preview to evaluate the rule now against real ADX data. ' +
+        'For hands-off scheduled evaluation, set LOOM_ADX_ALERT_SCOPE to the ADX cluster resource id (and grant the alert identity Database Viewer). ' +
+        'Log-Analytics-sourced rules evaluate continuously via Azure Monitor.';
+    }
+    return {
+      id: azureRuleName,
+      name: input.name || azureRuleName,
+      query,
+      azureRuleName,
+      condition: input.condition,
+      action: input.action,
+      actionGroupId,
+      ...(receivers ? { actionGroupReceivers: receivers } : {}),
+      severity,
+      evaluationFrequency,
+      windowSize,
+      state: 'Active',
+      backend: 'azure-monitor',
+      sourceKind: 'adx',
+      ...(input.adxDatabase ? { adxDatabase: input.adxDatabase } : {}),
+      ...(input.adxClusterUri ? { adxClusterUri: input.adxClusterUri } : {}),
+      scheduled,
+      createdAt: new Date().toISOString(),
+      note: [note, scheduleNote].filter(Boolean).join(' '),
+    };
+  }
+
+  // ── Log Analytics source (Azure Monitor scheduledQueryRule) ──
   await upsertScheduledQueryRule({
     name: azureRuleName,
     description: `Loom Activator rule '${input.name || 'rule'}'`,
@@ -221,6 +356,8 @@ export async function createMonitorActivatorRule(
     windowSize,
     state: 'Active',
     backend: 'azure-monitor',
+    sourceKind: 'log-analytics',
+    scheduled: true,
     createdAt: new Date().toISOString(),
     ...(note ? { note } : {}),
   };
@@ -249,13 +386,107 @@ export async function deleteMonitorActivatorRule(azureRuleName: string): Promise
   await deleteScheduledQueryRule(azureRuleName);
 }
 
-/** "Trigger now" on the Azure-native backend = run the rule's KQL against the
- *  LA workspace right now and report whether it would fire (rows > 0). */
+/** True when a rule is an UNSCHEDULED Eventhouse / ADX rule — sourceKind 'adx'
+ *  with no ADX-scoped alert host provisioned (`scheduled !== true`, i.e.
+ *  LOOM_ADX_ALERT_SCOPE was unset at create time) — so NO Azure Monitor
+ *  scheduledQueryRule exists on ARM for it. Lifecycle actions
+ *  (start/stop/enable/disable) must flip the persisted enabled flag on the
+ *  Cosmos record instead of PATCHing ARM (which would 404 and silently no-op),
+ *  and stop must NEVER re-upsert it: a re-PUT without the record's scopes would
+ *  recreate the rule against the default Log Analytics workspace with ADX KQL
+ *  (wrong scope; fails LA query validation). */
+export function isOnDemandAdxRule(
+  rule: { sourceKind?: string; scheduled?: boolean } | null | undefined,
+): boolean {
+  return !!rule && String(rule.sourceKind || '').toLowerCase() === 'adx' && rule.scheduled !== true;
+}
+
+// ── on-demand run history (Trigger / Preview evaluations) ───────────────────
+/** One persisted on-demand evaluation (Trigger now / Preview) of an activator
+ *  rule. Scheduled rules leave fired/resolved alert instances in Azure Monitor
+ *  Alerts Management; on-demand ADX rules (the RTI default when
+ *  LOOM_ADX_ALERT_SCOPE is unset) do NOT — so each evaluation is recorded on
+ *  the Cosmos activator item (state.runHistory, capped) and the /history route
+ *  merges them into its response with source:'on-demand'. */
+export interface OnDemandRunRecord {
+  ruleId: string;
+  ruleName: string;
+  /** ISO timestamp of the evaluation. */
+  at: string;
+  /** Rows the rule's KQL returned. */
+  rowCount: number;
+  /** Whether the rule would have fired (rows > 0). */
+  fired: boolean;
+  /** Query plane the evaluation ran against. */
+  backend: 'adx' | 'log-analytics';
+}
+
+/** Cap on persisted on-demand evaluations per activator item (newest first) so
+ *  the Cosmos document stays bounded. */
+export const RUN_HISTORY_CAP = 100;
+
+/** Prepend a run to an item's persisted on-demand history (state.runHistory),
+ *  newest first, capped at {@link RUN_HISTORY_CAP}. Pure — the caller persists
+ *  the returned array onto the Cosmos item. */
+export function appendRunHistory(state: unknown, run: OnDemandRunRecord): OnDemandRunRecord[] {
+  const prev: OnDemandRunRecord[] = Array.isArray((state as any)?.runHistory)
+    ? (state as any).runHistory.filter((r: any) => r && typeof r.at === 'string')
+    : [];
+  return [run, ...prev].slice(0, RUN_HISTORY_CAP);
+}
+
+/** "Trigger now" / "Preview" on the Azure-native backend = run the rule's KQL
+ *  right now and report whether it would fire (rows > 0).
+ *
+ *  Branches on the rule's source kind:
+ *   - 'adx' (Eventhouse / KQL Database — RTI DEFAULT): runs the KQL against the
+ *     real ADX cluster via kusto-client.executeQuery (cluster/db resolved from
+ *     LOOM_KUSTO_* unless the rule carries an override). This is the path that
+ *     makes rules authored over Eventhouse/RTI streams actually evaluate.
+ *   - 'log-analytics' (or legacy rules with no sourceKind): runs against the LA
+ *     workspace via queryLogs — unchanged.
+ *
+ *  Throws KustoError / MonitorNotConfiguredError / MonitorError which the route
+ *  maps to an honest 503/gate (e.g. LOOM_KUSTO_* unset ⇒ degrades cleanly). */
 export async function triggerMonitorActivatorRule(
-  query: string,
-): Promise<{ columns: string[]; rows: unknown[][]; count: number; fired: boolean }> {
-  const r = await queryLogs(query, 'PT1H');
-  return { columns: r.columns, rows: r.rows.slice(0, 50), count: r.rowCount, fired: r.rowCount > 0 };
+  rule: {
+    query?: string;
+    sourceKind?: string;
+    sourceTable?: string;
+    condition?: any;
+    adxDatabase?: string;
+    adxClusterUri?: string;
+  } | string,
+): Promise<{ columns: string[]; rows: unknown[][]; count: number; fired: boolean; backend: 'adx' | 'log-analytics'; query: string }> {
+  // Back-compat: a bare query string routes to the Log Analytics path.
+  const r = typeof rule === 'string' ? { query: rule } : (rule || {});
+  const isAdx = String((r as any).sourceKind || '').toLowerCase() === 'adx';
+
+  if (isAdx) {
+    const built = buildAdxRuleQuery(r);
+    const database = ((r as any).adxDatabase && String((r as any).adxDatabase).trim()) || kustoDefaultDatabase();
+    const clusterUri = normalizeClusterUri((r as any).adxClusterUri) || undefined;
+    const res = await executeQuery(database, built.query, clusterUri ? { clusterUri } : undefined);
+    return {
+      columns: res.columns,
+      rows: res.rows.slice(0, 50),
+      count: res.rowCount,
+      fired: res.rowCount > 0,
+      backend: 'adx',
+      query: built.query,
+    };
+  }
+
+  const q = String((r as any).query || '').trim();
+  const res = await queryLogs(q, 'PT1H');
+  return {
+    columns: res.columns,
+    rows: res.rows.slice(0, 50),
+    count: res.rowCount,
+    fired: res.rowCount > 0,
+    backend: 'log-analytics',
+    query: q,
+  };
 }
 
 /** Run history / trigger log — fetch the fired/resolved Azure Monitor alert

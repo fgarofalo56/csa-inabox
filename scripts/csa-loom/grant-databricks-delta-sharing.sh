@@ -21,9 +21,10 @@
 #   ./grant-databricks-delta-sharing.sh
 #
 # Or paste these into a Databricks SQL editor as a metastore admin:
-#   GRANT CREATE SHARE     ON METASTORE TO `<UAMI_APP_ID>`;
-#   GRANT CREATE RECIPIENT ON METASTORE TO `<UAMI_APP_ID>`;
-#   GRANT CREATE PROVIDER  ON METASTORE TO `<UAMI_APP_ID>`;
+#   GRANT CREATE PROVIDER  ON METASTORE TO `<UAMI_APP_ID>`;   -- register an inbound share (activation file)
+#   GRANT CREATE CATALOG   ON METASTORE TO `<UAMI_APP_ID>`;   -- subscribe = create a catalog from the share (so you can query it)
+#   GRANT CREATE SHARE     ON METASTORE TO `<UAMI_APP_ID>`;   -- publish outbound shares
+#   GRANT CREATE RECIPIENT ON METASTORE TO `<UAMI_APP_ID>`;   -- publish outbound recipients
 set -euo pipefail
 
 : "${DBX_HOST:?set DBX_HOST (e.g. adb-xxxx.NN.azuredatabricks.net)}"
@@ -42,7 +43,9 @@ run_sql() {
 }
 
 echo "Granting Delta Sharing metastore privileges to UAMI ${UAMI_APP_ID} on ${DBX_HOST}…"
+run_sql "GRANT CREATE PROVIDER ON METASTORE TO \`${UAMI_APP_ID}\`"
+run_sql "GRANT CREATE CATALOG ON METASTORE TO \`${UAMI_APP_ID}\`"
 run_sql "GRANT CREATE SHARE ON METASTORE TO \`${UAMI_APP_ID}\`"
 run_sql "GRANT CREATE RECIPIENT ON METASTORE TO \`${UAMI_APP_ID}\`"
-run_sql "GRANT CREATE PROVIDER ON METASTORE TO \`${UAMI_APP_ID}\`"
-echo "Done. Re-test Marketplace → Data shares → Shared by me → New share."
+echo "Done. Inbound: Marketplace → Data shares → add a share from an activation file → Subscribe"
+echo "(CREATE PROVIDER + CREATE CATALOG). Outbound: Shared by me → New share (CREATE SHARE/RECIPIENT)."

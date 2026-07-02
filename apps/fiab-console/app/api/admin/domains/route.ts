@@ -29,6 +29,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { tenantSettingsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import {
   mirrorDomainUpsert,
@@ -176,6 +177,9 @@ export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const tenantId = s.claims.oid;
+  // PDP gate (default-off / shadow-ready). Admin write: create a tenant domain.
+  const blocked = await pdpCheck(s, { level: 'domain', id: tenantId }, 'admin');
+  if (blocked) return blocked;
   const body = await req.json().catch(() => ({}));
   const id = (body?.id || '').toString().trim().toLowerCase().replace(/[^a-z0-9-]/g, '-');
   const name = (body?.name || '').toString().trim();
@@ -298,6 +302,9 @@ export async function PATCH(req: NextRequest) {
   const tenantId = s.claims.oid;
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id query param required' }, { status: 400 });
+  // PDP gate (default-off / shadow-ready). Admin write: edit/move a domain.
+  const blocked = await pdpCheck(s, { level: 'domain', id }, 'admin');
+  if (blocked) return blocked;
   const body = await req.json().catch(() => ({}));
   try {
     const c = await tenantSettingsContainer();
@@ -431,6 +438,9 @@ export async function DELETE(req: NextRequest) {
   const tenantId = s.claims.oid;
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id query param required' }, { status: 400 });
+  // PDP gate (default-off / shadow-ready). Admin write: delete a domain.
+  const blocked = await pdpCheck(s, { level: 'domain', id }, 'admin');
+  if (blocked) return blocked;
   try {
     const c = await tenantSettingsContainer();
     const docId = `domains:${tenantId}`;

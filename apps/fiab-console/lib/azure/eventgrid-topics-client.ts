@@ -113,6 +113,19 @@ function topicUrl(cfg: EventGridTopicsConfig, topic: string): string {
   return `${rgUrl(cfg)}/providers/Microsoft.EventGrid/topics/${encodeURIComponent(topic)}`;
 }
 
+/**
+ * Relative ARM resource id (no host) of a custom topic — the scope for Azure
+ * Monitor metrics (Microsoft.Insights/metrics). Event Grid metrics are
+ * per-topic (unlike the namespace-scoped Event Hubs / Service Bus metrics).
+ * monitor-client.fetchMetrics prepends the sovereign ARM base.
+ */
+export function eventGridTopicResourceId(topic: string): string {
+  const cfg = readEventGridTopicsConfig();
+  const name = (topic || '').trim();
+  if (!name) throw new EventGridTopicsError(400, undefined, 'topic is required');
+  return `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.resourceGroup)}/providers/Microsoft.EventGrid/topics/${encodeURIComponent(name)}`;
+}
+
 async function armToken(): Promise<string> {
   const t = await credential.getToken(armScope());
   if (!t?.token) throw new EventGridTopicsError(401, undefined, 'Failed to acquire ARM token for Event Grid');
@@ -292,6 +305,211 @@ export async function listTopicKeys(topic: string): Promise<TopicKeys> {
   const cfg = readEventGridTopicsConfig();
   const body = await arm<any>(`${topicUrl(cfg, topic)}/listKeys?api-version=${EG_ARM_API}`, { method: 'POST' });
   return { key1: body?.key1 || '', key2: body?.key2 || '' };
+}
+
+/**
+ * Regenerate one of a topic's SAS access keys (key1 | key2). Real ARM
+ * `Microsoft.EventGrid/topics/regenerateKey` POST — returns BOTH keys after the
+ * chosen one is rotated. The Console UAMI needs "EventGrid Contributor" on the
+ * resource group.
+ * https://learn.microsoft.com/rest/api/eventgrid/controlplane/topics/regenerate-key
+ */
+export async function regenerateTopicKey(topic: string, keyName: 'key1' | 'key2'): Promise<TopicKeys> {
+  const cfg = readEventGridTopicsConfig();
+  const name = (topic || '').trim();
+  if (!name) throw new EventGridTopicsError(400, undefined, 'topic name is required');
+  const kn = keyName === 'key2' ? 'key2' : 'key1';
+  const body = await arm<any>(`${topicUrl(cfg, name)}/regenerateKey?api-version=${EG_ARM_API}`, {
+    method: 'POST',
+    body: JSON.stringify({ keyName: kn }),
+  });
+  return { key1: body?.key1 || '', key2: body?.key2 || '' };
+}
+
+// ──────────────────────── event subscription create ───────────────────────
+
+/** Handler types a custom-topic event subscription can route governed events to. */
+export type EventSubDestinationType =
+  | 'AzureFunction'
+  | 'WebHook'
+  | 'EventHub'
+  | 'ServiceBusQueue'
+  | 'ServiceBusTopic'
+  | 'StorageQueue';
+
+/** One advanced (key/value) filter row for an event subscription. */
+export interface AdvancedFilterSpec {
+  /** e.g. StringIn, StringBeginsWith, NumberGreaterThan, BoolEquals … */
+  operatorType: string;
+  /** The event field to test, e.g. `data.priority` or `subject`. */
+  key: string;
+  /** Raw values (coerced to number/bool per the operator on the server). */
+  values?: (string | number | boolean)[];
+}
+
+export interface CreateEventSubscriptionSpec {
+  name: string;
+  destinationType: EventSubDestinationType;
+  /** WebHook endpoint URL (WebHook destination only). */
+  endpointUrl?: string;
+  /**
+   * ARM resource ID of the handler resource:
+   *  - AzureFunction → …/sites/{app}/functions/{fn}
+   *  - EventHub      → …/namespaces/{ns}/eventhubs/{hub}
+   *  - ServiceBusQueue → …/namespaces/{ns}/queues/{q}
+   *  - ServiceBusTopic → …/namespaces/{ns}/topics/{t}
+   *  - StorageQueue  → …/storageAccounts/{acct} (queue name below)
+   */
+  resourceId?: string;
+  /** Storage queue name (StorageQueue destination only). */
+  queueName?: string;
+  filter?: {
+    subjectBeginsWith?: string;
+    subjectEndsWith?: string;
+    includedEventTypes?: string[];
+    isSubjectCaseSensitive?: boolean;
+    advancedFilters?: AdvancedFilterSpec[];
+  };
+  /** Dead-letter to a Storage blob container (StorageBlob endpoint). */
+  deadLetter?: { resourceId?: string; blobContainerName?: string };
+  retryPolicy?: { maxDeliveryAttempts?: number; eventTimeToLiveInMinutes?: number };
+  /** Delivery schema; CloudEvents v1.0 is the governed default. */
+  eventDeliverySchema?: 'CloudEventSchemaV1_0' | 'EventGridSchema' | 'CustomInputSchema';
+}
+
+const NO_VALUE_OPERATORS = new Set(['IsNullOrUndefined', 'IsNotNull']);
+const NUMBER_SINGLE_OPERATORS = new Set([
+  'NumberGreaterThan', 'NumberGreaterThanOrEquals', 'NumberLessThan', 'NumberLessThanOrEquals',
+]);
+const NUMBER_MULTI_OPERATORS = new Set(['NumberIn', 'NumberNotIn', 'NumberInRange', 'NumberNotInRange']);
+
+/** Build one ARM advancedFilter object, coercing value vs values per operator. */
+function buildAdvancedFilter(f: AdvancedFilterSpec): Record<string, unknown> | null {
+  const key = (f.key || '').trim();
+  const op = (f.operatorType || '').trim();
+  if (!key || !op) return null;
+  if (NO_VALUE_OPERATORS.has(op)) return { operatorType: op, key };
+  const cleaned = (Array.isArray(f.values) ? f.values : [])
+    .map((v) => String(v).trim())
+    .filter((v) => v.length > 0);
+  if (!cleaned.length) return null;
+  if (op === 'BoolEquals') {
+    return { operatorType: op, key, value: /^(true|1|yes)$/i.test(cleaned[0]) };
+  }
+  if (NUMBER_SINGLE_OPERATORS.has(op)) {
+    const n = Number(cleaned[0]);
+    if (Number.isNaN(n)) return null;
+    return { operatorType: op, key, value: n };
+  }
+  if (NUMBER_MULTI_OPERATORS.has(op)) {
+    const nums = cleaned.map(Number).filter((n) => !Number.isNaN(n));
+    if (!nums.length) return null;
+    return { operatorType: op, key, values: nums };
+  }
+  // String* multi-value operators (StringIn/StringBeginsWith/StringContains/…).
+  return { operatorType: op, key, values: cleaned };
+}
+
+/** Build the ARM destination object for the chosen handler type. */
+function buildSubscriptionDestination(
+  spec: CreateEventSubscriptionSpec,
+): { endpointType: string; properties: Record<string, unknown> } {
+  const t = spec.destinationType;
+  switch (t) {
+    case 'WebHook': {
+      const url = (spec.endpointUrl || '').trim();
+      if (!url) throw new EventGridTopicsError(400, undefined, 'WebHook destination requires an endpoint URL');
+      return { endpointType: 'WebHook', properties: { endpointUrl: url } };
+    }
+    case 'StorageQueue': {
+      const resourceId = (spec.resourceId || '').trim();
+      const queueName = (spec.queueName || '').trim();
+      if (!resourceId || !queueName) {
+        throw new EventGridTopicsError(400, undefined, 'Storage Queue destination requires a storage account resource ID and a queue name');
+      }
+      return { endpointType: 'StorageQueue', properties: { resourceId, queueName } };
+    }
+    case 'AzureFunction':
+    case 'EventHub':
+    case 'ServiceBusQueue':
+    case 'ServiceBusTopic': {
+      const resourceId = (spec.resourceId || '').trim();
+      if (!resourceId) throw new EventGridTopicsError(400, undefined, `${t} destination requires a resource ID`);
+      return { endpointType: t, properties: { resourceId } };
+    }
+    default:
+      throw new EventGridTopicsError(400, undefined, `unsupported destination type: ${String(t)}`);
+  }
+}
+
+/**
+ * Create (idempotent PUT) an event subscription on a custom topic — routes
+ * matching events to a Function / WebHook / Event Hub / Service Bus / Storage
+ * Queue handler with optional subject + event-type + advanced filters,
+ * dead-letter destination, and a retry policy. Real ARM
+ * `Microsoft.EventGrid/topics/.../eventSubscriptions` PUT. WebHook destinations
+ * trigger Event Grid's validation handshake — an unreachable endpoint surfaces
+ * a real ARM error (no mock). The Console UAMI needs "EventGrid Contributor".
+ * https://learn.microsoft.com/rest/api/eventgrid/controlplane/event-subscriptions
+ */
+export async function createTopicEventSubscription(
+  topic: string,
+  spec: CreateEventSubscriptionSpec,
+): Promise<TopicEventSubscription> {
+  const cfg = readEventGridTopicsConfig();
+  const topicName = (topic || '').trim();
+  const subName = (spec?.name || '').trim();
+  if (!topicName) throw new EventGridTopicsError(400, undefined, 'topic is required');
+  if (!subName) throw new EventGridTopicsError(400, undefined, 'subscription name is required');
+
+  const properties: Record<string, any> = {
+    destination: buildSubscriptionDestination(spec),
+    eventDeliverySchema: spec.eventDeliverySchema || 'CloudEventSchemaV1_0',
+  };
+
+  const f = spec.filter || {};
+  const filter: Record<string, any> = {};
+  if (f.subjectBeginsWith?.trim()) filter.subjectBeginsWith = f.subjectBeginsWith.trim();
+  if (f.subjectEndsWith?.trim()) filter.subjectEndsWith = f.subjectEndsWith.trim();
+  const evTypes = (f.includedEventTypes || []).map((s) => s.trim()).filter(Boolean);
+  if (evTypes.length) filter.includedEventTypes = evTypes;
+  if (f.isSubjectCaseSensitive != null) filter.isSubjectCaseSensitive = !!f.isSubjectCaseSensitive;
+  const adv = (f.advancedFilters || []).map(buildAdvancedFilter).filter(Boolean) as Record<string, unknown>[];
+  if (adv.length) {
+    filter.advancedFilters = adv;
+    filter.enableAdvancedFilteringOnArrays = true;
+  }
+  if (Object.keys(filter).length) properties.filter = filter;
+
+  const dl = spec.deadLetter;
+  if (dl?.resourceId?.trim() && dl?.blobContainerName?.trim()) {
+    properties.deadLetterDestination = {
+      endpointType: 'StorageBlob',
+      properties: { resourceId: dl.resourceId.trim(), blobContainerName: dl.blobContainerName.trim() },
+    };
+  }
+
+  const rp: Record<string, number> = {};
+  if (spec.retryPolicy?.maxDeliveryAttempts) rp.maxDeliveryAttempts = spec.retryPolicy.maxDeliveryAttempts;
+  if (spec.retryPolicy?.eventTimeToLiveInMinutes) rp.eventTimeToLiveInMinutes = spec.retryPolicy.eventTimeToLiveInMinutes;
+  if (Object.keys(rp).length) properties.retryPolicy = rp;
+
+  const url = `${topicUrl(cfg, topicName)}/providers/Microsoft.EventGrid/eventSubscriptions/${encodeURIComponent(subName)}?api-version=${EG_ARM_API}`;
+  const body = await arm<any>(url, { method: 'PUT', body: JSON.stringify({ properties }) });
+  const p = body?.properties || {};
+  const dest = p?.destination || {};
+  return {
+    name: body?.name || subName,
+    destinationType: dest?.endpointType,
+    destination:
+      dest?.properties?.resourceId ||
+      dest?.properties?.endpointUrl ||
+      dest?.properties?.endpointBaseUrl ||
+      undefined,
+    provisioningState: p?.provisioningState,
+    filterSubjectBeginsWith: p?.filter?.subjectBeginsWith,
+    includedEventTypes: p?.filter?.includedEventTypes,
+  };
 }
 
 // ───────────────────────────── data plane ─────────────────────────────────

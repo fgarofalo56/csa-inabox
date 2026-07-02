@@ -9,7 +9,10 @@
  * No mocks, no stubs — real Cosmos persistence + audit trail.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { tenantSettingsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
   defaultSettings,
@@ -27,9 +30,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 async function loadOrSeed(tenantId: string, who: string): Promise<TenantSettingsDoc> {
   const c = await tenantSettingsContainer();
@@ -74,7 +75,7 @@ async function loadOrSeed(tenantId: string, who: string): Promise<TenantSettings
 
 export async function GET() {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
   try {
     const doc = await loadOrSeed(tenantId, s.claims.upn || s.claims.email || tenantId);
@@ -89,14 +90,24 @@ export async function GET() {
       groups: TENANT_SETTING_GROUPS,
     });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function PUT(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const tenantId = s.claims.oid;
+  // HARD admin gate — this writes tenant-wide governance toggles (DLP,
+  // sensitivity labels, feature enablement). The pdpCheck below is DEFAULT-OFF
+  // (returns null when LOOM_PDP_ENFORCE is unset), so it CANNOT be the sole
+  // authorization for a privileged write. Require a tenant admin first; keep the
+  // pdpCheck as an additional shadow/enforce layer.
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
+  // PDP gate (default-off / shadow-ready). Admin write to tenant-wide toggles.
+  const blocked = await pdpCheck(s, { level: 'domain', id: tenantId }, 'admin');
+  if (blocked) return blocked;
   const body = await req.json().catch(() => ({}));
   const incoming = body?.settings;
   const incomingScope = body?.scopeConfig;
@@ -105,7 +116,7 @@ export async function PUT(req: NextRequest) {
   const hasScope = incomingScope && typeof incomingScope === 'object';
   const hasNumeric = incomingNumeric && typeof incomingNumeric === 'object';
   if (!hasSettings && !hasScope && !hasNumeric) {
-    return err('one of settings / scopeConfig / numericParams (object) required', 400);
+    return apiError('one of settings / scopeConfig / numericParams (object) required', 400);
   }
 
   try {
@@ -232,6 +243,6 @@ export async function PUT(req: NextRequest) {
       updatedAt: updated.updatedAt,
     });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

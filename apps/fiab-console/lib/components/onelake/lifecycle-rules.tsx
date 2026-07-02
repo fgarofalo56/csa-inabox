@@ -100,14 +100,14 @@ const TEMPLATES: Template[] = [
 ];
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { flex: 1 },
-  rowActions: { display: 'flex', gap: 4 },
-  dialogBody: { display: 'flex', flexDirection: 'column', gap: 14, minWidth: 420 },
-  checks: { display: 'flex', flexDirection: 'column', gap: 4 },
+  rowActions: { display: 'flex', gap: tokens.spacingHorizontalXS },
+  dialogBody: { display: 'flex', flexDirection: 'column', gap: '14px', minWidth: '420px' },
+  checks: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS },
   hint: { color: tokens.colorNeutralForeground3 },
-  count: { color: tokens.colorNeutralForeground3, fontSize: 12 },
+  count: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
 });
 
 interface GateInfo { missing?: string; hint?: string; bicepModule?: string; }

@@ -58,11 +58,11 @@ const useStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
   },
   diffGrid: {
-    display: 'grid', gridTemplateColumns: '160px 1fr 24px 1fr', alignItems: 'center',
+    display: 'grid', gridTemplateColumns: '160px minmax(0, 1fr) 24px minmax(0, 1fr)', alignItems: 'center',
     gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
   },
-  before: { color: tokens.colorNeutralForeground3 },
-  after: { color: tokens.colorBrandForeground1, fontWeight: 600 },
+  before: { color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  after: { color: tokens.colorBrandForeground1, fontWeight: 600, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS },
   head: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });

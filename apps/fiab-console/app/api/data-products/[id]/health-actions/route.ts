@@ -26,6 +26,7 @@ import {
   PurviewNotConfiguredError,
   PurviewError,
 } from '@/lib/azure/purview-client';
+import { prewarmPurviewShirForScan } from '@/lib/azure/shir-autoscale';
 import { adxConfigGate, computeDqScore } from '@/lib/azure/data-quality-client';
 import { defaultDatabase } from '@/lib/azure/kusto-client';
 
@@ -99,8 +100,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       if (!source || !scan) {
         return NextResponse.json({ ok: false, error: 'source and scan are required for trigger-scan (pick them in the card).' }, { status: 400 });
       }
+      // Scale the shared Purview SHIR VMSS up first if this scan runs on a
+      // SelfHosted IR (fail-open — never blocks the scan).
+      const shir = await prewarmPurviewShirForScan(source, scan);
       const run = await triggerScanRun(source, scan);
-      return NextResponse.json({ ok: true, result: { action, outcome: `Scan run triggered on ${source}/${scan} (runId ${run.runId}).`, runId: run.runId, timestamp } });
+      return NextResponse.json({ ok: true, result: { action, outcome: `Scan run triggered on ${source}/${scan} (runId ${run.runId}).`, runId: run.runId, timestamp, ...(shir ? { shir } : {}) } });
     }
   } catch (e: any) {
     if (e instanceof PurviewNotConfiguredError) {

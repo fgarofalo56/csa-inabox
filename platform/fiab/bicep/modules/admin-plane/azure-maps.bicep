@@ -118,5 +118,10 @@ resource mapsKeySecret 'Microsoft.KeyVault/vaults/secrets@2024-04-01-preview' = 
 
 output mapsAccountName string = (boundary == 'Commercial' || boundary == 'GCC') ? mapsAccount!.name : ''
 output mapsAccountId string = (boundary == 'Commercial' || boundary == 'GCC') ? mapsAccount!.id : ''
+// Account uniqueId — the AAD "client id" the Azure Maps Web SDK / REST calls
+// send as `x-ms-client-id` alongside a UAMI-minted atlas token. Wired to the
+// Console as LOOM_AZURE_MAPS_CLIENT_ID (lib/azure/maps-client.ts AAD path,
+// which the Data Reader grant above authorizes).
+output mapsClientId string = (boundary == 'Commercial' || boundary == 'GCC') ? mapsAccount!.properties.uniqueId : ''
 output mapsKeySecretName string = (boundary == 'Commercial' || boundary == 'GCC') ? 'loom-azure-maps-primary-key' : ''
 output mapsAvailable bool = boundary == 'Commercial' || boundary == 'GCC'

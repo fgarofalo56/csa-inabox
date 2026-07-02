@@ -20,7 +20,7 @@ on:
         type: string
         required: false
       dlz_subscription:
-        description: 'Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Empty → defaults to the legacy DLZ sub (363ef5d1) for back-comp; set it for any cross-sub / non-eastus2 deploy. In a single-sub deploy set it equal to admin_subscription.'
+        description: 'Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Empty → must be provided by the dispatcher; set it for any cross-sub / non-eastus2 deploy. In a single-sub deploy set it equal to admin_subscription.'
         type: string
         required: false
       dlz_domain:
@@ -40,13 +40,13 @@ env:
   # ADMIN (hub) sub holds the Console UAMI / KV / APIM / Purview / Foundry.
   # DLZ sub holds Synapse / Databricks / ADLS. They are the SAME in single-sub.
   # admin_subscription empty → fall back to dlz_subscription, then the legacy sub.
-  # dlz_subscription empty → legacy DLZ sub (363ef5d1) for back-comp.
-  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
-  DLZ_SUB: ${{ inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  # dlz_subscription empty → provided by the dispatcher.
+  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '' }}
+  DLZ_SUB: ${{ inputs.dlz_subscription || '' }}
   # SUB kept as an alias of the ADMIN sub for the many steps that scope grants /
   # role assignments to the admin plane (Cost/Security/Monitor, APIM, Reader, …).
   # The "Resolve deploy coordinates" step re-points SUB to the admin sub at runtime.
-  SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '' }}
   ADMIN_RG: rg-csa-loom-admin-${{ inputs.region || 'eastus2' }}
   DLZ_RG: rg-csa-loom-dlz-${{ inputs.dlz_domain || 'single' }}-${{ inputs.region || 'eastus2' }}
   SYNAPSE_WS: syn-loom-default-${{ inputs.region || 'eastus2' }}
@@ -64,8 +64,8 @@ env:
   # in $GITHUB_ENV) → the live eastus2 defaults below (so the original estate
   # keeps working with no var + no resolution). Every grant step references these,
   # so the runtime resolution re-targets the whole bootstrap (incl. Purview).
-  CONSOLE_UAMI_PRINCIPAL: ${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL || 'e61f3eb3-c646-4183-8198-4c4a34cd9a01' }}
-  CONSOLE_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT || 'c6272de5-3c4e-4b72-8b57-71b2e950209b' }}
+  CONSOLE_UAMI_PRINCIPAL: ${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL || '' }}
+  CONSOLE_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT || '' }}
   # Console UAMI display NAME used for the Synapse SQL CREATE LOGIN/USER FROM
   # EXTERNAL PROVIDER steps. identity.bicep names it uami-loom-console-<region>,
   # so a non-eastus2 deploy MUST grant the right name or the Console UAMI gets
@@ -108,7 +108,7 @@ jobs:
         run: |
           set -e
           az account show --query "{user:user.name, sub:id}" -o table
-          echo "Acting as Synapse initial admin (b9c3cc65-522e-49c9-ad02-914676aa5a6b)"
+          echo "Acting as Synapse initial admin"
 
       - name: Resolve deploy coordinates (region-correct Console UAMI principal/client + Databricks host)
         # Region-parameterize the OLD eastus2 hardcodes. The env: block derives every
@@ -504,6 +504,34 @@ jobs:
             bash scripts/csa-loom/upsert-hub-dns-arecords.sh \
             || echo "::warning::Hub private-DNS A-record sweep incomplete — the deploy SP needs Private DNS Zone Contributor on $ADMIN_RG + Reader on $DLZ_RG. DLZ data planes may be unreachable from the Console until re-run."
 
+      - name: AI private endpoints (AOAI + Foundry) so copilot/agents resolve — Refs #1549
+        # DAY-ONE no-public AI reachability. The AOAI + AI Foundry (kind=AIServices)
+        # accounts' public FQDNs CNAME into privatelink.cognitiveservices/openai/
+        # services.ai zones that are hub-linked. Without a private endpoint those zones
+        # are EMPTY -> in-VNet resolution returns NXDOMAIN -> EVERY copilot/chat/agent/
+        # tool call fails with "fetch failed" (root-caused 2026-06-23). This creates the
+        # PEs + the services.ai zone + DNS-zone-groups so the Console resolves them
+        # privately. Idempotent.
+        run: |
+          set -uo pipefail
+          chmod +x scripts/csa-loom/ensure-ai-private-endpoints.sh
+          ADMIN_SUB="$ADMIN_SUB" REGION="$REGION" ADMIN_RG="$ADMIN_RG" \
+            bash scripts/csa-loom/ensure-ai-private-endpoints.sh \
+            || echo "::warning::AI private-endpoint setup incomplete — copilot/agents may be unreachable until re-run (deploy SP needs Network Contributor on $ADMIN_RG)."
+
+      - name: DNS Private Resolver resource (VPN; NOT VNet DNS) — Refs #1549
+        # Ensures the DNS Private Resolver resource exists for potential VPN use, but
+        # deliberately does NOT set it as the hub VNet DNS — doing so made the Console
+        # use it and it proved INTERMITTENT for recursive public->private AI lookups
+        # (caused the "fetch failed" outage). Hub VNet stays on Azure-default DNS; VPN
+        # clients use the hosts-file block. See docs/fiab/vpn-access.md.
+        run: |
+          set -uo pipefail
+          chmod +x scripts/csa-loom/ensure-vpn-dns-resolver.sh
+          ADMIN_SUB="$ADMIN_SUB" REGION="$REGION" ADMIN_RG="$ADMIN_RG" \
+            bash scripts/csa-loom/ensure-vpn-dns-resolver.sh \
+            || echo "::warning::DNS Private Resolver resource setup incomplete (non-blocking)."
+
       - name: Grant Console UAMI Synapse RBAC (in-VNET, NO public access) — Refs #1549
         # NO-PUBLIC day-one fix. The Synapse workspace is publicNetworkAccess=Disabled
         # behind a managed VNet, so `az synapse role assignment create` (which targets
@@ -538,6 +566,33 @@ jobs:
           DEPLOY_SP_TENANT="${{ secrets.AZURE_TENANT_ID }}" \
             bash scripts/csa-loom/grant-synapse-rbac-invnet-job.sh \
             || echo "::warning::In-VNET Synapse RBAC grant job did not complete — warehouse/serverless provisioning may still ELOGIN. Check the CAE Log Analytics ContainerAppConsoleLogs_CL."
+
+      - name: Create Synapse managed PE to the default lake (in-VNET — Spark storage)
+        # On a PE-only managed-VNet workspace (preventDataExfiltration), Spark
+        # notebooks/jobs can only read the default ADLS lake (mirrored data +
+        # lakehouse Delta) over an APPROVED managed private endpoint — otherwise
+        # the ABFS read HANGS on a blocked egress (cell "running" for minutes, no
+        # error). The standalone fix-synapse-spark-storage-access.sh below runs on
+        # THIS public runner and fails silently on a PE-only workspace (the dev
+        # endpoint is private). Run the create+approve IN-VNET as the deploy SP,
+        # where the dev endpoint is reachable — same pattern as the RBAC grant.
+        run: |
+          set -uo pipefail
+          CAE_NAME=$(az containerapp env list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+            --query "[?contains(name,'cae') || contains(name,'loom')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -z "${CAE_NAME:-}" ]; then
+            echo "::warning::No Container App Environment in $ADMIN_RG — skipping the in-VNET Synapse Spark storage fix."
+            exit 0
+          fi
+          echo "Console CAE for in-VNET Spark storage fix: $CAE_NAME"
+          chmod +x scripts/csa-loom/run-spark-storage-fix-invnet-job.sh
+          ADMIN_RG="$ADMIN_RG" ADMIN_SUB="$ADMIN_SUB" CAE="$CAE_NAME" \
+          DLZ_SUB="$DLZ_SUB" SYNAPSE_WS="$SYNAPSE_WS" \
+          DEPLOY_SP_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID }}" \
+          DEPLOY_SP_SECRET="${{ secrets.AZURE_CLIENT_SECRET }}" \
+          DEPLOY_SP_TENANT="${{ secrets.AZURE_TENANT_ID }}" \
+            bash scripts/csa-loom/run-spark-storage-fix-invnet-job.sh \
+            || echo "::warning::In-VNET Synapse Spark storage-fix job did not complete — Spark notebooks may hang reading the lake. Check the CAE Log Analytics (ContainerName_s=='sparkfix')."
 
       - name: Enable Synapse public access (temp — OPT-IN ONLY, default OFF)
         # DEFAULT OFF (no public network access — the in-VNET grant above replaces it).
@@ -760,6 +815,67 @@ jobs:
             cat /tmp/scim_patch.json
             echo
           fi
+
+      - name: Grant Databricks Delta Sharing metastore privileges (UAMI)
+        # Day-one fix so the Marketplace "Data shares" flow works END-TO-END
+        # without operator confusion: grant the Console UAMI the FULL UC metastore
+        # sharing set — CREATE PROVIDER (register an inbound share from an
+        # activation file) + CREATE CATALOG (subscribe = create a catalog from the
+        # share so it's queryable) + CREATE SHARE / CREATE RECIPIENT (publish
+        # outbound). account_admin does NOT include these data-plane privileges;
+        # the deploy SP (a Databricks account ≈ metastore admin) PATCHes them. The
+        # UAMI must already be SCIM-provisioned (previous step). Idempotent +
+        # best-effort (skips cleanly when no Databricks workspace is bound).
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ -z "${DBX_HOST:-}" ]; then echo "::notice::No Databricks host bound — skipping Delta Sharing grant."; exit 0; fi
+          UAMI="${CONSOLE_UAMI_CLIENT:-}"
+          if [ -z "$UAMI" ]; then echo "::notice::CONSOLE_UAMI_CLIENT unset — skipping Delta Sharing grant."; exit 0; fi
+          TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
+          MID=$(curl -sf "${auth[@]}" "https://$DBX_HOST/api/2.1/unity-catalog/metastore_summary" | jq -r '.metastore_id' 2>/dev/null || true)
+          if [ -z "$MID" ] || [ "$MID" = "null" ]; then echo "::warning::Could not resolve metastore_id on $DBX_HOST (is the deploy SP a metastore admin?). Skipping Delta Sharing grant."; exit 0; fi
+          echo ">>> Granting CREATE PROVIDER/CATALOG/SHARE/RECIPIENT to $UAMI on metastore $MID"
+          BODY=$(jq -n --arg p "$UAMI" '{changes:[{principal:$p, add:["CREATE_PROVIDER","CREATE_CATALOG","CREATE_SHARE","CREATE_RECIPIENT"]}]}')
+          CODE=$(curl -s -o /tmp/ds_grant.json -w '%{http_code}' "${auth[@]}" -X PATCH "https://$DBX_HOST/api/2.1/unity-catalog/permissions/metastore/$MID" -d "$BODY")
+          echo "    Delta Sharing grant PATCH: $CODE"; cat /tmp/ds_grant.json 2>/dev/null || true
+          if [ "$CODE" = "200" ]; then echo "✓ Delta Sharing metastore grants applied to $UAMI"; else echo "::warning::Delta Sharing grant returned $CODE (non-fatal — re-run csa-loom-grant-delta-sharing.yml)"; fi
+
+      - name: Provision default Databricks SQL warehouse (query compute) + wire it on the Console
+        # Day-one QUERY COMPUTE for Databricks — the equivalent of Synapse's
+        # always-on Serverless SQL pool, so users don't have to create one. A SQL
+        # warehouse is a Databricks DATA-PLANE resource (REST API, NOT ARM), so it
+        # cannot be created in bicep — it is provisioned here. Without it, the
+        # Marketplace "query a Delta share" path + any UC SQL execution have
+        # nothing to run against (LOOM_DATABRICKS_SQL_WAREHOUSE_ID was empty).
+        # Idempotent (reuses an existing 'loom-default' warehouse). Serverless when
+        # the workspace/region supports it, else a small classic PRO warehouse.
+        # Best-effort; skips cleanly when no Databricks workspace is bound.
+        # Learn: https://learn.microsoft.com/azure/databricks/sql/admin/sql-endpoints
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          if [ -z "${DBX_HOST:-}" ]; then echo "::notice::No Databricks host bound — skipping SQL warehouse provisioning."; exit 0; fi
+          TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
+          auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
+          WID=$(curl -sf "${auth[@]}" "https://$DBX_HOST/api/2.0/sql/warehouses" 2>/dev/null | jq -r '.warehouses[]? | select(.name=="loom-default") | .id' | head -1 || true)
+          if [ -z "$WID" ] || [ "$WID" = "null" ]; then
+            echo ">>> Creating serverless SQL warehouse 'loom-default' (2X-Small, auto-stop 10m)"
+            RESP=$(curl -s "${auth[@]}" -X POST "https://$DBX_HOST/api/2.0/sql/warehouses" -d '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":true,"warehouse_type":"PRO"}')
+            WID=$(echo "$RESP" | jq -r '.id // empty')
+            if [ -z "$WID" ]; then
+              echo "::notice::Serverless unavailable in this workspace/region — creating a classic PRO warehouse."
+              RESP=$(curl -s "${auth[@]}" -X POST "https://$DBX_HOST/api/2.0/sql/warehouses" -d '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":false,"warehouse_type":"PRO"}')
+              WID=$(echo "$RESP" | jq -r '.id // empty')
+            fi
+            if [ -z "$WID" ]; then echo "::warning::Could not create a SQL warehouse: $RESP"; exit 0; fi
+          fi
+          echo "    SQL warehouse id: $WID"
+          # One warehouse serves SQL execution, Delta-Sharing grants, lineage, and system-tables.
+          az containerapp update -n loom-console -g "$ADMIN_RG" --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" "LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID=$WID" -o none \
+            && echo "✓ Wired LOOM_DATABRICKS_SQL_WAREHOUSE_ID + LINEAGE = $WID on the Console" \
+            || echo "::warning::Could not set the warehouse env on the Console (set LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID manually)."
 
       - name: Databricks reachability fallback (IP access-list for Console egress)
         # #1466 FALLBACK to the databricks_ui_api Private Endpoint (databricks.bicep).

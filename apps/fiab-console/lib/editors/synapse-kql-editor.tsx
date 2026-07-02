@@ -32,16 +32,21 @@ import {
 } from '@fluentui/react-components';
 import {
   Dismiss24Regular, Play16Regular, Save16Regular, ArrowSync16Regular,
+  DocumentData24Regular, TableSearch24Regular,
 } from '@fluentui/react-icons';
 import { useCallback, useEffect, useState } from 'react';
+import { EmptyState } from '../components/empty-state';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 12, height: '100%', overflow: 'hidden' },
-  conn: { display: 'flex', gap: 12, flexWrap: 'wrap' },
-  connField: { minWidth: 220 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  // Header title leads with a section icon (matches sibling editors / polished surfaces).
+  titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  titleIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, height: '100%', overflow: 'hidden' },
+  conn: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  connField: { minWidth: '220px' },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '13px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300,
   },
   resultWrap: {
     flex: 1, minHeight: 0, overflow: 'auto',
@@ -61,7 +66,9 @@ const useStyles = makeStyles({
     maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
     fontVariantNumeric: 'tabular-nums',
   },
-  emptyNote: { display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 },
+  // Long backend error / gate strings (Kusto / ARM messages) must wrap, not push
+  // the MessageBar — and the drawer — into horizontal overflow.
+  msgText: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 interface KqlScriptProps { content?: { query?: string; currentConnection?: { poolName?: string; databaseName?: string; type?: string } } }
@@ -180,16 +187,19 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
         <DrawerHeaderTitle
           action={<Button appearance="subtle" aria-label="Close" icon={<Dismiss24Regular />} onClick={onClose} />}
         >
-          KQL script · {name}
+          <span className={s.titleRow}>
+            <DocumentData24Regular className={s.titleIcon} aria-hidden />
+            KQL script · {name}
+          </span>
         </DrawerHeaderTitle>
       </DrawerHeader>
       <DrawerBody>
         {loading ? (
-          <div style={{ padding: 16 }}><Spinner label="Loading KQL script…" /></div>
+          <div style={{ padding: tokens.spacingVerticalL }}><Spinner label="Loading KQL script…" /></div>
         ) : (
           <div className={s.body}>
             {error && (
-              <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
+              <MessageBar intent="error"><MessageBarBody className={s.msgText}><MessageBarTitle>Error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
             )}
 
             <div className={s.conn}>
@@ -239,10 +249,10 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
             </Field>
 
             {runGate && (
-              <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Connection needed</MessageBarTitle>{runGate}</MessageBarBody></MessageBar>
+              <MessageBar intent="warning"><MessageBarBody className={s.msgText}><MessageBarTitle>Connection needed</MessageBarTitle>{runGate}</MessageBarBody></MessageBar>
             )}
             {runError && (
-              <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Query failed</MessageBarTitle>{runError}</MessageBarBody></MessageBar>
+              <MessageBar intent="error"><MessageBarBody className={s.msgText}><MessageBarTitle>Query failed</MessageBarTitle>{runError}</MessageBarBody></MessageBar>
             )}
 
             {result && (
@@ -254,7 +264,12 @@ export function SynapseKqlEditor({ name, onClose }: SynapseKqlEditorProps) {
                   {result.truncated && <Badge appearance="tint" color="warning">Truncated to first 5000</Badge>}
                 </div>
                 {result.columns.length === 0 ? (
-                  <Caption1 className={s.emptyNote}>Query returned no columns.</Caption1>
+                  <EmptyState
+                    icon={<TableSearch24Regular />}
+                    title="No columns returned"
+                    body="The query ran successfully but produced no tabular columns. Adjust the KQL projection (or add a column to the result) and run again."
+                    primaryAction={{ label: running ? 'Running…' : 'Run again', onClick: run }}
+                  />
                 ) : (
                   <Table size="small" aria-label="Query results">
                     <TableHeader className={s.resultHeader}>

@@ -9,25 +9,36 @@
  * the task-flows surface. Folders are Loom-native (Cosmos `folders` container,
  * PK /workspaceId via the BFF) — no Fabric dependency.
  *
+ * Fabric workspace list-view parity: a Tree | List view toggle (tree default;
+ * preference persisted per-user via localStorage like the expanded-folder set),
+ * a keyword filter + item-type filter applied to BOTH views, and a List view on
+ * the shared LoomDataTable with sortable/filterable Name / Type / Owner /
+ * Refreshed / Endorsement / Sensitivity columns (mirroring the OneLake catalog
+ * grid; endorsement badge reused from lib/editors/endorsement-control).
+ *
  * Backend: every control calls a real BFF route in lib/api/workspaces.ts
  * (listFolders / createFolder / renameFolder / deleteFolder / patchWorkspaceItem
- * / deleteWorkspaceItem) → Cosmos. No mocks (per no-vaporware.md).
+ * / deleteWorkspaceItem) → Cosmos. Endorsement / sensitivity come from the real
+ * item docs (`state.endorsement` / `state.sensitivityLabel`, flattened by
+ * GET /api/workspaces/[id]/items). No mocks (per no-vaporware.md).
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  Body1, Button, Caption1, Spinner, Badge, Checkbox,
+  Body1, Button, Caption1, Spinner, Badge, Checkbox, Text, ToggleButton,
   Menu, MenuTrigger, MenuList, MenuItem, MenuPopover,
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Input, Field, Dropdown, Option,
   MessageBar, MessageBarBody,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   FolderAdd20Regular, Folder20Filled,
   FolderArrowRight20Regular, Delete20Regular, Open20Regular,
+  Search16Regular, TextBulletListTree20Regular, AppsListDetail20Regular,
+  DismissCircle16Regular,
 } from '@fluentui/react-icons';
 import { useRouter } from 'next/navigation';
 import {
@@ -38,16 +49,20 @@ import {
 } from '@/lib/api/workspaces';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { getItemTypeIcon } from '@/lib/components/item-type-icon';
+import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { endorsementBadge } from '@/lib/editors/endorsement-control';
 
 const useStyles = makeStyles({
-  toolbar: { display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' },
+  toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   treeShell: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
-    padding: '8px',
+    padding: tokens.spacingVerticalS,
     minHeight: '240px',
+    maxHeight: '70vh',
+    overflow: 'auto',
   },
   rootDrop: {
     padding: '4px 8px', borderRadius: '4px', fontSize: '12px',
@@ -59,29 +74,93 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorBrandBackground2Hover,
     color: tokens.colorBrandForeground1,
   },
-  itemRow: { display: 'flex', alignItems: 'center', gap: '6px' },
+  itemRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   badge: { marginLeft: '6px' },
   empty: {
-    padding: '32px', textAlign: 'center', color: tokens.colorNeutralForeground3,
-    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: '12px', lineHeight: 1.6,
+    padding: tokens.spacingVerticalXXL, textAlign: 'center', color: tokens.colorNeutralForeground3,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, lineHeight: 1.6,
   },
   treeItemDragOver: {
     outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px', borderRadius: '4px',
   },
   bulkBar: { backgroundColor: tokens.colorNeutralBackground2, borderRadius: '6px', padding: '6px 10px' },
+  keywordInput: { minWidth: '200px', flex: '0 1 240px' },
+  muted: { color: tokens.colorNeutralForeground3 },
+  // Segmented Tree | List view toggle — mirrors the shared ViewToggle styling
+  // (tinted track, raised "pill" for the active segment) so the affordance reads
+  // identically across collection surfaces.
+  viewGroup: {
+    display: 'inline-flex',
+    alignItems: 'stretch',
+    borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    overflow: 'hidden',
+    backgroundColor: tokens.colorNeutralBackground3,
+    padding: tokens.spacingHorizontalXXS,
+    gap: tokens.spacingHorizontalXXS,
+  },
+  viewBtn: {
+    border: 'none',
+    borderRadius: tokens.borderRadiusSmall,
+    minWidth: '64px',
+    backgroundColor: 'transparent',
+    color: tokens.colorNeutralForeground2,
+    fontWeight: tokens.fontWeightRegular,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground3Hover,
+      color: tokens.colorNeutralForeground1,
+    },
+  },
+  viewBtnChecked: {
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground1,
+    fontWeight: tokens.fontWeightSemibold,
+    boxShadow: tokens.shadow2,
+    ':hover': {
+      backgroundColor: tokens.colorNeutralBackground1,
+      color: tokens.colorNeutralForeground1,
+    },
+  },
 });
 
 const TREE_EXPANDED_KEY = (wsId: string) => `loom.workspaces.${wsId}.tree-expanded.v1`;
 
-interface FolderNode {
+/**
+ * Folder tree node. Generic over the leaf item shape so the same builder backs
+ * both the workspace pane (full `WorkspaceItem`) and lighter callers (e.g. the
+ * notebook editor's `NotebookLite`). Defaults to `WorkspaceItem` for existing
+ * in-file usage.
+ */
+export interface FolderNode<T = WorkspaceItem> {
   folder: WorkspaceFolder | null; // null = root
-  childFolders: FolderNode[];
-  childItems: WorkspaceItem[];
+  childFolders: FolderNode<T>[];
+  childItems: T[];
 }
 
-function buildTree(folders: WorkspaceFolder[], items: WorkspaceItem[]): FolderNode {
-  const byId = new Map<string, FolderNode>();
-  const root: FolderNode = { folder: null, childFolders: [], childItems: [] };
+/** Leaf-item sort order for {@link buildTree}. */
+export type TreeItemSort = 'name' | 'updated';
+
+/** Minimal leaf shape the tree builder needs: id + displayName, optional
+ * folderId/updatedAt. `WorkspaceItem` and `NotebookLite` both satisfy it. */
+export interface TreeLeaf {
+  id: string;
+  displayName: string;
+  folderId?: string | null;
+  updatedAt?: string;
+}
+
+/**
+ * Build a folder/subfolder tree from flat folders + items. Items with no (or an
+ * unknown) folderId land at the root. Folders sort alphabetically; leaves sort
+ * by name (A–Z) or by `updatedAt` (most-recent first) per `sort`.
+ */
+export function buildTree<T extends TreeLeaf>(
+  folders: WorkspaceFolder[],
+  items: T[],
+  sort: TreeItemSort = 'name',
+): FolderNode<T> {
+  const byId = new Map<string, FolderNode<T>>();
+  const root: FolderNode<T> = { folder: null, childFolders: [], childItems: [] };
   for (const f of folders) byId.set(f.id, { folder: f, childFolders: [], childItems: [] });
   for (const f of folders) {
     const node = byId.get(f.id)!;
@@ -93,16 +172,19 @@ function buildTree(folders: WorkspaceFolder[], items: WorkspaceItem[]): FolderNo
     const target = fid && byId.has(fid) ? byId.get(fid)! : root;
     target.childItems.push(it);
   }
-  const sortNode = (n: FolderNode) => {
+  const cmpItems = sort === 'updated'
+    ? (a: T, b: T) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '')
+    : (a: T, b: T) => a.displayName.localeCompare(b.displayName);
+  const sortNode = (n: FolderNode<T>) => {
     n.childFolders.sort((a, b) => (a.folder?.name ?? '').localeCompare(b.folder?.name ?? ''));
-    n.childItems.sort((a, b) => a.displayName.localeCompare(b.displayName));
+    n.childItems.sort(cmpItems);
     n.childFolders.forEach(sortNode);
   };
   sortNode(root);
   return root;
 }
 
-function countDescendants(n: FolderNode): number {
+export function countDescendants<T>(n: FolderNode<T>): number {
   let c = n.childItems.length + n.childFolders.length;
   for (const cf of n.childFolders) c += countDescendants(cf);
   return c;
@@ -124,11 +206,55 @@ function writeExpanded(wsId: string, ids: Set<string>) {
   catch { /* quota — non-fatal */ }
 }
 
+// ── Tree | List view preference — persisted per-user via localStorage (the
+//    pane's existing preference mechanism, same as the expanded-folder set). ──
+const ITEMS_VIEW_KEY = 'loom.workspaces.items-view.v1';
+type ItemsView = 'tree' | 'list';
+function readItemsView(): ItemsView {
+  if (typeof window === 'undefined') return 'tree';
+  try { return window.localStorage.getItem(ITEMS_VIEW_KEY) === 'list' ? 'list' : 'tree'; }
+  catch { return 'tree'; }
+}
+function writeItemsView(v: ItemsView) {
+  if (typeof window === 'undefined') return;
+  try { window.localStorage.setItem(ITEMS_VIEW_KEY, v); } catch { /* quota — non-fatal */ }
+}
+
+// ── Governance fields (real Cosmos item state, flattened by the items route) ──
+/** Items route additively flattens `state.endorsement` / `state.sensitivityLabel`. */
+type GovWorkspaceItem = WorkspaceItem & { endorsement?: string; sensitivity?: string };
+
+function itemEndorsement(it: GovWorkspaceItem): string | undefined {
+  const st = (it.state ?? {}) as Record<string, unknown>;
+  return it.endorsement
+    || (typeof st.endorsement === 'string' && st.endorsement ? st.endorsement : undefined)
+    || (st.certified ? 'Certified' : undefined);
+}
+function itemSensitivity(it: GovWorkspaceItem): string | undefined {
+  const st = (it.state ?? {}) as Record<string, unknown>;
+  return it.sensitivity
+    || (typeof st.sensitivityLabel === 'string' && st.sensitivityLabel ? st.sensitivityLabel : undefined);
+}
+function itemOwner(it: GovWorkspaceItem): string {
+  const st = (it.state ?? {}) as Record<string, unknown>;
+  return String(st.ownerUpn || st.contact || st.steward || it.createdBy || '');
+}
+/** Mirrors the OneLake catalog's sensitivity badge (lib/panes/onelake-catalog.tsx). */
+function sensitivityBadge(v?: string) {
+  if (!v) return null;
+  return <Badge appearance="tint" size="small" color={/highly|restricted|secret/i.test(v) ? 'danger' : 'informative'}>{v}</Badge>;
+}
+function fmtDate(iso?: string): string {
+  if (!iso) return '—';
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? new Date(t).toLocaleString() : '—';
+}
+
 export interface FoldersPaneProps {
   workspaceId: string;
 }
 
-export function FoldersPane({ workspaceId }: FoldersPaneProps): JSX.Element {
+export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Element {
   const s = useStyles();
   const router = useRouter();
   const qc = useQueryClient();
@@ -142,9 +268,40 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): JSX.Element {
     queryFn: () => listFolders(workspaceId),
   });
 
-  const items = itemsQ.data ?? [];
+  const items = (itemsQ.data ?? []) as GovWorkspaceItem[];
   const folders = foldersQ.data ?? [];
-  const tree = useMemo(() => buildTree(folders, items), [folders, items]);
+
+  // ── View toggle (tree default) + keyword / item-type filters ────────────
+  const [view, setView] = useState<ItemsView>('tree');
+  useEffect(() => { setView(readItemsView()); }, []);
+  const setViewAndPersist = useCallback((v: ItemsView) => { setView(v); writeItemsView(v); }, []);
+
+  const [keyword, setKeyword] = useState('');
+  const [typeFilter, setTypeFilter] = useState(''); // '' = all types
+
+  const typeOptions = useMemo(() => {
+    const seen = new Set<string>();
+    for (const it of items) seen.add(it.itemType);
+    return Array.from(seen)
+      .map((t) => ({ value: t, label: findItemType(t)?.displayName ?? t.replace(/-/g, ' ') }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [items]);
+
+  // Applied to BOTH the tree and the list view.
+  const filteredItems = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    return items.filter((it) => {
+      if (typeFilter && it.itemType !== typeFilter) return false;
+      if (!kw) return true;
+      const typeLabel = findItemType(it.itemType)?.displayName ?? it.itemType;
+      return it.displayName.toLowerCase().includes(kw)
+        || typeLabel.toLowerCase().includes(kw)
+        || it.itemType.toLowerCase().includes(kw);
+    });
+  }, [items, keyword, typeFilter]);
+  const filtersActive = keyword.trim() !== '' || typeFilter !== '';
+
+  const tree = useMemo(() => buildTree(folders, filteredItems), [folders, filteredItems]);
 
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   useEffect(() => { setExpanded(readExpanded(workspaceId)); }, [workspaceId]);
@@ -219,7 +376,7 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): JSX.Element {
     const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next;
   }), []);
   const clearSel = useCallback(() => setSelected(new Set()), []);
-  const selectAll = useCallback(() => setSelected(new Set(items.map((i) => i.id))), [items]);
+  const selectAll = useCallback(() => setSelected(new Set(filteredItems.map((i) => i.id))), [filteredItems]);
   const bulkMove = useCallback(async () => {
     setBulkBusy(true); setError(null);
     try {
@@ -388,6 +545,51 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): JSX.Element {
     );
   }
 
+  // ── List view columns — mirrors the OneLake catalog grid (Fabric workspace
+  //    list-view parity: sortable/filterable Endorsement + Sensitivity). ─────
+  const listColumns = useMemo<LoomColumn<GovWorkspaceItem>[]>(() => [
+    {
+      key: 'displayName', label: 'Name', sortable: true, filterable: true, width: 260,
+      getValue: (i) => i.displayName,
+      render: (i) => {
+        const meta = findItemType(i.itemType);
+        return (
+          <span className={s.itemRow}>
+            {getItemTypeIcon(i.itemType, meta?.category)}
+            <Text weight="semibold">{i.displayName}</Text>
+          </span>
+        );
+      },
+    },
+    {
+      key: 'itemType', label: 'Type', sortable: true, filterable: true, filterType: 'select', width: 150,
+      getValue: (i) => findItemType(i.itemType)?.displayName ?? i.itemType.replace(/-/g, ' '),
+    },
+    {
+      key: 'owner', label: 'Owner', sortable: true, filterable: true, width: 180,
+      getValue: (i) => itemOwner(i),
+      render: (i) => itemOwner(i) || <Text className={s.muted}>—</Text>,
+    },
+    {
+      key: 'updatedAt', label: 'Refreshed', sortable: true, filterable: true, filterType: 'date', width: 180,
+      getValue: (i) => i.updatedAt ?? '',
+      render: (i) => fmtDate(i.updatedAt),
+    },
+    {
+      key: 'endorsement', label: 'Endorsement', sortable: true, filterable: true, filterType: 'select', width: 150,
+      getValue: (i) => itemEndorsement(i) ?? '',
+      render: (i) => {
+        const e = itemEndorsement(i);
+        return e ? endorsementBadge(e as Parameters<typeof endorsementBadge>[0]) : <Text className={s.muted}>—</Text>;
+      },
+    },
+    {
+      key: 'sensitivity', label: 'Sensitivity', sortable: true, filterable: true, filterType: 'select', width: 160,
+      getValue: (i) => itemSensitivity(i) ?? '',
+      render: (i) => sensitivityBadge(itemSensitivity(i)) ?? <Text className={s.muted}>—</Text>,
+    },
+  ], [s.itemRow, s.muted]);
+
   const totalItems = items.length;
   const rootDropActive = dropTarget === 'root';
   const loading = itemsQ.isLoading || foldersQ.isLoading;
@@ -416,15 +618,72 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): JSX.Element {
         <>
           <div className={s.toolbar}>
             <Button appearance="secondary" icon={<FolderAdd20Regular />} onClick={() => openCreateFolder(null)} disabled={busy}>New folder</Button>
-            <div className={s.spacer} />
-            <span
-              className={`${s.rootDrop} ${rootDropActive ? s.rootDropActive : ''}`}
-              onDragOver={(e) => onFolderDragOver(e, 'root')}
-              onDragLeave={() => onFolderDragLeave('root')}
-              onDrop={(e) => onFolderDrop(e, null)}
+            <Input
+              className={s.keywordInput}
+              contentBefore={<Search16Regular />}
+              placeholder="Filter by keyword"
+              aria-label="Filter items by keyword"
+              value={keyword}
+              onChange={(_e, d) => setKeyword(d.value)}
+              contentAfter={keyword ? (
+                <DismissCircle16Regular
+                  role="button"
+                  aria-label="Clear keyword filter"
+                  tabIndex={0}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => setKeyword('')}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setKeyword(''); } }}
+                />
+              ) : undefined}
+            />
+            <Dropdown
+              aria-label="Filter by item type"
+              value={typeFilter ? (typeOptions.find((t) => t.value === typeFilter)?.label ?? typeFilter) : 'All types'}
+              selectedOptions={[typeFilter || '__all__']}
+              onOptionSelect={(_e, d) => setTypeFilter(d.optionValue === '__all__' ? '' : (d.optionValue || ''))}
+              style={{ minWidth: 160 }}
             >
-              Drop here to move to workspace root
-            </span>
+              <Option value="__all__">All types</Option>
+              {typeOptions.map((t) => <Option key={t.value} value={t.value}>{t.label}</Option>)}
+            </Dropdown>
+            {filtersActive && (
+              <Caption1 className={s.muted}>{filteredItems.length} of {items.length} items</Caption1>
+            )}
+            <div className={s.spacer} />
+            {view === 'tree' && (
+              <span
+                className={`${s.rootDrop} ${rootDropActive ? s.rootDropActive : ''}`}
+                onDragOver={(e) => onFolderDragOver(e, 'root')}
+                onDragLeave={() => onFolderDragLeave('root')}
+                onDrop={(e) => onFolderDrop(e, null)}
+              >
+                Drop here to move to workspace root
+              </span>
+            )}
+            <div className={s.viewGroup} role="group" aria-label="Switch items view">
+              <ToggleButton
+                className={mergeClasses(s.viewBtn, view === 'tree' && s.viewBtnChecked)}
+                appearance="subtle"
+                checked={view === 'tree'}
+                icon={<TextBulletListTree20Regular />}
+                aria-label="Tree view"
+                aria-pressed={view === 'tree'}
+                onClick={() => setViewAndPersist('tree')}
+              >
+                Tree
+              </ToggleButton>
+              <ToggleButton
+                className={mergeClasses(s.viewBtn, view === 'list' && s.viewBtnChecked)}
+                appearance="subtle"
+                checked={view === 'list'}
+                icon={<AppsListDetail20Regular />}
+                aria-label="List view"
+                aria-pressed={view === 'list'}
+                onClick={() => setViewAndPersist('list')}
+              >
+                List
+              </ToggleButton>
+            </div>
           </div>
 
           {selected.size > 0 && (
@@ -441,12 +700,29 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): JSX.Element {
             </div>
           )}
 
-          <div className={s.treeShell}>
-            <Tree aria-label="Workspace items">
-              {tree.childFolders.map(renderFolder)}
-              {tree.childItems.map(renderItem)}
-            </Tree>
-          </div>
+          {view === 'tree' ? (
+            <div className={s.treeShell}>
+              <Tree aria-label="Workspace items">
+                {tree.childFolders.map(renderFolder)}
+                {tree.childItems.map(renderItem)}
+              </Tree>
+              {filtersActive && filteredItems.length === 0 && (
+                <Caption1 className={s.muted} style={{ display: 'block', textAlign: 'center', padding: tokens.spacingVerticalL }}>
+                  No items match the current filters.
+                </Caption1>
+              )}
+            </div>
+          ) : (
+            <LoomDataTable
+              columns={listColumns}
+              rows={filteredItems}
+              getRowId={(i) => i.id}
+              loading={loading}
+              onRowClick={(i) => router.push(`/items/${i.itemType}/${i.id}`)}
+              ariaLabel="Workspace items list"
+              empty="No items match the current filters."
+            />
+          )}
 
           {/* Bulk move */}
           <Dialog open={bulkMoveOpen} onOpenChange={(_e, d) => { if (!d.open) setBulkMoveOpen(false); }}>

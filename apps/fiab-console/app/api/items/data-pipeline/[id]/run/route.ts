@@ -5,6 +5,7 @@
  * v3.25: dispatches to the underlying ADF pipeline.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { runPipeline } from '@/lib/azure/adf-client';
@@ -14,18 +15,18 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!resource || resource.itemType !== 'data-pipeline') return err('pipeline not found', 404);
+    if (!resource || resource.itemType !== 'data-pipeline') return apiError('pipeline not found', 404);
     const adfName = (resource.state as any)?.adfPipelineName;
     if (!adfName) {
       // Honest gate: bundle-installed pipeline whose activity graph opens
@@ -54,6 +55,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       ...(shir || {}),
     });
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502);
+    return apiError(e?.message || String(e), e?.status || 502);
   }
 }

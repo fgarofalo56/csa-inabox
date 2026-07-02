@@ -19,6 +19,7 @@
  * genuinely has no triggers wired to that pipeline yet.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import {
@@ -33,9 +34,7 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 async function getAdfName(id: string, workspaceId: string): Promise<string | null> {
   const items = await itemsContainer();
@@ -44,13 +43,14 @@ async function getAdfName(id: string, workspaceId: string): Promise<string | nul
   return (resource.state as any)?.adfPipelineName || null;
 }
 
-export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
+export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
-    const adfName = await getAdfName(ctx.params.id, workspaceId);
+    const adfName = await getAdfName(id, workspaceId);
     if (!adfName) return NextResponse.json({ ok: true, triggers: [], paramSources: paramSourceAvailability() });
     const all = await listTriggers();
     const mine = all.filter((t) =>
@@ -68,24 +68,25 @@ export async function GET(req: NextRequest, ctx: { params: { id: string } }) {
       })),
     });
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502);
+    return apiError(e?.message || String(e), e?.status || 502);
   }
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => null) as {
     name?: string;
     properties?: AdfTrigger['properties'];
     parameterBindings?: Record<string, ParamBinding>;
   } | null;
-  if (!body?.name || !body?.properties) return err('body must be { name, properties }', 400);
+  if (!body?.name || !body?.properties) return apiError('body must be { name, properties }', 400);
   try {
-    const adfName = await getAdfName(ctx.params.id, workspaceId);
-    if (!adfName) return err('Pipeline has no ADF backing — save first', 409);
+    const adfName = await getAdfName(id, workspaceId);
+    if (!adfName) return apiError('Pipeline has no ADF backing — save first', 409);
     const type = body.properties.type || 'ScheduleTrigger';
     const pipelineRef = { referenceName: adfName, type: 'PipelineReference' as const };
     // Resolve the per-parameter value bindings (direct / Key Vault / App Config)
@@ -98,55 +99,64 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
     // schedule/event triggers use the `pipelines[]` array.
     const props: any = { ...body.properties, type };
     if (type === 'TumblingWindowTrigger') {
-      if (!props.pipeline) props.pipeline = { pipelineReference: pipelineRef, parameters: {} };
+      // The wizard may emit a parameters-only `pipeline` scaffold (trigger-output
+      // mappings) without a pipelineReference — always (re)bind it to THIS
+      // pipeline so the upsert has a valid one-to-one reference.
+      if (!props.pipeline) props.pipeline = { parameters: {} };
+      props.pipeline.pipelineReference = pipelineRef;
       props.pipeline.parameters = { ...(props.pipeline.parameters || {}), ...resolvedParams };
       delete props.pipelines;
     } else if (!(props.pipelines && props.pipelines.length > 0)) {
       props.pipelines = [{ pipelineReference: pipelineRef, parameters: { ...resolvedParams } }];
     } else {
+      // Honor any caller-supplied parameters (trigger-output @-expressions) but
+      // ensure the first reference always points at this pipeline.
+      props.pipelines[0].pipelineReference = props.pipelines[0].pipelineReference || pipelineRef;
       props.pipelines[0].parameters = { ...(props.pipelines[0].parameters || {}), ...resolvedParams };
     }
     const wired: AdfTrigger = { name: body.name, properties: props };
     const trigger = await upsertTrigger(body.name, wired);
     return NextResponse.json({ ok: true, trigger });
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502);
+    return apiError(e?.message || String(e), e?.status || 502);
   }
 }
 
-export async function PUT(req: NextRequest, ctx: { params: { id: string } }) {
+export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const triggerName = req.nextUrl.searchParams.get('triggerName');
   const action = req.nextUrl.searchParams.get('action');
-  if (!workspaceId) return err('workspaceId required', 400);
-  if (!triggerName) return err('triggerName required', 400);
-  if (action !== 'start' && action !== 'stop') return err('action must be start|stop', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
+  if (!triggerName) return apiError('triggerName required', 400);
+  if (action !== 'start' && action !== 'stop') return apiError('action must be start|stop', 400);
   try {
-    const adfName = await getAdfName(ctx.params.id, workspaceId);
-    if (!adfName) return err('Pipeline has no ADF backing', 409);
+    const adfName = await getAdfName(id, workspaceId);
+    if (!adfName) return apiError('Pipeline has no ADF backing', 409);
     if (action === 'start') await startTrigger(triggerName);
     else await stopTrigger(triggerName);
     return NextResponse.json({ ok: true, triggerName, action });
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502);
+    return apiError(e?.message || String(e), e?.status || 502);
   }
 }
 
-export async function DELETE(req: NextRequest, ctx: { params: { id: string } }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const triggerName = req.nextUrl.searchParams.get('triggerName');
-  if (!workspaceId) return err('workspaceId required', 400);
-  if (!triggerName) return err('triggerName required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
+  if (!triggerName) return apiError('triggerName required', 400);
   try {
-    const adfName = await getAdfName(ctx.params.id, workspaceId);
-    if (!adfName) return err('Pipeline has no ADF backing', 409);
+    const adfName = await getAdfName(id, workspaceId);
+    if (!adfName) return apiError('Pipeline has no ADF backing', 409);
     await deleteTrigger(triggerName);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502);
+    return apiError(e?.message || String(e), e?.status || 502);
   }
 }

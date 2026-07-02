@@ -28,7 +28,7 @@
  */
 
 import { useMemo, useState, useCallback } from 'react';
-import {
+import { shorthands,
   Caption1, Input, Button, Switch, Badge, Tooltip,
   makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
@@ -79,11 +79,11 @@ const useStyles = makeStyles({
     transitionProperty: 'background-color, border-color',
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
-      borderColor: tokens.colorNeutralStroke1,
+      ...shorthands.borderColor(tokens.colorNeutralStroke1),
     },
   },
   legendItemPinned: {
-    borderColor: tokens.colorBrandStroke1,
+    ...shorthands.borderColor(tokens.colorBrandStroke1),
     backgroundColor: tokens.colorBrandBackground2,
   },
   legendItemDim: { opacity: '0.4' },

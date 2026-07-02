@@ -55,10 +55,10 @@ export interface ObjectsResponse {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: 8 },
-  head: { display: 'flex', alignItems: 'center', gap: 4, padding: '4px 8px' },
+  pad: { padding: tokens.spacingHorizontalS },
+  head: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: '4px 8px' },
   headTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300, flex: 1 },
-  leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
+  leafRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' },
   leafLabel: { flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   empty: { padding: '4px 8px', color: tokens.colorNeutralForeground3 },
   dropName: { fontFamily: 'Consolas, monospace', fontWeight: tokens.fontWeightSemibold },

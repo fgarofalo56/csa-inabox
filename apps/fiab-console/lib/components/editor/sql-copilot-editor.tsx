@@ -77,6 +77,9 @@ export interface SqlCopilotEditorProps {
   ariaLabel: string;
   height?: number;
   minHeight?: number;
+  /** Auto-fit the editor to its content (script grows without manual resize). */
+  autoHeight?: boolean;
+  maxHeight?: number;
   /** Human dialect label used in UI copy (e.g. 'T-SQL', 'Spark SQL'). */
   dialectLabel?: string;
   /** Current run error (enables the Fix action when present). */
@@ -98,6 +101,8 @@ export function SqlCopilotEditor({
   ariaLabel,
   height = 240,
   minHeight = 200,
+  autoHeight = false,
+  maxHeight = 640,
   dialectLabel = 'SQL',
   resultError,
   extraBody,
@@ -284,6 +289,8 @@ export function SqlCopilotEditor({
         language={language}
         height={height}
         minHeight={minHeight}
+        autoHeight={autoHeight}
+        maxHeight={maxHeight}
         ariaLabel={ariaLabel}
         onReady={onReady}
       />

@@ -26,7 +26,7 @@
   // Hardcoded configuration — no runtime override allowed (SEC-COPILOT)
   // Backend lives in:
   //   tenant : limitlessdata.ai (d1fc0498-f208-4b49-8376-beb9293acdf6)
-  //   sub    : FedCiv ATU FFL - DLZ (363ef5d1-0e77-4594-a530-f51af23dbf8c)
+  //   sub    : FedCiv ATU FFL - DLZ (<YOUR_DLZ_SUBSCRIPTION_ID>)
   //   rg     : rg-dlz-aiml-stack-dev
   //   region : eastus
   // See azure-functions/copilot-chat/DEPLOYMENT.md for full provenance.

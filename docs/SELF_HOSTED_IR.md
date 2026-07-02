@@ -27,6 +27,26 @@ The Self-Hosted Integration Runtime (SHIR) module enables CSA-in-a-Box to secure
 **Status:** Available but commented out in `deploy/bicep/DLZ/main.bicep`
 **Prerequisites:** Requires `installSHIRGateway.ps1` script and ADF Integration Runtime auth key
 
+!!! tip "Synapse pipelines have their own Integration Runtime backend (2026-06)"
+    This page covers the **Azure Data Factory** SHIR. **Synapse pipelines** now
+    expose the same Integration-Runtime management directly in the Loom console —
+    **list / status / create (upsert) / start / stop / delete / list-auth-keys**
+    of both **Azure (managed) IRs** and **self-hosted IRs** — through the Synapse
+    management ARM REST
+    (`Microsoft.Synapse/workspaces/{ws}/integrationRuntimes`, api-version
+    `2021-06-01`), analogous to the ADF factory IR backend (commit `63a7f95b`).
+    The Synapse pipeline editor's IR tab previously showed an honest "Loom doesn't
+    yet wire a Synapse IR backend" note; it now routes to the real
+    `IntegrationRuntimeManager` for both engines. BFF route
+    **`/api/synapse/integration-runtimes`** (GET list+status, POST
+    upsert/start/stop/authKeys, DELETE) honest-gates `503` when
+    `LOOM_SYNAPSE_WORKSPACE` / subscription / DLZ RG are unset; client is
+    `synapse-dev-client`. The scale-to-zero VMSS auto-scale runbook in this page
+    applies to the ADF SHIR; a Synapse **self-hosted** IR node registers with the
+    same `dmgcmd -RegisterNewNode <authKey>` flow using the auth key from the
+    Synapse IR (not the ADF one — a Synapse SHIR and an ADF SHIR cannot share a
+    node).
+
 ## 📑 Table of Contents
 
 - [🏗️ 1. Architecture Overview](#1-architecture-overview)

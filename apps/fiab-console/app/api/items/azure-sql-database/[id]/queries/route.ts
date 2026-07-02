@@ -251,7 +251,7 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   }
 
   const ops = permitted.map((q) => ({
-    operationType: BulkOperationType.Delete as const,
+    operationType: BulkOperationType.Delete,
     id: q.id,
     partitionKey: id,
   }));

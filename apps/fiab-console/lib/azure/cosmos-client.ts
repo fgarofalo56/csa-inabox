@@ -278,7 +278,7 @@ export interface AppInstallJob {
   workspaceId: string;
   status: 'running' | 'done' | 'partial' | 'failed';
   /** Coarse phase for the progress label. */
-  phase: 'creating-items' | 'provisioning' | 'finalizing' | 'done';
+  phase: 'creating-items' | 'provisioning' | 'seeding' | 'finalizing' | 'done';
   /** Whether live-service provisioning was requested (the wizard's Deploy switch). */
   deploy: boolean;
   mode: 'shared' | 'dedicated';
@@ -291,6 +291,9 @@ export interface AppInstallJob {
   /** Final provisioning report (set once the provision phase completes). Typed
    *  structurally so this low-level module stays decoupled from the engine. */
   provision?: unknown;
+  /** Sample-data seed outcome (Supercharge medallion apps) — lands the Bronze
+   *  SOURCE parquet + creates the lh_* Spark databases. Best-effort. */
+  seed?: { status: 'succeeded' | 'failed' | 'gated'; error?: string; gate?: string; at: string };
   /** Catastrophic worker error (the install loop itself threw) — distinct from
    *  per-item provision failures captured inside `provision`. */
   error?: string;
@@ -409,6 +412,28 @@ function client(): CosmosClient {
   if (_client) return _client;
   _client = new CosmosClient({ endpoint: endpoint(), aadCredentials: credential() });
   return _client;
+}
+
+/**
+ * Cheap reachability probe for the deep-health route (/api/health/deep).
+ *
+ * Does a single `getDatabaseAccount()` — a lightweight metadata read that
+ * exercises connectivity + the Console UAMI's AAD auth WITHOUT the heavier
+ * `ensure()` (which createIfNotExists's ~60 containers). Bounded by `budgetMs`
+ * via an AbortController so a Cosmos blip can't stall the health route. Throws
+ * CosmosNotConfiguredError when LOOM_COSMOS_ENDPOINT is unset (the honest
+ * "not configured in this deployment" signal) and rethrows on unreachable/auth
+ * failure — the caller records it as a degraded check, never a thrown 500.
+ */
+export async function probeCosmosReachable(budgetMs = 2000): Promise<void> {
+  const c = client(); // throws CosmosNotConfiguredError when the endpoint is unset
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), Math.max(250, budgetMs));
+  try {
+    await c.getDatabaseAccount({ abortSignal: ac.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function ensure() {

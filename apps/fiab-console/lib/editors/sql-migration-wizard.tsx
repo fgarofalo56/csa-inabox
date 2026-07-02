@@ -22,7 +22,7 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import {
+import { shorthands,
   Button,
   Spinner,
   MessageBar,
@@ -98,18 +98,18 @@ interface ImportResponse {
 }
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '16px', padding: '16px', maxWidth: '1100px' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, padding: tokens.spacingVerticalL, maxWidth: '1100px' },
   steps: {
     display: 'flex',
-    gap: '4px',
+    gap: tokens.spacingHorizontalXS,
     alignItems: 'center',
     flexWrap: 'wrap',
-    padding: '12px 16px',
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  step: { display: 'flex', alignItems: 'center', gap: '8px' },
+  step: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   stepDot: {
     width: '24px',
     height: '24px',
@@ -117,7 +117,7 @@ const useStyles = makeStyles({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     fontWeight: tokens.fontWeightSemibold,
     backgroundColor: tokens.colorNeutralBackground4,
     color: tokens.colorNeutralForeground3,
@@ -127,33 +127,33 @@ const useStyles = makeStyles({
   stepDotDone: { backgroundColor: tokens.colorPaletteGreenBackground3, color: tokens.colorNeutralForegroundOnBrand },
   stepLabelActive: { color: tokens.colorNeutralForeground1, fontWeight: tokens.fontWeightSemibold },
   stepLabelIdle: { color: tokens.colorNeutralForeground3 },
-  stepConnector: { width: '28px', height: '2px', backgroundColor: tokens.colorNeutralStroke2, margin: '0 4px' },
+  stepConnector: { width: '28px', height: '2px', backgroundColor: tokens.colorNeutralStroke2, margin: `0 ${tokens.spacingHorizontalXS}` },
   stepConnectorDone: { backgroundColor: tokens.colorPaletteGreenBackground3 },
   dropZone: {
     border: `2px dashed ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
-    padding: '32px',
+    padding: tokens.spacingVerticalXXXL,
     textAlign: 'center',
     display: 'flex',
     flexDirection: 'column',
     alignItems: 'center',
-    gap: '8px',
+    gap: tokens.spacingVerticalS,
     cursor: 'pointer',
     backgroundColor: tokens.colorNeutralBackground2,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
-  dropActive: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorBrandBackground2 },
-  countGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: '8px' },
-  countCard: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '2px' },
-  countValue: { fontSize: '24px', fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1, lineHeight: '1.1' },
+  dropActive: { ...shorthands.borderColor(tokens.colorBrandStroke1), backgroundColor: tokens.colorBrandBackground2 },
+  countGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: tokens.spacingVerticalS },
+  countCard: { padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  countValue: { fontSize: tokens.fontSizeBase600, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1, lineHeight: '1.1' },
   countLabel: { color: tokens.colorNeutralForeground3 },
-  actions: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
-  scriptArea: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px', width: '100%' },
-  findingsToolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  scriptArea: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, width: '100%' },
+  findingsToolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
   sevChip: { cursor: 'pointer', userSelect: 'none' },
   emptyFindings: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
-    padding: '24px', marginTop: '8px',
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalXXL, marginTop: tokens.spacingVerticalS,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
@@ -161,11 +161,17 @@ const useStyles = makeStyles({
   },
   monoCode: {
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     backgroundColor: tokens.colorNeutralBackground3,
-    padding: '1px 5px',
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`,
     borderRadius: tokens.borderRadiusSmall,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
+  // Long object names / messages / errors must wrap inside table cells, never
+  // push the table (and the whole surface) into horizontal overflow.
+  wrapCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  tableScroll: { width: '100%', overflowX: 'auto' },
 });
 
 function severityBadge(sev: Severity) {
@@ -369,7 +375,7 @@ export function SqlMigrationWizard() {
             onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
           />
         </div>
-        <div className={s.actions} style={{ marginTop: 12 }}>
+        <div className={s.actions} style={{ marginTop: tokens.spacingVerticalM }}>
           <Button
             appearance="primary"
             icon={scanning ? <Spinner size="tiny" /> : <Info20Regular />}
@@ -381,7 +387,7 @@ export function SqlMigrationWizard() {
           {file && <Button appearance="subtle" disabled={scanning} onClick={() => { setFile(null); reset(); }}>Clear</Button>}
         </div>
         {scanError && (
-          <MessageBar intent="error" style={{ marginTop: 12 }}>
+          <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
             <MessageBarBody><MessageBarTitle>Scan failed</MessageBarTitle>{scanError}</MessageBarBody>
           </MessageBar>
         )}
@@ -400,7 +406,7 @@ export function SqlMigrationWizard() {
               </Text>
             }
           />
-          <MessageBar intent={report.importable ? 'success' : 'warning'} style={{ marginBottom: 12 }}>
+          <MessageBar intent={report.importable ? 'success' : 'warning'} style={{ marginBottom: tokens.spacingVerticalM }}>
             <MessageBarBody>
               <MessageBarTitle>
                 {report.importable ? 'Ready to import' : 'Importable with auto-remediation'}
@@ -428,11 +434,11 @@ export function SqlMigrationWizard() {
             ))}
           </div>
 
-          <Divider style={{ margin: '16px 0' }} />
+          <Divider style={{ margin: `${tokens.spacingVerticalL} 0` }} />
 
           <Text weight="semibold">Findings</Text>
           {report.findings.length === 0 ? (
-            <MessageBar intent="success" style={{ marginTop: 8 }}>
+            <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}>
               <MessageBarBody>
                 <MessageBarTitle>No compatibility issues found</MessageBarTitle>
                 Every object in the package maps cleanly to the Dedicated SQL pool.
@@ -471,33 +477,35 @@ export function SqlMigrationWizard() {
                   <Text size={200}>No findings match the selected severities.</Text>
                 </div>
               ) : (
-                <Table size="small" aria-label="Compatibility findings" style={{ marginTop: 8 }}>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHeaderCell style={{ width: 110 }}>Severity</TableHeaderCell>
-                      <TableHeaderCell style={{ width: 220 }}>Object</TableHeaderCell>
-                      <TableHeaderCell>Issue</TableHeaderCell>
-                      <TableHeaderCell>Handling</TableHeaderCell>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {visibleFindings.map((f, i) => (
-                      <TableRow key={`${f.object}-${f.rule}-${i}`}>
-                        <TableCell>{severityBadge(f.severity)}</TableCell>
-                        <TableCell><span className={s.monoCode}>{f.object}</span></TableCell>
-                        <TableCell>{f.message}</TableCell>
-                        <TableCell>{f.remediation || '—'}</TableCell>
+                <div className={s.tableScroll} style={{ marginTop: tokens.spacingVerticalS }}>
+                  <Table size="small" aria-label="Compatibility findings">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell style={{ width: 110 }}>Severity</TableHeaderCell>
+                        <TableHeaderCell style={{ width: 220 }}>Object</TableHeaderCell>
+                        <TableHeaderCell>Issue</TableHeaderCell>
+                        <TableHeaderCell>Handling</TableHeaderCell>
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
+                    </TableHeader>
+                    <TableBody>
+                      {visibleFindings.map((f, i) => (
+                        <TableRow key={`${f.object}-${f.rule}-${i}`}>
+                          <TableCell>{severityBadge(f.severity)}</TableCell>
+                          <TableCell className={s.wrapCell}><span className={s.monoCode}>{f.object}</span></TableCell>
+                          <TableCell className={s.wrapCell}>{f.message}</TableCell>
+                          <TableCell className={s.wrapCell}>{f.remediation || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
               )}
             </>
           )}
 
           {scan?.ddl?.script && (
             <>
-              <Divider style={{ margin: '16px 0' }} />
+              <Divider style={{ margin: `${tokens.spacingVerticalL} 0` }} />
               <div className={s.actions}>
                 <Text weight="semibold">Generated migration script ({scan.ddl.statements.length} statements)</Text>
                 <Button size="small" appearance="subtle" icon={<DocumentArrowDown20Regular />} onClick={downloadScript}>
@@ -510,7 +518,7 @@ export function SqlMigrationWizard() {
                 readOnly
                 resize="vertical"
                 rows={12}
-                style={{ marginTop: 8 }}
+                style={{ marginTop: tokens.spacingVerticalS }}
                 aria-label="Generated migration T-SQL script"
               />
             </>
@@ -526,7 +534,7 @@ export function SqlMigrationWizard() {
             Choose which object kinds to import, then run the DDL against the live
             Synapse Dedicated SQL pool. Compute must be Online.
           </Text>
-          <div className={s.actions} style={{ marginTop: 12 }}>
+          <div className={s.actions} style={{ marginTop: tokens.spacingVerticalM }}>
             {availableKinds.map((k) => (
               <Checkbox
                 key={k}
@@ -536,7 +544,7 @@ export function SqlMigrationWizard() {
               />
             ))}
           </div>
-          <div className={s.actions} style={{ marginTop: 12 }}>
+          <div className={s.actions} style={{ marginTop: tokens.spacingVerticalM }}>
             <Button
               appearance="primary"
               icon={importing ? <Spinner size="tiny" /> : <DatabasePlugConnected20Regular />}
@@ -548,13 +556,13 @@ export function SqlMigrationWizard() {
           </div>
 
           {importError && (
-            <MessageBar intent="error" style={{ marginTop: 12 }}>
+            <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
               <MessageBarBody><MessageBarTitle>Import failed</MessageBarTitle>{importError}</MessageBarBody>
             </MessageBar>
           )}
 
           {importResp?.gate && (
-            <MessageBar intent="warning" style={{ marginTop: 12 }}>
+            <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
               <MessageBarBody>
                 <MessageBarTitle>Warehouse not configured</MessageBarTitle>
                 {importResp.gate.reason}
@@ -566,7 +574,7 @@ export function SqlMigrationWizard() {
 
           {importResp?.summary && (
             <>
-              <MessageBar intent={importResp.ok ? 'success' : 'warning'} style={{ marginTop: 12 }}>
+              <MessageBar intent={importResp.ok ? 'success' : 'warning'} style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBarBody>
                   <MessageBarTitle>
                     {importResp.ok ? 'Import complete' : 'Import completed with errors'}
@@ -574,30 +582,32 @@ export function SqlMigrationWizard() {
                   {importResp.summary.applied} applied · {importResp.summary.failed} failed · {importResp.summary.total} total
                 </MessageBarBody>
               </MessageBar>
-              <Table size="small" aria-label="Import results" style={{ marginTop: 8 }}>
-                <TableHeader>
-                  <TableRow>
-                    <TableHeaderCell>Status</TableHeaderCell>
-                    <TableHeaderCell>Kind</TableHeaderCell>
-                    <TableHeaderCell>Object</TableHeaderCell>
-                    <TableHeaderCell>Detail</TableHeaderCell>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {importResp.results?.map((r, i) => (
-                    <TableRow key={`${r.name}-${i}`}>
-                      <TableCell>
-                        {r.status === 'applied'
-                          ? <Badge color="success" appearance="tint" icon={<CheckmarkCircle20Filled />}>Applied</Badge>
-                          : <Badge color="danger" appearance="tint" icon={<Warning20Filled />}>Failed</Badge>}
-                      </TableCell>
-                      <TableCell>{r.kind}</TableCell>
-                      <TableCell><span className={s.monoCode}>{r.name}</span></TableCell>
-                      <TableCell>{r.error || (r.status === 'applied' ? 'OK' : '—')}</TableCell>
+              <div className={s.tableScroll} style={{ marginTop: tokens.spacingVerticalS }}>
+                <Table size="small" aria-label="Import results">
+                  <TableHeader>
+                    <TableRow>
+                      <TableHeaderCell>Status</TableHeaderCell>
+                      <TableHeaderCell>Kind</TableHeaderCell>
+                      <TableHeaderCell>Object</TableHeaderCell>
+                      <TableHeaderCell>Detail</TableHeaderCell>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
+                  </TableHeader>
+                  <TableBody>
+                    {importResp.results?.map((r, i) => (
+                      <TableRow key={`${r.name}-${i}`}>
+                        <TableCell>
+                          {r.status === 'applied'
+                            ? <Badge color="success" appearance="tint" icon={<CheckmarkCircle20Filled />}>Applied</Badge>
+                            : <Badge color="danger" appearance="tint" icon={<Warning20Filled />}>Failed</Badge>}
+                        </TableCell>
+                        <TableCell>{r.kind}</TableCell>
+                        <TableCell className={s.wrapCell}><span className={s.monoCode}>{r.name}</span></TableCell>
+                        <TableCell className={s.wrapCell}>{r.error || (r.status === 'applied' ? 'OK' : '—')}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
             </>
           )}
         </Card>

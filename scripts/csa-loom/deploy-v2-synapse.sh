@@ -13,7 +13,7 @@
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 
-SUB="${LOOM_SUBSCRIPTION_ID:-363ef5d1-0e77-4594-a530-f51af23dbf8c}"
+SUB="${LOOM_SUBSCRIPTION_ID:-00000000-0000-0000-0000-000000000001}"
 ADMIN_RG="${LOOM_ADMIN_RG:-rg-csa-loom-admin-eastus2}"
 DLZ_RG="${LOOM_DLZ_RG:-rg-csa-loom-dlz-single-eastus2}"
 LOCATION="${LOOM_LOCATION:-eastus2}"

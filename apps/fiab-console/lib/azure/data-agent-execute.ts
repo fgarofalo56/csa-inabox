@@ -15,7 +15,10 @@
 
 import { executeQuery as synapseExecute, dedicatedTarget, serverlessTarget } from './synapse-sql-client';
 import { executeQuery as kustoExecute, clusterUri, defaultDatabase, kustoConfigGate } from './kusto-client';
-import { searchDocuments, searchConfigGate } from './search-index-client';
+import { searchDocuments, searchConfigGate, getIndex, semanticConfigNames } from './search-index-client';
+import type { SearchRequest } from './search-field-shapes';
+import { isVectorFieldType } from './search-field-shapes';
+import { graphGroundingSearch, GraphSearchAccessError, type GraphGroundingScope } from './graph-search-client';
 import type { DataAgentSource } from './data-agent-client';
 
 export interface SourceExecution {
@@ -27,6 +30,8 @@ export interface SourceExecution {
   truncated?: boolean;
   /** Honest gate / error when the query could not be run. */
   gate?: string;
+  /** Extra grounding instruction appended to the re-prompt (e.g. citation rule). */
+  note?: string;
 }
 
 const MAX_ROWS = 25;
@@ -118,21 +123,94 @@ export async function executeSourceQuery(source: DataAgentSource, query: string)
         if (gate) return { executed: false, gate: `AI Search not configured: set ${gate.missing}.` };
         const index = source.name || (source.tables ? source.tables.split(',')[0].trim() : '');
         if (!index) return { executed: false, gate: 'No AI Search index name on this source.' };
-        // The model emits a search string; run it read-only and flatten the top docs.
-        const resp = await searchDocuments(index, { search: query, top: MAX_ROWS } as any);
+
+        // Honor the typed per-source retrieval options (queryKind / top /
+        // citations — see DataAgentAiSearchConfig). Every mode maps 1:1 onto
+        // the real data-plane request; a mode the index can't serve returns an
+        // honest gate naming the missing index feature, never a silent fallback.
+        const cfg = source.aiSearch || {};
+        const kind = cfg.queryKind || 'keyword';
+        const top = Math.min(Math.max(Math.floor(cfg.top ?? MAX_ROWS) || MAX_ROWS, 1), 50);
+        const req: SearchRequest = { search: query, top };
+
+        if (kind === 'semantic' || kind === 'vector' || kind === 'hybrid') {
+          // These modes depend on index capabilities — read the real definition.
+          const def = await getIndex(index);
+          if (!def) return { executed: false, gate: `AI Search index "${index}" was not found on the service.` };
+          if (kind === 'semantic') {
+            const configs = semanticConfigNames(def);
+            if (!configs.length) {
+              return { executed: false, gate: `Index "${index}" has no semantic configuration — add one in the AI Search index editor (Semantic ranking tab) to use semantic retrieval, or switch this source to keyword.` };
+            }
+            req.queryType = 'semantic';
+            req.semanticConfiguration = configs[0];
+            req.captions = 'extractive';
+            req.answers = 'extractive|count-3';
+          } else {
+            const vectorFields = (Array.isArray(def.fields) ? def.fields : [])
+              .filter((f: any) => isVectorFieldType(f?.type || '') && f?.dimensions)
+              .map((f: any) => f.name)
+              .filter(Boolean);
+            if (!vectorFields.length) {
+              return { executed: false, gate: `Index "${index}" has no vector fields — add a vector field + vectorizer in the AI Search index editor to use ${kind} retrieval, or switch this source to keyword.` };
+            }
+            // kind:'text' = integrated vectorization (the service embeds the
+            // query with the index's vectorizer). An index without a vectorizer
+            // errors on the wire → surfaced as the honest gate in catch below.
+            req.vectorQueries = [{ kind: 'text', text: query, fields: vectorFields.join(','), k: top }];
+            if (kind === 'vector') { req.pureVector = true; req.search = undefined; }
+          }
+        }
+
+        const resp = await searchDocuments(index, req);
         const docs: any[] = Array.isArray(resp?.value) ? resp.value : [];
-        // Build a stable column set (skip @search.* internals except score).
+        // Build a stable column set (skip @search.* internals except score +
+        // semantic reranker score when present).
         const cols: string[] = [];
         for (const d of docs) for (const k of Object.keys(d)) {
-          if (k.startsWith('@search.') && k !== '@search.score') continue;
+          if (k.startsWith('@search.') && k !== '@search.score' && k !== '@search.rerankerScore') continue;
           if (!cols.includes(k)) cols.push(k);
         }
-        const ordered = ['@search.score', ...cols.filter((c) => c !== '@search.score')].slice(0, 8);
-        const rows = docs.map((d) => ordered.map((c) => {
-          const v = d[c];
-          return typeof v === 'string' && v.length > 200 ? v.slice(0, 200) + '…' : v;
-        }));
-        return { executed: true, columns: ordered, rows, rowCount: docs.length, truncated: docs.length >= MAX_ROWS };
+        const scoreCols = ['@search.score', ...(kind === 'semantic' ? ['@search.rerankerScore'] : [])];
+        const ordered = [...scoreCols, ...cols.filter((c) => !scoreCols.includes(c))].slice(0, 8);
+        const withCite = !!cfg.citations;
+        const columns = withCite ? ['cite', ...ordered] : ordered;
+        const rows = docs.map((d, i) => {
+          const vals = ordered.map((c) => {
+            const v = d[c];
+            return typeof v === 'string' && v.length > 200 ? v.slice(0, 200) + '…' : v;
+          });
+          return withCite ? [`[${i + 1}]`, ...vals] : vals;
+        });
+        return {
+          executed: true, columns, rows, rowCount: docs.length, truncated: docs.length >= top,
+          ...(withCite ? { note: 'Cite these documents inline as [1], [2], … (matching the cite column) for every claim grounded on them.' } : {}),
+        };
+      }
+      case 'microsoft-graph': {
+        const scope = source.graph as GraphGroundingScope | undefined;
+        if (!scope?.kind) {
+          return { executed: false, gate: 'No Microsoft 365 scope configured on this source — pick SharePoint site / OneDrive drive / Mailbox in the agent Build tab.' };
+        }
+        if (scope.kind === 'site' && !(scope.site || '').trim()) {
+          return { executed: false, gate: 'The SharePoint scope needs a site id or URL — set it on this source in the Build tab.' };
+        }
+        if (scope.kind === 'drive' && !(scope.driveId || '').trim()) {
+          return { executed: false, gate: 'The drive scope needs a Graph drive id — set it on this source in the Build tab.' };
+        }
+        if (scope.kind === 'mail' && !(scope.mailbox || '').trim()) {
+          return { executed: false, gate: 'The mailbox scope needs a user UPN — set it on this source in the Build tab.' };
+        }
+        try {
+          const res = await graphGroundingSearch(scope, query, MAX_ROWS);
+          return { executed: true, columns: res.columns, rows: res.rows, rowCount: res.count, truncated: res.count >= MAX_ROWS };
+        } catch (e: any) {
+          if (e instanceof GraphSearchAccessError) {
+            // Honest consent gate — names the exact Graph app role(s) missing.
+            return { executed: false, gate: e.message };
+          }
+          throw e;
+        }
       }
       default:
         return {
@@ -153,5 +231,6 @@ export function executionToText(source: string, exec: SourceExecution): string {
     .slice(0, 10)
     .map((r) => (Array.isArray(r) ? r.map((c) => (c == null ? '' : String(c))).join(' | ') : String(r)))
     .join('\n');
-  return `Source "${source}" returned ${exec.rowCount} row(s)${exec.truncated ? ' (truncated)' : ''}:\n${cols}\n${sample}`;
+  const note = exec.note ? `\n${exec.note}` : '';
+  return `Source "${source}" returned ${exec.rowCount} row(s)${exec.truncated ? ' (truncated)' : ''}:\n${cols}\n${sample}${note}`;
 }

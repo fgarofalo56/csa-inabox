@@ -83,8 +83,9 @@ const useStyles = makeStyles({
     overflowX: 'auto',
     margin: 0,
   },
-  toolName: { fontFamily: tokens.fontFamilyMonospace, fontWeight: tokens.fontWeightSemibold },
-  toolCol: { width: '34%', whiteSpace: 'nowrap' },
+  toolName: { fontFamily: tokens.fontFamilyMonospace, fontWeight: tokens.fontWeightSemibold, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  toolCol: { width: '34%', minWidth: 0 },
+  toolDesc: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   authRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
   label: { fontWeight: tokens.fontWeightSemibold },
   emptyState: {
@@ -281,7 +282,7 @@ export function IqMcpPanel() {
                   doc.tools.map((t) => (
                     <TableRow key={t.name}>
                       <TableCell className={s.toolCol}><span className={s.toolName}>{t.name}</span></TableCell>
-                      <TableCell>{t.description}</TableCell>
+                      <TableCell className={s.toolDesc}>{t.description}</TableCell>
                     </TableRow>
                   ))
                 )}
@@ -290,7 +291,7 @@ export function IqMcpPanel() {
           </div>
 
           <Caption1 className={s.hint} style={{ marginTop: tokens.spacingVerticalM }}>
-            <Open16Regular style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+            <Open16Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXXS }} />
             Full registration walkthrough: <code>docs/fiab/v3-tenant-bootstrap.md#fabric-iq-mcp</code>
           </Caption1>
         </>

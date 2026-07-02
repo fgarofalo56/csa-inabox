@@ -23,14 +23,17 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Field, Input, Dropdown, Option, Button, Spinner, Badge, Divider,
+  Field, Input, Dropdown, Combobox, Option, Button, Spinner, Badge, Divider,
   Radio, RadioGroup, Caption1, Body1Strong, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
+  Link,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   BranchFork24Regular, ArrowSync20Regular, PlugDisconnected20Regular,
   Branch16Regular, Checkmark16Filled, Copy16Regular,
+  BranchFork20Regular, Open16Regular,
 } from '@fluentui/react-icons';
 
 type Provider = 'ado' | 'github';
@@ -59,8 +62,8 @@ const useStyles = makeStyles({
     padding: '14px', borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
   },
-  meta: { fontSize: '12px', color: tokens.colorNeutralForeground3 },
-  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px' },
+  meta: { fontSize: '12px', color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: '12px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   spacer: { flex: 1 },
   grow: { flex: 1 },
   loading: {
@@ -241,12 +244,115 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
         <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={sync} disabled={syncing}>
           {syncing ? 'Syncing…' : 'Sync now'}
         </Button>
+        <BranchOutDialog workspaceId={workspaceId} binding={binding} repoLabel={repoLabel} />
         <div className={styles.spacer} />
         <Button appearance="subtle" icon={<PlugDisconnected20Regular />} onClick={disconnect} disabled={disconnecting}>
           {disconnecting ? 'Disconnecting…' : 'Disconnect'}
         </Button>
       </div>
     </div>
+  );
+}
+
+// ========================================================================
+// Branch out — create a new branch + a new workspace bound to it
+// ========================================================================
+
+/**
+ * BranchOutDialog — Fabric "Branch out to another workspace" parity. From a
+ * Git-connected workspace, create a NEW branch off the current one, a NEW Loom
+ * workspace bound to that branch, and apply the source item set to it. Backed by
+ * POST /api/admin/workspaces/{id}/git/branch-out (real Git Data API branch
+ * create + real workspace create + real item copy — no Fabric dependency).
+ */
+function BranchOutDialog({ workspaceId, binding, repoLabel }: { workspaceId: string; binding: BindingView; repoLabel: string }) {
+  const styles = useStyles();
+  const [open, setOpen] = useState(false);
+  const [newBranch, setNewBranch] = useState('');
+  const [newWorkspaceName, setNewWorkspaceName] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<{ workspaceId: string; workspaceName: string; branch: string; itemsCopied: number; itemsFailed: { displayName: string; itemType: string; error: string }[] } | null>(null);
+
+  const reset = useCallback(() => { setNewBranch(''); setNewWorkspaceName(''); setError(null); setResult(null); setBusy(false); }, []);
+
+  const branchInvalid = /\s/.test(newBranch) || /\.\.|@\{|[~^:?*[\\]/.test(newBranch);
+  const canSubmit = !!newBranch.trim() && !!newWorkspaceName.trim() && !branchInvalid && !busy;
+
+  const submit = useCallback(async () => {
+    setBusy(true); setError(null);
+    const { res, json } = await getJson(`/api/admin/workspaces/${workspaceId}/git/branch-out`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ newBranchName: newBranch.trim(), newWorkspaceName: newWorkspaceName.trim() }),
+    });
+    if (!res.ok || !json.ok) { setError(json?.error || `HTTP ${res.status}`); setBusy(false); return; }
+    setResult(json.data);
+    setBusy(false);
+  }, [workspaceId, newBranch, newWorkspaceName]);
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) reset(); }}>
+      <DialogTrigger disableButtonEnhancement>
+        <Button appearance="secondary" icon={<BranchFork20Regular />}>Branch out</Button>
+      </DialogTrigger>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>Branch out to a new workspace</DialogTitle>
+          <DialogContent>
+            {!result ? (
+              <div className={styles.root}>
+                <Caption1 className={styles.meta}>
+                  Creates a new branch off <span className={styles.mono}>{binding.branch}</span> in{' '}
+                  <span className={styles.mono}>{repoLabel}</span>, a new Loom workspace bound to that branch,
+                  and copies this workspace&apos;s items into it. The current workspace is untouched.
+                </Caption1>
+                <Field label="New branch name" required
+                  validationState={branchInvalid ? 'error' : 'none'}
+                  validationMessage={branchInvalid ? 'No spaces or git-reserved characters (~ ^ : ? * [ \\ ..).' : undefined}>
+                  <Input value={newBranch} onChange={(_, d) => setNewBranch(d.value)} placeholder="feature/my-change" />
+                </Field>
+                <Field label="New workspace name" required>
+                  <Input value={newWorkspaceName} onChange={(_, d) => setNewWorkspaceName(d.value.slice(0, 256))} placeholder={`${binding.branch} branch`} />
+                </Field>
+                {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+              </div>
+            ) : (
+              <div className={styles.root}>
+                <MessageBar intent="success">
+                  <MessageBarBody>
+                    Created workspace <strong>{result.workspaceName}</strong> on branch{' '}
+                    <span className={styles.mono}>{result.branch}</span> and copied {result.itemsCopied} item(s).
+                  </MessageBarBody>
+                </MessageBar>
+                {result.itemsFailed.length > 0 && (
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      {result.itemsFailed.length} item(s) could not be copied:{' '}
+                      {result.itemsFailed.map((f) => `${f.displayName} (${f.itemType})`).join(', ')}.
+                    </MessageBarBody>
+                  </MessageBar>
+                )}
+                <Link href={`/workspaces/${result.workspaceId}`}>
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Open the new workspace
+                </Link>
+              </div>
+            )}
+          </DialogContent>
+          <DialogActions>
+            {!result ? (
+              <>
+                <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
+                <Button appearance="primary" icon={<BranchFork20Regular />} onClick={submit} disabled={!canSubmit}>
+                  {busy ? 'Branching out…' : 'Branch out'}
+                </Button>
+              </>
+            ) : (
+              <DialogTrigger disableButtonEnhancement><Button appearance="primary">Done</Button></DialogTrigger>
+            )}
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
   );
 }
 
@@ -513,11 +619,11 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
       )}
 
       <Field label="Branch" required hint="Pick an existing branch, or type a new name — it is created on first sync.">
-        <Dropdown freeform value={branch} selectedOptions={branches.includes(branch) ? [branch] : []} placeholder="main"
+        <Combobox freeform value={branch} selectedOptions={branches.includes(branch) ? [branch] : []} placeholder="main"
           onInput={(e) => setBranch((e.target as HTMLInputElement).value)}
           onOptionSelect={(_, d) => setBranch(d.optionValue || 'main')}>
           {branches.map((b) => <Option key={b} value={b}>{b}</Option>)}
-        </Dropdown>
+        </Combobox>
       </Field>
       <Field label="Folder" hint="Repo subfolder for the item JSON tree.">
         <Input value={folder} onChange={(_, d) => setFolder(d.value)} placeholder="loom-workspace" />

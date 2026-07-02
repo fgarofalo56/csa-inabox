@@ -34,7 +34,7 @@ const useStyles = makeStyles({
   actions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
   groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, width: '100%' },
   groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
   empty: { color: tokens.colorNeutralForeground3, flex: 1 },
 });
 

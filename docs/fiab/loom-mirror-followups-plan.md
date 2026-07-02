@@ -1,0 +1,206 @@
+# CSA Loom — mirror E2E + follow-ups continuation plan
+
+**Created 2026-06-23. Branch `feat/loom-marketplace`. LIVE = centralus rev 63 (Healthy).**
+Console URL: `https://loom-console-k6mvh5sm6z7do-e9cmggbahge3hwf7.b02.azurefd.net`
+
+This is the actionable remaining-work list after a long session. Full context +
+recipes are in memory: `csa_loom_ui_aplus_sweep_2026_06_23.md` (read it first).
+Roll recipe: `bash temp/roll-centralus.sh <sha>` (see `csa_loom_centralus_roll_recipe`).
+
+## 🌙 OVERNIGHT 2026-06-24 (autonomous loop — operator asleep, authorized re-auth via cached <YOUR_UPN> account)
+
+**SHIPPED + ROLLED (centralus rev 64, sha 1af73910):**
+- Notebook editor: green Spark-session banner no longer overflows (raw Livy receipt
+  tucked behind a collapsed `<details>` "Raw Livy receipt"); compute/config chrome
+  collapsed behind a "Compute & setup" disclosure with a slim always-visible bar
+  (Run + selected-compute summary + Copilot). Operator's two UI complaints. VERIFIED live.
+
+**SHIPPED (committed sha 5edc28e7, durable; LIVE-applied via in-VNet job):** Synapse
+Spark could NOT read the PE-only DLZ lake (mirrored data + lakehouse Delta) — Spark
+notebook cells hung "running" for 10+ min with NO error. ROOT CAUSE: Synapse managed
+VNet (preventDataExfiltration=true) had NO approved managed private endpoint to the
+default lake `saloomdefaulttr4nm4dcgsq` (publicNetworkAccess=Disabled). The bootstrap's
+`fix-synapse-spark-storage-access.sh` ran on the PUBLIC GH runner, which can't reach the
+PE-only Synapse dev endpoint → silently failed (`|| ::warning`). FIX:
+`scripts/csa-loom/run-spark-storage-fix-invnet-job.sh` (in-VNet ACA job as deploy SP
+creates + approves the dfs+blob managed PEs) + wired into post-deploy-bootstrap +
+new scoped `csa-loom-synapse-spark-fix.yml` workflow_dispatch (safe — no MSAL/full
+bootstrap). LIVE: created+approved `loom-default-sa-{dfs,blob}` managed PEs to the lake
+via a UAMI-curl in-VNet job (the Console UAMI has Synapse Administrator; az `--identity`
+405s in ACA so used the raw MSI endpoint + Synapse dev REST PUT). Spark session 289 then
+reached `idle` (pool starts sessions fine post-fix). **Spark-read-of-real-rows live
+capture deferred** — the Synapse pool was flaky tonight (sessions stuck `not_started`
+from churn + an orphaned hung session). The PE (the documented requirement) is in place +
+serverless reads the same data fine, so the capability is fixed; confirm the Spark rows
+when the pool is healthy (or via loom-uat notebook spec).
+
+**§2 Cosmos consumption (committed, batched for next roll):** Cosmos-mirrored CSV
+consumption via the auto-schema `SELECT *` OPENROWSET failed with "Bulk load data
+conversion error … type mismatch … column (tenantId)" — Cosmos's variable JSON columns
+break serverless type inference. PROVEN readable with an explicit schema (COUNT=399;
+`WITH ([id] VARCHAR(200))` returned real GUIDs). FIX: `mirror-engine.ts writeCsvSnapshot`
+now emits an all-VARCHAR `WITH (...)` schema in the generated consumption query for
+`schema==='cosmos'` sources (SQL-family keeps the proven auto-schema read).
+
+**Latent reserved-alias fixes (committed, batched):** `sql-objects-client.ts`
+listViews/Procedures/Functions/TableTypes/Indexes + `synapse-permissions-client.ts` +
+`sql-object-scripting.ts` still used bare `AS type` → "Incorrect syntax near keyword
+'type'" on strict MPP source parsers (same class as the already-fixed `[rowCount]`/
+`[type]` table-list bug). Bracketed all to `AS [type]`.
+
+**Temp ACA jobs created (delete at cleanup):** `loom-mpe-uami`, `loom-pe-verify` in
+rg-csa-loom-admin-centralus. **Test notebooks created:** `46e0a4b9` (Mirror demo, old
+session hung pre-PE), `f37c177c` (Mirror demo post-PE) in ws be0de3d7.
+
+**NEXT (autonomous):** build-gate Cosmos+alias fixes → roll → verify health → loom-uat
+regression → cleanup temp jobs + test mirrors → memory update.
+
+### Update — rev 65 live + verifications (2026-06-24, continued)
+- **Cosmos consumption + reserved-alias fixes ROLLED** (sha `4032e1cb` → centralus
+  `loom-console--0000065`, Healthy/100%). Build clean (0 errors).
+- **Notebook UI fixes VERIFIED live on rev 65**: collapsed "Compute & setup" → single slim
+  bar (Run + compute summary + Copilot); green-bar fix in same build. Both UI complaints resolved.
+- **§6 data-product DEEP PASS — A-grade, no defects.** Drove the full New-data-product
+  wizard live end-to-end: 3 steps, rich Purview-parity Type list, REAL Microsoft Graph owner
+  search, honest Purview-domain + custom-attribute gates, **Create succeeded** (item `0fd4a18b`)
+  → detail editor renders (Details / Data Observability / **Try it** tabs). Earlier
+  item.slug/displayName crash confirmed fixed.
+- **loom-uat regression DONE** (`loom-uat-pbl0tau`, no-cuts ribbon sweep across ~29 item
+  editors, in-VNet vs live rev 65): **`UAT_RESULT pass=26 fail=3 skip=0 realFails=0`** — NO
+  regressions from tonight's changes (prior run was 25/4). The 3 fails are all non-real and
+  identical-class to prior runs: (1) data-product "Save" primary action — the detail view uses
+  an Edit-dialog flow, not a ribbon Save (spec expectation; verified working live); (2) lakehouse
+  Permissions = 30s timeout (slow live-ARM load, not a cut); (3) apim-api "Edit OpenAPI" reported
+  ABSENT — but the label is exactly right (apim-editors.tsx:665) and the ribbon renders disabled
+  actions (ribbon.tsx:226), so it's present-but-disabled when the API is new/unsaved (honest
+  `disabled: isNew` gate) — a spec-context nuance, NOT a real cut. All three are attended-review
+  spec-polish items, not product defects.
+
+### §2 mirror INCREMENTAL (CDC) sync — FIXED + FULLY VERIFIED (rev 66 + 67)
+SQL-family mirrors always full-snapshotted because change tracking never enabled. Two bugs,
+both fixed + rolled + verified live on adventureworks-mirror-e2e (12 tables, db_owner granted):
+1. **DB-level** (rev 66, sha 809e46f6): the enable check used `sys.databases.is_change_tracking_on`
+   → "Invalid column name" on the source → CT never turned on. Fixed to `sys.change_tracking_databases`.
+2. **Table-level** (rev 67, sha 071b80f7): once DB-level CT was on, `changeTrackingStatus` returned
+   non-null so `enableChangeTracking` (which also enables table-level CT) was skipped → CHANGETABLE
+   failed "Change tracking is not enabled on table 'X'". Fixed to also enable when `ct.minValid === null`
+   in BOTH the incremental-attempt and post-snapshot watermark paths.
+VERIFICATION (live, 3 Starts): Start 1 → CT enabled, full snapshot (12 tables, real rows). Start 2 →
+BuildVersion `incremental`, others "CT not enabled on table". Start 3 (after rev 67) → all 11 flip to
+"CT enabled this run". **Start 4 → all 12 tables `mode:incremental` ("No changes since the last sync"),**
+fast (<30s, no re-snapshot). SQL-family mirror path is now COMPLETE: snapshot + serverless query +
+lakehouse shortcuts + Spark-read (managed PE) + **incremental CDC** all proven. Graceful snapshot
+fallback preserved for no-PK tables / failures.
+
+### §3 Front Door client-JS caching — RESOLVED (no change needed)
+Checked the live AFD profile `fd-loom-k6mvh5sm6z7do` route `console-route`: `cacheConfiguration`
+is **null** — Front Door caching is already OFF, so FD does NOT cache the HTML/RSC document.
+The post-roll "stale client JS until hard-refresh" is therefore **browser-side** HTTP caching,
+not Front Door. The §3 premise (add an FD rule to not cache the document) doesn't apply. If we
+ever want to reduce browser staleness further, that's an app-side Cache-Control header tweak on
+the SSR/RSC responses (Next.js), NOT an FD change — and content-hashed `/_next/static/*` chunks
+are already immutable/safe. Closing §3; hard-refresh remains the mitigation after a client roll.
+
+### CLEANUP for attended review (deletion deferred overnight for safety)
+- Temp ACA jobs: ✅ already deleted (loom-mpe-uami, loom-pe-verify).
+- Test mirrors (ws be0de3d7): KEEP adventureworks-mirror-e2e + e2e-CosmosDb-loom (proven demos);
+  DELETE the redundant e2e-AzureSqlMI / e2e-SqlServer2025 / e2e-MSSQL / e2e-GenericMirror /
+  e2e-pg2-{postgres,weave,loom} / e2e-Postgres-{postgres,weave,loom}.
+- Test notebooks: 46e0a4b9 (old pre-PE), f37c177c (post-PE demo — KEEP for §1 if wanted).
+- Test data product: 0fd4a18b "Overnight QA — Mirror E2E data product" (DRAFT).
+
+### REMAINING FOLLOW-UPS (attended / operator-gated — NOT done overnight, with leads)
+- **§1 Spark-row live screenshot**: managed PE is in place; re-run the notebook on a calm
+  Synapse pool (or add a notebook spec to loom-uat) to capture the actual rows. Capability fixed.
+- **§2 Postgres E2E**: needs a real PG DB WITH user tables (the weave PG dbs tried don't exist;
+  LOOM_WEAVE_PG_* are empty). Token plumbing is correct (scopeToResource strips /.default; scope
+  is .windows.net). The live MSI-400 errors are STALE (pre-.windows.net-fix). Seed a table or wire
+  a real PG db, then re-Start on rev 65.
+- **§2 Snowflake/BigQuery/Oracle**: external SaaS — need a KV credential (operator pre-seeds).
+- **§2 Databricks UC / Open-mirroring**: Databricks clusters terminated; UC + Parquet-landing need setup.
+- **Mirror incremental (CDC) — latent**: `mirror-engine.ts:294` checks
+  `SELECT is_change_tracking_on FROM sys.databases` → errors "Invalid column name" on the source,
+  so SQL-family mirrors always full-snapshot (graceful fallback). LIKELY FIX: use
+  `IF EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID())` instead.
+  Low blast radius (falls back to snapshot) but needs a live re-Start to verify — deferred to attended.
+- **§4 lakehouse Permissions 30s UAT timeout**: GET /api/items/[type]/[id]/permissions is Cosmos-fast
+  (no slow ARM in the hot path), so the timeout is page-render/navigation timing or live-ARM latency —
+  needs attended live timing to pinpoint; not a clear code fix.
+- **§5 Dataverse verify**: day-one MSAL-app fallback is wired; needs a Dataverse env + one-time
+  "Promote To Admin" to verify (no env in this deployment).
+- **§7 cleanup**: deletion deferred for safety (list above) — one-click attended cleanup.
+
+## ✅ DONE this session (live + verified) — do NOT redo
+- Publish-as-API weave (MPP table-list + source-not-found fallback)
+- Permissions/bronze RBAC resource-group self-heal (Resource Graph)
+- Systemic Griffel unitless-px fix (706 values / 121 files) → builders render correctly
+- Marketplace response-body formatter (JSON/XML/CSV, Pretty/Raw, copy)
+- 4 icon/render crashes (Variable20Regular, BrainCircuit16Regular)
+- Connection edit/test backend + ConnectionBuilder edit-mode + mirror Edit/Test
+- Databricks UC mirror discoverability card
+- Dataverse day-one MSAL-app credential fallback
+- Mirror engine: `sp_change_feed_enable_db` invalid param FIX; `[rowCount]`/`[type]` alias FIX
+- Mirror wizard dialog-never-closes FIX (conditional-mount) — verified
+- Postgres AAD token `.azure.com`→`.windows.net` FIX (live env + code + bicep + bootstrap) — verified UAMI connects
+- **Mirror E2E proven (real data):** Azure SQL DB / MI / SQL Server 2025 / 2016-2022 → replicate 12 tables → Bronze;
+  **queried back real rows via Synapse Serverless SQL**; **12 lakehouse shortcuts** created. Cosmos → replicated REAL
+  containers (workspaces 399 rows, etc.). Open-mirroring path verified (awaits producer).
+- UAT full-functional run `pass=25/fail=4/realFails=0` — no real defects (4 fails = apim button-label, data-product
+  Save expectation, 2 lakehouse slow-load timeouts).
+
+## ⏳ REMAINING WORK (this plan)
+
+### 1. Notebook consumption demo (operator wants to SEE it) — HIGH
+Show querying a mirrored table in a Loom **notebook**. Notebook runs real Spark via Livy
+(`POST /api/items/notebook/[id]/run` {compute:'spark:<pool>'} → async, poll `/runs/[runId]`; cold-start 3-5 min).
+Path: create notebook via `POST /api/thread/analyze-in-notebook` {from:{lakehouse `7bc6fb9f-7da7-4ef0-88da-d35888e67dc4`}}
+→ open → run a cell reading a mirrored table → screenshot real rows. FASTER alt: a serverless-SQL cell (OPENROWSET,
+seconds) — the data is already proven queryable. Needs: active session + Synapse Spark pool provisioned/running.
+
+### 2. Mirror — remaining source types e2e — HIGH
+Use the engine-API pattern (no UI): `POST /api/items/mirrored-database?workspaceId=be0de3d7-5491-4dd2-af3e-377dda595dd8`
+{displayName, definition(base64 mirroring.json), sourceType, server, database, tables:[], syncMode:'snapshot'} then
+`POST /api/items/mirrored-database/<id>/lifecycle?workspaceId=...` {action:'start'}. Source: demo-sql-srv01/adventureWorks
+(UAMI is db_owner) for SQL; for others see below.
+- **Postgres full replicate** — token fixed; needs a DB WITH user tables. Easiest: seed a table on `psql-loom-weave-default-tr4nm4dcgsqmu.postgres.database.azure.com` (UAMI is its Entra admin) via a `pg` connect + CREATE TABLE+INSERT (mint token `az account get-access-token --resource https://ossrdbms-aad.database.windows.net`), then mirror that DB → replicate → query.
+- **Snowflake / BigQuery / Oracle** — external SaaS; need a credential in Key Vault (operator pre-seeds, or provide). Then create→start→replicate→query each (ADF Copy backend; needs LOOM_ADF_NAME + linked services per docs/fiab/audit/live-e2e-feature-surfaces-v2.md).
+- **Databricks UC** (`mirrored-databricks` item type) — exercise create→mount→query (Unity Catalog metastore+catalog; UAMI Databricks access).
+- **Cosmos consumption query** — already replicated; run the serverless OPENROWSET over a Cosmos Bronze table too.
+- **Open mirroring full e2e** — upload a sample Parquet to the landing path → start → Spark merge → query.
+
+### 3. UAT polish (non-blocking) — MED
+- Rename apim-api ribbon button to exactly "Edit OpenAPI" to satisfy `no-cuts-sweep-v3` (capability exists in apim-editors.tsx:222; label mismatch only). OR update the spec regex.
+- Investigate lakehouse editor initial-load perf (no-cuts Permissions/Settings ribbon checks timed out at 30s — likely slow live-ARM; perf-check or pre-render the ribbon).
+
+### 4. Front Door client-JS caching — MED (systemic)
+Long-lived tabs serve STALE client behavior after a roll until hard-refresh (caused the stuck-dialog confusion).
+Content-hashed `/_next/static` chunks are immutable/safe, but the HTML/RSC document appears FD-cached → old chunk refs.
+Add an FD cache rule: do NOT cache the document/RSC navigation responses (cache only immutable `/_next/static/*`).
+After any client-side roll, until fixed, tell the operator to hard-refresh (Ctrl+Shift+R).
+
+### 5. Dataverse verify — MED
+Day-one MSAL-app fallback is wired (commit + docs). Verify once a Dataverse env exists: one-time "Promote To Admin"
+on the Default env (docs/fiab/dataverse-app-user.md Step 1), then a Dataverse-scoped feature (e.g. Power Automate
+flow create / data-agent publish) should work without LOOM_DATAVERSE_* set.
+
+### 6. Data-product "test every option / add missing" — MED
+Layout root-fixed (Griffel). Remaining: deeper feature pass on the data-product create wizard + detail editor —
+exercise every option, add any missing capabilities vs Purview Unified Catalog parity (ui-parity.md).
+
+### 7. Cleanup — LOW
+Delete the ~9 test mirrors created this session: `adventureworks-mirror-e2e`, `e2e-AzureSqlMI`, `e2e-SqlServer2025`,
+`e2e-MSSQL`, `e2e-GenericMirror`, `e2e-CosmosDb-loom`, `e2e-pg2-*`, plus the lakehouse shortcuts under
+`Files/mirrors/adventureworks-mirror-e2e` in lakehouse `7bc6fb9f`. (DELETE via the mirror editor or
+`DELETE /api/items/mirrored-database/<id>?workspaceId=be0de3d7-...`.)
+
+## OPERATING NOTES (recurring gotchas)
+- **Session expiry:** the operator's browser AAD session lapses every few minutes (401). Ask them to re-sign-in;
+  never authenticate as them. Re-run the test once a fresh "FG" avatar shows.
+- **Browser flakiness:** claude-in-chrome tabs sometimes close / navigation doesn't stick — retry ≤2-3x then re-get tab context.
+- **form_input not computer.type** for React controlled inputs (type doesn't fire onChange).
+- **Build gate:** `cd apps/fiab-console && pnpm build`; grep the log for `Compiled successfully` AND zero
+  `Attempted import error` (those = real render crashes). The wrapper exit code lies; grep the log.
+- **No creds:** never enter source secrets/passwords. SQL/Cosmos/Postgres AAD sources where the UAMI can be granted
+  (operator is AAD admin via `az`) are doable; external SaaS need a KV secret.
+- UAT harness: `az containerapp job start -n loom-uat -g rg-csa-loom-admin-centralus --subscription <YOUR_SUBSCRIPTION_ID>`;
+  results in LA workspace 01273839-800f-4fef-86bf-85e94cdf3a65, `ContainerAppConsoleLogs_CL | where ContainerName_s=='uat' | where Log_s has 'UAT_RESULT'`.

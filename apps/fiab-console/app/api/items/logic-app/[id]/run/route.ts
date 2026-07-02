@@ -14,6 +14,7 @@
  *   https://learn.microsoft.com/rest/api/logic/workflow-runs/list
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -29,7 +30,7 @@ import { armBase } from '@/lib/azure/cloud-endpoints';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 function resolveBinding(state: any): { subscriptionId: string; resourceGroup: string; workflowName: string } | null {
   const sec = (state?.provisioning?.secondaryIds || {}) as Record<string, string>;
@@ -57,14 +58,14 @@ function firstTrigger(state: any): string | undefined {
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!resource || resource.itemType !== 'logic-app') return err('logic app not found', 404);
+    if (!resource || resource.itemType !== 'logic-app') return apiError('logic app not found', 404);
     const state = (resource.state as any) || {};
 
     const binding = resolveBinding(state);
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     }
 
     const triggerName = (body?.trigger && String(body.trigger)) || firstTrigger(state);
-    if (!triggerName) return err('no trigger in workflow definition', 400);
+    if (!triggerName) return apiError('no trigger in workflow definition', 400);
 
     const run = await triggerAndPollWorkflowRun(
       (u, i) => callLogicArm(u, i),
@@ -113,6 +114,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       logicAppName: binding.workflowName,
     });
   } catch (e: any) {
-    return err(e?.message || String(e), e?.status || 502);
+    return apiError(e?.message || String(e), e?.status || 502);
   }
 }

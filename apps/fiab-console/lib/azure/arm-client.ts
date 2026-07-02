@@ -87,6 +87,24 @@ export async function armPut<T = any>(path: string, body: unknown): Promise<T> {
   );
 }
 
+/** POST an ARM action by bare path (e.g. listKeys / regenerateKeys). Body defaults to `{}`. */
+export async function armPost<T = any>(path: string, body: unknown = {}): Promise<T> {
+  return jsonOrThrow<T>(
+    await armFetch(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
+    `POST ${path}`,
+  );
+}
+
+/** DELETE an ARM resource by bare path (api-version included by the caller).
+ *  Tolerates 200/202/204 and a 404 (already-deleted = idempotent success). */
+export async function armDelete(path: string): Promise<void> {
+  const res = await armFetch(path, { method: 'DELETE' });
+  if (!res.ok && res.status !== 202 && res.status !== 204 && res.status !== 404) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`ARM DELETE ${path} failed ${res.status}: ${body.slice(0, 600)}`);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Synapse workspace Outbound Access / trusted-service bypass (OAP)
 // ---------------------------------------------------------------------------

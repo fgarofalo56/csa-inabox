@@ -4,22 +4,32 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   tokens, Spinner, MessageBar, MessageBarBody, Button, Badge,
   Caption1, Tooltip, Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent,
-  DialogActions, Field, Input, Switch,
+  DialogActions, Field, Input, Switch, RadioGroup, Radio,
 } from '@fluentui/react-components';
-import { Delete24Regular, Edit24Regular } from '@fluentui/react-icons';
+import { Delete24Regular, Edit24Regular, KeyMultiple24Regular } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ApimNamedValueSummary } from '@/lib/azure/apim-client';
 import { apimFetchJson } from './apim-pane-fetch';
 
+type NamedValueMode = 'inline' | 'keyvault';
+
 interface NamedValueForm {
   displayName: string;
+  mode: NamedValueMode;
   value: string;
+  /** Key Vault secret identifier (keyvault mode). */
+  secretIdentifier: string;
   secret: boolean;
   tags: string;
 }
 
-const EMPTY_FORM: NamedValueForm = { displayName: '', value: '', secret: false, tags: '' };
+const EMPTY_FORM: NamedValueForm = {
+  displayName: '', mode: 'inline', value: '', secretIdentifier: '', secret: false, tags: '',
+};
+
+// A KV secret identifier, e.g. https://my-vault.vault.azure.net/secrets/my-secret[/version].
+const KV_SECRET_ID_RE = /^https:\/\/[a-z0-9-]+\.vault\.[a-z0-9.-]+\/secrets\/[^/\s]+(\/[^/\s]+)?\/?$/i;
 
 export function ApimNamedValuesPane() {
   const [values, setValues] = useState<ApimNamedValueSummary[]>([]);
@@ -65,11 +75,15 @@ export function ApimNamedValuesPane() {
 
   const openEdit = useCallback((v: ApimNamedValueSummary) => {
     setEditing(v);
+    const kv = v.keyVault?.secretIdentifier;
     setForm({
       // Secret values are never returned on GET; the user must re-enter the
-      // value to change a secret (matches the portal's behavior).
+      // value to change a secret (matches the portal's behavior). Key Vault
+      // references, however, round-trip the secret identifier.
       displayName: v.displayName,
+      mode: kv ? 'keyvault' : 'inline',
       value: v.secret ? '' : (v.value || ''),
+      secretIdentifier: kv || '',
       secret: !!v.secret,
       tags: (v.tags || []).join(', '),
     });
@@ -79,7 +93,15 @@ export function ApimNamedValuesPane() {
 
   async function handleSave() {
     if (!form.displayName.trim()) { setDialogError('Name is required.'); return; }
-    if (!form.value.trim()) {
+    if (form.mode === 'keyvault') {
+      if (!form.secretIdentifier.trim()) {
+        setDialogError('Key Vault secret identifier is required.'); return;
+      }
+      if (!KV_SECRET_ID_RE.test(form.secretIdentifier.trim())) {
+        setDialogError('Enter a valid Key Vault secret URI, e.g. https://my-vault.vault.azure.net/secrets/my-secret.');
+        return;
+      }
+    } else if (!form.value.trim()) {
       setDialogError(editing?.secret
         ? 'Re-enter the secret value to save (secret values are never read back).'
         : 'Value is required.');
@@ -97,8 +119,10 @@ export function ApimNamedValuesPane() {
         body: JSON.stringify({
           id: editing ? editing.name : undefined,
           displayName: form.displayName.trim(),
-          value: form.value,
-          secret: form.secret,
+          // Mutually-exclusive value modes: Key Vault reference vs inline value.
+          ...(form.mode === 'keyvault'
+            ? { keyVault: { secretIdentifier: form.secretIdentifier.trim() } }
+            : { value: form.value, secret: form.secret }),
           tags: tags.length ? tags : undefined,
         }),
       });
@@ -158,11 +182,15 @@ export function ApimNamedValuesPane() {
     {
       key: 'secret',
       label: 'Type',
-      width: 100,
+      width: 120,
       render: (v) => (
-        <Badge appearance="outline" color={v.secret ? 'warning' : 'success'}>
-          {v.secret ? 'Secret' : 'Value'}
-        </Badge>
+        v.keyVault?.secretIdentifier ? (
+          <Badge appearance="outline" color="brand" icon={<KeyMultiple24Regular />}>Key Vault</Badge>
+        ) : (
+          <Badge appearance="outline" color={v.secret ? 'warning' : 'success'}>
+            {v.secret ? 'Secret' : 'Value'}
+          </Badge>
+        )
       ),
     },
     {
@@ -171,7 +199,9 @@ export function ApimNamedValuesPane() {
       width: 300,
       render: (v) => (
         <Caption1 style={{ wordBreak: 'break-all', maxWidth: '300px' }}>
-          {v.secret ? '(encrypted)' : v.value || '—'}
+          {v.keyVault?.secretIdentifier
+            ? v.keyVault.secretIdentifier
+            : v.secret ? '(encrypted)' : v.value || '—'}
         </Caption1>
       ),
     },
@@ -254,24 +284,61 @@ export function ApimNamedValuesPane() {
                     onChange={(_, d) => setForm((f) => ({ ...f, displayName: d.value }))}
                   />
                 </Field>
-                <Field
-                  label="Value"
-                  required
-                  hint={editing?.secret ? 'Secret values are never read back — re-enter to change.' : undefined}
-                >
-                  <Input
-                    type={form.secret ? 'password' : 'text'}
-                    value={form.value}
-                    placeholder={editing?.secret ? '(re-enter secret value)' : 'value'}
-                    onChange={(_, d) => setForm((f) => ({ ...f, value: d.value }))}
-                  />
+                <Field label="Value source" hint="Store the value inline in APIM, or reference a secret held in Azure Key Vault.">
+                  <RadioGroup
+                    layout="horizontal"
+                    value={form.mode}
+                    onChange={(_, d) => setForm((f) => ({ ...f, mode: d.value as NamedValueMode }))}
+                  >
+                    <Radio value="inline" label="Inline value" />
+                    <Radio value="keyvault" label="Key Vault secret" />
+                  </RadioGroup>
                 </Field>
-                <Field label="Secret" hint="Encrypt the value at rest; it will not be displayed in the list.">
-                  <Switch
-                    checked={form.secret}
-                    onChange={(_, d) => setForm((f) => ({ ...f, secret: d.checked }))}
-                  />
-                </Field>
+
+                {form.mode === 'inline' ? (
+                  <>
+                    <Field
+                      label="Value"
+                      required
+                      hint={editing?.secret ? 'Secret values are never read back — re-enter to change.' : undefined}
+                    >
+                      <Input
+                        type={form.secret ? 'password' : 'text'}
+                        value={form.value}
+                        placeholder={editing?.secret ? '(re-enter secret value)' : 'value'}
+                        onChange={(_, d) => setForm((f) => ({ ...f, value: d.value }))}
+                      />
+                    </Field>
+                    <Field label="Secret" hint="Encrypt the value at rest; it will not be displayed in the list.">
+                      <Switch
+                        checked={form.secret}
+                        onChange={(_, d) => setForm((f) => ({ ...f, secret: d.checked }))}
+                      />
+                    </Field>
+                  </>
+                ) : (
+                  <>
+                    <Field
+                      label="Key Vault secret identifier"
+                      required
+                      hint="Versionless URI auto-refreshes when the secret rotates; a versioned URI pins one version."
+                    >
+                      <Input
+                        value={form.secretIdentifier}
+                        placeholder="https://my-vault.vault.azure.net/secrets/my-secret"
+                        onChange={(_, d) => setForm((f) => ({ ...f, secretIdentifier: d.value }))}
+                      />
+                    </Field>
+                    <MessageBar intent="warning">
+                      <MessageBarBody>
+                        The APIM service&apos;s managed identity must have <strong>GET</strong> on this
+                        Key Vault secret (Key Vault Secrets User role, or a &quot;Get&quot; secret access
+                        policy). Without it APIM cannot resolve the value at runtime and the named value
+                        will report a fetch error. See aka.ms/apimmsi.
+                      </MessageBarBody>
+                    </MessageBar>
+                  </>
+                )}
                 <Field label="Tags" hint="Comma-separated tags for grouping (optional).">
                   <Input
                     value={form.tags}
@@ -283,7 +350,15 @@ export function ApimNamedValuesPane() {
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
-              <Button appearance="primary" onClick={handleSave} disabled={saving || !form.displayName.trim() || !form.value.trim()}>
+              <Button
+                appearance="primary"
+                onClick={handleSave}
+                disabled={
+                  saving ||
+                  !form.displayName.trim() ||
+                  (form.mode === 'keyvault' ? !form.secretIdentifier.trim() : !form.value.trim())
+                }
+              >
                 {saving ? 'Saving...' : editing ? 'Save changes' : 'Create'}
               </Button>
             </DialogActions>

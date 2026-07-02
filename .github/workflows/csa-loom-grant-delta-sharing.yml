@@ -1,15 +1,18 @@
 name: csa-loom-grant-delta-sharing
 
-# Grants the Loom Console UAMI the Unity Catalog metastore SHARING privileges
-# (CREATE SHARE / RECIPIENT / PROVIDER) so the Marketplace "Data shares →
-# Shared by me" publish flow works. account_admin (set by the bootstrap) does
-# NOT include these data-plane privileges, so create-share fails with
-# "User does not have CREATE SHARE on Metastore".
+# Grants the Loom Console UAMI the FULL Unity Catalog metastore SHARING privilege
+# set so the Marketplace "Data shares" flow works END-TO-END:
+#   CREATE PROVIDER  — register an inbound share from an activation file
+#   CREATE CATALOG   — subscribe = create a catalog from the share (so it's queryable)
+#   CREATE SHARE     — publish outbound shares ("Shared by me")
+#   CREATE RECIPIENT — publish outbound recipients
+# account_admin (set by the bootstrap) does NOT include these data-plane
+# privileges, so create-share / create-provider / create-catalog fail with
+# "User does not have CREATE <X> on Metastore".
 #
 # Runs as the limitlessdata_deploy SP, which is a Databricks account admin
-# (≈ metastore admin), so it can grant. Safe + targeted: NO MSAL app-reg / no
-# full bootstrap. Idempotent. Inbound subscribe needs only workspace access and
-# already works without this.
+# (≈ metastore admin), so it can grant — NO operator PAT needed. Safe + targeted:
+# NO MSAL app-reg / no full bootstrap. Idempotent.
 #
 # Defaults target the live centralus deployment; override inputs for others.
 
@@ -23,11 +26,19 @@ on:
       uami_client_id:
         description: 'Loom Console UAMI application (client) id to grant'
         required: true
-        default: f4f25dd9-e7aa-4ba0-ae18-6c902217964d
+        default: ''
       login_subscription:
         description: 'Any subscription the deploy SP can log into (token is tenant-wide)'
         required: false
-        default: e093f4fd-5047-4ee4-968d-a56942c665f3
+        default: ''
+      admin_rg:
+        description: 'Admin resource group holding the Console container app (for wiring the warehouse env)'
+        required: false
+        default: rg-csa-loom-admin-centralus
+      console_app:
+        description: 'Console container app name'
+        required: false
+        default: loom-console
 
 permissions:
   id-token: write
@@ -62,8 +73,8 @@ jobs:
           echo "    metastore_id=${METASTORE_ID}"
           [[ -z "$METASTORE_ID" || "$METASTORE_ID" == "null" ]] && { echo "ERROR: could not resolve metastore_id (is the deploy SP a workspace/metastore admin on ${HOST}?)" >&2; exit 1; }
 
-          echo ">>> Granting CREATE SHARE / CREATE RECIPIENT / CREATE PROVIDER to ${UAMI}"
-          BODY="$(jq -n --arg p "$UAMI" '{changes:[{principal:$p, add:["CREATE_SHARE","CREATE_RECIPIENT","CREATE_PROVIDER"]}]}')"
+          echo ">>> Granting CREATE PROVIDER / CREATE CATALOG / CREATE SHARE / CREATE RECIPIENT to ${UAMI}"
+          BODY="$(jq -n --arg p "$UAMI" '{changes:[{principal:$p, add:["CREATE_PROVIDER","CREATE_CATALOG","CREATE_SHARE","CREATE_RECIPIENT"]}]}')"
           CODE="$(curl -s -o /tmp/grant.json -w '%{http_code}' "${auth[@]}" -X PATCH \
             "https://${HOST}/api/2.1/unity-catalog/permissions/metastore/${METASTORE_ID}" -d "$BODY")"
           echo "    PATCH status: ${CODE}"
@@ -73,4 +84,30 @@ jobs:
           echo ">>> Verifying the grant"
           curl -sf "${auth[@]}" "https://${HOST}/api/2.1/unity-catalog/permissions/metastore/${METASTORE_ID}" \
             | jq -r --arg p "$UAMI" '.privilege_assignments[]? | select(.principal==$p) | "  \(.principal): \(.privileges|join(", "))"'
-          echo "✓ Done. Re-test Marketplace → Data shares → Shared by me → New share."
+          echo "✓ Grants done. Inbound subscribe (CREATE PROVIDER+CATALOG) + outbound publish (CREATE SHARE+RECIPIENT) now work."
+
+      - name: Provision default SQL warehouse (query compute) + wire it on the Console
+        # So a subscribed Delta share / UC catalog is actually QUERYABLE from Loom.
+        # A SQL warehouse is a Databricks data-plane resource (REST, not ARM).
+        # Idempotent (reuses 'loom-default'); serverless when supported else classic PRO.
+        run: |
+          set -uo pipefail
+          HOST="${{ inputs.dbx_workspace_host }}"
+          TOKEN="$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)"
+          auth=(-H "Authorization: Bearer ${TOKEN}" -H "Content-Type: application/json")
+          WID=$(curl -sf "${auth[@]}" "https://${HOST}/api/2.0/sql/warehouses" 2>/dev/null | jq -r '.warehouses[]? | select(.name=="loom-default") | .id' | head -1 || true)
+          if [ -z "$WID" ] || [ "$WID" = "null" ]; then
+            echo ">>> Creating serverless SQL warehouse 'loom-default'"
+            RESP=$(curl -s "${auth[@]}" -X POST "https://${HOST}/api/2.0/sql/warehouses" -d '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":true,"warehouse_type":"PRO"}')
+            WID=$(echo "$RESP" | jq -r '.id // empty')
+            if [ -z "$WID" ]; then
+              echo ">>> Serverless unavailable — creating classic PRO warehouse"
+              RESP=$(curl -s "${auth[@]}" -X POST "https://${HOST}/api/2.0/sql/warehouses" -d '{"name":"loom-default","cluster_size":"2X-Small","min_num_clusters":1,"max_num_clusters":1,"auto_stop_mins":10,"enable_serverless_compute":false,"warehouse_type":"PRO"}')
+              WID=$(echo "$RESP" | jq -r '.id // empty')
+            fi
+            [ -z "$WID" ] && { echo "ERROR: could not create SQL warehouse: $RESP" >&2; exit 1; }
+          fi
+          echo "    SQL warehouse id: $WID"
+          az containerapp update -n "${{ inputs.console_app }}" -g "${{ inputs.admin_rg }}" \
+            --set-env-vars "LOOM_DATABRICKS_SQL_WAREHOUSE_ID=$WID" "LOOM_DATABRICKS_LINEAGE_WAREHOUSE_ID=$WID" -o none
+          echo "✓ SQL warehouse loom-default ($WID) provisioned + wired on the Console. Re-test: subscribe to a Delta share, then query its catalog."

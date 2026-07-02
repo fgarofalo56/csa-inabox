@@ -35,7 +35,10 @@ param activatorPrincipalId string = ''
 @description('Compliance tags (note: ADX databases inherit cluster tags)')
 param complianceTags object
 
-var dbName = 'loomdb-${domainName}'
+// ADX/KQL database names must be valid bare KQL identifiers — hyphens break
+// `database('loomdb-x')`-free query/management commands. Sanitize the domain
+// (e.g. "real-time" → "real_time") and use an underscore prefix.
+var dbName = 'loomdb_${replace(domainName, '-', '_')}'
 
 module inner 'adx-db-inner.bicep' = {
   name: 'adx-db-${domainName}'

@@ -170,6 +170,11 @@ export async function listDatasets(): Promise<SynapseDataset[]> {
   return listAll<SynapseDataset>('datasets', 'listDatasets');
 }
 
+export async function getDataset(name: string): Promise<SynapseDataset> {
+  const r = await callDev(`/datasets/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  return jsonOrThrow<SynapseDataset>(r, `getDataset(${name})`);
+}
+
 export async function upsertDataset(name: string, spec: SynapseDataset): Promise<SynapseDataset> {
   const r = await callDev(`/datasets/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
     method: 'PUT',
@@ -237,6 +242,11 @@ export async function listLinkedServices(): Promise<SynapseLinkedService[]> {
   return listAll<SynapseLinkedService>('linkedservices', 'listLinkedServices');
 }
 
+export async function getLinkedService(name: string): Promise<SynapseLinkedService> {
+  const r = await callDev(`/linkedservices/${encodeURIComponent(name)}?api-version=${DEV_API}`);
+  return jsonOrThrow<SynapseLinkedService>(r, `getLinkedService(${name})`);
+}
+
 export async function upsertLinkedService(name: string, spec: SynapseLinkedService): Promise<SynapseLinkedService> {
   const r = await callDev(`/linkedservices/${encodeURIComponent(name)}?api-version=${DEV_API}`, {
     method: 'PUT',
@@ -250,6 +260,26 @@ export async function deleteLinkedService(name: string): Promise<void> {
   if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
     throw new Error(`deleteLinkedService failed ${r.status}: ${await r.text()}`);
   }
+}
+
+/**
+ * Validate a linked-service spec against the REAL Synapse workspace before the
+ * user commits it. Synapse's dev-plane has no synchronous "test connectivity"
+ * REST for an UNSAVED linked service, so this PUTs a transient linked service
+ * under a temp name then deletes it — a real dev-plane call that rejects a
+ * malformed `typeProperties`, an unknown connector `type`, or a spec the
+ * workspace can't accept, and proves the workspace is reachable with the
+ * Console identity's token. Returns `{ ok: true }` on a clean accept; throws
+ * with the real error otherwise. No mocks (per no-vaporware.md).
+ */
+export async function testLinkedService(spec: SynapseLinkedService): Promise<{ ok: true }> {
+  const tempName = `loom_test_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+  try {
+    await upsertLinkedService(tempName, { name: tempName, properties: spec.properties });
+  } finally {
+    try { await deleteLinkedService(tempName); } catch { /* best-effort cleanup */ }
+  }
+  return { ok: true };
 }
 
 // ============================================================

@@ -669,11 +669,14 @@ export interface KustoContinuousExport {
   isDisabled?: boolean;
   lastRunResult?: string;
   exportedTo?: string;
+  /** The export query (the KQL after `<|`) — prefills the edit dialog. */
+  query?: string;
+  /** IntervalBetweenRuns as a .NET/KQL timespan string. */
+  intervalBetweenRuns?: string;
 }
 
-/** `.show continuous-exports` — read-only continuous export jobs. */
-export async function listContinuousExports(db: string): Promise<KustoContinuousExport[]> {
-  const r = await executeMgmtCommand(db, '.show continuous-exports');
+/** Shape `.show continuous-export[s]` rows into typed jobs (shared by list + show). */
+function shapeContinuousExportRows(r: KustoQueryResult): KustoContinuousExport[] {
   const idx = (c: string) => r.columns.indexOf(c);
   const nameIdx = idx('Name');
   const extIdx = idx('ExternalTableName');
@@ -681,6 +684,8 @@ export async function listContinuousExports(db: string): Promise<KustoContinuous
   const disIdx = idx('IsDisabled');
   const resIdx = idx('LastRunResult');
   const expIdx = idx('ExportedTo');
+  const qIdx = idx('Query');
+  const intIdx = idx('IntervalBetweenRuns');
   return r.rows.map((row) => ({
     name: String(row[nameIdx >= 0 ? nameIdx : 0]),
     externalTableName: extIdx >= 0 ? (row[extIdx] as string) : undefined,
@@ -688,7 +693,33 @@ export async function listContinuousExports(db: string): Promise<KustoContinuous
     isDisabled: disIdx >= 0 ? Boolean(row[disIdx]) : undefined,
     lastRunResult: resIdx >= 0 ? (row[resIdx] as string) : undefined,
     exportedTo: expIdx >= 0 ? (row[expIdx] as string | undefined)?.toString() : undefined,
+    query: qIdx >= 0 ? ((row[qIdx] as string) || undefined) : undefined,
+    intervalBetweenRuns: intIdx >= 0 ? ((row[intIdx] as string) || undefined) : undefined,
   }));
+}
+
+/** `.show continuous-exports` — every continuous export job in the database. */
+export async function listContinuousExports(db: string): Promise<KustoContinuousExport[]> {
+  const r = await executeMgmtCommand(db, '.show continuous-exports');
+  return shapeContinuousExportRows(r);
+}
+
+/** `.show continuous-export ["CE"]` — a single job's details (edit-dialog receipt). */
+export async function showContinuousExport(db: string, name: string): Promise<KustoContinuousExport | null> {
+  if (!name.trim()) throw new KustoError('showContinuousExport: name is required', 400);
+  const r = await executeMgmtCommand(db, `.show continuous-export ${qName(name)}`);
+  return shapeContinuousExportRows(r)[0] ?? null;
+}
+
+/**
+ * `.drop continuous-export ["CE"]` — removes a continuous-export job. The
+ * external table it wrote to (and the storage data) are NOT touched. Requires
+ * Database Admin. Grounded in Microsoft Learn:
+ *   https://learn.microsoft.com/kusto/management/data-export/drop-continuous-export
+ */
+export async function dropContinuousExport(db: string, name: string): Promise<KustoQueryResult> {
+  if (!name.trim()) throw new KustoError('dropContinuousExport: name is required', 400);
+  return executeMgmtCommand(db, `.drop continuous-export ${qName(name)}`);
 }
 
 // ============================================================
@@ -958,6 +989,127 @@ export async function showDatabasePolicies(db: string): Promise<KustoDatabasePol
     }
   }
   return out;
+}
+
+/**
+ * `.show database <db> policy <kind>` for a SINGLE policy kind — the read-back
+ * receipt after a database-scope `.alter … policy` command. Returns null when
+ * the command yields no row (policy unset). Mirrors {@link showDatabasePolicies}
+ * shape for one kind.
+ */
+export async function showDatabasePolicy(db: string, kind: string): Promise<KustoDatabasePolicy | null> {
+  const r = await executeMgmtCommand(db, `.show database ${qName(db)} policy ${kind}`);
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const idx = polIdx >= 0 ? polIdx : r.columns.length - 1;
+  const raw = String(r.rows[0][idx] ?? '');
+  let policy: unknown = raw;
+  try { policy = JSON.parse(raw); } catch { policy = raw; }
+  return { kind, policy, raw };
+}
+
+/**
+ * `.show table ["T"] policy <retention|caching>` — the applied table-scope
+ * policy read back as the receipt. Returns null when unset.
+ */
+export async function showTablePolicy(
+  db: string, table: string, kind: 'retention' | 'caching',
+): Promise<KustoDatabasePolicy | null> {
+  if (!table.trim()) throw new KustoError('showTablePolicy: table is required', 400);
+  const r = await executeMgmtCommand(db, `.show table ${qName(table)} policy ${kind}`);
+  if (!r.rows.length) return null;
+  const polIdx = r.columns.indexOf('Policy');
+  const idx = polIdx >= 0 ? polIdx : r.columns.length - 1;
+  const raw = String(r.rows[0][idx] ?? '');
+  let policy: unknown = raw;
+  try { policy = JSON.parse(raw); } catch { policy = raw; }
+  return { kind, policy, raw };
+}
+
+// ============================================================
+// Retention + caching policy AUTHORING — table & database scope.
+//
+// The read-only sibling {@link showDatabasePolicies} surfaces the CURRENT
+// policies; the functions below AUTHOR them via real `.alter … policy`
+// control commands (the same authoring the ADX portal / Fabric RTI
+// "Retention" + "Caching" policy dialogs perform). Requires Database Admin
+// (table scope also accepts Table Admin) — the Console UAMI holds
+// AllDatabasesAdmin. A principal lacking the role gets a 403/Forbidden from
+// the cluster, which the BFF surfaces verbatim so the UI can render the
+// honest "needs Database Admin" gate. No mocks.
+//
+// Grounded in Microsoft Learn (Kusto management commands):
+//   .alter table T policy retention '{"SoftDeletePeriod":"…","Recoverability":"…"}'
+//   .alter database D policy retention '{…}'
+//     https://learn.microsoft.com/kusto/management/retention-policy
+//   .alter table T policy caching hot = <timespan>
+//   .alter database D policy caching hot = <timespan>
+//     https://learn.microsoft.com/kusto/management/cache-policy
+// ============================================================
+
+/** Retention-policy Recoverability values (soft-delete recoverability window). */
+export const KUSTO_RECOVERABILITY = ['Enabled', 'Disabled'] as const;
+export type KustoRecoverability = (typeof KUSTO_RECOVERABILITY)[number];
+
+/**
+ * Build the .NET-timespan string (`"<days>.00:00:00"`) the retention-policy
+ * `SoftDeletePeriod` field expects from a whole-day count. The read side
+ * ({@link listDatabasesWithDetails} `parseTimespanDays`) parses exactly this
+ * `days.hh:mm:ss` shape, so authoring in days round-trips cleanly.
+ */
+export function retentionTimespanFromDays(days: number): string {
+  if (!Number.isFinite(days) || days < 0) {
+    throw new KustoError('retention softDeleteDays must be a non-negative integer', 400);
+  }
+  return `${Math.floor(days)}.00:00:00`;
+}
+
+/** Validate a KQL timespan literal (e.g. `12h`, `7d`) for the caching hot window. */
+export function assertKqlTimespan(ts: string): string {
+  const t = (ts || '').trim();
+  if (!/^\d+[smhd]$/.test(t)) {
+    throw new KustoError(`invalid timespan "${ts}" — use a KQL timespan e.g. 12h, 7d, 31d`, 400);
+  }
+  return t;
+}
+
+function assertRecoverability(r: unknown): KustoRecoverability {
+  if (!(KUSTO_RECOVERABILITY as readonly string[]).includes(r as string)) {
+    throw new KustoError('recoverability must be "Enabled" or "Disabled"', 400);
+  }
+  return r as KustoRecoverability;
+}
+
+/** `.alter table ["T"] policy retention '{"SoftDeletePeriod":"…","Recoverability":"…"}'`. */
+export async function setTableRetentionPolicy(
+  db: string, table: string, softDeleteDays: number, recoverability: KustoRecoverability,
+): Promise<KustoQueryResult> {
+  if (!table.trim()) throw new KustoError('setTableRetentionPolicy: table is required', 400);
+  const rec = assertRecoverability(recoverability);
+  const policy = JSON.stringify({ SoftDeletePeriod: retentionTimespanFromDays(softDeleteDays), Recoverability: rec }).replace(/'/g, "\\'");
+  return executeMgmtCommand(db, `.alter table ${qName(table)} policy retention '${policy}'`);
+}
+
+/** `.alter database ["D"] policy retention '{…}'`. */
+export async function setDatabaseRetentionPolicy(
+  db: string, softDeleteDays: number, recoverability: KustoRecoverability,
+): Promise<KustoQueryResult> {
+  const rec = assertRecoverability(recoverability);
+  const policy = JSON.stringify({ SoftDeletePeriod: retentionTimespanFromDays(softDeleteDays), Recoverability: rec }).replace(/'/g, "\\'");
+  return executeMgmtCommand(db, `.alter database ${qName(db)} policy retention '${policy}'`);
+}
+
+/** `.alter table ["T"] policy caching hot = <timespan>`. */
+export async function setTableCachingPolicy(db: string, table: string, hot: string): Promise<KustoQueryResult> {
+  if (!table.trim()) throw new KustoError('setTableCachingPolicy: table is required', 400);
+  const ts = assertKqlTimespan(hot);
+  return executeMgmtCommand(db, `.alter table ${qName(table)} policy caching hot = ${ts}`);
+}
+
+/** `.alter database ["D"] policy caching hot = <timespan>`. */
+export async function setDatabaseCachingPolicy(db: string, hot: string): Promise<KustoQueryResult> {
+  const ts = assertKqlTimespan(hot);
+  return executeMgmtCommand(db, `.alter database ${qName(db)} policy caching hot = ${ts}`);
 }
 
 // ============================================================
@@ -1526,6 +1678,10 @@ export async function createOrAlterExternalTableDelta(
  * @param extTableName External Delta table name (created by createOrAlterExternalTableDelta)
  * @param interval     KQL timespan string: '5m' | '15m' | '1h' | '6h' | '24h' etc.
  *                     Minimum 1 minute per docs; recommended >= several minutes.
+ * @param opts.query   Optional custom export query (the KQL after `<|`). When
+ *                     omitted the whole `over` source table is exported. Lets a
+ *                     caller project / filter columns before export (e.g.
+ *                     `T | where ts > ago(1d) | project ts, tenant, value`).
  */
 export async function createOrAlterContinuousExport(
   db: string,
@@ -1533,6 +1689,7 @@ export async function createOrAlterContinuousExport(
   sourceTable: string,
   extTableName: string,
   interval: string,
+  opts?: { query?: string },
 ): Promise<KustoQueryResult> {
   if (!exportName.trim() || !sourceTable.trim() || !extTableName.trim() || !interval.trim()) {
     throw new KustoError('createOrAlterContinuousExport: all params required', 400);
@@ -1541,12 +1698,13 @@ export async function createOrAlterContinuousExport(
   if (!/^\d+[smhd]$/.test(interval.trim())) {
     throw new KustoError(`createOrAlterContinuousExport: invalid interval "${interval}" — use KQL timespan e.g. 5m, 1h, 24h`, 400);
   }
+  const exportQuery = opts?.query && opts.query.trim() ? opts.query.trim() : qName(sourceTable);
   const cmd = [
     `.create-or-alter continuous-export ${qName(exportName)}`,
     `over (${qName(sourceTable)})`,
     `to table ${qName(extTableName)}`,
     `with (intervalBetweenRuns=${interval.trim()}, managedIdentity=system)`,
-    `<| ${qName(sourceTable)}`,
+    `<| ${exportQuery}`,
   ].join(' ');
   return executeMgmtCommand(db, cmd);
 }

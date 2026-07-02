@@ -460,7 +460,11 @@ const useStyles = makeStyles({
     lineHeight: tokens.lineHeightBase300,
     padding: tokens.spacingVerticalM,
     whiteSpace: 'pre-wrap',
-    overflowX: 'auto',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    maxWidth: '100%',
+    maxHeight: '320px',
+    overflow: 'auto',
   },
   // footer / buttons
   footer: {

@@ -32,9 +32,16 @@ import {
   MessageBarTitle,
   Option,
   Spinner,
+  Subtitle2,
   makeStyles,
   tokens,
 } from '@fluentui/react-components';
+import {
+  DocumentTable20Regular,
+  DocumentArrowRight20Regular,
+  TableSettings20Regular,
+  PlayCircle20Regular,
+} from '@fluentui/react-icons';
 import { detectSparkFormat } from '@/lib/azure/spark-format-detect';
 import {
   SUPPORTED_LOAD_FORMATS,
@@ -44,17 +51,22 @@ import {
 } from '@/lib/azure/load-to-table-codegen';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 14, minWidth: 480 },
-  steps: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '480px' },
+  titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  titleIcon: { display: 'inline-flex', color: tokens.colorBrandForeground1 },
+  steps: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalXS },
+  stepHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorBrandForeground1 },
+  detect: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   summary: {
-    display: 'flex', flexDirection: 'column', gap: 6,
-    padding: 12, borderRadius: 6,
-    backgroundColor: tokens.colorNeutralBackground3,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
   },
-  row: { display: 'flex', justifyContent: 'space-between', gap: 16 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12, wordBreak: 'break-all' },
-  center: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, padding: 24 },
+  row: { display: 'flex', justifyContent: 'space-between', gap: tokens.spacingHorizontalL },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' },
+  center: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalXXL },
 });
 
 interface ComputeTarget { id: string; name: string; kind: string; state?: string }
@@ -157,7 +169,12 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
     <Dialog open={open} onOpenChange={(_, d) => { if (!submitting) onOpenChange(d.open); }}>
       <DialogSurface>
         <DialogBody>
-          <DialogTitle>Load to table — {path.split('/').pop()}</DialogTitle>
+          <DialogTitle>
+            <span className={s.titleRow}>
+              <span className={s.titleIcon}><DocumentTable20Regular /></span>
+              Load to table — {path.split('/').pop()}
+            </span>
+          </DialogTitle>
           <DialogContent>
             <div className={s.body}>
               <div className={s.steps}>
@@ -178,10 +195,11 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
               {/* ---- Step 1: source ---- */}
               {!submitting && step === 1 && (
                 <>
+                  <div className={s.stepHead}><DocumentArrowRight20Regular /><Subtitle2>Source file</Subtitle2></div>
                   <Field label="Source file">
                     <div className={s.mono}>{container}/{path}</div>
                   </Field>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <div className={s.detect}>
                     <Caption1>Detected format:</Caption1>
                     <Badge appearance="tint" color={detectedFormat ? 'brand' : 'warning'}>{hint.label}</Badge>
                     {detectedFormat ? (
@@ -210,6 +228,7 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
               {/* ---- Step 2: table + compute ---- */}
               {!submitting && step === 2 && (
                 <>
+                  <div className={s.stepHead}><TableSettings20Regular /><Subtitle2>Table &amp; compute</Subtitle2></div>
                   <Field
                     label="Table name"
                     validationState={nameErr ? 'error' : 'none'}
@@ -265,6 +284,7 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
               {/* ---- Step 3: write mode + summary ---- */}
               {!submitting && step === 3 && (
                 <>
+                  <div className={s.stepHead}><PlayCircle20Regular /><Subtitle2>Write mode &amp; run</Subtitle2></div>
                   <Field label="Write mode">
                     <Dropdown
                       selectedOptions={[writeMode]}

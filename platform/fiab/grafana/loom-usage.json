@@ -24,7 +24,7 @@
           "azureMonitor": {
             "resources": [
               {
-                "subscription": "e093f4fd-5047-4ee4-968d-a56942c665f3",
+                "subscription": "00000000-0000-0000-0000-000000000000",
                 "resourceGroup": "rg-csa-loom-admin-centralus",
                 "metricNamespace": "microsoft.app/containerapps",
                 "resourceName": "loom-console"
@@ -53,7 +53,7 @@
           "azureMonitor": {
             "resources": [
               {
-                "subscription": "e093f4fd-5047-4ee4-968d-a56942c665f3",
+                "subscription": "00000000-0000-0000-0000-000000000000",
                 "resourceGroup": "rg-csa-loom-admin-centralus",
                 "metricNamespace": "microsoft.app/containerapps",
                 "resourceName": "loom-console"
@@ -82,7 +82,7 @@
           "azureMonitor": {
             "resources": [
               {
-                "subscription": "e093f4fd-5047-4ee4-968d-a56942c665f3",
+                "subscription": "00000000-0000-0000-0000-000000000000",
                 "resourceGroup": "rg-csa-loom-admin-centralus",
                 "metricNamespace": "microsoft.app/containerapps",
                 "resourceName": "loom-console"
@@ -101,7 +101,7 @@
           "azureMonitor": {
             "resources": [
               {
-                "subscription": "e093f4fd-5047-4ee4-968d-a56942c665f3",
+                "subscription": "00000000-0000-0000-0000-000000000000",
                 "resourceGroup": "rg-csa-loom-admin-centralus",
                 "metricNamespace": "microsoft.app/containerapps",
                 "resourceName": "loom-console"
@@ -128,7 +128,7 @@
           "queryType": "Azure Log Analytics",
           "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
           "azureLogAnalytics": {
-            "resources": ["/subscriptions/e093f4fd-5047-4ee4-968d-a56942c665f3/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
+            "resources": ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
             "query": "ContainerAppConsoleLogs_CL | where ContainerName_s == 'loom-console' | summarize Entries=count() by bin(TimeGenerated, 1h) | order by TimeGenerated asc"
           }
         }

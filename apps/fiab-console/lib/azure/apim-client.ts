@@ -1192,6 +1192,20 @@ export async function testApiCall(args: {
 
 // ---------------- Named values ----------------
 
+/**
+ * A Key Vault reference on a named value (ARM `KeyVaultContractProperties`).
+ * `secretIdentifier` is the KV secret URI — versionless
+ * (`https://vault.vault.azure.net/secrets/name`) to allow auto-refresh, or
+ * versioned to pin. `lastStatus` reflects APIM's most recent fetch attempt so
+ * the UI can surface a fetch/permission failure honestly.
+ * Requires the APIM service's managed identity to have GET on the secret.
+ */
+export interface ApimKeyVaultRef {
+  secretIdentifier?: string;
+  identityClientId?: string;
+  lastStatus?: { code?: string; message?: string; timeStampUtc?: string };
+}
+
 export interface ApimNamedValueSummary {
   id: string;
   name: string;
@@ -1200,17 +1214,27 @@ export interface ApimNamedValueSummary {
   /** Present only for non-secret values (GET omits secret values). */
   value?: string;
   tags?: string[];
+  /** Present when the named value is Key Vault-backed instead of inline. */
+  keyVault?: ApimKeyVaultRef;
 }
 
 export interface ApimNamedValueBody {
   displayName: string;
-  value: string;
+  /** Inline value (inline mode). Omit when `keyVault` is supplied. */
+  value?: string;
   secret?: boolean;
   tags?: string[];
+  /**
+   * Key Vault-backed mode: reference a KV secret via its secret identifier
+   * instead of an inline value. When set, ARM stores `properties.keyVault`
+   * and forces `secret:true`; no inline `value` is transmitted.
+   */
+  keyVault?: { secretIdentifier: string };
 }
 
 function shapeNamedValue(raw: any): ApimNamedValueSummary {
   const p = raw?.properties || {};
+  const kv = p.keyVault;
   return {
     id: raw?.id,
     name: raw?.name,
@@ -1218,6 +1242,15 @@ function shapeNamedValue(raw: any): ApimNamedValueSummary {
     secret: p.secret,
     value: p.value,          // null on secret GETs — use listSecrets to reveal
     tags: p.tags,
+    keyVault: kv
+      ? {
+          secretIdentifier: kv.secretIdentifier,
+          identityClientId: kv.identityClientId,
+          lastStatus: kv.lastStatus
+            ? { code: kv.lastStatus.code, message: kv.lastStatus.message, timeStampUtc: kv.lastStatus.timeStampUtc }
+            : undefined,
+        }
+      : undefined,
   };
 }
 
@@ -1235,18 +1268,32 @@ export async function getNamedValue(id: string): Promise<ApimNamedValueSummary |
 
 /**
  * PUT /namedValues/{id} — create or update a named value (APIM "property").
- * displayName must match ^[A-Za-z0-9-._]+$. When secret=true the value is
- * encrypted at rest and not returned on subsequent GETs.
+ * displayName must match ^[A-Za-z0-9-._]+$.
+ *
+ * Two mutually-exclusive value modes (ARM `NamedValueCreateContractProperties`):
+ *   - Inline:    `value` (+ optional `secret:true` to encrypt at rest / hide on GET).
+ *   - Key Vault: `keyVault.secretIdentifier` referencing a KV secret. ARM forces
+ *                such values to be secret, so we set `secret:true` and send NO
+ *                inline `value`. The APIM service's managed identity must hold
+ *                GET on the referenced secret (Key Vault Secrets User /
+ *                get) — otherwise APIM reports the fetch failure in
+ *                `properties.keyVault.lastStatus` (surfaced via shapeNamedValue).
+ *                See aka.ms/apimmsi.
  */
 export async function upsertNamedValue(
   id: string,
   body: ApimNamedValueBody,
 ): Promise<ApimNamedValueSummary> {
-  const properties: any = {
-    displayName: body.displayName,
-    value: body.value,
-    secret: body.secret ?? false,
-  };
+  const properties: any = { displayName: body.displayName };
+  const secretIdentifier = body.keyVault?.secretIdentifier?.trim();
+  if (secretIdentifier) {
+    // Key Vault-backed: reference the secret; no inline value; always secret.
+    properties.keyVault = { secretIdentifier };
+    properties.secret = true;
+  } else {
+    properties.value = body.value ?? '';
+    properties.secret = body.secret ?? false;
+  }
   if (body.tags && body.tags.length) properties.tags = body.tags;
   const res = await apimFetch(`/namedValues/${encodeURIComponent(id)}`, {
     method: 'PUT',

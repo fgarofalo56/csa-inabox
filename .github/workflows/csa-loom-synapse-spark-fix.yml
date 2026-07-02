@@ -1,0 +1,80 @@
+name: csa-loom-synapse-spark-fix
+
+# Scoped, SAFE subset of the post-deploy bootstrap. Creates the Synapse managed
+# PRIVATE ENDPOINTS (dfs + blob) from the Synapse managed VNet to the workspace
+# DEFAULT ADLS lake — via an in-VNET Container App Job running as the deploy SP
+# (limitlessdata_deploy, the workspace Synapse admin) — so Spark notebooks/jobs
+# can read mirrored data + lakehouse Delta off the PE-only lake instead of
+# hanging on a blocked egress.
+#
+# WHY a SEPARATE workflow (not the full bootstrap): the full bootstrap is one
+# monolithic job that also re-registers the MSAL web-app (documented to break
+# live login) and other one-time grants. This workflow does ONLY the Synapse
+# Spark storage fix — nothing else — so it is safe to dispatch against a live
+# deployment. It complements the bootstrap, which already calls
+# fix-synapse-spark-storage-access.sh but on the PUBLIC runner, where it fails
+# silently on a PE-only workspace (the dev endpoint is private). This runs the
+# create+approve IN-VNET, where the dev endpoint is reachable.
+
+on:
+  workflow_dispatch:
+    inputs:
+      region:
+        description: 'Azure region the deploy landed in (e.g. centralus, eastus2). Derives ADMIN_RG / SYNAPSE_WS.'
+        type: string
+        default: centralus
+        required: false
+      admin_subscription:
+        description: 'ADMIN (hub) subscription id — holds the Console Container App Environment. Empty → dlz_subscription, then the centralus DMLZ default.'
+        type: string
+        required: false
+      dlz_subscription:
+        description: 'DLZ subscription id — holds the Synapse workspace + default ADLS lake. Empty → the centralus DLZ default.'
+        type: string
+        required: false
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  REGION: ${{ inputs.region || 'centralus' }}
+  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '' }}
+  DLZ_SUB: ${{ inputs.dlz_subscription || '' }}
+  ADMIN_RG: rg-csa-loom-admin-${{ inputs.region || 'centralus' }}
+  SYNAPSE_WS: syn-loom-default-${{ inputs.region || 'centralus' }}
+
+jobs:
+  synapse-spark-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (deploy SP — workspace Synapse admin)
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_CLIENT_SECRET }}",
+              "tenantId": "${{ secrets.AZURE_TENANT_ID }}",
+              "subscriptionId": "${{ env.ADMIN_SUB }}"
+            }
+
+      - name: Create + approve Synapse managed PE to the default lake (in-VNET)
+        run: |
+          set -euo pipefail
+          CAE_NAME=$(az containerapp env list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" \
+            --query "[?contains(name,'cae') || contains(name,'loom')].name | [0]" -o tsv 2>/dev/null || true)
+          if [ -z "${CAE_NAME:-}" ]; then
+            echo "::warning::No Container App Environment in $ADMIN_RG — cannot run the in-VNET Synapse Spark storage fix. Re-run after the admin plane is deployed."
+            exit 0
+          fi
+          echo "Console CAE (VNet-integrated): $CAE_NAME"
+          chmod +x scripts/csa-loom/run-spark-storage-fix-invnet-job.sh
+          ADMIN_RG="$ADMIN_RG" ADMIN_SUB="$ADMIN_SUB" CAE="$CAE_NAME" \
+          DLZ_SUB="$DLZ_SUB" SYNAPSE_WS="$SYNAPSE_WS" \
+          DEPLOY_SP_CLIENT_ID="${{ secrets.AZURE_CLIENT_ID }}" \
+          DEPLOY_SP_SECRET="${{ secrets.AZURE_CLIENT_SECRET }}" \
+          DEPLOY_SP_TENANT="${{ secrets.AZURE_TENANT_ID }}" \
+            bash scripts/csa-loom/run-spark-storage-fix-invnet-job.sh

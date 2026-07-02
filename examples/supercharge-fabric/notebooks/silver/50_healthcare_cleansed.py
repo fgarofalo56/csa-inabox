@@ -57,8 +57,8 @@ def _get_arg(name: str, default=None):
 
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
-source_table = "lh_bronze.dbo.bronze_healthcare_admissions"
-target_table = "lh_silver.dbo.silver_healthcare_encounters"
+source_table = "lh_bronze.bronze_healthcare_admissions"
+target_table = "lh_silver.silver_healthcare_encounters"
 
 print(f"Processing batch: {batch_id}")
 print(f"Source: {source_table}")

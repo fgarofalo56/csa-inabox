@@ -19,6 +19,31 @@ action surface.
     default rule backend is an **Azure Monitor scheduled-query alert** (Fabric
     Reflex is opt-in via `LOOM_ACTIVATOR_BACKEND=fabric`).
 
+!!! info "ADX-native Activator runtime (2026-07-01)"
+    The console activator now defaults new rules to an **Eventhouse / KQL
+    Database (ADX) source** (`sourceKind: 'adx'` in
+    `apps/fiab-console/lib/azure/activator-monitor.ts`). The rule wizard's
+    `/adx-source` pickers resolve the **real cluster, databases, and tables**
+    from the shared Loom ADX cluster, and the rule's KQL evaluates **directly
+    against Eventhouse/ADX data**:
+
+    - **On-demand (default):** **Trigger / Preview** runs the rule's KQL
+      against ADX now and dispatches actions if rows match — real data, no
+      scheduled host required.
+    - **Scheduled (opt-in):** set `LOOM_ADX_ALERT_SCOPE` to the ADX cluster
+      ARM resource id (and grant the alert identity **Database Viewer**);
+      Loom then creates a real Azure Monitor `scheduledQueryRule` **scoped to
+      the ADX cluster** (`skipQueryValidation` — the KQL targets ADX, not Log
+      Analytics) for hands-off continuous evaluation.
+
+    **Log Analytics** KQL and **Event Hub** sources remain available and always
+    evaluate continuously via standard Azure Monitor scheduled-query alerts.
+    Actions on all paths dispatch through real **Azure Monitor action groups**
+    (email, SMS, webhook, Logic App). This supersedes the older
+    "KQL Query Runner (scheduled queries → ADX)" description below for the
+    console-authored rule path; the C# engine remains the container-hosted
+    evaluation option (GCC-H / IL5).
+
 ## Service shape
 
 | Aspect | Value |

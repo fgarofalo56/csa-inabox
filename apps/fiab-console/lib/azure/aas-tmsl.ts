@@ -223,6 +223,15 @@ export interface TmslRelationship {
   toCardinality: TmslCardinality;
   crossFilteringBehavior: TmslCrossFilter;
   isActive: boolean;
+  /**
+   * Wave-3 RI flag. When true the tabular engine assumes referential integrity
+   * on this relationship (no blank "(Unknown)" member, INNER-join pushdown for
+   * DirectQuery). TMSL property `relyOnReferentialIntegrity`; emitted only when
+   * true so a relationship without the flag is byte-for-byte identical to the
+   * pre-Wave-3 output. Mirrors the optional `assumeReferentialIntegrity` flag on
+   * StoredRelationship / SmStoredRelationship (the canvas RI switch).
+   */
+  relyOnReferentialIntegrity?: boolean;
 }
 
 export interface TmslHierarchyLevel {
@@ -244,12 +253,31 @@ export interface TmslColumn {
   name: string;
   /** TMSL dataType — string | int64 | double | decimal | dateTime | boolean. */
   dataType: string;
+  /**
+   * Wave-3 date-table wiring. When true this column is emitted as the table's
+   * key column (`isKey: true`) — required on the date column of a table marked
+   * `dataCategory: 'Time'` so time-intelligence DAX (DATESYTD, SAMEPERIODLASTYEAR…)
+   * resolves. Emitted only when true (back-compat).
+   */
+  isKey?: boolean;
 }
 
 export interface TmslTable {
   name: string;
   columns: TmslColumn[];
   hierarchies?: TmslHierarchy[];
+  /**
+   * Wave-3 date-table mark. When set to 'Time' the table is emitted with
+   * `dataCategory: 'Time'` (mark-as-date-table). Optional + emitted only when
+   * present so a normal table is unchanged.
+   */
+  dataCategory?: string;
+  /**
+   * Wave-3 — the date/key column of a marked date table. When set, the matching
+   * column in `columns` is emitted with `isKey: true`. Alternative to setting
+   * `isKey` directly on the column; honored by `buildModelBimTmsl`.
+   */
+  dateColumn?: string;
 }
 
 function relationshipBody(rel: TmslRelationship): Record<string, unknown> {
@@ -265,6 +293,9 @@ function relationshipBody(rel: TmslRelationship): Record<string, unknown> {
     // TMSL `isActive` defaults to true — emit only when false so an inactive
     // (USERELATIONSHIP) role-playing relationship is honored.
     ...(rel.isActive === false ? { isActive: false } : {}),
+    // Wave-3 RI: `relyOnReferentialIntegrity` defaults to false — emit only when
+    // true so output is byte-identical to pre-Wave-3 for normal relationships.
+    ...(rel.relyOnReferentialIntegrity ? { relyOnReferentialIntegrity: true } : {}),
   };
 }
 
@@ -333,21 +364,43 @@ export function buildAlterTableHierarchyTmsl(
 }
 
 /**
+ * A table marked as the model's date table (mark-as-date-table). The matching
+ * table is emitted with `dataCategory: 'Time'` and its `dateColumn` becomes the
+ * table key column (`isKey: true`). Mirrors `DateTableMark` in model-store.ts;
+ * a `DateTableMark[]` (with an extra `updatedAt`) is structurally assignable.
+ */
+export interface DateTableMarkInput {
+  table: string;
+  dateColumn: string;
+}
+
+/**
  * Build a full `model.bim` TMSL document from the current model state. This is
  * the read-only preview shown in the editor AND the payload the Fabric
  * updateDefinition write overwrites with (it replaces the whole model.bim).
+ *
+ * Wave-3: pass `dateTables` (or set `dataCategory`/`dateColumn` on a TmslTable)
+ * to mark a date table — the table gets `dataCategory: 'Time'` and its date
+ * column gets `isKey: true`. Both inputs are optional and additive, so omitting
+ * them yields the exact pre-Wave-3 document.
  */
 export function buildModelBimTmsl(
   modelName: string,
   tables: TmslTable[],
   relationships: TmslRelationship[],
   hierarchies: TmslHierarchy[],
+  dateTables: DateTableMarkInput[] = [],
 ): string {
   const hierByTable = new Map<string, Omit<TmslHierarchy, 'table'>[]>();
   for (const h of hierarchies) {
     const list = hierByTable.get(h.table) || [];
     list.push({ name: h.name, levels: h.levels });
     hierByTable.set(h.table, list);
+  }
+  // table name → date/key column (from the dateTables arg, last write wins).
+  const dateColByTable = new Map<string, string>();
+  for (const d of dateTables) {
+    if (d && d.table && d.dateColumn) dateColByTable.set(d.table, d.dateColumn);
   }
   return JSON.stringify(
     {
@@ -357,14 +410,23 @@ export function buildModelBimTmsl(
         culture: 'en-US',
         tables: tables.map((t) => {
           const hs = hierByTable.get(t.name) || [];
+          // Effective date column: explicit dateTables arg wins, else the
+          // per-table `dateColumn` hint. Presence implies a Time data category.
+          const dateCol = dateColByTable.get(t.name) || t.dateColumn || '';
+          const dataCategory = dateCol ? 'Time' : t.dataCategory;
           return {
             name: t.name,
-            columns: t.columns.map((c) => ({
-              name: c.name,
-              dataType: c.dataType,
-              sourceColumn: c.name,
-            })),
+            columns: t.columns.map((c) => {
+              const isKey = c.isKey === true || (!!dateCol && c.name === dateCol);
+              return {
+                name: c.name,
+                dataType: c.dataType,
+                sourceColumn: c.name,
+                ...(isKey ? { isKey: true } : {}),
+              };
+            }),
             ...(hs.length ? { hierarchies: hs.map(hierarchyBody) } : {}),
+            ...(dataCategory ? { dataCategory } : {}),
           };
         }),
         relationships: relationships.map(relationshipBody),
@@ -379,6 +441,14 @@ export function buildModelBimTmsl(
  * Build the TMSL createOrReplace command for a single measure (pure — testable).
  * Used by the Monaco DAX editor's "Save to model (XMLA)" path. Optional format
  * string + display folder are included only when supplied.
+ *
+ * Wave-3: `formatStringDefinition` carries a DAX expression that RETURNS the
+ * format string (dynamic format strings, e.g. a measure whose format flips
+ * between currency and percent). It is emitted as
+ * `formatStringDefinition: { expression: '<dax>' }`; when absent the output is
+ * identical to the pre-Wave-3 command. A static `formatString` and a dynamic
+ * `formatStringDefinition` can both be supplied (the engine prefers the
+ * dynamic definition); supply only one when in doubt.
  */
 export function buildMeasureUpsertTmsl(opts: {
   database: string;
@@ -387,13 +457,18 @@ export function buildMeasureUpsertTmsl(opts: {
   expression: string;
   formatString?: string;
   displayFolder?: string;
+  /** DAX expression returning the format string (dynamic format strings). */
+  formatStringDefinition?: string;
 }): object {
-  const measure: Record<string, string> = {
+  const measure: Record<string, unknown> = {
     name: opts.measureName,
     expression: opts.expression,
   };
   if (opts.formatString) measure.formatString = opts.formatString;
   if (opts.displayFolder) measure.displayFolder = opts.displayFolder;
+  if (opts.formatStringDefinition) {
+    measure.formatStringDefinition = { expression: opts.formatStringDefinition };
+  }
   return {
     createOrReplace: {
       object: { database: opts.database, table: opts.tableName, measure: opts.measureName },
@@ -407,4 +482,86 @@ export function buildMeasureEvalQuery(tableName: string, measureName: string): s
   const tbl = "'" + (tableName || '').replace(/'/g, "''") + "'";
   const meas = '[' + (measureName || '').replace(/]/g, '') + ']';
   return 'EVALUATE ROW("value", ' + tbl + meas + ')';
+}
+
+// ---------------------------------------------------------------------------
+// Wave-3 — What-If parameter (OPT-IN provision-time emit only)
+//
+// A what-if parameter in a tabular model is a single-column CALCULATED TABLE
+// (partition source type 'calculated', expression GENERATESERIES(min,max,inc))
+// plus a SELECTEDVALUE "<name> Value" measure that reads the slicer selection.
+// This is the same shape Power BI Desktop generates for "New parameter", so the
+// model behaves identically when provisioned to a tabular engine. It is NOT on
+// the default Loom render/query path — the structured what-if dialog persists to
+// `state.model.whatIfParameters` and drives the real /query DAX directly; this
+// builder is only used when provisioning to an AAS/tabular engine (opt-in).
+//
+// TMSL refs:
+//   calculated table column — https://learn.microsoft.com/analysis-services/tmsl/tables-object-tmsl
+//   GENERATESERIES          — https://learn.microsoft.com/dax/generateseries-function-dax
+//   SELECTEDVALUE           — https://learn.microsoft.com/dax/selectedvalue-function-dax
+// ---------------------------------------------------------------------------
+
+/**
+ * Structural input for {@link buildWhatIfParameterTmsl}. A `WhatIfParameter`
+ * from model-store.ts is assignable to this (it carries every field plus extra
+ * metadata), so the model route can pass its persisted object directly.
+ */
+export interface WhatIfParameterTmslInput {
+  /** Identifier-safe table + column name (e.g. 'Discount %'). */
+  name: string;
+  /** The single-column table expression: `GENERATESERIES(min, max, increment)`. */
+  seriesExpression: string;
+  /** The bound value measure body: `SELECTEDVALUE('<name>'[<name>], <default>)`. */
+  valueMeasure: string;
+  /** TMSL data type of the generated column; defaults to 'double'. */
+  dataType?: 'int64' | 'decimal' | 'double';
+}
+
+/**
+ * createOrReplace command that upserts a what-if parameter as a calculated
+ * single-column table + its SELECTEDVALUE value measure. Pure JSON (no network).
+ * Returns the command object (mirrors {@link buildMeasureUpsertTmsl}); the route
+ * passes it to the TMSL executor when provisioning to a tabular engine.
+ *
+ * Output shape (Power-BI-parity for a what-if parameter):
+ *   createOrReplace → table { columns:[calculatedTableColumn over [Value]],
+ *   partitions:[{ mode:'import', source:{ type:'calculated', expression } }],
+ *   measures:[{ name:'<name> Value', expression:<SELECTEDVALUE> }] }.
+ */
+export function buildWhatIfParameterTmsl(database: string, param: WhatIfParameterTmslInput): object {
+  const name = param.name;
+  const dataType = param.dataType || 'double';
+  return {
+    createOrReplace: {
+      object: { database, table: name },
+      table: {
+        name,
+        columns: [
+          {
+            // GENERATESERIES returns a single column named [Value]; bind to it.
+            type: 'calculatedTableColumn',
+            name,
+            dataType,
+            isNameInferred: true,
+            isDataTypeInferred: true,
+            sourceColumn: '[Value]',
+            sortByColumn: name,
+            summarizeBy: 'none',
+          },
+        ],
+        partitions: [
+          {
+            name,
+            mode: 'import',
+            source: { type: 'calculated', expression: param.seriesExpression },
+          },
+        ],
+        measures: [
+          // Power BI convention: the value measure is named "<name> Value".
+          { name: `${name} Value`, expression: param.valueMeasure },
+        ],
+      },
+    },
+  };
 }

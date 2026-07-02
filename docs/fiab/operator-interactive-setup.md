@@ -7,8 +7,8 @@ auth. **Total time: ~5 minutes.** Each grant unlocks a family of editors.
 **Target principal for every grant below:**
 
 - **UAMI display name:** `uami-loom-console-eastus2`
-- **UAMI client (application) id:** `c6272de5-3c4e-4b72-8b57-71b2e950209b`
-- **UAMI object (principal) id:** `e61f3eb3-c646-4183-8198-4c4a34cd9a01`
+- **UAMI client (application) id:** `<YOUR_CONSOLE_UAMI_CLIENT_ID>`
+- **UAMI object (principal) id:** `<YOUR_CONSOLE_UAMI_PRINCIPAL_ID>`
 
 When a UI asks "user / group / service principal", you want **Service principal**
 and search either by the display name or the client id.
@@ -31,7 +31,7 @@ Copilot Studio family piggybacks on this single grant).
    labeled "Microsoft Entra roles" in newer UI).
 4. Find the **Power Platform Administrator** role row → click **Assign**.
 5. Search for `uami-loom-console-eastus2` (or paste the client id
-   `c6272de5-3c4e-4b72-8b57-71b2e950209b`).
+   `<YOUR_CONSOLE_UAMI_CLIENT_ID>`).
 6. Select the result → **Add** → confirm.
 
 > Some tenants surface this under **Microsoft Entra admin center → Roles &
@@ -79,7 +79,7 @@ fully green for Fabric-hosted notebooks.
    - Group type: **Security**
    - Name: `loom-fabric-sp`
    - Members → **Add members** → search for the UAMI client id
-     `c6272de5-3c4e-4b72-8b57-71b2e950209b` → Add → Create.
+     `<YOUR_CONSOLE_UAMI_CLIENT_ID>` → Add → Create.
 8. Back in Fabric admin portal → Apply.
 
 > Two related toggles in the same area are worth flipping while you're there:
@@ -236,7 +236,7 @@ Grant UAMI the role:
 
 ```bash
 ACC=$(az cognitiveservices account show -n csloomcontentsafety-eastus2 -g rg-csa-loom-admin-eastus2 --query id -o tsv)
-az role assignment create --assignee-object-id e61f3eb3-c646-4183-8198-4c4a34cd9a01 \
+az role assignment create --assignee-object-id <YOUR_CONSOLE_UAMI_PRINCIPAL_ID> \
   --assignee-principal-type ServicePrincipal \
   --role "Cognitive Services User" --scope "$ACC"
 ```
@@ -371,12 +371,12 @@ gh workflow run csa-loom-post-deploy-bootstrap.yml --ref main
 **Power Platform Administrator grant — DONE via Microsoft Graph:**
 
 1. Created role-assignable security group `loom-uami-admins` (Graph id: `5e2efb0a-8b25-4ddb-b545-a9b547127472`).
-2. Added UAMI service principal (`e61f3eb3-c646-4183-8198-4c4a34cd9a01`) as member.
+2. Added UAMI service principal (`<YOUR_CONSOLE_UAMI_PRINCIPAL_ID>`) as member.
 3. Assigned the **Power Platform Administrator** directory role (template id `11648597-926c-4cf3-9c36-bcebb0ba8dcc`) to the group at directory scope.
 
 The Entra assignment is in place. Power Platform API still 403s the SP because:
 - **Entra → PP propagation takes 5-15 min.** Retry `service-health.mjs` after the wait.
-- **Dataverse-backed editors** (Power Apps, Dataverse table, AI Builder) additionally need the SP registered as an **Application User** inside each Dataverse environment. Path: PPAC → Environment → Settings → Users + permissions → Application users → + New app user → search `c6272de5-3c4e-4b72-8b57-71b2e950209b` → assign business unit + System Administrator security role.
+- **Dataverse-backed editors** (Power Apps, Dataverse table, AI Builder) additionally need the SP registered as an **Application User** inside each Dataverse environment. Path: PPAC → Environment → Settings → Users + permissions → Application users → + New app user → search `<YOUR_CONSOLE_UAMI_CLIENT_ID>` → assign business unit + System Administrator security role.
 
 **Fabric tenant SP grants — already in place:**
 - "Service principals can call Fabric public APIs" → Enabled, applied to group `FabricDataGov` (id `43a6f18e-75c5-41e8-88c5-1532231baec6`).

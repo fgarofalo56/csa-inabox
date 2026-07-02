@@ -11,7 +11,7 @@
  * drag-and-drop from the activity palette.
  */
 
-import {
+import { shorthands,
   OverlayDrawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Button, Badge, Caption1, Subtitle2,
   makeStyles, tokens,
@@ -39,7 +39,7 @@ const useStyles = makeStyles({
     transitionProperty: 'border-color, box-shadow',
     transitionDuration: '120ms',
     ':hover': {
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
       boxShadow: tokens.shadow4,
     },
   },

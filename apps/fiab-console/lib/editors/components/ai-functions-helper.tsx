@@ -67,16 +67,16 @@ const FN_OPTIONS: { key: AiFn; label: string; desc: string }[] = [
 ];
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 14, minWidth: 520 },
-  row: { display: 'flex', gap: 12 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '520px' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM },
   flex1: { flex: 1 },
   receipt: {
-    display: 'flex', flexDirection: 'column', gap: 6,
-    padding: 12, borderRadius: 6,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-word' },
   tableWrap: { overflow: 'auto', maxHeight: '40vh' },
 });
 
@@ -266,7 +266,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
       <DialogSurface style={{ maxWidth: '760px', width: '92vw' }}>
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
               <Sparkle20Regular /> AI functions
             </span>
           </DialogTitle>

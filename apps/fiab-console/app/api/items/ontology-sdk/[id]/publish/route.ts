@@ -48,8 +48,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!boundOntologyId) return err('Bind an ontology to this SDK first.', 409, 'no_ontology');
   const onto = await loadOwnedItem(boundOntologyId, 'ontology', s.claims.oid);
   if (!onto) return err('bound ontology not found', 404, 'ontology_not_found');
-  const entityTypes = ontologyEntityTypes(onto);
-  if (entityTypes.length === 0) return err('The bound ontology has no entity types.', 409, 'empty_ontology');
+  const allEntityTypes = ontologyEntityTypes(onto);
+  if (allEntityTypes.length === 0) return err('The bound ontology has no entity types.', 409, 'empty_ontology');
+  // Honor the SDK scope selection (Ontology scope selector) so the published API
+  // covers exactly the object types the generated client does. Absent selection
+  // = all types (back-compat).
+  const selected = Array.isArray(state.selectedObjectTypes) ? (state.selectedObjectTypes as unknown[]).map(String) : null;
+  const entityTypes = selected ? allEntityTypes.filter((t) => selected.includes(t)) : allEntityTypes;
+  if (entityTypes.length === 0) return err('The SDK scope excludes every object type — include at least one before publishing.', 409, 'empty_selection');
 
   const gate = apimConfigGate();
   if (gate) {

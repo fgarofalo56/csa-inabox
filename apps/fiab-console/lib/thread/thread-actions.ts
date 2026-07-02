@@ -125,12 +125,126 @@ export const THREAD_ACTIONS: ThreadAction[] = [
     submitLabel: 'Weave',
   },
   {
+    // Azure-native DEFAULT report builder (no Fabric/Power BI). Appears on a
+    // Loom semantic-model item and opens a new `report` pre-bound to it. The
+    // shared route infers `sourceMode:'model'` from `from.type === 'semantic-model'`.
+    id: 'build-report-from-model',
+    label: 'Build a report',
+    description:
+      'Create a Loom report bound to this semantic model and open it in the report designer, ' +
+      'pre-bound — drag fields onto visuals and they render real SUM/AVG/COUNT GROUP BY rows ' +
+      'from the model’s Azure-native backend (Synapse warehouse / serverless-over-lakehouse, ' +
+      'or AAS tabular). No Power BI workspace required.',
+    group: 'Visualize',
+    fromTypes: ['semantic-model'],
+    icon: 'chart',
+    fields: [
+      {
+        name: 'reportName',
+        label: 'Report name',
+        kind: 'text',
+        required: true,
+        hint: 'A name for the new report. It opens pre-bound to this semantic model.',
+      },
+    ],
+    route: '/api/thread/build-loom-report',
+    submitLabel: 'Weave',
+  },
+  {
+    // Azure-native DEFAULT path from a data source: mints a Loom-native
+    // semantic-model from a table/SELECT (NOT a Power BI push dataset) and opens
+    // a report pre-bound to it. The shared route reads `from.type` (warehouse /
+    // synapse-dedicated-sql-pool / lakehouse / notebook) + `values.sourceMode`.
+    id: 'build-loom-report',
+    label: 'Build a report',
+    description:
+      'Create a Loom report from this source: Loom mints an Azure-native semantic model from a ' +
+      'table or a SQL query (over the Synapse warehouse / serverless-over-lakehouse), then opens ' +
+      'a report pre-bound to it. Visuals compile to real SUM/AVG/COUNT GROUP BY — no Power BI ' +
+      'workspace and no DAX to type.',
+    group: 'Visualize',
+    fromTypes: ['warehouse', 'synapse-dedicated-sql-pool', 'lakehouse', 'notebook'],
+    icon: 'chart',
+    fields: [
+      {
+        name: 'sourceMode',
+        label: 'Report source',
+        kind: 'select',
+        options: [
+          { value: 'table', label: 'A table' },
+          { value: 'query', label: 'A SQL query' },
+        ],
+        default: 'table',
+        required: true,
+        hint:
+          'Build the report’s semantic model from a table, or from the result of a SQL query. ' +
+          'For a notebook, choose “A SQL query”, pick the attached data source, and provide the query.',
+      },
+      {
+        name: 'table',
+        label: 'Table',
+        kind: 'select',
+        optionsRoute: '/api/thread/warehouse-tables?fromType={fromType}&fromId={fromId}',
+        required: true,
+        showWhen: { field: 'sourceMode', equals: 'table' },
+        hint: 'The Azure-native warehouse table to model and visualize.',
+      },
+      {
+        // Drives `sqlKindFor` in /api/thread/build-loom-report: for a notebook
+        // source the route reads the LITERAL backend kind ('warehouse' |
+        // 'lakehouse') from `values.attachedSource` to choose the Synapse target
+        // (dedicated pool vs serverless). This was previously a `loom-item` picker
+        // named `attachedSourceId` returning an item GUID, so the value never
+        // reached the route's `values.attachedSource` and every notebook→report
+        // wrongly resolved to the dedicated warehouse pool. A structured kind
+        // select keeps it dropdown-only (loom-no-freeform-config) and lets the
+        // existing route work unchanged.
+        name: 'attachedSource',
+        label: 'Notebook’s attached backend',
+        kind: 'select',
+        options: [
+          { value: 'warehouse', label: 'Warehouse / dedicated SQL pool (Synapse dedicated)' },
+          { value: 'lakehouse', label: 'Lakehouse (Synapse serverless)' },
+        ],
+        default: 'warehouse',
+        showWhen: { field: 'sourceMode', equals: 'query' },
+        hint:
+          'For a report from a notebook, pick which Azure-native backend the SQL query runs against — ' +
+          'the warehouse / dedicated SQL pool, or the lakehouse (Synapse serverless). This selects how the ' +
+          'query is introspected and executed. Ignored when the source is itself a warehouse or lakehouse.',
+      },
+      {
+        name: 'query',
+        label: 'SQL query',
+        kind: 'textarea',
+        required: true,
+        showWhen: { field: 'sourceMode', equals: 'query' },
+        hint:
+          'A SELECT against the Azure-native backend. Its result columns become the report’s ' +
+          'semantic-model table; the report’s visuals compile to SUM/AVG/COUNT GROUP BY over it.',
+      },
+      {
+        name: 'reportName',
+        label: 'Report name',
+        kind: 'text',
+        required: true,
+        hint: 'A name for the new report. It opens pre-bound to a Loom-native semantic model — no Power BI workspace required.',
+      },
+    ],
+    route: '/api/thread/build-loom-report',
+    submitLabel: 'Weave',
+  },
+  {
+    // Opt-in Power BI path (strictly additive to the Azure-native default above).
     id: 'build-powerbi-model',
     label: 'Build a Power BI model',
     description:
-      'Publish a warehouse table to Power BI as a real semantic model — columns are read from ' +
-      'the catalog and a sample of real rows is pushed so the model is queryable immediately. ' +
-      'Then build a report on it in Power BI. No connection strings to type.',
+      'Opt-in Power BI path: publish a warehouse table to Power BI as a real semantic model — ' +
+      'columns are read from the catalog and a sample of real rows is pushed so the model is ' +
+      'queryable immediately, then build the report in Power BI. Requires a Power BI workspace ' +
+      '(NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi; the Console identity must be a Member/Contributor). ' +
+      'For the Azure-native default that needs no Power BI workspace, use “Build a report” instead. ' +
+      'No connection strings to type.',
     group: 'Visualize',
     fromTypes: POWERBI_MODELABLE,
     icon: 'chart',

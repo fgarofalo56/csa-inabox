@@ -9,11 +9,15 @@ import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Open16Regular, Dismiss24Regular, ArrowClockwise16Regular } from '@fluentui/react-icons';
+import {
+  Open16Regular, Dismiss24Regular, ArrowClockwise16Regular,
+  Server20Regular, CloudCube20Regular, Money20Regular,
+} from '@fluentui/react-icons';
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
+import { SectionExplainer, LearnPopover } from '@/lib/components/ui/learn-popover';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { ScaleManagePanel } from '@/lib/components/admin/scale-manage-panel';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
@@ -113,42 +117,75 @@ function fmtCurrency(n: number, currency: string): string {
 
 const useStyles = makeStyles({
   intro: { color: tokens.colorNeutralForeground2, lineHeight: 1.55, marginBottom: tokens.spacingVerticalL },
+  explainer: { marginBottom: tokens.spacingVerticalL },
+  explainerList: { marginTop: tokens.spacingVerticalS, marginBottom: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   stats: {
     display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-    gap: tokens.spacingHorizontalM,
+    gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))',
+    gap: tokens.spacingHorizontalL,
   },
   stat: {
-    padding: tokens.spacingVerticalM,
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalL,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
   },
+  statIcon: {
+    flexShrink: 0,
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+  },
+  statBody: { display: 'flex', flexDirection: 'column', minWidth: 0 },
   statLabel: {
-    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
+    fontSize: tokens.fontSizeBase100, textTransform: 'uppercase', letterSpacing: '0.06em',
     color: tokens.colorNeutralForeground3, fontWeight: 600,
   },
-  statValue: { fontSize: '22px', fontWeight: 700, marginTop: '4px', lineHeight: 1.1 },
+  statValue: { fontSize: tokens.fontSizeBase600, fontWeight: 700, marginTop: tokens.spacingVerticalXXS, lineHeight: 1.1 },
   resName: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   resIcon: {
     flexShrink: 0, width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
   },
-  portalLink: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px' },
+  portalLink: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 },
   costCell: { fontVariantNumeric: 'tabular-nums', fontWeight: 600 },
-  spark: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
+  spark: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   sparkSvg: { flexShrink: 0 },
-  sparkVal: { fontSize: '12px', fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
+  sparkVal: { fontSize: tokens.fontSizeBase200, fontWeight: 600, fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' },
   dim: { color: tokens.colorNeutralForeground3 },
   totalBar: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
-    marginTop: tokens.spacingVerticalM, padding: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalM, padding: tokens.spacingVerticalL,
     borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
   },
-  totalVal: { fontSize: '18px', fontWeight: 700, fontVariantNumeric: 'tabular-nums' },
-  detailMeta: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 14px', marginBottom: tokens.spacingVerticalL, fontSize: '13px' },
+  totalIcon: {
+    flexShrink: 0,
+    width: '36px',
+    height: '36px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+  },
+  totalVal: { fontSize: tokens.fontSizeBase500, fontWeight: 700, fontVariantNumeric: 'tabular-nums' },
+  detailMeta: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, marginBottom: tokens.spacingVerticalL, fontSize: tokens.fontSizeBase300 },
   detailKey: { color: tokens.colorNeutralForeground3, fontWeight: 600 },
+  detailVal: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   chartGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingHorizontalM },
   vizLinks: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalL },
 });
@@ -347,11 +384,11 @@ function DetailPane({ res, viz, onClose }: { res: AzureRes; viz: VizConfig | nul
       </DrawerHeader>
       <DrawerBody>
         <div className={styles.detailMeta}>
-          <span className={styles.detailKey}>Type</span><span>{res.type}</span>
-          <span className={styles.detailKey}>Resource group</span><span>{res.resourceGroup}</span>
-          <span className={styles.detailKey}>Region</span><span>{res.location}</span>
-          {res.sku || res.kind ? <><span className={styles.detailKey}>SKU / Kind</span><span>{res.sku || res.kind}</span></> : null}
-          {res.provisioningState ? <><span className={styles.detailKey}>State</span><span>{res.provisioningState}</span></> : null}
+          <span className={styles.detailKey}>Type</span><span className={styles.detailVal}>{res.type}</span>
+          <span className={styles.detailKey}>Resource group</span><span className={styles.detailVal}>{res.resourceGroup}</span>
+          <span className={styles.detailKey}>Region</span><span className={styles.detailVal}>{res.location}</span>
+          {res.sku || res.kind ? <><span className={styles.detailKey}>SKU / Kind</span><span className={styles.detailVal}>{res.sku || res.kind}</span></> : null}
+          {res.provisioningState ? <><span className={styles.detailKey}>State</span><span className={styles.detailVal}>{res.provisioningState}</span></> : null}
         </div>
 
         <div className={styles.vizLinks}>
@@ -529,6 +566,31 @@ export default function CapacityPage() {
         gate, never a fake value.
       </Body1>
 
+      <div className={styles.explainer}>
+        <SectionExplainer>
+          A <strong>capacity</strong> here is the pool of Azure compute + storage that backs your Loom workloads — the resources listed below are what actually run your lakehouses, warehouses, pipelines, and analytics. Loom is Azure-native, so a "capacity" is one or more of these services rather than a single Microsoft Fabric SKU.
+          <ul className={styles.explainerList}>
+            <li>
+              <strong>SKUs &amp; equivalents</strong> — where Fabric uses one F-SKU dial (F2–F2048), Loom sizes each service on its own scale: Synapse <strong>DWU</strong>, ADX vCore tiers, Databricks cluster sizes, AI Search replicas/partitions. Roughly, an F64 of Fabric compute maps to a mid-tier Synapse pool plus an ADX cluster.{' '}
+              <LearnPopover
+                title="Capacity &amp; SKU equivalents"
+                content="Fabric bundles all engines under one capacity SKU. Loom exposes each Azure engine's native SKU so you pay only for what a workload needs — a Synapse DWU level for the warehouse, an ADX tier for real-time, Databricks node sizes for Spark, and AI Search units for retrieval."
+                learnMoreHref="https://learn.microsoft.com/fabric/enterprise/licenses"
+              />
+            </li>
+            <li>
+              <strong>Pause / resume &amp; cost</strong> — most engines can pause (Synapse dedicated pools, ADX, Databricks auto-terminate) so idle compute stops billing while data persists. Month-to-date cost per resource comes live from Azure Cost Management; 24h utilization comes from Azure Monitor.{' '}
+              <LearnPopover
+                title="Pause, resume, and cost"
+                content="Pausing a dedicated SQL pool or ADX cluster stops compute charges — you keep paying only for stored data. Resume on demand (a dedicated pool takes ~60–90s to come online). The $/mo column is real Cost Management data; where an offer has no cost or metric feed (e.g. some Azure Government offers) the cell shows an honest gate."
+                tips={['Pause idle pools to pay storage only', 'Resume is on-demand (~60–90s for a dedicated pool)', 'Use "Scale & manage" below to change SKU / pause / resume in place']}
+                learnMoreHref="https://learn.microsoft.com/azure/synapse-analytics/sql-data-warehouse/pause-and-resume-compute-portal"
+              />
+            </li>
+          </ul>
+        </SectionExplainer>
+      </div>
+
       {unauth && <SignInRequired subject="Azure resource inventory" />}
 
       {!unauth && data === null && (
@@ -549,13 +611,19 @@ export default function CapacityPage() {
           <Section title="Inventory summary">
             <div className={styles.stats}>
               <div className={styles.stat}>
-                <div className={styles.statLabel}>Total resources</div>
-                <div className={styles.statValue}>{data.totalResources}</div>
+                <span className={styles.statIcon} aria-hidden><Server20Regular /></span>
+                <div className={styles.statBody}>
+                  <div className={styles.statLabel}>Total resources</div>
+                  <div className={styles.statValue}>{data.totalResources}</div>
+                </div>
               </div>
               {Object.entries(data.byProvider || {}).slice(0, 5).map(([p, n]) => (
                 <div className={styles.stat} key={p}>
-                  <div className={styles.statLabel}>{p}</div>
-                  <div className={styles.statValue}>{n}</div>
+                  <span className={styles.statIcon} aria-hidden><CloudCube20Regular /></span>
+                  <div className={styles.statBody}>
+                    <div className={styles.statLabel}>{p}</div>
+                    <div className={styles.statValue}>{n}</div>
+                  </div>
                 </div>
               ))}
             </div>
@@ -572,9 +640,16 @@ export default function CapacityPage() {
           <Section
             title="Scale & manage"
             actions={
-              <Caption1 className={a.muted}>
-                Change SKUs, pause / resume, scale — live Azure-native compute
-              </Caption1>
+              <>
+                <Caption1 className={a.muted}>
+                  Change SKUs, pause / resume, scale — live Azure-native compute
+                </Caption1>
+                <LearnPopover
+                  title="Scale & manage"
+                  content="Change a service's SKU, pause or resume it, and scale replicas — applied in place via a real Azure REST call, no portal hand-off. Scale changes on Fabric capacity, APIM, and ADX are asynchronous; refresh after a few minutes to see the new state."
+                  learnMoreHref="https://learn.microsoft.com/azure/azure-resource-manager/management/overview"
+                />
+              </>
             }
           >
             <ScaleManagePanel />
@@ -583,9 +658,17 @@ export default function CapacityPage() {
           <Section
             title="Ops Copilot"
             actions={
-              <Caption1 className={a.muted}>
-                Natural language → ARM / config action, with approval diff + RBAC gate
-              </Caption1>
+              <>
+                <Caption1 className={a.muted}>
+                  Natural language → ARM / config action, with approval diff + RBAC gate
+                </Caption1>
+                <LearnPopover
+                  title="Ops Copilot"
+                  content="Describe an operation in plain language (e.g. “pause the dev SQL pool”) and the copilot proposes the exact ARM/config change. You review a diff and approve before anything runs, and every action is gated by your Azure RBAC — it can never do more than you can."
+                  tips={['Every change shows an approval diff first', 'Actions honor your Azure RBAC role', 'Each run is written to the audit log']}
+                  learnMoreHref="https://learn.microsoft.com/azure/role-based-access-control/overview"
+                />
+              </>
             }
           >
             <OpsCopilotPane />
@@ -624,6 +707,7 @@ export default function CapacityPage() {
               ariaLabel="Azure resources"
             />
             <div className={styles.totalBar}>
+              <span className={styles.totalIcon} aria-hidden><Money20Regular /></span>
               <Text className={styles.statLabel}>Estimated month-to-date cost (loaded rows)</Text>
               <span className={styles.totalVal}>{fmtCurrency(costSum, currencyRef.current)}</span>
               <Caption1 className={a.muted}>

@@ -10,7 +10,7 @@
  * Hover reveals the chunk preview.
  */
 
-import {
+import { shorthands,
   Tooltip, makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
@@ -29,30 +29,30 @@ export interface Citation {
 
 const useStyles = makeStyles({
   wrap: {
-    display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8,
-    paddingTop: 8, borderTop: `1px dashed ${tokens.colorNeutralStroke2}`,
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalSNudge, marginTop: tokens.spacingVerticalS,
+    paddingTop: tokens.spacingVerticalS, borderTop: `1px dashed ${tokens.colorNeutralStroke2}`,
   },
   label: {
-    fontSize: 11, color: tokens.colorNeutralForeground3,
+    fontSize: '11px', color: tokens.colorNeutralForeground3,
     textTransform: 'uppercase', letterSpacing: '0.06em',
-    width: '100%', marginBottom: 2, fontWeight: 600,
+    width: '100%', marginBottom: tokens.spacingVerticalXXS, fontWeight: 600,
   },
   chip: {
-    display: 'inline-flex', alignItems: 'center', gap: 4,
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
     padding: '2px 8px',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 12, fontSize: 12,
+    borderRadius: '12px', fontSize: tokens.fontSizeBase200,
     color: tokens.colorBrandForeground1, textDecoration: 'none',
-    maxWidth: 280, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+    maxWidth: '280px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
     transition: 'background-color 120ms ease, border-color 120ms ease',
     ':hover': {
       backgroundColor: tokens.colorBrandBackground2,
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
     },
     ':focus-visible': {
       outline: `2px solid ${tokens.colorBrandStroke1}`,
-      outlineOffset: 2,
+      outlineOffset: '2px',
     },
   },
   chipDisabled: {

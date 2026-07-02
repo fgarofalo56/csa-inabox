@@ -19,7 +19,18 @@
  *     either a plain JSON body or an SSE-framed (`text/event-stream`) body —
  *     Streamable HTTP servers may respond with either.
  *
- * Auth: Authorization header or Key Vault secret reference (resolved at call time).
+ * Auth: one of three modes, resolved at call time —
+ *   • 'header'      — a static Authorization header value (verbatim).
+ *   • 'key-vault'   — a tenant-static secret fetched from Key Vault over REST.
+ *   • 'entra-obo'   — a PER-USER Microsoft Entra On-Behalf-Of bearer (minted at
+ *     login + cached per-user, e.g. the Power BI remote MCP server at
+ *     api.fabric.microsoft.com/v1/mcp/powerbi). The token is NOT stored on this
+ *     server config; it is threaded in per request via the optional `userToken`
+ *     argument so the remote tools run under the signed-in user's RBAC. This is
+ *     an OPT-IN, config-gated path (no-fabric-dependency) — never reached unless
+ *     an admin registers such a server; the Azure-native authoring path is the
+ *     default. When no user token is available, no Authorization header is sent
+ *     and the remote endpoint's own 401/403 surfaces as the honest gate.
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
@@ -43,13 +54,22 @@ const kvCredential = uamiClientId
 
 /**
  * Resolve the Authorization header value for an MCP server.
- * @param authMethod 'header' (use authValue directly) or 'key-vault' (fetch from KV REST)
+ * @param authMethod 'header' (use authValue directly), 'key-vault' (fetch from KV REST),
+ *   or 'entra-obo' (use the per-user On-Behalf-Of bearer passed in `userToken`).
  * @param authValue raw value, or a KV secret ref "<vault-name-or-url>/<secret-name>" / "<secret-name>"
+ * @param userToken per-USER Entra OBO access token (entra-obo only); minted at
+ *   login + cached per user (pbi-user-token-store) and threaded in at call time.
+ *   Never persisted on the server config — supplied fresh per request.
  */
 export async function resolveAuthHeader(
   authMethod: string,
   authValue?: string,
+  userToken?: string,
 ): Promise<string> {
+  // entra-obo: credential is the per-user OBO bearer, not a static header/KV
+  // secret — checked BEFORE the authValue guard (OBO servers carry no authValue).
+  // No token → empty header; the remote endpoint's 401/403 is the honest gate.
+  if (authMethod === 'entra-obo') return userToken ? `Bearer ${userToken}` : '';
   if (!authValue) return '';
   if (authMethod === 'key-vault') {
     const parts = authValue.split('/');
@@ -218,14 +238,16 @@ async function rpcCall(
 /**
  * Fetch the list of available tools from an MCP server.
  * Performs the full Streamable HTTP handshake: initialize → tools/list.
+ * @param userToken optional per-user Entra OBO bearer (authMethod 'entra-obo' only).
  */
 export async function listMcpTools(
   endpoint: string,
   authMethod: string,
   authValue?: string,
   timeoutMs: number = 5000,
+  userToken?: string,
 ): Promise<Array<{ name: string; description?: string; inputSchema?: Record<string, unknown> }>> {
-  const authHeader = await resolveAuthHeader(authMethod, authValue);
+  const authHeader = await resolveAuthHeader(authMethod, authValue, userToken);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -243,6 +265,8 @@ export async function listMcpTools(
 /**
  * Call a tool on an MCP server.
  * Performs the full Streamable HTTP handshake: initialize → tools/call.
+ * @param userToken optional per-user Entra OBO bearer (authMethod 'entra-obo' only);
+ *   the remote tool then executes under the signed-in user's RBAC.
  */
 export async function callMcpTool(
   endpoint: string,
@@ -251,8 +275,9 @@ export async function callMcpTool(
   authMethod: string,
   authValue?: string,
   timeoutMs: number = 30000,
+  userToken?: string,
 ): Promise<unknown> {
-  const authHeader = await resolveAuthHeader(authMethod, authValue);
+  const authHeader = await resolveAuthHeader(authMethod, authValue, userToken);
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 

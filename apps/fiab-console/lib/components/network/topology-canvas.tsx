@@ -34,34 +34,50 @@ import {
   Badge, Body1, Body1Strong, Caption1, Subtitle2, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
 } from '@fluentui/react-components';
-import { Dismiss24Regular } from '@fluentui/react-icons';
+import {
+  Dismiss24Regular,
+  VirtualNetwork20Regular, Subtract20Regular, Shield20Regular,
+  GlobeShield20Regular, LockClosed20Regular, Cloud20Regular, Database20Regular,
+  Flash20Regular, Server20Regular, Stream20Regular, Cube20Regular,
+  type FluentIcon,
+} from '@fluentui/react-icons';
+import { accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import type {
   PrivateEndpointInfo, VNetInfo, SubnetInfo, NsgInfo, NsgRule, PrivateDnsZoneInfo,
 } from '@/lib/azure/network-discovery';
 
 /**
- * Service type color mapping — matches Fluent color tokens + CSA service categories.
+ * Service-type visual mapping — theme-aware `--loom-accent-*` var + Fluent glyph.
+ * Replaces the old hex-bg/border + emoji-icon map; light + dark resolve through
+ * the accent CSS vars (defined under both selectors in app/globals.css).
  */
-const SERVICE_COLORS: Record<string, { bg: string; border: string; icon: string }> = {
-  synapse: { bg: '#EFF6FC', border: tokens.colorBrandForeground1, icon: '⚡' },
-  storage: { bg: '#F0F5FD', border: '#1570EF', icon: '📦' },
-  sql: { bg: '#F0E8FF', border: '#7C3AED', icon: '🗄️' },
-  databricks: { bg: '#FEF3E2', border: '#D97706', icon: '📊' },
-  keyvault: { bg: '#FEF2F2', border: '#DC2626', icon: '🔐' },
-  eventgrid: { bg: '#F0FDF4', border: '#16A34A', icon: '📨' },
-  other: { bg: '#F5F5F5', border: tokens.colorNeutralStroke2, icon: '🔗' },
+const SERVICE_VISUAL: Record<string, { accent: string; Icon: FluentIcon }> = {
+  synapse: { accent: 'var(--loom-accent-blue)', Icon: Flash20Regular },
+  storage: { accent: 'var(--loom-accent-cyan)', Icon: Cloud20Regular },
+  sql: { accent: 'var(--loom-accent-violet)', Icon: Database20Regular },
+  databricks: { accent: 'var(--loom-accent-red)', Icon: Server20Regular },
+  keyvault: { accent: 'var(--loom-accent-amber)', Icon: LockClosed20Regular },
+  eventgrid: { accent: 'var(--loom-accent-green)', Icon: Stream20Regular },
+  other: { accent: 'var(--loom-accent-teal)', Icon: Cube20Regular },
 };
 
-function colorForService(groupIds?: string[]): typeof SERVICE_COLORS['other'] {
+function colorForService(groupIds?: string[]): typeof SERVICE_VISUAL['other'] {
   const firstGroup = (groupIds?.[0] ?? '').toLowerCase();
-  if (firstGroup.includes('synapse') || firstGroup === 'dev') return SERVICE_COLORS.synapse;
-  if (firstGroup.includes('blob') || firstGroup.includes('file')) return SERVICE_COLORS.storage;
-  if (firstGroup.includes('sql')) return SERVICE_COLORS.sql;
-  if (firstGroup.includes('databricks')) return SERVICE_COLORS.databricks;
-  if (firstGroup.includes('vault')) return SERVICE_COLORS.keyvault;
-  if (firstGroup.includes('eventgrid')) return SERVICE_COLORS.eventgrid;
-  return SERVICE_COLORS.other;
+  if (firstGroup.includes('synapse') || firstGroup === 'dev') return SERVICE_VISUAL.synapse;
+  if (firstGroup.includes('blob') || firstGroup.includes('file')) return SERVICE_VISUAL.storage;
+  if (firstGroup.includes('sql')) return SERVICE_VISUAL.sql;
+  if (firstGroup.includes('databricks')) return SERVICE_VISUAL.databricks;
+  if (firstGroup.includes('vault')) return SERVICE_VISUAL.keyvault;
+  if (firstGroup.includes('eventgrid')) return SERVICE_VISUAL.eventgrid;
+  return SERVICE_VISUAL.other;
 }
+
+// Node-kind accents (theme-aware --loom-accent-* vars; see app/globals.css).
+const VNET_ACCENT = 'var(--loom-accent-blue)';
+const SUBNET_ACCENT = 'var(--loom-accent-teal)';
+const NSG_ACCENT = 'var(--loom-accent-amber)';
+const ZONE_ACCENT = 'var(--loom-accent-azure)';
 
 /** Discriminated detail attached to each node — read in the drawer. */
 type NodeDetail =
@@ -99,7 +115,7 @@ const useStyles = makeStyles({
     overflow: 'hidden',
   },
   detailRow: { marginBottom: '10px' },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: '12px' },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: '12px', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   legend: {
     display: 'flex',
     flexWrap: 'wrap',
@@ -121,10 +137,13 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
   },
   legendSwatch: {
-    width: '12px',
-    height: '12px',
-    borderRadius: '3px',
+    width: '14px',
+    height: '14px',
+    borderRadius: tokens.borderRadiusSmall,
     flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   empty: {
     position: 'absolute',
@@ -139,14 +158,14 @@ const useStyles = makeStyles({
   },
 });
 
-/** Legend rows — node kinds + the service-color key, derived from SERVICE_COLORS. */
-const NODE_LEGEND: { label: string; bg: string; border: string }[] = [
-  { label: 'Virtual network', bg: tokens.colorNeutralBackground3, border: tokens.colorBrandBackground },
-  { label: 'Subnet', bg: tokens.colorNeutralBackground2, border: tokens.colorNeutralStroke2 },
-  { label: 'Network security group', bg: '#FFF7ED', border: '#B45309' },
-  { label: 'Private DNS zone', bg: '#F0F9FF', border: tokens.colorBrandBackground2 },
+/** Legend rows — node kinds + the service-color key, derived from SERVICE_VISUAL. */
+const NODE_LEGEND: { label: string; accent: string; Icon: FluentIcon }[] = [
+  { label: 'Virtual network', accent: VNET_ACCENT, Icon: VirtualNetwork20Regular },
+  { label: 'Subnet', accent: SUBNET_ACCENT, Icon: Subtract20Regular },
+  { label: 'Network security group', accent: NSG_ACCENT, Icon: Shield20Regular },
+  { label: 'Private DNS zone', accent: ZONE_ACCENT, Icon: GlobeShield20Regular },
 ];
-const SERVICE_LEGEND: { label: string; key: keyof typeof SERVICE_COLORS }[] = [
+const SERVICE_LEGEND: { label: string; key: keyof typeof SERVICE_VISUAL }[] = [
   { label: 'Synapse', key: 'synapse' },
   { label: 'Storage', key: 'storage' },
   { label: 'SQL', key: 'sql' },
@@ -200,22 +219,35 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
         type: 'default',
         position: { x: vnetX, y: vnetY },
         style: {
-          padding: '12px',
-          borderRadius: '6px',
-          backgroundColor: '#F5F5F5',
-          border: `2px solid ${tokens.colorBrandBackground}`,
+          padding: tokens.spacingHorizontalM,
+          borderRadius: tokens.borderRadiusLarge,
+          background: accentTint(VNET_ACCENT, 5),
+          border: `1.5px solid ${accentTint(VNET_ACCENT, 40)}`,
           width: '280px',
           height: `${vnetHeight}px`,
           minWidth: '160px',
+          boxShadow: tokens.shadow4,
         },
         data: {
           detail: { kind: 'vnet', vnet } as NodeDetail,
           label: (
             <div>
-              <div style={{ fontWeight: 600, fontSize: '12px', marginBottom: '4px' }}>
-                {vnet.name || 'vNet'}
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalXS }}>
+                <span
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 22, height: 22, borderRadius: tokens.borderRadiusMedium,
+                    background: accentTint(VNET_ACCENT, 14), color: VNET_ACCENT, flexShrink: 0,
+                  }}
+                  aria-hidden="true"
+                >
+                  <VirtualNetwork20Regular style={{ width: 16, height: 16 }} />
+                </span>
+                <span style={{ fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase200 }}>
+                  {vnet.name || 'vNet'}
+                </span>
               </div>
-              <div style={{ fontSize: '10px', color: tokens.colorNeutralForeground3 }}>
+              <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
                 {addressSpace}
               </div>
             </div>
@@ -240,49 +272,49 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
           extent: 'parent' as const,
           position: { x: 8, y: subnetY },
           style: {
-            padding: '8px',
-            borderRadius: '4px',
-            backgroundColor: '#FAFAFA',
-            border: `1px dashed ${tokens.colorNeutralStroke2}`,
-            fontSize: '11px',
+            padding: tokens.spacingHorizontalS,
+            borderRadius: tokens.borderRadiusMedium,
+            background: accentTint(SUBNET_ACCENT, 4),
+            border: `1px dashed ${accentTint(SUBNET_ACCENT, 40)}`,
+            fontSize: tokens.fontSizeBase100,
             width: 'calc(100% - 16px)',
             minWidth: '120px',
           },
           data: {
             detail: { kind: 'subnet', subnet, vnetName: vnet.name, peCount, nsgName } as NodeDetail,
             label: (
-              <div>
-                <span style={{ fontWeight: 600 }}>{subnet.name}</span>
-                <span style={{ fontSize: '9px', color: tokens.colorNeutralForeground3 }}>
-                  {' '}{subnet.addressPrefix}
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+                <span
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                    width: 20, height: 20, borderRadius: tokens.borderRadiusSmall,
+                    background: accentTint(SUBNET_ACCENT, 14), color: SUBNET_ACCENT, flexShrink: 0,
+                  }}
+                  aria-hidden="true"
+                >
+                  <Subtract20Regular style={{ width: 16, height: 16 }} />
+                </span>
+                <span style={{ fontWeight: tokens.fontWeightSemibold }}>{subnet.name}</span>
+                <span style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
+                  {subnet.addressPrefix}
                 </span>
                 {peCount > 0 && (
-                  <span
-                    style={{
-                      marginLeft: '4px',
-                      fontSize: '8px',
-                      backgroundColor: tokens.colorBrandBackground,
-                      color: '#FFF',
-                      padding: '1px 4px',
-                      borderRadius: '3px',
-                    }}
+                  <Badge
+                    appearance="tint"
+                    size="small"
+                    style={{ backgroundColor: accentTint(SUBNET_ACCENT, 16), color: SUBNET_ACCENT }}
                   >
                     {peCount} PE
-                  </span>
+                  </Badge>
                 )}
                 {nsgName && (
-                  <span
-                    style={{
-                      marginLeft: '4px',
-                      fontSize: '8px',
-                      backgroundColor: '#6B7280',
-                      color: '#FFF',
-                      padding: '1px 4px',
-                      borderRadius: '3px',
-                    }}
+                  <Badge
+                    appearance="tint"
+                    size="small"
+                    style={{ backgroundColor: accentTint(NSG_ACCENT, 16), color: NSG_ACCENT }}
                   >
                     NSG
-                  </span>
+                  </Badge>
                 )}
               </div>
             ),
@@ -319,23 +351,33 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
       type: 'default',
       position: { x: nsgX, y: nsgY },
       style: {
-        padding: '6px 8px',
-        borderRadius: '4px',
-        fontSize: '10px',
+        padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
+        borderRadius: tokens.borderRadiusMedium,
+        fontSize: tokens.fontSizeBase100,
         textAlign: 'center',
-        backgroundColor: '#FFF7ED',
-        border: '2px solid #B45309',
+        background: accentTint(NSG_ACCENT, 6),
+        border: `2px solid ${NSG_ACCENT}`,
         minWidth: '120px',
+        boxShadow: tokens.shadow4,
       },
       data: {
         detail: { kind: 'nsg', nsg } as NodeDetail,
         label: (
-          <div style={{ lineHeight: 1.3 }} title={nsg.name}>
-            <div>🛡️</div>
-            <div style={{ fontSize: '9px', fontWeight: 600 }}>
+          <div style={{ lineHeight: 1.3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXXS }} title={nsg.name}>
+            <span
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24, borderRadius: tokens.borderRadiusMedium,
+                background: accentTint(NSG_ACCENT, 14), color: NSG_ACCENT,
+              }}
+              aria-hidden="true"
+            >
+              <Shield20Regular style={{ width: 16, height: 16, color: NSG_ACCENT }} />
+            </span>
+            <div style={{ fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightSemibold }}>
               {nsg.name.length > 16 ? `${nsg.name.slice(0, 14)}…` : nsg.name}
             </div>
-            <div style={{ fontSize: '8px', color: tokens.colorNeutralForeground3 }}>
+            <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
               {nsg.rules.length} rules · {denyCount} deny
             </div>
           </div>
@@ -363,7 +405,7 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
         id: `subnet-nsg-${snNode}-${nsg.id}`,
         source: snNode,
         target: nsgNodeId,
-        style: { stroke: '#B45309', strokeWidth: 1.25 },
+        style: { stroke: NSG_ACCENT, strokeWidth: 1.25 },
         animated: false,
       });
     }
@@ -381,7 +423,7 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
     processedPes.add(pe.id);
 
     const peId = `pe-${pe.id}`;
-    const color = colorForService(pe.groupIds);
+    const v = colorForService(pe.groupIds);
     const serviceLabel = pe.connectedResourceName || pe.name;
 
     nodes.push({
@@ -389,45 +431,52 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
       type: 'default',
       position: { x: peX, y: peY },
       style: {
-        padding: '6px 8px',
-        borderRadius: '4px',
-        fontSize: '10px',
-        fontWeight: 600,
+        padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
+        borderRadius: tokens.borderRadiusMedium,
+        fontSize: tokens.fontSizeBase100,
+        fontWeight: tokens.fontWeightSemibold,
         textAlign: 'center',
-        backgroundColor: color.bg,
-        border: `2px solid ${color.border}`,
+        background: accentTint(v.accent, 6),
+        border: `2px solid ${v.accent}`,
         minWidth: '90px',
+        boxShadow: tokens.shadow4,
       },
       data: {
         detail: { kind: 'pe', pe } as NodeDetail,
         label: (
-          <div style={{ lineHeight: 1.3 }} title={serviceLabel}>
-            <div>{color.icon}</div>
-            <div style={{ fontSize: '8px', fontWeight: 600 }}>
+          <div style={{ lineHeight: 1.3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXXS }} title={serviceLabel}>
+            <span
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: 24, height: 24, borderRadius: tokens.borderRadiusMedium,
+                background: accentTint(v.accent, 14), color: v.accent,
+              }}
+              aria-hidden="true"
+            >
+              <v.Icon style={{ width: 16, height: 16, color: v.accent }} />
+            </span>
+            <div style={{ fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightSemibold }}>
               {serviceLabel.length > 12
                 ? `${serviceLabel.slice(0, 10)}...`
                 : serviceLabel}
             </div>
             {pe.loomDomain && (
-              <div
+              <Badge
+                appearance="tint"
+                size="small"
                 title={pe.loomDomain}
                 style={{
-                  marginTop: '2px',
-                  fontSize: '8px',
-                  fontWeight: 600,
-                  backgroundColor: tokens.colorBrandBackground2,
-                  color: tokens.colorBrandForeground1,
-                  padding: '1px 3px',
-                  borderRadius: '3px',
-                  display: 'inline-block',
+                  backgroundColor: accentTint(v.accent, 16),
+                  color: v.accent,
                   maxWidth: '80px',
                   overflow: 'hidden',
                   textOverflow: 'ellipsis',
                   whiteSpace: 'nowrap',
+                  display: 'inline-block',
                 }}
               >
                 {pe.loomDomain}
-              </div>
+              </Badge>
             )}
           </div>
         ),
@@ -443,7 +492,7 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
         id: `link-pe-${pe.id}`,
         source,
         target: peId,
-        style: { stroke: color.border, strokeWidth: 1.5 },
+        style: { stroke: v.accent, strokeWidth: 1.5 },
         animated: false,
       });
     }
@@ -483,18 +532,31 @@ function buildTopology(data: TopologyData): { nodes: Node[]; edges: Edge[] } {
       type: 'default',
       position: { x: zoneX, y: zoneY },
       style: {
-        padding: '6px 8px',
-        borderRadius: '4px',
-        backgroundColor: '#F0F9FF',
-        border: `1px solid ${tokens.colorBrandBackground2}`,
-        fontSize: '10px',
+        padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS}`,
+        borderRadius: tokens.borderRadiusMedium,
+        background: accentTint(ZONE_ACCENT, 5),
+        border: `1px solid ${accentTint(ZONE_ACCENT, 40)}`,
+        fontSize: tokens.fontSizeBase100,
         width: '130px',
+        boxShadow: tokens.shadow4,
       },
       data: {
         detail: { kind: 'zone', zone, fqdns } as NodeDetail,
         label: (
-          <div style={{ fontSize: '9px', fontWeight: 600, color: tokens.colorBrandForeground1 }}>
-            {zone.replace('privatelink.', '')}
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+            <span
+              style={{
+                display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                width: 20, height: 20, borderRadius: tokens.borderRadiusSmall,
+                background: accentTint(ZONE_ACCENT, 14), color: ZONE_ACCENT, flexShrink: 0,
+              }}
+              aria-hidden="true"
+            >
+              <GlobeShield20Regular style={{ width: 16, height: 16 }} />
+            </span>
+            <span style={{ fontSize: tokens.fontSizeBase100, fontWeight: tokens.fontWeightSemibold, color: ZONE_ACCENT, overflowWrap: 'anywhere' }}>
+              {zone.replace('privatelink.', '')}
+            </span>
           </div>
         ),
       },
@@ -738,7 +800,18 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
   }
 
   return (
-    <div className={styles.shell}>
+    // Drag-to-resize canvas height via the shared Web-5.0 primitive (pointer +
+    // keyboard + per-surface localStorage, bounded 360px–80vh). The shell keeps
+    // height:100% and resolves against the region; minHeight is overridden to 0
+    // here so the region's bounds win (the shared style's 520px floor stays for
+    // the empty-state return above, which is not wrapped).
+    <ResizableCanvasRegion
+      storageKey="network-topology"
+      defaultPx={560}
+      minPx={360}
+      ariaLabel="Resize network topology canvas height"
+    >
+    <div className={styles.shell} style={{ minHeight: 0 }}>
       <ReactFlowProvider>
         <ReactFlow
           nodes={nodes}
@@ -755,23 +828,27 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
                 <span key={n.label} className={styles.legendItem}>
                   <span
                     className={styles.legendSwatch}
-                    style={{ backgroundColor: n.bg, border: `2px solid ${n.border}` }}
-                  />
+                    style={{ background: accentTint(n.accent, 16), border: `2px solid ${n.accent}`, color: n.accent }}
+                  >
+                    <n.Icon style={{ width: 10, height: 10 }} />
+                  </span>
                   {n.label}
                 </span>
               ))}
-              {SERVICE_LEGEND.map((s) => (
-                <span key={s.label} className={styles.legendItem}>
-                  <span
-                    className={styles.legendSwatch}
-                    style={{
-                      backgroundColor: SERVICE_COLORS[s.key].bg,
-                      border: `2px solid ${SERVICE_COLORS[s.key].border}`,
-                    }}
-                  />
-                  {s.label}
-                </span>
-              ))}
+              {SERVICE_LEGEND.map((s) => {
+                const sv = SERVICE_VISUAL[s.key];
+                return (
+                  <span key={s.label} className={styles.legendItem}>
+                    <span
+                      className={styles.legendSwatch}
+                      style={{ background: accentTint(sv.accent, 16), border: `2px solid ${sv.accent}`, color: sv.accent }}
+                    >
+                      <sv.Icon style={{ width: 10, height: 10 }} />
+                    </span>
+                    {s.label}
+                  </span>
+                );
+              })}
             </div>
           </Panel>
           <MiniMap
@@ -811,6 +888,7 @@ export function NetworkTopologyCanvas(props: TopologyCanvasProps): React.ReactEl
         </DrawerBody>
       </OverlayDrawer>
     </div>
+    </ResizableCanvasRegion>
   );
 }
 

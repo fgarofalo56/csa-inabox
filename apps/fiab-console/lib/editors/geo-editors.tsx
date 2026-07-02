@@ -20,16 +20,22 @@
  * pipelines are NOT deployed in this Loom instance — the MessageBars say so.
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import {
+  useState, useCallback, useEffect, useMemo, useRef,
+  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Label, Spinner,
   TabList, Tab, Checkbox, Dropdown, Option, Field, Divider,
-  MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
-import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular, Save20Regular } from '@fluentui/react-icons';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+import { Map20Regular, Folder20Regular, Play20Regular, Flow20Regular, Save20Regular, Open16Regular } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { DataPipelineEditor } from './data-pipeline-editor';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -122,7 +128,7 @@ function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
   saving: boolean; dirty: boolean; savedAt: string | null; error: string | null; onSave: () => void;
 }) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, padding: `${tokens.spacingVerticalS} 0`, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
       <Button appearance="primary" icon={<Save20Regular />} onClick={onSave} disabled={saving || !dirty}>
         {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
       </Button>
@@ -136,56 +142,59 @@ function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
-  treePad: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '8px' },
-  field: { display: 'flex', flexDirection: 'column', gap: '4px' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   codeBlock: {
-    fontFamily: 'Consolas, monospace', fontSize: '12px', lineHeight: '18px',
-    margin: '0', padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, lineHeight: '18px',
+    margin: '0', padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground1,
-    whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: '240px', overflow: 'auto',
+    whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere',
+    maxWidth: '100%', maxHeight: '240px', overflow: 'auto', boxSizing: 'border-box',
+    resize: 'vertical',
   },
   enrichGroup: {
-    display: 'flex', flexDirection: 'column', gap: '8px',
-    padding: '12px', borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   schemaRow: {
-    display: 'flex', flexDirection: 'column', gap: '2px',
-    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: '6px', paddingTop: '2px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, paddingBottom: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalXXS,
   },
   // Bounding-box side-rail readout under the schema panel.
   bboxRail: {
-    marginTop: '8px', paddingTop: '8px',
+    marginTop: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalS,
     borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
-    display: 'flex', flexDirection: 'column', gap: '2px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
   },
   bboxValue: {
-    display: 'block', color: tokens.colorNeutralForeground3,
-    fontFamily: 'Consolas, monospace', fontSize: '11px', wordBreak: 'break-all',
+    display: 'block', color: tokens.colorNeutralForeground3, maxWidth: '100%',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100,
+    wordBreak: 'break-all', overflowWrap: 'anywhere',
   },
   // Last-run header row (title + run badges + timestamp).
-  runHeader: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  runHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   // Modern Fluent-toned parameter grid for the ADF run receipt.
   runTable: {
-    borderCollapse: 'collapse', width: '100%', fontSize: '12px', marginTop: '4px',
+    borderCollapse: 'collapse', width: '100%', fontSize: tokens.fontSizeBase200, marginTop: tokens.spacingVerticalXS,
     tableLayout: 'fixed',
   },
   runTh: {
-    textAlign: 'left', padding: '6px 8px', fontWeight: 600,
+    textAlign: 'left', padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, fontWeight: 600,
     color: tokens.colorNeutralForeground2,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   runTd: {
-    padding: '6px 8px', verticalAlign: 'top',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, verticalAlign: 'top',
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
   },
   runMono: {
-    padding: '6px 8px', verticalAlign: 'top',
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, verticalAlign: 'top',
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
-    fontFamily: 'Consolas, monospace', wordBreak: 'break-all',
+    fontFamily: 'Consolas, monospace', wordBreak: 'break-all', overflowWrap: 'anywhere',
   },
 });
 
@@ -321,7 +330,13 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
           {!parseErr && parsed && (
             <>
               <Subtitle2>Map render ({featureCount} feature{featureCount === 1 ? '' : 's'}{rasterUrl ? ` · Azure Maps basemap zoom ${zoom}` : ''})</Subtitle2>
-              <GeoJsonMap geojson={parsed} rasterUrl={rasterUrl} />
+              {/* Drag/keyboard-resizable canvas region. The map SVG fills width:100%/height:100%
+                  of this bounded region (see geojson-map.tsx); only the region height is
+                  user-controlled — map behaviour/features are unchanged. Height persists per
+                  surface under localStorage key `loom:canvas-height:geo-map`. */}
+              <ResizableCanvasRegion storageKey="geo-map" defaultPx={420} minPx={280} ariaLabel="Resize map canvas height">
+                <GeoJsonMap geojson={parsed} rasterUrl={rasterUrl} />
+              </ResizableCanvasRegion>
             </>
           )}
           <Caption1>Persisted into Cosmos item state via PATCH /api/cosmos-items/geo-map/{`{id}`}.</Caption1>
@@ -407,7 +422,7 @@ function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows
   const s = useStyles();
   const row0 = Array.isArray(rows) && rows.length > 0 ? rows[0] : [];
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
       <Caption1 style={{ fontWeight: 600 }}>Schema ({columns.length} column{columns.length === 1 ? '' : 's'})</Caption1>
       {columns.map((c, i) => {
         const cell = Array.isArray(row0) ? (row0 as unknown[])[i] : undefined;
@@ -416,12 +431,12 @@ function GeoSchemaPanel({ columns, rows, geomColumn }: { columns: string[]; rows
         const preview = cell == null ? '∅' : String(cell).slice(0, 64);
         return (
           <div key={c} className={s.schemaRow}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
               <Caption1 style={{ fontWeight: isGeom ? 700 : 500, color: isGeom ? tokens.colorBrandForeground1 : tokens.colorNeutralForeground1 }}>{c}</Caption1>
               {isGeom && <Badge appearance="tint" color="brand" size="small">geometry</Badge>}
               {enc && <Badge appearance="outline" color="informative" size="small">{enc}</Badge>}
             </div>
-            <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' }}>{preview}{cell != null && String(cell).length > 64 ? '…' : ''}</Caption1>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{preview}{cell != null && String(cell).length > 64 ? '…' : ''}</Caption1>
           </div>
         );
       })}
@@ -907,22 +922,75 @@ function useAdfPipelines() {
   return { pipelines, error, loading };
 }
 
-export function GeoPipelineEditor({ item, id }: { item: FabricItemType; id: string }) {
+export function GeoPipelineEditor({
+  item, id, templateId, runtimePreset,
+}: {
+  item: FabricItemType; id: string;
+  // The item page (app/items/[type]/[id]/page.tsx) resolves these from the
+  // catalog (geo-pipeline = templateOf 'data-pipeline', templateId 'geo-enrich',
+  // runtimePreset 'adf') and passes them to whatever editor opens for the slug.
+  templateId?: string;
+  runtimePreset?: 'adf' | 'synapse' | 'fabric';
+}) {
   if (id === 'new') {
+    // [geo-template] NEW geo pipelines are authored as a Data pipeline pre-seeded
+    // with the built-in "Geo enrichment" template — a complete, runnable
+    // ADF-runtime spec (H3 / reverse-geocode / buffer activities) — NOT a blank
+    // canvas or the legacy pointer surface. The catalog marks geo-pipeline as
+    // `templateOf 'data-pipeline'` with `templateId: 'geo-enrich'` + `runtimePreset:
+    // 'adf'`; the item page forwards those here. We delegate the `new` flow to the
+    // unified DataPipelineEditor, whose Contract F instantiates the geo-enrich
+    // template onto the canvas on mount and locks the runtime to Azure-native ADF
+    // (no-fabric-dependency.md). This is why the "New Data pipeline (Geo enrichment
+    // template)" CTA routes to /items/geo-pipeline/new (which carries templateId)
+    // rather than /items/data-pipeline/new (whose catalog entry has NO templateId,
+    // so the template would not seed and the user would land on a blank pipeline).
+    if (templateId) {
+      return <DataPipelineEditor item={item} id={id} templateId={templateId} runtimePreset={runtimePreset ?? 'adf'} />;
+    }
+    // Defensive fallback (templateId not forwarded): keep the legacy create gate
+    // reachable rather than dead-ending. Not expected on the catalog-resolved path.
     return (
-      <NewItemCreateGate item={item} createLabel="Create geo pipeline"
-        intro="A geo pipeline layers geo-enrichment flags (H3, reverse-geocode, buffer) onto an existing ADF pipeline. Create it, then pick the target pipeline and Trigger run." />
+      <NewItemCreateGate item={item} createLabel="Create legacy geo pipeline"
+        intro={
+          "Legacy surface. New geo pipelines are now authored as a Data pipeline using the built-in "
+          + "“Geo enrichment” template — a complete, ready-to-run pipeline on the Azure-native ADF "
+          + "runtime — rather than layering flags onto a pre-built ADF pipeline. This create gate remains "
+          + "for back-compat: it builds a pointer item that posts the H3 / reverse-geocode / buffer flags as "
+          + "parameters to an existing ADF pipeline you select. To build a working pipeline from scratch, "
+          + "create a Data pipeline and pick the “Geo enrichment” template instead."
+        } />
     );
   }
+  // Already-created geo-pipeline instances keep loading + running here unchanged
+  // (back-compat — see /api/items/geo-pipeline/[id]/run). Do NOT route these
+  // through the unified editor; their persisted pointer state lives on the
+  // geo-pipeline slug's own Cosmos route.
   return <GeoPipelineEditorBody item={item} id={id} />;
 }
 
 function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const router = useRouter();
   const { state, setState, loading, saving, savedAt, error, dirty, save } = useGeoItemState<GeoPipelineState>('geo-pipeline', id, {
     adfPipelineName: '', enrichH3: true, reverseGeocode: false, bufferMeters: 0,
   });
   const adf = useAdfPipelines();
+  // [geo-template] NEW geo pipelines are authored as a Data pipeline pre-seeded
+  // with the built-in "Geo enrichment" template (a complete, runnable ADF-runtime
+  // spec) rather than this legacy pointer surface. This CTA opens the GEO-PIPELINE
+  // create slug (/items/geo-pipeline/new) — NOT /items/data-pipeline/new. The
+  // geo-pipeline catalog entry carries templateId:'geo-enrich' + runtimePreset:'adf',
+  // which the item page forwards to GeoPipelineEditor → DataPipelineEditor so the
+  // template seeds onto the canvas (Contract F). Routing to /items/data-pipeline/new
+  // would open the unified editor with templateId=undefined (the data-pipeline catalog
+  // entry has no templateId) and dead-end on a blank canvas. Already-created
+  // geo-pipeline items keep loading + running here (back-compat — see
+  // /api/items/geo-pipeline/[id]/run below). Azure-native ADF is the default per
+  // no-fabric-dependency.md.
+  const openGeoTemplate = useCallback(() => {
+    router.push('/items/geo-pipeline/new');
+  }, [router]);
   // Azure Maps gate — reverse-geocode requires Azure Maps, which is not
   // provisioned in GCC-High / IL5 (bicep never sets the key there). Same gate
   // pattern as the GeoMap raster basemap.
@@ -982,10 +1050,28 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
     <ItemEditorChrome
       item={item} id={id}
       ribbon={ribbon}
-      leftPanel={<div className={s.treePad}><Caption1>This item layers geo-enrichment flags onto a real ADF pipeline. At Trigger run the flags are posted as ADF pipeline parameters (<code>enrichH3</code>, <code>reverseGeocode</code>, <code>bufferMeters</code>).</Caption1></div>}
+      leftPanel={<div className={s.treePad}>
+        <Badge appearance="tint" color="warning" size="small">Legacy</Badge>
+        <Caption1>This legacy item layers geo-enrichment flags onto a pre-built ADF pipeline. At Trigger run the flags are posted as ADF pipeline parameters (<code>enrichH3</code>, <code>reverseGeocode</code>, <code>bufferMeters</code>). New geo pipelines are authored as a Data pipeline with the <strong>Geo enrichment</strong> template instead.</Caption1>
+      </div>}
       main={
         <div className={s.pad}>
           {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
+          <MessageBar intent="info">
+            <MessageBarBody>
+              <MessageBarTitle>Legacy geo pipeline — pointer surface</MessageBarTitle>
+              This item posts geo-enrichment flags as parameters to a pre-built ADF pipeline you select below; it
+              continues to load and run for back-compat. New geo pipelines are now authored as a <strong>Data pipeline</strong>{' '}
+              using the built-in <strong>“Geo enrichment”</strong> template — a complete, ready-to-run pipeline on the
+              Azure-native ADF runtime that builds the H3 / reverse-geocode / buffer activities for you, no pre-existing
+              pipeline required.
+            </MessageBarBody>
+            <MessageBarActions>
+              <Button appearance="primary" size="small" icon={<Open16Regular />} onClick={openGeoTemplate}>
+                New Data pipeline (Geo enrichment template)
+              </Button>
+            </MessageBarActions>
+          </MessageBar>
           <Field label="ADF pipeline (target)">
             <Dropdown
               value={state.adfPipelineName || ''}

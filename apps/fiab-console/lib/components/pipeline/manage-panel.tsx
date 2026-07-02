@@ -44,9 +44,10 @@ interface RuntimeRow { name: string; type?: string; description?: string; state?
 interface GateState { missing: string }
 
 // Backend-aware routes. ADF exposes linked services + datasets + integration
-// runtimes; Synapse exposes linked services + datasets (Synapse IRs are managed
-// at the workspace level — the scaled self-hosted IR is provisioned separately,
-// so the IR tab is hidden for the Synapse backend).
+// runtimes (factory-scoped); Synapse exposes the same, with workspace-scoped
+// integration runtimes (Microsoft.Synapse/workspaces/integrationRuntimes via
+// /api/synapse/integration-runtimes). The scaled self-hosted IR VMSS card below
+// is ADF-specific and stays ADF-only.
 const ROUTES = {
   adf: {
     ls: '/api/adf/linked-services',
@@ -56,7 +57,7 @@ const ROUTES = {
   synapse: {
     ls: '/api/synapse/linkedservices',
     ds: '/api/synapse/datasets',
-    ir: '',
+    ir: '/api/synapse/integration-runtimes',
   },
 } as const;
 
@@ -110,7 +111,10 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
   const LS_ROUTE = ROUTES[backend].ls;
   const DS_ROUTE = ROUTES[backend].ds;
   const IR_ROUTE = ROUTES[backend].ir;
-  const showIr = backend === 'adf';
+  // Integration runtimes are now wired for BOTH backends (ADF factory-scoped,
+  // Synapse workspace-scoped). The scaled self-hosted IR VMSS card is ADF-only.
+  const showIr = true;
+  const showScaledShir = backend === 'adf';
   const backendLabel = backend === 'adf' ? 'Data Factory' : 'Synapse workspace';
   const [tab, setTab] = useState<ManageTab>('linked-services');
 
@@ -218,7 +222,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
     if (!open) return;
     if (tab === 'linked-services') loadLs();
     else if (tab === 'datasets') { loadDs(); if (!lsList.length) loadLs(); }
-    else if (showIr) { loadIr(); loadShir(); }
+    else if (showIr) { loadIr(); if (showScaledShir) loadShir(); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, tab]);
 
@@ -644,8 +648,8 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
             {/* ---------------- Integration runtimes ---------------- */}
             {tab === 'integration-runtimes' && !gate && (
               <>
-                {/* Loom scaled self-hosted IR (VMSS, scale-to-0) */}
-                {shirGate ? (
+                {/* Loom scaled self-hosted IR (VMSS, scale-to-0) — ADF-only */}
+                {showScaledShir && (shirGate ? (
                   <MessageBar intent="info" style={{ marginBottom: 12 }}>
                     <MessageBarBody><MessageBarTitle>Scaled self-hosted IR</MessageBarTitle>{shirGate}</MessageBarBody>
                   </MessageBar>
@@ -668,7 +672,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                     </div>
                     {shirError && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{shirError}</MessageBarBody></MessageBar>}
                   </div>
-                ) : null}
+                ) : null)}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                   <Subtitle2>Integration runtimes ({irList.length})</Subtitle2>
                   <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadIr} disabled={irLoading}>Refresh</Button>

@@ -63,13 +63,13 @@ export interface BatchQueryResponse {
 }
 
 const useStyles = makeStyles({
-  box: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 160, display: 'flex', flexDirection: 'column', gap: 8, minWidth: 0 },
-  meta: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  actions: { marginLeft: 'auto', display: 'flex', gap: 4, alignItems: 'center' },
-  search: { minWidth: 220 },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  selRow: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  box: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '160px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  meta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  actions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  search: { minWidth: '220px' },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  selRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
 });
 
 export function formatCell(v: unknown): string {
@@ -205,7 +205,7 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
     const bytes = recordsetsToXlsxBuffer(n.recordsets as any, n.messages as any);
     downloadBlob(
       `query-results-${stamp}.xlsx`,
-      new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      new Blob([new Uint8Array(bytes)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
     );
   }
 
@@ -236,7 +236,7 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
                 onOptionSelect={(_, d) => { setActiveSet(Number(d.optionValue)); setFilter(''); }}
               >
                 {recordsets.map((rs, i) => (
-                  <Option key={i} value={String(i)}>
+                  <Option key={i} value={String(i)} text={`Result set ${i + 1} — ${rs.rowCount.toLocaleString()} rows${rs.truncated ? ' (capped at 10,000)' : ''}`}>
                     Result set {i + 1} — {rs.rowCount.toLocaleString()} rows{rs.truncated ? ' (capped at 10,000)' : ''}
                   </Option>
                 ))}

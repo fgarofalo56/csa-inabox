@@ -61,7 +61,7 @@ def _get_arg(name: str, default=None):
 
 
 SOURCE_PATH = _get_arg("source_path", "Files/landing/healthcare/")
-TARGET_TABLE = "lh_bronze.dbo.bronze_healthcare_admissions"
+TARGET_TABLE = "lh_bronze.bronze_healthcare_admissions"
 BATCH_ID = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 print(f"Source: {SOURCE_PATH}")

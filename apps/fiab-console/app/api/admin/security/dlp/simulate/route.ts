@@ -13,6 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { evaluatePolicy, DlpError } from '@/lib/azure/dlp-graph-client';
 import { handleSecurityError } from '../../_lib/error-handling';
 
@@ -24,6 +25,8 @@ const MAX_CONTENT_BYTES = 64 * 1024;
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
   const content: string = (body?.content || '').toString();

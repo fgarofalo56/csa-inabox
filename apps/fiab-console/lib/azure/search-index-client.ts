@@ -105,6 +105,18 @@ function serviceBase(service: string): string {
   return `https://${service}.${getSearchSuffix()}`;
 }
 
+/**
+ * Resolve the AI Search data-plane endpoint host
+ * (`https://<service>.search.windows.net`) for the configured (or `override`)
+ * service. Used by the Foundry chat playground's Azure OpenAI "On Your Data"
+ * grounding to build the `azure_search` data-source `endpoint`. Throws
+ * SearchNotDeployedError when no service is configured — callers surface that as
+ * the honest infra gate.
+ */
+export function searchServiceEndpoint(override?: string): string {
+  return serviceBase(resolveServiceName(override));
+}
+
 async function searchToken(): Promise<string> {
   const t = await credential.getToken(SEARCH_SCOPE);
   if (!t?.token) throw new SearchDataError(401, undefined, 'Failed to acquire AAD token for AI Search');

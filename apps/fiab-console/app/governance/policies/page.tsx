@@ -758,7 +758,7 @@ export default function PoliciesPage() {
                     )}
                   </div>
                 )}
-                <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1 }}>{buildScope()} · {buildRule()}</Caption1>
+                <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorBrandForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{buildScope()} · {buildRule()}</Caption1>
               </div>
             </DialogContent>
             <DialogActions>
@@ -852,8 +852,8 @@ export default function PoliciesPage() {
                   <Field label="Path under the container"
                     hint="ACLs restrict a principal granted via ACL. A principal holding container-level Storage RBAC is unaffected — restrict at the container scope to cover that.">
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <Caption1 style={{ fontFamily: 'Consolas, monospace' }}>{rstRef}/{rstSubPath || ''}</Caption1>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                        <Caption1 style={{ fontFamily: 'Consolas, monospace', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{rstRef}/{rstSubPath || ''}</Caption1>
                         {rstSubPath && (
                           <Button size="small" appearance="subtle" icon={<ArrowUp16Regular />}
                             onClick={() => { const parent = rstSubPath.split('/').slice(0, -1).join('/'); setRstSubPath(parent); loadRstPaths(rstRef, parent); }}>

@@ -37,7 +37,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   try {
     const res = await publishPowerApp(envId, appId);
-    return NextResponse.json({ ok: true, envId, appId, ...res });
+    return NextResponse.json({ ...res, ok: true, envId, appId });
   } catch (e: any) {
     const status = e instanceof PowerPlatformError ? e.status : 502;
     return NextResponse.json(

@@ -18,14 +18,19 @@
  * consistent with MetricChart / the Monitor pane — no charting dependency.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
-  Spinner, Badge, Button, Caption1, Body1, Dropdown, Option,
+  Spinner, Skeleton, SkeletonItem, Badge, Button, Caption1, Dropdown, Option,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync20Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync20Regular, DataLine20Regular, DataHistogram20Regular,
+  DocumentBulletList20Regular, Code20Regular, ServerMultiple20Regular,
+  DataTrending20Regular, NumberSymbol20Regular,
+} from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
+import { EmptyState } from '@/lib/components/empty-state';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { KqlChart } from '@/lib/components/monitor/kql-chart';
 
@@ -64,20 +69,41 @@ const WINDOWS: Array<{ label: string; secs: number }> = [
 const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 0 },
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
-  kpis: { display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap' },
+  kpis: {
+    display: 'grid',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+    gap: tokens.spacingHorizontalL,
+    width: '100%',
+  },
   kpi: {
-    display: 'flex', flexDirection: 'column', gap: '2px',
-    padding: '10px 14px',
+    display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalM,
+    padding: `${tokens.spacingVerticalM} ${tokens.spacingHorizontalL}`,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    minWidth: '130px',
+    boxShadow: tokens.shadow4,
+    transitionDuration: tokens.durationNormal,
+    transitionProperty: 'box-shadow, transform',
+    minWidth: 0,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-2px)' },
   },
-  kpiValue: { fontSize: '22px', fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 },
-  kpiLabel: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  kpiIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+    width: '36px', height: '36px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium,
+    backgroundColor: tokens.colorBrandBackground2,
+    color: tokens.colorBrandForeground1,
+  },
+  kpiText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  kpiValue: { fontSize: tokens.fontSizeBase600, fontWeight: 700, color: tokens.colorBrandForeground1, lineHeight: 1.1 },
+  kpiLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  sectionHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+  },
+  sectionIcon: { display: 'flex', alignItems: 'center', color: tokens.colorBrandForeground1, flexShrink: 0 },
   code: {
     fontFamily: tokens.fontFamilyMonospace,
-    fontSize: '11px',
+    fontSize: tokens.fontSizeBase100,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
     margin: 0,
@@ -86,7 +112,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    padding: '10px',
+    padding: tokens.spacingVerticalS,
   },
 });
 
@@ -97,6 +123,16 @@ function fmtDuration(ms: number | null): string {
   if (s < 60) return `${s.toFixed(1)} s`;
   const m = Math.floor(s / 60);
   return `${m}m ${Math.round(s % 60)}s`;
+}
+
+/** Section title node: a Fluent icon + the heading text, aligned. */
+function headNode(icon: ReactNode, title: string, className: string, iconClassName: string): ReactNode {
+  return (
+    <span className={className}>
+      <span className={iconClassName} aria-hidden>{icon}</span>
+      {title}
+    </span>
+  );
 }
 
 function statusColor(s: string): 'success' | 'danger' | 'warning' | 'informative' {
@@ -173,7 +209,7 @@ export function WarehouseMonitoringTab({
       key: 'text', label: 'Query', width: 360, filterType: 'text',
       getValue: (r) => r.text,
       render: (r) => (
-        <code style={{ fontSize: 11 }} title={r.text}>
+        <code style={{ fontSize: tokens.fontSizeBase100 }} title={r.text}>
           {r.text ? (r.text.length > 160 ? `${r.text.slice(0, 159)}…` : r.text) : '—'}
         </code>
       ),
@@ -240,32 +276,69 @@ export function WarehouseMonitoringTab({
         </MessageBar>
       )}
 
+      {!data && loading && (
+        <Skeleton aria-label="Loading monitoring data">
+          <div className={s.kpis}>
+            <SkeletonItem size={64} />
+            <SkeletonItem size={64} />
+            <SkeletonItem size={64} />
+          </div>
+          <SkeletonItem size={16} style={{ width: '100%', marginTop: tokens.spacingVerticalL }} />
+          <SkeletonItem size={128} style={{ width: '100%', marginTop: tokens.spacingVerticalS }} />
+        </Skeleton>
+      )}
+
       {data?.ok && (
         <>
           <div className={s.kpis}>
             <div className={s.kpi}>
-              <span className={s.kpiValue}>{latest}</span>
-              <span className={s.kpiLabel}>{isDbx ? 'Clusters now' : 'Latest bucket'}</span>
+              <span className={s.kpiIcon}><ServerMultiple20Regular /></span>
+              <span className={s.kpiText}>
+                <span className={s.kpiValue}>{latest}</span>
+                <span className={s.kpiLabel}>{isDbx ? 'Clusters now' : 'Latest bucket'}</span>
+              </span>
             </div>
             <div className={s.kpi}>
-              <span className={s.kpiValue}>{peak}</span>
-              <span className={s.kpiLabel}>{isDbx ? 'Peak clusters' : 'Peak / bucket'}</span>
+              <span className={s.kpiIcon}><DataTrending20Regular /></span>
+              <span className={s.kpiText}>
+                <span className={s.kpiValue}>{peak}</span>
+                <span className={s.kpiLabel}>{isDbx ? 'Peak clusters' : 'Peak / bucket'}</span>
+              </span>
             </div>
             <div className={s.kpi}>
-              <span className={s.kpiValue}>{queries.length}</span>
-              <span className={s.kpiLabel}>Recent queries</span>
+              <span className={s.kpiIcon}><NumberSymbol20Regular /></span>
+              <span className={s.kpiText}>
+                <span className={s.kpiValue}>{queries.length}</span>
+                <span className={s.kpiLabel}>Recent queries</span>
+              </span>
             </div>
           </div>
 
-          <Section title={data.seriesLabel || (isDbx ? 'Running clusters over time' : 'Query load over time')}>
+          <Section
+            title={headNode(
+              <DataLine20Regular />,
+              data.seriesLabel || (isDbx ? 'Running clusters over time' : 'Query load over time'),
+              s.sectionHead,
+              s.sectionIcon,
+            )}
+          >
             {chartRows.length === 0 ? (
-              <Body1>No events in this window. {isDbx ? 'Start the warehouse and run a query to generate events.' : 'Run a query to populate the activity timeline.'}</Body1>
+              <EmptyState
+                icon={<DataHistogram20Regular />}
+                title="No events in this window"
+                body={isDbx
+                  ? 'Start the warehouse and run a query to generate cluster events, then refresh.'
+                  : 'Run a query to populate the activity timeline, then refresh.'}
+                primaryAction={{ label: 'Refresh', appearance: 'primary', onClick: () => void load() }}
+              />
             ) : (
               <KqlChart type="timechart" columns={chartColumns} rows={chartRows} />
             )}
           </Section>
 
-          <Section title="Recent queries">
+          <Section
+            title={headNode(<DocumentBulletList20Regular />, 'Recent queries', s.sectionHead, s.sectionIcon)}
+          >
             <LoomDataTable<MonitoringQueryRow>
               columns={queryColumns}
               rows={queries}
@@ -276,7 +349,9 @@ export function WarehouseMonitoringTab({
             />
           </Section>
 
-          <Section title="Raw events payload (receipt — first 5)">
+          <Section
+            title={headNode(<Code20Regular />, 'Raw events payload (receipt — first 5)', s.sectionHead, s.sectionIcon)}
+          >
             <Caption1>Live backend records, proving real data end-to-end (no mocks).</Caption1>
             <pre className={s.code}>{JSON.stringify(data.rawEvents ?? [], null, 2)}</pre>
           </Section>

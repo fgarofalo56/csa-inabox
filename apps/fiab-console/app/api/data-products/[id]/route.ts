@@ -73,6 +73,9 @@ import {
   accessRequestsContainer,
   auditLogContainer,
 } from '@/lib/azure/cosmos-client';
+import {
+  upsertDataProductDoc, deleteDataProductDoc, docForDataProduct,
+} from '@/lib/azure/loom-data-products-search';
 import { deleteOwnedItem } from '../../items/_lib/item-crud';
 import {
   deleteDataProductBestEffort,
@@ -177,9 +180,16 @@ function toDoc(item: WithEtag): EditDoc {
   };
 }
 
-/** Project stored owner records to the rich DataProductOwner shape (F3 view). */
-function toProductOwners(existing: unknown): DataProductOwner[] {
+/** Project stored owner records to the rich DataProductOwner shape (F3 view).
+ *  Falls back to the singular `state.owner` (the create-form "Owner (email)"
+ *  field) when no `owners[]` array is present, so an owner entered at create
+ *  time surfaces in the read-view's Owner contacts instead of "No owners". */
+function toProductOwners(existing: unknown, singularFallback?: unknown): DataProductOwner[] {
   const arr: OwnerRecord[] = Array.isArray(existing) ? (existing as OwnerRecord[]) : [];
+  if (arr.length === 0 && typeof singularFallback === 'string' && singularFallback.trim()) {
+    const s = singularFallback.trim();
+    return [{ id: s, upn: s, displayName: s }];
+  }
   return arr.map((o) => {
     if (typeof o === 'string') return { id: o, upn: o, displayName: o };
     return { id: ownerKey(o), upn: o.upn, displayName: o.displayName, label: o.label };
@@ -230,7 +240,7 @@ function itemToProduct(item: WithEtag, tenantId: string | null): DataProductDoc 
     status: ((st.status as DataProductStatus) ?? 'Draft'),
     endorsed: !!st.endorsed,
     updateFrequency: st.updateFrequency as string | undefined,
-    owners: toProductOwners(st.owners),
+    owners: toProductOwners(st.owners, st.owner),
     customAttributes: toCustomAttributes(st.customAttributes),
     termsOfUse: toLinks(st.termsOfUse),
     documentation: toLinks(st.documentation),
@@ -645,6 +655,15 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
           ifMatch ? { accessCondition: { type: 'IfMatch', condition: ifMatch } } : undefined,
         );
       const saved = resource as WithEtag;
+      // Re-mirror to the consumer-discovery index so publish / unpublish / edit
+      // is reflected in Discover. Published → upserted + visible; Draft/Deprecated
+      // → upserted but filtered out by the Published-only consumer search. This
+      // was missing — the PATCH wrote Cosmos but never updated the index, so
+      // publishing a draft never surfaced it. AWAITED (not fire-and-forget) so it
+      // actually completes within the request — a floating promise after the
+      // response isn't reliably run on the serverless/container runtime, which is
+      // why products never indexed. Best-effort: never fails the request.
+      try { await upsertDataProductDoc(docForDataProduct(saved, session.claims.oid)); } catch { /* index is derived */ }
       return NextResponse.json(
         {
           ok: true,

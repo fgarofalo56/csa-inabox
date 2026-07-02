@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { substituteNotebookPlaceholders } from '@/lib/apps/notebook-placeholders';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -71,8 +72,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (!nb) return err('notebook not found', 404);
     // Per-cell run path: caller passes { source, lang, cellId } — we run
     // only that cell's source. Fallback to notebook-level `code` blob.
+    // Resolve the `{{ADLS_ACCOUNT}}` deployment placeholder to the real
+    // Azure-native ADLS account (LOOM_ADLS_ACCOUNT) BEFORE the source is
+    // submitted to Livy / persisted to pendingRuns — so notebooks installed
+    // before the install-time substitution (or edited by hand) still execute
+    // against a valid abfss host instead of the raw token.
     const state = (nb.state as any) || {};
-    const cellSource = typeof body?.source === 'string' ? body.source : '';
+    const cellSource = substituteNotebookPlaceholders(typeof body?.source === 'string' ? body.source : '');
     const cellLang = typeof body?.lang === 'string' ? body.lang : '';
     const cellId = typeof body?.cellId === 'string' ? body.cellId : '';
     // Whole-notebook run: when no per-cell source is passed, assemble the code
@@ -85,7 +91,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       : (state.content?.kind === 'notebook' && Array.isArray(state.content.cells) ? state.content.cells : []);
     const codeFromCells = allCells.filter((c) => c?.type === 'code' && typeof c.source === 'string')
       .map((c) => c.source).join('\n\n');
-    const code = cellSource || state.code || codeFromCells || '';
+    // cellSource is already placeholder-resolved above; resolve the whole-notebook
+    // fallback too so a bundle-installed notebook that predates the fix runs clean.
+    const code = cellSource || substituteNotebookPlaceholders(state.code || codeFromCells || '');
     if (!code.trim()) return err('notebook is empty — write code before running', 400);
 
     // Map cell-lang to the statement-kind that Livy / Databricks expects.
@@ -182,11 +190,26 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const rawCfg = (body?.sessionConfig && typeof body.sessionConfig === 'object')
         ? body.sessionConfig
         : (state.sparkSessionSizing && typeof state.sparkSessionSizing === 'object' ? state.sparkSessionSizing : null);
-      const sizing = rawCfg ? {
-        numExecutors: typeof rawCfg.numExecutors === 'number' ? rawCfg.numExecutors : undefined,
-        executorMemory: typeof rawCfg.executorMemory === 'string' ? rawCfg.executorMemory : undefined,
-        driverMemory: typeof rawCfg.driverMemory === 'string' ? rawCfg.driverMemory : undefined,
-        heartbeatTimeoutInSecond: typeof rawCfg.heartbeatTimeoutInSecond === 'number' ? rawCfg.heartbeatTimeoutInSecond : undefined,
+      // Merge the user's preset / config-builder spark.* confs with the
+      // Synapse→Loom Log Analytics diagnostic defaults (env-gated; {} when LA is
+      // not configured) so EVERY Loom Spark session ships its logging events,
+      // metrics, and listener events to the Loom Log Analytics workspace. User
+      // confs win on key conflicts. NO freeform JSON — these are structured
+      // key/value pairs from the preset catalog + the dialog's row builder.
+      const { synapseLogAnalyticsConf } = await import('@/lib/spark/config-presets');
+      const laConf = synapseLogAnalyticsConf();
+      // The LA shared key rides in laConf so Synapse can authenticate the emitter;
+      // it must NEVER be persisted to Cosmos or returned to the client in the
+      // receipt. redactReceiptSecrets() masks it at both exits (below).
+      const { redactReceiptSecrets } = await import('@/lib/spark/config-presets');
+      const userConf = (rawCfg && rawCfg.conf && typeof rawCfg.conf === 'object') ? rawCfg.conf as Record<string, string> : {};
+      const mergedConf: Record<string, string> = { ...laConf, ...userConf };
+      const sizing = (rawCfg || Object.keys(mergedConf).length) ? {
+        numExecutors: typeof rawCfg?.numExecutors === 'number' ? rawCfg.numExecutors : undefined,
+        executorMemory: typeof rawCfg?.executorMemory === 'string' ? rawCfg.executorMemory : undefined,
+        driverMemory: typeof rawCfg?.driverMemory === 'string' ? rawCfg.driverMemory : undefined,
+        heartbeatTimeoutInSecond: typeof rawCfg?.heartbeatTimeoutInSecond === 'number' ? rawCfg.heartbeatTimeoutInSecond : undefined,
+        conf: Object.keys(mergedConf).length ? mergedConf : undefined,
       } : undefined;
       const sizingKey = sizing ? JSON.stringify(sizing) : '';
 
@@ -202,6 +225,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       let sessionId: number | undefined;
       let sessState = 'starting';
       let reused = false;
+      let displayLoaded = false;
+      let freshSession = false; // fresh cold-create OR a warm pool hand-off — both need the preamble
+      let fromPool = false;
+      let poolLeaseId: string | undefined;
       let sessionReceipt: Record<string, unknown> | null = null;
       const saved = state.sparkSession;
       const savedKey = saved && typeof saved.sizingKey === 'string' ? saved.sizingKey : '';
@@ -211,42 +238,77 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
           if (['idle', 'busy', 'starting', 'not_started'].includes(live.state)) {
             sessionId = saved.id; sessState = live.state; reused = true;
             sessionReceipt = saved.request || null;
+            displayLoaded = (saved as any).displayLoaded === true;
           }
         } catch { /* stale/expired → fall through to create */ }
       }
+
+      // Warm-pool hand-off (kills the 2-4 min Synapse cold start). When the
+      // notebook has no reusable session yet, try to lease a pre-warmed idle
+      // Livy session from the pool instead of cold-starting one. The lease/
+      // return model guarantees the session is handed to exactly THIS run (never
+      // shared concurrently); the pool refills itself in the background. Pool
+      // disabled / empty → acquireWarmSession returns null and we cold-start
+      // below exactly as before (pure accelerator, no hard dependency).
+      if (sessionId === undefined) {
+        try {
+          const { sparkPoolEnabled, acquireWarmSession } = await import('@/lib/azure/spark-session-pool');
+          if (sparkPoolEnabled()) {
+            const lease = await acquireWarmSession({
+              backend: 'synapse', poolName: pool, kind: effectiveSessKind, sizingKey, sizing, userOid: s.claims?.oid,
+            });
+            if (lease && typeof lease.sessionId === 'number') {
+              sessionId = lease.sessionId; sessState = 'idle';
+              fromPool = true; freshSession = true; poolLeaseId = lease.leaseId;
+              sessionReceipt = lease.request || null;
+            }
+          }
+        } catch { /* pool best-effort — fall through to cold create */ }
+      }
+
       if (sessionId === undefined) {
         const sess = await createLivySessionAsync(pool, effectiveSessKind, undefined, sizing);
         sessionId = sess.id; sessState = sess.state;
         sessionReceipt = sess.request;
+        freshSession = true;
+      }
 
-        // Rich display() — inject the ai-display.py helper as statement 0 of a
-        // FRESH pyspark session so display(df) emits the Loom rich-display MIME.
-        // Opt-in via LOOM_RICH_DISPLAY=1 (Azure-native, no Fabric dependency).
-        // Skipped on reuse (loaded once per session) and for non-pyspark kinds.
-        // Non-fatal: if it fails, display() falls back to the built-in table.
-        if ((process.env.LOOM_RICH_DISPLAY || '').trim() === '1' && sessKind === 'pyspark') {
-          try {
-            const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
-            const { AI_DISPLAY_PREAMBLE } = await import('@/lib/notebook/ai-display-preamble');
-            await submitLivyStatement(pool, sessionId, { code: AI_DISPLAY_PREAMBLE, kind: 'pyspark' });
-          } catch { /* non-fatal — display() degrades to the built-in renderer */ }
-        }
-
+      // Auto-mount attached lakehouses + display helper on any FRESH session —
+      // whether cold-created just now OR leased warm from the pool (a pooled
+      // session is a blank kernel, so it needs the same preamble a cold one
+      // gets). Skipped on notebook-level reuse (already injected once).
+      if (freshSession && sessKind === 'pyspark' && typeof sessionId === 'number') {
         // Auto-mount attached lakehouses (issue #655) — inject the
         // `loom_lakehouses` abfss preamble as a session statement on a FRESH
         // pyspark session so every cell can read the lake without typing paths.
         // Skipped on reuse (defined once per session) + non-pyspark kinds.
         // Honest: unresolvable sources are omitted; empty preamble injects
         // nothing. Non-fatal — a failure here must not break the run.
-        if (sessKind === 'pyspark') {
-          try {
-            const preamble = await buildAutoMountPreamble(state.attachedSources || [], workspaceId);
-            if (preamble) {
-              const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
-              await submitLivyStatement(pool, sessionId, { code: preamble, kind: 'pyspark' });
-            }
-          } catch { /* non-fatal — user can still type paths manually */ }
-        }
+        try {
+          const preamble = await buildAutoMountPreamble(state.attachedSources || [], workspaceId);
+          if (preamble) {
+            const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
+            await submitLivyStatement(pool, sessionId, { code: preamble, kind: 'pyspark' });
+          }
+        } catch { /* non-fatal — user can still type paths manually */ }
+      }
+
+      // Rich display() helper — ensure it is loaded ONCE per session, for BOTH
+      // fresh AND reused pyspark sessions. Injecting only on a fresh session left
+      // display() undefined on a REUSED session that predated the helper — the
+      // live "NameError: name 'display' is not defined" symptom. The helper is
+      // idempotent in-kernel (sys._loom_display_v1); displayLoaded (persisted in
+      // sparkSession) keeps us from re-submitting it on every cell run. Submitted
+      // BEFORE the cell statement (the poll route submits the cell), so Livy's
+      // FIFO ordering guarantees display() is defined by the time the cell runs.
+      // Opt-in via LOOM_RICH_DISPLAY=1 (Azure-native, no Fabric). Non-fatal.
+      if ((process.env.LOOM_RICH_DISPLAY || '').trim() === '1' && effectiveSessKind === 'pyspark' && !displayLoaded && typeof sessionId === 'number') {
+        try {
+          const { submitLivyStatement } = await import('@/lib/azure/synapse-dev-client');
+          const { AI_DISPLAY_PREAMBLE } = await import('@/lib/notebook/ai-display-preamble');
+          await submitLivyStatement(pool, sessionId, { code: AI_DISPLAY_PREAMBLE, kind: 'pyspark' });
+          displayLoaded = true;
+        } catch { /* non-fatal — display() degrades to the built-in renderer */ }
       }
       const runIdStr = `spark:${pool}:${sessionId}`;
 
@@ -254,13 +316,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       try {
         const items = await itemsContainer();
         const pendingRuns = { ...(state.pendingRuns || {}) };
-        if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: effectiveStmtKind, cellId };
+        if (cellSource) pendingRuns[runIdStr] = { source: cellSource, lang: effectiveStmtKind, cellId, startedAt: new Date().toISOString() };
         await items.item(nb.id, workspaceId).replace({
           ...nb,
           state: {
             ...state,
             pendingRuns,
-            sparkSession: { pool, id: sessionId, kind: effectiveSessKind, sizingKey, request: sessionReceipt },
+            sparkSession: { pool, id: sessionId, kind: effectiveSessKind, sizingKey, request: redactReceiptSecrets(sessionReceipt), displayLoaded, ...(poolLeaseId ? { poolLeaseId } : {}) },
             ...(rawCfg ? { sparkSessionSizing: rawCfg } : {}),
           },
           updatedAt: new Date().toISOString(),
@@ -272,14 +334,19 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
         runId: runIdStr,
         status: sessState,
         reusedSession: reused,
+        // True when this session was handed off warm from the pool (no cold
+        // start). Surfaced so the editor can show "warm session ready ⚡".
+        fromWarmPool: fromPool,
         compute: { kind: 'synapse-spark', pool },
         cellId: cellId || null,
         // Honest receipt: the real Livy session-create body that provisioned
         // (or is reusing) this session — `numExecutors` here is what the Spark
         // session actually runs with.
-        session: sessionReceipt
-          ? { id: sessionId, state: sessState, reused, ...sessionReceipt }
-          : { id: sessionId, state: sessState, reused },
+        session: redactReceiptSecrets(
+          sessionReceipt
+            ? { id: sessionId, state: sessState, reused, ...sessionReceipt }
+            : { id: sessionId, state: sessState, reused },
+        ),
         sourcePreview: code.slice(0, 200),
       });
     }

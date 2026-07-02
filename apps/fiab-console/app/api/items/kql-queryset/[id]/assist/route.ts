@@ -34,7 +34,7 @@ import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import {
   loadKustoItem,
   resolveDatabase,
@@ -42,20 +42,6 @@ import {
 } from '@/lib/azure/kusto-client';
 
 type AssistMode = 'generate' | 'explain' | 'fix';
-
-// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
-const credential = uamiArmCredential();
-
-// AOAI audience differs by cloud (public: cognitiveservices.azure.com,
-// Gov: cognitiveservices.azure.us). LOOM_AOAI_AUDIENCE is stamped by
-// admin-plane/main.bicep via the ARM environment() built-in; default is the
-// public-cloud host so the route works out of the box in Commercial.
-async function aoaiToken(): Promise<string> {
-  const audience = process.env.LOOM_AOAI_AUDIENCE || 'https://cognitiveservices.azure.com';
-  const t = await credential.getToken(`${audience}/.default`);
-  if (!t?.token) throw new Error('Failed to acquire AOAI token');
-  return t.token;
-}
 
 // ---------- ADX schema grounding (soft-fail, never blocks) ----------
 // One Kusto mgmt round-trip returns every table + column for the database.
@@ -172,9 +158,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const database = (body?.database && String(body.database).trim()) || resolveDatabase(item);
 
   // Resolve AOAI target — same resolution order as the cross-item Copilot.
-  let target;
+  // Pre-resolve here purely for the honest 503 gate; the unified client
+  // re-resolves (harmlessly) when the call is made.
   try {
-    target = await resolveAoaiTarget();
+    await resolveAoaiTarget();
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -193,48 +180,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const messages = buildMessages(mode, database, kql, prompt, errorText, schema);
 
   try {
-    const token = await aoaiToken();
-    const apiVersion = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
-    const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(
-      target.deployment,
-    )}/chat/completions?api-version=${apiVersion}`;
-
-    const callWithTemperature = (temp?: number) =>
-      fetch(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          messages,
-          ...(temp !== undefined ? { temperature: temp } : {}),
-          max_tokens: 2048,
-        }),
-      });
-
-    let res = await callWithTemperature(0.2);
-    if (res.status === 400) {
-      const txt = await res.text();
-      // Reasoning models (o1/o3/gpt-5/MAI-*) reject non-default temperature — retry once.
-      if (
-        /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(txt) &&
-        /temperature|top_p/i.test(txt)
-      ) {
-        res = await callWithTemperature(undefined);
-      } else {
-        return NextResponse.json(
-          { ok: false, error: `AOAI 400: ${txt.slice(0, 300)}` },
-          { status: 502 },
-        );
-      }
-    }
-    if (!res.ok) {
-      const txt = await res.text();
-      return NextResponse.json(
-        { ok: false, error: `AOAI ${res.status}: ${txt.slice(0, 300)}` },
-        { status: 502 },
-      );
-    }
-    const j = await res.json();
-    const raw: string = j?.choices?.[0]?.message?.content ?? '';
+    // Unified AOAI chat client (cogScope token + buildAoaiBody contract +
+    // unsupported-temperature retry, Commercial- and Gov-correct).
+    const raw = await aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2 });
     // Strip any stray ```kql / ```kusto fences the model may add despite instructions.
     const result =
       mode === 'explain'

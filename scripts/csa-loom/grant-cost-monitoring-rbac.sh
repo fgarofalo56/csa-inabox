@@ -23,7 +23,7 @@
 set -uo pipefail
 
 # Console UAMI object id (the identity the BFF runs as). Override via env.
-UAMI_PRINCIPAL="${CONSOLE_UAMI_PRINCIPAL:-e61f3eb3-c646-4183-8198-4c4a34cd9a01}"
+UAMI_PRINCIPAL="${CONSOLE_UAMI_PRINCIPAL:-00000000-0000-0000-0000-00000000000a}"
 
 # Built-in role definition GUIDs.
 COST_MGMT_READER="72fafb9e-0641-4937-9268-a91bfd8191a3"  # Cost Management Reader

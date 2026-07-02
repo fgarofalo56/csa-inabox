@@ -65,8 +65,8 @@ from pyspark.sql.functions import (
 
 # Parameters
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
-source_table = "lh_bronze.dbo.bronze_compliance"
-target_table = "lh_silver.dbo.silver_compliance_validated"
+source_table = "lh_bronze.bronze_compliance"
+target_table = "lh_silver.silver_compliance_validated"
 
 # Regulatory thresholds
 CTR_THRESHOLD = 10000

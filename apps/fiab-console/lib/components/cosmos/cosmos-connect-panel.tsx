@@ -35,11 +35,11 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 14, padding: '8px 4px', overflow: 'auto', height: '100%' },
-  head: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
-  section: { display: 'flex', flexDirection: 'column', gap: 10 },
-  sectionHead: { display: 'flex', alignItems: 'center', gap: 8 },
-  row: { display: 'flex', alignItems: 'flex-end', gap: 6 },
+  root: { display: 'flex', flexDirection: 'column', gap: '14px', padding: '8px 4px', overflow: 'auto', height: '100%' },
+  head: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalMNudge },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  row: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalSNudge },
   grow: { flex: 1, minWidth: 0 },
   note: { color: tokens.colorNeutralForeground3 },
   mono: { fontFamily: tokens.fontFamilyMonospace },

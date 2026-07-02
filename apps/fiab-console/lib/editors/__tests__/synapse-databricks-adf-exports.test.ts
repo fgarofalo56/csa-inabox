@@ -35,14 +35,23 @@ const CONTRACTS: SourceContract[] = [
       'AdfTriggerEditor',
     ],
   },
+  // databricks-editors.tsx is now a barrel; the editor `export function`
+  // declarations live in the per-editor files under ./databricks/.
   {
-    file: 'databricks-editors.tsx',
-    exports: [
-      'DatabricksNotebookEditor',
-      'DatabricksJobEditor',
-      'DatabricksClusterEditor',
-      'DatabricksSqlWarehouseEditor',
-    ],
+    file: 'databricks/databricks-notebook-editor.tsx',
+    exports: ['DatabricksNotebookEditor'],
+  },
+  {
+    file: 'databricks/job-editor.tsx',
+    exports: ['DatabricksJobEditor'],
+  },
+  {
+    file: 'databricks/cluster-editor.tsx',
+    exports: ['DatabricksClusterEditor'],
+  },
+  {
+    file: 'databricks/sql-warehouse-editor.tsx',
+    exports: ['DatabricksSqlWarehouseEditor'],
   },
 ];
 

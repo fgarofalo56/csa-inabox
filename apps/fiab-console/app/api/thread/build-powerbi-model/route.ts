@@ -59,9 +59,14 @@ export async function POST(req: NextRequest) {
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'pick a Power BI workspace' }, { status: 400 });
   if (!modelName) return NextResponse.json({ ok: false, error: 'name the model' }, { status: 400 });
 
-  // Owner-scoped: confirm the caller actually owns the source item.
-  const src = await loadOwnedItem(from.id, from.type, oid);
-  if (!src) return NextResponse.json({ ok: false, error: 'source item not found' }, { status: 404 });
+  // The model is built from the Azure-native warehouse BACKEND (the env-configured
+  // Synapse dedicated pool resolved below), not from the specific source item — so
+  // a brand-new/unsaved pool, or one surfaced by the resource navigator rather than
+  // saved as a Loom item, must still work. We don't actually need to persist a Loom
+  // item here (the model lands in Power BI), so the source load is best-effort and
+  // never blocks the weave.
+  const src = await loadOwnedItem(from.id, from.type, oid).catch(() => null);
+  void src; // (kept for future provenance; no longer a hard gate)
 
   let target;
   try {

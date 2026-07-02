@@ -71,43 +71,43 @@ const PRIMARY_METRICS: Record<TaskType, string[]> = {
 };
 
 const useStyles = makeStyles({
-  pad: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' },
-  tabBar: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, paddingBottom: '4px' },
+  pad: { padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  tabBar: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, paddingBottom: tokens.spacingVerticalXS },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    padding: '14px',
+    padding: tokens.spacingVerticalM,
     background: tokens.colorNeutralBackground1,
     display: 'flex',
     flexDirection: 'column',
-    gap: '10px',
+    gap: tokens.spacingVerticalM,
     boxShadow: tokens.shadow2,
   },
-  taskGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '10px' },
+  taskGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
   taskTile: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
-    padding: '12px',
+    padding: tokens.spacingVerticalM,
     cursor: 'pointer',
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: tokens.spacingVerticalXS,
     background: tokens.colorNeutralBackground1,
     transitionProperty: 'background, border-color, box-shadow',
     transitionDuration: tokens.durationFaster,
-    ':hover': { background: tokens.colorNeutralBackground1Hover, borderColor: tokens.colorNeutralStroke1 },
+    ':hover': { background: tokens.colorNeutralBackground1Hover, border: `1px solid ${tokens.colorNeutralStroke1}` },
     ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
   },
   taskTileSelected: {
-    borderColor: tokens.colorBrandStroke1,
+    border: `1px solid ${tokens.colorBrandStroke1}`,
     boxShadow: `0 0 0 1px ${tokens.colorBrandStroke1}`,
     background: tokens.colorNeutralBackground1Selected,
   },
   // ── Stepper ──────────────────────────────────────────────────────
-  stepper: { display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap', paddingBottom: '2px' },
+  stepper: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', paddingBottom: tokens.spacingVerticalXXS },
   stepItem: {
-    display: 'inline-flex', alignItems: 'center', gap: '6px',
-    background: 'transparent', border: 'none', padding: '4px 6px',
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    background: 'transparent', border: 'none', paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS, paddingLeft: tokens.spacingHorizontalXS, paddingRight: tokens.spacingHorizontalXS,
     borderRadius: tokens.borderRadiusMedium, cursor: 'pointer',
     color: tokens.colorNeutralForeground1, font: 'inherit',
     ':disabled': { cursor: 'not-allowed', opacity: 0.55 },
@@ -119,38 +119,42 @@ const useStyles = makeStyles({
     width: '24px', height: '24px', borderRadius: '50%',
     background: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground2,
-    fontSize: '12px', fontWeight: 600, flexShrink: 0,
+    fontSize: tokens.fontSizeBase200, fontWeight: 600, flexShrink: 0,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   stepDotActive: {
     background: tokens.colorBrandBackground,
     color: tokens.colorNeutralForegroundOnBrand,
-    borderColor: tokens.colorBrandBackground,
+    border: `1px solid ${tokens.colorBrandBackground}`,
   },
   stepDotDone: {
     background: tokens.colorPaletteGreenBackground2,
     color: tokens.colorPaletteGreenForeground1,
-    borderColor: tokens.colorPaletteGreenBorder1,
+    border: `1px solid ${tokens.colorPaletteGreenBorder1}`,
   },
   stepConnector: { width: '20px', height: '2px', background: tokens.colorNeutralStroke2, flexShrink: 0 },
   stepConnectorDone: { background: tokens.colorPaletteGreenBorder1 },
-  fieldRow: { display: 'flex', gap: '12px', flexWrap: 'wrap' },
-  navRow: { display: 'flex', gap: '8px', justifyContent: 'space-between', marginTop: '8px' },
-  reviewGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '4px 16px', fontSize: '13px' },
-  statusCell: { display: 'inline-flex', alignItems: 'center', gap: '4px' },
+  fieldRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
+  navRow: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'space-between', marginTop: tokens.spacingVerticalS },
+  reviewGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', rowGap: tokens.spacingVerticalXS, columnGap: tokens.spacingHorizontalL, fontSize: tokens.fontSizeBase300 },
+  reviewValue: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  tableScroll: { overflowX: 'auto', maxWidth: '100%' },
+  statusCell: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   uriHint: {
     fontFamily: tokens.fontFamilyMonospace,
     background: tokens.colorNeutralBackground3,
-    padding: '6px 8px', borderRadius: tokens.borderRadiusSmall,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS, paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusSmall,
     wordBreak: 'break-all',
   },
-  runsToolbar: { display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' },
+  runsToolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   runsSpacer: { flex: 1 },
   emptyState: {
-    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
-    padding: '28px 12px', textAlign: 'center', color: tokens.colorNeutralForeground3,
+    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXS,
+    paddingTop: tokens.spacingVerticalXXL, paddingBottom: tokens.spacingVerticalM, paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
+    textAlign: 'center', color: tokens.colorNeutralForeground3,
   },
-  actionCell: { display: 'flex', gap: '4px' },
+  actionCell: { display: 'flex', gap: tokens.spacingHorizontalXS },
 });
 
 interface ClusterLite { name: string; vmSize?: string; state?: string; provisioningState?: string; maxNodeCount?: number }
@@ -444,7 +448,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                 const active = i === stepIndex;
                 const reachable = i <= stepIndex || stepValid(STEPS[i - 1] || 'Task');
                 return (
-                  <span key={s} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span key={s} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS }}>
                     <button
                       type="button"
                       className={styles.stepItem}
@@ -647,7 +651,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                 <div className={styles.reviewGrid}>
                   <Caption1>Task</Caption1><Body1>{task}</Body1>
                   <Caption1>Datastore</Caption1><Body1>{datastore || '—'}</Body1>
-                  <Caption1>Training data URI</Caption1><Body1 style={{ fontFamily: 'monospace', fontSize: 12 }}>{trainingDataUri || '—'}</Body1>
+                  <Caption1>Training data URI</Caption1><Body1 className={styles.reviewValue} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200 }}>{trainingDataUri || '—'}</Body1>
                   <Caption1>Target column</Caption1><Body1>{targetColumn || '—'}</Body1>
                   {task === 'Forecasting' && (<><Caption1>Time column</Caption1><Body1>{timeColumn || '—'}</Body1></>)}
                   {task === 'Forecasting' && timeSeriesIds.trim() && (<><Caption1>Series IDs</Caption1><Body1>{timeSeriesIds}</Body1></>)}
@@ -724,6 +728,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
               </div>
             )}
             {filteredJobs.length > 0 && (
+              <div className={styles.tableScroll}>
               <Table size="small">
                 <TableHeader>
                   <TableRow>
@@ -770,6 +775,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
                   })}
                 </TableBody>
               </Table>
+              </div>
             )}
           </div>
         )}

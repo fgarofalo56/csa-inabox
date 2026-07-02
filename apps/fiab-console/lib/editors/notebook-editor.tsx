@@ -14,20 +14,31 @@
  * Backed by /api/loom/workspaces + /api/items/notebook/**.
  */
 
+import type React from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Subtitle2, Caption1, Badge, Button, Spinner, Input, Tooltip, Divider,
   Tree, TreeItem, TreeItemLayout, Select,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
+  Menu, MenuTrigger, MenuList, MenuItem, MenuPopover, Field,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Play20Regular, Add20Regular, Save20Regular, ArrowSync20Regular, Delete20Regular, Notebook20Regular,
   History20Regular, ArrowUpload20Regular, Open20Regular, Library20Regular, Settings20Regular, Sparkle20Regular, BracesVariable20Regular,
-  Copy20Regular, Info16Regular,
+  Copy20Regular, Info16Regular, ChevronDown20Regular, ChevronUp20Regular, Server20Regular,
+  Notebook16Regular, Database16Regular, History16Regular, Database24Regular, Stop20Regular,
+  FolderAdd20Regular, Folder20Filled, FolderArrowRight20Regular, ArrowSort20Regular,
+  Flash16Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
+import {
+  listFolders, createFolder, renameFolder, deleteFolder, patchWorkspaceItem,
+  type WorkspaceFolder,
+} from '@/lib/api/workspaces';
+import { buildTree, countDescendants, type FolderNode, type TreeItemSort } from '@/lib/panes/folders';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -41,43 +52,84 @@ import {
   SessionConfigDialog, toConfigureOptions, sessionConfigEquals, normalizeSessionConfig,
   DEFAULT_SESSION_CONFIG, type SessionConfig,
 } from '@/lib/components/notebook/session-config-dialog';
+import { redactReceiptSecrets } from '@/lib/spark/config-presets';
 import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
 import { setCopilotContext } from '@/lib/components/copilot-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 import { registerBridge } from '@/lib/copilot/apply-change';
 import { runtimeFromComputeKind, starterCellFor, RUNTIME_LABEL, type ClusterRuntime } from '@/lib/components/editor/cluster-runtime';
+import { useSharedEditorStyles } from './shared-styles';
 
 // Ribbon is now built dynamically inside the component so each action can
 // hold a real onClick wired to the editor's handlers. See `buildRibbon`
 // below the component declarations.
 
-const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0, position: 'relative' },
+const useLocalStyles = makeStyles({
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto', position: 'relative' },
   // Bottom-align so the label+control groups (Compute backend / Workspace /
   // Compute target / Environment) and the bare action buttons (Refresh / Manage
   // / Import / New) line up on one baseline instead of the buttons floating
   // mid-height — which made the row read as crammed/overlapping. Wider gap +
   // row-gap gives the labels breathing room when the row wraps.
-  toolbar: { display: 'flex', columnGap: 20, rowGap: 12, alignItems: 'flex-end', flexWrap: 'wrap', padding: '4px 4px 12px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: 4 },
-  toolDivider: { alignSelf: 'stretch', minHeight: 36 },
+  toolbar: { display: 'flex', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalM, alignItems: 'flex-end', flexWrap: 'wrap', padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalXS} ${tokens.spacingVerticalM}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalXS },
+  // Slim always-visible bar: Run + selected-compute summary + the Compute &
+  // setup disclosure + Copilot. Keeps the notebook header to one compact row
+  // when the full config is collapsed (the default) so cells get the space.
+  computeBar: { display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalM, rowGap: tokens.spacingVerticalS, flexWrap: 'wrap', padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalXS}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalXS },
+  computeSummary: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, color: tokens.colorNeutralForeground2 },
+  computeSummaryName: { maxWidth: '320px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  setupCollapsible: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalXS },
+  toolDivider: { alignSelf: 'stretch', minHeight: '36px' },
   editor: {
-    width: '100%', minHeight: 280,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', minHeight: '280px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  treePad: { padding: 8 },
-  tableWrap: { overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  // Notebooks-pane folder tree affordances (reuses the workspace folders engine).
+  nbPaneToolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  nbDragOver: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px', borderRadius: tokens.borderRadiusSmall },
+  nbRootDrop: {
+    marginTop: tokens.spacingVerticalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    borderRadius: tokens.borderRadiusMedium, fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3, border: `1px dashed ${tokens.colorNeutralStroke2}`, textAlign: 'center',
+  },
+  nbRootDropActive: {
+    border: `1px dashed ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2Hover, color: tokens.colorBrandForeground1,
+  },
+  tableWrap: { overflow: 'auto', maxHeight: '240px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   // Bottom-left session status badge — overlays the editor surface like the
   // Synapse Studio session indicator (Idle / Running / Error).
-  statusBadge: { position: 'absolute', bottom: 12, left: 12, zIndex: 5 },
+  statusBadge: { position: 'absolute', bottom: tokens.spacingVerticalM, left: tokens.spacingHorizontalM, zIndex: 5 },
+  // Section header with a leading Fluent icon — gives each sidebar/main
+  // section a glyph so they read as part of the same polished product
+  // (Web 3.0 rule) instead of bare text labels.
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground2 },
+  // Attach-Lakehouse picker row — a selectable list card. Elevated +
+  // rounded so it reads as a tappable card with depth, lifting on hover,
+  // instead of a flat bordered box.
+  lakehouseCard: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 120ms ease, border-color 120ms ease',
+    ':hover': { boxShadow: tokens.shadow16, border: `1px solid ${tokens.colorBrandStroke1}` },
+  },
 });
 
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
+
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
-interface NotebookLite { id: string; displayName: string; description?: string; }
+interface NotebookLite { id: string; displayName: string; description?: string; folderId?: string | null; updatedAt?: string; }
 interface JobLite {
   id: string; status?: string; jobType?: string; invokeType?: string;
   startTimeUtc?: string; endTimeUtc?: string;
@@ -152,6 +204,8 @@ interface ComputeTarget {
   name: string;
   kind: 'synapse-spark' | 'databricks-cluster' | 'synapse-dedicated-sql' | 'synapse-serverless-sql' | 'aml-ci';
   state?: string;
+  /** AML Compute Instance assigned to the caller (their own single-user CI). */
+  mine?: boolean;
 }
 
 /** Notebook compute backend: Loom-native Spark/Databricks vs the Azure ML path. */
@@ -184,27 +238,90 @@ function isCiStopped(state?: string): boolean {
   return CI_STOPPED.includes(state || '');
 }
 
-/** Detect whether the AML notebook path is wired (LOOM_AML_WORKSPACE set). */
+/**
+ * Idle auto-shutdown TTL options (ISO-8601 duration → label) offered in the
+ * Configure / New Compute Instance dialogs. Dropdown only — no freeform input
+ * (loom_no_freeform_config). Backs both the create body and the
+ * updateIdleShutdownSetting route.
+ */
+const IDLE_TTL_OPTIONS: { value: string; label: string }[] = [
+  { value: 'PT15M', label: '15 minutes' },
+  { value: 'PT30M', label: '30 minutes' },
+  { value: 'PT1H', label: '1 hour' },
+  { value: 'PT3H', label: '3 hours' },
+];
+const TTL_LABEL: Record<string, string> = Object.fromEntries(IDLE_TTL_OPTIONS.map((o) => [o.value, o.label]));
+
+/** Compute Instance VM sizes offered in the New Compute Instance dialog. */
+const AML_CI_VM_SIZES: { value: string; label: string }[] = [
+  { value: 'Standard_DS3_v2', label: 'Standard_DS3_v2 · 4 vCPU · 14 GB' },
+  { value: 'Standard_DS11_v2', label: 'Standard_DS11_v2 · 2 vCPU · 14 GB' },
+  { value: 'Standard_DS12_v2', label: 'Standard_DS12_v2 · 4 vCPU · 28 GB' },
+  { value: 'Standard_E4ds_v4', label: 'Standard_E4ds_v4 · 4 vCPU · 32 GB' },
+  { value: 'Standard_NC6s_v3', label: 'Standard_NC6s_v3 · 6 vCPU · 112 GB · 1×V100 GPU' },
+];
+
+/** Detect whether the AML notebook path is wired (LOOM_AML_WORKSPACE set), and
+ *  surface the bicep default Compute Instance name (LOOM_AML_DEFAULT_COMPUTE)
+ *  so the editor can auto-select it the moment that CI exists. */
 function useAmlConfigured() {
   const [configured, setConfigured] = useState<boolean | null>(null);
+  const [defaultCompute, setDefaultCompute] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
         const j = await (await fetch('/api/aml/compute-instances')).json();
-        if (!cancelled) setConfigured(j.ok === true || j.configured === true);
+        if (!cancelled) {
+          setConfigured(j.ok === true || j.configured === true);
+          setDefaultCompute(typeof j.defaultCompute === 'string' && j.defaultCompute ? j.defaultCompute : null);
+        }
       } catch { if (!cancelled) setConfigured(false); }
     })();
     return () => { cancelled = true; };
   }, []);
-  return configured;
+  return { configured, defaultCompute };
+}
+
+/** The caller's OWN per-user Compute Instance state + tenant quota + policy.
+ *  AML Compute Instances are single-user, so a shared default CI can't make
+ *  notebooks multi-user — every user provisions a CI assigned to THEM. Backs the
+ *  "My compute" label + "Create my compute instance" action + honest quota gate. */
+interface MyCiState {
+  loading: boolean;
+  enabled: boolean;
+  myName: string | null;
+  mine: { name: string; state?: string; running?: boolean } | null;
+  policy: { vmSize?: string; idleTtl?: string; maxPerTenant?: number } | null;
+  quota: { used: number; max: number; atLimit: boolean } | null;
+}
+function useMyCi() {
+  const [state, setState] = useState<MyCiState>({ loading: true, enabled: true, myName: null, mine: null, policy: null, quota: null });
+  const refresh = useCallback(async () => {
+    try {
+      const j = await (await fetch('/api/aml/compute-instances/mine')).json();
+      setState({
+        loading: false,
+        enabled: j?.enabled !== false,
+        myName: typeof j?.myName === 'string' ? j.myName : null,
+        mine: j?.mine || null,
+        policy: j?.policy || null,
+        quota: j?.quota || null,
+      });
+    } catch {
+      setState((p) => ({ ...p, loading: false }));
+    }
+  }, []);
+  useEffect(() => { void refresh(); }, [refresh]);
+  return { ...state, refresh };
 }
 
 export function NotebookEditor({ item, id }: Props) {
   const s = useStyles();
   const ws = useWorkspaces();
   const cp = useComputes();
-  const amlConfigured = useAmlConfigured();
+  const { configured: amlConfigured, defaultCompute: amlDefaultCompute } = useAmlConfigured();
+  const myCi = useMyCi();
   // Notebook compute backend toggle. Defaults to Loom-native Spark/Databricks;
   // the user flips to Azure ML when they want a Compute Instance + datastores.
   const [workspaceType, setWorkspaceType] = useState<WorkspaceType>('loom');
@@ -212,6 +329,25 @@ export function NotebookEditor({ item, id }: Props) {
   const [computeId, setComputeId] = useState('');
   const [notebooks, setNotebooks] = useState<NotebookLite[] | null>(null);
   const [notebookId, setNotebookId] = useState('');
+  // ---- Notebooks-pane folders/subfolders + sort + move (reuses the workspace
+  // folders engine: lib/panes/folders.tsx buildTree + lib/api/workspaces folder
+  // wrappers → real Cosmos cascade). Folder organization is Loom-native; no
+  // Fabric dependency. ----
+  const [folders, setFolders] = useState<WorkspaceFolder[]>([]);
+  const [nbSort, setNbSort] = useState<TreeItemSort>('name');
+  const [nbExpanded, setNbExpanded] = useState<Set<string>>(new Set());
+  const [nbFolderDialog, setNbFolderDialog] = useState<
+    | { mode: 'create'; parent: string | null }
+    | { mode: 'rename'; folderId: string; current: string }
+    | null
+  >(null);
+  const [nbFolderName, setNbFolderName] = useState('');
+  const [nbConfirmFolderDelete, setNbConfirmFolderDelete] = useState<WorkspaceFolder | null>(null);
+  const [nbMoveTarget, setNbMoveTarget] = useState<NotebookLite | null>(null);
+  const [nbFolderBusy, setNbFolderBusy] = useState(false);
+  const [nbFolderErr, setNbFolderErr] = useState<string | null>(null);
+  const [nbDragId, setNbDragId] = useState<string | null>(null);
+  const [nbDropTarget, setNbDropTarget] = useState<string | 'root' | null>(null);
   // Pylance/pylsp WS bridge path + VS Code for Web deep-link, resolved from
   // /api/notebook/<id>/lsp (server-only env: LOOM_PYLSP_ENABLED, boundary, AML).
   const [lspWsUrl, setLspWsUrl] = useState<string | null>(null);
@@ -279,6 +415,15 @@ export function NotebookEditor({ item, id }: Props) {
   const [sessionStatus, setSessionStatus] = useState<'Idle' | 'Running' | 'Error'>('Idle');
   const [sessionReceipt, setSessionReceipt] = useState<Record<string, unknown> | null>(null);
 
+  // Compute & setup chrome (backend toggle, workspace/compute pickers,
+  // environment, configure-session, history, …) is collapsed by default so the
+  // cells get the vertical space — it previously filled ~half the notebook.
+  // A slim always-visible bar keeps Run + the selected-compute summary handy;
+  // the full config expands on demand. Auto-expands once if no compute is
+  // selected so a brand-new notebook still surfaces the picker.
+  const [setupOpen, setSetupOpen] = useState(false);
+  const autoOpenedSetupRef = useRef(false);
+
   // Schema hint for inline code completion (ghost text): the attached
   // lakehouse / warehouse / KQL sources. Grounds AOAI suggestions in the
   // real items this notebook is bound to (no Fabric dependency).
@@ -311,10 +456,21 @@ export function NotebookEditor({ item, id }: Props) {
       return;
     }
     if (!computeId && cp.computes.length) {
+      // In Azure ML mode, prefer the caller's OWN per-user CI (multi-user:
+      // everyone lands on THEIR compute), then the bicep default CI
+      // (LOOM_AML_DEFAULT_COMPUTE), then the first runnable CI.
+      if (workspaceType === 'aml') {
+        const own = cp.computes.find(c => c.kind === 'aml-ci' && c.mine);
+        if (own) { setComputeId(own.id); return; }
+        if (amlDefaultCompute) {
+          const def = cp.computes.find(c => c.kind === 'aml-ci' && c.name === amlDefaultCompute);
+          if (def) { setComputeId(def.id); return; }
+        }
+      }
       const first = cp.computes.find(computeMatchesType);
       if (first) setComputeId(first.id);
     }
-  }, [cp.computes, computeId, computeMatchesType]);
+  }, [cp.computes, computeId, computeMatchesType, workspaceType, amlDefaultCompute]);
 
   // Pre-warm session on compute selection: if a Synapse Spark compute is picked,
   // immediately POST to /run with no code to initialize the Livy session in the background.
@@ -344,10 +500,46 @@ export function NotebookEditor({ item, id }: Props) {
   // instead of cold-starting on every run.
   const [startingCompute, setStartingCompute] = useState(false);
   const selectedCompute = cp.computes.find(c => c.id === computeId) || null;
+  // Open the collapsed setup once if compute finished loading with nothing
+  // selected, so a new notebook still surfaces the picker. Ref-guarded so a
+  // user who deliberately collapses it isn't fought on the next render.
+  useEffect(() => {
+    if (!cp.loading && !computeId && !autoOpenedSetupRef.current) {
+      autoOpenedSetupRef.current = true;
+      setSetupOpen(true);
+    }
+  }, [cp.loading, computeId]);
   // Runtime derived from the attached compute. Drives cluster-aware IntelliSense
   // (dbutils vs mssparkutils vs azure.ai.ml) + Copilot grounding. Defaults to
   // Synapse Spark (the validated Livy path) when nothing is selected yet.
   const clusterRuntime: ClusterRuntime = runtimeFromComputeKind(selectedCompute?.kind);
+
+  // Warm Spark session-pool indicator. Honest about whether the next run gets a
+  // pre-warmed session (⚡ instant) or will cold-start the Synapse Spark pool
+  // (~2 min). Polls the pool BFF; only meaningful for a Synapse Spark compute
+  // (computeId `spark:<pool>`). Silent when the pool is disabled or the backend
+  // isn't Spark — never implies capability that isn't there.
+  const [warmPool, setWarmPool] = useState<{ enabled: boolean; warmForPool: boolean } | null>(null);
+  const sparkPoolName = computeId.startsWith('spark:') ? computeId.slice('spark:'.length) : '';
+  useEffect(() => {
+    if (!sparkPoolName) { setWarmPool(null); return; }
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/spark/session-pool');
+        const j = await r.json();
+        if (cancelled || !j?.ok) return;
+        const st = j.status;
+        const warm = Array.isArray(st?.groups)
+          ? st.groups.some((gp: any) => gp?.poolName === sparkPoolName && gp?.warm > 0)
+          : false;
+        setWarmPool({ enabled: !!st?.enabled, warmForPool: warm });
+      } catch { /* silent — indicator is best-effort */ }
+    };
+    load();
+    const t = setInterval(load, 15000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [sparkPoolName, running]);
   const startCompute = useCallback(async () => {
     if (!computeId) return;
     setStartingCompute(true); setRunMsg('Starting compute…');
@@ -377,6 +569,131 @@ export function NotebookEditor({ item, id }: Props) {
       setRunMsg(`Could not start compute: ${e?.message || String(e)}`);
     } finally { setStartingCompute(false); }
   }, [computeId, cp]);
+
+  // ---- AML Compute Instance lifecycle (Azure ML path only) ----
+  // Stop a running CI right from the notebook so it stops billing. Mirrors
+  // startCompute's poll-to-state. computeId is `aml-ci:<name>`.
+  const [stoppingCompute, setStoppingCompute] = useState(false);
+  const stopComputeCi = useCallback(async () => {
+    if (!computeId.startsWith('aml-ci:')) return;
+    const ciName = computeId.slice('aml-ci:'.length);
+    setStoppingCompute(true); setRunMsg('Stopping compute…');
+    try {
+      const r = await fetch(`/api/aml/compute-instances/${encodeURIComponent(ciName)}/stop`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) {
+        setRunMsg(`Could not stop compute: ${j?.error || j?.hint || `HTTP ${r.status}`}`);
+        return;
+      }
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 5 * 60 * 1000) {
+        await new Promise(res => setTimeout(res, 5000));
+        await cp.refresh();
+        const cur = cp.computes.find(c => c.id === computeId);
+        if (cur && isCiStopped(cur.state)) { setRunMsg('Compute stopped.'); break; }
+        setRunMsg(`Stopping compute… (${cur?.state || 'pending'})`);
+      }
+    } catch (e: any) {
+      setRunMsg(`Could not stop compute: ${e?.message || String(e)}`);
+    } finally { setStoppingCompute(false); }
+  }, [computeId, cp]);
+
+  // Configure compute — idle auto-shutdown TTL dialog (POST .../idle-shutdown).
+  const [configCiOpen, setConfigCiOpen] = useState(false);
+  const [configCiTtl, setConfigCiTtl] = useState('PT30M');
+  const [configCiBusy, setConfigCiBusy] = useState(false);
+  const [configCiErr, setConfigCiErr] = useState<string | null>(null);
+  const saveCiIdleShutdown = useCallback(async () => {
+    if (!computeId.startsWith('aml-ci:')) return;
+    const ciName = computeId.slice('aml-ci:'.length);
+    setConfigCiBusy(true); setConfigCiErr(null);
+    try {
+      const r = await fetch(`/api/aml/compute-instances/${encodeURIComponent(ciName)}/idle-shutdown`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ idleTtl: configCiTtl }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || j?.ok === false) {
+        setConfigCiErr(j?.error || j?.hint || `HTTP ${r.status}`);
+        return;
+      }
+      setConfigCiOpen(false);
+      setRunMsg(`Idle shutdown set to ${TTL_LABEL[configCiTtl] || configCiTtl}.`);
+      void cp.refresh();
+    } catch (e: any) {
+      setConfigCiErr(e?.message || String(e));
+    } finally { setConfigCiBusy(false); }
+  }, [computeId, configCiTtl, cp]);
+
+  // New Compute Instance — create dialog (name + VM size + idle TTL), then
+  // refresh the compute list and select the freshly-created CI.
+  const [newCiOpen, setNewCiOpen] = useState(false);
+  const [newCiName, setNewCiName] = useState('');
+  const [newCiVmSize, setNewCiVmSize] = useState(AML_CI_VM_SIZES[0].value);
+  const [newCiTtl, setNewCiTtl] = useState('PT30M');
+  const [newCiBusy, setNewCiBusy] = useState(false);
+  const [newCiErr, setNewCiErr] = useState<string | null>(null);
+  const createCiInstance = useCallback(async () => {
+    const name = newCiName.trim();
+    if (!name) return;
+    setNewCiBusy(true); setNewCiErr(null);
+    try {
+      const r = await fetch('/api/aml/compute-instances', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, vmSize: newCiVmSize, idleTtl: newCiTtl }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if ((!r.ok && r.status !== 202) || j?.ok === false) {
+        setNewCiErr(j?.error || j?.hint || `HTTP ${r.status}`);
+        return;
+      }
+      setNewCiOpen(false);
+      setNewCiName('');
+      await cp.refresh();
+      setComputeId(`aml-ci:${name}`);
+      setRunMsg(`Compute Instance "${name}" is being created — it appears as Creating, then Running.`);
+    } catch (e: any) {
+      setNewCiErr(e?.message || String(e));
+    } finally { setNewCiBusy(false); }
+  }, [newCiName, newCiVmSize, newCiTtl, cp]);
+
+  // Provision (or attach) the caller's OWN per-user Compute Instance. This is
+  // what makes notebooks genuinely multi-user: a CI is single-user, so each user
+  // runs on a CI assigned to THEM (assignedUser = their AAD oid). One click →
+  // POST /api/aml/compute-instances/mine → the deterministic ci-loom-<oid> CI is
+  // created (or the existing one re-attached), then selected. Honest quota gate
+  // surfaces when the tenant per-user limit is hit.
+  const [provisioningMyCi, setProvisioningMyCi] = useState(false);
+  const [myCiErr, setMyCiErr] = useState<string | null>(null);
+  const provisionMyCi = useCallback(async () => {
+    setProvisioningMyCi(true); setMyCiErr(null); setRunMsg('Provisioning your compute instance…');
+    try {
+      const r = await fetch('/api/aml/compute-instances/mine', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if ((!r.ok && r.status !== 202) || j?.ok === false) {
+        setMyCiErr(j?.error || j?.hint || `HTTP ${r.status}`);
+        setRunMsg(null);
+        return;
+      }
+      const name: string | undefined = j?.name || j?.mine?.name;
+      await Promise.all([cp.refresh(), myCi.refresh()]);
+      if (name) setComputeId(`aml-ci:${name}`);
+      setRunMsg(
+        j?.reused
+          ? `Attached your compute instance "${name}".`
+          : `Your compute instance "${name}" is being created — it appears as Creating, then Running.`,
+      );
+    } catch (e: any) {
+      setMyCiErr(e?.message || String(e));
+      setRunMsg(null);
+    } finally { setProvisioningMyCi(false); }
+  }, [cp, myCi]);
 
   // Auto-start a stopped AML Compute Instance when it's selected in AML mode.
   // Debounced 1.5s so flipping through the picker doesn't fire a start per
@@ -488,6 +805,152 @@ export function NotebookEditor({ item, id }: Props) {
   useEffect(() => {
     if (workspaceId && notebookId) { loadDetail(workspaceId, notebookId); loadJobs(workspaceId, notebookId); }
   }, [workspaceId, notebookId, loadDetail, loadJobs]);
+
+  // ---- Notebooks-pane folders: load + ops (real Cosmos folders engine) ----
+  const loadFolders = useCallback(async (wsId: string) => {
+    try { setFolders(await listFolders(wsId)); }
+    catch { setFolders([]); /* folders are optional — pane still lists notebooks */ }
+  }, []);
+  useEffect(() => { if (workspaceId) loadFolders(workspaceId); else setFolders([]); }, [workspaceId, loadFolders]);
+
+  const refreshNbPane = useCallback(() => {
+    if (!workspaceId) return;
+    void loadList(workspaceId);
+    void loadFolders(workspaceId);
+  }, [workspaceId, loadList, loadFolders]);
+
+  const nbTree = useMemo(() => buildTree(folders, notebooks ?? [], nbSort), [folders, notebooks, nbSort]);
+
+  function openNbCreateFolder(parent: string | null) { setNbFolderDialog({ mode: 'create', parent }); setNbFolderName(''); }
+  async function submitNbFolderDialog() {
+    if (!nbFolderDialog || !workspaceId) return;
+    const name = nbFolderName.trim();
+    if (!name) return;
+    setNbFolderBusy(true); setNbFolderErr(null);
+    try {
+      if (nbFolderDialog.mode === 'create') await createFolder(workspaceId, { name, parent: nbFolderDialog.parent });
+      else await renameFolder(workspaceId, nbFolderDialog.folderId, name);
+      setNbFolderDialog(null);
+      await loadFolders(workspaceId);
+    } catch (e: any) { setNbFolderErr(e?.message || String(e)); }
+    finally { setNbFolderBusy(false); }
+  }
+  async function deleteNbFolder(folderId: string) {
+    if (!workspaceId) return;
+    setNbFolderBusy(true); setNbFolderErr(null);
+    try { await deleteFolder(workspaceId, folderId); refreshNbPane(); }
+    catch (e: any) { setNbFolderErr(e?.message || String(e)); }
+    finally { setNbFolderBusy(false); }
+  }
+  async function moveNbToFolder(nbId: string, folderId: string | null) {
+    if (!workspaceId) return;
+    setNbFolderBusy(true); setNbFolderErr(null);
+    try { await patchWorkspaceItem(workspaceId, nbId, { folderId }); refreshNbPane(); }
+    catch (e: any) { setNbFolderErr(e?.message || String(e)); }
+    finally { setNbFolderBusy(false); }
+  }
+
+  // HTML5 drag-drop: drag a notebook leaf onto a folder branch (or the root
+  // drop strip) to re-file it — same affordance as the workspace folders pane.
+  function onNbDragStart(e: React.DragEvent, nbId: string) {
+    e.dataTransfer.setData('text/plain', `nb:${nbId}`);
+    e.dataTransfer.effectAllowed = 'move';
+    setNbDragId(nbId);
+  }
+  function onNbFolderDragOver(e: React.DragEvent, target: string | 'root') {
+    if (!nbDragId) return;
+    e.preventDefault(); e.dataTransfer.dropEffect = 'move'; setNbDropTarget(target);
+  }
+  async function onNbFolderDrop(e: React.DragEvent, folderId: string | null) {
+    e.preventDefault();
+    const data = e.dataTransfer.getData('text/plain');
+    const dragged = nbDragId;
+    setNbDropTarget(null); setNbDragId(null);
+    const nbId = data?.startsWith('nb:') ? data.slice('nb:'.length) : dragged;
+    if (!nbId) return;
+    const nb = (notebooks || []).find((n) => n.id === nbId);
+    if (!nb || (nb.folderId || null) === folderId) return;
+    await moveNbToFolder(nbId, folderId);
+  }
+
+  // Recursive renderers — branch(folder) + leaf(notebook). Leaf click is an
+  // in-editor selection (setNotebookId), NOT a navigation.
+  const renderNbLeaf = (n: NotebookLite) => (
+    <Menu key={n.id} openOnContext>
+      <MenuTrigger disableButtonEnhancement>
+        <TreeItem itemType="leaf" value={`nb:${n.id}`}>
+          <TreeItemLayout
+            iconBefore={<Notebook20Regular />}
+            onClick={() => setNotebookId(n.id)}
+            {...{ draggable: true, onDragStart: (e: React.DragEvent) => onNbDragStart(e, n.id) } as any}
+          >
+            {notebookId === n.id ? <strong>{n.displayName}</strong> : n.displayName}
+          </TreeItemLayout>
+        </TreeItem>
+      </MenuTrigger>
+      <MenuPopover>
+        <MenuList>
+          <MenuItem onClick={() => setNotebookId(n.id)}>Open</MenuItem>
+          <MenuItem onClick={() => setNbMoveTarget(n)}>Move to folder…</MenuItem>
+        </MenuList>
+      </MenuPopover>
+    </Menu>
+  );
+
+  const renderNbFolder = (node: FolderNode<NotebookLite>): React.JSX.Element | null => {
+    if (!node.folder) return null;
+    const f = node.folder;
+    const count = countDescendants(node);
+    const isExpanded = nbExpanded.has(f.id);
+    const isDrop = nbDropTarget === f.id;
+    return (
+      <Menu key={f.id} openOnContext>
+        <MenuTrigger disableButtonEnhancement>
+          <TreeItem
+            itemType="branch"
+            value={`folder:${f.id}`}
+            open={isExpanded}
+            onOpenChange={(_e, d) => setNbExpanded((prev) => {
+              const nx = new Set(prev); if (d.open) nx.add(f.id); else nx.delete(f.id); return nx;
+            })}
+          >
+            <TreeItemLayout
+              iconBefore={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
+              className={isDrop ? s.nbDragOver : undefined}
+              {...{
+                onDragOver: (e: React.DragEvent) => onNbFolderDragOver(e, f.id),
+                onDragLeave: () => setNbDropTarget((cur) => (cur === f.id ? null : cur)),
+                onDrop: (e: React.DragEvent) => onNbFolderDrop(e, f.id),
+              } as any}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+                <span>{f.name}</span>
+                <Badge appearance="tint" color="informative" size="small">{count}</Badge>
+              </span>
+            </TreeItemLayout>
+            {isExpanded && (
+              <Tree>
+                {node.childFolders.map(renderNbFolder)}
+                {node.childItems.map(renderNbLeaf)}
+                {count === 0 && (
+                  <TreeItem itemType="leaf" value={`folder:${f.id}:empty`}>
+                    <TreeItemLayout><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>(empty)</Caption1></TreeItemLayout>
+                  </TreeItem>
+                )}
+              </Tree>
+            )}
+          </TreeItem>
+        </MenuTrigger>
+        <MenuPopover>
+          <MenuList>
+            <MenuItem onClick={() => openNbCreateFolder(f.id)}>New subfolder…</MenuItem>
+            <MenuItem onClick={() => { setNbFolderDialog({ mode: 'rename', folderId: f.id, current: f.name }); setNbFolderName(f.name); }}>Rename</MenuItem>
+            <MenuItem onClick={() => setNbConfirmFolderDelete(f)}>Delete</MenuItem>
+          </MenuList>
+        </MenuPopover>
+      </Menu>
+    );
+  };
 
   // Probe the Pylance/pylsp bridge + VS Code for Web availability for this
   // notebook. Server route reads the gated env (boundary, LOOM_PYLSP_ENABLED,
@@ -743,14 +1206,16 @@ export function NotebookEditor({ item, id }: Props) {
         pollInterval = cold ? 2000 : 600;
         if (p.output) {
           if (p.output.status === 'ok') {
-            const txt = p.output.textPlain || JSON.stringify(p.output.data || {}, null, 2);
-            setRunMsg(`✓ Completed:\n${txt}`);
+            // Keep the status line SHORT — the full cell output renders below
+            // each cell. Dumping textPlain/JSON here ran off-screen.
+            setRunMsg('✓ Completed');
             setSessionStatus('Idle');
           } else if (p.output.status === 'error') {
-            setRunMsg(`✗ Error: ${p.output.ename} ${p.output.evalue}${p.output.traceback ? '\n' + (Array.isArray(p.output.traceback) ? p.output.traceback.join('\n') : p.output.traceback) : ''}`);
+            // Concise error: ename + evalue only (no full traceback blob).
+            setRunMsg(`✗ Error: ${[p.output.ename, p.output.evalue].filter(Boolean).join(' ')}`);
             setSessionStatus('Error');
           } else {
-            setRunMsg(`Completed: ${JSON.stringify(p.output)}`);
+            setRunMsg('✓ Completed');
             setSessionStatus('Idle');
           }
           break;
@@ -1434,6 +1899,15 @@ export function NotebookEditor({ item, id }: Props) {
           { label: 'To markdown cell', onClick: activeCellId ? () => convertCell(activeCellId, 'markdown') : undefined, disabled: !activeCellId },
         ]},
       ]},
+      { id: 'ai', label: 'AI tools', groups: [
+        { label: 'Copilot', actions: [
+          { label: copilotOpen ? 'Hide Copilot' : 'Open Copilot', onClick: () => setCopilotOpen(v => !v) },
+          { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
+        ]},
+        { label: 'Cells', actions: [
+          { label: '+ Code cell', onClick: () => insertCell(insertAfter, 'code') },
+        ]},
+      ]},
       { id: 'run', label: 'Run', groups: [
         { label: 'Execute', actions: [
           { label: 'Run all', onClick: canRun ? run : undefined, disabled: !canRun },
@@ -1463,24 +1937,145 @@ export function NotebookEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Notebooks</Subtitle2>
+          <Subtitle2 className={s.sectionHeader} style={{ marginBottom: tokens.spacingVerticalS }}>
+            <Notebook16Regular /> Notebooks
+          </Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && notebooks === null && <Spinner size="tiny" label="Loading…" />}
-          {notebooks && notebooks.length === 0 && !listErr && <Caption1>No notebooks in this workspace.</Caption1>}
-          <Tree aria-label="Notebooks">
-            {(notebooks || []).map((n) => (
-              <TreeItem key={n.id} itemType="leaf" value={n.id} onClick={() => setNotebookId(n.id)}>
-                <TreeItemLayout iconBefore={<Notebook20Regular />}>
-                  {notebookId === n.id ? <strong>{n.displayName}</strong> : n.displayName}
-                </TreeItemLayout>
-              </TreeItem>
-            ))}
-          </Tree>
+          {workspaceId && notebooks && (
+            <>
+              <div className={s.nbPaneToolbar}>
+                <Tooltip content="New folder" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<FolderAdd20Regular />}
+                    onClick={() => openNbCreateFolder(null)} disabled={nbFolderBusy}>Folder</Button>
+                </Tooltip>
+                <div style={{ flex: 1 }} />
+                <Menu>
+                  <MenuTrigger disableButtonEnhancement>
+                    <Tooltip content="Sort notebooks" relationship="label">
+                      <Button size="small" appearance="subtle" icon={<ArrowSort20Regular />}>
+                        {nbSort === 'updated' ? 'Recent' : 'A–Z'}
+                      </Button>
+                    </Tooltip>
+                  </MenuTrigger>
+                  <MenuPopover>
+                    <MenuList>
+                      <MenuItem onClick={() => setNbSort('name')}>Name (A–Z)</MenuItem>
+                      <MenuItem onClick={() => setNbSort('updated')}>Recently updated</MenuItem>
+                    </MenuList>
+                  </MenuPopover>
+                </Menu>
+              </div>
+              {nbFolderErr && (
+                <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalS }}>
+                  <MessageBarBody>{nbFolderErr}</MessageBarBody>
+                </MessageBar>
+              )}
+              {notebooks.length === 0 && folders.length === 0 && !listErr ? (
+                <EmptyState
+                  icon={<Notebook20Regular />}
+                  title="No notebooks yet"
+                  body="Create a notebook, or add a folder to organize them."
+                  primaryAction={{ label: 'New folder', onClick: () => openNbCreateFolder(null) }}
+                />
+              ) : (
+                <>
+                  <Tree aria-label="Notebooks">
+                    {nbTree.childFolders.map(renderNbFolder)}
+                    {nbTree.childItems.map(renderNbLeaf)}
+                  </Tree>
+                  <div
+                    className={`${s.nbRootDrop} ${nbDropTarget === 'root' ? s.nbRootDropActive : ''}`}
+                    onDragOver={(e) => onNbFolderDragOver(e, 'root')}
+                    onDragLeave={() => setNbDropTarget((cur) => (cur === 'root' ? null : cur))}
+                    onDrop={(e) => onNbFolderDrop(e, null)}
+                  >
+                    Drop here to move to root
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          {/* New / rename notebook folder */}
+          <Dialog open={!!nbFolderDialog} onOpenChange={(_e, d) => { if (!d.open) setNbFolderDialog(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>{nbFolderDialog?.mode === 'rename' ? 'Rename folder' : 'New folder'}</DialogTitle>
+                <DialogContent>
+                  <Field label="Folder name" required>
+                    <Input value={nbFolderName} onChange={(_e, d) => setNbFolderName(d.value)} placeholder="My folder"
+                      onKeyDown={(e) => { if (e.key === 'Enter') void submitNbFolderDialog(); }} autoFocus />
+                  </Field>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNbFolderDialog(null)}>Cancel</Button>
+                  <Button appearance="primary" disabled={!nbFolderName.trim() || nbFolderBusy} onClick={() => void submitNbFolderDialog()}>
+                    {nbFolderDialog?.mode === 'rename' ? 'Rename' : 'Create'}
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Confirm delete notebook folder (cascade reparents to root) */}
+          <Dialog open={!!nbConfirmFolderDelete} onOpenChange={(_e, d) => { if (!d.open) setNbConfirmFolderDelete(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Delete folder</DialogTitle>
+                <DialogContent>
+                  <Caption1>
+                    Delete folder &quot;{nbConfirmFolderDelete?.name}&quot;? Notebooks inside move to the workspace root;
+                    subfolders reparent to the root.
+                  </Caption1>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNbConfirmFolderDelete(null)}>Cancel</Button>
+                  <Button appearance="primary" disabled={nbFolderBusy}
+                    onClick={async () => { if (nbConfirmFolderDelete) await deleteNbFolder(nbConfirmFolderDelete.id); setNbConfirmFolderDelete(null); }}>
+                    Delete
+                  </Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Move notebook to folder */}
+          <Dialog open={!!nbMoveTarget} onOpenChange={(_e, d) => { if (!d.open) setNbMoveTarget(null); }}>
+            <DialogSurface>
+              <DialogBody>
+                <DialogTitle>Move notebook</DialogTitle>
+                <DialogContent>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                    <Button appearance="subtle" icon={<FolderArrowRight20Regular />}
+                      onClick={async () => { if (nbMoveTarget) await moveNbToFolder(nbMoveTarget.id, null); setNbMoveTarget(null); }}>
+                      / Workspace root
+                    </Button>
+                    {folders.map((f) => (
+                      <Button key={f.id} appearance="subtle"
+                        icon={<Folder20Filled style={{ color: 'var(--loom-accent-gold)' }} />}
+                        onClick={async () => { if (nbMoveTarget) await moveNbToFolder(nbMoveTarget.id, f.id); setNbMoveTarget(null); }}>
+                        {f.name}
+                      </Button>
+                    ))}
+                    {folders.length === 0 && (
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No folders yet. Create one first.</Caption1>
+                    )}
+                  </div>
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setNbMoveTarget(null)}>Cancel</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
 
           {/* Phase 2: Data items pane — Fabric "Explorer" tab equivalent */}
           {notebookId && (
             <>
-              <Subtitle2 style={{ marginTop: 16, marginBottom: 4 }}>Data items</Subtitle2>
+              <Subtitle2 className={s.sectionHeader} style={{ marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalXS }}>
+                <Database16Regular /> Data items
+              </Subtitle2>
               {attachedSources.length === 0 ? (
                 <Caption1>No sources attached. Attach a Lakehouse so cells can read its OneLake mount.</Caption1>
               ) : (
@@ -1492,11 +2087,11 @@ export function NotebookEditor({ item, id }: Props) {
                       <TreeItemLayout
                         iconBefore={<Notebook20Regular />}
                       >
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2, width: '100%' }}>
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%' }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, width: '100%' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' }}>
                             <span style={{ flex: 1 }}>
                               {src.isDefault ? <strong>{src.displayName}</strong> : src.displayName}
-                              {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 6 }}>default</Badge>}
+                              {src.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>default</Badge>}
                             </span>
                             {!src.isDefault && (
                               <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); promoteDefault(src.id); }}>Pin</Button>
@@ -1507,9 +2102,9 @@ export function NotebookEditor({ item, id }: Props) {
                               exposes as loom_lakehouses['<name>'] — copyable. An
                               honest gate tooltip when storage isn't configured. */}
                           {resolved?.abfss && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS }}>
                               <Caption1
-                                style={{ flex: 1, fontFamily: tokens.fontFamilyMonospace, fontSize: 11, color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                style={{ flex: 1, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                                 title={resolved.abfss}
                               >{resolved.abfss}</Caption1>
                               <Tooltip content={`Copy abfss path (use as loom_lakehouses['${src.displayName}'])`} relationship="label">
@@ -1524,7 +2119,7 @@ export function NotebookEditor({ item, id }: Props) {
                           )}
                           {!resolved?.abfss && resolved?.hint && (
                             <Tooltip content={resolved.hint} relationship="description">
-                              <Caption1 style={{ display: 'flex', alignItems: 'center', gap: 4, color: tokens.colorPaletteYellowForeground1, fontSize: 11 }}>
+                              <Caption1 style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalXS, color: tokens.colorPaletteYellowForeground1, fontSize: tokens.fontSizeBase100 }}>
                                 <Info16Regular /> path not configured
                               </Caption1>
                             </Tooltip>
@@ -1536,7 +2131,7 @@ export function NotebookEditor({ item, id }: Props) {
                   })}
                 </Tree>
               )}
-              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={openAttach} disabled={!workspaceId} style={{ marginTop: 8, alignSelf: 'flex-start' }}>
+              <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={openAttach} disabled={!workspaceId} style={{ marginTop: tokens.spacingVerticalS, alignSelf: 'flex-start' }}>
                 Add data items
               </Button>
             </>
@@ -1553,12 +2148,71 @@ export function NotebookEditor({ item, id }: Props) {
       main={
         <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
         <div className={s.pad} style={{ flex: 1, minWidth: 0 }}>
-          <div className={s.toolbar}>
+          {/* Slim always-visible compute bar: Run + selected-compute summary +
+              the Compute & setup disclosure + Copilot. The full configuration
+              (backend / workspace / compute / environment / session) collapses
+              below so the cells get the vertical space (operator request). */}
+          <div className={s.computeBar}>
             <Badge appearance="filled" color="brand">Loom Notebook</Badge>
+            <Button
+              appearance="primary"
+              icon={<Play20Regular />}
+              disabled={running || !notebookId || !computeId}
+              title={!notebookId ? 'Open or create a notebook first'
+                : !computeId ? 'Select a compute target first (open Compute & setup)'
+                : undefined}
+              onClick={run}
+            >{running ? 'Queuing…' : 'Run'}</Button>
+            {computeId ? (
+              <span className={s.computeSummary}>
+                <Server20Regular />
+                <Caption1 className={s.computeSummaryName} title={selectedCompute?.name || computeId}>
+                  {selectedCompute?.name || computeId}
+                </Caption1>
+                {selectedCompute?.state && (
+                  <Badge appearance="filled" size="small" color={isComputeRunning(selectedCompute?.state) ? 'success' : 'warning'}>
+                    {selectedCompute.state}
+                  </Badge>
+                )}
+                <Badge appearance="outline" size="small" color={clusterRuntime === 'databricks' ? 'important' : clusterRuntime === 'azure-ml' ? 'success' : 'brand'}>
+                  {RUNTIME_LABEL[clusterRuntime]} syntax
+                </Badge>
+                {sparkPoolName && warmPool?.enabled && (
+                  <Tooltip
+                    relationship="label"
+                    content={warmPool.warmForPool
+                      ? 'A pre-warmed Spark session is on standby — your next run starts instantly instead of cold-starting the pool.'
+                      : 'No warm session on standby yet — the next run cold-starts the Synapse Spark pool (~2 min). The warm pool refills in the background so later runs are instant.'}
+                  >
+                    <Badge
+                      appearance="tint"
+                      size="small"
+                      color={warmPool.warmForPool ? 'success' : 'warning'}
+                      icon={<Flash16Regular />}
+                    >
+                      {warmPool.warmForPool ? 'Warm session ready' : 'Cold start (~2 min)'}
+                    </Badge>
+                  </Tooltip>
+                )}
+              </span>
+            ) : (
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No compute selected</Caption1>
+            )}
+            <Button
+              appearance="subtle"
+              icon={setupOpen ? <ChevronUp20Regular /> : <ChevronDown20Regular />}
+              aria-expanded={setupOpen}
+              onClick={() => setSetupOpen((v) => !v)}
+              title="Show or hide compute backend, workspace, environment, and session settings"
+            >{setupOpen ? 'Hide setup' : 'Compute & setup'}</Button>
+            <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen((v) => !v)}>Copilot</Button>
+          </div>
+          {setupOpen && (
+          <div className={s.toolbar}>
             {/* Compute backend toggle — Loom-native Spark/Databricks vs the
                 Azure ML Compute Instance path. Default Loom; flip to Azure ML
                 for a CI + datastores. No Fabric dependency on either path. */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
               <Caption1>Compute backend</Caption1>
               <div style={{ display: 'flex', gap: 0 }}>
                 <Button
@@ -1576,7 +2230,7 @@ export function NotebookEditor({ item, id }: Props) {
                 >Azure ML</Button>
               </div>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 240 }}>
               <Caption1>Workspace</Caption1>
               <Select aria-label="Workspace" value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -1585,9 +2239,9 @@ export function NotebookEditor({ item, id }: Props) {
                 ))}
               </Select>
             </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>{workspaceType === 'aml' ? 'Compute Instance' : 'Compute target'}</Caption1>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'flex-end' }}>
                 <div style={{ flex: 1 }}>
                   <Select aria-label="Compute target" value={computeId} onChange={(_, d) => setComputeId(d.value)} disabled={cp.loading || cp.computes.length === 0}>
                     {!computeId && <option value="">{cp.loading ? 'Loading compute…' : (workspaceType === 'aml' ? 'Select a Compute Instance' : 'Select compute')}</option>}
@@ -1630,14 +2284,72 @@ export function NotebookEditor({ item, id }: Props) {
                     {startingCompute ? 'Starting…' : 'Start compute'}
                   </Button>
                 )}
+                {/* Stop a running AML Compute Instance (deallocates → stops billing). */}
+                {computeId && selectedCompute && selectedCompute.kind === 'aml-ci' && isComputeRunning(selectedCompute.state) && (
+                  <Button
+                    appearance="outline"
+                    size="small"
+                    icon={<Stop20Regular />}
+                    disabled={stoppingCompute}
+                    onClick={stopComputeCi}
+                  >
+                    {stoppingCompute ? 'Stopping…' : 'Stop compute'}
+                  </Button>
+                )}
+                {/* Configure the selected CI's idle auto-shutdown TTL. */}
+                {computeId && selectedCompute && selectedCompute.kind === 'aml-ci' && (
+                  <Button
+                    appearance="outline"
+                    size="small"
+                    icon={<Settings20Regular />}
+                    onClick={() => { setConfigCiErr(null); setConfigCiOpen(true); }}
+                    title="Set the idle auto-shutdown time for this Compute Instance"
+                  >Configure compute</Button>
+                )}
               </div>
+              {/* Per-user + custom Compute Instance actions. "Create my compute
+                  instance" is the multi-user path: a CI is single-user, so each
+                  user provisions one assigned to THEM. Shown when the user has no
+                  own CI yet (and per-user CIs are enabled). "New compute
+                  instance" remains for a named/custom CI. */}
+              {workspaceType === 'aml' && (
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center', marginTop: tokens.spacingVerticalXS }}>
+                  {myCi.enabled && !myCi.mine && (
+                    <Button
+                      appearance="primary"
+                      size="small"
+                      icon={<Add20Regular />}
+                      disabled={amlConfigured === false || provisioningMyCi || myCi.loading || !!myCi.quota?.atLimit}
+                      onClick={provisionMyCi}
+                      title={
+                        amlConfigured === false ? 'Azure ML workspace not configured'
+                          : myCi.quota?.atLimit ? 'Per-user Compute Instance limit reached'
+                          : `Provision your own Compute Instance (${myCi.myName || 'ci-loom-…'}), assigned to you`
+                      }
+                    >{provisioningMyCi ? 'Provisioning…' : 'Create my compute instance'}</Button>
+                  )}
+                  {myCi.mine && (
+                    <Badge appearance="tint" color="brand" size="small" title={`Your Compute Instance ${myCi.mine.name} is assigned to you`}>
+                      My compute: {myCi.mine.name}{myCi.mine.state ? ` · ${myCi.mine.state}` : ''}
+                    </Badge>
+                  )}
+                  <Button
+                    appearance="outline"
+                    size="small"
+                    icon={<Add20Regular />}
+                    disabled={amlConfigured === false}
+                    onClick={() => { setNewCiErr(null); setNewCiOpen(true); }}
+                    title={amlConfigured === false ? 'Azure ML workspace not configured' : 'Create a new named Azure ML Compute Instance'}
+                  >New compute instance</Button>
+                </div>
+              )}
             </div>
             <Divider vertical className={s.toolDivider} />
             <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
             {/* Library & Environment: compact AML environment selector (Fabric ribbon parity). */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 240 }}>
               <Caption1>Environment (libraries)</Caption1>
-              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
                 <Select
                   aria-label="AML environment"
                   style={{ flex: 1 }}
@@ -1682,12 +2394,12 @@ export function NotebookEditor({ item, id }: Props) {
                 <DialogBody>
                   <DialogTitle>{workspaceType === 'aml' ? 'New notebook (Azure ML)' : 'Create notebook'}</DialogTitle>
                   <DialogContent>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                         <Caption1>Name</Caption1>
                         <Input placeholder="My notebook" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
                       </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                         <Caption1>Kernel</Caption1>
                         <Select aria-label="Kernel" value={createKernel} onChange={(_, d) => setCreateKernel(d.value as 'python' | 'r')}>
                           <option value="python">Python 3.10</option>
@@ -1704,21 +2416,74 @@ export function NotebookEditor({ item, id }: Props) {
                 </DialogBody>
               </DialogSurface>
             </Dialog>
+            {/* Configure compute — idle auto-shutdown TTL for the selected CI.
+                Dropdown only (loom_no_freeform_config). POST .../idle-shutdown. */}
+            <Dialog open={configCiOpen} onOpenChange={(_, d) => setConfigCiOpen(d.open)}>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>Configure compute</DialogTitle>
+                  <DialogContent>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                      <Caption1>
+                        Auto-stop {selectedCompute?.name ? <strong>{selectedCompute.name}</strong> : 'this Compute Instance'} after it sits idle, so it stops billing.
+                      </Caption1>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                        <Caption1>Idle shutdown</Caption1>
+                        <Select aria-label="Idle shutdown" value={configCiTtl} onChange={(_, d) => setConfigCiTtl(d.value)}>
+                          {IDLE_TTL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </Select>
+                      </div>
+                      {configCiErr && <MessageBar intent="error"><MessageBarBody>{configCiErr}</MessageBarBody></MessageBar>}
+                    </div>
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setConfigCiOpen(false)}>Cancel</Button>
+                    <Button appearance="primary" disabled={configCiBusy} onClick={saveCiIdleShutdown}>{configCiBusy ? 'Saving…' : 'Save'}</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+            {/* New Compute Instance — name + VM size + idle TTL (dropdowns only).
+                POST /api/aml/compute-instances → createCI. */}
+            <Dialog open={newCiOpen} onOpenChange={(_, d) => setNewCiOpen(d.open)}>
+              <DialogSurface>
+                <DialogBody>
+                  <DialogTitle>New compute instance</DialogTitle>
+                  <DialogContent>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                        <Caption1>Name</Caption1>
+                        <Input placeholder="my-compute" value={newCiName} onChange={(_, d) => setNewCiName(d.value)} style={{ width: '100%' }} />
+                        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>3-24 chars · start with a letter · letters, numbers, and hyphens.</Caption1>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                        <Caption1>Virtual machine size</Caption1>
+                        <Select aria-label="VM size" value={newCiVmSize} onChange={(_, d) => setNewCiVmSize(d.value)}>
+                          {AML_CI_VM_SIZES.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </Select>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                        <Caption1>Idle shutdown</Caption1>
+                        <Select aria-label="Idle shutdown" value={newCiTtl} onChange={(_, d) => setNewCiTtl(d.value)}>
+                          {IDLE_TTL_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                        </Select>
+                      </div>
+                      {newCiErr && <MessageBar intent="error"><MessageBarBody>{newCiErr}</MessageBarBody></MessageBar>}
+                    </div>
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setNewCiOpen(false)}>Cancel</Button>
+                    <Button appearance="primary" disabled={newCiBusy || !newCiName.trim()} onClick={createCiInstance}>{newCiBusy ? 'Creating…' : 'Create'}</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
             {/*
               Save lives in the ribbon (Home → Item → Save) now that the
               ribbon actions are wired. Avoid a second Save here so users
               aren't confused by two visually-identical Save buttons.
               Ctrl+S still works from anywhere.
             */}
-            <Button
-              appearance="primary"
-              icon={<Play20Regular />}
-              disabled={running || !notebookId || !computeId}
-              title={!notebookId ? 'Open or create a notebook first'
-                : !computeId ? 'Select a compute target first'
-                : undefined}
-              onClick={run}
-            >{running ? 'Queuing…' : 'Run'}</Button>
             <Button
               appearance="outline"
               icon={<Settings20Regular />}
@@ -1741,10 +2506,10 @@ export function NotebookEditor({ item, id }: Props) {
                 icon={<Open20Regular />}
               >Open in VS Code for Web</Button>
             )}
-            <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen(v => !v)}>Copilot</Button>
             <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
+          )}
 
           {/* Phase 3: HistoryDrawer — right-side OverlayDrawer wired to /jobs */}
           <HistoryDrawer
@@ -1796,14 +2561,19 @@ export function NotebookEditor({ item, id }: Props) {
                 <DialogContent>
                   {availableLakehouses === null && <Spinner size="tiny" label="Loading lakehouses…" />}
                   {availableLakehouses && availableLakehouses.length === 0 && (
-                    <Caption1>No lakehouses found in this workspace. Create one first from the workspace +New menu.</Caption1>
+                    <EmptyState
+                      icon={<Database24Regular />}
+                      title="No lakehouses in this workspace"
+                      body="Create a Lakehouse first from the workspace +New menu, then attach it so cells can read its OneLake mount."
+                      primaryAction={{ label: 'Refresh', onClick: loadLakehouses, appearance: 'outline' }}
+                    />
                   )}
                   {availableLakehouses && availableLakehouses.length > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 320, overflow: 'auto' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxHeight: 320, overflow: 'auto', padding: tokens.spacingHorizontalXXS }}>
                       {availableLakehouses.map((lh) => {
                         const already = attachedSources.some(s => s.kind === 'lakehouse' && s.id === lh.id);
                         return (
-                          <div key={lh.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                          <div key={lh.id} className={s.lakehouseCard}>
                             <div style={{ flex: 1 }}>
                               <Subtitle2>{lh.displayName}</Subtitle2>
                               {lh.description && <Caption1 style={{ display: 'block' }}>{lh.description}</Caption1>}
@@ -1828,7 +2598,7 @@ export function NotebookEditor({ item, id }: Props) {
           {(ws.error || listErr) && (
             <MessageBar intent="error">
               <MessageBarBody>
-                <MessageBarTitle>Fabric not reachable</MessageBarTitle>
+                <MessageBarTitle>Couldn't load workspaces</MessageBarTitle>
                 {ws.error || listErr}
                 {(ws.hint || listHint) && <><br /><Caption1>{ws.hint || listHint}</Caption1></>}
               </MessageBarBody>
@@ -1858,7 +2628,36 @@ export function NotebookEditor({ item, id }: Props) {
               </MessageBarBody>
             </MessageBar>
           )}
-          {!cp.loading && !cp.error && workspaceType === 'aml' && cp.computes.filter(c => c.kind === 'aml-ci').length === 0 && (
+          {/* Honest per-user quota gate — the tenant hit its per-user CI ceiling
+              (LOOM_AML_CI_MAX). Naming the exact limit + remediation per
+              no-vaporware.md. */}
+          {workspaceType === 'aml' && myCi.quota?.atLimit && !myCi.mine && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Per-user Compute Instance limit reached</MessageBarTitle>
+                {myCi.quota.used}/{myCi.quota.max} per-user Compute Instances are in use. An
+                administrator can raise <code>LOOM_AML_CI_MAX</code>, or stop/delete unused Compute
+                Instances in the Azure ML workspace to free capacity.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {myCiErr && <MessageBar intent="error"><MessageBarBody>{myCiErr}</MessageBarBody></MessageBar>}
+          {!cp.loading && !cp.error && workspaceType === 'aml' && amlConfigured !== false && myCi.enabled && !myCi.mine && !myCi.quota?.atLimit && cp.computes.filter(c => c.kind === 'aml-ci' && c.mine).length === 0 && (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>You don't have a compute instance yet</MessageBarTitle>
+                Azure ML Compute Instances are single-user. Provision one assigned to you
+                {myCi.myName ? <> (<code>{myCi.myName}</code>)</> : null} to run cells on your own
+                compute — it auto-stops after {(myCi.policy?.idleTtl && TTL_LABEL[myCi.policy.idleTtl]) || '30 minutes'} idle.
+              </MessageBarBody>
+              <MessageBarActions>
+                <Button size="small" appearance="primary" icon={<Add20Regular />} disabled={provisioningMyCi || myCi.loading} onClick={provisionMyCi}>
+                  {provisioningMyCi ? 'Provisioning…' : 'Create my compute instance'}
+                </Button>
+              </MessageBarActions>
+            </MessageBar>
+          )}
+          {!cp.loading && !cp.error && workspaceType === 'aml' && cp.computes.filter(c => c.kind === 'aml-ci').length === 0 && (amlConfigured === false || !myCi.enabled) && (
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>No Azure ML Compute Instance is available</MessageBarTitle>
@@ -1871,28 +2670,63 @@ export function NotebookEditor({ item, id }: Props) {
               </MessageBarBody>
             </MessageBar>
           )}
-          {runMsg && <MessageBar intent="info"><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
+          {runMsg && <MessageBar intent="info"><MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{runMsg}</MessageBarBody></MessageBar>}
 
           {/* Honest receipt: the real Livy session-create body that provisioned
               the running Spark session. numExecutors here is what the session
               actually runs with — confirms the Configure-session sizing. */}
           {sessionReceipt && typeof sessionReceipt.numExecutors === 'number' && (
-            <MessageBar intent="success">
-              <MessageBarBody>
-                <MessageBarTitle>Spark session{sessionReceipt.reused ? ' (reused)' : ''}</MessageBarTitle>
-                Session {String(sessionReceipt.id ?? '—')} · <strong>{String(sessionReceipt.numExecutors)} executors</strong>
-                {sessionReceipt.executorMemory ? ` · ${String(sessionReceipt.executorMemory)} executor memory` : ''}
-                {sessionReceipt.driverMemory ? ` · ${String(sessionReceipt.driverMemory)} driver memory` : ''}
-                {typeof sessionReceipt.heartbeatTimeoutInSecond === 'number' ? ` · ${Math.round((sessionReceipt.heartbeatTimeoutInSecond as number) / 60)} min timeout` : ''}
-                <br />
-                <code style={{ fontSize: 11 }}>{JSON.stringify(sessionReceipt)}</code>
-              </MessageBarBody>
-            </MessageBar>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, maxWidth: '100%' }}>
+              <MessageBar intent="success">
+                <MessageBarBody style={{ minWidth: 0, overflowWrap: 'anywhere' }}>
+                  <MessageBarTitle>Spark session{sessionReceipt.reused ? ' (reused)' : ''}</MessageBarTitle>
+                  Session {String(sessionReceipt.id ?? '—')} · <strong>{String(sessionReceipt.numExecutors)} executors</strong>
+                  {sessionReceipt.executorMemory ? ` · ${String(sessionReceipt.executorMemory)} executor memory` : ''}
+                  {sessionReceipt.driverMemory ? ` · ${String(sessionReceipt.driverMemory)} driver memory` : ''}
+                  {typeof sessionReceipt.heartbeatTimeoutInSecond === 'number' ? ` · ${Math.round((sessionReceipt.heartbeatTimeoutInSecond as number) / 60)} min timeout` : ''}
+                </MessageBarBody>
+              </MessageBar>
+              {/* Honest raw Livy receipt rendered as a SEPARATE block BELOW the
+                  banner — NOT inside the MessageBar. A tall expanding <details>
+                  inside MessageBarBody broke the bar's icon/body alignment when
+                  opened. Collapsed by default; bounded + wrapped + scrollable so
+                  expanding it just grows this block downward, cleanly. */}
+              <details style={{ minWidth: 0, maxWidth: '100%' }}>
+                <summary
+                  style={{
+                    cursor: 'pointer',
+                    fontSize: tokens.fontSizeBase200,
+                    color: tokens.colorNeutralForeground3,
+                    userSelect: 'none',
+                  }}
+                >Raw Livy receipt</summary>
+                <code
+                  style={{
+                    display: 'block',
+                    marginTop: tokens.spacingVerticalXS,
+                    padding: tokens.spacingHorizontalS,
+                    borderRadius: tokens.borderRadiusSmall,
+                    backgroundColor: tokens.colorNeutralBackground3,
+                    color: tokens.colorNeutralForeground3,
+                    fontFamily: tokens.fontFamilyMonospace,
+                    fontSize: tokens.fontSizeBase100,
+                    whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere',
+                    wordBreak: 'break-word',
+                    maxWidth: '100%',
+                    minWidth: 0,
+                    maxHeight: 220,
+                    overflow: 'auto',
+                    boxSizing: 'border-box',
+                  }}
+                >{JSON.stringify(redactReceiptSecrets(sessionReceipt), null, 2)}</code>
+              </details>
+            </div>
           )}
 
           {notebookId && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
                 <Caption1>{cells.length} cell{cells.length === 1 ? '' : 's'} · default lang <code>{defaultLang}</code></Caption1>
                 <div style={{ flex: 1 }} />
@@ -1905,7 +2739,7 @@ export function NotebookEditor({ item, id }: Props) {
                   <option value="tsql">T-SQL</option>
                 </Select>
               </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                 <CellAdder
                   onAddCode={() => insertCell(-1, 'code')}
                   onAddMarkdown={() => insertCell(-1, 'markdown')}
@@ -1915,7 +2749,7 @@ export function NotebookEditor({ item, id }: Props) {
                     key={c.id}
                     onDragOver={(e) => { if (dragIndexRef.current != null) { e.preventDefault(); setDragOverId(c.id); } }}
                     onDrop={(e) => { e.preventDefault(); onCellDrop(idx); }}
-                    style={dragOverId === c.id ? { outline: `2px dashed ${tokens.colorBrandStroke1}`, outlineOffset: 2, borderRadius: 4 } : undefined}
+                    style={dragOverId === c.id ? { outline: `2px dashed ${tokens.colorBrandStroke1}`, outlineOffset: 2, borderRadius: tokens.borderRadiusMedium } : undefined}
                   >
                     {c.type === 'code' ? (
                       <CodeCell
@@ -1983,8 +2817,8 @@ export function NotebookEditor({ item, id }: Props) {
                   </div>
                 ))}
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Subtitle2>Run history ({jobs.length})</Subtitle2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
+                <Subtitle2 className={s.sectionHeader}><History16Regular /> Run history ({jobs.length})</Subtitle2>
                 <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => loadJobs(workspaceId, notebookId)}>Refresh</Button>
               </div>
               <div className={s.tableWrap}>

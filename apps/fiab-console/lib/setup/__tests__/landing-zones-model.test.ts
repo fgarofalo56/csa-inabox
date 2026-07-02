@@ -14,8 +14,8 @@ import {
   type HubCoords,
 } from '../landing-zones-model';
 
-const HUB_SUB = 'e093f4fd-5047-4ee4-968d-a56942c665f3';
-const TARGET_SUB = '363ef5d1-0e77-4594-a530-f51af23dbf8c';
+const HUB_SUB = '11111111-1111-1111-1111-111111111111';
+const TARGET_SUB = '22222222-2222-2222-2222-222222222222';
 
 const hub: HubCoords = { hubSubscriptionId: HUB_SUB, location: 'centralus', boundary: 'Commercial' };
 

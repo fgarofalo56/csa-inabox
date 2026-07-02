@@ -48,12 +48,14 @@ import '@xyflow/react/dist/style.css';
 import {
   Badge, Button, Caption1, Input, Text, Tooltip, makeStyles, tokens,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   FullScreenMaximize20Regular, Organization20Regular, TargetRegular,
   Table16Regular, Document16Regular, Notebook16Regular, Flow16Regular,
   ChartMultiple16Regular, Database16Regular, Box16Regular, BranchFork16Regular,
   Search16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
+import { portStyle } from '@/lib/components/canvas/canvas-node-kit';
 
 // ---------------------------------------------------------------------------
 // Public model — kept in sync with the LineageNode / LineageEdge the BFF
@@ -96,7 +98,7 @@ export interface CanvasLineageEdge {
 // reports, lakehouses. Unknown types fall back to a neutral dataset chip.
 // ---------------------------------------------------------------------------
 
-interface TypeStyle { color: string; Icon: React.FC<{ fontSize?: number }>; kind: string; }
+interface TypeStyle { color: string; Icon: React.FC<{ fontSize?: number | string }>; kind: string; }
 
 const TYPE_STYLES: Record<string, TypeStyle> = {
   table: { color: 'var(--loom-accent-blue)', Icon: Table16Regular, kind: 'Table' },
@@ -110,7 +112,7 @@ const TYPE_STYLES: Record<string, TypeStyle> = {
   report: { color: 'var(--loom-accent-magenta)', Icon: ChartMultiple16Regular, kind: 'Report' },
   dashboard: { color: 'var(--loom-accent-magenta)', Icon: ChartMultiple16Regular, kind: 'Dashboard' },
   lakehouse: { color: 'var(--loom-accent-emerald)', Icon: Database16Regular, kind: 'Lakehouse' },
-  process: { color: '#605E5C', Icon: Box16Regular, kind: 'Process' },
+  process: { color: tokens.colorNeutralForeground3, Icon: Box16Regular, kind: 'Process' },
   // Weave (Loom Thread) edge endpoints — the integration mesh recorded in the
   // thread-edges Cosmos container (notebook attach, data-agent source, Power BI
   // model, API publish). These are Loom items, not Azure/Fabric assets.
@@ -119,7 +121,7 @@ const TYPE_STYLES: Record<string, TypeStyle> = {
   'data-api-builder': { color: 'var(--loom-accent-teal)', Icon: Flow16Regular, kind: 'Data API' },
 };
 
-const FALLBACK_STYLE: TypeStyle = { color: '#605E5C', Icon: Box16Regular, kind: 'Asset' };
+const FALLBACK_STYLE: TypeStyle = { color: tokens.colorNeutralForeground3, Icon: Box16Regular, kind: 'Asset' };
 
 /** Normalize the heterogeneous type strings each source returns to a style key. */
 function styleForType(type?: string): TypeStyle {
@@ -178,35 +180,38 @@ function LineageNodeImpl({ data, selected }: NodeProps) {
         position: 'relative',
         width: NODE_W,
         minHeight: NODE_H,
-        padding: '8px 10px',
-        borderRadius: 8,
+        paddingTop: tokens.spacingVerticalS,
+        paddingBottom: tokens.spacingVerticalS,
+        paddingLeft: tokens.spacingHorizontalSNudge,
+        paddingRight: tokens.spacingHorizontalSNudge,
+        borderRadius: tokens.borderRadiusMedium,
         background: tokens.colorNeutralBackground1,
         borderLeft: `4px solid ${style.color}`,
         border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
         borderLeftWidth: 4,
         borderLeftColor: style.color,
         boxShadow: node.focus
-          ? `0 0 0 2px ${style.color}`
+          ? `0 0 0 2px ${style.color}, ${tokens.shadow8}`
           : selected
-            ? `0 0 0 2px ${tokens.colorBrandBackground2}`
-            : '0 1px 2px rgba(0,0,0,0.08)',
+            ? `0 0 0 2px ${tokens.colorBrandBackground2}, ${tokens.shadow8}`
+            : tokens.shadow4,
         opacity: dimmed ? 0.25 : 1,
         transition: 'opacity 120ms ease',
         display: 'flex',
         flexDirection: 'column',
-        gap: 2,
+        gap: tokens.spacingVerticalXXS,
         cursor: 'pointer',
         userSelect: 'none',
       }}
     >
-      <Handle type="target" position={Position.Left} style={{ width: 8, height: 8, background: style.color, border: 'none', left: -4 }} />
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ color: style.color, display: 'inline-flex' }}><Icon fontSize={16} /></span>
+      <Handle type="target" position={Position.Left} style={portStyle('in', style.color)} />
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
+        <span style={{ color: style.color, display: 'inline-flex' }}><Icon fontSize={tokens.fontSizeBase400} /></span>
         <Text size={200} weight={node.focus ? 'semibold' : 'medium'} truncate wrap={false} style={{ flex: 1 }}>
           {node.label}
         </Text>
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{style.kind}</Caption1>
         <span style={{ color: tokens.colorNeutralForeground4 }}>·</span>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{SOURCE_LABEL[node.source]}</Caption1>
@@ -214,7 +219,7 @@ function LineageNodeImpl({ data, selected }: NodeProps) {
           <Badge size="extra-small" appearance="tint" color="informative" style={{ marginLeft: 'auto' }}>merged</Badge>
         )}
       </div>
-      <Handle type="source" position={Position.Right} style={{ width: 8, height: 8, background: style.color, border: 'none', right: -4 }} />
+      <Handle type="source" position={Position.Right} style={portStyle('out', style.color)} />
     </div>
   );
 }
@@ -287,44 +292,57 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     width: '100%',
-    height: 560,
+    // Fills the user-resizable ResizableCanvasRegion (default 560px, persisted
+    // per-surface, bounded 320px–80vh). React Flow needs this definite height.
+    height: '100%',
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 8,
+    borderRadius: tokens.borderRadiusXLarge,
   },
   toolbar: {
-    display: 'flex', gap: 4, alignItems: 'center',
+    display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center',
     background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 6, padding: 4,
+    borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalXS,
   },
-  search: { width: 184 },
+  search: { width: '184px' },
   legend: {
-    display: 'flex', flexWrap: 'wrap', gap: 8, maxWidth: 340,
+    display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, maxWidth: '340px',
     background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 6, padding: '6px 8px',
+    borderRadius: tokens.borderRadiusLarge,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
   },
-  legendItem: { display: 'flex', alignItems: 'center', gap: 4 },
-  legendSwatch: { width: 10, height: 10, borderRadius: 2, display: 'inline-block' },
+  legendItem: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  // A fixed small square colour chip (NOT spacing tokens used as size).
+  legendSwatch: {
+    width: tokens.fontSizeBase200,
+    height: tokens.fontSizeBase200,
+    borderRadius: tokens.borderRadiusSmall,
+    display: 'inline-block',
+    flexShrink: 0,
+  },
   detail: {
-    position: 'absolute', top: 12, right: 12,
+    position: 'absolute', top: tokens.spacingVerticalM, right: tokens.spacingHorizontalM,
     // Responsive: cap to the available canvas width so the panel never bleeds
     // off-screen on a narrow viewport. 300px on wide canvases, otherwise the
-    // canvas width minus both 12px gutters.
-    width: 300, maxWidth: 'calc(100% - 24px)',
+    // canvas width minus both gutters.
+    width: '300px', maxWidth: 'calc(100% - 24px)',
     maxHeight: 'calc(100% - 24px)',
     overflowY: 'auto', zIndex: 10,
     background: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: 8, padding: 14,
+    borderRadius: tokens.borderRadiusXLarge,
+    paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
     boxShadow: tokens.shadow16,
     // Keyboard/scroll affordance: the panel is focusable and outlined when
     // focused so keyboard users land here after selecting a node.
     ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px' },
   },
-  detailRow: { display: 'flex', flexDirection: 'column', gap: 2, marginBottom: 10 },
+  detailRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS, marginBottom: tokens.spacingVerticalMNudge },
 });
 
 export interface LineageCanvasHandle {
@@ -460,6 +478,12 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
   }, [selectedId]);
 
   return (
+    <ResizableCanvasRegion
+      storageKey="catalog-lineage"
+      defaultPx={560}
+      minPx={320}
+      ariaLabel="Resize lineage canvas height"
+    >
     <div className={s.shell} data-testid="lineage-canvas" aria-label="Data lineage canvas">
       <ReactFlow
         nodes={rfNodes}
@@ -551,9 +575,9 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
           tabIndex={-1}
           onKeyDown={(e) => { if (e.key === 'Escape') setSelectedId(null); }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalM }}>
             <span style={{ color: styleForType(selected.type).color, display: 'inline-flex' }}>
-              {(() => { const I = styleForType(selected.type).Icon; return <I fontSize={16} />; })()}
+              {(() => { const I = styleForType(selected.type).Icon; return <I fontSize={tokens.fontSizeBase400} />; })()}
             </span>
             <Text weight="semibold" size={300} style={{ wordBreak: 'break-all' }}>{selected.label}</Text>
           </div>
@@ -569,7 +593,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
           {selected.multiSource && selected.multiSource.length > 1 && (
             <div className={s.detailRow}>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Matched in</Caption1>
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
                 {selected.multiSource.map((src) => (
                   <Badge key={src} size="small" appearance="outline">{SOURCE_LABEL[src as LineageSource] || src}</Badge>
                 ))}
@@ -583,7 +607,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
           {selected.columns && selected.columns.length > 0 && (
             <div className={s.detailRow}>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Columns ({selected.columns.length})</Caption1>
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXXS }}>
                 {selected.columns.slice(0, 24).map((c) => (
                   <Badge key={c} size="small" appearance="outline" color="subtle">{c}</Badge>
                 ))}
@@ -592,7 +616,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
             </div>
           )}
 
-          <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS }}>
             <Button size="small" appearance="primary" icon={<TargetRegular />} onClick={() => { setFocusMode(true); focusOn(selected.id); }}>
               Focus chain
             </Button>
@@ -605,6 +629,7 @@ const LineageCanvasInner = forwardRef<LineageCanvasHandle, LineageCanvasProps>(f
         </div>
       )}
     </div>
+    </ResizableCanvasRegion>
   );
 });
 

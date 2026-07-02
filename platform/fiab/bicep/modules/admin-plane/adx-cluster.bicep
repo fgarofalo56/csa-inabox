@@ -85,6 +85,9 @@ param ehNamespaceRg string = ''
 @description('Console UAMI principal ID — granted Monitoring Contributor at cluster scope (metric alert rules + diagnostic settings) AND AllDatabasesAdmin via principalAssignment (so kusto-client can query / run mgmt commands / ingest across every per-domain database). Empty skips both grants.')
 param consolePrincipalId string = ''
 
+@description('Activator UAMI principal ID — granted AllDatabasesViewer via principalAssignment. This is the "alert identity" for continuous Eventhouse/ADX Activator rule evaluation (LOOM_ADX_ALERT_SCOPE → Microsoft.Insights scheduledQueryRules scoped to this cluster; see apps/fiab-console/lib/azure/activator-monitor.ts). Empty skips the grant.')
+param activatorPrincipalId string = ''
+
 @description('When true, skip all role grants (e.g. re-deploy where RBAC already exists or the deployer lacks User Access Administrator).')
 param skipRoleGrants bool = false
 
@@ -249,6 +252,26 @@ resource adxConsoleAdmin 'Microsoft.Kusto/clusters/principalAssignments@2024-04-
     principalType: 'App'
     role: 'AllDatabasesAdmin'
   }
+}
+
+// ---- Activator UAMI → AllDatabasesViewer (ADX data-plane) ----
+// The Loom Activator's continuous Eventhouse/ADX rule evaluation
+// (LOOM_ADX_ALERT_SCOPE = this cluster's ARM id → Microsoft.Insights
+// scheduledQueryRules scoped here; apps/fiab-console/lib/azure/
+// activator-monitor.ts) requires the alert identity to hold ADX Database
+// Viewer on the queried databases. Cluster-level AllDatabasesViewer is the
+// shared-cluster parallel of the per-database 'activator-viewer' grant in
+// landing-zone/adx-db-inner.bicep. Sequenced after adxConsoleAdmin — ADX
+// serializes principalAssignment writes per cluster (concurrent PUTs race).
+resource adxActivatorViewer 'Microsoft.Kusto/clusters/principalAssignments@2024-04-13' = if (!empty(activatorPrincipalId)) {
+  parent: adxCluster
+  name: 'activator-uami-alldatabasesviewer'
+  properties: {
+    principalId: activatorPrincipalId
+    principalType: 'App'
+    role: 'AllDatabasesViewer'
+  }
+  dependsOn: [ adxConsoleAdmin ]
 }
 
 // ARM resource id of the cluster — used by workspace-monitor.bicep to set the

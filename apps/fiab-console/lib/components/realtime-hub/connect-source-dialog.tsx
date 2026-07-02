@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import {
+import { shorthands,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Button, Input, Field, Badge, MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Subtitle2, Body1, Caption1, Spinner, Dropdown, Option, Switch, Divider, Link as FluentLink,
@@ -72,7 +72,7 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM,
     cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1, textAlign: 'left',
-    ':hover': { borderColor: tokens.colorBrandStroke1, boxShadow: tokens.shadow4 },
+    ':hover': { ...shorthands.borderColor(tokens.colorBrandStroke1), boxShadow: tokens.shadow4 },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },

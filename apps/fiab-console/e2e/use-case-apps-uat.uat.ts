@@ -136,8 +136,14 @@ for (const appId of APP_IDS) {
     const wsId = await createWorkspace(page, wsName);
 
     const { result, consoleErrors, networkErrors } = await captureFailures(page, async () => {
-      // 1) open the app detail page (real render)
-      await page.goto(`${BASE}/apps/${appId}`, { waitUntil: 'networkidle' });
+      // 1) open the app detail page (real render). Use 'domcontentloaded', NOT
+      // 'networkidle': the app pages poll continuously (compute-targets, job
+      // status, …) so the network never goes idle and a 'networkidle' goto times
+      // out at 30s before we ever click Install — the real cause of the residual
+      // use-case-app failures once the dialog aria-hidden regression was fixed.
+      // The explicit Install-button visibility wait below is the correct
+      // readiness gate.
+      await page.goto(`${BASE}/apps/${appId}`, { waitUntil: 'domcontentloaded' });
       await expect(page.getByRole('button', { name: /^Install/i }).first()).toBeVisible({ timeout: 30_000 });
       await page.screenshot({ path: path.join(SHOT_DIR, `${appId}-1-detail.png`), fullPage: true });
 

@@ -235,9 +235,19 @@ async function writeCsvSnapshot(
   await uploadFile(BRONZE, `${folder}/snapshot.csv`, buf, 'text/csv');
 
   const folderUrl = pathToHttpsUrl(BRONZE, `${folder}/`);
+  // Cosmos containers serialize nested / variable-shape JSON fields into the CSV,
+  // so the serverless auto-schema (`SELECT *`) infers a column type from the first
+  // rows and then fails on a later row ("Bulk load data conversion error … type
+  // mismatch … column N"). Emit an explicit all-VARCHAR WITH schema (column names
+  // from the snapshot header) for Cosmos sources so the provided consumption query
+  // is robust. SQL-family columns are cleanly typed, so they keep the simpler
+  // auto-schema read (already proven against AdventureWorks).
+  const withClause = schema === 'cosmos' && columns.length
+    ? ` WITH (${columns.map((c) => `[${String(c).replace(/]/g, ']]')}] VARCHAR(8000)`).join(', ')})`
+    : '';
   const openrowset =
     `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', ` +
-    `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS rows`;
+    `FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE)${withClause} AS rows`;
   return { schema, table, status: 'replicated', mode: 'snapshot', rows: rows.length, bytes: buf.length, truncated, lastSync, path: folderUrl, openrowset };
 }
 
@@ -280,8 +290,15 @@ async function writeDeltaCsv(
  */
 async function enableChangeTracking(server: string, database: string, schema: string, table: string): Promise<void> {
   // DB-level: turn CT on with a 7-day retention window if it isn't already on.
+  // Use sys.change_tracking_databases (the portable catalog view of CT-enabled
+  // databases) rather than sys.databases.is_change_tracking_on — the latter
+  // errors "Invalid column name 'is_change_tracking_on'" against the source
+  // (the column isn't exposed in that query context), which forced every
+  // SQL-family mirror down the full-snapshot fallback. change_tracking_databases
+  // is queryable with VIEW DATABASE STATE (db_owner has it) and is the documented
+  // way to test whether CT is on for the current database.
   await executeParameterized(server, database,
-    `IF (SELECT is_change_tracking_on FROM sys.databases WHERE database_id = DB_ID()) = 0 ` +
+    `IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID()) ` +
     `BEGIN ALTER DATABASE ${bracket(database)} SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 7 DAYS, AUTO_CLEANUP = ON) END`);
   // Table-level: enable CT on the specific table if it isn't already tracked.
   await executeParameterized(server, database,
@@ -569,9 +586,15 @@ async function snapshotTable(
     if (savedSyncVersion !== undefined && savedSyncVersion !== null) {
       try {
         const ct = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
-        if (!ct) {
-          // CT not enabled at the DB level — try to turn it on for next run, then
-          // full-snapshot now (it can't read deltas the very run it's enabled).
+        if (!ct || ct.minValid === null) {
+          // CT not usable for this table yet — either DB-level CT is off (ct null)
+          // OR table-level CT is off (minValid null, even though DB-level CT is on).
+          // enableChangeTracking is idempotent at BOTH levels, so call it for both
+          // cases, then full-snapshot now (a table can't read deltas the very run CT
+          // is enabled). The next Start syncs incrementally. (Previously this only
+          // handled DB-level-off; once DB-level CT was on, table-level CT was never
+          // enabled and the CHANGETABLE read failed with "Change tracking is not
+          // enabled on table 'X'" forever.)
           try {
             await enableChangeTracking(src.server, src.database, t.schema, t.table);
             fallbackNote = 'Change tracking enabled this run; the next Start will sync incrementally.';
@@ -611,11 +634,15 @@ async function snapshotTable(
     // on full snapshots and never reaches the incremental path.
     try {
       let ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
-      if (!ctNow) {
+      // Enable when DB-level CT is off (ctNow null) OR table-level CT is off for
+      // this table (minValid null, even though DB-level CT is on) — otherwise
+      // CHANGE_TRACKING_MIN_VALID_VERSION(table) stays NULL and the table never
+      // reaches the incremental path.
+      if (!ctNow || ctNow.minValid === null) {
         try {
           await enableChangeTracking(src.server, src.database, t.schema, t.table);
           ctNow = await changeTrackingStatus(src.server, src.database, t.schema, t.table);
-          if (ctNow && !fallbackNote) result.note = 'Change tracking enabled this run; the next Start will sync incrementally.';
+          if (ctNow && ctNow.minValid !== null && !fallbackNote) result.note = 'Change tracking enabled this run; the next Start will sync incrementally.';
         } catch (ce: any) {
           if (!fallbackNote) result.note =
             'Change tracking could not be enabled — the next Start will re-snapshot. ' +

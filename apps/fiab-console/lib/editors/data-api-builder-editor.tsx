@@ -34,6 +34,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   Button, Input, Label, Dropdown, Option, Switch, Checkbox, Textarea, Spinner,
+  Skeleton, SkeletonItem,
   Badge, Caption1, Subtitle2, Body1, Text, Tooltip, Divider,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -43,8 +44,11 @@ import {
   Save20Regular, CheckmarkCircle20Regular, ArrowDownload20Regular, Play20Regular,
   CloudArrowUp20Regular, Add16Regular, Delete16Regular, Database20Regular,
   Table20Regular, Eye20Regular, Code20Regular, ServerLink20Regular, CloudAdd20Regular,
+  Globe20Regular, Branch20Regular, Wand20Regular, ColumnTriple20Regular,
+  ShieldKeyhole20Regular, Timer20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import type {
@@ -54,9 +58,9 @@ import type {
 } from '@/app/api/dab/_lib/dab-config-model';
 
 const useStyles = makeStyles({
-  rail: { display: 'flex', flexDirection: 'column', gap: '2px', padding: '8px' },
+  rail: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, padding: tokens.spacingVerticalS },
   railItem: {
-    display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', borderRadius: '6px',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusMedium,
     cursor: 'pointer', color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase300,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
@@ -65,28 +69,42 @@ const useStyles = makeStyles({
     fontWeight: tokens.fontWeightSemibold,
   },
   railNum: {
-    minWidth: '20px', height: '20px', borderRadius: '10px', display: 'inline-flex', alignItems: 'center',
-    justifyContent: 'center', fontSize: '11px', backgroundColor: tokens.colorNeutralBackground4,
+    minWidth: '20px', height: '20px', borderRadius: tokens.borderRadiusCircular, display: 'inline-flex', alignItems: 'center',
+    justifyContent: 'center', fontSize: tokens.fontSizeBase100, backgroundColor: tokens.colorNeutralBackground4,
   },
-  body: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '920px' },
-  field: { display: 'flex', flexDirection: 'column', gap: '4px' },
-  row: { display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' },
+  body: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '920px' },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '8px', padding: '12px',
-    display: 'flex', flexDirection: 'column', gap: '10px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationNormal, transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16 },
   },
-  entityList: { display: 'flex', flexDirection: 'column', gap: '4px', padding: '8px' },
+  cardHeader: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    color: tokens.colorBrandForeground1,
+  },
+  entityList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS },
   entityRow: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
-    padding: '6px 10px', borderRadius: '6px', cursor: 'pointer',
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusMedium, cursor: 'pointer',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
   entityRowActive: { backgroundColor: tokens.colorBrandBackground2, fontWeight: tokens.fontWeightSemibold },
-  tabBar: { display: 'flex', gap: '4px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: '8px', flexWrap: 'wrap' },
+  tabBar: { display: 'flex', gap: tokens.spacingHorizontalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   tabBtn: { borderBottomWidth: '2px', borderBottomStyle: 'solid', borderBottomColor: 'transparent', borderRadius: 0 },
   tabBtnActive: { borderBottomColor: tokens.colorBrandStroke1, color: tokens.colorBrandForeground1 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: '12px', whiteSpace: 'pre', overflow: 'auto', maxHeight: '480px', backgroundColor: tokens.colorNeutralBackground2, padding: '12px', borderRadius: '6px' },
-  pillRow: { display: 'flex', gap: '6px', flexWrap: 'wrap' },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre', overflow: 'auto', overflowWrap: 'anywhere', maxWidth: '100%', maxHeight: '480px', resize: 'vertical', boxSizing: 'border-box', backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingHorizontalM, borderRadius: tokens.borderRadiusMedium },
+  pillRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  entityGrid: { display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) minmax(0, 1fr)', gap: tokens.spacingHorizontalM },
+  entityDetailPane: { minWidth: 0, overflowX: 'auto' },
+  spaceBetween: { justifyContent: 'space-between' },
+  remediation: { display: 'block', overflowWrap: 'anywhere' },
+  remediationMono: { display: 'block', marginTop: tokens.spacingVerticalXS, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre-wrap' },
+  loadingRows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 });
 
 type Stage = 'source' | 'entities' | 'runtime' | 'preview' | 'config';
@@ -378,7 +396,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
             <EntitiesStage cfg={cfg} mutate={mutate} activeEntity={activeEntity} setActiveEntity={setActiveEntity} />
           )}
           {stage === 'runtime' && <RuntimeStage cfg={cfg} mutate={mutate} />}
-          {stage === 'preview' && <PreviewStage cfg={cfg} id={id} />}
+          {stage === 'preview' && <PreviewStage cfg={cfg} id={id} mutate={mutate} />}
           {stage === 'config' && <ConfigStage cfg={cfg} id={id} />}
         </div>
       }
@@ -610,8 +628,8 @@ function DeploySourcePanel({ cfg, mutate, onClose, onDeployed }: {
 
   return (
     <div className={s.card}>
-      <div className={s.row} style={{ justifyContent: 'space-between' }}>
-        <Caption1><ServerLink20Regular style={{ verticalAlign: 'middle' }} /> Deploy a new data source &amp; register it</Caption1>
+      <div className={mergeClasses(s.row, s.spaceBetween)}>
+        <span className={s.cardHeader}><ServerLink20Regular /><Caption1>Deploy a new data source &amp; register it</Caption1></span>
         <Button size="small" appearance="subtle" onClick={onClose}>Close</Button>
       </div>
       <Body1>
@@ -663,7 +681,7 @@ function DeploySourcePanel({ cfg, mutate, onClose, onDeployed }: {
           <MessageBarTitle>Deploy gated / failed</MessageBarTitle>
           {result.error}
           {result.remediation && (
-            <Caption1>
+            <Caption1 className={s.remediation}>
               {result.remediation.message}
               {result.remediation.module && <><br />Module: <code>{result.remediation.module}</code></>}
               {result.remediation.command && <><br /><code>{result.remediation.command}</code></>}
@@ -763,7 +781,7 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
           <MessageBarTitle>Schema not introspected</MessageBarTitle>
           {schemaGate.error}
           {schemaGate.remediation && (
-            <><br /><Caption1 style={{ display: 'block', marginTop: 4, fontFamily: 'monospace', whiteSpace: 'pre-wrap' }}>{schemaGate.remediation}</Caption1></>
+            <><br /><Caption1 className={s.remediationMono}>{schemaGate.remediation}</Caption1></>
           )}
           {schemaGate.missing && !schemaGate.remediation && (
             <><br /><Caption1>Set <code>{schemaGate.missing}</code>.</Caption1></>
@@ -773,7 +791,7 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
 
       {schema && (
         <div className={s.card}>
-          <Caption1>Add from database (real sys.* introspection)</Caption1>
+          <span className={s.cardHeader}><Wand20Regular /><Caption1>Add from database (real sys.* introspection)</Caption1></span>
           <SchemaPickerGroup label="Tables" objs={schema.tables} onAdd={(o) => addEntity(o, 'table')} existing={cfg.entities} />
           <SchemaPickerGroup label="Views" objs={schema.views} onAdd={(o) => addEntity(o, 'view')} existing={cfg.entities} />
           <SchemaPickerGroup label="Stored procedures" objs={schema.procedures} onAdd={(o) => addEntity(o, 'stored-procedure')} existing={cfg.entities} />
@@ -783,7 +801,7 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
       <Divider />
 
       {/* Defined entities + editor */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(180px, 240px) 1fr', gap: 12 }}>
+      <div className={s.entityGrid}>
         <div className={s.entityList}>
           {cfg.entities.length === 0 && <Caption1>No entities yet.</Caption1>}
           {cfg.entities.map((e) => (
@@ -799,8 +817,14 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
           ))}
         </div>
 
-        <div>
-          {!active && <Caption1>Select an entity to edit its REST, GraphQL, fields, permissions, relationships, and cache.</Caption1>}
+        <div className={s.entityDetailPane}>
+          {!active && (
+            <EmptyState
+              icon={<Table20Regular />}
+              title={cfg.entities.length === 0 ? 'No entity selected' : 'Select an entity'}
+              body="Pick an entity from the list to edit its REST, GraphQL, fields, permissions, relationships, and cache. Add entities above from real sys.* introspection."
+            />
+          )}
           {active && (
             <>
               <div className={s.tabBar}>
@@ -960,8 +984,15 @@ function EntityDetail({ cfg, entity, tab, mutate }: {
   if (tab === 'fields') {
     return (
       <div className={s.card}>
-        <Caption1>Column → exposed-field alias + primary-key designation (DAB 2.0 fields[]).</Caption1>
-        {!cols && <Caption1>Loading columns… (requires an mssql source)</Caption1>}
+        <span className={s.cardHeader}><ColumnTriple20Regular /><Caption1>Column → exposed-field alias + primary-key designation (DAB 2.0 fields[]).</Caption1></span>
+        {!cols && (
+          <>
+            <Caption1>Loading columns… (requires an mssql source)</Caption1>
+            <Skeleton aria-label="Loading columns" className={s.loadingRows}>
+              {[0, 1, 2, 3].map((k) => <SkeletonItem key={k} size={24} />)}
+            </Skeleton>
+          </>
+        )}
         {cols && (
           <Table size="small">
             <TableHeader><TableRow>
@@ -1042,7 +1073,7 @@ function PermissionsTab({ entity, cols, setEntity }: {
   const isSp = entity.source.type === 'stored-procedure';
   return (
     <div className={s.card}>
-      <Caption1>Per-role access. Anonymous = unauthenticated; Authenticated = any signed-in user; or a custom role (selected via the X-MS-API-ROLE header).</Caption1>
+      <span className={s.cardHeader}><ShieldKeyhole20Regular /><Caption1>Per-role access. Anonymous = unauthenticated; Authenticated = any signed-in user; or a custom role (selected via the X-MS-API-ROLE header).</Caption1></span>
       {entity.permissions.map((perm, pi) => (
         <div key={pi} className={s.card}>
           <div className={s.row}>
@@ -1110,7 +1141,7 @@ function RelationshipsTab({ cfg, entity, setEntity }: {
   const others = cfg.entities.filter((e) => e.name !== entity.name);
   return (
     <div className={s.card}>
-      <Caption1>Relationships surface as nested GraphQL fields. Pick a target entity, cardinality, and the join fields (and a linking object for many-to-many).</Caption1>
+      <span className={s.cardHeader}><Branch20Regular /><Caption1>Relationships surface as nested GraphQL fields. Pick a target entity, cardinality, and the join fields (and a linking object for many-to-many).</Caption1></span>
       {(entity.relationships || []).map((r, ri) => (
         <div key={ri} className={s.card}>
           <div className={s.row}>
@@ -1191,7 +1222,7 @@ function RuntimeStage({ cfg, mutate }: { cfg: DabConfig; mutate: (fn: (c: DabCon
     <>
       <Subtitle2>Runtime &amp; host</Subtitle2>
       <div className={s.card}>
-        <Caption1>REST</Caption1>
+        <span className={s.cardHeader}><Globe20Regular /><Caption1>REST</Caption1></span>
         <Switch checked={rt.rest.enabled} label="REST enabled" onChange={(_, d) => setRt((r) => { r.rest.enabled = d.checked; })} />
         <div className={s.row}>
           <div className={s.field}><Label>Base path</Label><Input value={rt.rest.path} onChange={(_, d) => setRt((r) => { r.rest.path = d.value; })} /></div>
@@ -1199,7 +1230,7 @@ function RuntimeStage({ cfg, mutate }: { cfg: DabConfig; mutate: (fn: (c: DabCon
         </div>
       </div>
       <div className={s.card}>
-        <Caption1>GraphQL</Caption1>
+        <span className={s.cardHeader}><Code20Regular /><Caption1>GraphQL</Caption1></span>
         <Switch checked={rt.graphql.enabled} label="GraphQL enabled" onChange={(_, d) => setRt((r) => { r.graphql.enabled = d.checked; })} />
         <div className={s.row}>
           <div className={s.field}><Label>Base path</Label><Input value={rt.graphql.path} onChange={(_, d) => setRt((r) => { r.graphql.path = d.value; })} /></div>
@@ -1207,7 +1238,7 @@ function RuntimeStage({ cfg, mutate }: { cfg: DabConfig; mutate: (fn: (c: DabCon
         </div>
       </div>
       <div className={s.card}>
-        <Caption1>Host</Caption1>
+        <span className={s.cardHeader}><ShieldKeyhole20Regular /><Caption1>Host</Caption1></span>
         <div className={s.row}>
           <div className={s.field}>
             <Label>Mode</Label>
@@ -1235,7 +1266,7 @@ function RuntimeStage({ cfg, mutate }: { cfg: DabConfig; mutate: (fn: (c: DabCon
         <Switch checked={rt.host.corsAllowCredentials} label="CORS allow-credentials" onChange={(_, d) => setRt((r) => { r.host.corsAllowCredentials = d.checked; })} />
       </div>
       <div className={s.card}>
-        <Caption1>Global cache &amp; pagination</Caption1>
+        <span className={s.cardHeader}><Timer20Regular /><Caption1>Global cache &amp; pagination</Caption1></span>
         <Switch checked={rt.cache.enabled} label="Global cache enabled" onChange={(_, d) => setRt((r) => { r.cache.enabled = d.checked; })} />
         <div className={s.row}>
           <div className={s.field}><Label>Cache TTL seconds</Label><Input type="number" value={String(rt.cache.ttlSeconds)} onChange={(_, d) => setRt((r) => { r.cache.ttlSeconds = Number(d.value); })} /></div>
@@ -1249,7 +1280,7 @@ function RuntimeStage({ cfg, mutate }: { cfg: DabConfig; mutate: (fn: (c: DabCon
 
 // --- Stage 4: Preview & publish --------------------------------------------
 
-function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
+function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate: (fn: (c: DabConfig) => DabConfig) => void }) {
   const s = useStyles();
   const [probe, setProbe] = useState<{ ok: boolean; gate?: { missing: string }; error?: string; baseUrl?: string; probe?: any } | null>(null);
   const [probing, setProbing] = useState(false);
@@ -1266,6 +1297,11 @@ function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
   const [apiId, setApiId] = useState(`dab-${id.substring(0, 8)}`);
   const [apiPath, setApiPath] = useState(`dab/${id.substring(0, 8)}`);
   const [publishResult, setPublishResult] = useState<string | null>(null);
+  // API surface to publish into APIM — DAB emits BOTH a REST and a GraphQL
+  // endpoint from the same dab-config.json (Merge #4: API-for-GraphQL folds
+  // into Data API builder). REST imports the runtime's permission-aware
+  // OpenAPI doc; GraphQL surfaces the runtime's `/graphql` endpoint.
+  const [apiType, setApiType] = useState<'rest' | 'graphql'>('rest');
 
   const doProbe = useCallback(async () => {
     setProbing(true);
@@ -1317,12 +1353,21 @@ function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
     try {
       const r = await fetch(`/api/dab/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ apiId, path: apiPath, restBasePath: cfg.runtime.rest.path }),
+        // The publish route imports the runtime's OpenAPI doc (REST) today; the
+        // graphql/graphqlPath flags are forward-compatible hints so the route
+        // can branch on a native GraphQL import when that path lands (unknown
+        // fields are ignored by the current handler — no faked success).
+        body: JSON.stringify({
+          apiId, path: apiPath, restBasePath: cfg.runtime.rest.path,
+          ...(apiType === 'graphql'
+            ? { graphql: true, graphqlPath: cfg.runtime.graphql.path }
+            : {}),
+        }),
       });
       const j = await r.json();
       setPublishResult(JSON.stringify(j, null, 2));
     } catch (e: any) { setPublishResult(`Error: ${e?.message || e}`); }
-  }, [apiId, apiPath, cfg.runtime.rest.path, id]);
+  }, [apiId, apiPath, cfg.runtime.rest.path, cfg.runtime.graphql.path, apiType, id]);
 
   const gated = probe && !probe.ok && probe.gate;
 
@@ -1349,7 +1394,7 @@ function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
 
       {/* REST tester — always rendered; calls real runtime when live. */}
       <div className={s.card}>
-        <Caption1>REST tester (real GET against the runtime)</Caption1>
+        <span className={s.cardHeader}><Globe20Regular /><Caption1>REST tester (real GET against the runtime)</Caption1></span>
         <div className={s.row}>
           <div className={s.field}>
             <Label>Entity</Label>
@@ -1367,7 +1412,7 @@ function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
 
       {/* GraphQL tester */}
       <div className={s.card}>
-        <Caption1>GraphQL tester (real POST /graphql)</Caption1>
+        <span className={s.cardHeader}><Code20Regular /><Caption1>GraphQL tester (real POST /graphql)</Caption1></span>
         <Textarea value={gqlQuery} resize="vertical" onChange={(_, d) => setGqlQuery(d.value)} />
         <div className={s.row}>
           <Button appearance="primary" icon={<Play20Regular />} onClick={runGql} disabled={!probe?.ok}>Run</Button>
@@ -1375,13 +1420,62 @@ function PreviewStage({ cfg, id }: { cfg: DabConfig; id: string }) {
         {gqlResult && <pre className={s.mono}>{gqlResult}</pre>}
       </div>
 
-      {/* Publish to APIM */}
+      {/* Publish to APIM — REST (OpenAPI import) or GraphQL (endpoint surface). */}
       <div className={s.card}>
-        <Caption1>Publish to APIM (imports the runtime&apos;s OpenAPI as a REST API)</Caption1>
+        <span className={s.cardHeader}><CloudArrowUp20Regular /><Caption1>Publish to APIM — expose this Data API&apos;s REST or GraphQL surface through the gateway</Caption1></span>
+        <div className={s.field}>
+          <Label>API type</Label>
+          <div className={s.pillRow}>
+            <Button size="small" appearance={apiType === 'rest' ? 'primary' : 'outline'} icon={<Globe20Regular />}
+              onClick={() => setApiType('rest')}>REST</Button>
+            <Button size="small" appearance={apiType === 'graphql' ? 'primary' : 'outline'} icon={<Code20Regular />}
+              onClick={() => setApiType('graphql')}>GraphQL</Button>
+          </div>
+          <Caption1>
+            {apiType === 'rest'
+              ? 'Imports the runtime’s permission-aware OpenAPI v3 document into APIM as a REST API.'
+              : 'Publishes the GraphQL endpoint the same dab-config.json already emits (single /graphql contract).'}
+          </Caption1>
+        </div>
+
+        {apiType === 'graphql' && (
+          <>
+            {/* GraphQL must be enabled on the runtime for the endpoint to exist;
+                reuse the runtime.graphql config the RuntimeStage already owns. */}
+            {!cfg.runtime.graphql.enabled && (
+              <MessageBar intent="warning"><MessageBarBody>
+                <MessageBarTitle>GraphQL is disabled on the runtime</MessageBarTitle>
+                The GraphQL endpoint won&apos;t be served until <code>runtime.graphql.enabled</code> is on.
+                {' '}<Button size="small" appearance="transparent" icon={<Code20Regular />}
+                  onClick={() => mutate((c) => { c.runtime.graphql.enabled = true; return c; })}>
+                  Enable GraphQL endpoint
+                </Button>
+                {' '}then Save the config.
+              </MessageBarBody></MessageBar>
+            )}
+            <div className={s.field}>
+              <Label>GraphQL endpoint</Label>
+              <Input readOnly
+                value={`${probe?.baseUrl || '<runtime>'}${cfg.runtime.graphql.path}`}
+                aria-label="GraphQL endpoint URL" />
+              <Caption1>Derived from the live runtime base URL + <code>runtime.graphql.path</code>. Test it with the GraphQL tester above.</Caption1>
+            </div>
+            <MessageBar intent="info"><MessageBarBody>
+              <MessageBarTitle>GraphQL publish via APIM is a REST (OpenAPI) import today</MessageBarTitle>
+              The gateway publish path currently imports the runtime&apos;s OpenAPI v3 document, so the GraphQL
+              endpoint is registered behind the same REST-import flow (a single <code>POST /graphql</code> operation).
+              Native GraphQL passthrough in APIM is planned; until then this surfaces the real GraphQL endpoint URL
+              above and publishes it through the existing import rather than faking a separate GraphQL API.
+            </MessageBarBody></MessageBar>
+          </>
+        )}
+
         <div className={s.row}>
           <div className={s.field}><Label>API id</Label><Input value={apiId} onChange={(_, d) => setApiId(d.value)} /></div>
           <div className={s.field}><Label>API path</Label><Input value={apiPath} onChange={(_, d) => setApiPath(d.value)} /></div>
-          <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={publish} disabled={!probe?.ok}>Publish</Button>
+          <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={publish} disabled={!probe?.ok}>
+            {apiType === 'graphql' ? 'Publish GraphQL endpoint' : 'Publish'}
+          </Button>
         </div>
         {publishResult && <pre className={s.mono}>{publishResult}</pre>}
       </div>

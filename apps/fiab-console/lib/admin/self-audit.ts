@@ -135,6 +135,24 @@ export const VALUE_HINT: Record<string, string> = {
   LOOM_ACA_ENV_ID: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/managedEnvironments/<aca-env>',
   LOOM_ACA_ENV_DOMAIN: '<aca-env-default-domain>.<region>.azurecontainerapps.io',
   LOOM_BUILTIN_MCP_URL: 'https://<loom-builtin-mcp-host>',
+  // ── wave-2 coverage: builder/publish/networking env the earlier checks missed
+  //    (env-config derives its editable whitelist from ENV_CHECKS, so a var
+  //    absent there is silently dropped by PUT /api/admin/env-config) ──
+  LOOM_SWA_SUBSCRIPTION_ID: CTX.sub,
+  LOOM_SWA_RESOURCE_GROUP: '<swa-resource-group>',
+  LOOM_SWA_RG: '<swa-resource-group>',
+  LOOM_SWA_LOCATION: 'eastus2',
+  LOOM_LOCATION: '<azure-region (e.g. centralus)>',
+  LOOM_ADX_ALERT_SCOPE: '/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Kusto/clusters/<adx-cluster>',
+  LOOM_PE_SUBNET_ID: '/subscriptions/<sub>/resourceGroups/<networking-rg>/providers/Microsoft.Network/virtualNetworks/<hub-vnet>/subnets/snet-private-endpoints',
+  LOOM_PLAN_BACKING_SQL_SERVER: '<sql-logical-server>.database.windows.net',
+  LOOM_PLAN_BACKING_SQL_DATABASE: 'loom-plan-writeback',
+  LOOM_DAB_PREVIEW_URL: 'https://loom-dab-preview.<aca-env-domain>',
+  LOOM_UDF_FUNCTION_BASE: 'https://<udf-function-app>.azurewebsites.net',
+  LOOM_ONELAKE_SECURITY_ACL: 'true',
+  LOOM_MAPS_BACKEND: 'azure-maps',
+  LOOM_AZURE_MAPS_CLIENT_ID: '<azure-maps-account-uniqueId-guid>',
+  LOOM_AZURE_MAPS_KEY: '<azure-maps-shared-key (Commercial only; prefer AAD)>',
 };
 
 /** Pick the concrete env vars an admin should set from a missing-list that may
@@ -477,6 +495,76 @@ export const ENV_CHECKS: EnvSpec[] = [
     provisionedBy: 'modules/landing-zone (Databricks workspace) → admin-plane forwards loomDatabricksHostname → apps[] env',
     role: 'Databricks workspace access for the Console UAMI (SCIM-provisioned) + network reachability (private link / IP allowlist — see issue #1466)',
   },
+
+  // ── wave-2 coverage: builder/publish/networking env the earlier checks missed.
+  //    env-config.ts derives its EDITABLE_ENV whitelist from THESE specs — a var
+  //    absent here is silently DROPPED by PUT /api/admin/env-config, so every
+  //    runtime LOOM_ var a route reads must have a spec. ──
+  {
+    id: 'svc-swa-publish', category: 'builders', title: 'Static Web Apps publish (Workshop / Slate apps)', severity: 'optional',
+    // The publish routes fall back: sub → LOOM_SUBSCRIPTION_ID, rg → LOOM_SWA_RG,
+    // location → LOOM_LOCATION → 'eastus2' — hence the alias groups.
+    anyOf: [
+      ['LOOM_SWA_SUBSCRIPTION_ID', 'LOOM_SUBSCRIPTION_ID'],
+      ['LOOM_SWA_RESOURCE_GROUP', 'LOOM_SWA_RG'],
+      ['LOOM_SWA_LOCATION', 'LOOM_LOCATION'],
+    ],
+    warnOnMiss: true,
+    remediation: 'Workshop and Slate apps PUBLISH to a real Azure Static Web App. Set LOOM_SWA_RESOURCE_GROUP (the resource group new SWAs deploy into; LOOM_SWA_SUBSCRIPTION_ID falls back to LOOM_SUBSCRIPTION_ID and LOOM_SWA_LOCATION defaults to eastus2) and grant the Console UAMI "Website Contributor" on that RG. The builders + in-editor Preview work without this — only one-click Publish is gated. No Microsoft Fabric required.',
+    provisionedBy: 'set via env (not yet bicep-emitted) — POST /api/items/{workshop-app,slate-app}/[id]/publish reads these; any RG in the deployment (e.g. the admin RG) works',
+    role: 'Website Contributor (Console UAMI) on the SWA resource group',
+  },
+  {
+    id: 'svc-activator-adx-scope', category: 'azure-services', title: 'Activator — ADX continuous-evaluation scope', severity: 'optional',
+    required: ['LOOM_ADX_ALERT_SCOPE'], warnOnMiss: true,
+    remediation: 'Set LOOM_ADX_ALERT_SCOPE to the ADX cluster ARM resource id so Activator rules on Eventhouse/ADX sources get hands-off scheduled evaluation (an Azure Monitor scheduled-query rule scoped to the cluster), and grant the alert identity "Database Viewer" on the target database. Without it, ADX-sourced rules still evaluate on-demand via Trigger; Log Analytics sources evaluate continuously regardless.',
+    provisionedBy: 'modules/landing-zone (adxEnabled → the ADX cluster whose resource id this names); set the env on the Console app (not yet auto-emitted by admin-plane/main.bicep)',
+    role: 'Database Viewer (alert identity) on the ADX database + Monitoring Contributor (Console UAMI) on LOOM_ALERT_RG',
+  },
+  {
+    id: 'svc-pe-subnet', category: 'security', title: 'Managed private endpoints — PE subnet', severity: 'optional',
+    required: ['LOOM_PE_SUBNET_ID'], warnOnMiss: true, derived: true,
+    remediation: 'Auto-derived from the network module (snet-private-endpoints) on a push-button deploy. Set LOOM_PE_SUBNET_ID to the ARM id of the private-endpoints subnet so tenant admins can create self-service managed private endpoints (and workspace inbound-protection / outbound PE rules) from the admin Network page. The Console UAMI needs Network Contributor on the networking RG.',
+    provisionedBy: 'modules/admin-plane/main.bicep (network.outputs.privateEndpointsSubnetId → apps[] env, auto-derived, line ~2353)',
+    role: 'Network Contributor (Console UAMI) on the networking resource group (LOOM_NETWORKING_RG / LOOM_ADMIN_RG)',
+  },
+  {
+    id: 'svc-plan-writeback', category: 'builders', title: 'Plan (preview) — Azure SQL writeback store', severity: 'optional',
+    required: ['LOOM_PLAN_BACKING_SQL_SERVER', 'LOOM_PLAN_BACKING_SQL_DATABASE'], warnOnMiss: true,
+    remediation: 'Planning cells always persist Loom-native (Cosmos). To ALSO mirror them into a governed Azure SQL store (the Azure-native equivalent of Fabric\'s auto-provisioned Plan SQL database), deploy modules/shared/plan-backing-sql.bicep (or point at an existing DB) and set LOOM_PLAN_BACKING_SQL_SERVER + LOOM_PLAN_BACKING_SQL_DATABASE. Grant the Console UAMI db_ddladmin + db_datawriter on that database (AAD token auth — no SQL password). No Microsoft Fabric required.',
+    provisionedBy: 'modules/shared/plan-backing-sql.bicep → admin-plane/main.bicep params loomPlanBackingSqlServer / loomPlanBackingSqlDatabase (apps[] env ~2579)',
+    role: 'db_ddladmin + db_datawriter (Console UAMI AAD login) on the writeback database',
+  },
+  {
+    id: 'svc-dab-runtime', category: 'builders', title: 'Data API builder — shared preview runtime', severity: 'optional',
+    required: ['LOOM_DAB_PREVIEW_URL'], warnOnMiss: true, derived: true,
+    remediation: 'Auto-wired on a push-button deploy (dabRuntimeEnabled, default on): the loom-dab-preview Container App URL lands in LOOM_DAB_PREVIEW_URL. It powers the DAB editor\'s live REST/GraphQL testers + publish probe, the ontology-sdk "Try it" runner, and Slate rest-dab queries. The builders render fully without it — only run-against-runtime calls are gated.',
+    provisionedBy: 'modules/admin-plane/dab-runtime.bicep (dabRuntimeEnabled) → LOOM_DAB_PREVIEW_URL apps[] env (admin-plane/main.bicep ~3650)',
+    role: 'none (HTTP endpoint); entity queries additionally need the Console UAMI SQL login — scripts/csa-loom/grant-dab-sql.sh',
+  },
+  {
+    id: 'svc-udf-function', category: 'builders', title: 'User data functions — Azure Functions run target', severity: 'optional',
+    required: ['LOOM_UDF_FUNCTION_BASE'], warnOnMiss: true,
+    remediation: 'Set LOOM_UDF_FUNCTION_BASE to the Azure Function App base URL (e.g. https://my-udf.azurewebsites.net) that hosts published user-data-functions — the Azure-native invoke backend. A per-item state.azureFunctionUrl overrides it; a Fabric backend is opt-in ONLY via LOOM_UDF_BACKEND=fabric. The editor + code authoring work without it — only Invoke is gated.',
+    provisionedBy: 'set via env (not yet bicep-emitted) — deploy an Azure Functions app; POST /api/items/user-data-function/[id]/invoke reads it',
+    role: 'none (HTTPS endpoint); if the function requires a key, set state.functionKeySecret to the Key Vault secret name',
+  },
+  {
+    id: 'svc-onelake-acl', category: 'security', title: 'OneLake security roles — ADLS ACL enforcement', severity: 'optional',
+    required: ['LOOM_ONELAKE_SECURITY_ACL'], warnOnMiss: true,
+    remediation: 'Set LOOM_ONELAKE_SECURITY_ACL=true so lakehouse OneLake-security roles are ENFORCED as real ADLS Gen2 POSIX ACLs on the Delta folders (deploy admin-plane + synapse.bicep with loomOnelakeSecurityEnabled=true). Requires the Console UAMI to hold "Storage Blob Data Owner" on the DLZ storage account and the LOOM_{LANDING,BRONZE,SILVER,GOLD}_URL container URLs to be set. Role definitions still author + persist without it — only ACL enforcement is gated.',
+    provisionedBy: 'modules/admin-plane/main.bicep (param loomOnelakeSecurityEnabled → LOOM_ONELAKE_SECURITY_ACL, ~3484) + modules/landing-zone/synapse.bicep (Storage Blob Data Owner grant)',
+    role: 'Storage Blob Data Owner (Console UAMI) on the DLZ storage account',
+  },
+  {
+    id: 'svc-azure-maps', category: 'azure-services', title: 'Azure Maps (map visuals / Geo)', severity: 'optional',
+    required: ['LOOM_MAPS_BACKEND'],
+    anyOf: [['LOOM_AZURE_MAPS_CLIENT_ID', 'LOOM_AZURE_MAPS_KEY']],
+    warnOnMiss: true,
+    remediation: 'Set LOOM_MAPS_BACKEND=azure-maps plus a credential: LOOM_AZURE_MAPS_CLIENT_ID (the Maps account uniqueId — Entra/AAD path, gov-safe, PREFERRED; grant the Console UAMI "Azure Maps Data Reader") or LOOM_AZURE_MAPS_KEY (subscription key, Commercial only). Lights up the report Map visual + the graph/Geo map canvases; the aggregated location rows render without it. No Power BI / Fabric required.',
+    provisionedBy: 'modules/landing-zone/azure-maps.bicep (azureMapsEnabled → Gen2 account + "Azure Maps Data Reader" grant + mapsClientId output)',
+    role: 'Azure Maps Data Reader (Console UAMI) on the Maps account',
+  },
 ];
 
 // ── live probes (best-effort; bounded) ──────────────────────────────────────
@@ -725,6 +813,73 @@ async function probeDatabricks(): Promise<CheckResult> {
   }
 }
 
+async function probeDeltaSharing(): Promise<CheckResult> {
+  const base = { id: 'probe-delta-sharing', category: 'azure-services' as const, title: 'Delta Sharing — inbound providers + publishing', severity: 'recommended' as const };
+  if (!has('LOOM_DATABRICKS_HOSTNAME') && !has('LOOM_DATABRICKS_HOSTNAMES')) {
+    return {
+      ...base, status: 'warn',
+      detail: 'Databricks / Unity Catalog not bound — Delta Sharing needs a Databricks workspace.',
+      remediation: 'Set LOOM_DATABRICKS_HOSTNAME to enable the Marketplace "Data shares" flow (subscribe to inbound Delta shares from an activation file + publish outbound shares). Delta Sharing is an Azure Databricks Unity Catalog feature (no Fabric dependency).',
+      redeploy: true,
+    };
+  }
+  // The grant SQL/script, pre-filled with THIS deployment's UAMI principal — the
+  // one-step fix a Databricks metastore admin runs (the UAMI cannot self-grant).
+  const grantScript = [
+    '# Grant the Console UAMI the Unity Catalog metastore SHARING privileges so the',
+    '# Marketplace "Data shares" flow works end-to-end — inbound: CREATE PROVIDER',
+    '# (register the share from an activation file) + CREATE CATALOG (subscribe =',
+    '# create a catalog from the share so you can query it); outbound: CREATE SHARE',
+    '# + CREATE RECIPIENT. Run as a Databricks METASTORE ADMIN (the UAMI cannot',
+    '# grant itself). Paste in a Databricks SQL editor / notebook, or use',
+    '# scripts/csa-loom/grant-databricks-delta-sharing.sh.',
+    `GRANT CREATE PROVIDER  ON METASTORE TO \`${CTX.uamiClientId}\`;`,
+    `GRANT CREATE CATALOG   ON METASTORE TO \`${CTX.uamiClientId}\`;`,
+    `GRANT CREATE SHARE     ON METASTORE TO \`${CTX.uamiClientId}\`;`,
+    `GRANT CREATE RECIPIENT ON METASTORE TO \`${CTX.uamiClientId}\`;`,
+  ].join('\n');
+  const portalSteps = [
+    `Open the Databricks workspace SQL editor (or a notebook) as a metastore admin: https://${env('LOOM_DATABRICKS_HOSTNAME')}.`,
+    'Run the three GRANT statements below (they grant the Console UAMI CREATE PROVIDER / SHARE / RECIPIENT on the metastore).',
+    'Inbound (adding a share from an activation file) needs CREATE PROVIDER; publishing outbound needs CREATE SHARE + CREATE RECIPIENT.',
+    'Return here and click Re-run audit — this check turns green once the grant lands.',
+  ];
+  let r: import('@/lib/azure/unity-catalog-client').DeltaSharingReadiness;
+  try {
+    const { deltaSharingReadiness } = await import('@/lib/azure/unity-catalog-client');
+    r = await withTimeout(deltaSharingReadiness(), 8000);
+  } catch (e: any) {
+    return {
+      ...base, status: 'warn',
+      detail: `Delta Sharing readiness probe failed: ${e?.message || String(e)}`,
+      remediation: 'Confirm the Console UAMI is SCIM-provisioned into the Databricks workspace and the workspace is reachable, then grant the metastore sharing privileges (below).',
+      redeploy: true, portalSteps, fixScript: grantScript,
+    };
+  }
+  if (r.reason === 'not_configured') {
+    return { ...base, status: 'warn', detail: r.message || 'Databricks not bound.', remediation: 'Set LOOM_DATABRICKS_HOSTNAME to enable Delta Sharing.', redeploy: true };
+  }
+  if (r.reason === 'unreachable') {
+    return { ...base, status: 'warn', detail: r.message || 'Unity Catalog metastore unreachable.', remediation: 'Verify the workspace is network-reachable and the Console UAMI is SCIM-provisioned into it.', redeploy: true, docs: 'https://learn.microsoft.com/azure/databricks/data-sharing/' };
+  }
+  if (r.reason === 'ready') {
+    return {
+      ...base, status: 'pass',
+      detail: `Delta Sharing ready on metastore '${r.metastoreName}' — the Console UAMI can add inbound providers (activation-file shares) and publish outbound shares/recipients. Open (token) sharing scope: ${r.externalSharingEnabled ? 'enabled (INTERNAL_AND_EXTERNAL)' : 'internal-only'}.`,
+      docs: 'https://learn.microsoft.com/azure/databricks/data-sharing/',
+    };
+  }
+  // privileges_missing — the live error the operator hit (CREATE PROVIDER denied).
+  const p = r.privileges;
+  return {
+    ...base, status: 'warn',
+    detail: `The Console UAMI lacks Unity Catalog metastore sharing privileges on '${r.metastoreName || 'the metastore'}' (CREATE PROVIDER: ${p.createProvider ? 'yes' : 'NO'}, CREATE CATALOG: ${p.createCatalog ? 'yes' : 'NO'}, CREATE SHARE: ${p.createShare ? 'yes' : 'NO'}, CREATE RECIPIENT: ${p.createRecipient ? 'yes' : 'NO'}). Adding an inbound share from an activation file needs CREATE PROVIDER; SUBSCRIBING (create a catalog from the share so you can query it) needs CREATE CATALOG.${r.message ? ' ' + r.message : ''}`,
+    remediation: 'A Databricks metastore admin grants the Console UAMI CREATE PROVIDER / SHARE / RECIPIENT on the metastore — the UAMI cannot self-grant. Run scripts/csa-loom/grant-databricks-delta-sharing.sh, or paste the SQL below in a Databricks SQL editor as metastore admin. This grant should be applied day-one by the post-deploy bootstrap.',
+    redeploy: true, portalSteps, fixScript: grantScript,
+    docs: 'https://learn.microsoft.com/azure/databricks/data-governance/unity-catalog/manage-privileges/',
+  };
+}
+
 async function probeDlpGraphRoles(): Promise<CheckResult> {
   const base = { id: 'probe-dlp-graph-roles', category: 'catalog-governance' as const, title: 'DLP / Information-Protection Graph roles', severity: 'optional' as const };
   if (env('LOOM_DLP_ENABLED') !== 'true') {
@@ -824,16 +979,17 @@ export interface AuditReport {
 /** Run the full self-audit. `now` is passed in so the engine stays pure. */
 export async function runSelfAudit(now: string): Promise<AuditReport> {
   const results: CheckResult[] = ENV_CHECKS.map(evalEnv);
-  const [cosmos, aoai, purviewMap, searchGov, databricks, dlpRoles, posture] = await Promise.all([
+  const [cosmos, aoai, purviewMap, searchGov, databricks, deltaSharing, dlpRoles, posture] = await Promise.all([
     probeCosmos(),
     probeAoai(),
     probePurviewDataMap(),
     probeGovernanceSearchIndex(),
     probeDatabricks(),
+    probeDeltaSharing(),
     probeDlpGraphRoles(),
     probePostureFunction(),
   ]);
-  results.push(cosmos, aoai, purviewMap, searchGov, databricks, dlpRoles, posture, ...securityChecks());
+  results.push(cosmos, aoai, purviewMap, searchGov, databricks, deltaSharing, dlpRoles, posture, ...securityChecks());
 
   // Augment specific findings whose fix needs more than (or wasn't given) the
   // generic env-var recipe — RBAC/Graph grants, and the security env-checks.

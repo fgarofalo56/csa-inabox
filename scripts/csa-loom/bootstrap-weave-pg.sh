@@ -45,7 +45,7 @@ WEAVE_PG_DB="${WEAVE_PG_DB:-loom-weave}"
 WEAVE_GRAPH="${WEAVE_GRAPH:-loom_ontology}"
 CONSOLE_UAMI_NAME="${CONSOLE_UAMI_NAME:-loom-console}"
 PG_HOST_SUFFIX="${PG_HOST_SUFFIX:-postgres.database.azure.com}"
-PG_AAD_RESOURCE="${PG_AAD_RESOURCE:-https://ossrdbms-aad.database.azure.com}"
+PG_AAD_RESOURCE="${PG_AAD_RESOURCE:-https://ossrdbms-aad.database.windows.net}"  # .azure.com returns AADSTS500011 in some tenants — use the documented OSS-RDBMS resource
 
 # Validate identifiers (defence-in-depth — these flow into SQL below).
 if ! [[ "$WEAVE_GRAPH" =~ ^[A-Za-z_][A-Za-z0-9_]{0,62}$ ]]; then

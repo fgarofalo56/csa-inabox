@@ -55,12 +55,12 @@ type SortCol = VarSortCol;
 type SortDir = VarSortDir;
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 8 },
-  titleRow: { display: 'flex', alignItems: 'center', gap: 8 },
-  toolbar: { display: 'flex', alignItems: 'center', gap: 8 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS },
+  titleRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   spacer: { flex: 1 },
   headerCell: { cursor: 'pointer', userSelect: 'none' },
-  headerInner: { display: 'flex', alignItems: 'center', gap: 4 },
+  headerInner: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   nameCell: { fontFamily: 'Consolas, monospace', fontWeight: tokens.fontWeightSemibold },
   typeCell: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground2 },
   valueCell: {
@@ -69,7 +69,7 @@ const useStyles = makeStyles({
     whiteSpace: 'nowrap',
     overflow: 'hidden',
     textOverflow: 'ellipsis',
-    maxWidth: 220,
+    maxWidth: '220px',
     cursor: 'default',
   },
 });

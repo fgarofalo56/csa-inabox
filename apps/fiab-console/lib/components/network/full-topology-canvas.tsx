@@ -23,19 +23,27 @@
  * a node → Fluent OverlayDrawer with that resource's live ARM detail.
  */
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   MarkerType, useReactFlow, useNodesInitialized, type Node, type Edge,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
   Spinner, MessageBar, MessageBarBody, MessageBarTitle,
   OverlayDrawer, DrawerHeader, DrawerHeaderTitle, DrawerBody, Button,
   Badge, Body1, Body1Strong, Caption1, Subtitle2, Divider,
 } from '@fluentui/react-components';
-import { Dismiss24Regular } from '@fluentui/react-icons';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
+import {
+  Dismiss24Regular,
+  VirtualNetwork20Regular, Subtract20Regular, PlugConnected20Regular,
+  Shield20Regular, Fire20Regular, GlobeShield20Regular, Box20Regular,
+  Router20Regular, ArrowRouting20Regular, Cube20Regular,
+} from '@fluentui/react-icons';
+import type { FluentIcon } from '@fluentui/react-icons';
+import { accentTint, accentGradient } from '@/lib/components/canvas/canvas-node-kit';
 import type {
   TopoNode, TopoEdge, TopoNodeKind, TopologyGraph,
 } from '@/lib/azure/network-topology-graph';
@@ -46,29 +54,36 @@ interface ApiResp extends Partial<TopologyGraph> {
   gate?: { reason?: string; remediation?: string };
 }
 
-/** Per-kind visual style: container styling differs from leaf chips. */
-const KIND_STYLE: Record<TopoNodeKind, { bg: string; border: string; icon: string; label: string }> = {
-  vnet:           { bg: '#F5F5F5', border: tokens.colorBrandBackground, icon: '🌐', label: 'Virtual network' },
-  subnet:         { bg: '#FAFAFA', border: tokens.colorNeutralStroke2, icon: '▦', label: 'Subnet' },
-  pe:             { bg: '#EFF6FC', border: '#0F6CBD', icon: '🔌', label: 'Private endpoint' },
-  nsg:            { bg: '#FFF7ED', border: '#B45309', icon: '🛡️', label: 'Network security group' },
-  firewall:       { bg: '#FEF2F2', border: '#DC2626', icon: '🔥', label: 'Azure Firewall' },
-  privatednszone: { bg: '#F0F9FF', border: tokens.colorBrandBackground2, icon: '🧭', label: 'Private DNS zone' },
-  bastion:        { bg: '#F0FDF4', border: '#16A34A', icon: '🧱', label: 'Bastion' },
-  managedenv:     { bg: '#F0E8FF', border: '#7C3AED', icon: '📦', label: 'Container Apps env' },
-  appgateway:     { bg: '#FEF3E2', border: '#D97706', icon: '🚪', label: 'Application Gateway' },
-  loadbalancer:   { bg: '#ECFEFF', border: '#0891B2', icon: '⚖️', label: 'Load Balancer' },
+/**
+ * Per-kind visual style: a theme-aware accent CSS var (--loom-accent-*, defined
+ * light + dark in app/globals.css) + a Fluent icon component + label. Tints and
+ * gradients are derived from the accent via the kit's accentTint/accentGradient
+ * helpers at render time — never a raw hex.
+ */
+const KIND_STYLE: Record<TopoNodeKind, { accent: string; Icon: FluentIcon; label: string }> = {
+  vnet:           { accent: 'var(--loom-accent-blue)',    Icon: VirtualNetwork20Regular, label: 'Virtual network' },
+  subnet:         { accent: 'var(--loom-accent-teal)',    Icon: Subtract20Regular,       label: 'Subnet' },
+  pe:             { accent: 'var(--loom-accent-azure)',   Icon: PlugConnected20Regular,  label: 'Private endpoint' },
+  nsg:            { accent: 'var(--loom-accent-amber)',   Icon: Shield20Regular,         label: 'Network security group' },
+  firewall:       { accent: 'var(--loom-accent-red)',     Icon: Fire20Regular,           label: 'Azure Firewall' },
+  privatednszone: { accent: 'var(--loom-accent-cyan)',    Icon: GlobeShield20Regular,    label: 'Private DNS zone' },
+  bastion:        { accent: 'var(--loom-accent-green)',   Icon: GlobeShield20Regular,    label: 'Bastion' },
+  managedenv:     { accent: 'var(--loom-accent-violet)',  Icon: Box20Regular,            label: 'Container Apps env' },
+  appgateway:     { accent: 'var(--loom-accent-orange)',  Icon: Router20Regular,         label: 'Application Gateway' },
+  loadbalancer:   { accent: 'var(--loom-accent-emerald)', Icon: ArrowRouting20Regular,   label: 'Load Balancer' },
 };
 
 const useStyles = makeStyles({
   shell: {
-    // Definite height — NOT `height: 100%`. This canvas renders inside an
-    // auto-height card (network-pane), so a percentage height resolves against
-    // an indefinite parent and collapses to ~0; ReactFlow then measures the
-    // container as 0×0 at mount and `fitView` zooms the (large, multi-sub)
-    // estate to nothing → blank canvas even though the data loaded. A definite
-    // height makes the container real on first paint so the map renders.
-    position: 'relative', width: '100%', height: '640px', minHeight: '560px',
+    // Fills the <ResizableCanvasRegion> wrapper, which supplies the DEFINITE
+    // height ReactFlow needs to measure its container on first paint. A bare
+    // `height: 100%` against the auto-height network-pane card would resolve
+    // against an indefinite parent and collapse to ~0; ReactFlow would then
+    // measure the container as 0×0 at mount and `fitView` would zoom the
+    // (large, multi-sub) estate to nothing → blank canvas. The wrapper's body
+    // is height-bounded (user-resizable, persisted), so 100% here is definite
+    // and the map renders correctly while the region stays drag-resizable.
+    position: 'relative', width: '100%', height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge, overflow: 'hidden',
@@ -86,7 +101,10 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center', gap: '6px',
     fontSize: '11px', color: tokens.colorNeutralForeground2, whiteSpace: 'nowrap',
   },
-  legendSwatch: { width: '12px', height: '12px', borderRadius: '3px', flexShrink: 0 },
+  legendSwatch: {
+    width: '16px', height: '16px', borderRadius: tokens.borderRadiusSmall, flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+  },
   empty: {
     position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
     alignItems: 'center', justifyContent: 'center', gap: '8px',
@@ -99,8 +117,8 @@ function edgeStyle(kind: TopoEdge['kind']): { stroke: string; dash?: string; ani
   switch (kind) {
     case 'subnet':    return { stroke: tokens.colorNeutralStroke2, dash: '3,3', animated: false };
     case 'peering':   return { stroke: tokens.colorBrandBackground, animated: true };
-    case 'pe-target': return { stroke: '#0F6CBD', animated: false };
-    case 'nsg':       return { stroke: '#B45309', animated: false };
+    case 'pe-target': return { stroke: KIND_STYLE.pe.accent, animated: false };
+    case 'nsg':       return { stroke: KIND_STYLE.nsg.accent, animated: false };
     case 'attach':    return { stroke: tokens.colorNeutralStroke1, animated: false };
     default:          return { stroke: tokens.colorNeutralStroke2, animated: false };
   }
@@ -177,15 +195,29 @@ function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[
     rfNodes.push({
       id: v.id, type: 'default', position: { x: vnetX, y: 0 },
       style: {
-        width: vnetW, height: vnetH, padding: 10, borderRadius: 8,
-        backgroundColor: st.bg, border: `2px solid ${st.border}`,
+        width: vnetW, height: vnetH,
+        padding: tokens.spacingHorizontalS, borderRadius: tokens.borderRadiusLarge,
+        background: accentTint(st.accent, 5), border: `1.5px solid ${accentTint(st.accent, 40)}`,
+        boxShadow: tokens.shadow4,
       },
       data: {
         topo: v,
         label: (
           <div>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>{st.icon} {v.name}</div>
-            <div style={{ fontSize: 11, color: tokens.colorNeutralForeground3 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 }}>
+              <span
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 22, height: 22, borderRadius: tokens.borderRadiusMedium,
+                  background: accentTint(st.accent, 14), color: st.accent, flexShrink: 0,
+                }}
+                aria-hidden="true"
+              >
+                <st.Icon style={{ width: 14, height: 14 }} />
+              </span>
+              {v.name}
+            </div>
+            <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
               {(v.meta?.addressPrefixes as string[] | undefined)?.join(', ') || '(no prefix)'}
             </div>
           </div>
@@ -203,24 +235,37 @@ function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[
         id: sn.id, type: 'default', parentId: v.id, extent: 'parent' as const,
         position: { x: chipX, y: sy },
         style: {
-          width: chipW, height: SUBNET_H - 8, padding: 6, borderRadius: 4,
-          backgroundColor: sst.bg, border: `1px dashed ${sst.border}`, fontSize: 12,
+          width: chipW, height: SUBNET_H - 8,
+          padding: tokens.spacingHorizontalXS, borderRadius: tokens.borderRadiusMedium,
+          background: accentTint(sst.accent, 4), border: `1px dashed ${accentTint(sst.accent, 40)}`,
+          fontSize: tokens.fontSizeBase200,
         },
         data: {
           topo: sn,
           label: (
-            <div style={{ lineHeight: 1.3 }}>
-              <span style={{ fontWeight: 600, fontSize: 12 }}>{sn.name}</span>{' '}
-              <span style={{ fontSize: 11, color: tokens.colorNeutralForeground3 }}>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, lineHeight: 1.3, flexWrap: 'wrap' }}>
+              <span style={{ display: 'inline-flex', alignItems: 'center', color: sst.accent }} aria-hidden="true">
+                <sst.Icon style={{ width: 12, height: 12 }} />
+              </span>
+              <span style={{ fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase200 }}>{sn.name}</span>
+              <span style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
                 {sn.meta?.addressPrefix as string}
               </span>
               {Number(sn.meta?.privateEndpointCount || 0) > 0 && (
-                <span style={{ marginLeft: 4, fontSize: 10, background: tokens.colorBrandBackground, color: '#FFF', padding: '1px 4px', borderRadius: 3 }}>
+                <Badge
+                  appearance="tint" size="small"
+                  style={{ backgroundColor: accentTint(KIND_STYLE.pe.accent, 16), color: KIND_STYLE.pe.accent }}
+                >
                   {sn.meta?.privateEndpointCount as number} PE
-                </span>
+                </Badge>
               )}
               {sn.meta?.nsg && (
-                <span style={{ marginLeft: 4, fontSize: 10, background: '#B45309', color: '#FFF', padding: '1px 4px', borderRadius: 3 }}>NSG</span>
+                <Badge
+                  appearance="tint" size="small"
+                  style={{ backgroundColor: accentTint(KIND_STYLE.nsg.accent, 16), color: KIND_STYLE.nsg.accent }}
+                >
+                  NSG
+                </Badge>
               )}
             </div>
           ),
@@ -275,28 +320,41 @@ function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[
     let ly = subnetId === '__floating__' ? leafRowY : (subnetAbsY.get(subnetId) ?? leafRowY);
     leaves.forEach((leaf) => {
       const st = KIND_STYLE[leaf.kind];
+      const LeafIcon = st?.Icon ?? Cube20Regular;
+      const leafAccent = st?.accent ?? 'var(--loom-accent-blue)';
       rfNodes.push({
         id: leaf.id, type: 'default', position: { x: colX, y: ly },
         style: {
           width: LEAF_W,
           height: LEAF_H,   // FIX 4: explicit height so ReactFlow measures the node
-          padding: '8px 10px', borderRadius: 4,
-          textAlign: 'center', backgroundColor: st.bg, border: `2px solid ${st.border}`,
+          padding: tokens.spacingHorizontalS, borderRadius: tokens.borderRadiusMedium,
+          textAlign: 'center', background: accentTint(leafAccent, 6),
+          border: `2px solid ${leafAccent}`,
           boxSizing: 'border-box' as const,
+          boxShadow: tokens.shadow4,
         },
         data: {
           topo: leaf,
           label: (
-            <div style={{ lineHeight: 1.35 }} title={leaf.name}>
-              <div style={{ fontSize: 16 }}>{st.icon}</div>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalXXS, lineHeight: 1.35 }} title={leaf.name}>
+              <span
+                style={{
+                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+                  width: 26, height: 26, borderRadius: tokens.borderRadiusMedium,
+                  background: accentTint(leafAccent, 14), color: leafAccent,
+                }}
+                aria-hidden="true"
+              >
+                <LeafIcon style={{ width: 16, height: 16 }} />
+              </span>
               {/* FIX 4: label font raised to 12px */}
-              <div style={{ fontSize: 12, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <div style={{ fontSize: tokens.fontSizeBase200, fontWeight: tokens.fontWeightSemibold, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {leaf.name}
               </div>
               {leaf.kind === 'pe' && leaf.meta?.target && (
-                // FIX 4: PE target at 11px with ellipsis + title tooltip
+                // FIX 4: PE target with ellipsis + title tooltip
                 <div
-                  style={{ fontSize: 11, color: tokens.colorNeutralForeground3, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                  style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
                   title={leaf.meta.target as string}
                 >
                   → {leaf.meta.target as string}
@@ -327,14 +385,21 @@ function layout(graph: { nodes: TopoNode[]; edges: TopoEdge[] }): { nodes: Node[
       position: { x: col * (DNS_ZONE_W + LEAF_GAP), y: zoneY + row * (DNS_ZONE_H + 12) },
       style: {
         width: DNS_ZONE_W, height: DNS_ZONE_H,
-        padding: '6px 10px', borderRadius: 4, boxSizing: 'border-box' as const,
-        backgroundColor: st.bg, border: `1px solid ${st.border}`,
+        padding: tokens.spacingHorizontalS, borderRadius: tokens.borderRadiusMedium,
+        boxSizing: 'border-box' as const,
+        background: accentTint(st.accent, 5), border: `1px solid ${accentTint(st.accent, 40)}`,
+        boxShadow: tokens.shadow4,
       },
       data: {
         topo: z,
         label: (
-          <div style={{ fontSize: 12, fontWeight: 600, color: tokens.colorBrandForeground1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={z.name}>
-            {st.icon} {z.name.replace('privatelink.', '')}
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200, fontWeight: tokens.fontWeightSemibold, color: st.accent, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100%' }} title={z.name}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', flexShrink: 0 }} aria-hidden="true">
+              <st.Icon style={{ width: 14, height: 14 }} />
+            </span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {z.name.replace('privatelink.', '')}
+            </span>
           </div>
         ),
       },
@@ -425,21 +490,34 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
 
   if (nodes.length === 0) {
     return (
-      <div className={styles.shell}>
-        <div className={styles.empty}>
-          <Subtitle2>No network resources to map</Subtitle2>
-          <Body1 style={{ color: tokens.colorNeutralForeground3, maxWidth: 380 }}>
-            Azure Resource Graph returned no virtual networks, private endpoints, firewalls, or other
-            network resources for the readable subscription(s). Once the network bicep module deploys the
-            hub/spoke vNets and their endpoints, the live topology renders here.
-          </Body1>
+      <ResizableCanvasRegion
+        storageKey="full-network-topology"
+        defaultPx={640}
+        minPx={400}
+        ariaLabel="Resize topology canvas height"
+      >
+        <div className={styles.shell}>
+          <div className={styles.empty}>
+            <Subtitle2>No network resources to map</Subtitle2>
+            <Body1 style={{ color: tokens.colorNeutralForeground3, maxWidth: 380 }}>
+              Azure Resource Graph returned no virtual networks, private endpoints, firewalls, or other
+              network resources for the readable subscription(s). Once the network bicep module deploys the
+              hub/spoke vNets and their endpoints, the live topology renders here.
+            </Body1>
+          </div>
         </div>
-      </div>
+      </ResizableCanvasRegion>
     );
   }
 
   return (
-    <div className={styles.shell}>
+    <ResizableCanvasRegion
+      storageKey="full-network-topology"
+      defaultPx={640}
+      minPx={400}
+      ariaLabel="Resize topology canvas height"
+    >
+      <div className={styles.shell}>
       <ReactFlowProvider>
         <ReactFlow
           nodes={nodes}
@@ -456,19 +534,28 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
           <Controls showInteractive={false} />
           <Panel position="top-left">
             <div className={styles.legend} aria-label="Topology legend">
-              {NODE_LEGEND.map((k) => (
-                <span key={k} className={styles.legendItem}>
-                  <span className={styles.legendSwatch} style={{ backgroundColor: KIND_STYLE[k].bg, border: `2px solid ${KIND_STYLE[k].border}` }} />
-                  {KIND_STYLE[k].label}
-                </span>
-              ))}
+              {NODE_LEGEND.map((k) => {
+                const { accent, Icon, label } = KIND_STYLE[k];
+                return (
+                  <span key={k} className={styles.legendItem}>
+                    <span
+                      className={styles.legendSwatch}
+                      style={{ background: accentTint(accent, 16), border: `2px solid ${accent}`, color: accent }}
+                      aria-hidden="true"
+                    >
+                      <Icon style={{ width: 12, height: 12 }} />
+                    </span>
+                    {label}
+                  </span>
+                );
+              })}
             </div>
           </Panel>
           <MiniMap
             position="bottom-right" pannable zoomable
             nodeColor={(n) => {
               const k = (n.data as { topo?: TopoNode } | undefined)?.topo?.kind;
-              return k ? KIND_STYLE[k].border : tokens.colorNeutralStroke2;
+              return k ? KIND_STYLE[k].accent : tokens.colorNeutralStroke2;
             }}
             style={{ backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}` }}
           />
@@ -485,7 +572,8 @@ function GraphInner({ graph }: { graph: { nodes: TopoNode[]; edges: TopoEdge[] }
           {selected ? <DetailBody topo={selected} /> : <Body1>Select a node.</Body1>}
         </DrawerBody>
       </OverlayDrawer>
-    </div>
+      </div>
+    </ResizableCanvasRegion>
   );
 }
 

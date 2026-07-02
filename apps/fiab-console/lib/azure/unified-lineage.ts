@@ -201,6 +201,7 @@ const SOURCE_RANK: Record<LineageSource, number> = {
   'unity-catalog': 1,
   weave: 2,
   onelake: 3,
+  loom: 4,
 };
 
 /**

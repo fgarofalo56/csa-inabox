@@ -28,20 +28,20 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '16px' },
-  header: { display: 'flex', alignItems: 'center', gap: '8px' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   card: {
-    display: 'flex', flexDirection: 'column', gap: '10px',
-    padding: '16px', borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
   },
-  statusRow: { display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' },
-  kv: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: '16px', rowGap: '6px', alignItems: 'center' },
+  statusRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', minWidth: 0 },
+  kv: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalXS, alignItems: 'center' },
   label: { color: tokens.colorNeutralForeground3 },
-  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' },
-  toolbar: { display: 'flex', gap: '8px', flexWrap: 'wrap' },
-  dialogBody: { display: 'flex', flexDirection: 'column', gap: '14px', minWidth: '460px' },
+  mono: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, wordBreak: 'break-all', overflowWrap: 'anywhere', minWidth: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  dialogBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
   hint: { color: tokens.colorNeutralForeground3 },
 });
 
@@ -364,7 +364,7 @@ function BindWizard({
                 >
                   {keys.map((k) => (
                     <Option key={k.name} value={k.name} disabled={!k.enabled}>
-                      {k.name}{k.enabled ? '' : ' (disabled)'}
+                      {`${k.name}${k.enabled ? '' : ' (disabled)'}`}
                     </Option>
                   ))}
                 </Dropdown>
@@ -381,7 +381,7 @@ function BindWizard({
                   <Option value="__latest__">Latest (auto-rotate)</Option>
                   {versions.map((v) => (
                     <Option key={v.version} value={v.version} disabled={!v.enabled}>
-                      {v.version.slice(0, 16)}…{v.enabled ? '' : ' (disabled)'}
+                      {`${v.version.slice(0, 16)}…${v.enabled ? '' : ' (disabled)'}`}
                     </Option>
                   ))}
                 </Dropdown>

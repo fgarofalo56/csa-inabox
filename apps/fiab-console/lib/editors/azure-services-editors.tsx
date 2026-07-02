@@ -29,103 +29,47 @@ import { ItemEditorChrome } from './item-editor-chrome';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import {
   DS_TYPES, DS_TYPE_LABELS, FILE_DS_TYPES, TABLE_DS_TYPES, COMPRESSION_CODECS,
+  REST_DS_TYPES, COSMOS_DS_TYPES, DYNAMICS_DS_TYPES,
   containerLabelFor, locationTypeFor, buildDatasetTypeProperties, readDatasetTypeProperties,
 } from '@/lib/azure/adf-dataset-builder';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { PipelineEditorCore } from './pipeline-editor-core';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  form: { padding: 20, display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 720 },
-  row: { display: 'flex', gap: 12 },
-  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: 4 },
+const useLocalStyles = makeStyles({
+  form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '720px' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM },
+  field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   monaco: {
-    width: '100%', minHeight: 200,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', minHeight: '200px', maxWidth: '100%', boxSizing: 'border-box',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
+    resize: 'vertical', overflow: 'auto',
   },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
+  tabBar: {
+    paddingTop: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalL,
+    paddingRight: tokens.spacingHorizontalL, paddingBottom: 0,
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
   // Grouped config section — a subtle card so Location / Format / Table
   // reference read as distinct steps rather than one flat run of inputs.
   section: {
-    display: 'flex', flexDirection: 'column', gap: 10, padding: 14,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   hint: { color: tokens.colorNeutralForeground3 },
-  switchField: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', paddingBottom: 2 },
+  switchField: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', paddingBottom: tokens.spacingVerticalXXS },
 });
 
-// ============================================================
-// Synapse — Dedicated SQL pool
-// ============================================================
-const SYN_DSQL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New SQL query' }, { label: 'Run' }, { label: 'Estimate cost' }] },
-    { label: 'Scale', actions: [{ label: 'Scale up / down' }, { label: 'Pause' }, { label: 'Resume' }] },
-    { label: 'Manage', actions: [{ label: 'Permissions' }, { label: 'Workload mgmt' }, { label: 'Geo backup' }] },
-  ]},
-];
-// v3.28: replaced the previous stand-in (fake "DW400c · Online · 100 rows · 2.3 s"
-// badges + dead Run button + hard-coded T-SQL in a defaultValue textarea) with
-// an honest stub per `no-vaporware.md`. The slug `synapse-dedicated-sql-pool`
-// is actually routed by `registry.ts` to the real wired editor in
-// `synapse-sql-editors.tsx`, so this duplicate is never loaded — but keeping
-// the export here as an honest placeholder so anyone reaching it via direct
-// import sees the redirect.
-export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={SYN_DSQL_RIBBON}
-      main={
-        <div className={s.pad}>
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
-              The real Synapse Dedicated SQL pool editor is in <code>synapse-sql-editors.tsx</code> and is
-              the one the catalog actually loads. It runs T-SQL through the BFF, lists databases via ARM,
-              and renders real rows. This stub was a pre-wiring sketch and exposed fake badges + a dead Run
-              button, which violates the no-vaporware rule.
-            </MessageBarBody>
-          </MessageBar>
-        </div>
-      }
-    />
-  );
-}
-
-// ============================================================
-// Synapse — Serverless SQL pool
-// ============================================================
-const SYN_SSQL_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New SQL query' }, { label: 'Run' }, { label: 'External tables' }] },
-    { label: 'Cost', actions: [{ label: 'Bytes processed' }, { label: 'Cost cap' }] },
-  ]},
-];
-// v3.28: see comment on SynapseDedicatedSqlPoolEditor above. Same rule.
-export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={SYN_SSQL_RIBBON} main={
-      <div className={s.pad}>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
-            The real Synapse Serverless SQL pool editor is in <code>synapse-sql-editors.tsx</code> and runs
-            OPENROWSET via the BFF. The previous body showed a hard-coded query in a defaultValue textarea
-            with a fake "Estimated cost: ~$0.012" caption — both violate no-vaporware.
-          </MessageBarBody>
-        </MessageBar>
-      </div>
-    } />
-  );
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
 }
 
 // ============================================================
@@ -152,6 +96,12 @@ interface SparkBatchDTO {
   appId?: string | null;
   submitterName?: string;
 }
+
+// Synapse Spark Big Data pool node sizes (ARM enum) + the GA Spark runtime
+// versions. The live pool's current version is merged in at render so an
+// out-of-list value is never silently dropped from the dropdown.
+const SPARK_NODE_SIZES = ['Small', 'Medium', 'Large', 'XLarge', 'XXLarge'];
+const SPARK_VERSIONS = ['3.3', '3.4'];
 
 export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -183,6 +133,21 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   const [apEnabled, setApEnabled] = useState(true);
   const [apDelay, setApDelay] = useState(15);
   const [apError, setApError] = useState<string | null>(null);
+
+  // Configuration tab — editable, persisted via ARM PATCH (parity with the
+  // Azure portal pool Settings blade). Seeded from the loaded pool.
+  const [cfgNodeSize, setCfgNodeSize] = useState('Small');
+  const [cfgSparkVersion, setCfgSparkVersion] = useState('3.4');
+  const [cfgApEnabled, setCfgApEnabled] = useState(true);
+  const [cfgApDelay, setCfgApDelay] = useState('15');
+  const [cfgAsEnabled, setCfgAsEnabled] = useState(false);
+  const [cfgAsMin, setCfgAsMin] = useState('3');
+  const [cfgAsMax, setCfgAsMax] = useState('10');
+  const [cfgNodeCount, setCfgNodeCount] = useState('3');
+  const [cfgSaving, setCfgSaving] = useState(false);
+  const [cfgError, setCfgError] = useState<string | null>(null);
+  const [cfgGate, setCfgGate] = useState<string | null>(null);
+  const [cfgSaved, setCfgSaved] = useState(false);
 
   const loadPools = useCallback(async () => {
     setLoading(true); setError(null);
@@ -298,8 +263,68 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
     finally { setBusy(false); }
   }, [selected, apEnabled, apDelay, loadPool]);
 
-  const setAutoPause = useCallback(async (action: 'pause' | 'resume') => {
-    if (!selected) return;
+  // Seed the editable Configuration tab whenever a pool loads/reloads.
+  useEffect(() => {
+    if (!pool) return;
+    setCfgNodeSize(pool.properties.nodeSize || 'Small');
+    setCfgSparkVersion(pool.properties.sparkVersion || '3.4');
+    setCfgApEnabled(pool.properties.autoPause?.enabled ?? true);
+    setCfgApDelay(String(pool.properties.autoPause?.delayInMinutes ?? 15));
+    setCfgAsEnabled(pool.properties.autoScale?.enabled ?? false);
+    setCfgAsMin(String(pool.properties.autoScale?.minNodeCount ?? 3));
+    setCfgAsMax(String(pool.properties.autoScale?.maxNodeCount ?? 10));
+    setCfgNodeCount(String(pool.properties.nodeCount ?? 3));
+    setCfgError(null); setCfgGate(null); setCfgSaved(false);
+  }, [pool]);
+
+  // Spark-version dropdown options — GA set plus the pool's live value.
+  const sparkVersionOptions = useMemo(
+    () => Array.from(new Set([...SPARK_VERSIONS, ...(cfgSparkVersion ? [cfgSparkVersion] : [])])),
+    [cfgSparkVersion],
+  );
+
+  // Client-side validation mirrors the BFF so Save is disabled on bad input.
+  const cfgInvalid = useMemo(() => {    if (cfgApEnabled && (!Number.isFinite(Number(cfgApDelay)) || Number(cfgApDelay) < 5)) return 'Auto-pause delay must be ≥ 5 minutes.';
+    if (cfgAsEnabled) {
+      const min = Number(cfgAsMin), max = Number(cfgAsMax);
+      if (!Number.isFinite(min) || min < 3) return 'Autoscale min must be ≥ 3 nodes.';
+      if (!Number.isFinite(max) || max < min) return 'Autoscale max must be ≥ the min.';
+    } else if (!Number.isFinite(Number(cfgNodeCount)) || Number(cfgNodeCount) < 3) {
+      return 'Node count must be ≥ 3.';
+    }
+    return null;
+  }, [cfgApEnabled, cfgApDelay, cfgAsEnabled, cfgAsMin, cfgAsMax, cfgNodeCount]);
+
+  const saveConfig = useCallback(async () => {
+    if (!selected || cfgInvalid) return;
+    setCfgSaving(true); setCfgError(null); setCfgGate(null); setCfgSaved(false);
+    try {
+      const payload: Record<string, unknown> = {
+        nodeSize: cfgNodeSize,
+        sparkVersion: cfgSparkVersion,
+        autoPause: { enabled: cfgApEnabled, delayInMinutes: cfgApEnabled ? Number(cfgApDelay) : undefined },
+        autoScale: cfgAsEnabled
+          ? { enabled: true, minNodeCount: Number(cfgAsMin), maxNodeCount: Number(cfgAsMax) }
+          : { enabled: false },
+        nodeCount: cfgAsEnabled ? undefined : Number(cfgNodeCount),
+      };
+      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/config`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (r.status === 403 || j?.forbidden) {
+        setCfgGate(j?.error || 'The Console identity is not authorized to update this pool.');
+        return;
+      }
+      if (!j?.ok) throw new Error(j?.error || `save failed (${r.status})`);
+      setCfgSaved(true);
+      await loadPool(selected);
+    } catch (e: any) { setCfgError(e?.message || String(e)); }
+    finally { setCfgSaving(false); }
+  }, [selected, cfgInvalid, cfgNodeSize, cfgSparkVersion, cfgApEnabled, cfgApDelay, cfgAsEnabled, cfgAsMin, cfgAsMax, cfgNodeCount, loadPool]);
+
+  const setAutoPause = useCallback(async (action: 'pause' | 'resume') => {    if (!selected) return;
     setBusy(true); setError(null);
     try {
       const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/state`, {
@@ -336,7 +361,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="Spark pools" defaultOpenItems={['pools']}>
             <TreeItem itemType="branch" value="pools">
               <TreeItemLayout iconBefore={<Server20Regular />}>Pools ({pools.length})</TreeItemLayout>
@@ -355,7 +380,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
       }
       main={
         <div className={s.pad}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge appearance="filled" color={state === 'Succeeded' ? 'success' : state === 'Provisioning' ? 'warning' : 'informative'}>{state}</Badge>
             <Badge appearance="outline">{pool?.properties.nodeSize || '—'}</Badge>
             <Badge appearance="outline">{pool?.properties.sparkVersion || 'Spark —'}</Badge>
@@ -400,17 +425,67 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
             <div className={s.form}>
               <div className={s.row}>
                 <div className={s.field}><Caption1>Pool name</Caption1><Input value={pool?.name || ''} readOnly /></div>
-                <div className={s.field}><Caption1>Node size</Caption1><Input value={pool?.properties.nodeSize || ''} readOnly /></div>
+                <div className={s.field}>
+                  <Caption1>Node size</Caption1>
+                  <Dropdown value={cfgNodeSize} selectedOptions={[cfgNodeSize]} onOptionSelect={(_, d) => setCfgNodeSize(d.optionValue || cfgNodeSize)}>
+                    {SPARK_NODE_SIZES.map((n) => <Option key={n} value={n}>{n}</Option>)}
+                  </Dropdown>
+                </div>
               </div>
               <div className={s.row}>
-                <div className={s.field}><Caption1>Spark version</Caption1><Input value={pool?.properties.sparkVersion || ''} readOnly /></div>
-                <div className={s.field}><Caption1>Auto-pause (min)</Caption1><Input value={String(pool?.properties.autoPause?.delayInMinutes ?? '—')} readOnly /></div>
+                <div className={s.field}>
+                  <Caption1>Spark version</Caption1>
+                  <Dropdown value={cfgSparkVersion} selectedOptions={[cfgSparkVersion]} onOptionSelect={(_, d) => setCfgSparkVersion(d.optionValue || cfgSparkVersion)}>
+                    {sparkVersionOptions.map((v) => <Option key={v} value={v}>{v}</Option>)}
+                  </Dropdown>
+                </div>
+                <div className={s.switchField}>
+                  <Switch label="Auto-pause on idle" checked={cfgApEnabled} onChange={(_, d) => setCfgApEnabled(!!d.checked)} />
+                </div>
               </div>
+              {cfgApEnabled && (
+                <div className={s.row}>
+                  <div className={s.field}><Caption1>Auto-pause delay (minutes, ≥ 5)</Caption1><Input type="number" min={5} value={cfgApDelay} onChange={(_, d) => setCfgApDelay(d.value)} /></div>
+                  <div className={s.field} />
+                </div>
+              )}
               <div className={s.row}>
-                <div className={s.field}><Caption1>Autoscale min</Caption1><Input value={String(pool?.properties.autoScale?.minNodeCount ?? '—')} readOnly /></div>
-                <div className={s.field}><Caption1>Autoscale max</Caption1><Input value={String(pool?.properties.autoScale?.maxNodeCount ?? '—')} readOnly /></div>
+                <div className={s.switchField}>
+                  <Switch label="Autoscale" checked={cfgAsEnabled} onChange={(_, d) => setCfgAsEnabled(!!d.checked)} />
+                </div>
+                <div className={s.field} />
               </div>
-              <Caption1>Edit via Synapse Studio for now; v2.2 wires inline PUT.</Caption1>
+              {cfgAsEnabled ? (
+                <div className={s.row}>
+                  <div className={s.field}><Caption1>Autoscale min (≥ 3 nodes)</Caption1><Input type="number" min={3} value={cfgAsMin} onChange={(_, d) => setCfgAsMin(d.value)} /></div>
+                  <div className={s.field}><Caption1>Autoscale max</Caption1><Input type="number" min={3} value={cfgAsMax} onChange={(_, d) => setCfgAsMax(d.value)} /></div>
+                </div>
+              ) : (
+                <div className={s.row}>
+                  <div className={s.field}><Caption1>Node count (fixed, ≥ 3)</Caption1><Input type="number" min={3} value={cfgNodeCount} onChange={(_, d) => setCfgNodeCount(d.value)} /></div>
+                  <div className={s.field} />
+                </div>
+              )}
+              {cfgInvalid && <MessageBar intent="warning"><MessageBarBody>{cfgInvalid}</MessageBarBody></MessageBar>}
+              {cfgGate && (
+                <MessageBar intent="warning">
+                  <MessageBarBody>
+                    <MessageBarTitle>Not authorized to update this pool</MessageBarTitle>
+                    The Console managed identity needs the <strong>Contributor</strong> role on the Synapse workspace to change pool settings.
+                    Grant it in the portal (Synapse workspace → Access control (IAM) → Add role assignment → <strong>Contributor</strong> → the Console UAMI), then retry.
+                    ARM said: <code>{cfgGate}</code>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+              {cfgError && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{cfgError}</MessageBarBody></MessageBar>}
+              {cfgSaved && <MessageBar intent="success"><MessageBarBody>Pool configuration saved — Synapse is applying the change.</MessageBarBody></MessageBar>}
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
+                <Button appearance="primary" icon={<Save20Regular />} disabled={cfgSaving || !selected || !!cfgInvalid} onClick={saveConfig}>
+                  {cfgSaving ? 'Saving…' : 'Save configuration'}
+                </Button>
+                <Button appearance="subtle" disabled={cfgSaving || !pool} onClick={() => { if (selected) loadPool(selected); }}>Discard changes</Button>
+                <Caption1 className={s.hint}>Persisted to <code>Microsoft.Synapse/workspaces/…/bigDataPools/{pool?.name || '…'}</code> via ARM PATCH.</Caption1>
+              </div>
             </div>
           )}
           {tab === 'submit' && (
@@ -559,129 +634,6 @@ export function SynapsePipelineEditor({ item, id }: { item: FabricItemType; id: 
 }
 
 // ============================================================
-// Databricks — Notebook
-// ============================================================
-const DBX_NB_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Run', actions: [{ label: 'Run all' }, { label: 'Run cell' }, { label: 'Stop' }] },
-    { label: 'Cluster', actions: [{ label: 'Attach' }, { label: 'Detach' }, { label: 'Restart' }] },
-    { label: 'Workspace', actions: [{ label: 'Schedule' }, { label: 'Permissions' }, { label: 'Revision history' }] },
-  ]},
-];
-// v3.28: legacy stub. Real Databricks Notebook editor is in
-// `databricks-editors.tsx` (wired to /api/items/databricks-notebook/* via
-// the Databricks Workspace + Jobs REST API). The previous body faked "Attached:
-// ml-jobs-cluster (i3.xlarge, 4 workers)" badges + dead Run button + textareas
-// with hard-coded code — no-vaporware violation.
-export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={DBX_NB_RIBBON} main={
-      <div className={s.pad}>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
-            The catalog routes the <code>databricks-notebook</code> slug to the real implementation in
-            <code> databricks-editors.tsx</code>. That editor lists notebooks via the Databricks Workspace API,
-            opens cells in Monaco, and runs jobs through the Jobs REST API.
-          </MessageBarBody>
-        </MessageBar>
-      </div>
-    } />
-  );
-}
-
-// ============================================================
-// Databricks — Job
-// ============================================================
-const DBX_JOB_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Tasks', actions: [{ label: 'Add task' }, { label: 'Reorder' }] },
-    { label: 'Run', actions: [{ label: 'Run now' }, { label: 'Schedule' }, { label: 'Retries' }] },
-  ]},
-];
-// v3.28: legacy stub — see DatabricksNotebookEditor comment. The previous body
-// rendered five fake job rows (ingest_raw / silver_enrich / etc.) and a fake
-// schedule/status line. The wired Databricks Job editor in
-// `databricks-editors.tsx` lists real jobs and run history.
-export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={DBX_JOB_RIBBON} main={
-      <div className={s.pad}>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
-            The <code>databricks-job</code> slug is routed by the catalog to the real editor in
-            <code> databricks-editors.tsx</code> which queries the Databricks Jobs REST API.
-          </MessageBarBody>
-        </MessageBar>
-      </div>
-    } />
-  );
-}
-
-// ============================================================
-// Databricks — Cluster
-// ============================================================
-const DBX_CLUSTER_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'State', actions: [{ label: 'Start' }, { label: 'Restart' }, { label: 'Terminate' }] },
-    { label: 'Configure', actions: [{ label: 'Init scripts' }, { label: 'Libraries' }, { label: 'Spark config' }] },
-  ]},
-];
-// v3.28: legacy stub — see DatabricksNotebookEditor comment. The previous body
-// pretended a cluster was Running on "14.3 LTS (Photon)" with hard-coded
-// defaultValue Inputs (Standard_DS3_v2, 2-8 autoscale, etc.). No backend was
-// wired. The wired editor is in `databricks-editors.tsx`.
-export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={DBX_CLUSTER_RIBBON} main={
-      <div className={s.pad}>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
-            The <code>databricks-cluster</code> slug routes to the real editor in
-            <code> databricks-editors.tsx</code> which queries the Databricks Clusters REST API and supports
-            Start / Restart / Terminate against real cluster IDs.
-          </MessageBarBody>
-        </MessageBar>
-      </div>
-    } />
-  );
-}
-
-// ============================================================
-// Databricks — SQL Warehouse
-// ============================================================
-const DBX_SQLW_RIBBON: RibbonTab[] = [
-  { id: 'home', label: 'Home', groups: [
-    { label: 'Query', actions: [{ label: 'New SQL query' }, { label: 'Run' }, { label: 'Query history' }] },
-    { label: 'Warehouse', actions: [{ label: 'Start' }, { label: 'Stop' }, { label: 'Scale' }] },
-  ]},
-];
-// v3.28: legacy stub — see DatabricksNotebookEditor comment. Previous body had
-// hard-coded "Serverless · Medium", fake Running badge, and a defaultValue
-// textarea — all dead. Real editor in `databricks-editors.tsx`.
-export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemType; id: string }) {
-  const s = useStyles();
-  return (
-    <ItemEditorChrome item={item} id={id} ribbon={DBX_SQLW_RIBBON} main={
-      <div className={s.pad}>
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>This is the legacy stub — use the wired editor</MessageBarTitle>
-            The <code>databricks-sql-warehouse</code> slug routes to the real editor in
-            <code> databricks-editors.tsx</code> which submits real SQL through the Databricks SQL Statements API.
-          </MessageBarBody>
-        </MessageBar>
-      </div>
-    } />
-  );
-}
-
-// ============================================================
 // Azure Data Factory — Pipeline (real-REST against adf-loom-*)
 // ============================================================
 // (Ribbon defined inside the component via useMemo.)
@@ -755,6 +707,12 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   const [encodingName, setEncodingName] = useState<string>('');
   const [tableSchema, setTableSchema] = useState<string>('');
   const [tableName, setTableName] = useState<string>('');
+  // REST / Cosmos / Dynamics guided fields (no raw typeProperties JSON).
+  const [relativeUrl, setRelativeUrl] = useState<string>('');
+  const [requestMethod, setRequestMethod] = useState<string>('GET');
+  const [paginationRule, setPaginationRule] = useState<string>('');
+  const [collectionName, setCollectionName] = useState<string>('');
+  const [entityName, setEntityName] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -803,6 +761,11 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
       setEncodingName(g.encodingName || '');
       setTableSchema(g.schema || '');
       setTableName(g.table || '');
+      setRelativeUrl(g.relativeUrl || '');
+      setRequestMethod(g.requestMethod || 'GET');
+      setPaginationRule(g.paginationRule || '');
+      setCollectionName(g.collectionName || '');
+      setEntityName(g.entityName || '');
     } catch (e: any) { setError(e?.message || String(e)); }
   }, []);
 
@@ -834,6 +797,11 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
         encodingName,
         schema: tableSchema,
         table: tableName,
+        relativeUrl,
+        requestMethod,
+        paginationRule,
+        collectionName,
+        entityName,
       });
       const body: AdfDatasetDTO = {
         name: selected,
@@ -857,7 +825,8 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
     finally { setBusy(false); }
   }, [selected, linkedService, linkedServices, type, container, folder, file, compression,
       columnDelimiter, rowDelimiter, firstRowAsHeader, quoteChar, escapeChar, encodingName,
-      tableSchema, tableName, ds, loadDataset]);
+      tableSchema, tableName, relativeUrl, requestMethod, paginationRule, collectionName, entityName,
+      ds, loadDataset]);
 
   // v3.28 Phase 4.5: Ctrl+S triggers Save. Mirrors ADF Studio behavior.
   useEffect(() => {
@@ -939,7 +908,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="ADF datasets" defaultOpenItems={['d']}>
             <TreeItem itemType="branch" value="d">
               <TreeItemLayout iconBefore={<Database20Regular />}>Datasets ({datasets.length})</TreeItemLayout>
@@ -952,12 +921,12 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
               </Tree>
             </TreeItem>
           </Tree>
-          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: 8 }}>+ New dataset</Button>
+          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: tokens.spacingVerticalS }}>+ New dataset</Button>
         </div>
       }
       main={
         <div className={s.form}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge appearance="filled" color="brand">{selected || '(no dataset)'}</Badge>
             <Badge appearance="outline">{type}</Badge>
             <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save} style={{ marginLeft: 'auto' }}>Save</Button>
@@ -1063,7 +1032,53 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
               </div>
             </div>
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+          {REST_DS_TYPES.has(type) && (
+            <div className={s.section}>
+              <Subtitle2>REST resource</Subtitle2>
+              <Caption1 className={s.hint}>Path appended to the linked service base URL — no raw JSON. Maps to dataset typeProperties.relativeUrl / requestMethod.</Caption1>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>Relative URL</Caption1>
+                  <Input value={relativeUrl} onChange={(_, d) => setRelativeUrl(d.value)} placeholder="v1/customers" />
+                </div>
+                <div className={s.field}>
+                  <Caption1>Request method</Caption1>
+                  <Dropdown value={requestMethod} selectedOptions={[requestMethod]} onOptionSelect={(_, d) => setRequestMethod(d.optionValue || 'GET')}>
+                    {['GET', 'POST'].map((m) => <Option key={m} value={m}>{m}</Option>)}
+                  </Dropdown>
+                </div>
+                <div className={s.field}>
+                  <Caption1>Pagination next-URL (optional)</Caption1>
+                  <Input value={paginationRule} onChange={(_, d) => setPaginationRule(d.value)} placeholder="$.paging.next" />
+                </div>
+              </div>
+            </div>
+          )}
+          {COSMOS_DS_TYPES.has(type) && (
+            <div className={s.section}>
+              <Subtitle2>Cosmos DB container</Subtitle2>
+              <Caption1 className={s.hint}>SQL-API container (collection) on the linked Cosmos DB account. Maps to typeProperties.collectionName.</Caption1>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>Container / collection</Caption1>
+                  <Input value={collectionName} onChange={(_, d) => setCollectionName(d.value)} placeholder="orders" />
+                </div>
+              </div>
+            </div>
+          )}
+          {DYNAMICS_DS_TYPES.has(type) && (
+            <div className={s.section}>
+              <Subtitle2>Dataverse / Dynamics entity</Subtitle2>
+              <Caption1 className={s.hint}>Logical entity (table) name on the linked Dataverse / Dynamics 365 environment. Maps to typeProperties.entityName.</Caption1>
+              <div className={s.row}>
+                <div className={s.field}>
+                  <Caption1>Entity name</Caption1>
+                  <Input value={entityName} onChange={(_, d) => setEntityName(d.value)} placeholder="account" />
+                </div>
+              </div>
+            </div>
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
             <Subtitle2>Schema ({ds?.properties.schema?.length || 0} columns)</Subtitle2>
             <Button size="small" icon={<Add20Regular />} disabled={!selected} onClick={addColumn}>Add column</Button>
             {(ds?.properties.schema?.length || 0) > 0 && (
@@ -1316,7 +1331,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
+        <div style={{ padding: tokens.spacingVerticalS }}>
           <Tree aria-label="ADF triggers" defaultOpenItems={['t']}>
             <TreeItem itemType="branch" value="t">
               <TreeItemLayout iconBefore={<Server20Regular />}>Triggers ({triggers.length})</TreeItemLayout>
@@ -1329,12 +1344,12 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
               </Tree>
             </TreeItem>
           </Tree>
-          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: 8 }}>+ New trigger</Button>
+          <Button size="small" appearance="outline" onClick={createNew} style={{ marginTop: tokens.spacingVerticalS }}>+ New trigger</Button>
         </div>
       }
       main={
         <div className={s.form}>
-          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
             <Badge appearance="filled" color="brand">{selected || '(no trigger)'}</Badge>
             <Badge appearance="filled" color={runtimeState === 'Started' ? 'success' : 'informative'}>{runtimeState}</Badge>
             <Button appearance="primary" icon={<Save20Regular />} disabled={busy || !selected} onClick={save}>Save</Button>
@@ -1371,14 +1386,14 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
               <div className={s.field}><Caption1>Time zone</Caption1><Input value={timeZone} onChange={(_, d) => setTimeZone(d.value)} /></div>
             </div>
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
             <Subtitle2>Pipeline parameters</Subtitle2>
             <Button size="small" icon={<Add20Regular />} onClick={() => setParamRows((r) => [...r, { key: '', value: '' }])}>Add parameter</Button>
           </div>
           <Caption1>Values passed to <code>{targetPipeline || 'the pipeline'}</code> each time the trigger fires. Strings or JSON literals.</Caption1>
           {paramRows.length === 0 && <Caption1>No parameters — the pipeline runs with its defaults.</Caption1>}
           {paramRows.map((row, i) => (
-            <div key={i} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
               <Input style={{ flex: 1 }} placeholder="name" value={row.key}
                 onChange={(_, d) => setParamRows((rs) => rs.map((x, j) => j === i ? { ...x, key: d.value } : x))} />
               <Input style={{ flex: 2 }} placeholder='value (e.g. "raw/2026" or 5)' value={row.value}
@@ -1418,63 +1433,145 @@ USING Outputters.Csv(outputHeader: true);`;
 // v3.27: heuristic U-SQL → PySpark translator. Handles EXTRACT/OUTPUT
 // patterns + SELECT/GROUP BY. NOT a full compiler — operator covers
 // the 80% case; the rest must be hand-edited in the resulting cell.
-function convertUsqlToPyspark(usql: string): string {
-  const lines: string[] = [
-    '# Converted from U-SQL by Loom usql-job heuristic translator.',
-    '# REVIEW BEFORE RUNNING — this covers EXTRACT/SELECT/GROUP BY/OUTPUT only.',
-    '',
-  ];
+//
+// v3.42 (no-vaporware): GROUP BY projections are now translated into a REAL
+// `.agg(F.sum(...).alias(...), …)` chain. The previous build emitted a
+// `.agg(/* TODO … */)` — a snippet that never runs. When a projected column
+// is neither a GROUP BY key nor a supported aggregate we REFUSE to emit and
+// return an `error` the editor surfaces in a MessageBar, rather than shipping
+// broken code.
+
+// PySpark equivalents for the U-SQL aggregate functions we translate.
+const USQL_AGG_FNS: Record<string, string> = { SUM: 'sum', COUNT: 'count', AVG: 'avg', MIN: 'min', MAX: 'max' };
+
+/** Split a SELECT projection on top-level commas only (ignores commas inside FUNC(...) parens). */
+function splitProjection(projection: string): string[] {
+  const parts: string[] = [];
+  let depth = 0, cur = '';
+  for (const ch of projection) {
+    if (ch === '(') { depth++; cur += ch; }
+    else if (ch === ')') { depth = Math.max(0, depth - 1); cur += ch; }
+    else if (ch === ',' && depth === 0) { parts.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  if (cur.trim()) parts.push(cur);
+  return parts.map(p => p.trim()).filter(Boolean);
+}
+
+/**
+ * Translate a U-SQL grouped SELECT into `src.groupBy(keys).agg(exprs)`.
+ * Returns `{ code }` on success or `{ error }` when a projected column is
+ * neither a group key nor a supported aggregate — the caller then refuses to
+ * emit a broken snippet.
+ */
+function translateGroupByAgg(
+  target: string, src: string, projection: string, groupCols: string[],
+): { code: string } | { error: string } {
+  const groupSet = new Set(groupCols.map(c => c.toLowerCase()));
+  const aggExprs: string[] = [];
+  for (const item of splitProjection(projection)) {
+    const fn = item.match(/^(\w+)\s*\(\s*([\s\S]*?)\s*\)\s*(?:AS\s+([\w]+))?$/i);
+    if (fn) {
+      const name = fn[1].toUpperCase();
+      const arg = fn[2].trim();
+      const py = USQL_AGG_FNS[name];
+      if (!py) {
+        return { error: `Unsupported aggregate "${fn[1]}(...)" in the SELECT projection. Loom translates SUM, COUNT, AVG, MIN and MAX only — rewrite "${item}" as one of those (or hand-author the PySpark) and convert again.` };
+      }
+      const alias = fn[3] || `${py}_${arg.replace(/[^\w]/g, '') || 'all'}`;
+      const col = arg === '*' ? '"*"' : `"${arg}"`;
+      aggExprs.push(`F.${py}(${col}).alias("${alias}")`);
+      continue;
+    }
+    // Plain projected column — legal only if it's one of the GROUP BY keys.
+    const bare = item.replace(/\s+AS\s+[\w]+$/i, '').trim();
+    if (groupSet.has(bare.toLowerCase())) continue;
+    return { error: `Column "${item}" is neither a GROUP BY key nor an aggregate. In a grouped query every projected column must be aggregated or listed in GROUP BY — fix the U-SQL and convert again.` };
+  }
+  if (!aggExprs.length) {
+    return { error: 'The grouped SELECT has no aggregate columns to translate. Add at least one SUM/COUNT/AVG/MIN/MAX(...) to the projection.' };
+  }
+  const keys = groupCols.map(c => `"${c}"`).join(', ');
+  return { code: `${target} = ${src}.groupBy(${keys}).agg(${aggExprs.join(', ')})` };
+}
+
+function convertUsqlToPyspark(usql: string): { code: string; error: string | null } {
+  const body: string[] = [];
+  let needsF = false;
   const extractMatch = usql.match(/@(\w+)\s*=\s*EXTRACT\s+([\s\S]*?)FROM\s+"([^"]+)"\s+USING\s+Extractors\.(\w+)\s*\(([^)]*)\)/i);
   if (extractMatch) {
     const [, alias, cols, path, fmt, opts] = extractMatch;
     const skip = /skipFirstNRows:\s*1/i.test(opts);
     const schema = cols.split(',').map(c => c.trim().split(/\s+/)).filter(p => p.length === 2)
       .map(([n, t]) => `('${n}', '${t.toLowerCase()}')`).join(', ');
-    lines.push(`# EXTRACT @${alias}`);
-    lines.push(`${alias} = spark.read.option("header", ${skip ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
-    lines.push(`# Original U-SQL schema: ${schema}`);
-    lines.push('');
+    body.push(`# EXTRACT @${alias}`);
+    body.push(`${alias} = spark.read.option("header", ${skip ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
+    body.push(`# Original U-SQL schema: ${schema}`);
+    body.push('');
   }
   const selectMatch = usql.match(/@(\w+)\s*=\s*SELECT\s+([\s\S]*?)\s+FROM\s+@(\w+)([\s\S]*?);/i);
   if (selectMatch) {
     const [, target, projection, src, rest] = selectMatch;
     const groupBy = rest.match(/GROUP\s+BY\s+([\w,\s]+)/i);
-    lines.push(`# SELECT into @${target}`);
+    body.push(`# SELECT into @${target}`);
     if (groupBy) {
-      lines.push(`${target} = ${src}.groupBy("${groupBy[1].trim().replace(/\s*,\s*/g, '", "')}").agg(/* TODO: hand-translate aggregates from: ${projection.trim()} */)`);
+      const groupCols = groupBy[1].trim().split(/\s*,\s*/).filter(Boolean);
+      const res = translateGroupByAgg(target, src, projection, groupCols);
+      if ('error' in res) {
+        // Refuse to emit a broken snippet — surface the reason to the editor.
+        return { code: '', error: res.error };
+      }
+      needsF = true;
+      body.push(res.code);
     } else {
-      lines.push(`${target} = ${src}.selectExpr(${projection.split(',').map(c => '"' + c.trim() + '"').join(', ')})`);
+      body.push(`${target} = ${src}.selectExpr(${projection.split(',').map(c => '"' + c.trim() + '"').join(', ')})`);
     }
-    lines.push('');
+    body.push('');
   }
   const outputMatch = usql.match(/OUTPUT\s+@(\w+)\s+TO\s+"([^"]+)"\s+USING\s+Outputters\.(\w+)\s*\(([^)]*)\)/i);
   if (outputMatch) {
     const [, src, path, fmt, opts] = outputMatch;
     const header = /outputHeader:\s*true/i.test(opts);
-    lines.push(`# OUTPUT @${src}`);
-    lines.push(`${src}.write.mode("overwrite").option("header", ${header ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
+    body.push(`# OUTPUT @${src}`);
+    body.push(`${src}.write.mode("overwrite").option("header", ${header ? 'True' : 'False'}).${fmt.toLowerCase() === 'csv' ? 'csv' : fmt.toLowerCase()}("abfss:/${path}")`);
   }
-  if (lines.length <= 3) {
-    lines.push('# Translator could not parse the input.');
-    lines.push('# Original U-SQL preserved as a comment block:');
-    usql.split(/\r?\n/).forEach(l => lines.push('# ' + l));
+  const header: string[] = [
+    '# Converted from U-SQL by Loom usql-job heuristic translator.',
+    '# REVIEW BEFORE RUNNING — this covers EXTRACT/SELECT/GROUP BY/OUTPUT only.',
+  ];
+  if (needsF) header.push('from pyspark.sql import functions as F');
+  header.push('');
+  if (!body.length) {
+    body.push('# Translator could not parse the input.');
+    body.push('# Original U-SQL preserved as a comment block:');
+    usql.split(/\r?\n/).forEach(l => body.push('# ' + l));
   }
-  return lines.join('\n');
+  return { code: [...header, ...body].join('\n'), error: null };
 }
 
 export function UsqlJobEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [usql, setUsql] = useState<string>(USQL_SAMPLE);
   const [pyspark, setPyspark] = useState<string>('');
+  const [convertError, setConvertError] = useState<string | null>(null);
+
+  // Run the translator; on an unsupported construct it returns an error and
+  // NO code — we clear the output and show the reason rather than emitting a
+  // broken snippet (no-vaporware).
+  const runConvert = useCallback(() => {
+    const res = convertUsqlToPyspark(usql);
+    setConvertError(res.error);
+    setPyspark(res.error ? '' : res.code);
+  }, [usql]);
 
   // Ribbon — Convert to PySpark wires to the inline heuristic translator.
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Migration', actions: [
-        { label: 'Convert to PySpark', onClick: () => setPyspark(convertUsqlToPyspark(usql)) },
+        { label: 'Convert to PySpark', onClick: runConvert },
       ]},
     ]},
-  ], [usql]);
+  ], [runConvert]);
 
   // v3.27: D-fix — ADLA was retired 2024-02-29. The previous editor
   // pretended to estimate AUs and submit jobs to a service that no
@@ -1493,12 +1590,20 @@ export function UsqlJobEditor({ item, id }: { item: FabricItemType; id: string }
         </MessageBar>
         <Subtitle2>U-SQL source</Subtitle2>
         <textarea className={s.monaco} spellCheck={false} value={usql} onChange={(e) => setUsql(e.target.value)} aria-label="U-SQL editor" />
-        <div style={{ display: 'flex', gap: 8 }}>
-          <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setPyspark(convertUsqlToPyspark(usql))}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
+          <Button appearance="primary" icon={<ArrowSync20Regular />} onClick={runConvert}>
             Convert to PySpark
           </Button>
           <Caption1 style={{ alignSelf: 'center' }}>Heuristic translator — covers EXTRACT / SELECT / GROUP BY / OUTPUT. Review before running.</Caption1>
         </div>
+        {convertError && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              <MessageBarTitle>Cannot fully translate this U-SQL</MessageBarTitle>
+              {convertError}
+            </MessageBarBody>
+          </MessageBar>
+        )}
         {pyspark && (
           <>
             <Subtitle2>PySpark (review + paste into a Notebook)</Subtitle2>

@@ -14,6 +14,8 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import { createMonitorActivatorRule, type MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
+import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
+import { buildCheckQuery, CHECK_TYPE_BY_ID } from '../../_lib/check-types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,39 +23,28 @@ const ITEM_TYPE = 'health-check';
 function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
 }
-function monitorGate(e: any): NextResponse | null {
-  if (e instanceof MonitorNotConfiguredError) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor not configured: set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_ALERT_RG'}.`,
-      gate: { reason: 'Health checks create scheduled-query alert rules on Azure Monitor.', remediation: `Set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.` },
-    }, { status: 503 });
-  }
-  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor ${e.status}: not authorized to create alert rules.`,
+const monitorGateBodies: MonitorGateBodies = {
+  notConfigured: (missing) => ({ error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_ALERT_RG'}.`,
+      gate: { reason: 'Health checks create scheduled-query alert rules on Azure Monitor.', remediation: `Set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.` },
+    }),
+  unauthorized: (status) => ({ error: `Azure Monitor ${status}: not authorized to create alert rules.`,
       gate: { reason: 'The Console UAMI needs rights on the alert resource group.', remediation: 'Grant the Console UAMI "Monitoring Contributor" on LOOM_ALERT_RG.' },
-    }, { status: 403 });
-  }
-  return null;
-}
+    }),
+};
 
-/** Build a real KQL condition for the chosen check type. */
+/**
+ * Build a real KQL condition for the chosen check type. Delegates to the shared
+ * check-type library (Time / Size / Content / Schema / Status families). The
+ * wizard sends a `params` object; legacy callers send flat fields (table /
+ * thresholdMinutes / minRows / customKql) which are merged so old clients keep
+ * working. A missing / unknown check type falls back to freshness.
+ */
 function buildQuery(body: any): string | null {
-  const table = String(body?.table || '').replace(/[^A-Za-z0-9_]/g, '') || 'AppEvents';
-  if (body?.checkType === 'custom') {
-    const kql = String(body?.customKql || '').trim();
-    return kql || null;
-  }
-  if (body?.checkType === 'rowcount') {
-    const minRows = Number(body?.minRows ?? 1) || 1;
-    // Fires when the table produced FEWER than minRows in the window.
-    return `${table}\n| summarize n = count()\n| where n < ${minRows}`;
-  }
-  // freshness (default): fires when no rows have arrived within thresholdMinutes.
-  const mins = Number(body?.thresholdMinutes ?? 60) || 60;
-  return `${table}\n| where TimeGenerated > ago(${mins}m)\n| summarize n = count()\n| where n == 0`;
+  const checkType = String(body?.checkType || 'freshness');
+  const params = { ...(body || {}), ...(body?.params && typeof body.params === 'object' ? body.params : {}) };
+  if (CHECK_TYPE_BY_ID[checkType]) return buildCheckQuery(checkType, params);
+  // Unknown id → treat as legacy freshness for back-compat.
+  return buildCheckQuery('freshness', params);
 }
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -79,18 +70,25 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!query) return err('a custom check requires a KQL condition', 400, 'no_query');
   const name = String(body?.name || `${body?.checkType || 'freshness'}-check`).trim();
   const email = String(body?.email || '').trim();
+  const sevRaw = Number(body?.severity);
+  const severity = Number.isFinite(sevRaw) && sevRaw >= 0 && sevRaw <= 4 ? Math.round(sevRaw) : undefined;
 
   let rule: MonitorRuleRecord;
   try {
+    // Bind the rule to the item's persisted notification action group (from the
+    // Notifications tab) when present; otherwise fall back to a per-rule email.
+    const boundActionGroupId = ((hc.state as any)?.actionGroup?.id as string | undefined) || undefined;
     rule = await createMonitorActivatorRule(hc.displayName || 'Health check', {
       name,
       query,
+      severity,
       evaluationFrequency: typeof body?.evaluationFrequency === 'string' ? body.evaluationFrequency : 'PT5M',
       windowSize: typeof body?.windowSize === 'string' ? body.windowSize : 'PT15M',
+      existingActionGroupId: boundActionGroupId,
       action: email ? { target: email } : undefined,
     });
   } catch (e: any) {
-    return monitorGate(e) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 
   const state = { ...((hc.state || {}) as Record<string, unknown>) };

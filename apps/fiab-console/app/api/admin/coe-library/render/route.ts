@@ -19,6 +19,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { getTemplate, getTemplateFiles, getClone } from '@/lib/coe-library/coe-library-client';
 import { parseReportModel } from '@/lib/coe-library/report-render/pbir-parse';
@@ -32,9 +33,7 @@ import {
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
-}
+
 
 interface ResolvedTemplate {
   resolvedTemplateId: string;
@@ -51,13 +50,13 @@ async function resolveTemplate(req: NextRequest, tenantId: string): Promise<Reso
   if (cloneId) {
     try {
       const clone = await getClone(tenantId, cloneId);
-      if (!clone) return err(`unknown clone: ${cloneId}`, 404);
+      if (!clone) return apiError(`unknown clone: ${cloneId}`, 404);
       return { resolvedTemplateId: clone.templateId, published: !!clone.published, displayName: clone.displayName };
     } catch (e: any) {
-      return err(e?.message || String(e), 500);
+      return apiError(e?.message || String(e), 500);
     }
   }
-  if (!templateId) return err('templateId or cloneId is required', 400);
+  if (!templateId) return apiError('templateId or cloneId is required', 400);
   return { resolvedTemplateId: templateId };
 }
 
@@ -73,7 +72,7 @@ async function buildPayload(
   const { resolvedTemplateId, published, displayName } = resolved;
 
   const tpl = getTemplate(resolvedTemplateId);
-  if (!tpl) return err(`unknown template: ${resolvedTemplateId}`, 404);
+  if (!tpl) return apiError(`unknown template: ${resolvedTemplateId}`, 404);
 
   const files = getTemplateFiles(resolvedTemplateId);
   const model = parseReportModel(files);
@@ -115,7 +114,7 @@ async function buildPayload(
 
 export async function GET(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const url = new URL(req.url);
   const live = url.searchParams.get('mode') === 'live';
   const overrides: ReportParamOverrides = {
@@ -129,7 +128,7 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body → env defaults */ }
   const p = body?.params || {};

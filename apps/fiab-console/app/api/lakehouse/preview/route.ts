@@ -1,8 +1,9 @@
 /**
- * GET /api/lakehouse/preview?container=&path=&format=
- * Previews first 100 rows of a file via Synapse Serverless OPENROWSET.
+ * GET /api/lakehouse/preview?container=&path=&format=&top=
+ * Previews the first N rows of a file via Synapse Serverless OPENROWSET.
  * Format defaults to detect from extension. _delta_log/ in the path
- * forces FORMAT='DELTA'.
+ * forces FORMAT='DELTA'. `top` is the row sample size (default 100,
+ * clamped 1..1000) — Fabric's lakehouse table preview maxes at 1000 rows.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -52,6 +53,16 @@ function escapeSingleQuotes(s: string): string {
   return s.replace(/'/g, "''");
 }
 
+const DEFAULT_TOP = 100;
+const MAX_TOP = 1000;
+
+/** Clamp the row-sample size to 1..1000 (Fabric lakehouse preview cap); default 100. */
+function parseTop(raw: string | null): number {
+  const n = parseInt(raw || '', 10);
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_TOP;
+  return Math.min(n, MAX_TOP);
+}
+
 export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
@@ -59,6 +70,7 @@ export async function GET(req: NextRequest) {
   const container = req.nextUrl.searchParams.get('container') || '';
   const path = req.nextUrl.searchParams.get('path') || '';
   const explicit = req.nextUrl.searchParams.get('format');
+  const top = parseTop(req.nextUrl.searchParams.get('top'));
   // Reference-Lakehouse federation (F8): an explicit `account` previews a file
   // that lives in a REFERENCED lakehouse's storage account (any account the
   // Console UAMI + Synapse Serverless MI hold Storage Blob Data Reader on). When
@@ -107,11 +119,11 @@ export async function GET(req: NextRequest) {
 
   let sqlText: string;
   if (fmt === 'CSV') {
-    sqlText = `SELECT TOP 100 *
+    sqlText = `SELECT TOP ${top} *
 FROM OPENROWSET(BULK '${safeUrl}', FORMAT = 'CSV', PARSER_VERSION = '2.0',
   HEADER_ROW = TRUE, FIELDTERMINATOR = ',', FIELDQUOTE = '"') AS r;`;
   } else {
-    sqlText = `SELECT TOP 100 *
+    sqlText = `SELECT TOP ${top} *
 FROM OPENROWSET(BULK '${safeUrl}', FORMAT = '${fmt}') AS r;`;
   }
 
@@ -122,6 +134,7 @@ FROM OPENROWSET(BULK '${safeUrl}', FORMAT = '${fmt}') AS r;`;
       container,
       path,
       format: fmt,
+      top,
       bulkUrl: url,
       sql: sqlText,
       ...result,

@@ -2,8 +2,8 @@
 
 **Status:** Phases 1-7 complete (2026-05-25)
 **Branch:** `access-patterns-vpn-agw-fd`
-**Subscription:** `363ef5d1-0e77-4594-a530-f51af23dbf8c` (FedCiv ATU FFL — DLZ)
-**Console UAMI principalId:** `e61f3eb3-c646-4183-8198-4c4a34cd9a01`
+**Subscription:** `<YOUR_DLZ_SUBSCRIPTION_ID>` (FedCiv ATU FFL — DLZ)
+**Console UAMI principalId:** `<YOUR_CONSOLE_UAMI_PRINCIPAL_ID>`
 
 This document records the v3 security posture for the CSA Loom platform. Each
 phase is independently committed.
@@ -120,7 +120,7 @@ runtime by the Console UAMI (`uami-loom-console-eastus2`).
 
 ### RBAC change
 
-Console UAMI (`principalId e61f3eb3-c646-4183-8198-4c4a34cd9a01`) now has
+Console UAMI (`principalId <YOUR_CONSOLE_UAMI_PRINCIPAL_ID>`) now has
 **Key Vault Secrets User** at vault scope:
 
 ```bash
@@ -130,7 +130,7 @@ az rest --method PUT \
   --url "https://management.azure.com/subscriptions/363ef5d1-.../resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.KeyVault/vaults/kv-loom-m56yejezt7bjo/providers/Microsoft.Authorization/roleAssignments/$(uuidgen)?api-version=2022-04-01" \
   --body '{"properties":{
     "roleDefinitionId":"/subscriptions/.../providers/Microsoft.Authorization/roleDefinitions/4633458b-17de-408a-b874-0445c86b69e6",
-    "principalId":"e61f3eb3-c646-4183-8198-4c4a34cd9a01",
+    "principalId":"<YOUR_CONSOLE_UAMI_PRINCIPAL_ID>",
     "principalType":"ServicePrincipal"}}'
 ```
 
@@ -187,7 +187,7 @@ public-network toggle workaround.
 ## Phase 4 — Per-app least-privilege RBAC audit (Console UAMI)
 
 The Console UAMI (`uami-loom-console-eastus2`,
-`principalId e61f3eb3-c646-4183-8198-4c4a34cd9a01`) previously held broad
+`principalId <YOUR_CONSOLE_UAMI_PRINCIPAL_ID>`) previously held broad
 **Contributor** at five scopes. We removed three of them in v3:
 
 ### 4a. Synapse workspace — swapped for custom Operator role

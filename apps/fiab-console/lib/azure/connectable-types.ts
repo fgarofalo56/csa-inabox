@@ -59,6 +59,7 @@ export const CONN_TYPE_LABEL: Record<ConnectionType, string> = {
   'storage-adls': 'ADLS / Storage',
   'cosmos': 'Cosmos DB',
   'generic-sql': 'SQL Server',
+  'adx': 'Azure Data Explorer',
   'event-hub': 'Event Hubs',
   'service-bus': 'Service Bus',
   'key-vault': 'Key Vault',
@@ -77,6 +78,7 @@ export const CONN_TILE_SLUG: Record<ConnectionType, string> = {
   'cosmos': 'cosmos-account',
   'storage-adls': 'storage-adls',
   'postgres': 'postgres',
+  'adx': 'kql-database',
   'event-hub': 'event-hub',
   'service-bus': 'service-bus',
   'key-vault': 'key-vault',
@@ -112,6 +114,9 @@ export const CONN_TYPE_AUTH_OPTIONS: Record<ConnectionType, AuthMethod[]> = {
   'postgres':           ['sql-password', 'entra-mi'],
   // Storage: MI is the preferred path; account-key for older integrations.
   'storage-adls':       ['entra-mi', 'account-key'],
+  // ADX (Azure Data Explorer / Kusto): MI via AAD token is preferred; SPN for
+  // headless integrations.
+  'adx':                ['entra-mi', 'service-principal'],
   // Cosmos / EH / SB: connection-string is widely used; MI is also supported.
   'cosmos':             ['entra-mi', 'connection-string'],
   'event-hub':          ['entra-mi', 'connection-string'],

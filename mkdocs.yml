@@ -46,6 +46,10 @@ theme:
 exclude_docs: |
   tutorials/_template/
   _includes/
+  # Stale, point-in-time audit / test-script / version-handoff artifacts.
+  # Kept in-repo for history under fiab/archive/ but excluded from the built
+  # site and dropped from nav (2026-07-01 docs cleanup) so the site stays lean.
+  fiab/archive/
   learn/examples/solution-references/azure-realtime-analytics/example_mds/
   learn/examples/solution-references/azure-realtime-analytics/TASK_LIST.md
   learn/images/README.md
@@ -1659,6 +1663,39 @@ nav:
               - Variable Library: fiab/tutorials/editor-variable-library.md
               - Vector Store: fiab/tutorials/editor-vector-store.md
               - Warehouse: fiab/tutorials/editor-warehouse.md
+              - Event Grid Topic: fiab/tutorials/editor-event-grid-topic.md
+              - Event Hubs Namespace: fiab/tutorials/editor-event-hubs-namespace.md
+              - Health Check: fiab/tutorials/editor-health-check.md
+              - Lakehouse Shortcut: fiab/tutorials/editor-lakehouse-shortcut.md
+              - Ontology SDK: fiab/tutorials/editor-ontology-sdk.md
+              - Release Environment: fiab/tutorials/editor-release-environment.md
+              - Service Bus Namespace: fiab/tutorials/editor-service-bus-namespace.md
+              - Slate App: fiab/tutorials/editor-slate-app.md
+              - "Spindle (AIP Logic & agents)": fiab/tutorials/editor-aip-logic.md
+              - Workshop App: fiab/tutorials/editor-workshop-app.md
+              - Apache Airflow Job: fiab/tutorials/editor-airflow-job.md
+              - AutoML: fiab/tutorials/editor-automl.md
+              - Azure Cosmos DB Account: fiab/tutorials/editor-azure-cosmos-account.md
+              - Data API Builder: fiab/tutorials/editor-data-api-builder.md
+              - Data Marketplace: fiab/tutorials/editor-data-marketplace.md
+              - "Datamart (migration)": fiab/tutorials/editor-datamart.md
+              - Event Schema Set: fiab/tutorials/editor-event-schema-set.md
+              - Integration Runtime: fiab/tutorials/editor-integration-runtime.md
+              - Linked Service: fiab/tutorials/editor-linked-service.md
+              - Logic App: fiab/tutorials/editor-logic-app.md
+              - Mapping Data Flow: fiab/tutorials/editor-mapping-dataflow.md
+              - Materialized Lake View: fiab/tutorials/editor-materialized-lake-view.md
+              - Mirrored Databricks Catalog: fiab/tutorials/editor-mirrored-databricks.md
+              - Mounted Data Factory: fiab/tutorials/editor-mounted-adf.md
+              - PostgreSQL Flexible Server: fiab/tutorials/editor-postgres-flexible-server.md
+              - Rayfin App: fiab/tutorials/editor-rayfin-app.md
+              - Spark Environment: fiab/tutorials/editor-spark-environment.md
+              - SQL Analytics Endpoint: fiab/tutorials/editor-sql-analytics-endpoint.md
+              - SQL Database: fiab/tutorials/editor-sql-database.md
+              - Stream Analytics Job: fiab/tutorials/editor-stream-analytics-job.md
+              - Synapse Notebook: fiab/tutorials/editor-synapse-notebook.md
+              - Tapestry: fiab/tutorials/editor-tapestry.md
+              - Workspace Monitoring: fiab/tutorials/editor-workspace-monitor.md
           - Parity Gap Reports:
               - Summaries:
                   - "AI/ML editors (2026-05-26)": fiab/parity-gap/_ai-ml-summary.md
@@ -1795,9 +1832,7 @@ nav:
               - Architecture: fiab/help-copilot/architecture.md
               - Prompt patterns: fiab/help-copilot/prompts.md
           - Operator — Interactive Setup Steps: fiab/operator-interactive-setup.md
-          - MSAL Sign-in Handoff: fiab/MSAL-handoff.md
           - Dataverse Application User setup: fiab/dataverse-app-user.md
-          - Console v2 UI Handoff Brief: fiab/console-v2-ui-handoff.md
           - Engine services:
               - Activator Engine: fiab/services/activator-engine.md
               - Mirroring Engine: fiab/services/mirroring-engine.md
@@ -1813,6 +1848,7 @@ nav:
               - Information Protection tab: fiab/admin/security/information-protection.md
               - DLP tab: fiab/admin/security/dlp.md
               - Audit tab: fiab/admin/security/audit.md
+              - "Sharing, Endorsement & Preview-as": fiab/sharing-endorsement-preview-as.md
           - Unified Catalog:
               - Overview: fiab/catalog/index.md
               - Architecture: fiab/catalog/architecture.md
@@ -1983,39 +2019,16 @@ nav:
           - Audits & Inventories:
               - Fabric Feature Inventory: fiab/fabric-feature-inventory.md
               - Fabric UI Parity Action Plan: fiab/fabric-ui-parity-action-plan.md
-              - Editor Capability Audit: fiab/editor-capability-audit.md
-              - Editor Wiring Audit: fiab/wiring-audit.md
-              - UI Audit v1.10: fiab/ui-audit-v1.10.md
               - UAT Coverage Matrix: fiab/uat-coverage.md
               - CSA-in-a-Box Alignment + v2 Backlog: fiab/loom-csa-alignment-and-v2-backlog.md
               - Parity Progress (running log): fiab/parity-progress.md
               - Parity Rollup — Every Surface: fiab/parity-rollup.md
-              - PRP Delivery Audit: fiab/prp-audit.md
               - UAT Report (Iteration 1): fiab/uat-report.md
-              - Test Script (2026-05-27): fiab/TEST_SCRIPT_2026_05_27.md
-          - Status Snapshots:
-              - V2 Scope Expansion (2026-05-23 walkthrough): fiab/v2-scope-expansion.md
-              - Live Deploy Status (2026-05-23): fiab/live-deploy-status.md
-              - v1 Final Status + v2 Plan: fiab/v1-final-status-and-v2-plan.md
           - Releases:
               - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
           - Handoffs & Version State:
-              - "v1.18 GREEN handoff": fiab/v118-handoff.md
-              - "v2.0 handoff (Synapse pools live)": fiab/v2.0-handoff.md
-              - "v2.0 push-button deploy gap audit": fiab/v2.0-pushbutton-gap-audit.md
-              - "v2.1 LIVE state": fiab/v2.1-live-state.md
-              - "v2.1 E2E results": fiab/v2.1-e2e-results.md
-              - "v2.1 handoff": fiab/v2.1-handoff.md
-              - "v2.1 FINAL session state": fiab/v2.1-FINAL.md
-              - "v2.1 absolute final": fiab/v2.1-absolute-final.md
-              - "v2.2 LIVE — ready for v2 work": fiab/v2.2-done.md
-              - "v2.3 — v2 launch complete": fiab/v2.3-launch.md
-              - "v2.4 — final v2 launch": fiab/v2.4-launch.md
-              - "v2.5.1 — zero vaporware": fiab/v2.5.1-zero-vaporware.md
               - "v3 Security Hardening": fiab/v3-security-hardening.md
               - "v3 UI Parity — Chunked Execution Plan": fiab/v3-ui-parity-chunked-plan.md
-              - "v3.0 → v3.1 Handoff": fiab/v30-v31-handoff.md
-              - "v3.1 UAT Receipt": fiab/v31-uat-receipt.md
               - "Next-session kickoff": fiab/next-session-kickoff.md
 
   # ============================================================

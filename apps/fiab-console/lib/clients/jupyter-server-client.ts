@@ -42,7 +42,7 @@
  */
 import crypto from 'node:crypto';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import type { TokenCredential } from '@azure/core-auth';
+import type { TokenCredential } from '@azure/identity';
 import { armBase, armScope } from '../azure/cloud-endpoints';
 import type { NormalizedOutput } from '../azure/synapse-livy-client';
 

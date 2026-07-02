@@ -25,46 +25,63 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   Subtitle2, Body1, Body1Strong, Caption1, Badge, Button, Spinner,
-  Tab, TabList,
+  Tab, TabList, Dropdown, Option, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Play20Regular, ArrowSync20Regular, Flash20Regular, Branch20Regular,
-  ArrowRight16Regular,
+  ArrowRight16Regular, Options20Regular, ArrowExportLtr20Regular, Save20Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  flow: { display: 'flex', flexDirection: 'column', gap: 0, alignItems: 'stretch', maxWidth: 760 },
+  pad: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, flex: 1, minHeight: 0 },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS, paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  flow: { display: 'flex', flexDirection: 'column', gap: 0, alignItems: 'stretch', maxWidth: '760px', width: '100%', minWidth: 0 },
   node: {
     border: `1px solid ${tokens.colorNeutralStroke1}`,
-    borderRadius: 8,
-    padding: '10px 14px',
+    borderRadius: tokens.borderRadiusXLarge,
+    paddingTop: tokens.spacingVerticalSNudge, paddingBottom: tokens.spacingVerticalSNudge,
+    paddingLeft: tokens.spacingHorizontalM, paddingRight: tokens.spacingHorizontalM,
     backgroundColor: tokens.colorNeutralBackground1,
-    display: 'flex', flexDirection: 'column', gap: 4,
+    boxShadow: tokens.shadow4,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS,
+    minWidth: 0, maxWidth: '100%', boxSizing: 'border-box',
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
   trigger: { borderLeft: `4px solid ${tokens.colorBrandStroke1}` },
   action: { borderLeft: `4px solid ${tokens.colorPaletteBlueBorderActive}` },
   branch: { borderLeft: `4px solid ${tokens.colorPaletteMarigoldBorderActive}` },
-  branchKids: { marginLeft: 28, marginTop: 8, display: 'flex', flexDirection: 'column', gap: 0 },
-  connector: { display: 'flex', justifyContent: 'center', color: tokens.colorNeutralForeground3, padding: '2px 0' },
-  nodeHead: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  cfg: { fontFamily: 'Consolas, monospace', fontSize: 12, color: tokens.colorNeutralForeground2, wordBreak: 'break-all' },
+  branchKids: { marginLeft: tokens.spacingHorizontalXXL, marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: 0 },
+  connector: { display: 'flex', justifyContent: 'center', color: tokens.colorNeutralForeground3, paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS },
+  nodeHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  cfg: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, wordBreak: 'break-word', overflowWrap: 'anywhere', minWidth: 0, maxWidth: '100%' },
+  outputsBlob: {
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+    color: tokens.colorNeutralForeground2, backgroundColor: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingHorizontalMNudge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: '280px', overflow: 'auto',
+  },
   runAfter: { color: tokens.colorNeutralForeground3 },
-  tableWrap: { overflow: 'auto', maxHeight: 420, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12 },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground2 },
+  tableWrap: {
+    overflow: 'auto', maxHeight: '420px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+  },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-word', overflowWrap: 'anywhere' },
   runOut: {
-    fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap',
-    backgroundColor: tokens.colorNeutralBackground3, borderRadius: 4, padding: 10,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: 200, overflow: 'auto',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+    backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingHorizontalMNudge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: '200px', overflow: 'auto',
   },
 });
 
@@ -215,6 +232,16 @@ export function LogicAppEditor({ item, id }: Props) {
   const [tab, setTab] = useState('designer');
   const [running, setRunning] = useState(false);
   const [runRes, setRunRes] = useState<RunResponse | null>(null);
+  // Which trigger to fire — defaults to the first; a picker appears when the
+  // workflow has more than one trigger (the run route already accepts `trigger`).
+  const [selTrigger, setSelTrigger] = useState('');
+
+  // Editable WDL code view — the real authoring surface. Persisted via PUT
+  // (ARM Microsoft.Logic/workflows when bound, always to Cosmos state).
+  const [draft, setDraft] = useState<string>('');
+  const [dirty, setDirty] = useState(false);
+  const [savingDef, setSavingDef] = useState(false);
+  const [saveMsg, setSaveMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
 
   const load = useCallback(async () => {
     if (!workspaceId || id === 'new') { setDetail({ ok: true, definition: { triggers: {}, actions: {} } }); return; }
@@ -233,10 +260,41 @@ export function LogicAppEditor({ item, id }: Props) {
   const triggers = definition.triggers || {};
   const actions = definition.actions || {};
   const triggerNames = useMemo(() => Object.keys(triggers), [triggers]);
+  // Keep the selected trigger valid as the definition loads/changes.
+  useEffect(() => {
+    if (triggerNames.length && !triggerNames.includes(selTrigger)) setSelTrigger(triggerNames[0]);
+  }, [triggerNames, selTrigger]);
   const wdlParams = definition.parameters || {};
   const paramValues = detail?.parameters || {};
   const bound = !!detail?.logicApp?.bound;
   const definitionJson = useMemo(() => JSON.stringify(definition, null, 2), [definition]);
+
+  // Re-seed the editable draft whenever a fresh definition loads (and the user
+  // hasn't started editing).
+  useEffect(() => { if (!dirty) setDraft(definitionJson); }, [definitionJson, dirty]);
+
+  const saveDefinition = useCallback(async () => {
+    if (!workspaceId || id === 'new') {
+      setSaveMsg({ intent: 'error', text: 'Save the item before editing its workflow definition.' });
+      return;
+    }
+    let parsed: unknown;
+    try { parsed = JSON.parse(draft); }
+    catch (e: any) { setSaveMsg({ intent: 'error', text: `Invalid JSON: ${e?.message || String(e)}` }); return; }
+    setSavingDef(true); setSaveMsg(null);
+    try {
+      const r = await fetch(`/api/items/logic-app/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ definition: parsed }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setSaveMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      setDirty(false);
+      setSaveMsg({ intent: 'success', text: j.upserted ? 'Saved + deployed to Azure Logic App (ARM).' : 'Saved to workspace (deploy by binding a live Logic App).' });
+      await load();
+    } catch (e: any) { setSaveMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSavingDef(false); }
+  }, [workspaceId, id, draft, load]);
 
   const runTrigger = useCallback(async () => {
     if (!workspaceId) return;
@@ -244,13 +302,13 @@ export function LogicAppEditor({ item, id }: Props) {
     try {
       const r = await fetch(`/api/items/logic-app/${encodeURIComponent(id)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ trigger: triggerNames[0] }),
+        body: JSON.stringify({ trigger: selTrigger || triggerNames[0] }),
       });
       const j: RunResponse = await r.json();
       setRunRes(j);
     } catch (e: any) { setRunRes({ ok: false, error: e?.message || String(e) }); }
     finally { setRunning(false); }
-  }, [workspaceId, id, triggerNames]);
+  }, [workspaceId, id, triggerNames, selTrigger]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -289,6 +347,15 @@ export function LogicAppEditor({ item, id }: Props) {
               <Button appearance="primary" icon={<Play20Regular />} disabled={!workspaceId || running} onClick={runTrigger}>
                 {running ? 'Running…' : 'Run trigger'}
               </Button>
+              {triggerNames.length > 1 && (
+                <Tooltip relationship="label" content="Choose which trigger to fire — this workflow has more than one">
+                  <Dropdown size="small" aria-label="Trigger to run" style={{ minWidth: 160 }}
+                    value={selTrigger} selectedOptions={selTrigger ? [selTrigger] : []}
+                    onOptionSelect={(_, d) => { if (d.optionValue) setSelTrigger(d.optionValue); }}>
+                    {triggerNames.map((tn) => <Option key={tn} value={tn} text={tn}>{tn}</Option>)}
+                  </Dropdown>
+                </Tooltip>
+              )}
               <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
             </div>
 
@@ -330,10 +397,14 @@ export function LogicAppEditor({ item, id }: Props) {
                     </MessageBarBody>
                   </MessageBar>
                 )}
+                {triggerNames.length === 0 && Object.keys(actions).length === 0 ? (
+                  <EmptyState
+                    icon={<Flash20Regular />}
+                    title="No triggers or actions yet"
+                    body="This workflow has no triggers or actions defined. The Designer is a read-only flow view — open the Code view tab to add a trigger and actions to the Workflow Definition Language definition, then Save to deploy."
+                  />
+                ) : (
                 <div className={s.flow}>
-                  {triggerNames.length === 0 && Object.keys(actions).length === 0 && (
-                    <Caption1>This workflow has no triggers or actions yet.</Caption1>
-                  )}
                   {triggerNames.map((tn, i) => (
                     <div key={tn}>
                       {i > 0 && <div className={s.connector}>↓</div>}
@@ -343,13 +414,20 @@ export function LogicAppEditor({ item, id }: Props) {
                   {triggerNames.length > 0 && Object.keys(actions).length > 0 && <div className={s.connector}>↓</div>}
                   <FlowBody actions={actions} />
                 </div>
+                )}
               </>
             )}
 
             {detail && tab === 'parameters' && (
               <>
-                <Subtitle2>Definition parameters</Subtitle2>
-                {Object.keys(wdlParams).length === 0 && <Caption1>No parameters declared.</Caption1>}
+                <Subtitle2 className={s.sectionHead}><Options20Regular />Definition parameters</Subtitle2>
+                {Object.keys(wdlParams).length === 0 && (
+                  <EmptyState
+                    icon={<Options20Regular />}
+                    title="No parameters declared"
+                    body="This workflow declares no Workflow Definition Language parameters. Parameters and their deploy-time values appear here once the definition declares them."
+                  />
+                )}
                 {Object.keys(wdlParams).length > 0 && (
                   <div className={s.tableWrap}>
                     <Table aria-label="Workflow parameters" size="small">
@@ -376,8 +454,10 @@ export function LogicAppEditor({ item, id }: Props) {
                 )}
                 {definition.outputs && Object.keys(definition.outputs).length > 0 && (
                   <>
-                    <Subtitle2 style={{ marginTop: 12 }}>Outputs</Subtitle2>
-                    <div className={s.cfg}>{JSON.stringify(definition.outputs, null, 2)}</div>
+                    <Subtitle2 className={s.sectionHead} style={{ marginTop: tokens.spacingVerticalM }}>
+                      <ArrowExportLtr20Regular />Outputs
+                    </Subtitle2>
+                    <div className={s.outputsBlob}>{JSON.stringify(definition.outputs, null, 2)}</div>
                   </>
                 )}
               </>
@@ -385,14 +465,31 @@ export function LogicAppEditor({ item, id }: Props) {
 
             {detail && tab === 'code' && (
               <>
-                <Body1>Full Workflow Definition Language (WDL) definition.</Body1>
+                <Body1>Workflow Definition Language (WDL) — edit the triggers, actions, and parameters here.</Body1>
+                <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalS }}>
+                  This is the authoring surface: change triggers/actions in the WDL JSON and <strong>Save</strong>.
+                  {bound
+                    ? ' Saving deploys the workflow to the bound Azure Logic App via ARM (PUT Microsoft.Logic/workflows) and persists it.'
+                    : ' Saving persists to the workspace; bind/deploy a live Logic App (set LOOM_LOGIC_SUB / LOOM_LOGIC_RG / LOOM_LOGIC_LOCATION + grant the Console UAMI "Logic App Contributor") to push it to ARM.'}
+                  {' '}The Designer tab renders this same definition as a read-only flow.
+                </Caption1>
+                {saveMsg && (
+                  <MessageBar intent={saveMsg.intent}><MessageBarBody>{saveMsg.text}</MessageBarBody></MessageBar>
+                )}
+                <div className={s.toolbar}>
+                  <Button appearance="primary" icon={<Save20Regular />} disabled={savingDef || !dirty} onClick={saveDefinition}>
+                    {savingDef ? 'Saving…' : 'Save workflow'}
+                  </Button>
+                  <Button appearance="subtle" disabled={!dirty} onClick={() => { setDraft(definitionJson); setDirty(false); setSaveMsg(null); }}>
+                    Revert
+                  </Button>
+                </div>
                 <MonacoTextarea
-                  value={definitionJson}
-                  onChange={() => { /* read-only view; edits land via Save in a follow-up */ }}
+                  value={draft}
+                  onChange={(v) => { setDraft(v); setDirty(true); }}
                   language="json"
-                  readOnly
                   height={520}
-                  ariaLabel="Workflow definition JSON"
+                  ariaLabel="Workflow definition JSON (editable)"
                 />
               </>
             )}

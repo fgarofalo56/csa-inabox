@@ -48,18 +48,18 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   monaco: {
-    width: '100%', minHeight: '180px',
+    width: '100%', minHeight: '180px', maxWidth: '100%', boxSizing: 'border-box',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: '13px', padding: '12px',
+    fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px',
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
-    resize: 'vertical',
+    resize: 'vertical', overflowWrap: 'anywhere',
   },
-  card: { padding: '12px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px' },
+  card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
 });
 
 // ----- ML Model shapes (mirror lib/azure/foundry-client + mlflow-client) -----
@@ -81,7 +81,8 @@ interface MlflowVersionLite {
 }
 interface MlWorkspaceLite { name: string; kind?: string; isHub?: boolean }
 interface ModelBindingState { modelName: string; workspaceName?: string; version?: string }
-interface OnlineEndpointLite { id?: string; name: string; provisioningState?: string; scoringUri?: string; authMode?: string }
+interface OnlineEndpointLite { id?: string; name: string; provisioningState?: string; scoringUri?: string; authMode?: string; traffic?: Record<string, number> }
+interface OnlineDeploymentLite { name: string; endpointName: string; model?: string; instanceType?: string; instanceCount?: number; provisioningState?: string }
 
 type Stage = 'None' | 'Staging' | 'Production' | 'Archived';
 const STAGES: Stage[] = ['None', 'Staging', 'Production', 'Archived'];
@@ -160,9 +161,15 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
 
   // ---- Deploy ----
   const [instanceType, setInstanceType] = useState('Standard_DS3_v2');
+  const [instanceCount, setInstanceCount] = useState('1');
   const [deploying, setDeploying] = useState(false);
   const [endpointMsg, setEndpointMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
   const [endpoints, setEndpoints] = useState<OnlineEndpointLite[]>([]);
+  const [deployments, setDeployments] = useState<OnlineDeploymentLite[]>([]);
+  // Blue-green traffic split + per-endpoint admin (scale / delete) ops.
+  const [trafficEp, setTrafficEp] = useState<string | null>(null);
+  const [bluePct, setBluePct] = useState(100);
+  const [opBusy, setOpBusy] = useState<string | null>(null);
 
   // ---- Register-version dialog ----
   const [regOpen, setRegOpen] = useState(false);
@@ -230,9 +237,36 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
     try {
       const res = await fetch(`${apiBase}/endpoint`);
       const j = await safeModelJson(res);
-      if (j.ok) setEndpoints(j.data?.endpoints || []);
+      if (j.ok) { setEndpoints(j.data?.endpoints || []); setDeployments(j.data?.deployments || []); }
     } catch { /* non-critical */ }
   }, [apiBase]);
+
+  // Blue-green: set the traffic split for an endpoint (blue=pct, green=100-pct).
+  const applyTraffic = useCallback(async () => {
+    if (!trafficEp) return;
+    const deps = deployments.filter((d) => d.endpointName === trafficEp);
+    const blue = deps[0]?.name || 'blue'; const green = deps[1]?.name;
+    const traffic: Record<string, number> = green ? { [blue]: bluePct, [green]: 100 - bluePct } : { [blue]: 100 };
+    setOpBusy(`traffic:${trafficEp}`); setEndpointMsg(null);
+    try {
+      const res = await fetch(`${apiBase}/endpoint`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ endpointName: trafficEp, traffic }) });
+      const j = await safeModelJson(res);
+      setEndpointMsg({ intent: j.ok ? 'success' : 'error', text: j.ok ? `Traffic: ${JSON.stringify(traffic)}` : (j.error || `HTTP ${j.status}`) });
+      if (j.ok) { setTrafficEp(null); loadEndpoints(); }
+    } catch (e: any) { setEndpointMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setOpBusy(null); }
+  }, [apiBase, trafficEp, bluePct, deployments, loadEndpoints]);
+
+  const deleteEndpoint = useCallback(async (name: string) => {
+    setOpBusy(`del:${name}`); setEndpointMsg(null);
+    try {
+      const res = await fetch(`${apiBase}/endpoint?endpoint=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const j = await safeModelJson(res);
+      setEndpointMsg({ intent: j.ok ? 'success' : 'error', text: j.ok ? `Endpoint ${name} deletion started.` : (j.error || `HTTP ${j.status}`) });
+      if (j.ok) loadEndpoints();
+    } catch (e: any) { setEndpointMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setOpBusy(null); }
+  }, [apiBase, loadEndpoints]);
 
   useEffect(() => { loadBinding(); }, [loadBinding]);
   useEffect(() => {
@@ -261,7 +295,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
     try {
       const res = await fetch(`${apiBase}/endpoint`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ version: selected || undefined, instanceType }),
+        body: JSON.stringify({ version: selected || undefined, instanceType, instanceCount: Number(instanceCount) || 1 }),
       });
       const j = await safeModelJson(res);
       if (!j.ok) { setEndpointMsg({ intent: 'error', text: j.error || `HTTP ${j.status}` }); return; }
@@ -365,7 +399,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
         Choose the Azure Machine Learning workspace and a registered model. The binding is saved on this item; all actions then target the bound model&apos;s real registry.
       </Body1>
       {wsError && (
-        <MessageBar intent="warning" style={{ marginTop: 8 }}>
+        <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS }}>
           <MessageBarBody>
             <MessageBarTitle>Azure ML workspaces not reachable</MessageBarTitle>
             {wsError}
@@ -373,7 +407,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
           </MessageBarBody>
         </MessageBar>
       )}
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: 12 }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end', marginTop: tokens.spacingVerticalM }}>
         <Field label="Workspace (blank = Foundry hub)">
           <Dropdown
             placeholder={workspaces.length ? 'Foundry hub (default)' : 'No AML workspaces found'}
@@ -382,7 +416,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
             onOptionSelect={(_, d) => { const w = d.optionValue || ''; setPickWs(w); setPickModel(''); loadBinding(w); }}
           >
             <Option value="">Foundry hub (default)</Option>
-            {workspaces.map((w) => <Option key={w.name} value={w.name}>{w.name}{w.isHub ? ' (hub)' : w.kind ? ` (${w.kind})` : ''}</Option>)}
+            {workspaces.map((w) => <Option key={w.name} value={w.name}>{`${w.name}${w.isHub ? ' (hub)' : w.kind ? ` (${w.kind})` : ''}`}</Option>)}
           </Dropdown>
         </Field>
         <Field label="Registered model">
@@ -392,7 +426,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
             selectedOptions={pickModel ? [pickModel] : []}
             onOptionSelect={(_, d) => setPickModel(d.optionValue || '')}
           >
-            {models.map((m) => <Option key={m.name} value={m.name}>{m.name}{m.latestVersion ? ` (latest v${m.latestVersion})` : ''}</Option>)}
+            {models.map((m) => <Option key={m.name} value={m.name}>{`${m.name}${m.latestVersion ? ` (latest v${m.latestVersion})` : ''}`}</Option>)}
           </Dropdown>
         </Field>
         <Button appearance="primary" onClick={doBind} disabled={bindBusy || !pickModel}>
@@ -400,14 +434,14 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
         </Button>
       </div>
       {modelsError && (
-        <MessageBar intent="warning" style={{ marginTop: 8 }}>
+        <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS }}>
           <MessageBarBody>
             <MessageBarTitle>Models not reachable</MessageBarTitle>
             {modelsError}
           </MessageBarBody>
         </MessageBar>
       )}
-      {bindError && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{bindError}</MessageBarBody></MessageBar>}
+      {bindError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{bindError}</MessageBarBody></MessageBar>}
     </div>
   );
 
@@ -417,12 +451,12 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       id={id}
       ribbon={ribbon}
       leftPanel={
-        <div style={{ padding: 8 }}>
-          <Caption1 style={{ padding: '4px 8px', color: tokens.colorNeutralForeground3 }}>
+        <div style={{ padding: tokens.spacingVerticalS }}>
+          <Caption1 style={{ padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, color: tokens.colorNeutralForeground3 }}>
             {bound?.modelName ? `Versions (${versions.length})` : 'Not bound'}
           </Caption1>
           {bound?.modelName && versions.length === 0 && !loading && (
-            <Body1 style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No versions registered.</Body1>
+            <Body1 style={{ padding: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>No versions registered.</Body1>
           )}
           <Tree aria-label="Model versions">
             {versions.map((v) => {
@@ -437,10 +471,10 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                   <TreeItemLayout>
                     v{v.version}
                     {model?.latestVersion === v.version && (
-                      <Badge appearance="tint" color="brand" style={{ marginLeft: 8 }}>latest</Badge>
+                      <Badge appearance="tint" color="brand" style={{ marginLeft: tokens.spacingHorizontalS }}>latest</Badge>
                     )}
                     {st && st !== 'None' && (
-                      <Badge appearance="tint" color={stageColor(st)} style={{ marginLeft: 8 }}>{st}</Badge>
+                      <Badge appearance="tint" color={stageColor(st)} style={{ marginLeft: tokens.spacingHorizontalS }}>{st}</Badge>
                     )}
                   </TreeItemLayout>
                 </TreeItem>
@@ -458,8 +492,8 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
               or not the model is registered/bound yet; Register/Bind/Deploy
               still target the real Azure ML registry. */}
           {!bindLoading && bundleContent && (
-            <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' }}>
                 <Subtitle2>Model definition</Subtitle2>
                 <Badge appearance="filled" color="brand">{bundleContent.algorithm}</Badge>
                 {bundleContent.framework && <Badge appearance="outline">{bundleContent.framework}</Badge>}
@@ -469,7 +503,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
               {bundleContent.hyperparameters && Object.keys(bundleContent.hyperparameters).length > 0 && (
                 <div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Hyperparameters</Caption1>
-                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalSNudge, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS }}>
                     {Object.entries(bundleContent.hyperparameters).map(([k, v]) => (
                       <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
                     ))}
@@ -506,7 +540,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
           {/* Bound — model detail / versions / deploy. */}
           {!bindLoading && bound?.modelName && (
             <>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center' }}>
                 <Badge appearance="filled" color="brand">{bound.modelName}</Badge>
                 <Badge appearance="outline">{bound.workspaceName || 'Foundry hub'}</Badge>
                 <Button size="small" appearance="subtle" onClick={unbind}>Re-bind</Button>
@@ -531,13 +565,13 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                     <>
                       <Subtitle2>{model.name}</Subtitle2>
                       {model.description && <Body1>{model.description}</Body1>}
-                      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                         <Badge appearance="tint">Latest: v{model.latestVersion || '—'}</Badge>
                         <Badge appearance="tint">{versions.length} version(s)</Badge>
                       </div>
                       {current && (
                         <>
-                          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 8 }}>
+                          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center', marginTop: tokens.spacingVerticalS }}>
                             <Subtitle2>Selected version: v{current.version}</Subtitle2>
                             <Badge appearance="filled" color={stageColor(currentMlflow?.currentStage)}>
                               {currentMlflow?.currentStage || 'None'}
@@ -545,7 +579,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                             <Button size="small" appearance="subtle" onClick={() => openStageDialog(current.version)}>Transition stage</Button>
                           </div>
                           {current.description && <Body1>{current.description}</Body1>}
-                          <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                             <Badge appearance="outline">type: {current.modelType || '—'}</Badge>
                             {current.createdAt && <Badge appearance="outline">created: {current.createdAt}</Badge>}
                             {currentMlflow?.status && <Badge appearance="outline">status: {currentMlflow.status}</Badge>}
@@ -555,7 +589,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                           )}
                           {/* Source-run lineage — the canonical MLflow run_id link. */}
                           {currentMlflow?.runId && (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4, flexWrap: 'wrap' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' }}>
                               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Source run (lineage)</Caption1>
                               <Badge appearance="tint">{currentMlflow.runId}</Badge>
                               <Button
@@ -579,7 +613,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                           {current.tags && Object.keys(current.tags).length > 0 && (
                             <div>
                               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Tags</Caption1>
-                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingHorizontalSNudge, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS }}>
                                 {Object.entries(current.tags).map(([k, v]) => (
                                   <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
                                 ))}
@@ -589,7 +623,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                           {current.properties && Object.keys(current.properties).length > 0 && (
                             <div>
                               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Properties (lineage / run)</Caption1>
-                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingHorizontalSNudge, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS }}>
                                 {Object.entries(current.properties).map(([k, v]) => (
                                   <Badge key={k} appearance="outline">{k}={String(v)}</Badge>
                                 ))}
@@ -603,7 +637,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
 
                   {tab === 'versions' && (
                     <>
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                         <Button appearance="primary" onClick={() => { setRegUri(''); setRegVersion(''); setRegRunId(''); setRegMsg(null); setRegOpen(true); }}>
                           Register new version
                         </Button>
@@ -618,6 +652,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                           </MessageBarBody>
                         </MessageBar>
                       )}
+                      <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
                       <Table aria-label="Model versions" size="small">
                         <TableHeader><TableRow>
                           <TableHeaderCell>Version</TableHeaderCell>
@@ -636,7 +671,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                                 <TableCell><Badge appearance="tint" color={stageColor(st)}>{st || 'None'}</Badge></TableCell>
                                 <TableCell>{v.modelType || '—'}</TableCell>
                                 <TableCell>{v.createdAt || '—'}</TableCell>
-                                <TableCell style={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' }}>{v.modelUri || '—'}</TableCell>
+                                <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{v.modelUri || '—'}</TableCell>
                                 <TableCell>
                                   <Button size="small" appearance="subtle" onClick={(e) => { e.stopPropagation(); openStageDialog(v.version); }}>Transition</Button>
                                 </TableCell>
@@ -645,6 +680,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                           })}
                         </TableBody>
                       </Table>
+                      </div>
                     </>
                   )}
 
@@ -654,9 +690,12 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                       <Body1 style={{ color: tokens.colorNeutralForeground3 }}>
                         Creates a managed online endpoint + a &quot;blue&quot; deployment serving <code>{bound.modelName}:{selected || model.latestVersion || '?'}</code> via real ARM PUTs in <strong>{bound.workspaceName || 'the Foundry hub'}</strong>.
                       </Body1>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                         <Field label="Endpoint VM size">
                           <Input value={instanceType} onChange={(_, d) => setInstanceType(d.value)} placeholder="Standard_DS3_v2" />
+                        </Field>
+                        <Field label="Instances (scale)">
+                          <Input type="number" value={instanceCount} onChange={(_, d) => setInstanceCount(d.value)} style={{ width: 96 }} />
                         </Field>
                         <Button appearance="primary" disabled={deploying || !versions.length} onClick={createEndpoint}>
                           {deploying ? 'Deploying…' : `Deploy v${selected || model.latestVersion || '?'}`}
@@ -667,29 +706,88 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                           <MessageBarBody>{endpointMsg.text}</MessageBarBody>
                         </MessageBar>
                       )}
-                      <Subtitle2 style={{ marginTop: 8 }}>Existing endpoints ({endpoints.length})</Subtitle2>
+                      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Existing endpoints ({endpoints.length})</Subtitle2>
                       {endpoints.length === 0
                         ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No managed online endpoints in this workspace yet.</Caption1>
                         : (
+                          <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
                           <Table aria-label="Online endpoints" size="small">
                             <TableHeader><TableRow>
                               <TableHeaderCell>Endpoint</TableHeaderCell>
                               <TableHeaderCell>State</TableHeaderCell>
-                              <TableHeaderCell>Auth</TableHeaderCell>
+                              <TableHeaderCell>Traffic</TableHeaderCell>
                               <TableHeaderCell>Scoring URI</TableHeaderCell>
+                              <TableHeaderCell>Actions</TableHeaderCell>
                             </TableRow></TableHeader>
                             <TableBody>
-                              {endpoints.map((ep) => (
+                              {endpoints.map((ep) => {
+                                const traffic = ep.traffic && Object.keys(ep.traffic).length
+                                  ? Object.entries(ep.traffic).map(([d, p]) => `${d}:${p}%`).join(' / ') : '—';
+                                return (
                                 <TableRow key={ep.name}>
                                   <TableCell><strong>{ep.name}</strong></TableCell>
-                                  <TableCell>{ep.provisioningState || '—'}</TableCell>
-                                  <TableCell>{ep.authMode || '—'}</TableCell>
-                                  <TableCell style={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' }}>{ep.scoringUri || '—'}</TableCell>
+                                  <TableCell><Badge appearance="tint" color={ep.provisioningState === 'Succeeded' ? 'success' : ep.provisioningState === 'Failed' ? 'danger' : 'warning'}>{ep.provisioningState || '—'}</Badge></TableCell>
+                                  <TableCell>{traffic}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{ep.scoringUri || '—'}</TableCell>
+                                  <TableCell>
+                                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+                                      <Button size="small" appearance="subtle" onClick={() => { setTrafficEp(ep.name); setBluePct(50); }}>Traffic</Button>
+                                      <Button size="small" appearance="subtle" as="a" href={`/workspace/monitor?endpoint=${encodeURIComponent(ep.name)}`}>Monitor</Button>
+                                      <Button size="small" appearance="subtle" disabled={opBusy === `del:${ep.name}`} onClick={() => deleteEndpoint(ep.name)}>{opBusy === `del:${ep.name}` ? 'Deleting…' : 'Delete'}</Button>
+                                    </div>
+                                  </TableCell>
+                                </TableRow>
+                                );
+                              })}
+                            </TableBody>
+                          </Table>
+                          </div>
+                        )}
+                      {/* Deploy history — blue/green deployments + their model + scale. */}
+                      {deployments.length > 0 && (
+                        <>
+                          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Deployments ({deployments.length})</Subtitle2>
+                          <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                          <Table aria-label="Deployment history" size="small">
+                            <TableHeader><TableRow>
+                              <TableHeaderCell>Deployment</TableHeaderCell><TableHeaderCell>Endpoint</TableHeaderCell>
+                              <TableHeaderCell>Model</TableHeaderCell><TableHeaderCell>VM / count</TableHeaderCell><TableHeaderCell>State</TableHeaderCell>
+                            </TableRow></TableHeader>
+                            <TableBody>
+                              {deployments.map((d) => (
+                                <TableRow key={`${d.endpointName}/${d.name}`}>
+                                  <TableCell><strong>{d.name}</strong></TableCell>
+                                  <TableCell>{d.endpointName}</TableCell>
+                                  <TableCell style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{d.model || '—'}</TableCell>
+                                  <TableCell>{d.instanceType || '—'} × {d.instanceCount ?? '—'}</TableCell>
+                                  <TableCell><Badge appearance="tint" color={d.provisioningState === 'Succeeded' ? 'success' : 'warning'}>{d.provisioningState || '—'}</Badge></TableCell>
                                 </TableRow>
                               ))}
                             </TableBody>
                           </Table>
-                        )}
+                          </div>
+                        </>
+                      )}
+                      {/* Blue-green traffic split dialog */}
+                      <Dialog open={!!trafficEp} onOpenChange={(_, d) => { if (!d.open) setTrafficEp(null); }}>
+                        <DialogSurface>
+                          <DialogBody>
+                            <DialogTitle>Traffic split — {trafficEp}</DialogTitle>
+                            <DialogContent>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                                <Caption1>Blue/green split across deployments via a real ARM PUT to <code>onlineEndpoints/{trafficEp}</code> traffic. First deployment = blue, second = green.</Caption1>
+                                <Field label={`Blue ${bluePct}% / Green ${100 - bluePct}%`}>
+                                  <input type="range" min={0} max={100} step={5} value={bluePct} onChange={(e) => setBluePct(Number(e.target.value))} />
+                                </Field>
+                              </div>
+                            </DialogContent>
+                            <DialogActions>
+                              <Button onClick={() => setTrafficEp(null)}>Cancel</Button>
+                              <Button appearance="primary" disabled={!!opBusy} onClick={applyTraffic}>{opBusy?.startsWith('traffic') ? 'Applying…' : 'Apply split'}</Button>
+                            </DialogActions>
+                          </DialogBody>
+                        </DialogSurface>
+                      </Dialog>
                     </>
                   )}
                 </>
@@ -703,7 +801,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
               <DialogBody>
                 <DialogTitle>Register a new model version</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <Caption1>Registers a new version of <strong>{bound?.modelName}</strong> from a model artifact URI. Supplying a source run ID uses the MLflow registry path so the version records run lineage; otherwise a real ARM PUT to the model registry is used.</Caption1>
                     <Field label="Model artifact URI">
                       <Input value={regUri} onChange={(_, d) => setRegUri(d.value)} placeholder="azureml://jobs/<run>/outputs/artifacts/paths/model/" />
@@ -738,7 +836,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
               <DialogBody>
                 <DialogTitle>Transition stage — v{stagePickVer}</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <Caption1>
                       Moves <strong>{bound?.modelName} v{stagePickVer}</strong> to a new MLflow registry stage via a real <code>model-versions/transition-stage</code> call. The registry response (post-transition model version) is shown as the receipt.
                     </Caption1>
@@ -757,7 +855,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                         <MessageBarBody>
                           {stageMsg.text}
                           {stageMsg.receipt && (
-                            <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 220, marginTop: 8 }}>
+                            <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 220, marginTop: tokens.spacingVerticalS }}>
                               {stageMsg.receipt}
                             </div>
                           )}

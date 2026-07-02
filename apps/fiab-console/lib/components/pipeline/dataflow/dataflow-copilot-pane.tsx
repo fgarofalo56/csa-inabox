@@ -55,13 +55,13 @@ const useStyles = makeStyles({
   code: {
     margin: 0, padding: tokens.spacingHorizontalS, overflow: 'auto',
     background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusSmall,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, whiteSpace: 'pre-wrap',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
   },
-  cardActions: { display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: 2 },
+  cardActions: { display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXXS },
   userBubble: {
     alignSelf: 'flex-end', maxWidth: '90%', padding: `4px 8px`,
     borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2,
-    fontSize: 13,
+    fontSize: '13px',
   },
 });
 

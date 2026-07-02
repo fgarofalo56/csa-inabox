@@ -14,17 +14,33 @@
  * LOOM_AOAI_ENDPOINT / LOOM_AOAI_DEPLOYMENT.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getSession } from '@/lib/auth/session';
+import { withRateLimit } from '@/lib/azure/rate-limiter';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
-import { cogScope } from '@/lib/azure/cloud-endpoints';
+import { resolveAoaiTarget } from '@/lib/azure/copilot-orchestrator';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import { aoaiChatStream, NoAoaiDeploymentError } from '@/lib/azure/aoai-chat-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
-const credential = uamiArmCredential();
+/** Honest 503 gate body when no AOAI deployment is configured. */
+function noAoaiDeployment(message: string) {
+  return NextResponse.json(
+    {
+      ok: false,
+      error: message,
+      code: 'no_aoai',
+      hint: {
+        missingEnvVar: 'LOOM_AOAI_ENDPOINT',
+        bicepModule: 'platform/fiab/bicep/modules/admin-plane/main.bicep',
+        bicepStatus: 'Deploy an AI Foundry account + a gpt-4o class chat deployment; wire LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT into the apps[].env list (set automatically when agentFoundryEnabled).',
+        followUp: 'Set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT, or pick a Copilot chat model under Admin → Tenant settings → Copilot & Agents.',
+      },
+    },
+    { status: 503 },
+  );
+}
 
 export async function POST(req: NextRequest) {
   const s = getSession();
@@ -33,32 +49,26 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: 'forbidden', code: 'admin_only' }, { status: 403 });
   }
 
+  // Per-principal AOAI rate limit — opt-in (LOOM_RATE_LIMIT=on). Default = no-op
+  // (returns null → identical behavior). Checked before any stream is opened.
+  const limited = withRateLimit(s, 'aoai');
+  if (limited) return limited;
+
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
   const question = String(body?.question || '').trim();
   if (!question) return NextResponse.json({ ok: false, error: 'question is required' }, { status: 400 });
   const chartData = body?.chartData ?? {};
 
-  let target;
+  // Resolve the tenant Copilot config once so a missing deployment surfaces the
+  // honest 503 `no_aoai` gate before we stream. The unified client re-resolves
+  // the same cfg internally (harmless) when aoaiChatStream is called below.
+  let tenantConfig: Awaited<ReturnType<typeof loadTenantCopilotConfig>> = null;
   try {
-    target = await resolveAoaiTarget();
+    tenantConfig = await loadTenantCopilotConfig(s.claims.oid).catch(() => null);
+    await resolveAoaiTarget(tenantConfig);
   } catch (e) {
-    if (e instanceof NoAoaiDeploymentError) {
-      return NextResponse.json(
-        {
-          ok: false,
-          error: e.message,
-          code: 'no_aoai',
-          hint: {
-            missingEnvVar: 'LOOM_AOAI_ENDPOINT',
-            bicepModule: 'platform/fiab/bicep/modules/admin-plane/main.bicep',
-            bicepStatus: 'Deploy an AI Foundry account + a gpt-4o class chat deployment; wire LOOM_AOAI_ENDPOINT + LOOM_AOAI_DEPLOYMENT into the apps[].env list (set automatically when agentFoundryEnabled).',
-            followUp: 'Set LOOM_AOAI_ENDPOINT and LOOM_AOAI_DEPLOYMENT, or pick a Copilot chat model under Admin → Tenant settings → Copilot & Agents.',
-          },
-        },
-        { status: 503 },
-      );
-    }
+    if (e instanceof NoAoaiDeploymentError) return noAoaiDeployment(e.message);
     return NextResponse.json({ ok: false, error: (e as any)?.message || String(e), code: 'unexpected' }, { status: 500 });
   }
 
@@ -74,62 +84,33 @@ export async function POST(req: NextRequest) {
     'speculate, invent metrics, or discuss anything outside this governance posture.\n\n' +
     'GOVERNANCE POSTURE DATA:\n' + grounding;
 
-  let token: string;
+  let res: Response;
   try {
-    const t = await credential.getToken(cogScope());
-    if (!t?.token) throw new Error('no token');
-    token = t.token;
-  } catch (e) {
-    return NextResponse.json({ ok: false, error: `Failed to acquire AOAI token: ${(e as any)?.message || e}`, code: 'aoai_auth' }, { status: 502 });
-  }
-
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const payload = {
-    messages: [
-      { role: 'system', content: system },
-      { role: 'user', content: question },
-    ],
-    max_tokens: 800,
-    temperature: 0.2,
-    stream: true,
-  };
-
-  let upstream: Response;
-  try {
-    upstream = await fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
+    res = await aoaiChatStream({
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: question },
+      ],
+      maxCompletionTokens: 800,
+      temperature: 0.2,
+      cfg: tenantConfig,
     });
   } catch (e) {
-    return NextResponse.json({ ok: false, error: `AOAI request failed: ${(e as any)?.message || e}`, code: 'aoai_upstream' }, { status: 502 });
-  }
-
-  if (!upstream.ok || !upstream.body) {
-    const errText = await upstream.text().catch(() => '');
-    // Some reasoning models reject temperature; retry once without it (non-streamed
-    // would change shape, so retry streamed without temperature).
-    if (upstream.status === 400 && /temperature|unsupported_value|does not support/i.test(errText)) {
-      const retry = await fetch(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ ...payload, temperature: undefined }),
-      }).catch(() => null);
-      if (retry?.ok && retry.body) {
-        return new NextResponse(retry.body, {
-          headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' },
-        });
-      }
-    }
+    // The pre-resolve above already surfaces the honest 503 gate, but the client
+    // re-resolves internally — handle NoAoaiDeploymentError defensively too. Any
+    // other throw (token mint or upstream fetch / non-OK status) collapses into
+    // the same 502 `aoai_upstream` the inline fetch returned. NOTE: the former
+    // `aoai_auth` 502 folds in here since the client now mints the token itself.
+    if (e instanceof NoAoaiDeploymentError) return noAoaiDeployment(e.message);
     return NextResponse.json(
-      { ok: false, error: `AOAI chat-completions failed ${upstream.status}: ${errText.slice(0, 400)}`, code: 'aoai_upstream' },
+      { ok: false, error: `AOAI request failed: ${(e as any)?.message || e}`, code: 'aoai_upstream' },
       { status: 502 },
     );
   }
 
   // Pipe the SSE stream straight through to the browser (OpenAI-compatible
   // chat-completions delta chunks). The client reads `choices[0].delta.content`.
-  return new NextResponse(upstream.body, {
+  return new NextResponse(res.body, {
     headers: { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-store' },
   });
 }

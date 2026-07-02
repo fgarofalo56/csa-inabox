@@ -10,21 +10,27 @@
  *  - Cypher / GQL: KQL backends (ADX `make-graph` + `graph-match` for Cypher
  *    semantics) are dispatched via the existing /api/items/kql-database/[id]/query
  *    route, so no new BFF endpoints required here.
- *  - Vector store: backend picker (Cosmos vCore / AI Search / pgvector) +
- *    create-index form. Live similarity test is fully wired against Azure AI
- *    Search: POST /api/items/vector-store/[id]/search dispatches to
- *    foundry-client.vectorSearch() (k-NN + optional hybrid). Requires the
- *    LOOM_AI_SEARCH_SERVICE env var and the Console UAMI 'Search Index Data
- *    Contributor' RBAC on the search service (see ai-search.bicep) — without
- *    them the route returns a 503 honest gate naming both. The non-ai-search
- *    backends (cosmos-nosql / cosmos-vcore / pgvector) persist their spec to
- *    Cosmos and surface an honest infra gate in the editor.
+ *  - Vector store: backend picker (AI Search / Cosmos NoSQL / Cosmos vCore /
+ *    pgvector) + create-index form. THREE backends have live create + kNN +
+ *    upload data planes (real backend, no mock, per no-vaporware.md):
+ *      • ai-search    → foundry-client (AI Search vector + optional BM25 hybrid).
+ *                       Gate: LOOM_AI_SEARCH_SERVICE + 'Search Index Data
+ *                       Contributor' RBAC on the search service (ai-search.bicep).
+ *      • pgvector     → pgvector-client (PostgreSQL `vector` extension: CREATE
+ *                       INDEX … USING hnsw; ORDER BY embedding <op> $1::vector).
+ *                       Gate: LOOM_PGVECTOR_HOST + LOOM_POSTGRES_AAD_USER.
+ *      • cosmos-vcore → cosmos-vcore-vector-client (Cosmos DB for MongoDB vCore
+ *                       `cosmosSearch` index + $search kNN aggregation).
+ *                       Gate: LOOM_COSMOS_VCORE_CONNECTION_STRING.
+ *    Each returns a 503 honest gate (env var named) only when its connection
+ *    isn't wired. cosmos-nosql (DiskANN) is the one config-only backend and
+ *    surfaces an honest gate.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Caption1, Subtitle2, Badge, Button, Input, Label, Spinner,
-  Tab, TabList, Textarea, Dropdown, Option, Field, Divider,
+  Tab, TabList, Textarea, Dropdown, Option, Field, Divider, InfoLabel, Tooltip,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, shorthands, tokens,
@@ -39,31 +45,31 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ForceDirectedGraph, extractGraph } from '@/lib/components/graph/force-directed-graph';
 import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
+const useLocalStyles = makeStyles({
   editor: {
-    width: '100%', minHeight: 160,
-    fontFamily: 'Consolas, monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', minHeight: '160px',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingHorizontalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  treePad: { padding: 12, display: 'flex', flexDirection: 'column', gap: 12 },
-  field: { display: 'flex', flexDirection: 'column', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   // Vector store surfaces
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   searchRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
-  fullField: { flex: 1, minWidth: 220 },
-  kField: { width: 96 },
+  fullField: { flex: 1, minWidth: '220px' },
+  kField: { width: '96px' },
   sectionHeader: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     marginTop: tokens.spacingVerticalS,
   },
   jsonView: {
     fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
-    maxHeight: 320, overflow: 'auto', margin: 0,
+    maxHeight: '320px', overflow: 'auto', margin: 0,
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word',
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
     ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
@@ -78,8 +84,14 @@ const useStyles = makeStyles({
   },
   emptyIcon: { color: tokens.colorNeutralForeground4 },
   scoreCell: { fontVariantNumeric: 'tabular-nums', fontFamily: tokens.fontFamilyMonospace },
-  monoCell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+  monoCell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 const SAMPLE_GREMLIN = `// Find vertices labeled "person", their friends, and the company they work for.
 g.V().hasLabel('person')
@@ -123,7 +135,7 @@ function ResultsPreview({ result }: { result: any }) {
     );
   }
   return (
-    <pre style={{ fontSize: 12, maxHeight: 320, overflow: 'auto', background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>
+    <pre style={{ fontSize: tokens.fontSizeBase200, maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium }}>
       {JSON.stringify(result, null, 2)}
     </pre>
   );
@@ -191,10 +203,14 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
             <Input value={endpoint || '— not configured —'} readOnly placeholder="wss://<acct>.gremlin.cosmos.azure.com:443/" />
             <Caption1>Configured via <code>LOOM_COSMOS_GREMLIN_ENDPOINT</code>. Editing here is not honored by the BFF.</Caption1>
           </div>
-          <Caption1 style={{ marginTop: 8 }}>Use the buttons below to quick-load <code>g.V()</code> / <code>g.E()</code> previews.</Caption1>
-          <div style={{ display: 'flex', gap: 4, marginTop: 8 }}>
-            <Button size="small" onClick={showVertices} disabled={loading}>Vertices</Button>
-            <Button size="small" onClick={showEdges} disabled={loading}>Edges</Button>
+          <Caption1 style={{ marginTop: tokens.spacingVerticalS }}>Use the buttons below to quick-load <code>g.V()</code> / <code>g.E()</code> previews.</Caption1>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalS }}>
+            <Tooltip relationship="label" content="Quick-load g.V() — preview the first 25 vertices (nodes) and render them on the graph">
+              <Button size="small" onClick={showVertices} disabled={loading}>Vertices</Button>
+            </Tooltip>
+            <Tooltip relationship="label" content="Quick-load g.E() — preview the first 25 edges (relationships) and render them on the graph">
+              <Button size="small" onClick={showEdges} disabled={loading}>Edges</Button>
+            </Tooltip>
           </div>
         </div>
       }
@@ -209,7 +225,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
             </MessageBarBody>
           </MessageBar>
           <MonacoTextarea value={query} onChange={setQuery} language="javascript" height={200} minHeight={160} ariaLabel="Gremlin query" />
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
             <Button appearance="secondary" disabled={loading} onClick={showVertices}>Quick: Vertices</Button>
             <Button appearance="secondary" disabled={loading} onClick={showEdges}>Quick: Edges</Button>
@@ -237,7 +253,7 @@ function GremlinViz({ result }: { result: any }) {
   if (!graph) return null;
   return (
     <div>
-      <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({graph.nodes.length} nodes, {graph.edges.length} edges)</Caption1>
+      <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({graph.nodes.length} nodes, {graph.edges.length} edges)</Caption1>
       <ForceDirectedGraph nodes={graph.nodes} edges={graph.edges} />
     </div>
   );
@@ -302,7 +318,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
       ribbon={ribbon}
       leftPanel={<div className={s.treePad}>
         <Caption1>Cypher → KQL bridge. Backed by ADX <code>make-graph</code> + <code>graph-match</code>.</Caption1>
-        <div className={s.field} style={{ marginTop: 8 }}>
+        <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
           <Label>Source table</Label>
           <Input value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} placeholder="GraphSnapshot" />
           <Caption1>The ADX table that holds the graph snapshot (output of <code>make-graph</code>).</Caption1>
@@ -329,13 +345,13 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
           {translated && (
             <div>
               <Caption1>Translated KQL:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{translated}</pre>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{translated}</pre>
             </div>
           )}
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>Run</Button>
           {cypherGraph && (
             <div>
-              <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({cypherGraph.nodes.length} nodes, {cypherGraph.edges.length} edges)</Caption1>
+              <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({cypherGraph.nodes.length} nodes, {cypherGraph.edges.length} edges)</Caption1>
               <ForceDirectedGraph nodes={cypherGraph.nodes} edges={cypherGraph.edges} />
             </div>
           )}
@@ -353,10 +369,38 @@ type GqlBackend = 'adx-graph' | 'fabric-graph' | 'cosmos-gremlin-translate' | 'p
 
 export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  // Wave-B merge #5: cypher-graph folds into gql-graph. A `lang` toggle lets
+  // this editor accept either ISO GQL (default, unchanged behavior) or
+  // openCypher. In openCypher mode it reuses the SAME cypherToKql translator
+  // CypherGraphEditor uses (against `sourceTable`) and POSTs the emitted KQL to
+  // the kql-database query route — exactly as CypherGraphEditor does — so both
+  // languages ultimately target ADX make-graph/graph-match. CypherGraphEditor
+  // stays registered so already-created cypher-graph instances keep opening.
+  const [lang, setLang] = useState<'gql' | 'cypher'>('gql');
   const [query, setQuery] = useState<string>(SAMPLE_GQL);
   const [backend, setBackend] = useState<GqlBackend>('adx-graph');
+  const [sourceTable, setSourceTable] = useState('GraphSnapshot');
+  const [translated, setTranslated] = useState<string>('');
+  const [translateErr, setTranslateErr] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const [loading, setLoading] = useState(false);
+
+  // Toggle the editor language; swap to the matching sample so the editor is
+  // never left holding the other dialect's syntax. Only replaces the buffer
+  // when it still holds the *other* dialect's untouched sample (so user edits
+  // are preserved when toggling back and forth).
+  const toggleLang = useCallback(() => {
+    setLang((prev) => {
+      const next = prev === 'gql' ? 'cypher' : 'gql';
+      setQuery((q) => {
+        if (next === 'cypher' && q === SAMPLE_GQL) return SAMPLE_CYPHER;
+        if (next === 'gql' && q === SAMPLE_CYPHER) return SAMPLE_GQL;
+        return q;
+      });
+      setTranslated(''); setTranslateErr(null);
+      return next;
+    });
+  }, []);
 
   // v3.27: F-vaporware fix — Run button now actually does something.
   // For Fabric Graph backend we POST to the Fabric Graph executeQuery
@@ -366,9 +410,29 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
   // persist-only we honestly save the query to item state without
   // pretending to execute it.
   const run = useCallback(async () => {
-    setLoading(true); setResult(null);
+    setLoading(true); setResult(null); setTranslateErr(null); setTranslated('');
     try {
-      if (backend === 'adx-graph') {
+      // openCypher on the Azure-native ADX backend: translate to KQL graph
+      // operators (reusing CypherGraphEditor's translator) then run via the
+      // kql-database query route, which executeQuery's the self-contained
+      // make-graph/graph-match pipeline the translator emits.
+      if (lang === 'cypher' && backend === 'adx-graph') {
+        let kqlBody: string;
+        try {
+          kqlBody = cypherToKql(query, sourceTable);
+          setTranslated(kqlBody);
+        } catch (e) {
+          const tErr = e instanceof TranslationError ? e : new TranslationError(String(e));
+          setTranslateErr(`${tErr.message}${tErr.hint ? ` — ${tErr.hint}` : ''}`);
+          setLoading(false);
+          return;
+        }
+        const r = await fetch(`/api/items/kql-database/${id}/query`, {
+          method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kql: kqlBody }),
+        });
+        setResult(await r.json());
+      } else if (backend === 'adx-graph') {
         // Azure-native default — runs make-graph + graph-match on ADX (no Fabric).
         const r = await fetch(`/api/items/gql-graph/${id}/query`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -397,7 +461,7 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
       }
     } catch (e: any) { setResult({ ok: false, error: e?.message || String(e) }); }
     finally { setLoading(false); }
-  }, [backend, id, query]);
+  }, [backend, id, query, lang, sourceTable]);
 
   const gqlGraph = useMemo(() => {
     if (!result || !result.ok) return null;
@@ -410,9 +474,10 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
     { id: 'home', label: 'Home', groups: [
       { label: 'Query', actions: [
         { label: loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run', onClick: loading ? undefined : run, disabled: loading },
+        { label: `Language: ${lang === 'cypher' ? 'openCypher' : 'GQL'}`, onClick: toggleLang },
       ]},
     ]},
-  ], [loading, run, backend]);
+  ], [loading, run, backend, lang, toggleLang]);
 
   return (
     <ItemEditorChrome
@@ -420,51 +485,112 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
       ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Caption1>ISO GQL standard. Pick a backend below.</Caption1>
-          <div className={s.field} style={{ marginTop: 8 }}>
-            <Label>Backend</Label>
-            <select value={backend} onChange={(e) => setBackend(e.target.value as GqlBackend)} style={{ padding: 6 }}>
-              <option value="adx-graph">Azure Data Explorer (KQL graph — default, no Fabric)</option>
-              <option value="cosmos-gremlin-translate">Cosmos Gremlin (best-effort translate)</option>
-              <option value="persist-only">Persist-only (no dispatch)</option>
-              <option value="fabric-graph">Fabric Graph REST (opt-in — gated on workspace)</option>
-            </select>
+          <Caption1>ISO GQL / openCypher. Pick a language and backend below.</Caption1>
+          <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
+            <InfoLabel info="Authoring language for your graph query. GQL is the ISO standard graph query language and openCypher is Neo4j-style Cypher; either way Loom translates it to ADX KQL graph operators (make-graph / graph-match) to run.">Language</InfoLabel>
+            <Dropdown
+              aria-label="Language"
+              value={lang === 'cypher' ? 'openCypher → KQL (ADX make-graph)' : 'ISO GQL (39075:2024)'}
+              selectedOptions={[lang]}
+              onOptionSelect={(_, d) => { const v = d.optionValue as 'gql' | 'cypher'; if (v && v !== lang) toggleLang(); }}
+            >
+              <Option value="gql">ISO GQL (39075:2024)</Option>
+              <Option value="cypher">openCypher → KQL (ADX make-graph)</Option>
+            </Dropdown>
+            <Caption1>
+              {lang === 'cypher'
+                ? <>openCypher translates to ADX <code>graph-match</code> against the source table, then runs via the KQL query route — same engine as GQL.</>
+                : <>GQL runs natively on the selected backend (ADX <code>make-graph</code> by default).</>}
+            </Caption1>
+          </div>
+          {lang === 'cypher' && (
+            <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
+              <InfoLabel info="The ADX table holding your edges/nodes that make-graph builds the graph from — it's the input snapshot graph-match traverses.">Source table</InfoLabel>
+              <Input value={sourceTable} onChange={(_: unknown, d: any) => setSourceTable(d.value)} placeholder="GraphSnapshot" />
+              <Caption1>The ADX table that holds the graph snapshot (input to <code>make-graph</code>).</Caption1>
+            </div>
+          )}
+          <div className={s.field} style={{ marginTop: tokens.spacingVerticalS }}>
+            <InfoLabel info="Engine that executes the query. adx-graph = Azure Data Explorer make-graph/graph-match, the Azure-native default (no Fabric). Cosmos Gremlin best-effort translates, persist-only just saves, and Fabric Graph is opt-in and gated on a bound workspace.">Backend</InfoLabel>
+            <Dropdown
+              aria-label="Backend"
+              value={{ 'adx-graph': 'Azure Data Explorer (KQL graph — default, no Fabric)', 'cosmos-gremlin-translate': 'Cosmos Gremlin (best-effort translate)', 'persist-only': 'Persist-only (no dispatch)', 'fabric-graph': 'Fabric Graph REST (opt-in — gated on workspace)' }[backend]}
+              selectedOptions={[backend]}
+              onOptionSelect={(_, d) => setBackend(d.optionValue as GqlBackend)}
+            >
+              <Option value="adx-graph">Azure Data Explorer (KQL graph — default, no Fabric)</Option>
+              <Option value="cosmos-gremlin-translate">Cosmos Gremlin (best-effort translate)</Option>
+              <Option value="persist-only">Persist-only (no dispatch)</Option>
+              <Option value="fabric-graph">Fabric Graph REST (opt-in — gated on workspace)</Option>
+            </Dropdown>
+            {lang === 'cypher' && backend !== 'adx-graph' && (
+              <Caption1>openCypher translation is wired for the <strong>Azure Data Explorer</strong> backend. Switch to GQL or ADX to run.</Caption1>
+            )}
           </div>
         </div>
       }
       main={
         <div className={s.pad}>
-          <MessageBar intent={backend === 'persist-only' ? 'warning' : 'info'}>
-            <MessageBarBody>
-              <MessageBarTitle>
-                {backend === 'fabric-graph' && 'Fabric Graph REST'}
-                {backend === 'cosmos-gremlin-translate' && 'Cosmos Gremlin best-effort'}
-                {backend === 'persist-only' && 'Persist-only mode'}
-              </MessageBarTitle>
-              {backend === 'fabric-graph' && (
-                <>Fabric Graph <code>executeQuery</code> endpoint is preview. Run dispatches to <code>/api/items/gql-graph/[id]/query</code> — returns 501 with a documented gate when <code>LOOM_FABRIC_GRAPH_WORKSPACE</code> isn't bound.</>
-              )}
-              {backend === 'cosmos-gremlin-translate' && (
-                <>The Cosmos Gremlin route accepts <code>lang: 'gql'</code> for best-effort pattern translation. Complex GQL paths may fall back to Gremlin equivalents or return a translation-failed error.</>
-              )}
-              {backend === 'persist-only' && (
-                <>Run saves the query to item state and does <strong>not</strong> dispatch — this is the honest no-backend mode. Switch the backend dropdown to actually execute.</>
-              )}
-            </MessageBarBody>
-          </MessageBar>
-          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} ariaLabel="GQL editor" />
+          {lang === 'cypher' ? (
+            <MessageBar intent="info">
+              <MessageBarBody>
+                <MessageBarTitle>openCypher on ADX</MessageBarTitle>
+                Type Cypher; the translator emits KQL <code>graph-match</code> against{' '}
+                <code>{sourceTable}</code> and runs it on Azure Data Explorer. Switch{' '}
+                <em>Language</em> to GQL in the ribbon (or left panel) to write ISO GQL instead.
+              </MessageBarBody>
+            </MessageBar>
+          ) : (
+            <MessageBar intent={backend === 'persist-only' ? 'warning' : 'info'}>
+              <MessageBarBody>
+                <MessageBarTitle>
+                  {backend === 'adx-graph' && 'GQL on Azure Data Explorer'}
+                  {backend === 'fabric-graph' && 'Fabric Graph REST'}
+                  {backend === 'cosmos-gremlin-translate' && 'Cosmos Gremlin best-effort'}
+                  {backend === 'persist-only' && 'Persist-only mode'}
+                </MessageBarTitle>
+                {backend === 'adx-graph' && (
+                  <>ISO GQL runs natively on the Kusto graph engine via <code>make-graph</code> + <code>graph-match</code> — the same Azure-native backend openCypher targets. No Microsoft Fabric required.</>
+                )}
+                {backend === 'fabric-graph' && (
+                  <>Fabric Graph <code>executeQuery</code> endpoint is preview. Run dispatches to <code>/api/items/gql-graph/[id]/query</code> — returns 501 with a documented gate when <code>LOOM_FABRIC_GRAPH_WORKSPACE</code> isn't bound.</>
+                )}
+                {backend === 'cosmos-gremlin-translate' && (
+                  <>The Cosmos Gremlin route accepts <code>lang: 'gql'</code> for best-effort pattern translation. Complex GQL paths may fall back to Gremlin equivalents or return a translation-failed error.</>
+                )}
+                {backend === 'persist-only' && (
+                  <>Run saves the query to item state and does <strong>not</strong> dispatch — this is the honest no-backend mode. Switch the backend dropdown to actually execute.</>
+                )}
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          <MonacoTextarea value={query} onChange={setQuery} language="sql" height={200} minHeight={160} ariaLabel={lang === 'cypher' ? 'openCypher editor' : 'GQL editor'} />
+          {translateErr && (
+            <MessageBar intent="error">
+              <MessageBarBody>
+                <MessageBarTitle>Cypher → KQL translation failed</MessageBarTitle>
+                {translateErr} — switch Language to GQL and write the query by hand, or simplify the pattern.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {translated && (
+            <div>
+              <Caption1>Translated KQL:</Caption1>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{translated}</pre>
+            </div>
+          )}
           <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run}>
             {loading ? 'Running…' : backend === 'persist-only' ? 'Save query' : 'Run'}
           </Button>
           {result?.translated && (
             <div>
               <Caption1>Translated Gremlin:</Caption1>
-              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: 12, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap' }}>{result.translated}</pre>
+              <pre style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>{result.translated}</pre>
             </div>
           )}
           {gqlGraph && (
             <div>
-              <Caption1 style={{ marginBottom: 4 }}>Force-directed graph view ({gqlGraph.nodes.length} nodes, {gqlGraph.edges.length} edges)</Caption1>
+              <Caption1 style={{ marginBottom: tokens.spacingVerticalXS }}>Force-directed graph view ({gqlGraph.nodes.length} nodes, {gqlGraph.edges.length} edges)</Caption1>
               <ForceDirectedGraph nodes={gqlGraph.nodes} edges={gqlGraph.edges} />
             </div>
           )}
@@ -490,10 +616,12 @@ const VECTOR_BACKEND_DESCRIPTIONS: Record<VectorBackend, string> = {
   pgvector: 'PostgreSQL pgvector',
 };
 
-// Native AI Search vector backend is fully wired (create index / add docs /
-// vector search). The other backends persist their spec to Cosmos and show an
-// honest gate — they aren't reachable from this Loom build's network plane.
+// AI Search, pgvector and Cosmos vCore all have live create / upload / kNN data
+// planes (real backends; see the file header). cosmos-nosql (DiskANN) is the one
+// config-only backend and surfaces an honest gate.
 const AI_SEARCH_BACKEND: VectorBackend = 'ai-search';
+/** Backends with a live data plane in this build (everything except cosmos-nosql). */
+const LIVE_BACKENDS: ReadonlySet<VectorBackend> = new Set(['ai-search', 'pgvector', 'cosmos-vcore']);
 
 /**
  * Renders live k-NN search hits as a sortable results table when the rows share a
@@ -607,6 +735,19 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const [indexName, setIndexName] = useState<string>('docs-vec');
   const [dim, setDim] = useState<number>(1536);
   const [metric, setMetric] = useState<'cosine' | 'euclidean' | 'dotProduct'>('cosine');
+  const [algorithm, setAlgorithm] = useState<'hnsw' | 'exhaustiveKnn'>('hnsw');
+  // Guided embedding-dimension picker — common model output sizes; "Custom…"
+  // reveals a number input for anything else (replaces the freeform number box).
+  const DIM_PRESETS: Array<{ v: number; label: string }> = [
+    { v: 384, label: '384 — MiniLM-L6' },
+    { v: 768, label: '768 — MPNet / all-mpnet' },
+    { v: 1024, label: '1024 — text-embedding-3-large (1024)' },
+    { v: 1536, label: '1536 — text-embedding-3-small / ada-002' },
+    { v: 3072, label: '3072 — text-embedding-3-large' },
+  ];
+  const [customDim, setCustomDim] = useState(false);
+  const dimIsPreset = DIM_PRESETS.some((p) => p.v === dim);
+  const dimCustomMode = customDim || !dimIsPreset;
   const [dirty, setDirty] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -630,7 +771,9 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
   const [searching, setSearching] = useState(false);
   const [searchResult, setSearchResult] = useState<any>(null);
 
-  const isAiSearch = backend === AI_SEARCH_BACKEND;
+  // ai-search, pgvector and cosmos-vcore all have live data planes; cosmos-nosql
+  // is the one config-only backend (honest gate).
+  const backendLive = LIVE_BACKENDS.has(backend);
 
   // Load persisted spec.
   useEffect(() => {
@@ -647,6 +790,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
           if (st.indexName) setIndexName(st.indexName);
           if (typeof st.dim === 'number') setDim(st.dim);
           if (st.metric) setMetric(st.metric);
+          if (st.algorithm) setAlgorithm(st.algorithm);
           setSavedAt(j.item.updatedAt || null);
         }
       } catch { /* ignore */ }
@@ -662,11 +806,11 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       const r = isNew
         ? await fetch(`/api/items/vector-store`, {
             method: 'POST', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ workspaceId: 'default', displayName: indexName, state: { backend, indexName, dim, metric } }),
+            body: JSON.stringify({ workspaceId: 'default', displayName: indexName, state: { backend, indexName, dim, metric, algorithm } }),
           })
         : await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`, {
             method: 'PATCH', headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ state: { backend, indexName, dim, metric } }),
+            body: JSON.stringify({ state: { backend, indexName, dim, metric, algorithm } }),
           });
       const j = await r.json();
       if (j?.ok) {
@@ -677,40 +821,40 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       return j;
     } catch (e: any) { return { ok: false, error: e?.message || String(e) }; }
     finally { setSaving(false); }
-  }, [id, backend, indexName, dim, metric]);
+  }, [id, backend, indexName, dim, metric, algorithm]);
 
-  // Load the live AI Search index schema.
+  // Load the live index schema for whichever backend is selected.
   const loadSchema = useCallback(async () => {
-    if (!isAiSearch || !indexName) return;
+    if (!backendLive || !indexName) return;
     setSchemaMsg(null); setLiveIndex(null); setSchemaLoading(true);
     try {
-      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index?name=${encodeURIComponent(indexName)}`);
+      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index?name=${encodeURIComponent(indexName)}&backend=${encodeURIComponent(backend)}`);
       const j = await r.json();
       if (!j.ok) { setSchemaMsg(j); return; }
       setLiveIndex(j.exists ? j.index : null);
       if (!j.exists) setSchemaMsg({ ok: true, info: `Index "${indexName}" not created yet — click Create index.` });
     } catch (e: any) { setSchemaMsg({ ok: false, error: e?.message || String(e) }); }
     finally { setSchemaLoading(false); }
-  }, [isAiSearch, indexName, id]);
+  }, [backendLive, indexName, id, backend]);
 
-  useEffect(() => { if (isAiSearch) loadSchema(); }, [isAiSearch, loadSchema]);
+  useEffect(() => { if (backendLive) loadSchema(); }, [backendLive, loadSchema]);
 
-  // Create / update the real AI Search vector index.
+  // Create / update the real vector index on the selected backend.
   const createIndex = useCallback(async () => {
     await persistSpec();
-    if (!isAiSearch) { setCreateResult({ ok: false, deferred: true, error: `Live index creation is wired for the ai-search backend only. The "${backend}" spec was persisted to Cosmos; provision that backend and switch this Loom build to reach it.` }); return; }
+    if (!backendLive) { setCreateResult({ ok: false, deferred: true, error: `The "${backend}" backend is config-only in this build. The spec was persisted to Cosmos; switch to ai-search, cosmos-vcore, or pgvector to create a live index.` }); return; }
     setCreating(true); setCreateResult(null);
     try {
       const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ indexName, dim, metric }),
+        body: JSON.stringify({ indexName, dim, metric, algorithm, backend }),
       });
       const j = await r.json();
       setCreateResult(j);
       if (j.ok) await loadSchema();
     } catch (e: any) { setCreateResult({ ok: false, error: e?.message || String(e) }); }
     finally { setCreating(false); }
-  }, [persistSpec, isAiSearch, backend, id, indexName, dim, metric, loadSchema]);
+  }, [persistSpec, backendLive, backend, id, indexName, dim, metric, algorithm, loadSchema]);
 
   const uploadDocs = useCallback(async () => {
     setUploading(true); setUploadResult(null);
@@ -720,12 +864,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       if (!Array.isArray(documents)) documents = [documents];
       const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ indexName, documents }),
+        body: JSON.stringify({ indexName, documents, backend }),
       });
       setUploadResult(await r.json());
     } catch (e: any) { setUploadResult({ ok: false, error: e?.message || String(e) }); }
     finally { setUploading(false); }
-  }, [docsText, indexName, id]);
+  }, [docsText, indexName, id, backend]);
 
   const runSearch = useCallback(async () => {
     setSearching(true); setSearchResult(null);
@@ -734,12 +878,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       try { vector = JSON.parse(searchVec); } catch { setSearchResult({ ok: false, error: 'Query vector must be a JSON number array, e.g. [0.1, 0.2, …]' }); return; }
       const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/search`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ indexName, vector, k, text: searchText || undefined }),
+        body: JSON.stringify({ indexName, vector, k, metric, text: searchText || undefined, backend }),
       });
       setSearchResult(await r.json());
     } catch (e: any) { setSearchResult({ ok: false, error: e?.message || String(e) }); }
     finally { setSearching(false); }
-  }, [searchVec, searchText, k, indexName, id]);
+  }, [searchVec, searchText, k, indexName, id, metric, backend]);
 
   // Ctrl+S persists the spec.
   useEffect(() => {
@@ -755,14 +899,14 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       { label: 'Index', actions: [
         { label: saving ? 'Saving…' : 'Save spec', icon: <Save20Regular />, onClick: saving ? undefined : () => persistSpec(), disabled: saving },
         { label: creating ? 'Creating…' : 'Create index', icon: <Add20Regular />, onClick: creating ? undefined : createIndex, disabled: creating },
-        { label: 'Reload schema', icon: <ArrowClockwise20Regular />, onClick: loadSchema, disabled: !isAiSearch },
+        { label: 'Reload schema', icon: <ArrowClockwise20Regular />, onClick: loadSchema, disabled: !backendLive },
       ]},
       { label: 'Test', actions: [
         { label: 'Documents', icon: <Add20Regular />, onClick: () => setTab('documents') },
         { label: 'Vector search', icon: <Search20Regular />, onClick: () => setTab('search') },
       ]},
     ]},
-  ], [saving, persistSpec, creating, createIndex, loadSchema, isAiSearch]);
+  ], [saving, persistSpec, creating, createIndex, loadSchema, backendLive]);
 
   const vectorField = useMemo(() => {
     const f = (liveIndex?.fields || []).find((x: any) => x.type?.includes('Collection(Edm.Single)'));
@@ -779,7 +923,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
             <Database24Regular className={s.emptyIcon} />
             <Subtitle2>Index spec</Subtitle2>
           </div>
-          <Field label="Backend" hint="Azure-native vector store backing this index.">
+          <Field label={<InfoLabel info="The Azure-native service that stores and searches the embedding vectors. AI Search (default) gives hybrid BM25 + vector; Cosmos NoSQL/vCore and pgvector are alternatives.">Backend</InfoLabel>}>
             <Dropdown
               value={VECTOR_BACKEND_DESCRIPTIONS[backend]}
               selectedOptions={[backend]}
@@ -790,13 +934,28 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               ))}
             </Dropdown>
           </Field>
-          <Field label="Index name">
+          <Field label={<InfoLabel info="Name of the search index / collection that will hold your vectors. Lowercase letters, digits and dashes.">Index name</InfoLabel>}>
             <Input value={indexName} onChange={(_: unknown, d: any) => { setIndexName(d.value); setDirty(true); }} />
           </Field>
-          <Field label="Dimensions" hint="Length of each embedding vector (e.g. 1536 for text-embedding-3-small).">
-            <Input type="number" value={String(dim)} onChange={(_: unknown, d: any) => { setDim(Number(d.value || '0')); setDirty(true); }} />
+          <Field label={<InfoLabel info="Length of each embedding vector — must match your embedding model's output. Pick the model you embed with; choose Custom… for any other size.">Dimensions</InfoLabel>}>
+            <Dropdown
+              value={dimCustomMode ? 'Custom…' : (DIM_PRESETS.find((p) => p.v === dim)?.label || String(dim))}
+              selectedOptions={dimCustomMode ? ['custom'] : [String(dim)]}
+              onOptionSelect={(_, d) => {
+                if (d.optionValue === 'custom') { setCustomDim(true); }
+                else if (d.optionValue) { setCustomDim(false); setDim(Number(d.optionValue)); setDirty(true); }
+              }}
+            >
+              {DIM_PRESETS.map((p) => <Option key={p.v} value={String(p.v)} text={p.label}>{p.label}</Option>)}
+              <Option value="custom" text="Custom…">Custom…</Option>
+            </Dropdown>
+            {dimCustomMode && (
+              <Input type="number" value={String(dim)} placeholder="e.g. 512"
+                onChange={(_: unknown, d: any) => { setDim(Number(d.value || '0')); setDirty(true); }}
+                style={{ marginTop: tokens.spacingVerticalXS }} />
+            )}
           </Field>
-          <Field label="Metric">
+          <Field label={<InfoLabel info="How vector similarity is scored. cosine = angle (best for normalized embeddings, the default); dotProduct = inner product (fastest, needs normalized vectors); euclidean = L2 distance.">Metric</InfoLabel>}>
             <Dropdown
               value={metric}
               selectedOptions={[metric]}
@@ -805,6 +964,16 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
               <Option value="cosine">cosine</Option>
               <Option value="euclidean">euclidean</Option>
               <Option value="dotProduct">dotProduct</Option>
+            </Dropdown>
+          </Field>
+          <Field label={<InfoLabel info="Vector search algorithm. HNSW = approximate nearest-neighbor, fast at scale (the default). Exhaustive kNN = brute-force exact search, best for small corpora or recall validation.">Algorithm</InfoLabel>}>
+            <Dropdown
+              value={algorithm === 'exhaustiveKnn' ? 'Exhaustive kNN (exact)' : 'HNSW (approximate, fast)'}
+              selectedOptions={[algorithm]}
+              onOptionSelect={(_, d) => { if (d.optionValue) { setAlgorithm(d.optionValue as 'hnsw' | 'exhaustiveKnn'); setDirty(true); } }}
+            >
+              <Option value="hnsw" text="HNSW (approximate, fast)">HNSW (approximate, fast)</Option>
+              <Option value="exhaustiveKnn" text="Exhaustive kNN (exact)">Exhaustive kNN (exact)</Option>
             </Dropdown>
           </Field>
           <Divider />
@@ -817,7 +986,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       }
       main={
         <>
-          <div style={{ padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+          <div style={{ padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
             <TabList selectedValue={tab} onTabSelect={(_: unknown, d: any) => setTab(d.value)}>
               <Tab value="schema">Index schema</Tab>
               <Tab value="documents">Add documents</Tab>
@@ -825,13 +994,32 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
             </TabList>
           </div>
           <div className={s.pad}>
-            {!isAiSearch && (
+            {backend === 'cosmos-nosql' && (
               <MessageBar intent="warning">
                 <MessageBarBody>
-                  <MessageBarTitle>{VECTOR_BACKEND_DESCRIPTIONS[backend]} — config-only in this build</MessageBarTitle>
-                  The spec persists to Cosmos, but this Loom build only reaches the <strong>Azure AI Search</strong> data plane.
-                  To run live index/search here, switch the backend to <code>ai-search</code> and set <code>LOOM_AI_SEARCH_SERVICE</code>
-                  (+ grant the Console UAMI <em>Search Index Data Contributor</em>). For {backend}, provision the resource and wire its endpoint.
+                  <MessageBarTitle>Cosmos DB for NoSQL (DiskANN) — config-only in this build</MessageBarTitle>
+                  The spec persists to Cosmos, but a DiskANN vector policy on a Cosmos NoSQL container isn't wired here.
+                  Switch the backend to <code>ai-search</code>, <code>cosmos-vcore</code>, or <code>pgvector</code> for a live create + k-NN index.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {backend === 'pgvector' && (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>PostgreSQL pgvector — live backend</MessageBarTitle>
+                  Create runs <code>CREATE EXTENSION vector</code> + <code>CREATE INDEX … USING hnsw</code>; search runs a real k-NN
+                  (<code>ORDER BY embedding &lt;op&gt; $1::vector LIMIT k</code>). Requires <code>LOOM_PGVECTOR_HOST</code> +{' '}
+                  <code>LOOM_POSTGRES_AAD_USER</code>, and the server must allow-list the <code>vector</code> extension. When unset,
+                  the action returns an honest gate below.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {backend === 'cosmos-vcore' && (
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Cosmos DB for MongoDB vCore — live backend</MessageBarTitle>
+                  Create builds a <code>cosmosSearch</code> vector index; search runs the <code>$search</code> k-NN aggregation.
+                  Requires <code>LOOM_COSMOS_VCORE_CONNECTION_STRING</code>. When unset, the action returns an honest gate below.
                 </MessageBarBody>
               </MessageBar>
             )}
@@ -843,12 +1031,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                     {creating ? 'Creating…' : 'Create / update index'}
                   </Button>
                   <Button icon={<Save20Regular />} onClick={() => persistSpec()} disabled={saving}>{saving ? 'Saving…' : 'Save spec'}</Button>
-                  <Button icon={<ArrowClockwise20Regular />} onClick={loadSchema} disabled={!isAiSearch || schemaLoading}>Reload schema</Button>
+                  <Button icon={<ArrowClockwise20Regular />} onClick={loadSchema} disabled={!backendLive || schemaLoading}>Reload schema</Button>
                 </div>
                 {createResult && (
                   <MessageBar intent={createResult.ok ? 'success' : createResult.deferred ? 'warning' : 'error'}>
                     <MessageBarBody>
-                      <MessageBarTitle>{createResult.ok ? `Index "${indexName}" created` : createResult.deferred ? 'AI Search not provisioned' : 'Create failed'}</MessageBarTitle>
+                      <MessageBarTitle>{createResult.ok ? `Index "${indexName}" created` : createResult.deferred ? 'Backend not provisioned' : 'Create failed'}</MessageBarTitle>
                       {createResult.error || (createResult.ok ? `${createResult.index?.fields?.length || 0} fields, ${dim}-dim ${metric} vector field.` : '')}
                       {createResult.hint && <><br />{createResult.hint}</>}
                     </MessageBarBody>
@@ -861,11 +1049,11 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                 )}
                 {schemaMsg?.info && <MessageBar intent="info"><MessageBarBody>{schemaMsg.info}</MessageBarBody></MessageBar>}
                 {schemaLoading && <Spinner size="small" label="Loading live index schema…" labelPosition="after" />}
-                {!schemaLoading && !liveIndex && isAiSearch && !schemaMsg && (
+                {!schemaLoading && !liveIndex && backendLive && !schemaMsg && (
                   <div className={s.emptyState}>
                     <Database24Regular className={s.emptyIcon} fontSize={40} />
                     <Subtitle2>No live index yet</Subtitle2>
-                    <Caption1>Set the index name, dimensions, and metric on the left, then choose <strong>Create / update index</strong> to provision it on Azure AI Search.</Caption1>
+                    <Caption1>Set the index name, dimensions, and metric on the left, then choose <strong>Create / update index</strong> to provision it on the selected backend (<strong>{VECTOR_BACKEND_DESCRIPTIONS[backend]}</strong>).</Caption1>
                   </div>
                 )}
                 {liveIndex && (
@@ -875,22 +1063,24 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                       <Subtitle2>Live index fields — {liveIndex.name}</Subtitle2>
                       <Badge appearance="tint" color="success">{(liveIndex.fields || []).length} fields</Badge>
                     </div>
-                    <Table aria-label="Index fields" size="small">
-                      <TableHeader><TableRow>
-                        <TableHeaderCell>Field</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
-                        <TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Dimensions</TableHeaderCell>
-                      </TableRow></TableHeader>
-                      <TableBody>
-                        {(liveIndex.fields || []).map((f: any) => (
-                          <TableRow key={f.name}>
-                            <TableCell><strong>{f.name}</strong></TableCell>
-                            <TableCell className={s.monoCell}>{f.type}</TableCell>
-                            <TableCell>{f.key ? <Badge appearance="tint" color="brand">key</Badge> : ''}</TableCell>
-                            <TableCell className={s.scoreCell}>{f.dimensions || ''}</TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
+                    <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                      <Table aria-label="Index fields" size="small">
+                        <TableHeader><TableRow>
+                          <TableHeaderCell>Field</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                          <TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Dimensions</TableHeaderCell>
+                        </TableRow></TableHeader>
+                        <TableBody>
+                          {(liveIndex.fields || []).map((f: any) => (
+                            <TableRow key={f.name}>
+                              <TableCell><strong>{f.name}</strong></TableCell>
+                              <TableCell className={s.monoCell}>{f.type}</TableCell>
+                              <TableCell>{f.key ? <Badge appearance="tint" color="brand">key</Badge> : ''}</TableCell>
+                              <TableCell className={s.scoreCell}>{f.dimensions || ''}</TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
                   </>
                 )}
               </>

@@ -11,13 +11,36 @@
 import dynamic from 'next/dynamic';
 import type { ComponentType } from 'react';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import type { PipelineRuntime } from '@/lib/components/pipeline/types';
 
-export interface EditorProps { item: FabricItemType; id: string; }
+export interface EditorProps {
+  item: FabricItemType;
+  id: string;
+  /**
+   * Runtime preset forwarded by the item page when the opened item is an
+   * alias/preset of the unified pipeline item (Contract D). Locks the unified
+   * editor's runtime selector to this backend. `'adf'` is the Azure-native
+   * default per no-fabric-dependency.md; `'fabric'` is opt-in only. Editors
+   * that ignore this prop behave identically to today.
+   */
+  runtimePreset?: PipelineRuntime;
+  /**
+   * Template id forwarded by the item page when the opened item is a template
+   * (templateOf/templateId in the catalog, Contract F). Resolved by
+   * lib/components/pipeline/templates/catalog.ts into a pre-wired spec.
+   * Undefined for non-template items — no behavior change.
+   */
+  templateId?: string;
+}
 
 type EditorComponent = ComponentType<EditorProps>;
 
-const reg = (loader: () => Promise<{ [k: string]: EditorComponent }>, name: string): EditorComponent =>
-  dynamic(() => loader().then((m) => ({ default: m[name] })), { ssr: false });
+// The loader resolves any module namespace; we pick a single named export by
+// `name`. Typing it as a generic record (rather than requiring EVERY export be
+// an EditorComponent) lets editor modules also export helpers/types alongside
+// their component without tripping the map type.
+const reg = (loader: () => Promise<Record<string, unknown>>, name: string): EditorComponent =>
+  dynamic(() => loader().then((m) => ({ default: m[name] as EditorComponent })), { ssr: false });
 
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // Fabric Apps (Build 2026 preview)
@@ -30,6 +53,11 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'notebook':             reg(() => import('./notebook-editor'),          'NotebookEditor'),
   'data-pipeline':        reg(() => import('./data-pipeline-editor'),     'DataPipelineEditor'),
   'dataflow':             reg(() => import('./dataflow-gen2-editor'),     'DataflowGen2Editor'),
+  // Mapping data flow — the ADF/Synapse SPARK-based visual data flow designer
+  // (DISTINCT from the Power Query / Dataflow Gen2 above). Hosts the React Flow
+  // graph of Source / transformation / Sink nodes that compiles to the Data
+  // Flow Script Spark runs; round-trips via /api/adf/dataflows.
+  'mapping-dataflow':     reg(() => import('./mapping-dataflow-editor'),  'MappingDataFlowEditor'),
   'mirrored-database':    reg(() => import('./mirrored-database-editor'), 'MirroredDatabaseEditor'),
   'mirrored-databricks':  reg(() => import('./mirrored-databricks-editor'), 'MirroredDatabricksEditor'),
   'mounted-adf':          reg(() => import('./mounted-adf-editor'),       'MountedAdfEditor'),
@@ -40,6 +68,16 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'spark-environment':    reg(() => import('./spark-environment-editor'), 'SparkEnvironmentEditor'),
   'copy-job':             reg(() => import('./copy-job-editor'),          'CopyJobEditor'),
   'dbt-job':              reg(() => import('./phase2-misc-editors'),      'DbtJobEditor'),
+  // Data Factory connection objects as first-class creatable items. The
+  // standalone editors wrap the shared pipeline gallery / IR manager (read-only)
+  // in manage/factory-scoped mode; real ARM via /api/adf (+ /api/synapse).
+  // Azure-native default, Fabric opt-in — per no-fabric-dependency.md.
+  'linked-service':       reg(() => import('./linked-service-editor'),    'LinkedServiceEditor'),
+  'integration-runtime':  reg(() => import('./integration-runtime-editor'), 'IntegrationRuntimeEditor'),
+  // Read-only T-SQL analyst consumption surface over a lakehouse/warehouse/mirror
+  // — Azure Synapse serverless SQL over the Delta in ADLS (no Fabric). Reuses the
+  // serverless SQL editor surface; BFF re-exports the serverless query/schema/objects.
+  'sql-analytics-endpoint': reg(() => import('./sql-analytics-endpoint-editor'), 'SqlAnalyticsEndpointEditor'),
 
   // Phase 3
   'eventhouse':           reg(() => import('./phase3-editors'),           'EventhouseEditor'),
@@ -73,9 +111,6 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'map':                  reg(() => import('./phase4-editors'),           'MapEditor'),
   'operations-agent':     reg(() => import('./phase4-editors'),           'OperationsAgentEditor'),
   'data-agent':           reg(() => import('./phase4-editors'),           'DataAgentEditor'),
-
-  // v3.5 — Data Science experience home (workload landing page)
-  'data-science-home':    reg(() => import('./data-science-home-editor'), 'DataScienceHomeEditor'),
 
   // v1.5 — Native Azure-service editors (Synapse, Databricks, ADF, U-SQL)
   // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)
@@ -197,6 +232,15 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'release-environment':         reg(() => import('./palantir-editors'),       'ReleaseEnvironmentEditor'),
   'health-check':                reg(() => import('./palantir-editors'),       'HealthCheckEditor'),
   'aip-logic':                   reg(() => import('./palantir-editors'),       'AipLogicEditor'),
+
+  // wave2-a — Azure-native messaging + lakehouse-shortcut items. Each is a
+  // navigator over a deployment-pinned Azure resource (real ARM / data-plane via
+  // the existing eventhubs / eventgrid / adls clients) with an honest infra gate.
+  // Azure-native default — no Fabric / OneLake required (no-fabric-dependency.md).
+  'event-hubs-namespace':        reg(() => import('./event-hubs-namespace-editor'), 'EventHubsNamespaceEditor'),
+  'service-bus-namespace':       reg(() => import('./service-bus-namespace-editor'), 'ServiceBusNamespaceEditor'),
+  'event-grid-topic':            reg(() => import('./event-grid-topic-editor'),    'EventGridTopicEditor'),
+  'lakehouse-shortcut':          reg(() => import('./lakehouse-shortcut-editor'),  'LakehouseShortcutEditor'),
 };
 
 export function getEditor(slug: string): EditorComponent | null {

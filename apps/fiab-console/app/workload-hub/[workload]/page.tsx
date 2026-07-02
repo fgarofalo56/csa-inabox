@@ -39,8 +39,10 @@ const useStyles = makeStyles({
     lineHeight: tokens.lineHeightBase400,
     maxWidth: '760px',
     marginBottom: tokens.spacingVerticalL,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
-  empty: { color: tokens.colorNeutralForeground3 },
+  empty: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   badgeRow: { display: 'inline-flex', gap: tokens.spacingHorizontalXS },
 });
 
@@ -113,6 +115,7 @@ export default function WorkloadLandingPage(props: Props) {
                 badge={
                   <span className={s.badgeRow}>
                     {t.preview && <Badge appearance="outline" color="warning" size="small">Preview</Badge>}
+                    {t.labs && <Badge appearance="tint" color="brand" size="small">Labs</Badge>}
                     {t.noRestApi && <Badge appearance="outline" color="informative" size="small">UI only</Badge>}
                   </span>
                 }

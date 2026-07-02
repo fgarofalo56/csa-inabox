@@ -19,6 +19,7 @@
  * mirror engine + ADF queryPipelineRuns) — no mocks.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -32,7 +33,7 @@ export const dynamic = 'force-dynamic';
 // A full re-snapshot of several tables (TDS read + ADLS write each) can take a while.
 export const maxDuration = 300;
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 /** Resolve the mirror's source config from item.state (with definition fallback). */
 function sourceFromState(state: Record<string, any>): MirrorSource {
@@ -55,19 +56,19 @@ function sourceFromState(state: Record<string, any>): MirrorSource {
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   const action = body?.action;
   if (action !== 'stop' && action !== 'start' && action !== 'restart') {
-    return err("action must be 'stop', 'start', or 'restart'", 400);
+    return apiError("action must be 'stop', 'start', or 'restart'", 400);
   }
 
   try {
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!existing || existing.itemType !== 'mirrored-database') return err('mirrored database not found', 404);
+    if (!existing || existing.itemType !== 'mirrored-database') return apiError('mirrored database not found', 404);
     const state = (existing.state || {}) as Record<string, any>;
     const before = { mirroringStatus: state.mirroringStatus || 'NotStarted' };
 
@@ -126,5 +127,5 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       note: run.note,
       error: run.error,
     });
-  } catch (e: any) { return err(e?.message || String(e), 500); }
+  } catch (e: any) { return apiError(e?.message || String(e), 500); }
 }

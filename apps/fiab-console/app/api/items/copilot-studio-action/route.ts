@@ -1,6 +1,6 @@
 /**
  * GET  /api/items/copilot-studio-action?envId=&agentId=  — list actions
- * POST /api/items/copilot-studio-action                  — bind (body: { envId, agentId, name, type, connectorId?, flowId? })
+ * POST /api/items/copilot-studio-action                  — bind (body: { envId, agentId, name, type, connectorId?, flowId?, parameters? })
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -41,6 +41,11 @@ export async function POST(req: NextRequest) {
       type: String(body.type),
       connectorId: body.connectorId,
       flowId: body.flowId,
+      // Forward the structured Inputs/Outputs mapping grid (no freeform JSON).
+      // bindAction performs an honest EntityDefinitions pre-flight on
+      // msdyn_parameterconfiguration and either persists the Memo JSON or
+      // throws a 422 gate — it never silently drops the mapping.
+      parameters: Array.isArray(body.parameters) ? body.parameters : undefined,
     });
     return NextResponse.json({ ok: true, action });
   } catch (e: any) { return handleErr(e); }

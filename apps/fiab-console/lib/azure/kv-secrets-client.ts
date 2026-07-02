@@ -86,6 +86,17 @@ export async function putShortcutSecret(name: string, value: string): Promise<{ 
   return { name: secretName };
 }
 
+/** Soft-delete a secret from the SHORTCUT vault (best-effort — never throws). */
+export async function deleteShortcutSecret(name: string): Promise<void> {
+  const base = shortcutVaultUrl();
+  if (!base || !name) return;
+  await fetchWithTimeout(`${base}/secrets/${encodeURIComponent(name)}?api-version=${KV_API}`, {
+    method: 'DELETE',
+    headers: { authorization: `Bearer ${await token()}` },
+    cache: 'no-store',
+  }).catch(() => { /* best-effort */ });
+}
+
 /** GET the current value of a secret from the SHORTCUT vault. */
 export async function getShortcutSecretValue(name: string): Promise<string> {
   const base = shortcutVaultUrl();

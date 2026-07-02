@@ -39,7 +39,8 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorPaletteBlueBackground2, color: tokens.colorPaletteBlueForeground2,
   },
   nameText: { display: 'flex', flexDirection: 'column', minWidth: 0 },
-  openLink: { display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px' },
+  openLink: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 },
+  errorText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 export default function AdminWorkspacesPage() {
@@ -187,7 +188,7 @@ export default function AdminWorkspacesPage() {
 
       {error && (
         <MessageBar intent="error" className={a.messageBar}>
-          <MessageBarBody>
+          <MessageBarBody className={s.errorText}>
             <MessageBarTitle>Could not load workspaces</MessageBarTitle>
             {error}
           </MessageBarBody>

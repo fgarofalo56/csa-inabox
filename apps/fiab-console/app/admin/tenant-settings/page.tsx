@@ -11,14 +11,15 @@
 import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Spinner, Button, Switch, Caption1, Subtitle2, Body1, Input, Badge,
+  Button, Switch, Caption1, Subtitle2, Body1, Input, Badge,
   MessageBar, MessageBarBody, MessageBarTitle, SpinButton, Field,
   Accordion, AccordionItem, AccordionHeader, AccordionPanel,
-  Tooltip, makeStyles, tokens,
+  Tooltip, Skeleton, SkeletonItem, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search24Regular, Save24Regular, ArrowReset24Regular, Open16Regular } from '@fluentui/react-icons';
+import { Search24Regular, Save24Regular, ArrowReset24Regular, Open16Regular, Settings24Regular } from '@fluentui/react-icons';
 import { AdminShell } from '@/lib/components/admin-shell';
 import { Section } from '@/lib/components/ui/section';
+import { EmptyState } from '@/lib/components/empty-state';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
 import { ToggleScopePicker } from '@/lib/components/admin/toggle-scope-picker';
@@ -67,23 +68,52 @@ const useStyles = makeStyles({
     borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
     alignItems: 'center',
   },
-  toggleLabel: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: 0 },
-  toggleName: { fontSize: '14px', fontWeight: 500 },
-  toggleHelp: { fontSize: '12px', color: tokens.colorNeutralForeground3, lineHeight: 1.45 },
-  groupDesc: { color: tokens.colorNeutralForeground3, fontSize: '13px', marginBottom: tokens.spacingVerticalS, display: 'block' },
-  groupCount: { color: tokens.colorNeutralForeground3, fontSize: '12px', marginLeft: '8px' },
-  diff: { color: tokens.colorPaletteYellowForeground2, fontSize: '12px' },
-  learn: { display: 'inline-flex', alignItems: 'center', gap: '4px', marginLeft: '6px' },
+  toggleLabel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0 },
+  toggleName: { fontSize: tokens.fontSizeBase300, fontWeight: 500, overflowWrap: 'anywhere' },
+  toggleHelp: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, lineHeight: 1.45, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  groupDesc: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase300, marginBottom: tokens.spacingVerticalS, display: 'block', overflowWrap: 'anywhere' },
+  groupCount: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, marginLeft: tokens.spacingHorizontalS },
+  diff: { color: tokens.colorPaletteYellowForeground2, fontSize: tokens.fontSizeBase200 },
+  learn: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginLeft: tokens.spacingHorizontalXS },
   numericBlock: {
     marginTop: tokens.spacingVerticalS,
-    display: 'flex', flexDirection: 'column', gap: '2px', maxWidth: '260px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, maxWidth: '260px',
   },
   filterInput: { width: '100%', maxWidth: '360px', minWidth: '200px' },
-  changeNote: { marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 },
+  changeNote: { marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   metaLine: { display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM },
-  emptyMsg: { color: tokens.colorNeutralForeground3, padding: tokens.spacingVerticalXXL },
-  toggleId: { color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: '11px' },
+  toggleId: { color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   spinWidth: { width: '140px' },
+  // Icon-led page intro — matches the polished admin Health / Network surfaces.
+  intro: {
+    display: 'flex',
+    alignItems: 'flex-start',
+    gap: tokens.spacingHorizontalM,
+    marginBottom: tokens.spacingVerticalL,
+  },
+  introIcon: {
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2}, ${tokens.colorBrandBackground})`,
+    color: tokens.colorNeutralForegroundOnBrand,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+    boxShadow: tokens.shadow4,
+  },
+  introText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  introHint: { color: tokens.colorNeutralForeground3 },
+  // Loading skeleton that mirrors the accordion group layout.
+  skeletonStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  skeletonRow: {
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalXL,
+    paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
+    borderTop: `1px solid ${tokens.colorNeutralStroke3}`,
+  },
+  skeletonRowText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, flex: 1, minWidth: 0 },
 });
 
 export default function TenantSettingsPage() {
@@ -266,6 +296,17 @@ export default function TenantSettingsPage() {
 
   return (
     <AdminShell sectionTitle="Tenant settings">
+      <div className={s.intro}>
+        <div className={s.introIcon} aria-hidden><Settings24Regular /></div>
+        <div className={s.introText}>
+          <Subtitle2>Tenant-wide feature switches</Subtitle2>
+          <Caption1 className={s.introHint}>
+            Per-area switches across Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, and Git.
+            Changes persist to Cosmos with a per-toggle audit trail. Save with Ctrl+S.
+          </Caption1>
+        </div>
+      </div>
+
       <div className={s.toolbar}>
         <Input
           contentBefore={<Search24Regular />}
@@ -362,12 +403,42 @@ export default function TenantSettingsPage() {
         </MessageBar>
       )}
 
-      {!groups && !loadError && <Spinner label="Loading settings…" />}
+      {!groups && !loadError && (
+        <Section title="Settings">
+          <div className={s.skeletonStack} aria-label="Loading settings" role="status">
+            {[0, 1, 2].map((g) => (
+              <div key={g}>
+                <Skeleton aria-label="">
+                  <SkeletonItem shape="rectangle" style={{ width: '180px', height: '20px' }} />
+                </Skeleton>
+                {[0, 1, 2].map((r) => (
+                  <div key={r} className={s.skeletonRow}>
+                    <div className={s.skeletonRowText}>
+                      <Skeleton aria-label="">
+                        <SkeletonItem shape="rectangle" style={{ width: `${40 + ((g * 3 + r) * 11) % 35}%`, height: '16px' }} />
+                      </Skeleton>
+                      <Skeleton aria-label="">
+                        <SkeletonItem shape="rectangle" style={{ width: '90%', height: '12px' }} />
+                      </Skeleton>
+                    </div>
+                    <Skeleton aria-label="">
+                      <SkeletonItem shape="rectangle" style={{ width: '40px', height: '20px' }} />
+                    </Skeleton>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {groups && visibleGroups.length === 0 && filter && (
-        <Body1 className={s.emptyMsg}>
-          No settings match &ldquo;{q}&rdquo;.
-        </Body1>
+        <EmptyState
+          icon={<Search24Regular />}
+          title="No matching settings"
+          body={`No tenant settings match “${q}”. Try a different name, key, or description.`}
+          primaryAction={{ label: 'Clear filter', appearance: 'secondary', onClick: () => setQ('') }}
+        />
       )}
 
       {visibleGroups.length > 0 && (

@@ -3,10 +3,10 @@
 import { useState } from 'react';
 import { CatalogShell } from '@/lib/components/catalog/catalog-shell';
 import { TreeBrowser } from '@/lib/components/catalog/tree-browser';
-import { TabList, Tab, makeStyles } from '@fluentui/react-components';
+import { TabList, Tab, makeStyles, tokens } from '@fluentui/react-components';
 
 const useStyles = makeStyles({
-  tabs: { marginBottom: 12 },
+  tabs: { marginBottom: tokens.spacingVerticalM },
 });
 
 export default function CatalogBrowsePage() {

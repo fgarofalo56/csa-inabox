@@ -30,7 +30,7 @@ const useStyles = makeStyles({
     display: 'flex',
     flexDirection: 'column',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   shellActive: {
@@ -53,7 +53,7 @@ const useStyles = makeStyles({
     zIndex: 999,
   },
   header: {
-    display: 'flex', alignItems: 'center', gap: 8,
+    display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: tokens.spacingHorizontalS,
     padding: '4px 8px',
     backgroundColor: tokens.colorNeutralBackground2,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -70,9 +70,9 @@ const useStyles = makeStyles({
   },
   editor: {
     width: '100%',
-    minHeight: 80,
+    minHeight: '80px',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: 13, padding: 8,
+    fontSize: '13px', padding: tokens.spacingHorizontalS,
     border: 'none',
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1,
@@ -90,13 +90,16 @@ const useStyles = makeStyles({
     resize: 'none',
   },
   outputBox: {
-    padding: 8,
+    padding: tokens.spacingHorizontalS,
     fontFamily: 'Consolas, monospace',
-    fontSize: 12,
+    fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
+    maxWidth: '100%',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
-    maxHeight: 240,
+    maxHeight: '240px',
     overflow: 'auto',
   },
   outputBoxMaximized: {
@@ -108,8 +111,8 @@ const useStyles = makeStyles({
   badgeCount: {
     fontFamily: 'Consolas, monospace',
     color: tokens.colorNeutralForeground3,
-    fontSize: 11,
-    minWidth: 32,
+    fontSize: '11px',
+    minWidth: '32px',
     textAlign: 'right',
   },
 });
@@ -560,6 +563,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
                   <pre style={{
                     fontFamily: 'Consolas, monospace', fontSize: 12, margin: 0, maxHeight: 240,
                     overflow: 'auto', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap',
+                    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%',
                     backgroundColor: tokens.colorNeutralBackground3,
                     border: `1px solid ${tokens.colorNeutralStroke2}`,
                   }}>
@@ -638,17 +642,35 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
         <Button size="small" appearance="subtle" icon={<Delete16Regular />} onClick={(e) => { e.stopPropagation(); onDelete?.(); }} aria-label="Delete cell" />
       </div>
       {!collapsed && (
-        <MonacoTextarea
-          value={cell.source}
-          onChange={setSource}
-          language={(cell.lang || 'pyspark') as MonacoLanguage}
-          readOnly={locked}
-          height={maximized ? 'calc(100% - 200px)' : 160}
-          minHeight={80}
-          ariaLabel={`Code cell ${cell.id}`}
-          className={mergeClasses(locked && s.editorLocked)}
-          onReady={handleEditorReady}
-        />
+        maximized ? (
+          <MonacoTextarea
+            value={cell.source}
+            onChange={setSource}
+            language={(cell.lang || 'pyspark') as MonacoLanguage}
+            readOnly={locked}
+            height={'calc(100% - 200px)'}
+            minHeight={80}
+            ariaLabel={`Code cell ${cell.id}`}
+            className={mergeClasses(locked && s.editorLocked)}
+            onReady={handleEditorReady}
+          />
+        ) : (
+          // Auto-fit: the editor grows to its content height (min 120px, up to
+          // 720px then scrolls) so the cell shows everything by default without
+          // the user dragging. Maximize is still available for large edits.
+          <MonacoTextarea
+            value={cell.source}
+            onChange={setSource}
+            language={(cell.lang || 'pyspark') as MonacoLanguage}
+            readOnly={locked}
+            autoHeight
+            minHeight={120}
+            maxHeight={720}
+            ariaLabel={`Code cell ${cell.id}`}
+            className={mergeClasses(locked && s.editorLocked)}
+            onReady={handleEditorReady}
+          />
+        )
       )}
       {!collapsed && cell.output && (() => {
         // Rich display(): prefer the structured payload; fall back to the raw

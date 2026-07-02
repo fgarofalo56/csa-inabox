@@ -24,6 +24,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { workspacesContainer, itemsContainer, workspacePermissionsContainer } from '@/lib/azure/cosmos-client';
 import { fetchSubscribedSkus, listUsersWithLicenses } from '@/lib/azure/graph-identity-client';
 import { listAllWorkspaceRolesForWorkspaces } from '@/lib/azure/workspace-roles-client';
@@ -72,6 +73,11 @@ function m365AdminBaseFor(): string {
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // This route enumerates the WHOLE Entra tenant (fetchSubscribedSkus +
+  // listUsersWithLicenses via the Console UAMI's Graph app roles) — estate-wide
+  // directory data, not per-user. Restrict to tenant admins before any Graph call.
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const tenantId = s.claims.oid;
   try {
     const wsC = await workspacesContainer();

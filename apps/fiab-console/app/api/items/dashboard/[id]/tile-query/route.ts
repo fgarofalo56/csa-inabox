@@ -30,7 +30,6 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import {
   executeDatasetQueries,
   PowerBiError,
@@ -38,31 +37,15 @@ import {
 } from '@/lib/azure/powerbi-client';
 import { executeQuery, KustoError, kustoConfigGate, defaultDatabase } from '@/lib/azure/kusto-client';
 import { executeDax, AasError, aasConfigGate, resolveAasTarget } from '@/lib/azure/aas-client';
-import { resolveAoaiTarget, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
+import { NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
+import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import { isGovCloud } from '@/lib/azure/cloud-endpoints';
 
 type TileKind = 'dax' | 'kusto' | 'streaming-adx';
 const MAX_ROWS = 1_000;
 
-// ---------- AOAI credential (identical pattern to the KQL assist edge) -------
-// ACA-first UAMI chain (see lib/azure/arm-credential.ts — the ACA MI token bug).
-const credential = uamiArmCredential();
-
-async function aoaiToken(): Promise<string> {
-  const audience = process.env.LOOM_AOAI_AUDIENCE || 'https://cognitiveservices.azure.com';
-  const t = await credential.getToken(`${audience}/.default`);
-  if (!t?.token) throw new Error('Failed to acquire AOAI token');
-  return t.token;
-}
-
 /** NL → DAX via the Loom AOAI deployment. Returns the generated DAX (no fences). */
 async function generateDax(nlPrompt: string, datasetSchema: string): Promise<string> {
-  const target = await resolveAoaiTarget();
-  const token = await aoaiToken();
-  const apiVersion = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(
-    target.deployment,
-  )}/chat/completions?api-version=${apiVersion}`;
   const schemaSection = datasetSchema.trim()
     ? `\n\nThe semantic model exposes these tables/columns (ground your DAX in them, do not invent names):\n${datasetSchema}`
     : '';
@@ -79,27 +62,7 @@ async function generateDax(nlPrompt: string, datasetSchema: string): Promise<str
     },
     { role: 'user' as const, content: nlPrompt },
   ];
-  const callWithTemp = (temp?: number) =>
-    fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ messages, ...(temp !== undefined ? { temperature: temp } : {}), max_tokens: 1200 }),
-    });
-  let res = await callWithTemp(0.1);
-  if (res.status === 400) {
-    const txt = await res.text();
-    if (/temperature|top_p/i.test(txt) && /unsupported_value|does not support|default \(1\)/i.test(txt)) {
-      res = await callWithTemp(undefined);
-    } else {
-      throw new Error(`AOAI 400: ${txt.slice(0, 300)}`);
-    }
-  }
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`AOAI ${res.status}: ${txt.slice(0, 300)}`);
-  }
-  const j = await res.json();
-  const raw: string = j?.choices?.[0]?.message?.content ?? '';
+  const raw = await aoaiChat({ messages, maxCompletionTokens: 1200, temperature: 0.1 });
   return raw.replace(/^\s*```[a-zA-Z0-9_+-]*\s*\n?/, '').replace(/\n?```\s*$/, '').trim();
 }
 
@@ -158,7 +121,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // Azure-native DAX path (no Power BI workspace required).
       const gate = aasConfigGate();
       if (gate) {
-        return NextResponse.json({ ok: false, code: 'aas_gate', error: `AAS not configured: ${gate.missing}`, hint: gate.hint }, { status: 503 });
+        return NextResponse.json({ ok: false, code: 'aas_gate', error: `AAS not configured: ${gate.missing}`, hint: gate.reason }, { status: 503 });
       }
       try {
         const { server, model } = resolveAasTarget();

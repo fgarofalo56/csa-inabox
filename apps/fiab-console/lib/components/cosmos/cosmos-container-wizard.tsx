@@ -31,12 +31,12 @@ import type {
 const CONTAINER_ROUTE = '/api/cosmos/containers';
 
 const useStyles = makeStyles({
-  steps: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 8 },
-  body: { display: 'flex', flexDirection: 'column', gap: 12, minHeight: 320 },
-  ttlRow: { display: 'flex', flexDirection: 'column', gap: 8 },
+  steps: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, minHeight: '320px' },
+  ttlRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS },
   summary: {
-    display: 'flex', flexDirection: 'column', gap: 4,
-    padding: 10, borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS,
+    padding: tokens.spacingHorizontalMNudge, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3,
   },
   kv: { display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '2px 12px' },
@@ -181,7 +181,7 @@ export function CosmosContainerWizard({
                 <Badge
                   key={label}
                   appearance={i === step ? 'filled' : i < step ? 'tint' : 'outline'}
-                  color={i === step ? 'brand' : i < step ? 'success' : 'informational'}
+                  color={i === step ? 'brand' : i < step ? 'success' : 'informative'}
                 >
                   {i + 1}. {label}
                 </Badge>

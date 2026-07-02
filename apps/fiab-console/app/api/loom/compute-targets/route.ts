@@ -22,7 +22,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listSparkPools } from '@/lib/azure/synapse-dev-client';
-import { listClusters, createCluster } from '@/lib/azure/databricks-client';
+import { listClusters, createCluster, type ClusterSpec } from '@/lib/azure/databricks-client';
+import { findPreset, databricksConfFor, databricksClusterLogConf } from '@/lib/spark/config-presets';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,6 +36,10 @@ interface ComputeTarget {
   sku?: string;
   nodeSize?: string;
   runEndpoint: string;
+  /** For an AML Compute Instance: true when it's assigned to the caller (their
+   *  own single-user CI). Notebooks are only genuinely multi-user when each user
+   *  runs on the CI assigned to them, so the picker surfaces "mine" first. */
+  mine?: boolean;
 }
 
 /**
@@ -132,21 +137,29 @@ export async function GET() {
   // notebook editor filters to kind === 'aml-ci' when its workspace toggle is
   // set to Azure ML. Azure-native — no Fabric dependency.
   try {
-    const { amlIsConfigured, listCIs, ciIsRunning } = await import('@/lib/azure/aml-client');
+    const { amlIsConfigured, listCIs, ciIsRunning, ciIsOwnedBy } = await import('@/lib/azure/aml-client');
     if (amlIsConfigured()) {
+      const oid = s.claims.oid;
       const cis = await withTimeout(listCIs(), 8000, 'aml-ci');
+      const amlRows: ComputeTarget[] = [];
       for (const ci of cis) {
-        computes.push({
+        const mine = ciIsOwnedBy(ci, oid);
+        amlRows.push({
           id: `aml-ci:${ci.name}`,
-          name: `${ci.name} (AML Compute Instance)`,
+          // Label the caller's own single-user CI so the picker reads clearly.
+          name: mine ? `${ci.name} (My compute)` : `${ci.name} (AML Compute Instance)`,
           kind: 'aml-ci',
           state: ci.state,
           nodeSize: ci.vmSize,
           sku: ci.vmSize,
           runEndpoint: '/api/items/notebook/{id}/run',
+          mine,
         });
         void ciIsRunning; // running-state computed client-side from `state`
       }
+      // Caller's own CI(s) first — a user should land on THEIR compute.
+      amlRows.sort((a, b) => Number(b.mine) - Number(a.mine));
+      computes.push(...amlRows);
     }
   } catch (e: any) {
     errors.push({ kind: 'aml-ci', error: e?.message || String(e) });
@@ -182,6 +195,16 @@ export async function POST(req: NextRequest) {
     node_type_id?: string;
     num_workers?: number;
     autotermination_minutes?: number;
+    /** Best-practice preset id (from lib/spark/config-presets) — expands to a
+     *  cluster shape (autoscale/Photon/spot/autoterm) + curated spark_conf. */
+    presetId?: string;
+    /** Structured spark.* overrides from the builder (merged over the preset). */
+    spark_conf?: Record<string, string>;
+    /** Builder fields (override the preset shape when supplied). */
+    photon?: boolean;
+    spot?: boolean;
+    min_workers?: number;
+    max_workers?: number;
   };
 
   if (body.kind && body.kind !== 'databricks-cluster') {
@@ -199,15 +222,46 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: false, error: `Missing: ${missing.join(', ')}` }, { status: 400 });
   }
 
+  // Expand the chosen preset (if any), then let explicit builder fields win.
+  const preset = findPreset(body.presetId);
+  const shape = preset?.databricks;
+
+  // spark_conf precedence: preset's Databricks confs first, builder rows last.
+  const sparkConf: Record<string, string> = {
+    ...(preset ? databricksConfFor(preset) : {}),
+    ...(body.spark_conf || {}),
+  };
+
+  // Autoscale vs fixed: a preset (or explicit min/max) → autoscale; else num_workers.
+  const minW = typeof body.min_workers === 'number' ? body.min_workers : shape?.minWorkers;
+  const maxW = typeof body.max_workers === 'number' ? body.max_workers : shape?.maxWorkers;
+  const useAutoscale = typeof minW === 'number' && typeof maxW === 'number' && maxW > minW;
+
+  const photon = typeof body.photon === 'boolean' ? body.photon : !!shape?.photon;
+  const spot = typeof body.spot === 'boolean' ? body.spot : !!shape?.spot;
+  const autoterm =
+    typeof body.autotermination_minutes === 'number'
+      ? body.autotermination_minutes
+      : shape?.autoterminationMinutes ?? 30;
+
+  const spec: ClusterSpec = {
+    cluster_name: body.cluster_name!,
+    spark_version: body.spark_version!,
+    node_type_id: body.node_type_id!,
+    autotermination_minutes: autoterm,
+    runtime_engine: photon ? 'PHOTON' : 'STANDARD',
+    custom_tags: { 'loom-managed': 'true', ...(body.presetId ? { 'loom-preset': body.presetId } : {}) },
+  };
+  if (Object.keys(sparkConf).length) spec.spark_conf = sparkConf;
+  if (useAutoscale) spec.autoscale = { min_workers: minW!, max_workers: maxW! };
+  else spec.num_workers = typeof body.num_workers === 'number' ? body.num_workers : (typeof minW === 'number' ? minW : 2);
+  if (spot) spec.azure_attributes = { availability: 'SPOT_WITH_FALLBACK_AZURE', first_on_demand: 1 };
+  // Honest log-delivery: only when LOOM_DATABRICKS_CLUSTER_LOG_PATH is configured.
+  const logConf = databricksClusterLogConf();
+  if (logConf) spec.cluster_log_conf = logConf;
+
   try {
-    const { cluster_id } = await createCluster({
-      cluster_name: body.cluster_name!,
-      spark_version: body.spark_version!,
-      node_type_id: body.node_type_id!,
-      num_workers: typeof body.num_workers === 'number' ? body.num_workers : 2,
-      autotermination_minutes:
-        typeof body.autotermination_minutes === 'number' ? body.autotermination_minutes : 30,
-    });
+    const { cluster_id } = await createCluster(spec);
     return NextResponse.json({
       ok: true,
       created: { id: `databricks:${cluster_id}`, cluster_id, kind: 'databricks-cluster' },

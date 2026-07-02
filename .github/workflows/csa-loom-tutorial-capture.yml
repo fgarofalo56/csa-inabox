@@ -34,7 +34,7 @@ permissions:
   contents: read
 
 env:
-  SUB: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+  SUB: 00000000-0000-0000-0000-000000000000
   ADMIN_RG: rg-csa-loom-admin-eastus2
 
 jobs:

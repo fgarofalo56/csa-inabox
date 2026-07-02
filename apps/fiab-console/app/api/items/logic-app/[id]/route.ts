@@ -24,6 +24,7 @@
  *   https://learn.microsoft.com/azure/logic-apps/workflow-definition-language-schema
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -38,7 +39,7 @@ import { armBase, LOGIC_APP_WORKFLOW_SCHEMA } from '@/lib/azure/cloud-endpoints'
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 /** Default empty WDL definition (used only if a record has neither content nor a saved definition). */
 const EMPTY_DEFINITION = {
@@ -83,13 +84,13 @@ function definitionFromContent(state: any): { definition: any; parameters?: any;
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!resource || resource.itemType !== 'logic-app') return err('logic app not found', 404);
+    if (!resource || resource.itemType !== 'logic-app') return apiError('logic app not found', 404);
     const state = (resource.state as any) || {};
 
     // 1) Live binding: fetch the real Microsoft.Logic/workflows resource.
@@ -156,21 +157,21 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       fromContent: true,
     });
   } catch (e: any) {
-    if (e?.code === 404) return err('logic app not found', 404);
-    return err(e?.message || String(e), 500);
+    if (e?.code === 404) return apiError('logic app not found', 404);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   try {
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!existing || existing.itemType !== 'logic-app') return err('logic app not found', 404);
+    if (!existing || existing.itemType !== 'logic-app') return apiError('logic app not found', 404);
     const state = (existing.state as any) || {};
 
     // Upsert to live ARM when bound and a definition was supplied.
@@ -191,7 +192,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         body: JSON.stringify(armBody),
       });
       if (!r.ok && r.status !== 200 && r.status !== 201) {
-        return err(`ARM PUT workflow failed (${r.status}): ${(await r.text().catch(() => '')).slice(0, 240)}`, 502);
+        return apiError(`ARM PUT workflow failed (${r.status}): ${(await r.text().catch(() => '')).slice(0, 240)}`, 502);
       }
       upserted = true;
     }
@@ -215,14 +216,14 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
       upserted,
       definition: (resource?.state as any)?.definition,
     });
-  } catch (e: any) { return err(e?.message || String(e), 500); }
+  } catch (e: any) { return apiError(e?.message || String(e), 500); }
 }
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
@@ -234,6 +235,6 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

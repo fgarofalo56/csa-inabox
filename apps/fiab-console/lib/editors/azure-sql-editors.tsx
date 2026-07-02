@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Label,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Skeleton, SkeletonItem, Input, Label,
   Tree, TreeItem, TreeItemLayout,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -29,8 +29,10 @@ import {
   ShieldKeyhole20Regular, Globe20Regular, Sparkle20Regular,
   ArrowDownload20Regular, Delete20Regular, Copy20Regular, Stop20Regular,
   ArrowSync20Regular, Dismiss20Regular, DocumentSearch20Regular,
+  TableSimple20Regular, DatabaseMultiple20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -38,6 +40,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { FullTextSearchPanel, VectorIndexPanel } from './components/sql-search-management';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useSharedEditorStyles } from './shared-styles';
 
 // ── Azure SQL real option sets (parity with the portal create/scale blades) ──
 const AZURE_REGIONS = [
@@ -89,27 +92,40 @@ function resultsToJson(columns: string[], rows: unknown[][]): string {
   return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
 }
 
-const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+const useLocalStyles = makeStyles({
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
-    width: '100%', minHeight: 200,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', minHeight: '200px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
-  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  treePad: { padding: 8 },
-  formRow: { display: 'flex', flexDirection: 'column', gap: 4, marginBottom: 12 },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '200px' },
+  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
+  tableWrap: {
+    overflow: 'auto', maxHeight: '360px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  // Icon + title section header (e.g. "Databases", "Managed Instances").
+  sectionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    color: tokens.colorNeutralForeground1,
+  },
+  sectionHeaderIcon: { color: tokens.colorBrandForeground1, display: 'flex' },
+  formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalM },
   fullWidth: { width: '100%' },
   // SQL database schema-object browser (left pane)
   sqlLeftPane: {
-    padding: 8,
+    padding: tokens.spacingVerticalS,
     display: 'flex',
     flexDirection: 'column',
     gap: tokens.spacingVerticalS,
@@ -131,7 +147,7 @@ const useStyles = makeStyles({
   },
   schemaBrowserBox: {
     flex: 1,
-    minHeight: 360,
+    minHeight: '360px',
     display: 'flex',
     flexDirection: 'column',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -146,7 +162,7 @@ const useStyles = makeStyles({
     gap: tokens.spacingHorizontalS,
     flexWrap: 'wrap',
   },
-  dbSearch: { minWidth: 220, maxWidth: 320 },
+  dbSearch: { minWidth: '220px', maxWidth: '320px' },
   dbCount: { marginLeft: 'auto', color: tokens.colorNeutralForeground3 },
   sortHeader: {
     cursor: 'pointer',
@@ -161,17 +177,13 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1Selected,
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Selected },
   },
-  dbEmpty: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: tokens.spacingVerticalXS,
-    padding: tokens.spacingVerticalXXL,
-    color: tokens.colorNeutralForeground3,
-    textAlign: 'center',
-  },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface QueryResponse {
   ok: boolean;
@@ -193,8 +205,28 @@ function formatCell(v: unknown): string {
 
 function ResultsPanel({ result, loading }: { result: QueryResponse | null; loading: boolean }) {
   const s = useStyles();
-  if (loading) return (<div className={s.resultBox}><Spinner size="small" label="Executing T-SQL…" labelPosition="after" /></div>);
-  if (!result) return (<div className={s.resultBox}><Caption1>Click <strong>Run</strong> to execute.</Caption1></div>);
+  if (loading) return (
+    <div className={s.resultBox}>
+      <div className={s.resultMeta}>
+        <Spinner size="tiny" label="Executing T-SQL…" labelPosition="after" />
+      </div>
+      <Skeleton aria-label="Executing query…">
+        <SkeletonItem size={16} style={{ width: '40%' }} />
+        <SkeletonItem size={12} />
+        <SkeletonItem size={12} style={{ width: '90%' }} />
+        <SkeletonItem size={12} style={{ width: '75%' }} />
+      </Skeleton>
+    </div>
+  );
+  if (!result) return (
+    <div className={s.resultBox}>
+      <EmptyState
+        icon={<Play20Regular />}
+        title="No results yet"
+        body="Write T-SQL above, then click Run to execute it over AAD-authenticated TDS and see the rows here."
+      />
+    </div>
+  );
   if (!result.ok) {
     return (
       <div className={s.resultBox}>
@@ -234,7 +266,11 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
         )}
       </div>
       {rows.length === 0 ? (
-        <Caption1>Query returned no rows.</Caption1>
+        <EmptyState
+          icon={<TableSimple20Regular />}
+          title="Query returned no rows"
+          body="The statement executed successfully but produced an empty result set."
+        />
       ) : (
         <div className={s.tableWrap}>
           <Table aria-label="Query results" size="small">
@@ -568,10 +604,25 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
             <BackendStateBar error={error} title="Azure SQL" />
           )}
           {!selected ? (
-            <Caption1>Pick a server on the left to inspect its databases.</Caption1>
+            loading ? (
+              <Skeleton aria-label="Loading SQL servers…">
+                <SkeletonItem size={16} style={{ width: '32%' }} />
+                <SkeletonItem size={12} />
+                <SkeletonItem size={12} style={{ width: '85%' }} />
+              </Skeleton>
+            ) : (
+              <EmptyState
+                icon={<Server20Regular />}
+                title="Select a SQL server"
+                body="Pick a server in the left tree to inspect its databases, firewall rules, and Microsoft Entra admin over live ARM."
+              />
+            )
           ) : (
             <>
-              <Subtitle2>{selected.name}</Subtitle2>
+              <Subtitle2 className={s.sectionHeader}>
+                <span className={s.sectionHeaderIcon}><Server20Regular /></span>
+                {selected.name}
+              </Subtitle2>
               <div className={s.toolbar}>
                 <Badge appearance="filled" color={selected.state === 'Ready' ? 'success' : 'informative'}>{selected.state || 'Unknown'}</Badge>
                 <Badge appearance="outline">{selected.location}</Badge>
@@ -584,13 +635,16 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                 FQDN: <code>{selected.fqdn}</code>
                 <Tooltip content="Copy FQDN" relationship="label">
                   <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy server FQDN"
-                    onClick={() => navigator.clipboard?.writeText(selected.fqdn)} style={{ marginLeft: 4 }} />
+                    onClick={() => navigator.clipboard?.writeText(selected.fqdn)} style={{ marginLeft: tokens.spacingHorizontalXXS }} />
                 </Tooltip>
               </Body1>
               <Body1>AAD admin login: <code>{selected.administratorLogin || '— set via Microsoft.Sql/servers/administrators —'}</code></Body1>
 
-              <div className={s.dbTableToolbar} style={{ marginTop: 12 }}>
-                <Subtitle2>Databases</Subtitle2>
+              <div className={s.dbTableToolbar} style={{ marginTop: tokens.spacingVerticalM }}>
+                <Subtitle2 className={s.sectionHeader}>
+                  <span className={s.sectionHeaderIcon}><DatabaseMultiple20Regular /></span>
+                  Databases
+                </Subtitle2>
                 <Input
                   size="small"
                   className={s.dbSearch}
@@ -609,24 +663,26 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
               </div>
               {loading ? (
                 <div className={s.tableWrap}>
-                  <Spinner size="small" label="Loading databases…" labelPosition="after" style={{ padding: 24 }} />
+                  <Skeleton aria-label="Loading databases…" style={{ padding: tokens.spacingVerticalXL }}>
+                    <SkeletonItem size={16} style={{ width: '30%' }} />
+                    <SkeletonItem size={12} />
+                    <SkeletonItem size={12} style={{ width: '90%' }} />
+                    <SkeletonItem size={12} style={{ width: '70%' }} />
+                  </Skeleton>
                 </div>
               ) : databases.length === 0 ? (
-                <div className={s.tableWrap}>
-                  <div className={s.dbEmpty}>
-                    <Database20Regular />
-                    <Body1>No databases on <strong>{selected.name}</strong></Body1>
-                    <Caption1>Create one with <code>az sql db create</code> or in the portal, then Refresh.</Caption1>
-                  </div>
-                </div>
+                <EmptyState
+                  icon={<Database20Regular />}
+                  title={`No databases on ${selected.name}`}
+                  body="Create one with `az sql db create` or in the Azure portal, then Refresh to see it listed here."
+                />
               ) : visibleDatabases.length === 0 ? (
-                <div className={s.tableWrap}>
-                  <div className={s.dbEmpty}>
-                    <DocumentSearch20Regular />
-                    <Body1>No databases match <strong>“{dbFilter}”</strong></Body1>
-                    <Button size="small" appearance="subtle" onClick={() => setDbFilter('')}>Clear filter</Button>
-                  </div>
-                </div>
+                <EmptyState
+                  icon={<DocumentSearch20Regular />}
+                  title={`No databases match “${dbFilter}”`}
+                  body="No database on this server matches the current filter. Clear it to see them all."
+                  primaryAction={{ label: 'Clear filter', appearance: 'secondary', onClick: () => setDbFilter('') }}
+                />
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Databases" size="small" sortable>
@@ -695,7 +751,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                   {fwError && (
                     <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Firewall API error</MessageBarTitle>{fwError}</MessageBarBody></MessageBar>
                   )}
-                  <div style={{ overflow: 'auto', marginTop: 8, marginBottom: 12 }}>
+                  <div style={{ overflow: 'auto', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM }}>
                     <Table aria-label="Firewall rules" size="small">
                       <TableHeader><TableRow>
                         <TableHeaderCell>Name</TableHeaderCell>
@@ -710,8 +766,8 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                         {fwRules.map((r) => (
                           <TableRow key={r.name}>
                             <TableCell><strong>{r.name}</strong></TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{r.startIpAddress}</code></TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{r.endIpAddress}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.startIpAddress}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.endIpAddress}</code></TableCell>
                             <TableCell>
                               <Tooltip content={`Delete firewall rule ${r.name}`} relationship="label">
                                 <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete firewall rule ${r.name}`} disabled={fwBusy} onClick={() => setConfirmDeleteRule(r.name)}>Delete</Button>
@@ -723,7 +779,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
                     </Table>
                   </div>
                   <Subtitle2>Add rule</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS }}>
                     <Field label="Name"><Input value={newRuleName} onChange={(_, d) => setNewRuleName(d.value)} placeholder="allow-corp-vpn" /></Field>
                     <Field label="Start IP"><Input value={newRuleStart} onChange={(_, d) => setNewRuleStart(d.value)} placeholder="0.0.0.0" /></Field>
                     <Field label="End IP"><Input value={newRuleEnd} onChange={(_, d) => setNewRuleEnd(d.value)} placeholder="0.0.0.0" /></Field>
@@ -1049,7 +1105,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               value={server}
               onChange={(e) => { setServer(e.target.value); setDatabase(''); }}
               disabled={srv.loading || (srv.servers?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
               {srv.loading && <option value="">Loading servers…</option>}
               {!srv.loading && (srv.servers?.length ?? 0) === 0 && (
@@ -1069,7 +1125,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
               value={database}
               onChange={(e) => setDatabase(e.target.value)}
               disabled={!server || dbs.loading || (dbs.databases?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
               {!server && <option value="">Select a server first</option>}
               {server && dbs.loading && <option value="">Loading databases…</option>}
@@ -1204,7 +1260,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={toggleMirror} icon={<ShieldKeyhole20Regular />}>Enable / Refresh mirror</Button>
-              {mirrorState && <pre style={{ fontSize: 12, background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{JSON.stringify(mirrorState, null, 2)}</pre>}
+              {mirrorState && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, maxWidth: '100%', maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box', margin: 0 }}>{JSON.stringify(mirrorState, null, 2)}</pre>}
             </>
           )}
           {tab === 'replication' && (
@@ -1232,7 +1288,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={probe2025} icon={<Sparkle20Regular />}>Probe engine</Button>
-              {sql2025State && <pre style={{ fontSize: 12, background: tokens.colorNeutralBackground3, padding: 8, borderRadius: 4 }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
+              {sql2025State && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, maxWidth: '100%', maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box', margin: 0 }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
             </>
           )}
 
@@ -1249,7 +1305,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                     <select
                       value={replicaServer}
                       onChange={(e) => setReplicaServer(e.target.value)}
-                      style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+                      style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
                     >
                       <option value="">Select a replica server</option>
                       {(srv.servers || []).filter((sv) => sv.name !== server).map((sv) => (
@@ -1304,16 +1360,42 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
 }
 
 // ============================================================
-// Managed Instance editor (list-only in v3)
+// Managed Instance editor — registry + live T-SQL query execution
 // ============================================================
+// Lists managed instances (ARM) AND runs live T-SQL over the SELECTED
+// instance's private-endpoint FQDN. Query execution reuses the exact same
+// TDS path the Azure SQL Database editor uses: the jobs-store startSqlQuery →
+// POST /api/items/azure-sql-database/[id]/query → executeQueryBatch (AAD-token
+// TDS). getPool uses the FQDN as-is (MI FQDNs contain dots), so the MI's
+// `<mi>.<zone>.database.<suffix>` connection works without a Fabric dependency.
+// The left-pane SqlDbTree gives the real sys.* schema navigator against the
+// same connection. If the Console cannot reach the instance over its private
+// endpoint, the real TDS connection error surfaces (honest gate, no fake data).
 export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const [instances, setInstances] = useState<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  // Selected instance → drives the schema navigator (real reads over the PE).
+  // Selected instance → drives the schema navigator + live TDS query editor.
   const [selectedFqdn, setSelectedFqdn] = useState('');
   const [navDb, setNavDb] = useState('master');
+  const [tab, setTab] = useState<'instances' | 'query'>('instances');
+  const [browserRefreshKey, setBrowserRefreshKey] = useState(0);
+
+  // ── Live T-SQL query surface (same execution path as the Azure SQL DB editor) ──
+  const [sqlText, setSqlText] = useState<string>(
+    `-- Azure SQL Managed Instance — TDS over AAD MI from the Loom Console BFF.\n`
+    + `-- Same execution path as the Azure SQL Database editor, pointed at the\n`
+    + `-- selected instance's private-endpoint FQDN.\n`
+    + `SELECT @@VERSION AS version, DB_NAME() AS db, SUSER_SNAME() AS login_name;`,
+  );
+  const [result, setResult] = useState<QueryResponse | null>(null);
+  const [running, setRunning] = useState(false);
+  // Background-job continuity + TDS cancel token (see jobs-store.startSqlQuery).
+  const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [activeRequestId, setActiveRequestId] = useState<string | null>(null);
+  const startSqlQuery = useJobsStore((st) => st.startSqlQuery);
+  const jobs = useJobsStore((st) => st.jobs);
 
   const refresh = useCallback(() => {
     setLoading(true); setErr(null);
@@ -1326,13 +1408,98 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
 
   useEffect(() => { refresh(); }, [refresh]);
 
+  const selectInstance = useCallback((fqdn: string) => {
+    if (!fqdn) return;
+    setSelectedFqdn(fqdn);
+    setResult(null);
+    setTab('query');
+  }, []);
+
+  // Run T-SQL over the selected instance's FQDN, reusing the Azure SQL DB
+  // /query route (executeQueryBatch). The route resolves the connection purely
+  // from the body server/database, so pointing `server` at the MI FQDN reuses
+  // the identical TDS backend — no MI-specific backend needed.
+  const run = useCallback(() => {
+    if (!selectedFqdn) { setResult({ ok: false, error: 'select a managed instance first' }); return; }
+    if (!navDb.trim()) { setResult({ ok: false, error: 'database is required' }); return; }
+    const reqId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID()
+      : `req-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    setActiveRequestId(reqId);
+    setRunning(true); setResult(null);
+    const jobId = startSqlQuery({
+      databaseName: navDb.trim(),
+      server: selectedFqdn,
+      sqlLabel: sqlText.slice(0, 80),
+      sqlText,
+      queryUrl: `/api/items/azure-sql-database/${encodeURIComponent(id)}/query`,
+      requestId: reqId,
+      onDone: ({ ok, queryResult, error, code }) => {
+        setRunning(false); setActiveJobId(null); setActiveRequestId(null);
+        setResult(ok && queryResult
+          ? { ok: true, ...queryResult }
+          : { ok: false, error: error || 'query failed', code });
+      },
+    });
+    setActiveJobId(jobId);
+  }, [id, selectedFqdn, navDb, sqlText, startSqlQuery]);
+
+  // Cancel via a real TDS ATTENTION packet (same cancel route as Azure SQL DB).
+  const cancelQuery = useCallback(async () => {
+    if (!activeRequestId) return;
+    try {
+      await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ requestId: activeRequestId }),
+      });
+    } catch { /* best-effort; the query promise still settles */ }
+  }, [id, activeRequestId]);
+
+  // Recover a result for a query that finished while this editor was unmounted.
+  useEffect(() => {
+    if (!activeJobId) return;
+    const job = jobs.find((j) => j.id === activeJobId);
+    if (!job || job.status === 'running') return;
+    setRunning(false);
+    setResult(job.status === 'success' && job.queryResult
+      ? { ok: true, ...job.queryResult }
+      : { ok: false, error: job.error || 'query failed' });
+    setActiveJobId(null);
+    setActiveRequestId(null);
+  }, [jobs, activeJobId]);
+
+  const newTsql = useCallback(() => {
+    setSqlText('-- New T-SQL.\nSELECT 1;');
+    setResult(null);
+    setTab('query');
+  }, []);
+
+  const canRun = !!selectedFqdn && !!navDb.trim() && !running;
+
+  // Ctrl+S / Cmd+S = Run on the Query tab (SSMS / Azure Data Studio muscle memory).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (tab === 'query' && canRun) run();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tab, canRun, run]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Instances', actions: [
         { label: loading ? 'Refreshing…' : 'Refresh list', onClick: loading ? undefined : refresh, disabled: loading },
       ]},
+      { label: 'Query', actions: [
+        { label: 'New T-SQL', onClick: newTsql },
+        { label: running ? 'Running…' : 'Run', onClick: canRun ? run : undefined, disabled: !canRun, title: !selectedFqdn ? 'Select a managed instance first' : undefined },
+      ]},
     ]},
-  ], [loading, refresh]);
+  ], [loading, refresh, running, canRun, run, newTsql, selectedFqdn]);
 
   return (
     <ItemEditorChrome
@@ -1340,8 +1507,40 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
       ribbon={ribbon}
       leftPanel={
         selectedFqdn
-          ? <SqlDbTree workspaceId="" itemId="new" server={selectedFqdn} database={navDb} />
-          : <div className={s.treePad}><Caption1>Select a managed instance below to browse its schemas, tables, and views over the private endpoint.</Caption1></div>
+          ? (
+            <div className={s.sqlLeftPane}>
+              <div className={s.schemaBrowserHeader}>
+                <Caption1 className={s.schemaBrowserTitle}>Schema · <code>{selectedFqdn}</code></Caption1>
+                <Tooltip content="Reload objects from sys.* catalog" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={() => setBrowserRefreshKey((k) => k + 1)} aria-label="Refresh schema browser" />
+                </Tooltip>
+                <Tooltip content="Clear the selected instance" relationship="label">
+                  <Button size="small" appearance="subtle" icon={<Dismiss20Regular />} onClick={() => setSelectedFqdn('')} aria-label="Clear selected instance" />
+                </Tooltip>
+              </div>
+              <div className={s.formRow}>
+                <Label htmlFor="mi-nav-db">Database</Label>
+                <Input id="mi-nav-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} placeholder="master" />
+              </div>
+              <div className={s.schemaBrowserBox}>
+                <SqlDbTree
+                  workspaceId="" itemId={id}
+                  server={selectedFqdn} database={navDb}
+                  refreshKey={browserRefreshKey}
+                  onOpenQuery={(sql) => { setSqlText(sql); setTab('query'); }}
+                />
+              </div>
+            </div>
+          )
+          : (
+            <div className={s.treePad}>
+              <EmptyState
+                icon={<Database20Regular />}
+                title="No instance selected"
+                body="Select a managed instance to browse its schemas, tables, and views and run live T-SQL over the private endpoint."
+              />
+            </div>
+          )
       }
       main={
         <div className={s.pad}>
@@ -1349,63 +1548,121 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
             <MessageBar intent="warning">
               <MessageBarBody>
                 <MessageBarTitle>Managed Instances are provisioned out-of-band</MessageBarTitle>
-                Create via bicep <code>Microsoft.Sql/managedInstances</code> (45+ min deploy) or the Azure portal.
-                This is a read-only registry view.
+                Create via bicep <code>Microsoft.Sql/managedInstances</code> (45+ min deploy) or the Azure portal, then
+                select the instance here to browse its schema and run T-SQL.
               </MessageBarBody>
             </MessageBar>
           )}
-          {/* Real schema reads are attempted over the PE via the navigator; this
-              note names the infra/role the reads need (honest fallback per
-              no-vaporware.md — the navigator surfaces the real TDS error if the
-              PE isn't reachable). */}
-          <MessageBar intent="info">
-            <MessageBarBody>
-              <MessageBarTitle>Browsing an instance reads its schema over the private endpoint</MessageBarTitle>
-              Select an instance to load its schemas/tables/views in the navigator (real
-              <code> sys.*</code> over TDS — the same path the Azure SQL DB editor uses). The
-              Console must reach the instance over a private endpoint in the MI delegated subnet
-              and the UAMI must be an Entra admin (or have <code>db_datareader</code> + <code>VIEW DEFINITION</code>);
-              the navigator shows the real connection error otherwise.
-            </MessageBarBody>
-          </MessageBar>
-          <div className={s.toolbar}>
-            <Button size="small" appearance="outline" onClick={refresh} disabled={loading}>Refresh list</Button>
-            {selectedFqdn && (
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)}>
+            <Tab value="instances" icon={<DatabaseMultiple20Regular />}>Instances</Tab>
+            <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+          </TabList>
+
+          {tab === 'instances' && (
+            <>
+              {/* Honest gate: schema reads + queries run over the PE; this names
+                  the infra/role they need (per no-vaporware.md — the real TDS
+                  error surfaces if the PE isn't reachable). */}
+              <MessageBar intent="info">
+                <MessageBarBody>
+                  <MessageBarTitle>Select an instance to browse its schema and run T-SQL</MessageBarTitle>
+                  Selecting an instance loads its schemas/tables/views in the navigator and enables the
+                  <strong> Query</strong> tab — real <code>sys.*</code> reads and live T-SQL over TDS, the same
+                  execution path the Azure SQL Database editor uses. The Console must reach the instance over a
+                  private endpoint in the MI delegated subnet and the UAMI must be a
+                  <strong> Microsoft Entra admin</strong> on the instance (or have <code>db_datareader</code> +
+                  <code> VIEW DEFINITION</code>); the connection error is shown verbatim otherwise.
+                </MessageBarBody>
+              </MessageBar>
+              <div className={s.toolbar}>
+                <Button size="small" appearance="outline" onClick={refresh} disabled={loading}>Refresh list</Button>
+                {selectedFqdn && (
+                  <>
+                    <Caption1>Selected: <strong>{selectedFqdn}</strong></Caption1>
+                    <Button size="small" appearance="subtle" onClick={() => setTab('query')}>Open Query</Button>
+                    <Button size="small" appearance="subtle" onClick={() => setSelectedFqdn('')}>Clear</Button>
+                  </>
+                )}
+                {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
+              </div>
+              {err && <BackendStateBar error={err} title="Azure SQL" />}
+              <Subtitle2 className={s.sectionHeader}>
+                <span className={s.sectionHeaderIcon}><DatabaseMultiple20Regular /></span>
+                Managed Instances ({instances.length})
+              </Subtitle2>
+              {loading ? (
+                <div className={s.tableWrap}>
+                  <Skeleton aria-label="Loading managed instances…" style={{ padding: tokens.spacingVerticalXL }}>
+                    <SkeletonItem size={16} style={{ width: '30%' }} />
+                    <SkeletonItem size={12} />
+                    <SkeletonItem size={12} style={{ width: '90%' }} />
+                    <SkeletonItem size={12} style={{ width: '70%' }} />
+                  </Skeleton>
+                </div>
+              ) : instances.length === 0 && !err ? (
+                <EmptyState
+                  icon={<Database20Regular />}
+                  title="No managed instances found"
+                  body="Provision one with `Microsoft.Sql/managedInstances` via bicep or the Azure portal, then Refresh to see it listed here."
+                />
+              ) : (
+                <div className={s.tableWrap}>
+                  <Table size="small">
+                    <TableHeader><TableRow>
+                      <TableHeaderCell>Name</TableHeaderCell>
+                      <TableHeaderCell>State</TableHeaderCell>
+                      <TableHeaderCell>Location</TableHeaderCell>
+                      <TableHeaderCell>SKU</TableHeaderCell>
+                      <TableHeaderCell>FQDN</TableHeaderCell>
+                    </TableRow></TableHeader>
+                    <TableBody>
+                      {instances.map((i: any) => (
+                        <TableRow key={i.id}
+                          onClick={() => i.fqdn && selectInstance(i.fqdn)}
+                          style={{ cursor: i.fqdn ? 'pointer' : 'default', background: i.fqdn && i.fqdn === selectedFqdn ? tokens.colorNeutralBackground1Selected : undefined }}>
+                          <TableCell><strong>{i.name}</strong></TableCell>
+                          <TableCell>{i.state}</TableCell>
+                          <TableCell>{i.location}</TableCell>
+                          <TableCell>{i.sku?.name}</TableCell>
+                          <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{i.fqdn}</code></TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </>
+          )}
+
+          {tab === 'query' && (
+            !selectedFqdn ? (
+              <EmptyState
+                icon={<Play20Regular />}
+                title="No instance selected"
+                body="Pick a managed instance on the Instances tab, then write T-SQL here and Run it over AAD-authenticated TDS."
+              />
+            ) : (
               <>
-                <Caption1>Browsing: <strong>{selectedFqdn}</strong></Caption1>
-                <Label htmlFor="mi-nav-db">DB</Label>
-                <Input id="mi-nav-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} style={{ width: 140 }} />
-                <Button size="small" appearance="subtle" onClick={() => setSelectedFqdn('')}>Clear</Button>
+                <div className={s.toolbar}>
+                  <Badge appearance="filled" color="brand">SQL MI</Badge>
+                  <Caption1>instance: <strong>{selectedFqdn}</strong>, db: <strong>{navDb || 'not set'}</strong></Caption1>
+                  <Label htmlFor="mi-query-db">DB</Label>
+                  <Input id="mi-query-db" size="small" value={navDb} onChange={(_, d) => setNavDb(d.value || 'master')} style={{ width: '160px' }} />
+                  <Button appearance="primary" icon={<Play20Regular />} disabled={!canRun} onClick={run} style={{ marginLeft: 'auto' }}>Run</Button>
+                  {running && (
+                    <Button appearance="secondary" icon={<Stop20Regular />} onClick={cancelQuery} disabled={!activeRequestId} title="Send a TDS ATTENTION packet — cancels the running query on the server">Cancel</Button>
+                  )}
+                </div>
+                {running && (
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    Running in background — switch tabs or close this editor freely; a toast fires when the query completes.
+                  </Caption1>
+                )}
+                <MonacoTextarea value={sqlText} onChange={setSqlText} language="tsql" height={240} minHeight={200} ariaLabel="T-SQL editor" />
+                <ResultsPanel result={result} loading={running} />
               </>
-            )}
-            {loading && <Spinner size="tiny" label="Loading…" labelPosition="after" />}
-          </div>
-          {err && <BackendStateBar error={err} title="Azure SQL" />}
-          <Subtitle2>Managed Instances ({instances.length})</Subtitle2>
-          <div className={s.tableWrap}>
-            <Table size="small">
-              <TableHeader><TableRow>
-                <TableHeaderCell>Name</TableHeaderCell>
-                <TableHeaderCell>State</TableHeaderCell>
-                <TableHeaderCell>Location</TableHeaderCell>
-                <TableHeaderCell>SKU</TableHeaderCell>
-                <TableHeaderCell>FQDN</TableHeaderCell>
-              </TableRow></TableHeader>
-              <TableBody>
-                {instances.map((i: any) => (
-                  <TableRow key={i.id}
-                    onClick={() => i.fqdn && setSelectedFqdn(i.fqdn)}
-                    style={{ cursor: i.fqdn ? 'pointer' : 'default', background: i.fqdn && i.fqdn === selectedFqdn ? tokens.colorNeutralBackground1Selected : undefined }}>
-                    <TableCell><strong>{i.name}</strong></TableCell>
-                    <TableCell>{i.state}</TableCell>
-                    <TableCell>{i.location}</TableCell>
-                    <TableCell>{i.sku?.name}</TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{i.fqdn}</code></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+            )
+          )}
         </div>
       }
     />
@@ -1482,7 +1739,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
               value={server}
               onChange={(e) => { setServer(e.target.value); setDatabase(''); }}
               disabled={srv.loading || (srv.servers?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
               {srv.loading && <option value="">Loading servers…</option>}
               {!srv.loading && (srv.servers?.length ?? 0) === 0 && (
@@ -1502,7 +1759,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
               value={database}
               onChange={(e) => setDatabase(e.target.value)}
               disabled={!server || dbs.loading || (dbs.databases?.length ?? 0) === 0}
-              style={{ padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
+              style={{ padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1 }}
             >
               {!server && <option value="">Select a server first</option>}
               {server && dbs.loading && <option value="">Loading databases…</option>}

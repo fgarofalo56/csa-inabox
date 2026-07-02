@@ -32,17 +32,17 @@ const useStyles = makeStyles({
     position: 'relative',
   },
   badge: {
-    position: 'absolute', top: 4, right: 4,
-    minWidth: 16, height: 16, padding: '0 4px',
+    position: 'absolute', top: tokens.spacingVerticalXS, right: tokens.spacingHorizontalXS,
+    minWidth: tokens.spacingHorizontalL, height: tokens.spacingVerticalL, padding: '0 4px',
     borderRadius: 'var(--loom-radius-full)',
     backgroundColor: '#E63946',
     color: 'white',
-    fontSize: 10, fontWeight: 700,
+    fontSize: tokens.fontSizeBase100, fontWeight: 700,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     border: '1px solid var(--loom-topbar-bg)',
   },
   surface: {
-    width: 360, maxHeight: 460, padding: 0,
+    width: '360px', maxHeight: '460px', padding: 0,
     display: 'flex', flexDirection: 'column',
   },
   header: {
@@ -53,7 +53,7 @@ const useStyles = makeStyles({
   },
   list: { flex: 1, overflow: 'auto' },
   item: {
-    display: 'flex', flexDirection: 'column', gap: 4,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS,
     padding: 'var(--loom-space-3)',
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     textDecoration: 'none', color: tokens.colorNeutralForeground1,
@@ -62,10 +62,10 @@ const useStyles = makeStyles({
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
   unread: { backgroundColor: tokens.colorBrandBackground2 },
-  itemTitle: { fontSize: 13, fontWeight: 600 },
-  itemBody: { fontSize: 12, color: tokens.colorNeutralForeground2, lineHeight: 1.4 },
-  itemMeta: { fontSize: 11, color: tokens.colorNeutralForeground3 },
-  empty: { padding: 'var(--loom-space-5)', textAlign: 'center', color: tokens.colorNeutralForeground2, fontSize: 13 },
+  itemTitle: { fontSize: '13px', fontWeight: 600 },
+  itemBody: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, lineHeight: 1.4 },
+  itemMeta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
+  empty: { padding: 'var(--loom-space-5)', textAlign: 'center', color: tokens.colorNeutralForeground2, fontSize: '13px' },
 });
 
 export function NotificationsButton() {

@@ -30,7 +30,10 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Play20Regular, ArrowDownload20Regular } from '@fluentui/react-icons';
+import {
+  Play20Regular, ArrowDownload20Regular,
+  Table20Regular, TextBulletListSquare20Regular, Server16Regular,
+} from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { ConnectionDetailsPanel } from './components/connection-details';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
@@ -41,23 +44,31 @@ import {
   type ObjectsResponse,
 } from '@/lib/components/synapse-sql-object-explorer';
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  connect: { display: 'flex', gap: 8, alignItems: 'center' },
-  editorWrap: { minHeight: 220 },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 200, display: 'flex', flexDirection: 'column', gap: 8 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+const useLocalStyles = makeStyles({
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 },
+  connect: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', minWidth: 0 },
+  endpointBadge: { maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  errorText: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  editorWrap: { minHeight: '220px' },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '200px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   messages: {
-    fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap',
-    backgroundColor: tokens.colorNeutralBackground3, borderRadius: 4, padding: 12,
-    color: tokens.colorNeutralForeground2, maxHeight: 280, overflow: 'auto', margin: 0,
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+    backgroundColor: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalM,
+    color: tokens.colorNeutralForeground2, maxHeight: '280px', overflow: 'auto', margin: 0,
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface QueryResponse {
   ok: boolean;
@@ -405,7 +416,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
             </MessageBar>
           )}
           <div className={s.toolbar}>
-            <Badge appearance="filled" color="brand">Serverless</Badge>
+            <Badge appearance="filled" color="brand" icon={<Server16Regular />}>Serverless</Badge>
             <div className={s.connect}>
               <Label size="small" htmlFor="connect-db">Connect to</Label>
               <Dropdown
@@ -419,7 +430,8 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
                 {databases.map((db) => <Option key={db} value={db}>{db}</Option>)}
               </Dropdown>
             </div>
-            <Badge appearance="outline" color={endpoint ? 'success' : 'severe'}>
+            <Badge appearance="outline" color={endpoint ? 'success' : 'severe'}
+              className={s.endpointBadge} title={endpoint || 'endpoint not configured'}>
               {endpoint || 'endpoint not configured'}
             </Badge>
             <Button appearance="primary" icon={<Play20Regular />} disabled={loading} onClick={run} style={{ marginLeft: 'auto' }}>
@@ -434,6 +446,8 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
               language="tsql"
               height={260}
               minHeight={220}
+              autoHeight
+              maxHeight={640}
               ariaLabel="Serverless T-SQL editor"
               onReady={onEditorReady}
             />
@@ -441,8 +455,8 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
 
           <div className={s.resultBox}>
             <TabList selectedValue={resultTab} onTabSelect={(_, d) => setResultTab(d.value as 'results' | 'messages')} size="small">
-              <Tab value="results">Results</Tab>
-              <Tab value="messages">Messages{result?.messages?.length ? ` (${result.messages.length})` : ''}</Tab>
+              <Tab value="results" icon={<Table20Regular />}>Results</Tab>
+              <Tab value="messages" icon={<TextBulletListSquare20Regular />}>Messages{result?.messages?.length ? ` (${result.messages.length})` : ''}</Tab>
             </TabList>
 
             {loading && <Spinner size="small" label="Executing T-SQL…" labelPosition="after" />}
@@ -504,7 +518,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
                 <Caption1>Messages (PRINT, RAISERROR, DDL receipts and errors) appear here after you Run.</Caption1>
               ) : !result.ok ? (
                 <MessageBar intent="error">
-                  <MessageBarBody>
+                  <MessageBarBody className={s.errorText}>
                     <MessageBarTitle>Query failed{result.sqlNumber ? ` (Msg ${result.sqlNumber})` : ''}</MessageBarTitle>
                     {result.error || 'Unknown error'}{result.code ? ` · ${result.code}` : ''}
                   </MessageBarBody>

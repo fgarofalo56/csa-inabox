@@ -5,7 +5,7 @@
  * responses and confirms:
  *   - workspace list fetch fires
  *   - pipeline config GET fires on mount
- *   - the "Design here, publish to Fabric" guidance MessageBar renders AND a
+ *   - the "Design here, provision to Azure (Fabric optional)" guidance MessageBar renders AND a
  *     real, enabled "Publish to Fabric" action is wired (no-vaporware: the
  *     editor now ships a live publish workflow — info MessageBar + ribbon
  *     button + toolbar button + dialog — not a passive disclosure banner)
@@ -57,7 +57,7 @@ describe('EventstreamEditor', () => {
     // main content in more than one layout tree, so the title node appears more
     // than once; assert at least one is present.)
     await waitFor(() => {
-      expect(screen.getAllByText('Design here, publish to Fabric').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Design here, provision to Azure (Fabric optional)').length).toBeGreaterThan(0);
     });
     // …and the publish workflow is real, not a passive banner: a "Publish to
     // Fabric" button is rendered and enabled (it opens the publish dialog that

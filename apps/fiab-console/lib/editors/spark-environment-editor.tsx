@@ -30,36 +30,64 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle, Spinner,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
-import { ArrowUpload20Regular, Delete20Regular, Rocket20Regular, Beaker20Regular, Link20Regular } from '@fluentui/react-icons';
+import {
+  ArrowUpload20Regular, Delete20Regular, Rocket20Regular, Beaker20Regular, Link20Regular,
+  BranchFork20Regular, Server20Regular, PuzzlePiece20Regular, Library20Regular,
+  Settings20Regular, PlugConnected20Regular, CloudArrowUp20Regular,
+} from '@fluentui/react-icons';
+import type { ReactNode } from 'react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
+import { EmptyState } from '@/lib/components/empty-state';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  tabBody: { padding: '20px', display: 'flex', flexDirection: 'column', gap: '12px', maxWidth: '880px' },
-  row: { display: 'flex', gap: '16px', flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: '4px' },
+const useLocalStyles = makeStyles({
+  tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '880px' },
+  row: { display: 'flex', gap: tokens.spacingVerticalL, flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   footer: {
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px',
+    padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
     background: tokens.colorNeutralBackground2,
   },
-  toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
-  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px' },
+  mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   pre: {
-    width: '100%', maxHeight: '220px', overflow: 'auto', padding: '10px', margin: 0,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '12px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '4px',
+    width: '100%', maxWidth: '100%', maxHeight: '320px', overflow: 'auto', padding: tokens.spacingVerticalS, margin: 0,
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     background: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
-    whiteSpace: 'pre-wrap',
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box',
+    resize: 'vertical', minHeight: '120px',
   },
+  tableScroll: { width: '100%', maxWidth: '100%', overflowX: 'auto' },
+  sectionHead: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    color: tokens.colorBrandForeground1,
+  },
+  poolField: { maxWidth: '320px' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
+
+function SectionHeader({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  const styles = useStyles();
+  return (
+    <div className={styles.sectionHead}>
+      {icon}
+      <Subtitle2>{children}</Subtitle2>
+    </div>
+  );
+}
 
 const NODE_SIZES = ['Small', 'Medium', 'Large', 'XLarge', 'XXLarge'] as const;
 const SPARK_VERSIONS = [
@@ -387,7 +415,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
 
           {tab === 'runtime' && (
             <>
-              <Subtitle2>Runtime</Subtitle2>
+              <SectionHeader icon={<BranchFork20Regular />}>Runtime</SectionHeader>
               <div className={styles.row}>
                 <div className={styles.field}>
                   <Caption1>Spark runtime version</Caption1>
@@ -418,7 +446,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
 
           {tab === 'compute' && (
             <>
-              <Subtitle2>Compute</Subtitle2>
+              <SectionHeader icon={<Server20Regular />}>Compute</SectionHeader>
               <div className={styles.row}>
                 <div className={styles.field}>
                   <Caption1>Node size</Caption1>
@@ -470,7 +498,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
 
           {tab === 'public-libs' && (
             <>
-              <Subtitle2>Public libraries</Subtitle2>
+              <SectionHeader icon={<PuzzlePiece20Regular />}>Public libraries</SectionHeader>
               <div className={styles.row}>
                 <div className={styles.field}>
                   <Caption1>Format</Caption1>
@@ -507,7 +535,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
 
           {tab === 'custom-libs' && (
             <>
-              <Subtitle2>Custom libraries</Subtitle2>
+              <SectionHeader icon={<Library20Regular />}>Custom libraries</SectionHeader>
               <Caption1>Upload <code>.whl</code> or <code>.jar</code> files. They are staged to the
                 ADLS <code>landing</code> container and referenced as pool custom libraries on publish.</Caption1>
               <input ref={fileRef} type="file" accept=".whl,.jar" style={{ display: 'none' }} onChange={onFileChange} />
@@ -518,8 +546,14 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
                 {uploading && <Spinner size="tiny" />}
               </div>
               {customLibraries.length === 0 ? (
-                <Caption1>No custom libraries uploaded yet.</Caption1>
+                <EmptyState
+                  icon={<Library20Regular />}
+                  title="No custom libraries yet"
+                  body="Upload a .whl or .jar to stage it to the ADLS landing container; it is referenced as a pool custom library on publish."
+                  primaryAction={{ label: 'Upload .whl / .jar', onClick: onPickFile }}
+                />
               ) : (
+                <div className={styles.tableScroll}>
                 <Table size="small" aria-label="Custom libraries">
                   <TableHeader>
                     <TableRow>
@@ -545,13 +579,14 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
                     ))}
                   </TableBody>
                 </Table>
+                </div>
               )}
             </>
           )}
 
           {tab === 'spark-props' && (
             <>
-              <Subtitle2>Spark properties</Subtitle2>
+              <SectionHeader icon={<Settings20Regular />}>Spark properties</SectionHeader>
               <Caption1>Key/value pairs written to <code>spark-defaults.conf</code> and baked onto the pool.</Caption1>
               <KeyValueGrid value={sparkPropsJson} onChange={(v) => { setSparkPropsJson(v); markDirty(); }}
                 keyLabel="Property" valueLabel="Value"
@@ -564,9 +599,9 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
 
         {/* ---- Publish / Validate / Attach footer ---- */}
         <div className={styles.footer}>
-          <Subtitle2>Publish</Subtitle2>
+          <SectionHeader icon={<CloudArrowUp20Regular />}>Publish</SectionHeader>
           <div className={styles.toolbar}>
-            <div className={styles.field} style={{ maxWidth: 320 }}>
+            <div className={mergeClasses(styles.field, styles.poolField)}>
               <Caption1>Target Spark pool</Caption1>
               <Dropdown value={targetPool} selectedOptions={targetPool ? [targetPool] : []}
                 onOptionSelect={(_, d) => setTargetPool(d.optionValue || '')}>
@@ -622,7 +657,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
             </>
           )}
 
-          <Subtitle2>Attach to notebooks &amp; Spark job definitions</Subtitle2>
+          <SectionHeader icon={<PlugConnected20Regular />}>Attach to notebooks &amp; Spark job definitions</SectionHeader>
           <div className={styles.toolbar}>
             <Button icon={<Link20Regular />} onClick={loadCandidates} disabled={busy}>
               {candidates === null ? 'Load items' : 'Refresh items'}
@@ -631,8 +666,16 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
               <Caption1>Publish first so attached items default to the published pool.</Caption1>
             )}
           </div>
-          {candidates && candidates.length === 0 && <Caption1>No notebooks or Spark job definitions in your workspaces yet.</Caption1>}
+          {candidates && candidates.length === 0 && (
+            <EmptyState
+              icon={<PlugConnected20Regular />}
+              title="Nothing to attach yet"
+              body="No notebooks or Spark job definitions exist in your workspaces yet. Create one, then refresh to attach this environment to it."
+              primaryAction={{ label: 'Refresh items', onClick: loadCandidates, appearance: 'secondary' }}
+            />
+          )}
           {candidates && candidates.length > 0 && (
+            <div className={styles.tableScroll}>
             <Table size="small" aria-label="Attach candidates">
               <TableHeader>
                 <TableRow>
@@ -662,6 +705,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
                 ))}
               </TableBody>
             </Table>
+            </div>
           )}
         </div>
       </>

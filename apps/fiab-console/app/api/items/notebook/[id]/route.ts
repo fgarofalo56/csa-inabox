@@ -11,6 +11,7 @@
  * (Synapse Spark Livy / Databricks Jobs) — see [id]/run/route.ts.
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
@@ -19,7 +20,7 @@ import { migrateLegacyState, type NotebookCell, type NotebookCellLang } from '@/
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number) { return NextResponse.json({ ok: false, error }, { status }); }
+
 
 async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
   const c = await workspacesContainer();
@@ -31,15 +32,15 @@ async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
     const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return err('workspace not found', 404);
+    if (!ws) return apiError('workspace not found', 404);
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!resource || resource.itemType !== 'notebook') return err('notebook not found', 404);
+    if (!resource || resource.itemType !== 'notebook') return apiError('notebook not found', 404);
     const state = (resource.state as any) || {};
     // Fallback for bundle-installed notebooks whose cells were stamped only
     // into state.content (NotebookContent shape) and never into state.cells —
@@ -68,23 +69,23 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       },
     });
   } catch (e: any) {
-    if (e?.code === 404) return err('notebook not found', 404);
-    return err(e?.message || String(e), 500);
+    if (e?.code === 404) return apiError('notebook not found', 404);
+    return apiError(e?.message || String(e), 500);
   }
 }
 
 export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   try {
     const ws = await loadWs(workspaceId, s.claims.oid);
-    if (!ws) return err('workspace not found', 404);
+    if (!ws) return apiError('workspace not found', 404);
     const items = await itemsContainer();
     const { resource: existing } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
-    if (!existing || existing.itemType !== 'notebook') return err('notebook not found', 404);
+    if (!existing || existing.itemType !== 'notebook') return apiError('notebook not found', 404);
     const def = body?.definition;
     const stateNext: Record<string, unknown> = { ...(existing.state || {}) };
 
@@ -147,20 +148,20 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         sessionConfig: respState.sessionConfig || null,
       },
     });
-  } catch (e: any) { return err(e?.message || String(e), 500); }
+  } catch (e: any) { return apiError(e?.message || String(e), 500); }
 }
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
-  if (!s) return err('unauthenticated', 401);
+  if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return err('workspaceId required', 400);
+  if (!workspaceId) return apiError('workspaceId required', 400);
   try {
     const items = await itemsContainer();
     await items.item((await ctx.params).id, workspaceId).delete();
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
-    return err(e?.message || String(e), 500);
+    return apiError(e?.message || String(e), 500);
   }
 }

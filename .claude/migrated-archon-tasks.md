@@ -494,7 +494,7 @@ _order: 2 . feature: Phase-1-Critical . assignee: Coding Agent . id: `a96b53a0-a
 
 Three hardcoded values committed to source control in ALZ:
 
-1. **Subscription ID** — `deploy/bicep/LandingZone - ALZ/params.dev.json` line 15 (real sub ID `a60a2fdd-c133-4845-9beb-31f470bf3ef5` repeated at lines 375, 603). Replace with `<ALZ_SUBSCRIPTION_ID>` placeholder.
+1. **Subscription ID** — `deploy/bicep/LandingZone - ALZ/params.dev.json` line 15 (real sub ID `<ALZ_SUBSCRIPTION_ID>` repeated at lines 375, 603). Replace with `<ALZ_SUBSCRIPTION_ID>` placeholder.
 2. **IP Address** — `deploy/bicep/LandingZone - ALZ/main.bicep` lines 551-556 has `98.204.179.172` hardcoded in storage ipRules. Parameterize as `parAllowedIpAddresses`.
 3. **Contact info** — `main.bicep` lines 128-129 has `PrimaryContact: 'frgarofa'` and `CostCenter: 'FFL ATU - exp12345'` hardcoded in tags. Add parameters matching DLZ/DMLZ pattern.
 

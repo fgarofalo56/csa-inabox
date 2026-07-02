@@ -20,7 +20,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Field,
+  Subtitle2, Body1, Caption1, Badge, Button, Spinner, SkeletonItem, Input, Textarea, Field,
   Tree, TreeItem, TreeItemLayout, Select,
   Tab, TabList,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -30,22 +30,60 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular, Delete20Regular,
+  TableSimple20Regular, Play20Regular, BranchFork20Regular, Info20Regular,
+  DocumentTable20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { TsqlMonaco } from '@/lib/editors/components/tsql-monaco';
 import { SqlDbTree } from '@/lib/components/sqldb/sqldb-tree';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 },
+const useLocalStyles = makeStyles({
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4 },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '240px' },
+  propsPane: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, maxWidth: '100%',
+    padding: tokens.spacingVerticalL,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    backgroundColor: tokens.colorNeutralBackground1,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  tablesCanvas: {
+    flex: 1, minHeight: '360px',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    overflow: 'hidden',
+  },
+  skeletonStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, paddingTop: tokens.spacingVerticalS },
+  breakAll: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
+
+function TreeSkeleton({ rows = 4 }: { rows?: number }) {
+  const s = useStyles();
+  return (
+    <div className={s.skeletonStack} aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <SkeletonItem key={i} size={24} />
+      ))}
+    </div>
+  );
+}
 
 interface WorkspaceLite { id: string; name: string }
 interface SqlDbLite { id: string; displayName: string; description?: string }
@@ -216,9 +254,11 @@ WHERE is_ms_shipped = 0;`,
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Fabric SQL DBs</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+            <Database20Regular />Fabric SQL DBs
+          </Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
-          {workspaceId && dbs === null && <Spinner size="tiny" label="Loading…" />}
+          {workspaceId && dbs === null && <TreeSkeleton />}
           {dbs && dbs.length === 0 && !listErr && <Caption1>No SQL databases yet.</Caption1>}
           <Tree aria-label="Fabric SQL DBs">
             {(dbs || []).map(d => (
@@ -235,10 +275,10 @@ WHERE is_ms_shipped = 0;`,
         <>
           <div className={s.tabs}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-              <Tab value="tables">Tables</Tab>
-              <Tab value="query">Query</Tab>
-              <Tab value="mirroring">Mirroring</Tab>
-              <Tab value="properties">Properties</Tab>
+              <Tab value="tables" icon={<TableSimple20Regular />}>Tables</Tab>
+              <Tab value="query" icon={<Play20Regular />}>Query</Tab>
+              <Tab value="mirroring" icon={<BranchFork20Regular />}>Mirroring</Tab>
+              <Tab value="properties" icon={<Info20Regular />}>Properties</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
@@ -275,7 +315,7 @@ WHERE is_ms_shipped = 0;`,
 
             {listErr && (
               <MessageBar intent={listErr.code === 'NO_FABRIC_WS' ? 'warning' : 'error'}>
-                <MessageBarBody>
+                <MessageBarBody className={s.breakAll}>
                   <MessageBarTitle>{listErr.code === 'NO_FABRIC_WS' ? 'No Fabric workspace attached' : 'Fabric error'}</MessageBarTitle>
                   {listErr.error}
                   {listErr.hint && <><br /><Caption1>{listErr.hint}</Caption1></>}
@@ -286,9 +326,15 @@ WHERE is_ms_shipped = 0;`,
 
             {tab === 'tables' && (
               <>
-                {!dbId && <Caption1>Select a SQL database from the left panel.</Caption1>}
+                {!dbId && (
+                  <EmptyState
+                    icon={<Database20Regular />}
+                    title="No SQL database selected"
+                    body="Pick a Fabric SQL database from the left panel to browse its tables, views, and schema in the Object Explorer."
+                  />
+                )}
                 {dbId && workspaceId && (
-                  <div style={{ flex: 1, minHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4, overflow: 'hidden' }}>
+                  <div className={s.tablesCanvas}>
                     <SqlDbTree
                       workspaceId={workspaceId}
                       itemId={dbId}
@@ -302,10 +348,17 @@ WHERE is_ms_shipped = 0;`,
 
             {tab === 'query' && (
               <>
-                {!dbId && <Caption1>Select a database first.</Caption1>}
+                {!dbId && (
+                  <EmptyState
+                    icon={<Play20Regular />}
+                    title="No database selected"
+                    body="Select a Fabric SQL database from the left panel to write and run T-SQL against the underlying Azure SQL engine."
+                  />
+                )}
                 {dbId && (
                   <>
                     <div className={s.toolbar}>
+                      <Play20Regular />
                       <Body1>T-SQL (runs through Azure SQL engine)</Body1>
                     </div>
                     <TsqlMonaco
@@ -318,8 +371,22 @@ WHERE is_ms_shipped = 0;`,
                       busy={sqlBusy}
                     />
                     {sqlBusy && <Spinner size="small" label="Executing…" labelPosition="after" />}
+                    {!sqlBusy && !sqlResult && (
+                      <EmptyState
+                        icon={<DocumentTable20Regular />}
+                        title="No results yet"
+                        body="Write a T-SQL statement above and run it. Result rows from the live Azure SQL engine appear here."
+                      />
+                    )}
                     {!sqlBusy && sqlResult && !sqlResult.ok && (
-                      <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Query failed</MessageBarTitle>{sqlResult.error}</MessageBarBody></MessageBar>
+                      <MessageBar intent="error"><MessageBarBody className={s.breakAll}><MessageBarTitle>Query failed</MessageBarTitle>{sqlResult.error}</MessageBarBody></MessageBar>
+                    )}
+                    {!sqlBusy && sqlResult?.ok && (sqlResult.columns?.length ?? 0) === 0 && (
+                      <EmptyState
+                        icon={<DocumentTable20Regular />}
+                        title="Query returned no rows"
+                        body="The statement executed successfully against the live endpoint but returned no result set. Adjust the statement and run again."
+                      />
                     )}
                     {!sqlBusy && sqlResult?.ok && (sqlResult.columns?.length ?? 0) > 0 && (
                       <div className={s.tableWrap}>
@@ -346,7 +413,13 @@ WHERE is_ms_shipped = 0;`,
 
             {tab === 'mirroring' && (
               <>
-                {!dbId && <Caption1>Select a database first.</Caption1>}
+                {!dbId && (
+                  <EmptyState
+                    icon={<BranchFork20Regular />}
+                    title="No database selected"
+                    body="Select a Fabric SQL database from the left panel to see its OneLake auto-mirroring status."
+                  />
+                )}
                 {dbId && (
                   <MessageBar intent="info">
                     <MessageBarBody>
@@ -359,12 +432,21 @@ WHERE is_ms_shipped = 0;`,
             )}
 
             {tab === 'properties' && active && (
-              <>
-                <Subtitle2>{active.displayName}</Subtitle2>
-                <Caption1>id: <code>{active.id}</code></Caption1>
-                {active.description && <Caption1>{active.description}</Caption1>}
-                <Caption1>Fabric workspace: <code>{fabricWsId || '(not attached)'}</code></Caption1>
-              </>
+              <div className={s.propsPane}>
+                <Subtitle2 className={s.breakAll} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+                  <Info20Regular />{active.displayName}
+                </Subtitle2>
+                <Caption1 className={s.breakAll}>id: <code>{active.id}</code></Caption1>
+                {active.description && <Caption1 className={s.breakAll}>{active.description}</Caption1>}
+                <Caption1 className={s.breakAll}>Fabric workspace: <code>{fabricWsId || '(not attached)'}</code></Caption1>
+              </div>
+            )}
+            {tab === 'properties' && !active && (
+              <EmptyState
+                icon={<Info20Regular />}
+                title="No database selected"
+                body="Select a Fabric SQL database from the left panel to view its display name, id, and attached Fabric workspace."
+              />
             )}
           </div>
         </>

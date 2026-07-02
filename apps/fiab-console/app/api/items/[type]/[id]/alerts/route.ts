@@ -48,6 +48,7 @@ import {
   MonitorNotConfiguredError,
   MonitorError,
 } from '@/lib/azure/monitor-client';
+import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -81,30 +82,21 @@ interface AlertBody {
 }
 
 /** Honest Azure infra-gate (never a Fabric gate) for Monitor errors → 503/403. */
-function monitorGate(e: unknown): NextResponse | null {
-  if (e instanceof MonitorNotConfiguredError) {
-    return NextResponse.json({
-      ok: false,
-      gated: true,
-      error: `Azure Monitor not configured: set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_ALERT_RG'}.`,
+const monitorGateBodies: MonitorGateBodies = {
+  notConfigured: (missing) => ({ gated: true,
+      error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID / LOOM_ALERT_RG'}.`,
       gate: {
         reason: 'The Azure-native warehouse alert creates a scheduled-query alert rule on Azure Monitor.',
-        remediation: `Set ${e.missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.`,
+        remediation: `Set ${missing?.join(' / ') || 'LOOM_LOG_ANALYTICS_RESOURCE_ID + LOOM_ALERT_RG'} on the Console. No Microsoft Fabric required.`,
       },
-    }, { status: 503 });
-  }
-  if (e instanceof MonitorError && (e.status === 401 || e.status === 403)) {
-    return NextResponse.json({
-      ok: false,
-      error: `Azure Monitor ${e.status}: not authorized to create alert rules.`,
+    }),
+  unauthorized: (status) => ({ error: `Azure Monitor ${status}: not authorized to create alert rules.`,
       gate: {
         reason: 'The Console UAMI needs rights on the alert resource group.',
         remediation: 'Grant the Console UAMI "Monitoring Contributor" on LOOM_ALERT_RG so it can create scheduledQueryRules.',
       },
-    }, { status: 403 });
-  }
-  return null;
-}
+    }),
+};
 
 // ============================================================
 // GET — list alerts for the active cloud boundary
@@ -130,7 +122,7 @@ export async function GET(_req: NextRequest, _ctx: { params: Promise<{ type: str
       }));
       return NextResponse.json({ ok: true, backend: 'azure-monitor', alerts });
     } catch (e) {
-      return monitorGate(e) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
+      return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
     }
   }
 
@@ -201,7 +193,7 @@ export async function POST(req: NextRequest, _ctx: { params: Promise<{ type: str
       });
       return NextResponse.json({ ok: true, backend: 'azure-monitor', alertId: ruleId, name });
     } catch (e) {
-      return monitorGate(e) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
+      return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
     }
   }
 
@@ -271,7 +263,7 @@ export async function PATCH(req: NextRequest, _ctx: { params: Promise<{ type: st
       });
       return NextResponse.json({ ok: true, backend: 'azure-monitor', alertId: ruleId, name });
     } catch (e) {
-      return monitorGate(e) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
+      return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
     }
   }
 
@@ -309,7 +301,7 @@ export async function DELETE(req: NextRequest, _ctx: { params: Promise<{ type: s
       await deleteScheduledQueryRule(alertId); // alertId is the rule name on the Gov path
       return NextResponse.json({ ok: true, backend: 'azure-monitor', deleted: alertId });
     } catch (e) {
-      return monitorGate(e) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
+      return monitorGate(e, monitorGateBodies) || NextResponse.json({ ok: false, error: (e as Error)?.message || String(e) }, { status: 502 });
     }
   }
 

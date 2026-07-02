@@ -13,10 +13,10 @@ import { makeStyles, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-co
 const SECTIONS = [
   { href: '/catalog',             label: 'Search',      desc: 'Federated search across Purview, Unity Catalog, and OneLake.' },
   { href: '/catalog/browse',      label: 'Browse',      desc: 'Tree view: source → workspace → schema/domain → asset.' },
-  { href: '/catalog/domains',     label: 'Domains',     desc: 'Business-domain CRUD; assign UC catalogs and OneLake workspaces.' },
+  { href: '/admin/domains',       label: 'Domains',     desc: 'Business-domain CRUD; assign UC catalogs and OneLake workspaces (Admin portal).' },
   { href: '/catalog/permissions', label: 'Permissions', desc: 'Loom roles that fan out to Purview RBAC, UC GRANTs, and Fabric roles.' },
   { href: '/catalog/metastores',  label: 'Metastores',  desc: 'Registered Databricks metastores, Purview accounts, OneLake regions.' },
-  { href: '/catalog/lineage',     label: 'Lineage',     desc: 'Federated lineage graph rolling up Purview + UC + Fabric edges.' },
+  { href: '/catalog/lineage',     label: 'Federated lineage', desc: 'Federated lineage graph rolling up Purview + UC + Fabric edges.' },
 ];
 
 const useStyles = makeStyles({

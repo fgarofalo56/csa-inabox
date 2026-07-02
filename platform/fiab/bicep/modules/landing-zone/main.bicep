@@ -425,6 +425,65 @@ module eventgridBusiness 'eventgrid-business.bicep' = {
 }
 
 // =====================================================================
+// 5b. Service Bus namespace (reliable queue / pub-sub messaging)
+//
+//    Backs the service-bus-namespace navigator (queues + topics CRUD). Azure-
+//    native parity for the Fabric/Activator reliable-messaging surface — no
+//    Fabric dependency. Provisioned by DEFAULT (opt-out, mirrors Event Hubs);
+//    set deployServiceBus=false to skip the namespace cost — the service-bus-
+//    namespace editor then honest-gates (admin-plane blanks LOOM_SERVICEBUS_*),
+//    per no-vaporware.md. Standard tier (topics require Standard). PE on the
+//    spoke PE subnet, sharing the privatelink.servicebus.windows.net zone with
+//    Event Hubs.
+// =====================================================================
+
+@description('Provision a Service Bus namespace (Standard) in this DLZ to back the service-bus-namespace navigator. Default true (opt-out). false skips it (the editor honest-gates).')
+param deployServiceBus bool = true
+
+module servicebus 'servicebus.bicep' = if (deployServiceBus) {
+  name: 'dlz-servicebus'
+  params: {
+    location: location
+    domainName: domainName
+    consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    // Service Bus shares the Event Hubs private DNS zone
+    // (privatelink.servicebus.windows.net) — reuse the same coordinate.
+    privateDnsZoneServicebusId: string(adminPlanePrivateDnsZoneIds.?servicebus ?? '')
+    workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// 5c. Event Grid custom topic (dedicated, PE-locked) for the
+//     event-grid-topic navigator. Additive to the always-on business-events
+//     topic (section 5 above) — a private general-purpose topic so a fresh
+//     deploy lights up the event-grid-topic item. Default true (opt-out): the
+//     navigator is RG-scoped and also functions against the business topic, so
+//     deployEventGrid=false is a safe opt-out (no honest-gate regression).
+// =====================================================================
+
+@description('Provision a DEDICATED PE-locked Event Grid custom topic in this DLZ for the event-grid-topic navigator. Default true (opt-out). false skips it — the navigator still lists the always-on business-events topic in the same RG.')
+param deployEventGrid bool = true
+
+module eventgrid 'eventgrid.bicep' = if (deployEventGrid) {
+  name: 'dlz-eventgrid-topic'
+  params: {
+    location: location
+    consolePrincipalId: consolePrincipalId
+    skipRoleGrants: skipRoleGrants
+    privateEndpointSubnetId: network.outputs.privateEndpointSubnetId
+    // privatelink.eventgrid.azure.net — empty when the admin-plane DNS zones
+    // object carries no eventgrid zone (PE registers; DNS group skipped).
+    eventGridPrivateDnsZoneId: string(adminPlanePrivateDnsZoneIds.?eventgrid ?? '')
+    workspaceId: adminPlaneLawId
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
 // 6. ADX database (on the Admin Plane shared cluster)
 // =====================================================================
 
@@ -741,6 +800,18 @@ output eventHubsNamespaceFqdn string = provisionEventHub ? eventhubs!.outputs.na
 output eventHubsNamespaceName string = provisionEventHub ? eventhubs!.outputs.namespaceName : existingEventHubNamespaceName
 output cosmosEndpoint string = cosmos.outputs.endpoint
 output storageEventGridTopicId string = storage.outputs.eventGridTopicId
+
+// Service Bus namespace NAME (short) — threaded to the hub console env
+// (LOOM_SERVICEBUS_NAMESPACE) so the service-bus-namespace navigator binds to
+// THIS DLZ's namespace instead of honest-gating. Empty when Service Bus is
+// disabled (the console then honest-gates, the correct behavior).
+output serviceBusNamespaceName string = deployServiceBus ? servicebus!.outputs.namespaceName : ''
+output serviceBusNamespaceFqdn string = deployServiceBus ? servicebus!.outputs.namespaceFqdn : ''
+// Dedicated Event Grid custom-topic NAME — the event-grid-topic navigator is
+// RG-scoped (lists all topics in LOOM_EVENTGRID_RG) so this is informational;
+// surfaced so dlz-attach can gate setting LOOM_EVENTGRID_RG/SUB when a topic
+// exists. Empty when the dedicated topic is disabled.
+output eventGridTopicName string = deployEventGrid ? eventgrid!.outputs.topicName : ''
 
 // CSA Loom family — Power Platform / ML / Geo / Graph sweep outputs
 output cosmosGremlinEndpoint string = cosmosGraphVectorEnabled ? cosmosGraphVector!.outputs.gremlinEndpoint : ''

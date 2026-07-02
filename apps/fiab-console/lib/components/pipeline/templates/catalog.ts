@@ -231,6 +231,161 @@ export const PIPELINE_TEMPLATES: PipelineTemplate[] = [
     },
   },
 
+  // ── 5. Geo enrichment (template that backs the geo-pipeline item) ─────
+  //
+  // Wave A, Contract F: `geo-pipeline` becomes templateOf:'data-pipeline' /
+  // templateId:'geo-enrich'. The unified DataPipelineEditor instantiates THIS
+  // spec when templateId==='geo-enrich' and runs it as-is on the ADF runtime
+  // (Azure-native default per no-fabric-dependency.md — no Fabric dependency).
+  //
+  // The chain is three WIRED activities (1 → 2 → 3, Succeeded dependencies):
+  //   1. ReadPoints   — Copy a points dataset out of the ADLS Gen2 lake
+  //                     (DelimitedText over {{ADLS_ACCOUNT}}) into a Parquet
+  //                     staging path. Source path is parameterized.
+  //   2. EnrichH3     — WebActivity (Azure-native parity for an enrichment
+  //                     transform) that computes the H3 cell for each point and,
+  //                     when @reverseGeocode is true, reverse-geocodes against
+  //                     the Azure Maps endpoint. The Maps host + the buffer
+  //                     radius are wired via pipeline parameters / deployment
+  //                     tokens so it runs without hand-editing. The H3-only vs.
+  //                     H3+reverse-geocode behavior is selected by the
+  //                     @reverseGeocode parameter in the request body.
+  //   3. WriteEnriched — Copy the enriched staging output to the curated lake
+  //                     path as Parquet.
+  //
+  // All shapes are real ADF activity types (Copy, WebActivity) that the
+  // upsert accepts — no Fabric-only activities, no mock placeholders. Linked
+  // service / dataset references are left blank ('') to be wired in the binder
+  // after instantiation, exactly like the sibling templates above; the run
+  // path resolves {{ADLS_ACCOUNT}} from deployment env tokens.
+  {
+    id: 'geo-enrich',
+    title: 'Geo enrichment',
+    category: 'Transform',
+    description:
+      'H3 index + reverse-geocode + buffer over a points dataset, runs on ADF. ' +
+      'Reads a points dataset from the ADLS Gen2 lake, adds the H3 cell (and ' +
+      'optionally reverse-geocodes against Azure Maps), then writes the enriched ' +
+      'result back to the curated path. Parameters: enrichH3, reverseGeocode, ' +
+      'bufferMeters.',
+    spec: {
+      name: 'GeoEnrich',
+      properties: {
+        description:
+          'Geo-enrichment chain: read points from ADLS → add H3 cell + optional ' +
+          'reverse-geocode (Azure Maps) + buffer → write enriched points. ' +
+          'Runs as-is on the ADF runtime (Azure-native default).',
+        activities: [
+          // 1 — Copy the raw points dataset out of the ADLS Gen2 lake into a
+          //     Parquet staging path. Source folder is parameterized; the lake
+          //     account resolves from the {{ADLS_ACCOUNT}} deployment token.
+          {
+            name: 'ReadPoints',
+            type: 'Copy',
+            dependsOn: [],
+            typeProperties: {
+              source: {
+                type: 'DelimitedTextSource',
+                storeSettings: {
+                  type: 'AzureBlobFSReadSettings',
+                  recursive: true,
+                  wildcardFolderPath: {
+                    value: '@pipeline().parameters.pointsPath',
+                    type: 'Expression',
+                  },
+                  wildcardFileName: '*.csv',
+                },
+                formatSettings: { type: 'DelimitedTextReadSettings' },
+              },
+              sink: {
+                type: 'ParquetSink',
+                storeSettings: { type: 'AzureBlobFSWriteSettings', copyBehavior: 'MergeFiles' },
+                formatSettings: { type: 'ParquetWriteSettings' },
+              },
+              enableStaging: false,
+              translator: { type: 'TabularTranslator', typeConversion: true },
+            },
+            inputs:  [{ referenceName: '', type: 'DatasetReference' }],
+            outputs: [{ referenceName: '', type: 'DatasetReference' }],
+            policy: { timeout: '0.12:00:00', retry: 1, retryIntervalInSeconds: 30 },
+          },
+          // 2 — Enrichment transform. WebActivity is Azure-native parity for an
+          //     enrichment step: it POSTs the staged points to the geo-enrich
+          //     endpoint, which computes the H3 cell (enrichH3), applies the
+          //     buffer (bufferMeters), and — only when reverseGeocode is true —
+          //     calls the Azure Maps reverse-geocode API at @mapsEndpoint. The
+          //     gating happens inside the request body via @reverseGeocode, so
+          //     a single wired activity covers both modes with no hand-editing.
+          {
+            name: 'EnrichH3',
+            type: 'WebActivity',
+            dependsOn: [{ activity: 'ReadPoints', dependencyConditions: ['Succeeded'] }],
+            typeProperties: {
+              url: {
+                value: '@pipeline().parameters.mapsEndpoint',
+                type: 'Expression',
+              },
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: {
+                value:
+                  "@json(concat('{\"enrichH3\":', string(pipeline().parameters.enrichH3), " +
+                  "',\"reverseGeocode\":', string(pipeline().parameters.reverseGeocode), " +
+                  "',\"bufferMeters\":', string(pipeline().parameters.bufferMeters), " +
+                  "',\"stagedPath\":\"', pipeline().parameters.pointsPath, '\"}'))",
+                type: 'Expression',
+              },
+            },
+            policy: { timeout: '0.01:00:00', retry: 1, retryIntervalInSeconds: 30 },
+          },
+          // 3 — Copy the enriched output to the curated lake path as Parquet.
+          {
+            name: 'WriteEnriched',
+            type: 'Copy',
+            dependsOn: [{ activity: 'EnrichH3', dependencyConditions: ['Succeeded'] }],
+            typeProperties: {
+              source: {
+                type: 'ParquetSource',
+                storeSettings: { type: 'AzureBlobFSReadSettings', recursive: true },
+                formatSettings: { type: 'ParquetReadSettings' },
+              },
+              sink: {
+                type: 'ParquetSink',
+                storeSettings: {
+                  type: 'AzureBlobFSWriteSettings',
+                  copyBehavior: 'MergeFiles',
+                },
+                formatSettings: { type: 'ParquetWriteSettings' },
+              },
+              enableStaging: false,
+            },
+            inputs:  [{ referenceName: '', type: 'DatasetReference' }],
+            outputs: [{ referenceName: '', type: 'DatasetReference' }],
+            policy: { timeout: '0.12:00:00', retry: 1, retryIntervalInSeconds: 30 },
+          },
+        ],
+        parameters: {
+          // Lowercase ADF parameter types ('bool'/'int') so paramsFromSpec()
+          // maps them onto PipelineParameterType and the Parameters pane types
+          // them correctly (ADF-cased 'Bool'/'Int' fall through to String in
+          // the editor). ADF REST accepts the lowercase forms at upsert.
+          enrichH3:       { type: 'bool', defaultValue: true },
+          reverseGeocode: { type: 'bool', defaultValue: false },
+          bufferMeters:   { type: 'int',  defaultValue: 0 },
+          // Source folder of the points dataset inside the ADLS Gen2 lake. The
+          // lake account itself resolves from the {{ADLS_ACCOUNT}} token at run
+          // time (same convention as the content-bundle pipelines).
+          pointsPath:     { type: 'string', defaultValue: 'geo/points' },
+          // Azure Maps (or the deployed geo-enrich function) endpoint. Resolved
+          // from a deployment token so the template runs without hand-editing.
+          mapsEndpoint:   { type: 'string', defaultValue: 'https://{{AZURE_MAPS_HOST}}/geo/enrich' },
+        },
+        variables: {},
+        annotations: ['loom-template:geo-enrich'],
+      },
+    },
+  },
+
   // ── 4. Metadata-driven ───────────────────────────────────────────────
   {
     id: 'metadata-driven',
