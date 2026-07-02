@@ -1915,6 +1915,50 @@ export async function buildConnectionExecutor(
  * Pure of side effects beyond the Cosmos item lookup + (direct-query only) a
  * single zero-row Synapse introspection probe. No mock data is ever returned.
  */
+// ───────────────────────────────────────────────────────────────────────────
+// QUERY ACCELERATION — aggregation tables / Direct-Lake-ish fast path (additive)
+//
+// Fabric "Direct Lake" gets import-mode speed by reading Delta directly; Power BI
+// "aggregation tables" pre-compute summaries and silently route matching queries
+// to them. Loom's Azure-native equivalent already exists as the Wave-2 per-table
+// Import/Dual/DirectLake STORAGE MODE: an Import/Dual table materializes a Delta
+// CACHE (materialized-lake-view-engine → ADLS Delta, the SHARED `reportTableMlvSpec`
+// location) and the query route serves aggregating visuals from that cache. That
+// materialized cache IS the aggregation-table story — a precomputed summary the
+// route routes to when present (`cacheReady`), with a live fallback otherwise.
+//
+// This helper surfaces that cache's Delta URL from a resolved `SourceGroupSqlSource`
+// so the report-accel client can point DuckDB's `delta_scan` at the SAME Delta the
+// refresh route wrote — interactive-speed aggregations over the pre-materialized
+// summary, no Fabric capacity (no-fabric-dependency.md), no mock (no-vaporware.md).
+//
+// A dedicated NAMED pre-aggregation designer (distinct summary tables at a coarser
+// grain, à la Power BI "Manage aggregations") is NOT yet part of SemanticModelContent
+// (it carries tables / measures / calc-groups / field-params only). When that lands
+// it slots in here as an extra binding whose `cache` points at the coarser Delta;
+// until then the honest, functional path is the storage-mode materialized cache.
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * The materialized Delta CACHE URL for a model table on the accel/aggregation
+ * fast path, or null when the table has no built cache (DirectQuery, or an
+ * Import/Dual table not yet refreshed). Reads the resolved `source-groups`
+ * bindings — the same relations the query route picks between live vs cache.
+ */
+export function acceleratableCacheDeltaUrl(
+  sqlSource: ReportSqlSource,
+  tableName?: string,
+): string | null {
+  if (sqlSource.mode !== 'source-groups') return null;
+  const entries = Object.entries(sqlSource.bindings);
+  const picked =
+    (tableName ? entries.find(([n]) => n === tableName) : undefined) ??
+    entries.find(([, b]) => b.cacheReady && b.cache) ??
+    entries.find(([, b]) => b.cache);
+  const b = picked?.[1];
+  return b?.cacheReady && b.cache ? b.cache.deltaUrl : null;
+}
+
 export async function resolveReportModel(
   reportItem: WorkspaceItem,
   tenantId: string,

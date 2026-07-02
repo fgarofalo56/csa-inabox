@@ -2952,3 +2952,73 @@ az role assignment create \
 `modules/admin-plane/main.bicep`, pass the CAE + UAMI + lake account, and set the
 console's `LOOM_REPORT_ACCEL_URL` to the module's `accelUrl` output. The module
 is standalone and does not edit `main.bicep`.
+
+## Unified capacity + chargeback dashboard (Cost Management + Monitor)
+
+`/admin/usage-chargeback` is the Azure-native 1:1 of the Fabric **Capacity
+Metrics** app — "who consumed what" across every engine, in one place. It rolls
+up **real** Azure Cost Management spend (by service, by workspace) and **real**
+Azure Monitor utilization, normalized to a single **Loom Capacity Unit (LCU)**
+with a throttle/surge gauge. The dashboard is tenant-admin gated
+(`requireTenantAdmin`) because it aggregates cost + consumption across every
+workspace in the tenant. Backend: `GET /api/admin/capacity/chargeback`.
+
+### Required role
+
+The Console UAMI needs the built-in **Cost Management Reader** role
+(`72fafb9e-0641-4937-9268-a91bfd8191a3`) at the subscription (or billing) scope
+so the BFF can call `Microsoft.CostManagement/query`,
+`Microsoft.Consumption/*/read`, and read budgets. Without it the dashboard shows
+an **honest 503 gate** naming this exact role + `LOOM_BILLING_SCOPE`; utilization
+(the normalized-CU rollup) still renders once **Monitoring Reader** is granted
+(see the monitoring-reader section above). The role GUID is identical across all
+clouds (Commercial / GCC / GCC-High / IL5 / DoD).
+
+Bicep: `platform/fiab/bicep/modules/admin-plane/cost-management-rbac.bicep`
+(subscription-scoped; grants the role and emits `loomBillingScope`).
+
+```bash
+# Out-of-band grant (e.g. cross-subscription rollup, or deployer lacked UAA):
+az role assignment create \
+  --assignee-object-id <console-uami-principal-id> --assignee-principal-type ServicePrincipal \
+  --role "Cost Management Reader" \
+  --scope /subscriptions/<sub-id>
+```
+
+### Env vars
+
+| Env var | Set on | Purpose |
+| --- | --- | --- |
+| `LOOM_BILLING_SCOPE` | `loom-console` | ARM scope the chargeback rollup covers — set from the `cost-management-rbac.bicep` `loomBillingScope` output. Defaults to the subscription scope; can point at a billing account / management group. |
+| `LOOM_CAPACITY_LCU` | `loom-console` | Optional — pin the LCU capacity ceiling (the Loom analogue of choosing a Fabric F-SKU) so the throttle gauge is absolute. Empty ⇒ auto-derived from observed peak + 25% headroom. |
+
+### Normalized Loom Capacity Unit (LCU)
+
+Loom has **no** single Fabric SKU (every engine is a real Azure service per
+`no-fabric-dependency.md`), so the one-number capacity story is synthesized. Each
+engine's native billable signal from Azure Monitor is mapped to LCU via a
+**published coefficient** (returned in the API model and shown in the UI — nothing
+hidden):
+
+| Engine | Metric (Azure Monitor) | Native unit | LCU per unit |
+| --- | --- | --- | --- |
+| Synapse dedicated SQL | `DWULimit` × `DWUUsedPercent` (per sqlPool) | DWU-hour | 0.5 |
+| Azure Data Explorer / Eventhouse | `CPU` (+ `TotalNumberOfThrottledQueries`) | compute-hour | 100 |
+| Container Apps | `UsageNanoCores` | vCPU-second | 0.01 |
+| Azure OpenAI | `TotalTokens` | token | 0.00002 |
+| Stream Analytics | `ResourceUtilization` | SU-hour | 6 |
+| Azure Databricks | (DBU not in Monitor — see note) | DBU | 10 |
+
+`utilizationPct = totalLcu / capacityLcu × 100` is the Loom CU% throttle gauge.
+`surge` is `critical` when any engine reports throttling or utilization ≥ 100%,
+`elevated` at ≥ 80%, else `none`. Databricks DBU is not emitted to Azure Monitor;
+its **cost** is still captured via Cost Management, only its LCU contribution
+requires the opt-in Databricks billable-usage system-table / Account Usage feed.
+
+### Integration pass (not done in the feature branch)
+
+`cost-management-rbac.bicep` is standalone and does **not** edit `main.bicep`. The
+operator wires it in a dedicated integration commit: add the module (scope
+`subscription()`, pass `consoleIdentity.outputs.principalId`), then set the
+console's `LOOM_BILLING_SCOPE` env to the module's `loomBillingScope` output. The
+module header carries the exact snippet.

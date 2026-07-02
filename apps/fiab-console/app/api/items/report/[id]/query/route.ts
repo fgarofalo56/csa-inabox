@@ -171,6 +171,11 @@ import {
   hasTransform,
   reportTransformMode,
 } from '@/lib/editors/report/report-data-source';
+import { deriveFreshnessToken } from '@/lib/azure/query-result-cache';
+import {
+  runAcceleratedQuery,
+  extractDeltaUrl,
+} from '@/lib/azure/report-accel-client';
 import { foldAppliedStepsToSql, parseSharedQueries } from '@/lib/components/pipeline/dataflow/m-script';
 import {
   isLoomContentId,
@@ -974,13 +979,45 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // pool for a live (DirectQuery / Dual-live) relation. Single-source reports
       // set no override and keep the resolver-pinned target, byte-for-byte.
       const runTarget = projected.target ?? resolved.sqlSource.target;
-      const result = await executeQuery(runTarget, compiled.sql, 30_000, compiled.parameters);
+
+      // ── QUERY ACCELERATION (Direct-Lake-ish) — accel → cache → Serverless ────
+      // The result cache is ALWAYS on (in-process + optional Cosmos): a repeat of
+      // this exact logical query (same compiled SQL + params, same freshness
+      // token) collapses to a Map read. The DuckDB-over-Delta accel fast path is
+      // offered ONLY when LOOM_REPORT_ACCEL_URL is deployed AND the chosen
+      // relation is a serverless Delta OPENROWSET (lakehouse / Import-Dual-Direct
+      // Lake cache) — i.e. the exact aggregating-visual shape Direct Lake speeds
+      // up. It is NOT offered when a Power Query transform folded the source
+      // (fold.kind==='folded') or drill/what-if rewrote the query (compileOpts),
+      // because the narrow accel compiler wouldn't reflect those — those still run
+      // on Synapse. On ANY accel miss/failure the orchestrator runs the SAME real
+      // Synapse query below (runDirect) — honest fallback, never a mock or a wrong
+      // row (no-vaporware.md). 100% Azure-native (no Fabric / Power BI / OneLake).
+      const deltaUrl =
+        fold.kind === 'folded' || compileOpts ? null : extractDeltaUrl(projected.source.from);
+      const accelInputs =
+        deltaUrl && body.visual
+          ? { deltaUrl, visual: body.visual, filters, columns: projected.source.columns }
+          : undefined;
+
+      const run = await runAcceleratedQuery({
+        modelId: item.id,
+        freshness: deriveFreshnessToken(item),
+        storageMode: runTarget.cacheKey, // precise execution-surface identity
+        compiledSql: compiled.sql,
+        parameters: compiled.parameters,
+        accel: accelInputs,
+        runDirect: () => executeQuery(runTarget, compiled.sql, 30_000, compiled.parameters),
+      });
+
       return NextResponse.json({
         ok: true,
-        rows: objectRows(result.columns, result.rows),
-        sql: compiled.sql,
-        elapsedMs: result.executionMs,
-        rowCount: result.rowCount,
+        rows: run.rows,
+        sql: run.sql ?? compiled.sql,
+        elapsedMs: run.elapsedMs,
+        rowCount: run.rowCount,
+        // Which tier answered — drives the "Accelerated ⚡ / Serverless" badge.
+        accelerated: run.source,
       });
     } catch (e: any) {
       return NextResponse.json(
