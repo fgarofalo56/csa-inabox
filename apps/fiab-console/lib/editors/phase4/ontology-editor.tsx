@@ -63,10 +63,12 @@ import { GraphSourceBinding, type SourceBindable } from '@/lib/components/graph/
 // instance/link/action routes keep resolving the declared type names.
 import {
   migrateOntologyState, deriveSourceFromObjectTypes, normalizeOntoActionTypes, isOntoIdent,
+  withEffectiveProperties, validateInterfaceImplementation, interfaceConformances,
   ONTO_BASE_TYPES, ONTO_BASE_TYPE_LABELS, ONTO_KEY_ELIGIBLE_TYPES, ONTO_STATUSES, ONTO_COLORS,
   ONTO_CARDINALITIES, ONTO_CARDINALITY_LABELS, ONTO_PARAM_TYPES, ONTO_PARAM_TYPE_LABELS, ONTO_ACTION_KINDS,
   type OntoObjectType, type OntoProperty, type OntoLinkType, type OntoActionType, type OntoActionParam,
   type OntoBaseType, type OntoCardinality, type OntoParamType, type OntoStatus, type OntoColor, type OntoDatasource,
+  type OntoInterface, type OntoSharedPropertyGroup,
 } from '../ontology-model';
 // Pure-logic helpers extracted for vitest coverage. See
 // `lib/editors/__tests__/family-utils.test.ts`.
@@ -154,15 +156,11 @@ interface OntoState {
    * with the legacy { name, objectType, kind, params: string[] } shape.
    */
   actionTypes?: OntoActionType[];
+  /** Interfaces (contracts object types implement) — pure Cosmos state. */
+  interfaces?: OntoInterface[];
+  /** Shared property groups (defined once, attached to many object types). */
+  sharedPropertyGroups?: OntoSharedPropertyGroup[];
   [k: string]: unknown;
-}
-
-/** A declared Weave action type (mirror of lib/azure/weave-ontology-store WeaveActionType). */
-interface WeaveActionTypeDecl {
-  name: string;
-  objectType: string;
-  kind: 'create' | 'update' | 'delete';
-  params?: string[];
 }
 
 // `parseOntologyHierarchy` is imported from `_family-utils` (vitest coverage
@@ -183,14 +181,86 @@ function OntologyHierarchyViz({ classes }: { classes: { name: string; parent?: s
 }
 
 /**
+ * Instance picker — a Dropdown of live object instances of one declared type,
+ * fed by GET /api/items/ontology/[id]/objects?objectType=… (real AGE vertices).
+ * Options are labeled by the type's title property when one is declared. Falls
+ * back to a plain vertex-id Input when the backend is gated (503) or errors, so
+ * the surface stays fully usable with the honest-gate ergonomics.
+ */
+function OntoInstancePicker({
+  ontologyId, objectType, objectTypes, value, onChange, label, hint, required,
+}: {
+  ontologyId: string;
+  objectType: string;
+  objectTypes: OntoObjectType[];
+  value: string;
+  onChange: (vertexId: string) => void;
+  label: string;
+  hint?: string;
+  required?: boolean;
+}) {
+  const [instances, setInstances] = useState<Array<{ id: string; properties: Record<string, unknown> }>>([]);
+  const [loading, setLoading] = useState(false);
+  const [fallback, setFallback] = useState<string | null>(null);
+  const titleKey = objectTypes.find((o) => o.apiName === objectType)?.titleKey;
+
+  const load = useCallback(async () => {
+    if (!ontologyId || ontologyId === 'new' || !objectType) { setInstances([]); return; }
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/items/ontology/${encodeURIComponent(ontologyId)}/objects?objectType=${encodeURIComponent(objectType)}&top=200`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setFallback(j?.error || `HTTP ${r.status}`); setInstances([]); return; }
+      setFallback(null);
+      setInstances(Array.isArray(j.objects) ? j.objects : []);
+    } catch (e: any) { setFallback(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [ontologyId, objectType]);
+  useEffect(() => { void load(); }, [load]);
+
+  const labelFor = useCallback((o: { id: string; properties: Record<string, unknown> }) => {
+    const t = titleKey ? o.properties?.[titleKey] : undefined;
+    return t !== undefined && t !== null && String(t) !== '' ? `${String(t)} · #${o.id}` : `#${o.id}`;
+  }, [titleKey]);
+
+  if (fallback) {
+    // Honest degradation: the list endpoint is gated/unavailable — the exact
+    // reason is surfaced and the picker degrades to manual vertex-id entry.
+    return (
+      <Field label={label} hint={`Instance list unavailable (${fallback}) — enter the AGE vertex id.`} required={required}>
+        <Input value={value} onChange={(_, d) => onChange(d.value)} placeholder="844424930131969" />
+      </Field>
+    );
+  }
+  const selected = instances.find((o) => o.id === value);
+  return (
+    <Field label={label} hint={hint} required={required}>
+      <Dropdown
+        value={selected ? labelFor(selected) : ''}
+        selectedOptions={value ? [value] : []}
+        onOptionSelect={(_, d) => onChange(d.optionValue || '')}
+        placeholder={loading ? 'Loading instances…' : instances.length === 0 ? `No ${objectType} instances yet` : `Select a ${objectType} instance`}
+        disabled={loading}
+      >
+        {instances.map((o) => <Option key={o.id} value={o.id} text={labelFor(o)}>{labelFor(o)}</Option>)}
+      </Dropdown>
+    </Field>
+  );
+}
+
+/**
  * Weave (Semantic Ontology) Phase 1 — object instance write-back + write-back
  * action types over the bound PG + Apache AGE graph store.
  *
  *   • Objects: list instances of a declared object type, create a new instance
  *     (POST /api/items/ontology/[id]/objects → real AGE vertex).
+ *   • Links: create a typed link between two object instances (POST
+ *     /api/items/ontology/[id]/links → real AGE edge), list existing links
+ *     (GET …/links?linkType=) and delete them (DELETE …/links?linkId=).
  *   • Write-back actions: declare create/update/delete action types (persisted on
  *     state.actionTypes), then RUN them (POST /api/items/ontology/[id]/run-action
- *     → real AGE transaction). This is the Palantir-class write-back surface.
+ *     → real AGE transaction) via a form generated from the action's typed
+ *     parameters[]. This is the Palantir-class write-back surface.
  *
  * All controls call the real BFF; when the AGE backend env (LOOM_WEAVE_PG_FQDN)
  * is unset the routes return a 503 with a gate that this panel surfaces in a
@@ -201,14 +271,16 @@ function WeaveInstancePanel({
   id,
   classes,
   objectTypes,
+  linkTypes,
   actionTypes,
   onActionTypesChange,
 }: {
   id: string;
   classes: { name: string }[];
   objectTypes: OntoObjectType[];
-  actionTypes: WeaveActionTypeDecl[];
-  onActionTypesChange: (next: WeaveActionTypeDecl[]) => void;
+  linkTypes: OntoLinkType[];
+  actionTypes: OntoActionType[];
+  onActionTypesChange: (next: OntoActionType[]) => void;
 }) {
   const s = useStyles();
   const classNames = useMemo(() => classes.map((c) => c.name), [classes]);
@@ -302,6 +374,88 @@ function WeaveInstancePanel({
     } finally { setCreating(false); }
   }, [id, objType, selectedOt, instVals, kvProps, loadObjects]);
 
+  // ── Link instances (Gap A) — typed AGE edges between two object instances ──
+  // Pick a declared link type, pick source + target instances (instance pickers
+  // fed by the /objects route), create the link via POST /links, list existing
+  // links of that type via GET /links, delete via DELETE /links. All real AGE.
+  const [linkTypeSel, setLinkTypeSel] = useState('');
+  const [linkFrom, setLinkFrom] = useState('');
+  const [linkTo, setLinkTo] = useState('');
+  const [links, setLinks] = useState<Array<{ id: string; linkType: string; fromId: string; fromType: string; toId: string; toType: string; properties: Record<string, unknown> }>>([]);
+  const [linksLoading, setLinksLoading] = useState(false);
+  const [linkMsg, setLinkMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [linkCreating, setLinkCreating] = useState(false);
+  const [linkDeleting, setLinkDeleting] = useState<string | null>(null);
+
+  const selectedLt = useMemo(() => linkTypes.find((l) => l.apiName === linkTypeSel) || null, [linkTypes, linkTypeSel]);
+  useEffect(() => { if (!linkTypeSel && linkTypes.length) setLinkTypeSel(linkTypes[0].apiName); }, [linkTypes, linkTypeSel]);
+  useEffect(() => { setLinkFrom(''); setLinkTo(''); }, [linkTypeSel]);
+
+  const loadLinks = useCallback(async (lt: string) => {
+    if (!id || id === 'new' || !lt) { setLinks([]); return; }
+    setLinksLoading(true); setLinkMsg(null);
+    try {
+      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/links?linkType=${encodeURIComponent(lt)}&top=200`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
+        setLinkMsg({ intent: r.status === 503 ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        setLinks([]);
+        return;
+      }
+      setLinks(Array.isArray(j.links) ? j.links : []);
+    } catch (e: any) {
+      setLinkMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setLinksLoading(false); }
+  }, [id]);
+  useEffect(() => { if (linkTypeSel) void loadLinks(linkTypeSel); }, [linkTypeSel, loadLinks]);
+
+  const createLinkInstance = useCallback(async () => {
+    if (!selectedLt) { setLinkMsg({ intent: 'error', text: 'Pick a link type.' }); return; }
+    const fromId = linkFrom.trim();
+    const toId = linkTo.trim();
+    if (!fromId || !toId) { setLinkMsg({ intent: 'error', text: 'Pick both a source and a target instance.' }); return; }
+    setLinkCreating(true); setLinkMsg(null);
+    try {
+      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/links`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          fromObjectType: selectedLt.fromType, fromId,
+          linkType: selectedLt.apiName,
+          toObjectType: selectedLt.toType, toId,
+        }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
+        setLinkMsg({ intent: r.status === 503 ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setLinkMsg({ intent: 'success', text: `Linked ${selectedLt.fromType} #${fromId} —${selectedLt.apiName}→ ${selectedLt.toType} #${toId} (AGE edge id ${j.link?.id}).` });
+      setLinkFrom(''); setLinkTo('');
+      await loadLinks(selectedLt.apiName);
+    } catch (e: any) {
+      setLinkMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setLinkCreating(false); }
+  }, [id, selectedLt, linkFrom, linkTo, loadLinks]);
+
+  const removeLinkInstance = useCallback(async (linkId: string) => {
+    setLinkDeleting(linkId); setLinkMsg(null);
+    try {
+      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/links?linkId=${encodeURIComponent(linkId)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
+        setLinkMsg({ intent: r.status === 503 ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setLinkMsg({ intent: 'success', text: `Deleted link #${linkId} (${j.deleted ?? 0} edge${(j.deleted ?? 0) === 1 ? '' : 's'} removed).` });
+      if (linkTypeSel) await loadLinks(linkTypeSel);
+    } catch (e: any) {
+      setLinkMsg({ intent: 'error', text: e?.message || String(e) });
+    } finally { setLinkDeleting(null); }
+  }, [id, linkTypeSel, loadLinks]);
+
   // ── Write-back action types ──
   const [actDlgOpen, setActDlgOpen] = useState(false);
   const [actName, setActName] = useState('');
@@ -310,7 +464,9 @@ function WeaveInstancePanel({
   const [actDlgErr, setActDlgErr] = useState<string | null>(null);
   const [runMsg, setRunMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
   const [runningAction, setRunningAction] = useState<string | null>(null);
-  const [runParams, setRunParams] = useState<Record<string, string>>({});
+  // Per-action runtime values keyed `${action.name}.${param.apiName}` (plus
+  // `.id` for update/delete targets and legacy `.props` key/value rows).
+  const [runParams, setRunParams] = useState<Record<string, string | boolean>>({});
 
   const openActDlg = useCallback(() => {
     setActName(''); setActObjType(classNames[0] || ''); setActKind('create'); setActDlgErr(null); setActDlgOpen(true);
@@ -321,7 +477,7 @@ function WeaveInstancePanel({
     if (!/^[A-Za-z_][\w]*$/.test(name)) { setActDlgErr('Action name must start with a letter/underscore (letters, digits, _).'); return; }
     if (actionTypes.some((a) => a.name === name)) { setActDlgErr(`Action "${name}" already exists.`); return; }
     if (!actObjType) { setActDlgErr('Pick an object type.'); return; }
-    onActionTypesChange([...actionTypes, { name, objectType: actObjType, kind: actKind }]);
+    onActionTypesChange([...actionTypes, { name, objectType: actObjType, kind: actKind, parameters: [] }]);
     setActDlgOpen(false);
   }, [actName, actObjType, actKind, actionTypes, onActionTypesChange]);
 
@@ -329,18 +485,34 @@ function WeaveInstancePanel({
     onActionTypesChange(actionTypes.filter((a) => a.name !== name));
   }, [actionTypes, onActionTypesChange]);
 
-  const runAction = useCallback(async (action: WeaveActionTypeDecl) => {
+  // Gap B — the run form is generated from the action's TYPED parameters[]
+  // (authored in the Typed model → Actions tab), not the legacy untyped decl.
+  // Values are collected per parameter and submitted through the unchanged
+  // /run-action backend, which validates + coerces via validateActionRun.
+  const runAction = useCallback(async (action: OntoActionType) => {
     setRunningAction(action.name); setRunMsg(null);
     const params: Record<string, unknown> = {};
     if (action.kind === 'update' || action.kind === 'delete') {
-      const idVal = (runParams[`${action.name}.id`] || '').trim();
-      if (!idVal) { setRunMsg({ intent: 'error', text: `"${action.name}" needs the target object id.` }); setRunningAction(null); return; }
+      const idVal = String(runParams[`${action.name}.id`] ?? '').trim();
+      if (!idVal) { setRunMsg({ intent: 'error', text: `"${action.name}" needs the target object instance.` }); setRunningAction(null); return; }
       params.id = idVal;
     }
-    if (action.kind === 'create' || action.kind === 'update') {
-      const raw = (runParams[`${action.name}.props`] || '').trim();
+    if (action.parameters.length > 0) {
+      for (const p of action.parameters) {
+        const v = runParams[`${action.name}.${p.apiName}`];
+        if (v === undefined || v === '') {
+          if (p.required && p.defaultValue === undefined) {
+            setRunMsg({ intent: 'error', text: `Parameter "${p.apiName}" is required.` }); setRunningAction(null); return;
+          }
+          continue;
+        }
+        params[p.apiName] = v;
+      }
+    } else if (action.kind === 'create' || action.kind === 'update') {
+      // Legacy action with no typed parameters — structured key/value rows.
+      const raw = String(runParams[`${action.name}.props`] ?? '').trim();
       if (raw) {
-        try { Object.assign(params, JSON.parse(raw)); } catch { setRunMsg({ intent: 'error', text: 'Properties must be valid JSON.' }); setRunningAction(null); return; }
+        try { Object.assign(params, JSON.parse(raw)); } catch { setRunMsg({ intent: 'error', text: 'Enter key/value pairs for the action properties.' }); setRunningAction(null); return; }
       }
     }
     try {
@@ -386,8 +558,8 @@ function WeaveInstancePanel({
   if (id === 'new') {
     return (
       <div className={s.ontoSection}>
-        <Subtitle2>Objects & write-back actions</Subtitle2>
-        <MessageBar intent="info"><MessageBarBody>Save the ontology to enable object instances + write-back actions over the graph store.</MessageBarBody></MessageBar>
+        <Subtitle2>Objects, links & write-back actions</Subtitle2>
+        <MessageBar intent="info"><MessageBarBody>Save the ontology to enable object instances, link instances + write-back actions over the graph store.</MessageBarBody></MessageBar>
       </div>
     );
   }
@@ -520,6 +692,109 @@ function WeaveInstancePanel({
         )}
       </div>
 
+      {/* ── Link instances (Gap A) ── */}
+      <div className={s.ontoSection}>
+        <div className={s.ontoSectionHead}>
+          <span className={s.ontoSectionIcon}><Link20Regular /></span>
+          <div>
+            <Subtitle2>Links <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
+            <Caption1 as="p" block className={s.ontoSectionHint}>
+              Link instances connect two object instances with a typed AGE edge on the graph store. Pick a declared link type, then its source and target instances. Real write-back — Azure-native, no Fabric.
+            </Caption1>
+          </div>
+        </div>
+        {linkTypes.length === 0 ? (
+          <MessageBar intent="info"><MessageBarBody>Declare a link type in the <strong>Typed model</strong> panel (Link types tab) first — links are typed edges between two declared object types.</MessageBarBody></MessageBar>
+        ) : (
+          <>
+            <Field label="Link type">
+              <Dropdown
+                value={selectedLt ? `${selectedLt.displayName || selectedLt.apiName} (${selectedLt.fromType} → ${selectedLt.toType})` : ''}
+                selectedOptions={linkTypeSel ? [linkTypeSel] : []}
+                onOptionSelect={(_, d) => setLinkTypeSel(d.optionValue || '')}
+                placeholder="Select a link type"
+              >
+                {linkTypes.map((l) => (
+                  <Option key={l.apiName} value={l.apiName} text={`${l.displayName || l.apiName} (${l.fromType} → ${l.toType})`}>
+                    {`${l.displayName || l.apiName} (${l.fromType} → ${l.toType})`}
+                  </Option>
+                ))}
+              </Dropdown>
+            </Field>
+            {selectedLt && (
+              <>
+                <OntoInstancePicker
+                  ontologyId={id}
+                  objectType={selectedLt.fromType}
+                  objectTypes={objectTypes}
+                  value={linkFrom}
+                  onChange={setLinkFrom}
+                  label={`From — ${selectedLt.fromType}`}
+                  hint="Source instance of the link."
+                  required
+                />
+                <OntoInstancePicker
+                  ontologyId={id}
+                  objectType={selectedLt.toType}
+                  objectTypes={objectTypes}
+                  value={linkTo}
+                  onChange={setLinkTo}
+                  label={`To — ${selectedLt.toType}`}
+                  hint="Target instance of the link."
+                  required
+                />
+                <Button appearance="primary" icon={linkCreating ? <Spinner size="tiny" /> : <Link20Regular />} onClick={createLinkInstance} disabled={linkCreating || !linkFrom || !linkTo} className={s.ontoStartBtn}>
+                  {linkCreating ? 'Linking…' : `Create ${selectedLt.apiName} link`}
+                </Button>
+              </>
+            )}
+            {linkMsg && <MessageBar intent={linkMsg.intent}><MessageBarBody>{linkMsg.text}</MessageBarBody></MessageBar>}
+            {linksLoading ? (
+              <div className={s.ontoLoading}><Spinner size="tiny" /><Caption1>Loading links…</Caption1></div>
+            ) : links.length === 0 ? (
+              <div className={s.ontoEmpty}><Caption1>No {linkTypeSel || 'link'} instances yet. Create one above to materialize an AGE edge.</Caption1></div>
+            ) : (
+              <>
+                <div className={s.ontoTableMeta}>
+                  <Caption1>{links.length} {links.length === 1 ? 'link' : 'links'}</Caption1>
+                  <Button size="small" appearance="subtle" icon={<ArrowSync16Regular />} onClick={() => void loadLinks(linkTypeSel)} disabled={linksLoading}>Refresh</Button>
+                </div>
+                <div className={s.ontoTableWrap}>
+                  <Table size="small" aria-label={`${linkTypeSel} link instances`}>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHeaderCell>id</TableHeaderCell>
+                        <TableHeaderCell>from</TableHeaderCell>
+                        <TableHeaderCell>link</TableHeaderCell>
+                        <TableHeaderCell>to</TableHeaderCell>
+                        <TableHeaderCell aria-label="actions" />
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {links.map((l) => (
+                        <TableRow key={l.id}>
+                          <TableCell><span className={s.ontoCellId}>{l.id}</span></TableCell>
+                          <TableCell>{l.fromType} <span className={s.ontoCellId}>#{l.fromId}</span></TableCell>
+                          <TableCell><Badge appearance="tint" color="informative">{l.linkType}</Badge></TableCell>
+                          <TableCell>{l.toType} <span className={s.ontoCellId}>#{l.toId}</span></TableCell>
+                          <TableCell>
+                            <Button size="small" appearance="subtle"
+                              icon={linkDeleting === l.id ? <Spinner size="tiny" /> : <Dismiss16Regular />}
+                              aria-label={`Delete link ${l.id}`}
+                              disabled={linkDeleting === l.id}
+                              onClick={() => void removeLinkInstance(l.id)} />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
+            )}
+          </>
+        )}
+      </div>
+
       {/* ── Write-back actions ── */}
       <div className={s.ontoSection}>
         <div className={s.ontoSectionHead}>
@@ -547,17 +822,95 @@ function WeaveInstancePanel({
                 <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove action ${a.name}`} onClick={() => removeActionType(a.name)}>Remove</Button>
               </div>
               {(a.kind === 'update' || a.kind === 'delete') && (
-                <Field label="Target object id (AGE vertex id)">
-                  <Input value={runParams[`${a.name}.id`] || ''} onChange={(_, d) => setRunParams((p) => ({ ...p, [`${a.name}.id`]: d.value }))} placeholder="844424930131969" />
-                </Field>
+                <OntoInstancePicker
+                  ontologyId={id}
+                  objectType={a.objectType}
+                  objectTypes={objectTypes}
+                  value={String(runParams[`${a.name}.id`] ?? '')}
+                  onChange={(v) => setRunParams((p) => ({ ...p, [`${a.name}.id`]: v }))}
+                  label={`Target ${a.objectType} instance`}
+                  hint="The AGE vertex the action runs against."
+                  required
+                />
               )}
-              {(a.kind === 'create' || a.kind === 'update') && (
-                <Field label="Properties">
-                  <KeyValueRows key={`${a.name}.props`} value={runParams[`${a.name}.props`] || ''}
+              {a.parameters.length > 0 ? (
+                // Typed run form (Gap B) — one control per declared parameter,
+                // same control mapping as the typed instance form above.
+                a.parameters.map((p) => {
+                  const key = `${a.name}.${p.apiName}`;
+                  const label = `${p.apiName}${p.required ? ' *' : ''}`;
+                  const hint = `${ONTO_PARAM_TYPE_LABELS[p.type]}${p.prompt ? ` — ${p.prompt}` : ''}`;
+                  const v = runParams[key];
+                  const strv = typeof v === 'string' ? v : '';
+                  const setV = (val: string | boolean) => setRunParams((prev) => ({ ...prev, [key]: val }));
+                  if (p.type === 'boolean') {
+                    return (
+                      <Field key={key} label={label} hint={hint}>
+                        <Switch checked={v === true} onChange={(_, d) => setV(d.checked)} />
+                      </Field>
+                    );
+                  }
+                  if (p.type === 'integer' || p.type === 'long' || p.type === 'double' || p.type === 'decimal') {
+                    return (
+                      <Field key={key} label={label} hint={hint}>
+                        <Input type="number" value={strv} onChange={(_, d) => setV(d.value)} placeholder={p.defaultValue ?? ''} />
+                      </Field>
+                    );
+                  }
+                  if (p.type === 'date') {
+                    return (
+                      <Field key={key} label={label} hint={hint}>
+                        <Input type="date" value={strv} onChange={(_, d) => setV(d.value)} />
+                      </Field>
+                    );
+                  }
+                  if (p.type === 'timestamp') {
+                    return (
+                      <Field key={key} label={label} hint={hint}>
+                        <Input type="datetime-local" value={strv} onChange={(_, d) => setV(d.value)} />
+                      </Field>
+                    );
+                  }
+                  if (p.type === 'enum') {
+                    return (
+                      <Field key={key} label={label} hint={hint}>
+                        <Dropdown value={strv} selectedOptions={strv ? [strv] : []} onOptionSelect={(_, d) => setV(d.optionValue || '')} placeholder={p.defaultValue ? `(default: ${p.defaultValue})` : 'Select a value'}>
+                          {(p.allowedValues || []).map((av) => <Option key={av} value={av}>{av}</Option>)}
+                        </Dropdown>
+                      </Field>
+                    );
+                  }
+                  if (p.type === 'objectReference' && p.objectTypeRef) {
+                    return (
+                      <OntoInstancePicker
+                        key={key}
+                        ontologyId={id}
+                        objectType={p.objectTypeRef}
+                        objectTypes={objectTypes}
+                        value={strv}
+                        onChange={(val) => setV(val)}
+                        label={label}
+                        hint={hint}
+                        required={!!p.required}
+                      />
+                    );
+                  }
+                  return (
+                    <Field key={key} label={label} hint={hint}>
+                      <Input value={strv} onChange={(_, d) => setV(d.value)} placeholder={p.defaultValue ?? ''} />
+                    </Field>
+                  );
+                })
+              ) : (a.kind === 'create' || a.kind === 'update') ? (
+                // Legacy action with no typed parameters — structured key/value
+                // rows. Add typed parameters in Typed model → Actions for a
+                // fully-typed run form.
+                <Field label="Properties" hint="No typed parameters declared — add them in the Typed model panel's Actions tab for a typed form.">
+                  <KeyValueRows key={`${a.name}.props`} value={String(runParams[`${a.name}.props`] ?? '')}
                     onChange={(json) => setRunParams((p) => ({ ...p, [`${a.name}.props`]: json }))}
                     keyPlaceholder="name" valuePlaceholder="Acme" />
                 </Field>
-              )}
+              ) : null}
               <Button appearance="secondary" icon={runningAction === a.name ? <Spinner size="tiny" /> : <Play20Regular />} onClick={() => runAction(a)} disabled={runningAction === a.name} className={s.ontoStartBtn}>
                 {runningAction === a.name ? 'Running…' : `Run ${a.name}`}
               </Button>
@@ -626,16 +979,25 @@ function OntologyTypedModelPanel({
   const s = useStyles();
   const ls = useOntoLocalStyles();
   const model = useMemo(() => migrateOntologyState(state), [state]);
-  const { objectTypes, linkTypes, actionTypes } = model;
+  const { objectTypes, linkTypes, actionTypes, interfaces, sharedPropertyGroups } = model;
   const objNames = useMemo(() => objectTypes.map((o) => o.apiName), [objectTypes]);
-  const [tab, setTab] = useState<'objects' | 'links' | 'actions'>('objects');
+  const [tab, setTab] = useState<'objects' | 'links' | 'actions' | 'interfaces' | 'shared'>('objects');
 
-  const commit = useCallback((patch: { objectTypes?: OntoObjectType[]; linkTypes?: OntoLinkType[]; actionTypes?: OntoActionType[] }) => {
+  const commit = useCallback((patch: {
+    objectTypes?: OntoObjectType[]; linkTypes?: OntoLinkType[]; actionTypes?: OntoActionType[];
+    interfaces?: OntoInterface[]; sharedPropertyGroups?: OntoSharedPropertyGroup[];
+  }) => {
     const nextObj = patch.objectTypes ?? objectTypes;
     const nextLink = patch.linkTypes ?? linkTypes;
     const nextAct = patch.actionTypes ?? actionTypes;
-    persistOnto({ ...state, objectTypes: nextObj, linkTypes: nextLink, actionTypes: nextAct, source: deriveSourceFromObjectTypes(nextObj) });
-  }, [state, persistOnto, objectTypes, linkTypes, actionTypes]);
+    const nextIf = patch.interfaces ?? interfaces;
+    const nextSpg = patch.sharedPropertyGroups ?? sharedPropertyGroups;
+    persistOnto({
+      ...state, objectTypes: nextObj, linkTypes: nextLink, actionTypes: nextAct,
+      interfaces: nextIf, sharedPropertyGroups: nextSpg,
+      source: deriveSourceFromObjectTypes(nextObj),
+    });
+  }, [state, persistOnto, objectTypes, linkTypes, actionTypes, interfaces, sharedPropertyGroups]);
 
   // ───────────────────────── Object-type dialog ─────────────────────────
   interface OtDraft {
@@ -647,11 +1009,16 @@ function OntologyTypedModelPanel({
     dsKind: '' | 'lakehouse' | 'warehouse'; dsSourceId: string; dsTable: string; dsPkColumn: string;
     /** Ontology property apiName → backing source column (Gap B mapping grid). */
     dsColumnMap: Record<string, string>;
+    /** Interface apiNames this object type implements (validated on save). */
+    implementsList: string[];
+    /** Shared property group apiNames attached to this object type. */
+    sharedGroups: string[];
   }
   const blankOt = (): OtDraft => ({
     index: null, apiName: '', displayName: '', pluralDisplayName: '', description: '',
     status: 'active', color: '', properties: [], primaryKey: '', titleKey: '',
     dsKind: '', dsSourceId: '', dsTable: '', dsPkColumn: '', dsColumnMap: {},
+    implementsList: [], sharedGroups: [],
   });
   const [otOpen, setOtOpen] = useState(false);
   const [ot, setOt] = useState<OtDraft>(blankOt);
@@ -727,6 +1094,7 @@ function OntologyTypedModelPanel({
       primaryKey: o.primaryKey || '', titleKey: o.titleKey || '',
       dsKind: ds?.kind || '', dsSourceId: ds?.sourceItemId || '', dsTable: ds?.table || '', dsPkColumn: ds?.primaryKeyColumn || '',
       dsColumnMap: ds?.columnMap ? { ...ds.columnMap } : {},
+      implementsList: [...(o.implements || [])], sharedGroups: [...(o.sharedPropertyGroups || [])],
     });
     setOtErr(null); setDsGate(null); setDsErr(null); setOtOpen(true);
   };
@@ -773,6 +1141,26 @@ function OntologyTypedModelPanel({
         boundAt: new Date().toISOString(),
       };
     }
+    // Interface conformance (Gap C): every implemented interface's properties
+    // must exist among the draft's EFFECTIVE properties (own + shared groups),
+    // with matching base type / arity. Validated before persisting.
+    const draftForConformance: OntoObjectType = {
+      apiName, properties,
+      ...(ot.sharedGroups.length ? { sharedPropertyGroups: ot.sharedGroups } : {}),
+    };
+    for (const ifName of ot.implementsList) {
+      const iface = interfaces.find((x) => x.apiName === ifName);
+      if (!iface) continue;
+      const conf = validateInterfaceImplementation(draftForConformance, iface, sharedPropertyGroups);
+      if (!conf.ok) {
+        const parts = [
+          ...conf.missing.map((m) => `missing property "${m}"`),
+          ...conf.mismatched.map((m) => `"${m.apiName}" is ${m.actual} but the interface requires ${m.expected}`),
+        ];
+        setOtErr(`Does not satisfy interface "${ifName}": ${parts.join('; ')}. Add the propert${conf.missing.length === 1 ? 'y' : 'ies'} or attach a shared property group that provides them.`);
+        return;
+      }
+    }
     const base = ot.index === null ? ({} as Partial<OntoObjectType>) : objectTypes[ot.index];
     const pk = seen.has(ot.primaryKey) && ONTO_KEY_ELIGIBLE_TYPES.has(properties.find((p) => p.apiName === ot.primaryKey)!.baseType) ? ot.primaryKey : undefined;
     const title = seen.has(ot.titleKey) ? ot.titleKey : undefined;
@@ -791,6 +1179,8 @@ function OntologyTypedModelPanel({
       ...(pk ? { primaryKey: pk } : {}),
       ...(title ? { titleKey: title } : {}),
       ...(datasource ? { datasource } : {}),
+      ...(ot.implementsList.length ? { implements: [...ot.implementsList] } : {}),
+      ...(ot.sharedGroups.length ? { sharedPropertyGroups: [...ot.sharedGroups] } : {}),
     };
     const arr2 = [...objectTypes];
     if (ot.index === null) arr2.push(next); else arr2[ot.index] = next;
@@ -876,6 +1266,115 @@ function OntologyTypedModelPanel({
   };
   const removeAt = (i: number) => commit({ actionTypes: actionTypes.filter((_, idx) => idx !== i) });
 
+  // ───────────────────── Interface dialog (Gap C) ─────────────────────
+  interface IfDraft { index: number | null; apiName: string; displayName: string; description: string; properties: OntoProperty[]; }
+  const blankIf = (): IfDraft => ({ index: null, apiName: '', displayName: '', description: '', properties: [] });
+  const [ifOpen, setIfOpen] = useState(false);
+  const [ifd, setIfd] = useState<IfDraft>(blankIf);
+  const [ifErr, setIfErr] = useState<string | null>(null);
+  const patchIf = (p: Partial<IfDraft>) => setIfd((d) => ({ ...d, ...p }));
+  const openNewIf = () => { setIfd(blankIf()); setIfErr(null); setIfOpen(true); };
+  const openEditIf = (i: number) => {
+    const f = interfaces[i];
+    setIfd({ index: i, apiName: f.apiName, displayName: f.displayName || '', description: f.description || '', properties: f.properties.map((p) => ({ ...p })) });
+    setIfErr(null); setIfOpen(true);
+  };
+  const saveIf = () => {
+    const apiName = ifd.apiName.trim();
+    if (!isOntoIdent(apiName)) { setIfErr('API name must start with a letter/underscore (≤63 letters, digits, _).'); return; }
+    if (interfaces.some((f, i) => f.apiName === apiName && i !== ifd.index)) { setIfErr(`Interface "${apiName}" already exists.`); return; }
+    const seen = new Set<string>();
+    for (const p of ifd.properties) {
+      if (!isOntoIdent(p.apiName.trim())) { setIfErr('Every property needs a valid API name (letter/underscore start).'); return; }
+      if (seen.has(p.apiName.trim())) { setIfErr(`Duplicate property "${p.apiName.trim()}".`); return; }
+      seen.add(p.apiName.trim());
+    }
+    const properties: OntoProperty[] = ifd.properties.map((p) => ({
+      apiName: p.apiName.trim(), baseType: p.baseType,
+      ...(p.arrayOf ? { arrayOf: true } : {}),
+      ...(p.required ? { required: true } : {}),
+      ...(p.description ? { description: p.description } : {}),
+    }));
+    const next: OntoInterface = {
+      apiName,
+      ...(ifd.displayName.trim() ? { displayName: ifd.displayName.trim() } : {}),
+      ...(ifd.description.trim() ? { description: ifd.description.trim() } : {}),
+      properties,
+    };
+    const arr2 = [...interfaces];
+    if (ifd.index === null) arr2.push(next); else arr2[ifd.index] = next;
+    commit({ interfaces: arr2 });
+    setIfOpen(false);
+  };
+  const removeIf = (i: number) => {
+    // Cascade: strip the interface from every object type's implements list.
+    const removed = interfaces[i].apiName;
+    commit({
+      interfaces: interfaces.filter((_, idx) => idx !== i),
+      objectTypes: objectTypes.map((o) => {
+        if (!o.implements?.includes(removed)) return o;
+        const impl = o.implements.filter((n) => n !== removed);
+        const { implements: _x, ...rest } = o;
+        return impl.length ? { ...rest, implements: impl } : rest;
+      }),
+    });
+  };
+
+  // ─────────────── Shared property group dialog (Gap C) ───────────────
+  interface SpDraft { index: number | null; apiName: string; displayName: string; description: string; properties: OntoProperty[]; }
+  const blankSp = (): SpDraft => ({ index: null, apiName: '', displayName: '', description: '', properties: [] });
+  const [spOpen, setSpOpen] = useState(false);
+  const [spd, setSpd] = useState<SpDraft>(blankSp);
+  const [spErr, setSpErr] = useState<string | null>(null);
+  const patchSp = (p: Partial<SpDraft>) => setSpd((d) => ({ ...d, ...p }));
+  const openNewSp = () => { setSpd(blankSp()); setSpErr(null); setSpOpen(true); };
+  const openEditSp = (i: number) => {
+    const g = sharedPropertyGroups[i];
+    setSpd({ index: i, apiName: g.apiName, displayName: g.displayName || '', description: g.description || '', properties: g.properties.map((p) => ({ ...p })) });
+    setSpErr(null); setSpOpen(true);
+  };
+  const saveSp = () => {
+    const apiName = spd.apiName.trim();
+    if (!isOntoIdent(apiName)) { setSpErr('API name must start with a letter/underscore (≤63 letters, digits, _).'); return; }
+    if (sharedPropertyGroups.some((g, i) => g.apiName === apiName && i !== spd.index)) { setSpErr(`Shared property group "${apiName}" already exists.`); return; }
+    const seen = new Set<string>();
+    for (const p of spd.properties) {
+      if (!isOntoIdent(p.apiName.trim())) { setSpErr('Every property needs a valid API name (letter/underscore start).'); return; }
+      if (seen.has(p.apiName.trim())) { setSpErr(`Duplicate property "${p.apiName.trim()}".`); return; }
+      seen.add(p.apiName.trim());
+    }
+    if (spd.properties.length === 0) { setSpErr('Add at least one property — a shared group is a reusable property set.'); return; }
+    const properties: OntoProperty[] = spd.properties.map((p) => ({
+      apiName: p.apiName.trim(), baseType: p.baseType,
+      ...(p.arrayOf ? { arrayOf: true } : {}),
+      ...(p.required ? { required: true } : {}),
+      ...(p.description ? { description: p.description } : {}),
+    }));
+    const next: OntoSharedPropertyGroup = {
+      apiName,
+      ...(spd.displayName.trim() ? { displayName: spd.displayName.trim() } : {}),
+      ...(spd.description.trim() ? { description: spd.description.trim() } : {}),
+      properties,
+    };
+    const arr2 = [...sharedPropertyGroups];
+    if (spd.index === null) arr2.push(next); else arr2[spd.index] = next;
+    commit({ sharedPropertyGroups: arr2 });
+    setSpOpen(false);
+  };
+  const removeSp = (i: number) => {
+    // Cascade: detach the group from every object type that references it.
+    const removed = sharedPropertyGroups[i].apiName;
+    commit({
+      sharedPropertyGroups: sharedPropertyGroups.filter((_, idx) => idx !== i),
+      objectTypes: objectTypes.map((o) => {
+        if (!o.sharedPropertyGroups?.includes(removed)) return o;
+        const spg = o.sharedPropertyGroups.filter((n) => n !== removed);
+        const { sharedPropertyGroups: _x, ...rest } = o;
+        return spg.length ? { ...rest, sharedPropertyGroups: spg } : rest;
+      }),
+    });
+  };
+
   const dsList = ot.dsKind === 'warehouse' ? warehouses : lakehouses;
   const colorBadge: Record<OntoColor, 'brand' | 'success' | 'warning' | 'danger' | 'informative' | 'subtle'> = {
     brand: 'brand', success: 'success', warning: 'warning', danger: 'danger', informative: 'informative', subtle: 'subtle',
@@ -889,7 +1388,8 @@ function OntologyTypedModelPanel({
           <Subtitle2>Typed model</Subtitle2>
           <Caption1 as="p" block className={s.ontoSectionHint}>
             Author object types, typed properties, primary / title keys, an Azure-native datasource backing
-            (ADLS Delta lakehouse / Synapse SQL warehouse — no Fabric), link types, and write-back action types.
+            (ADLS Delta lakehouse / Synapse SQL warehouse — no Fabric), link types, write-back action types,
+            interfaces (contracts object types implement), and shared property groups (define once, attach to many).
             Saved to Cosmos; the class DSL stays in sync automatically.
           </Caption1>
         </div>
@@ -899,6 +1399,8 @@ function OntologyTypedModelPanel({
         <Tab value="objects" icon={<Cube20Regular />}>Object types ({objectTypes.length})</Tab>
         <Tab value="links" icon={<Link20Regular />}>Link types ({linkTypes.length})</Tab>
         <Tab value="actions" icon={<Play20Regular />}>Actions ({actionTypes.length})</Tab>
+        <Tab value="interfaces" icon={<ShieldCheckmark20Regular />}>Interfaces ({interfaces.length})</Tab>
+        <Tab value="shared" icon={<Layer20Regular />}>Shared properties ({sharedPropertyGroups.length})</Tab>
       </TabList>
 
       {/* ── Object types ── */}
@@ -927,6 +1429,15 @@ function OntologyTypedModelPanel({
                     {o.primaryKey && <Badge appearance="ghost" color="brand">PK: {o.primaryKey}</Badge>}
                     {o.titleKey && <Badge appearance="ghost">title: {o.titleKey}</Badge>}
                     {o.datasource && <Badge appearance="tint" color={o.datasource.kind === 'lakehouse' ? 'brand' : 'success'} icon={<Database20Regular />}>{o.datasource.sourceDisplayName || o.datasource.kind}{o.datasource.table ? ` · ${o.datasource.table}` : ''}</Badge>}
+                    {interfaceConformances(o, interfaces, sharedPropertyGroups).map((c) => (
+                      <Badge key={c.interfaceName} appearance="tint" color={c.ok ? 'success' : 'danger'} icon={<ShieldCheckmark20Regular />}
+                        title={c.ok ? `Satisfies interface ${c.interfaceName}` : `Missing/mismatched: ${[...c.missing, ...c.mismatched.map((m) => m.apiName)].join(', ')}`}>
+                        {c.interfaceName}
+                      </Badge>
+                    ))}
+                    {(o.sharedPropertyGroups || []).map((g) => (
+                      <Badge key={g} appearance="tint" color="informative" icon={<Layer20Regular />}>{g}</Badge>
+                    ))}
                   </div>
                 </div>
               ))}
@@ -998,6 +1509,94 @@ function OntologyTypedModelPanel({
         </div>
       )}
 
+      {/* ── Interfaces (Gap C) ── */}
+      {tab === 'interfaces' && (
+        <div className={s.tmTabPanel}>
+          <Button appearance="primary" icon={<Add16Regular />} onClick={openNewIf} disabled={saving} className={s.ontoStartBtn}>Add interface</Button>
+          {interfaces.length === 0 ? (
+            <EmptyState icon={<ShieldCheckmark20Regular />} title="No interfaces yet" body="Define a contract (a set of required properties) that object types implement — implementers are validated against it." />
+          ) : (
+            <div className={s.tmCardGrid}>
+              {interfaces.map((f, i) => {
+                const implementers = objectTypes.filter((o) => o.implements?.includes(f.apiName));
+                return (
+                  <div key={f.apiName} className={s.ontoActionCard}>
+                    <div className={s.ontoActionHead}>
+                      <ShieldCheckmark20Regular />
+                      <Body1><strong>{f.displayName || f.apiName}</strong></Body1>
+                      <Badge appearance="tint" color="informative">{f.properties.length} propert{f.properties.length === 1 ? 'y' : 'ies'}</Badge>
+                      <span className={s.ontoBindRowSpacer} />
+                      <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label={`Edit interface ${f.apiName}`} onClick={() => openEditIf(i)} />
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove interface ${f.apiName}`} onClick={() => removeIf(i)} />
+                    </div>
+                    <Caption1 className={s.ontoSectionHint}><code>{f.apiName}</code></Caption1>
+                    {f.description && <Caption1>{f.description}</Caption1>}
+                    {f.properties.length > 0 && (
+                      <div className={s.tmCardMeta}>
+                        {f.properties.map((p) => <Badge key={p.apiName} appearance="ghost">{p.apiName}: {ONTO_BASE_TYPE_LABELS[p.baseType]}{p.arrayOf ? ' []' : ''}</Badge>)}
+                      </div>
+                    )}
+                    <div className={s.tmCardMeta}>
+                      {implementers.length === 0 ? (
+                        <Caption1 className={s.ontoSectionHint}>No implementers yet — pick this interface in an object type&apos;s <strong>Implements</strong> field.</Caption1>
+                      ) : implementers.map((o) => {
+                        const conf = validateInterfaceImplementation(o, f, sharedPropertyGroups);
+                        return (
+                          <Badge key={o.apiName} appearance="tint" color={conf.ok ? 'success' : 'danger'} icon={<Cube20Regular />}
+                            title={conf.ok ? `${o.apiName} satisfies ${f.apiName}` : `Missing/mismatched: ${[...conf.missing, ...conf.mismatched.map((m) => m.apiName)].join(', ')}`}>
+                            {o.apiName}
+                          </Badge>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Shared property groups (Gap C) ── */}
+      {tab === 'shared' && (
+        <div className={s.tmTabPanel}>
+          <Button appearance="primary" icon={<Add16Regular />} onClick={openNewSp} disabled={saving} className={s.ontoStartBtn}>Add shared property group</Button>
+          {sharedPropertyGroups.length === 0 ? (
+            <EmptyState icon={<Layer20Regular />} title="No shared property groups yet" body="Define a property set once (e.g. audit fields), then attach it to multiple object types — attached properties merge into each type's effective schema." />
+          ) : (
+            <div className={s.tmCardGrid}>
+              {sharedPropertyGroups.map((g, i) => {
+                const attached = objectTypes.filter((o) => o.sharedPropertyGroups?.includes(g.apiName));
+                return (
+                  <div key={g.apiName} className={s.ontoActionCard}>
+                    <div className={s.ontoActionHead}>
+                      <Layer20Regular />
+                      <Body1><strong>{g.displayName || g.apiName}</strong></Body1>
+                      <Badge appearance="tint" color="informative">{g.properties.length} propert{g.properties.length === 1 ? 'y' : 'ies'}</Badge>
+                      <span className={s.ontoBindRowSpacer} />
+                      <Button size="small" appearance="subtle" icon={<Edit16Regular />} aria-label={`Edit shared group ${g.apiName}`} onClick={() => openEditSp(i)} />
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove shared group ${g.apiName}`} onClick={() => removeSp(i)} />
+                    </div>
+                    <Caption1 className={s.ontoSectionHint}><code>{g.apiName}</code></Caption1>
+                    {g.description && <Caption1>{g.description}</Caption1>}
+                    {g.properties.length > 0 && (
+                      <div className={s.tmCardMeta}>
+                        {g.properties.map((p) => <Badge key={p.apiName} appearance="ghost">{p.apiName}: {ONTO_BASE_TYPE_LABELS[p.baseType]}{p.arrayOf ? ' []' : ''}</Badge>)}
+                      </div>
+                    )}
+                    <div className={s.tmCardMeta}>
+                      {attached.length === 0 ? (
+                        <Caption1 className={s.ontoSectionHint}>Not attached yet — pick this group in an object type&apos;s <strong>Shared property groups</strong> field.</Caption1>
+                      ) : attached.map((o) => <Badge key={o.apiName} appearance="tint" color="brand" icon={<Cube20Regular />}>{o.apiName}</Badge>)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* ── Object-type dialog ── */}
       <Dialog open={otOpen} onOpenChange={(_, d) => setOtOpen(d.open)}>
         <DialogSurface>
@@ -1049,6 +1648,30 @@ function OntologyTypedModelPanel({
                   ))}
                 </div>
 
+                <Field label="Implements interfaces" hint="Contracts this type satisfies — every interface property must exist among its effective properties (own + shared groups). Validated on save.">
+                  <Dropdown
+                    multiselect
+                    value={ot.implementsList.join(', ')}
+                    selectedOptions={ot.implementsList}
+                    onOptionSelect={(_, d) => patchOt({ implementsList: d.selectedOptions })}
+                    placeholder={interfaces.length === 0 ? 'No interfaces declared yet (Interfaces tab)' : 'Select interfaces'}
+                    disabled={interfaces.length === 0}
+                  >
+                    {interfaces.map((f) => <Option key={f.apiName} value={f.apiName}>{f.displayName || f.apiName}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Shared property groups" hint="Property sets defined once and attached here — their properties merge into this type's schema (instances + validation).">
+                  <Dropdown
+                    multiselect
+                    value={ot.sharedGroups.join(', ')}
+                    selectedOptions={ot.sharedGroups}
+                    onOptionSelect={(_, d) => patchOt({ sharedGroups: d.selectedOptions })}
+                    placeholder={sharedPropertyGroups.length === 0 ? 'No shared groups declared yet (Shared properties tab)' : 'Select shared property groups'}
+                    disabled={sharedPropertyGroups.length === 0}
+                  >
+                    {sharedPropertyGroups.map((g) => <Option key={g.apiName} value={g.apiName} text={g.displayName || g.apiName}>{`${g.displayName || g.apiName} (${g.properties.map((p) => p.apiName).join(', ')})`}</Option>)}
+                  </Dropdown>
+                </Field>
                 <Field label="Primary key" hint="Key-eligible scalar property uniquely identifying an instance.">
                   <Dropdown value={ot.primaryKey || '(none)'} selectedOptions={ot.primaryKey ? [ot.primaryKey] : ['']} onOptionSelect={(_, d) => patchOt({ primaryKey: d.optionValue || '' })} disabled={otKeyEligible.length === 0} placeholder={otKeyEligible.length === 0 ? 'Add a key-eligible property first' : 'Select a property'}>
                     <Option value="">(none)</Option>
@@ -1243,6 +1866,102 @@ function OntologyTypedModelPanel({
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* ── Interface dialog (Gap C) ── */}
+      <Dialog open={ifOpen} onOpenChange={(_, d) => setIfOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{ifd.index === null ? 'Add interface' : `Edit ${ifd.apiName}`}</DialogTitle>
+            <DialogContent>
+              <div className={s.tmDialogScroll}>
+                <Field label="API name" required hint={ifd.index === null ? 'Stable identifier (letter/underscore start).' : 'Locked after creation so implementers keep resolving.'}>
+                  <Input value={ifd.apiName} disabled={ifd.index !== null} onChange={(_, d) => patchIf({ apiName: d.value })} placeholder="Auditable" />
+                </Field>
+                <Field label="Display name"><Input value={ifd.displayName} onChange={(_, d) => patchIf({ displayName: d.value })} placeholder="Auditable" /></Field>
+                <Field label="Description"><Textarea value={ifd.description} onChange={(_, d) => patchIf({ description: d.value })} placeholder="Anything with created/updated audit fields." /></Field>
+                <div className={s.tmSubBlock}>
+                  <div className={s.ontoActionHead}>
+                    <Table20Regular />
+                    <Subtitle2>Required properties</Subtitle2>
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" icon={<Add16Regular />} onClick={() => patchIf({ properties: [...ifd.properties, { apiName: '', baseType: 'string' }] })}>Add property</Button>
+                  </div>
+                  {ifd.properties.length === 0 ? (
+                    <Caption1 className={s.ontoSectionHint}>No properties yet. Each property becomes part of the contract every implementing object type must expose.</Caption1>
+                  ) : ifd.properties.map((p, pi) => (
+                    <div key={pi} className={s.tmPropRow}>
+                      <Field label={pi === 0 ? 'API name' : undefined}>
+                        <Input value={p.apiName} onChange={(_, d) => patchIf({ properties: ifd.properties.map((x, xi) => xi === pi ? { ...x, apiName: d.value } : x) })} placeholder="createdAt" />
+                      </Field>
+                      <Field label={pi === 0 ? 'Base type' : undefined}>
+                        <Dropdown value={ONTO_BASE_TYPE_LABELS[p.baseType]} selectedOptions={[p.baseType]} onOptionSelect={(_, d) => patchIf({ properties: ifd.properties.map((x, xi) => xi === pi ? { ...x, baseType: (d.optionValue as OntoBaseType) || 'string' } : x) })}>
+                          {ONTO_BASE_TYPES.map((bt) => <Option key={bt} value={bt}>{ONTO_BASE_TYPE_LABELS[bt]}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Switch checked={!!p.arrayOf} label="Array" onChange={(_, d) => patchIf({ properties: ifd.properties.map((x, xi) => xi === pi ? { ...x, arrayOf: d.checked } : x) })} />
+                      <Switch checked={!!p.required} label="Required" onChange={(_, d) => patchIf({ properties: ifd.properties.map((x, xi) => xi === pi ? { ...x, required: d.checked } : x) })} />
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove property ${p.apiName || pi + 1}`} onClick={() => patchIf({ properties: ifd.properties.filter((_, xi) => xi !== pi) })} />
+                    </div>
+                  ))}
+                </div>
+                {ifErr && <MessageBar intent="error"><MessageBarBody>{ifErr}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setIfOpen(false)}>Cancel</Button>
+              <Button appearance="primary" onClick={saveIf}>{ifd.index === null ? 'Add interface' : 'Save'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* ── Shared property group dialog (Gap C) ── */}
+      <Dialog open={spOpen} onOpenChange={(_, d) => setSpOpen(d.open)}>
+        <DialogSurface>
+          <DialogBody>
+            <DialogTitle>{spd.index === null ? 'Add shared property group' : `Edit ${spd.apiName}`}</DialogTitle>
+            <DialogContent>
+              <div className={s.tmDialogScroll}>
+                <Field label="API name" required hint={spd.index === null ? 'Stable identifier (letter/underscore start).' : 'Locked after creation so attached object types keep resolving.'}>
+                  <Input value={spd.apiName} disabled={spd.index !== null} onChange={(_, d) => patchSp({ apiName: d.value })} placeholder="auditFields" />
+                </Field>
+                <Field label="Display name"><Input value={spd.displayName} onChange={(_, d) => patchSp({ displayName: d.value })} placeholder="Audit fields" /></Field>
+                <Field label="Description"><Textarea value={spd.description} onChange={(_, d) => patchSp({ description: d.value })} placeholder="createdAt / createdBy shared across types." /></Field>
+                <div className={s.tmSubBlock}>
+                  <div className={s.ontoActionHead}>
+                    <Table20Regular />
+                    <Subtitle2>Properties</Subtitle2>
+                    <span className={s.ontoBindRowSpacer} />
+                    <Button size="small" icon={<Add16Regular />} onClick={() => patchSp({ properties: [...spd.properties, { apiName: '', baseType: 'string' }] })}>Add property</Button>
+                  </div>
+                  {spd.properties.length === 0 ? (
+                    <Caption1 className={s.ontoSectionHint}>No properties yet. These merge into every object type the group is attached to.</Caption1>
+                  ) : spd.properties.map((p, pi) => (
+                    <div key={pi} className={s.tmPropRow}>
+                      <Field label={pi === 0 ? 'API name' : undefined}>
+                        <Input value={p.apiName} onChange={(_, d) => patchSp({ properties: spd.properties.map((x, xi) => xi === pi ? { ...x, apiName: d.value } : x) })} placeholder="createdBy" />
+                      </Field>
+                      <Field label={pi === 0 ? 'Base type' : undefined}>
+                        <Dropdown value={ONTO_BASE_TYPE_LABELS[p.baseType]} selectedOptions={[p.baseType]} onOptionSelect={(_, d) => patchSp({ properties: spd.properties.map((x, xi) => xi === pi ? { ...x, baseType: (d.optionValue as OntoBaseType) || 'string' } : x) })}>
+                          {ONTO_BASE_TYPES.map((bt) => <Option key={bt} value={bt}>{ONTO_BASE_TYPE_LABELS[bt]}</Option>)}
+                        </Dropdown>
+                      </Field>
+                      <Switch checked={!!p.arrayOf} label="Array" onChange={(_, d) => patchSp({ properties: spd.properties.map((x, xi) => xi === pi ? { ...x, arrayOf: d.checked } : x) })} />
+                      <Switch checked={!!p.required} label="Required" onChange={(_, d) => patchSp({ properties: spd.properties.map((x, xi) => xi === pi ? { ...x, required: d.checked } : x) })} />
+                      <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove property ${p.apiName || pi + 1}`} onClick={() => patchSp({ properties: spd.properties.filter((_, xi) => xi !== pi) })} />
+                    </div>
+                  ))}
+                </div>
+                {spErr && <MessageBar intent="error"><MessageBarBody>{spErr}</MessageBarBody></MessageBar>}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setSpOpen(false)}>Cancel</Button>
+              <Button appearance="primary" onClick={saveSp}>{spd.index === null ? 'Add shared property group' : 'Save'}</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
   );
 }
@@ -1251,8 +1970,15 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
   const s = useStyles();
   const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<OntoState>('ontology', id, { source: ONTO_SAMPLE });
   const classes = parseOntologyHierarchy(state.source || '');
-  // Typed object types (drives the typed instance form in WeaveInstancePanel).
-  const objectTypes = useMemo(() => migrateOntologyState(state).objectTypes, [state]);
+  // Typed model (object/link/action types + interfaces + shared property groups).
+  const typedModel = useMemo(() => migrateOntologyState(state), [state]);
+  // Object types with their EFFECTIVE schema (own + shared-group properties) —
+  // drives the typed instance form + instance pickers in WeaveInstancePanel so
+  // shared properties are instantiable exactly like own properties.
+  const objectTypes = useMemo(
+    () => typedModel.objectTypes.map((o) => withEffectiveProperties(o, typedModel.sharedPropertyGroups)),
+    [typedModel],
+  );
   const [materializing, setMaterializing] = useState(false);
   const [matMsg, setMatMsg] = useState<string | null>(null);
 
@@ -1642,12 +2368,13 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
           </div>
         </div>
 
-        {/* ── Weave Phase 1: object instances + write-back actions (PG + AGE) ── */}
+        {/* ── Weave Phase 1: object + link instances + write-back actions (PG + AGE) ── */}
         <WeaveInstancePanel
           id={id}
           classes={classes}
           objectTypes={objectTypes}
-          actionTypes={Array.isArray(state.actionTypes) ? state.actionTypes : []}
+          linkTypes={typedModel.linkTypes}
+          actionTypes={typedModel.actionTypes}
           onActionTypesChange={(next) => persistOnto({ ...state, actionTypes: normalizeOntoActionTypes(next) })}
         />
 

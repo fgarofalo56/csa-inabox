@@ -122,6 +122,45 @@ export interface OntoObjectType {
   titleKey?: string;
   /** Backing datasource. */
   datasource?: OntoDatasource;
+  /**
+   * Interface apiNames this object type implements (Foundry "interfaces").
+   * Validated at edit time: every property the interface declares must exist
+   * among the object type's effective properties (own + shared groups).
+   */
+  implements?: string[];
+  /**
+   * Shared property group apiNames attached to this object type (Foundry
+   * "shared properties" — define a property set once, attach it to many types).
+   * The group's properties merge into the type's effective schema.
+   */
+  sharedPropertyGroups?: string[];
+}
+
+/**
+ * An interface — a contract object types implement (Foundry "interface").
+ * Its `properties` are the required members: every implementing object type
+ * must expose each of them (by apiName + base type) among its effective
+ * properties. Persisted on the ontology item state (Cosmos) — pure model.
+ */
+export interface OntoInterface {
+  apiName: string;
+  displayName?: string;
+  description?: string;
+  /** The contract: properties every implementer must expose. */
+  properties: OntoProperty[];
+}
+
+/**
+ * A shared property group (Foundry "shared properties") — a property set
+ * defined once and attached to multiple object types via
+ * `OntoObjectType.sharedPropertyGroups`. Persisted in Cosmos item state.
+ */
+export interface OntoSharedPropertyGroup {
+  apiName: string;
+  displayName?: string;
+  description?: string;
+  /** The properties this group contributes to every attached object type. */
+  properties: OntoProperty[];
 }
 
 export type OntoCardinality = 'one-to-one' | 'one-to-many' | 'many-to-many';
@@ -207,6 +246,10 @@ function str(v: unknown): string { return typeof v === 'string' ? v : v == null 
 function strArr(v: unknown): string[] {
   return Array.isArray(v) ? v.map((x) => str(x).trim()).filter(Boolean) : [];
 }
+/** A deduped list of valid API-name identifiers (for implements / group refs). */
+function identArr(v: unknown): string[] {
+  return Array.from(new Set(strArr(v).filter(isOntoIdent)));
+}
 
 export function normalizeProperty(raw: unknown): OntoProperty | null {
   if (!raw || typeof raw !== 'object') return null;
@@ -281,12 +324,49 @@ export function normalizeObjectType(raw: unknown): OntoObjectType | null {
     ...(primaryKey ? { primaryKey } : {}),
     ...(titleKey ? { titleKey } : {}),
     ...(normalizeDatasource(r.datasource) ? { datasource: normalizeDatasource(r.datasource) } : {}),
+    ...(identArr(r.implements).length ? { implements: identArr(r.implements) } : {}),
+    ...(identArr(r.sharedPropertyGroups).length ? { sharedPropertyGroups: identArr(r.sharedPropertyGroups) } : {}),
   };
 }
 
 export function normalizeObjectTypes(raw: unknown): OntoObjectType[] {
   if (!Array.isArray(raw)) return [];
   return raw.map(normalizeObjectType).filter((o): o is OntoObjectType => o !== null);
+}
+
+/** Shared shape for interfaces + shared property groups: name + property list. */
+function normalizeNamedPropertySet(raw: unknown): { apiName: string; displayName?: string; description?: string; properties: OntoProperty[] } | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  const apiName = str(r.apiName).trim();
+  if (!isOntoIdent(apiName)) return null;
+  const properties = Array.isArray(r.properties)
+    ? r.properties.map(normalizeProperty).filter((p): p is OntoProperty => p !== null)
+    : [];
+  return {
+    apiName,
+    ...(r.displayName ? { displayName: str(r.displayName) } : {}),
+    ...(r.description ? { description: str(r.description) } : {}),
+    properties,
+  };
+}
+
+export function normalizeInterface(raw: unknown): OntoInterface | null {
+  return normalizeNamedPropertySet(raw);
+}
+
+export function normalizeInterfaces(raw: unknown): OntoInterface[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeInterface).filter((i): i is OntoInterface => i !== null);
+}
+
+export function normalizeSharedPropertyGroup(raw: unknown): OntoSharedPropertyGroup | null {
+  return normalizeNamedPropertySet(raw);
+}
+
+export function normalizeSharedPropertyGroups(raw: unknown): OntoSharedPropertyGroup[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map(normalizeSharedPropertyGroup).filter((g): g is OntoSharedPropertyGroup => g !== null);
 }
 
 export function normalizeLinkType(raw: unknown): OntoLinkType | null {
@@ -392,9 +472,92 @@ export function objectTypeNames(state: Record<string, unknown> | undefined | nul
   return new Set(parseOntologyHierarchy(str((state || {}).source)).map((c) => c.name));
 }
 
-/** Resolve a single object type by api name from persisted state. */
+/**
+ * Resolve a single object type by api name from persisted state, with its
+ * EFFECTIVE property schema — its own properties merged with the properties of
+ * every attached shared property group. The objects route validates instance
+ * writes against this, so shared-group properties are instantiable without any
+ * route change (pure Cosmos-state extension).
+ */
 export function objectTypeByName(state: Record<string, unknown> | undefined | null, name: string): OntoObjectType | null {
-  return normalizeObjectTypes((state || {}).objectTypes).find((o) => o.apiName === name) || null;
+  const s = state || {};
+  const ot = normalizeObjectTypes(s.objectTypes).find((o) => o.apiName === name) || null;
+  if (!ot) return null;
+  return withEffectiveProperties(ot, normalizeSharedPropertyGroups(s.sharedPropertyGroups));
+}
+
+// ============================================================
+// Interfaces + shared property groups — effective schema + conformance
+// ============================================================
+
+/**
+ * The effective property list of an object type: its own properties followed by
+ * every attached shared-group property not shadowed by an own property of the
+ * same apiName (own wins).
+ */
+export function effectiveProperties(ot: OntoObjectType, groups: OntoSharedPropertyGroup[]): OntoProperty[] {
+  const out = [...ot.properties];
+  const seen = new Set(out.map((p) => p.apiName));
+  for (const gName of ot.sharedPropertyGroups || []) {
+    const g = groups.find((x) => x.apiName === gName);
+    if (!g) continue;
+    for (const p of g.properties) {
+      if (seen.has(p.apiName)) continue;
+      seen.add(p.apiName);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+/** An object type with `properties` replaced by its effective property list. */
+export function withEffectiveProperties(ot: OntoObjectType, groups: OntoSharedPropertyGroup[]): OntoObjectType {
+  if (!ot.sharedPropertyGroups || ot.sharedPropertyGroups.length === 0) return ot;
+  return { ...ot, properties: effectiveProperties(ot, groups) };
+}
+
+export interface InterfaceConformance {
+  interfaceName: string;
+  /** Interface property apiNames the object type does not expose at all. */
+  missing: string[];
+  /** Properties exposed under the right name but with the wrong base type / arity. */
+  mismatched: Array<{ apiName: string; expected: string; actual: string }>;
+  ok: boolean;
+}
+
+/**
+ * Validate that an object type satisfies an interface contract: every property
+ * the interface declares must exist among the type's EFFECTIVE properties
+ * (own + shared groups) with the same base type and array-ness.
+ */
+export function validateInterfaceImplementation(
+  ot: OntoObjectType,
+  iface: OntoInterface,
+  groups: OntoSharedPropertyGroup[],
+): InterfaceConformance {
+  const eff = new Map(effectiveProperties(ot, groups).map((p) => [p.apiName, p]));
+  const missing: string[] = [];
+  const mismatched: InterfaceConformance['mismatched'] = [];
+  for (const req of iface.properties) {
+    const got = eff.get(req.apiName);
+    if (!got) { missing.push(req.apiName); continue; }
+    const expected = `${req.baseType}${req.arrayOf ? '[]' : ''}`;
+    const actual = `${got.baseType}${got.arrayOf ? '[]' : ''}`;
+    if (expected !== actual) mismatched.push({ apiName: req.apiName, expected, actual });
+  }
+  return { interfaceName: iface.apiName, missing, mismatched, ok: missing.length === 0 && mismatched.length === 0 };
+}
+
+/** Conformance for every interface an object type declares it implements. */
+export function interfaceConformances(
+  ot: OntoObjectType,
+  interfaces: OntoInterface[],
+  groups: OntoSharedPropertyGroup[],
+): InterfaceConformance[] {
+  return (ot.implements || [])
+    .map((n) => interfaces.find((i) => i.apiName === n))
+    .filter((i): i is OntoInterface => !!i)
+    .map((i) => validateInterfaceImplementation(ot, i, groups));
 }
 
 // ============================================================
@@ -405,6 +568,10 @@ export interface OntoModel {
   objectTypes: OntoObjectType[];
   linkTypes: OntoLinkType[];
   actionTypes: OntoActionType[];
+  /** Interfaces (contracts object types implement). */
+  interfaces: OntoInterface[];
+  /** Shared property groups (defined once, attached to many object types). */
+  sharedPropertyGroups: OntoSharedPropertyGroup[];
   /** Derived DSL kept in sync for the AGE routes. */
   source: string;
 }
@@ -436,7 +603,22 @@ export function migrateOntologyState(state: Record<string, unknown> | undefined 
     (l) => objectNameSet.has(l.fromType) && objectNameSet.has(l.toType),
   );
   const actionTypes = normalizeOntoActionTypes(s.actionTypes).filter((a) => objectNameSet.has(a.objectType));
-  return { objectTypes, linkTypes, actionTypes, source: deriveSourceFromObjectTypes(objectTypes) };
+  const interfaces = normalizeInterfaces(s.interfaces);
+  const sharedPropertyGroups = normalizeSharedPropertyGroups(s.sharedPropertyGroups);
+  // Strip dangling implements / shared-group references from object types.
+  const ifaceNames = new Set(interfaces.map((i) => i.apiName));
+  const groupNames = new Set(sharedPropertyGroups.map((g) => g.apiName));
+  objectTypes = objectTypes.map((o) => {
+    const impl = (o.implements || []).filter((n) => ifaceNames.has(n));
+    const spg = (o.sharedPropertyGroups || []).filter((n) => groupNames.has(n));
+    const { implements: _impl, sharedPropertyGroups: _spg, ...rest } = o;
+    return {
+      ...rest,
+      ...(impl.length ? { implements: impl } : {}),
+      ...(spg.length ? { sharedPropertyGroups: spg } : {}),
+    };
+  });
+  return { objectTypes, linkTypes, actionTypes, interfaces, sharedPropertyGroups, source: deriveSourceFromObjectTypes(objectTypes) };
 }
 
 // ============================================================
