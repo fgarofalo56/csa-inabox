@@ -353,6 +353,19 @@ temp/atlas-tools/__pycache__/
 /tmpclaude-*
 
 
+# ---------------------------
+# Public-release hygiene — internal planning / agent / audit context that must
+# NOT ship in the public repo. (temp/ is already ignored above.) These dirs are
+# operator-internal; already-tracked files still need `git rm --cached`.
+# ---------------------------
+.harness/
+dev-loop/
+docs/fiab/prp/
+docs/fiab/audit/
+docs/fiab/parity-gap/
+docs/fiab/design/
+apps/fiab-console/test-results/
+
 # Next.js build artifacts in apps/
 apps/*/.next/
 apps/*/node_modules/
@@ -367,3 +380,6 @@ apps/*/node_modules/
 !apps/fiab-console/app/**/stats/**
 !apps/fiab-console/app/**/dist/
 !apps/fiab-console/app/**/dist/**
+
+# Live browser-walk audit screenshots (session artifacts, not shipped)
+browser-walk/

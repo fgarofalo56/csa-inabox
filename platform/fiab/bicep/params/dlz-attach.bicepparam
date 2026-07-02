@@ -8,16 +8,16 @@
 //
 // This SAME file deploys both the bureau DLZ AND the optional 2nd demo domain:
 // override domainName + --subscription per invocation.
-//   • bureau DLZ → DLZ sub  363ef5d1-0e77-4594-a530-f51af23dbf8c  domainName=bureau
-//   • 2nd demo   → Main sub ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea  domainName=demo2
+//   • bureau DLZ → DLZ sub  <YOUR_DLZ_SUBSCRIPTION_ID>  domainName=bureau
+//   • 2nd demo   → Main sub <YOUR_DEMO_SUBSCRIPTION_ID>  domainName=demo2
 //
 // Deploy (RG-scoped — a sub-scoped admin-plane deploy CANNOT create RGs in
 // other subs, so pre-create the RG first):
 //   bash scripts/csa-loom/bootstrap-dlz-rgs.sh eastus2 \
-//     "363ef5d1-0e77-4594-a530-f51af23dbf8c,ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea" \
+//     "<YOUR_DLZ_SUBSCRIPTION_ID>,<YOUR_DEMO_SUBSCRIPTION_ID>" \
 //     "bureau,demo2"
 //   az deployment group create \
-//     --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+//     --subscription <YOUR_DLZ_SUBSCRIPTION_ID> \
 //     -g rg-csa-loom-dlz-bureau-eastus2 \
 //     -f platform/fiab/bicep/modules/landing-zone/main.bicep \
 //     -p platform/fiab/bicep/params/dlz-attach.bicepparam \
@@ -26,7 +26,7 @@
 // The four admin-plane handoffs (hub VNet, LAW, catalog endpoint, Console UAMI
 // principal) come from the tenant-dmlz deploy outputs — capture them with:
 //   az deployment sub show -n <tenant-deploy> \
-//     --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+//     --subscription <YOUR_SUBSCRIPTION_ID> \
 //     --query properties.outputs
 // then export the LOOM_* env vars below. See docs/fiab/topology-migration.md.
 
@@ -51,7 +51,7 @@ param catalogEndpoint = readEnvironmentVariable('LOOM_CATALOG_ENDPOINT', '')
 // --- Admin-plane handoffs (from tenant-dmlz deploy outputs) ---
 // adminPlaneHubVnetId: the DMLZ hub VNet the spoke peers to. In the FedCiv
 // estate the connectivity hub may live in the ALZ sub
-// (a60a2fdd-c133-4845-9beb-31f470bf3ef5) — supply that hub's resource id here
+// (<YOUR_CONNECTIVITY_SUBSCRIPTION_ID>) — supply that hub's resource id here
 // and the spoke peers under the ALZ platform topology. network.bicep consumes
 // it as the spoke-peering remote VNet id.
 param adminPlaneHubVnetId = readEnvironmentVariable('LOOM_ADMIN_HUB_VNET_ID', '')

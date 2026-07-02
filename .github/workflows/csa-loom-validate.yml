@@ -17,9 +17,9 @@ on:
         type: string
         default: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
       sub:
-        description: 'Subscription holding the admin plane / loom-console (default = old single-sub). For the migrated estate use the DMLZ sub e093f4fd-5047-4ee4-968d-a56942c665f3.'
+        description: 'Subscription holding the admin plane / loom-console (default = old single-sub). For the migrated estate use the DMLZ sub <YOUR_DMLZ_SUBSCRIPTION_ID>.'
         type: string
-        default: 363ef5d1-0e77-4594-a530-f51af23dbf8c
+        default: ''
       admin_rg:
         description: 'Admin-plane RG holding loom-console + Key Vault (default = old single-sub).'
         type: string

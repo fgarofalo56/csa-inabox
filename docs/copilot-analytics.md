@@ -10,10 +10,10 @@ separately in **Cosmos DB**: `cosmos-csa-inabox-copilot-fg` →
 
 | What | Where | URL |
 |------|-------|-----|
-| Live request stream | Application Insights → Live Metrics | [Open](https://portal.azure.com/#view/AppInsightsExtension/AspNetOverview.ReactView/ComponentId/%2Fsubscriptions%2F363ef5d1-0e77-4594-a530-f51af23dbf8c%2FresourceGroups%2Frg-dlz-aiml-stack-dev%2Fproviders%2Fmicrosoft.insights%2Fcomponents%2Fappi-csa-inabox-copilot-fg) |
+| Live request stream | Application Insights → Live Metrics | [Open](https://portal.azure.com/#view/AppInsightsExtension/AspNetOverview.ReactView/ComponentId/%2Fsubscriptions%2F<YOUR_DLZ_SUBSCRIPTION_ID>%2FresourceGroups%2Frg-dlz-aiml-stack-dev%2Fproviders%2Fmicrosoft.insights%2Fcomponents%2Fappi-csa-inabox-copilot-fg) |
 | Custom event explorer | Application Insights → Logs (Analytics) | Same resource → "Logs" |
 | Saved queries / workbook | Application Insights → Workbooks → "Copilot Analytics" | (created from this doc) |
-| Raw chat conversations | Cosmos DB → `copilot/conversations` | [Data Explorer](https://portal.azure.com/#@limitlessdata.ai/resource/subscriptions/363ef5d1-0e77-4594-a530-f51af23dbf8c/resourceGroups/rg-dlz-aiml-stack-dev/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-csa-inabox-copilot-fg/dataExplorer) |
+| Raw chat conversations | Cosmos DB → `copilot/conversations` | [Data Explorer](https://portal.azure.com/#@limitlessdata.ai/resource/subscriptions/<YOUR_DLZ_SUBSCRIPTION_ID>/resourceGroups/rg-dlz-aiml-stack-dev/providers/Microsoft.DocumentDB/databaseAccounts/cosmos-csa-inabox-copilot-fg/dataExplorer) |
 | Auto-filed backlog issues | GitHub Issues with the `from-copilot` label | [Filtered list](https://github.com/fgarofalo56/csa-inabox/issues?q=is%3Aissue+label%3Afrom-copilot) |
 | Live function logs | Application Insights → Transaction search | Same resource → "Search" |
 

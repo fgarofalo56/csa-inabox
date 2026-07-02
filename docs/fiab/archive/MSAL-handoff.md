@@ -70,7 +70,7 @@ unblock you (Frank) need to do from your own account.
 ```bash
 # Sign in as yourself (not the SP) and pick the right tenant
 az login --tenant d1fc0498-f208-4b49-8376-beb9293acdf6
-az account set --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c   # DLZ
+az account set --subscription <YOUR_DLZ_SUBSCRIPTION_ID>   # DLZ
 
 # Create the app reg with all three redirect URIs
 APP=$(az ad app create \

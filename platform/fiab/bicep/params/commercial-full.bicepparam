@@ -180,8 +180,8 @@ param pbiEmbeddedEnabled       = bool(readEnvironmentVariable('LOOM_PBI_EMBEDDED
 // Network
 param hubVnetCidr = '10.0.0.0/16'
 
-// Identity — real Loom Admins group
-param adminEntraGroupId = '716f5ec5-20d0-4713-9e42-57ef931cd665'
+// Identity — Loom Admins group (object id). Required: supply via env.
+param adminEntraGroupId = readEnvironmentVariable('LOOM_ADMIN_ENTRA_GROUP_ID', '')
 
 // Feature-Permissions bootstrap admin — members can open /admin/* before any
 // grants exist. Defaults to the Loom Admins group above (so members bypass the

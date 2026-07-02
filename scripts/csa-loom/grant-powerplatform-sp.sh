@@ -29,7 +29,7 @@
 # users > New app user) or via `pac admin application-user create`.
 set -euo pipefail
 
-APP_ID="${APP_ID:-f4f25dd9-e7aa-4ba0-ae18-6c902217964d}"   # Console UAMI client id (centralus)
+APP_ID="${APP_ID:-00000000-0000-0000-0000-000000000010}"   # Console UAMI client id (centralus)
 BAP="https://api.bap.microsoft.com"
 API_VERSION="2020-10-01"
 

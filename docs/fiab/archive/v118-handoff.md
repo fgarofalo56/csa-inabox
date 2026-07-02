@@ -96,7 +96,7 @@ You're picking up CSA Loom v2 work. Background:
    git push
    gh workflow run full-app-deploy-commercial --ref access-patterns-vpn-agw-fd -f tag=v1.X -f skip_build=false -f enable_apps_after=false
    gh run watch <id> --interval 30 --exit-status
-   az account set --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c
+   az account set --subscription <YOUR_DLZ_SUBSCRIPTION_ID>
    az containerapp update -g rg-csa-loom-admin-eastus2 -n loom-console --image acrloomm56yejezt7bjo.azurecr.io/loom-console:v1.X --set-env-vars LOOM_VERSION=v1.X NEXT_PUBLIC_LOOM_VERSION=v1.X
 
 5. Start v2 with Synapse Dedicated SQL Pool: wire the real Azure SQL TDS path behind apps/fiab-console/lib/editors/azure-services-editors.tsx → SynapseDedicatedSqlPoolEditor. BFF route at /api/items/synapse-dedicated-sql-pool/[id]/query proxies T-SQL via @azure/identity DefaultAzureCredential.

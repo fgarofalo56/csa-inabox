@@ -20,7 +20,7 @@ on:
         type: string
         required: false
       dlz_subscription:
-        description: 'Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Empty → defaults to the legacy DLZ sub (363ef5d1) for back-comp; set it for any cross-sub / non-eastus2 deploy. In a single-sub deploy set it equal to admin_subscription.'
+        description: 'Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Empty → must be provided by the dispatcher; set it for any cross-sub / non-eastus2 deploy. In a single-sub deploy set it equal to admin_subscription.'
         type: string
         required: false
       dlz_domain:
@@ -40,13 +40,13 @@ env:
   # ADMIN (hub) sub holds the Console UAMI / KV / APIM / Purview / Foundry.
   # DLZ sub holds Synapse / Databricks / ADLS. They are the SAME in single-sub.
   # admin_subscription empty → fall back to dlz_subscription, then the legacy sub.
-  # dlz_subscription empty → legacy DLZ sub (363ef5d1) for back-comp.
-  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
-  DLZ_SUB: ${{ inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  # dlz_subscription empty → provided by the dispatcher.
+  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '' }}
+  DLZ_SUB: ${{ inputs.dlz_subscription || '' }}
   # SUB kept as an alias of the ADMIN sub for the many steps that scope grants /
   # role assignments to the admin plane (Cost/Security/Monitor, APIM, Reader, …).
   # The "Resolve deploy coordinates" step re-points SUB to the admin sub at runtime.
-  SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '' }}
   ADMIN_RG: rg-csa-loom-admin-${{ inputs.region || 'eastus2' }}
   DLZ_RG: rg-csa-loom-dlz-${{ inputs.dlz_domain || 'single' }}-${{ inputs.region || 'eastus2' }}
   SYNAPSE_WS: syn-loom-default-${{ inputs.region || 'eastus2' }}
@@ -64,8 +64,8 @@ env:
   # in $GITHUB_ENV) → the live eastus2 defaults below (so the original estate
   # keeps working with no var + no resolution). Every grant step references these,
   # so the runtime resolution re-targets the whole bootstrap (incl. Purview).
-  CONSOLE_UAMI_PRINCIPAL: ${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL || 'e61f3eb3-c646-4183-8198-4c4a34cd9a01' }}
-  CONSOLE_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT || 'c6272de5-3c4e-4b72-8b57-71b2e950209b' }}
+  CONSOLE_UAMI_PRINCIPAL: ${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL || '' }}
+  CONSOLE_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT || '' }}
   # Console UAMI display NAME used for the Synapse SQL CREATE LOGIN/USER FROM
   # EXTERNAL PROVIDER steps. identity.bicep names it uami-loom-console-<region>,
   # so a non-eastus2 deploy MUST grant the right name or the Console UAMI gets
@@ -108,7 +108,7 @@ jobs:
         run: |
           set -e
           az account show --query "{user:user.name, sub:id}" -o table
-          echo "Acting as Synapse initial admin (b9c3cc65-522e-49c9-ad02-914676aa5a6b)"
+          echo "Acting as Synapse initial admin"
 
       - name: Resolve deploy coordinates (region-correct Console UAMI principal/client + Databricks host)
         # Region-parameterize the OLD eastus2 hardcodes. The env: block derives every

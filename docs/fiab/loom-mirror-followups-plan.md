@@ -7,7 +7,7 @@ This is the actionable remaining-work list after a long session. Full context +
 recipes are in memory: `csa_loom_ui_aplus_sweep_2026_06_23.md` (read it first).
 Roll recipe: `bash temp/roll-centralus.sh <sha>` (see `csa_loom_centralus_roll_recipe`).
 
-## 🌙 OVERNIGHT 2026-06-24 (autonomous loop — operator asleep, authorized re-auth via cached fgarofalo@limitlessdata.ai account)
+## 🌙 OVERNIGHT 2026-06-24 (autonomous loop — operator asleep, authorized re-auth via cached <YOUR_UPN> account)
 
 **SHIPPED + ROLLED (centralus rev 64, sha 1af73910):**
 - Notebook editor: green Spark-session banner no longer overflows (raw Livy receipt
@@ -202,5 +202,5 @@ Delete the ~9 test mirrors created this session: `adventureworks-mirror-e2e`, `e
   `Attempted import error` (those = real render crashes). The wrapper exit code lies; grep the log.
 - **No creds:** never enter source secrets/passwords. SQL/Cosmos/Postgres AAD sources where the UAMI can be granted
   (operator is AAD admin via `az`) are doable; external SaaS need a KV secret.
-- UAT harness: `az containerapp job start -n loom-uat -g rg-csa-loom-admin-centralus --subscription e093f4fd-5047-4ee4-968d-a56942c665f3`;
+- UAT harness: `az containerapp job start -n loom-uat -g rg-csa-loom-admin-centralus --subscription <YOUR_SUBSCRIPTION_ID>`;
   results in LA workspace 01273839-800f-4fef-86bf-85e94cdf3a65, `ContainerAppConsoleLogs_CL | where ContainerName_s=='uat' | where Log_s has 'UAT_RESULT'`.

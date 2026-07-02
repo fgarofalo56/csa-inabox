@@ -46,7 +46,7 @@ export MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*'
 # ---------------------------------------------------------------------------
 # Parameters (override via env)
 # ---------------------------------------------------------------------------
-SUB="${SUB:-e093f4fd-5047-4ee4-968d-a56942c665f3}"
+SUB="${SUB:-00000000-0000-0000-0000-000000000000}"
 ADMIN_RG="${ADMIN_RG:-rg-csa-loom-admin-centralus}"
 CAE="${CAE:-cae-csa-loom-centralus}"
 LOCATION="${LOCATION:-centralus}"

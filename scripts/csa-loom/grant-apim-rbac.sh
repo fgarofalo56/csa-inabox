@@ -8,10 +8,10 @@
 # Re-run AFTER the APIM service finishes provisioning (~30-45 min from 'apim create').
 set -euo pipefail
 
-SUB="${SUB:-363ef5d1-0e77-4594-a530-f51af23dbf8c}"
+SUB="${SUB:-00000000-0000-0000-0000-000000000001}"
 RG="${RG:-rg-csa-loom-admin-eastus2}"
 APIM="${APIM:-apim-csa-loom-eastus2}"
-UAMI_PRINCIPAL_ID="${UAMI_PRINCIPAL_ID:-e61f3eb3-c646-4183-8198-4c4a34cd9a01}"
+UAMI_PRINCIPAL_ID="${UAMI_PRINCIPAL_ID:-00000000-0000-0000-0000-00000000000a}"
 ROLE="${ROLE:-API Management Service Contributor}"
 
 SCOPE="/subscriptions/${SUB}/resourceGroups/${RG}/providers/Microsoft.ApiManagement/service/${APIM}"

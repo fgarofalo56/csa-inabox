@@ -13,7 +13,7 @@ Status: in-flight, next session takes over UI expansion
 
 ## Resource IDs
 
-- Sub: `363ef5d1-0e77-4594-a530-f51af23dbf8c`
+- Sub: `<YOUR_DLZ_SUBSCRIPTION_ID>`
 - Admin Plane RG: `rg-csa-loom-admin-eastus2`
 - DLZ RG: `rg-csa-loom-dlz-single-eastus2`
 - ACR: `acrloomm56yejezt7bjo` (private endpoint)

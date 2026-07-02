@@ -7,7 +7,7 @@
 | Field | Value |
 |-------|-------|
 | **Tenant** | `limitlessdata.ai` (`d1fc0498-f208-4b49-8376-beb9293acdf6`) |
-| **Subscription** | `FedCiv ATU FFL - DLZ` (`363ef5d1-0e77-4594-a530-f51af23dbf8c`) |
+| **Subscription** | `<YOUR_SUBSCRIPTION_NAME>` (`<YOUR_SUBSCRIPTION_ID>`) |
 | **Resource Group** | `rg-dlz-aiml-stack-dev` |
 | **Region** | `eastus` |
 | **Function App** | `func-csa-inabox-copilot-fg` |
@@ -70,7 +70,7 @@ soft-delete window on the old (personal-sub) instance.
 ```bash
 # 1. Authenticate to the right tenant
 az login --tenant limitlessdata.ai
-az account set --subscription "FedCiv ATU FFL - DLZ"
+az account set --subscription "<YOUR_SUBSCRIPTION_NAME>"
 
 # 2. From repo root, publish code changes
 cd azure-functions/copilot-chat
@@ -92,7 +92,7 @@ curl -s -X POST \
 If the resource needs to be rebuilt entirely:
 
 ```bash
-DLZ=363ef5d1-0e77-4594-a530-f51af23dbf8c
+DLZ=<YOUR_SUBSCRIPTION_ID>
 RG=rg-dlz-aiml-stack-dev
 LOC=eastus
 ST=aimldatastore        # reuse: shared-key policy blocks new storage accounts
@@ -145,7 +145,7 @@ deployed 2026-05-06 to `cosmos-csa-inabox-copilot-fg` in **eastus2**
 
 ```bash
 az login --tenant limitlessdata.ai
-az account set --subscription "FedCiv ATU FFL - DLZ"
+az account set --subscription "<YOUR_SUBSCRIPTION_NAME>"
 az deployment group create \
   -g rg-dlz-aiml-stack-dev \
   -f azure-functions/copilot-chat/deploy/main.bicep
@@ -166,7 +166,7 @@ After the deployment finishes, set these app settings on the Function App
 ```bash
 SALT=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
 az functionapp config appsettings set \
-  --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+  --subscription <YOUR_SUBSCRIPTION_ID> \
   -g rg-dlz-aiml-stack-dev \
   -n func-csa-inabox-copilot-fg \
   --settings \
@@ -191,7 +191,7 @@ provisioned by `contentSafetyEnabled` in the platform bicep, or any
 
 ```bash
 az functionapp config appsettings set \
-  --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+  --subscription <YOUR_SUBSCRIPTION_ID> \
   -g rg-dlz-aiml-stack-dev \
   -n func-csa-inabox-copilot-fg \
   --settings \
@@ -254,7 +254,7 @@ binding is missing, the analytics calls no-op and the chat path stays
 healthy.
 
 The drain workflow's SP (`limitlessdata_deploy`,
-client `95ca491e-...`, object `b9c3cc65-...`) was granted the same
+client `<YOUR_DEPLOY_SP_APP_ID>`, object `<YOUR_ADMIN_OBJECT_ID>`) was granted the same
 Cosmos role separately:
 
 ```bash
@@ -262,7 +262,7 @@ MSYS_NO_PATHCONV=1 az cosmosdb sql role assignment create \
   --account-name cosmos-csa-inabox-copilot-fg \
   -g rg-dlz-aiml-stack-dev \
   --scope "/" \
-  --principal-id "b9c3cc65-522e-49c9-ad02-914676aa5a6b" \
+  --principal-id "<YOUR_ADMIN_OBJECT_ID>" \
   --role-definition-id "00000000-0000-0000-0000-000000000002"
 ```
 

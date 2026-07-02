@@ -6,7 +6,7 @@
 // LOOM_FOUNDRY_PROJECT_ENDPOINT — distinct from the shared AzureML Foundry Hub
 // in ../admin-plane/ai-foundry.bicep.
 //
-// Live mapping (sub 363ef5d1-0e77-4594-a530-f51af23dbf8c, rg-csa-loom-admin-eastus2):
+// Live mapping (sub <YOUR_SUBSCRIPTION_ID>, rg-csa-loom-admin-eastus2):
 //   account  : aifndry-loom-eastus2  (Microsoft.CognitiveServices/accounts kind=AIServices, S0, custom domain)
 //   project  : loom-agents           (accounts/projects, 2025-04-01-preview, SystemAssigned)
 //   model #1 : chat                  = gpt-4.1-mini  v2025-04-14  (GlobalStandard, cap 10)

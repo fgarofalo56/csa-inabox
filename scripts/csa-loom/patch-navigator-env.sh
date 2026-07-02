@@ -29,7 +29,7 @@ set -uo pipefail
 # ---------------------------------------------------------------------------
 # Context (override via env for other deployments / boundaries)
 # ---------------------------------------------------------------------------
-SUB="${SUB:-363ef5d1-0e77-4594-a530-f51af23dbf8c}"
+SUB="${SUB:-00000000-0000-0000-0000-000000000001}"
 ADMIN_RG="${ADMIN_RG:-rg-csa-loom-admin-eastus2}"
 DLZ_RG="${DLZ_RG:-rg-csa-loom-dlz-single-eastus2}"
 LOCATION="${LOCATION:-eastus2}"

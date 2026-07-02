@@ -39,8 +39,8 @@ permissions:
 
 env:
   REGION: ${{ inputs.region || 'centralus' }}
-  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || 'e093f4fd-5047-4ee4-968d-a56942c665f3' }}
-  DLZ_SUB: ${{ inputs.dlz_subscription || '363ef5d1-0e77-4594-a530-f51af23dbf8c' }}
+  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '' }}
+  DLZ_SUB: ${{ inputs.dlz_subscription || '' }}
   ADMIN_RG: rg-csa-loom-admin-${{ inputs.region || 'centralus' }}
   SYNAPSE_WS: syn-loom-default-${{ inputs.region || 'centralus' }}
 

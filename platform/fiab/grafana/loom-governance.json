@@ -36,7 +36,7 @@
           "azureResourceGraph": {
             "query": "Resources | where resourceGroup startswith 'rg-csa-loom-' | summarize count()"
           },
-          "subscriptions": ["e093f4fd-5047-4ee4-968d-a56942c665f3", "363ef5d1-0e77-4594-a530-f51af23dbf8c"]
+          "subscriptions": ["00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000001"]
         }
       ]
     },
@@ -56,7 +56,7 @@
           "azureResourceGraph": {
             "query": "Resources | where resourceGroup startswith 'rg-csa-loom-' | summarize Count=count() by type | order by Count desc"
           },
-          "subscriptions": ["e093f4fd-5047-4ee4-968d-a56942c665f3", "363ef5d1-0e77-4594-a530-f51af23dbf8c"]
+          "subscriptions": ["00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000001"]
         }
       ]
     },
@@ -75,7 +75,7 @@
           "azureResourceGraph": {
             "query": "Resources | where resourceGroup startswith 'rg-csa-loom-' | summarize Resources=count() by resourceGroup, subscriptionId | order by Resources desc"
           },
-          "subscriptions": ["e093f4fd-5047-4ee4-968d-a56942c665f3", "363ef5d1-0e77-4594-a530-f51af23dbf8c"]
+          "subscriptions": ["00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000001"]
         }
       ]
     },
@@ -93,7 +93,7 @@
           "queryType": "Azure Log Analytics",
           "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
           "azureLogAnalytics": {
-            "resources": ["/subscriptions/e093f4fd-5047-4ee4-968d-a56942c665f3/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
+            "resources": ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
             "query": "AzureActivity | where OperationNameValue has_any ('roleAssignments','policyAssignments','deployments','providers/Microsoft.Authorization') or CategoryValue == 'Administrative' | summarize Operations=count() by bin(TimeGenerated, 1h), CategoryValue | order by TimeGenerated asc"
           }
         }
@@ -112,7 +112,7 @@
           "queryType": "Azure Log Analytics",
           "datasource": { "type": "grafana-azure-monitor-datasource", "uid": "azure-monitor-oob" },
           "azureLogAnalytics": {
-            "resources": ["/subscriptions/e093f4fd-5047-4ee4-968d-a56942c665f3/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
+            "resources": ["/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-csa-loom-admin-centralus/providers/Microsoft.OperationalInsights/workspaces/law-csa-loom-centralus"],
             "query": "AzureActivity | where CategoryValue == 'Administrative' | project TimeGenerated, OperationNameValue, Caller, ActivityStatusValue, _ResourceId | order by TimeGenerated desc | take 50"
           }
         }

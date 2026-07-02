@@ -173,7 +173,7 @@ gh api repos/fgarofalo56/csa-inabox/actions/runners --jq '.runners[].name'
 # Job executions (one per queued run):
 az containerapp job execution list \
   -n gh-aca-runner -g rg-csa-loom-admin-centralus \
-  --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+  --subscription <YOUR_SUBSCRIPTION_ID> \
   --query '[].{Status:properties.status,Name:name,Start:properties.startTime}' -o table
 ```
 
@@ -184,7 +184,7 @@ Inspect the live scale rule if runs stay queued:
 
 ```bash
 az containerapp job show -n gh-aca-runner -g rg-csa-loom-admin-centralus \
-  --subscription e093f4fd-5047-4ee4-968d-a56942c665f3 \
+  --subscription <YOUR_SUBSCRIPTION_ID> \
   --query "properties.configuration.eventTriggerConfig.scale.rules[0]"
 ```
 

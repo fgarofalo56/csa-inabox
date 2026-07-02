@@ -23,7 +23,7 @@ RG="${2:-}"; SUB_ARG="${3:-}"
 WRITER=false; for a in "$@"; do [[ "$a" == "--writer" ]] && WRITER=true; done
 
 # Console UAMI object id (the identity the BFF runs as). Override via env.
-UAMI_PRINCIPAL="${CONSOLE_UAMI_PRINCIPAL:-e61f3eb3-c646-4183-8198-4c4a34cd9a01}"
+UAMI_PRINCIPAL="${CONSOLE_UAMI_PRINCIPAL:-00000000-0000-0000-0000-00000000000a}"
 SBDR="2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"  # Storage Blob Data Reader
 SBDC="ba92f5b4-2d11-453d-a403-e96b0029c9fe"  # Storage Blob Data Contributor
 
@@ -59,7 +59,7 @@ $WRITER && grant "$SBDC" "Storage Blob Data Contributor (--writer)"
 # endpoint). Verified working live 2026-06-01: a Deny account became reachable
 # to shortcuts via exactly this rule, with NO open firewall.
 # ---------------------------------------------------------------------------
-CAE_SUBNET_ID="${LOOM_CAE_SUBNET_ID:-/subscriptions/363ef5d1-0e77-4594-a530-f51af23dbf8c/resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-eastus2/subnets/snet-container-platform}"
+CAE_SUBNET_ID="${LOOM_CAE_SUBNET_ID:-/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-eastus2/subnets/snet-container-platform}"
 DEF_ACTION="$(az storage account show -n "$ACCT" -g "$RG" --subscription "$SUB_ARG" --query "networkRuleSet.defaultAction" -o tsv 2>/dev/null)"
 if [[ "$DEF_ACTION" == "Deny" ]]; then
   MSYS_NO_PATHCONV=1 az network vnet subnet update --ids "$CAE_SUBNET_ID" --service-endpoints Microsoft.Storage -o none 2>&1 | tail -0 || true
@@ -84,9 +84,9 @@ fi
 PUB="$(az storage account show -n "$ACCT" -g "$RG" --subscription "$SUB_ARG" --query publicNetworkAccess -o tsv 2>/dev/null)"
 WANT_PE=false; for a in "$@"; do [[ "$a" == "--managed-pe" ]] && WANT_PE=true; done
 if [[ "$WANT_PE" == true || "$PUB" == "Disabled" ]]; then
-  PE_SUBNET="${LOOM_PE_SUBNET_ID:-/subscriptions/363ef5d1-0e77-4594-a530-f51af23dbf8c/resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-eastus2/subnets/snet-private-endpoints}"
+  PE_SUBNET="${LOOM_PE_SUBNET_ID:-/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.Network/virtualNetworks/vnet-csa-loom-hub-eastus2/subnets/snet-private-endpoints}"
   PE_RG="${LOOM_HUB_RG:-rg-csa-loom-admin-eastus2}"
-  DNS_ZONE_ID="${LOOM_DFS_PRIVDNS_ID:-/subscriptions/363ef5d1-0e77-4594-a530-f51af23dbf8c/resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.Network/privateDnsZones/privatelink.dfs.core.windows.net}"
+  DNS_ZONE_ID="${LOOM_DFS_PRIVDNS_ID:-/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-csa-loom-admin-eastus2/providers/Microsoft.Network/privateDnsZones/privatelink.dfs.core.windows.net}"
   PE_NAME="pe-loomsc-${ACCT}"
   echo "  Creating managed Private Endpoint $PE_NAME (snet-private-endpoints -> $ACCT/dfs)…"
   MSYS_NO_PATHCONV=1 az network private-endpoint create --name "$PE_NAME" -g "$PE_RG" \
