@@ -36,7 +36,10 @@
  *     offers "Turn into a standard visual" (the same onApplyVisual path the Copilot
  *     uses) — a cross-table spec surfaces /query's honest code:'multi-table' 400.
  *
- * runtime nodejs, force-dynamic. Auth via getSession (401).
+ * runtime nodejs, force-dynamic. Auth via getSession (401) THEN an ownership gate
+ * on the path `id` (loadContentBackedItem / loadModelItem, tenant-scoped) — a
+ * report the caller does not own returns 404 before any AOAI call (mirrors the
+ * sibling …/query + …/endorsement owner checks; never an ungated AI route).
  */
 
 import { NextResponse, type NextRequest } from 'next/server';
@@ -48,6 +51,12 @@ import {
   type ToolContext,
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import {
+  isLoomContentId,
+  cosmosIdFromLoomId,
+  loadContentBackedItem,
+} from '../../../_lib/pbi-content-fallback';
+import { loadModelItem } from '@/lib/azure/model-binding';
 import {
   buildReportDesignerActTools,
   DESIGNER_VISUAL_TYPES,
@@ -148,9 +157,24 @@ function aoaiErrorResponse(e: unknown) {
   return NextResponse.json({ ok: false, error: msg }, { status: 502 });
 }
 
-export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+
+  // OWNERSHIP GATE (no-vaporware.md — never an ungated AI route): the report id
+  // on the path MUST resolve to an item this caller owns before we spend any
+  // AOAI tokens or echo back its model field list. Mirrors the sibling …/query
+  // and …/endorsement routes' owner check (loadContentBackedItem for a loom
+  // content id, loadModelItem for a plain Cosmos id) — both verify the item's
+  // workspace belongs to the caller's tenant. A miss returns 404 (not 403) so an
+  // unauthorized caller cannot probe which report ids exist.
+  const id = (await ctx.params).id;
+  const owned = isLoomContentId(id)
+    ? await loadContentBackedItem(cosmosIdFromLoomId(id), 'report', session.claims.oid)
+    : await loadModelItem(id, 'report', session.claims.oid);
+  if (!owned) {
+    return NextResponse.json({ ok: false, error: 'report not found' }, { status: 404 });
+  }
 
   let body: AiVisualRequest = {};
   try { body = (await req.json()) as AiVisualRequest; } catch { /* empty body → 400 below */ }

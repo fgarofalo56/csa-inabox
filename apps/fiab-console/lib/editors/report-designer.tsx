@@ -1053,6 +1053,141 @@ interface AiVisualWiring {
   pageRows: SmartNarrativeVisualRows[];
 }
 
+/**
+ * True Power BI MATRIX cross-tab (parity: a matrix is NOT a flat table). Pivots
+ * the Columns (legend) well's DISTINCT values into column headers, groups the
+ * Rows (category) wells down the left, and drops the Values well aggregate(s)
+ * into the body cells — with a per-row Total column and a per-column Total row
+ * summed over the SAME real /query rows (reshape only; NO new backend, no
+ * no-vaporware fabrication). Rendered by VisualBody ONLY when a matrix carries
+ * BOTH a Columns well and ≥1 Values well and the expected result keys exist; a
+ * matrix without a Columns well stays the grouped-table render (its natural PBI
+ * shape). Fluent v9 Table has no reliable colspan, so a multi-measure matrix
+ * flattens each column header to "<column value> · <measure>" (single-measure
+ * shows just the column value) — a correct, dark-legible cross-tab, tokens only.
+ */
+function MatrixPivotTable({ rows, rowKeys, pivotKey, valueAliases, valueLabels, nf, styles }: {
+  rows: Array<Record<string, unknown>>;
+  rowKeys: string[];
+  pivotKey: string;
+  valueAliases: string[];
+  valueLabels: string[];
+  nf?: Parameters<typeof formatValue>[1];
+  styles: Styles;
+}): ReactElement {
+  const multi = valueAliases.length > 1;
+  // Distinct Columns-well values, first-seen order (capped so a high-cardinality
+  // pivot can't explode the header).
+  const pivotValues: string[] = [];
+  const seenPv = new Set<string>();
+  for (const r of rows) {
+    const pv = String(r[pivotKey] ?? '');
+    if (!seenPv.has(pv)) { seenPv.add(pv); pivotValues.push(pv); if (pivotValues.length >= 40) break; }
+  }
+  // One entry per distinct Rows tuple; numeric value cells SUM on collision
+  // (the /query grouping already de-dupes on category×legend, but summing is the
+  // correct, safe aggregation for any residual duplicate row).
+  const rowMap = new Map<string, { display: string[]; cells: Map<string, number> }>();
+  const rowOrder: string[] = [];
+  for (const r of rows) {
+    const display = rowKeys.map((k) => String(r[k] ?? ''));
+    const rk = display.join('');
+    let entry = rowMap.get(rk);
+    if (!entry) { entry = { display, cells: new Map() }; rowMap.set(rk, entry); rowOrder.push(rk); }
+    const pv = String(r[pivotKey] ?? '');
+    for (const a of valueAliases) {
+      const cell = r[a];
+      if (cellIsNumeric(cell)) {
+        const ck = `${pv}${a}`;
+        entry.cells.set(ck, (entry.cells.get(ck) ?? 0) + Number(cell));
+      }
+    }
+  }
+  const bodyRows = rowOrder.slice(0, 200).map((rk) => rowMap.get(rk)!);
+
+  // Body columns: {pivotValue × valueAlias}, then a trailing Total per valueAlias.
+  const colHeader = (pv: string, li: number) =>
+    multi ? `${pv || '(blank)'} · ${valueLabels[li]}` : (pv || '(blank)');
+  const totalHeader = (li: number) => (multi ? `Total · ${valueLabels[li]}` : 'Total');
+  const cellNum = (row: { cells: Map<string, number> }, pv: string, a: string): number | undefined => {
+    const v = row.cells.get(`${pv}${a}`);
+    return v === undefined ? undefined : v;
+  };
+
+  const matrixEl = (
+    <Table size="small">
+      <TableHeader>
+        <TableRow>
+          {rowKeys.map((k) => <TableHeaderCell key={`h_${k}`}>{k}</TableHeaderCell>)}
+          {pivotValues.map((pv) =>
+            valueAliases.map((_a, li) => (
+              <TableHeaderCell key={`h_${pv}_${li}`} style={{ textAlign: 'right' }}>{colHeader(pv, li)}</TableHeaderCell>
+            )),
+          )}
+          {valueAliases.map((_a, li) => (
+            <TableHeaderCell key={`h_total_${li}`} style={{ textAlign: 'right' }}>{totalHeader(li)}</TableHeaderCell>
+          ))}
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {bodyRows.map((row, ri) => (
+          <TableRow key={ri}>
+            {rowKeys.map((k, ki) => (
+              <TableCell key={`c_${k}`}><Text weight={ki === 0 ? 'semibold' : 'regular'}>{row.display[ki] || ''}</Text></TableCell>
+            ))}
+            {pivotValues.map((pv) =>
+              valueAliases.map((a, li) => {
+                const v = cellNum(row, pv, a);
+                return (
+                  <TableCell key={`c_${pv}_${li}`} style={{ textAlign: 'right' }}>
+                    {v === undefined ? '' : formatValue(v, nf)}
+                  </TableCell>
+                );
+              }),
+            )}
+            {valueAliases.map((a, li) => {
+              const rowTotal = pivotValues.reduce((acc, pv) => acc + (cellNum(row, pv, a) ?? 0), 0);
+              return (
+                <TableCell key={`c_total_${li}`} style={{ textAlign: 'right' }}>
+                  <Text weight="semibold">{formatValue(rowTotal, nf)}</Text>
+                </TableCell>
+              );
+            })}
+          </TableRow>
+        ))}
+        {/* Column totals (Power BI matrix grand-total row). */}
+        <TableRow style={{ borderTop: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke1}` }}>
+          {rowKeys.map((k, ki) => (
+            <TableCell key={`t_${k}`}>{ki === 0 ? <Text weight="semibold">Total</Text> : ''}</TableCell>
+          ))}
+          {pivotValues.map((pv) =>
+            valueAliases.map((a, li) => {
+              const colTotal = bodyRows.reduce((acc, row) => acc + (cellNum(row, pv, a) ?? 0), 0);
+              return (
+                <TableCell key={`t_${pv}_${li}`} style={{ textAlign: 'right' }}>
+                  <Text weight="semibold">{formatValue(colTotal, nf)}</Text>
+                </TableCell>
+              );
+            }),
+          )}
+          {valueAliases.map((a, li) => {
+            const grand = bodyRows.reduce(
+              (acc, row) => acc + pivotValues.reduce((s, pv) => s + (cellNum(row, pv, a) ?? 0), 0),
+              0,
+            );
+            return (
+              <TableCell key={`t_total_${li}`} style={{ textAlign: 'right' }}>
+                <Text weight="semibold">{formatValue(grand, nf)}</Text>
+              </TableCell>
+            );
+          })}
+        </TableRow>
+      </TableBody>
+    </Table>
+  );
+  return <div className={styles.section} style={{ overflowX: 'auto', minWidth: 0 }}>{matrixEl}</div>;
+}
+
 function VisualBody({ visual, state, styles, filters, selection, interactionMode, onSelect, onPageFilter, onSlicerStyle, themeChart, ai, script, reportId, onPointSelect, onPointHover, onExportData }: {
   visual: DVisual; state?: VisualState; styles: Styles; filters?: ReportFilter[];
   selection?: VisualSelection | null; interactionMode?: InteractionMode;
@@ -1462,6 +1597,39 @@ function VisualBody({ visual, state, styles, filters, selection, interactionMode
         ))}
       </div>
     );
+  }
+
+  // True MATRIX cross-tab: when a matrix carries a Columns (legend) well AND ≥1
+  // Values well, pivot the legend's distinct values into column headers over the
+  // SAME real rows (row/col groups + values + totals — genuine PBI matrix, not a
+  // flat table). Guarded so the expected result keys must actually be present;
+  // otherwise (matrix with no Columns well, or a mismatch) fall through to the
+  // grouped-table render below. Cross-filter/drill/conditional-format stay on the
+  // table path — the pivot is a faithful read-only cross-tab of the real query.
+  if (visual.type === 'matrix') {
+    const legendField = visual.wells.legend?.[0];
+    const valueFields = visual.wells.values || [];
+    if (legendField && (legendField.column || legendField.measure) && valueFields.length > 0) {
+      const pivotKey = legendField.column ?? legendField.measure ?? '';
+      const rowKeys = (visual.wells.category || [])
+        .map((f) => f.column ?? f.measure ?? '')
+        .filter((k) => k && cols.includes(k));
+      const valueAliases = valueFields.map(wellResultAlias);
+      const valueLabels = valueFields.map(fieldLabel);
+      if (pivotKey && cols.includes(pivotKey) && valueAliases.every((a) => cols.includes(a))) {
+        return (
+          <MatrixPivotTable
+            rows={rows}
+            rowKeys={rowKeys}
+            pivotKey={pivotKey}
+            valueAliases={valueAliases}
+            valueLabels={valueLabels}
+            nf={nf}
+            styles={styles}
+          />
+        );
+      }
+    }
   }
 
   // table / matrix / non-numeric fallback — conditional paint,
