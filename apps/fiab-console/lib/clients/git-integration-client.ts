@@ -274,6 +274,41 @@ export async function adoPushFiles(args: AdoPushArgs): Promise<GitCommitStatus> 
   return { commitId, comment: args.comment };
 }
 
+/**
+ * Create a new branch ref at an existing commit (Fabric "Branch out to another
+ * workspace" — real Azure DevOps Git Data API). POSTs a ref-update with
+ * `oldObjectId = zero` (create) and `newObjectId = fromObjectId` (the tip the
+ * new branch points at). Throws a clean 409 when the branch already exists.
+ */
+export async function adoCreateBranch(
+  org: string, project: string, repoId: string, newBranch: string, fromObjectId: string, pat: string,
+): Promise<{ name: string; objectId: string }> {
+  if (!fromObjectId || fromObjectId === ADO_ZERO_OBJECT_ID) {
+    throw new GitIntegrationError(
+      'The source branch has no commits to branch from. Sync the workspace to Git first, then branch out.',
+      'ado_no_source_commit', 409,
+    );
+  }
+  const body = [{ name: `refs/heads/${newBranch}`, oldObjectId: ADO_ZERO_OBJECT_ID, newObjectId: fromObjectId }];
+  const res = await adoFetch(
+    `${ADO_BASE}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoId)}/refs?api-version=${ADO_API}`,
+    pat,
+    { method: 'POST', body: JSON.stringify(body) },
+  );
+  const j = await adoJson<{ value: { success?: boolean; updateStatus?: string; customMessage?: string; name?: string; newObjectId?: string }[] }>(res, 'create branch');
+  const r = j.value?.[0];
+  if (!r || r.success === false) {
+    const detail = r?.customMessage || r?.updateStatus || 'unknown';
+    const already = /exist/i.test(detail);
+    throw new GitIntegrationError(
+      already ? `Branch "${newBranch}" already exists in the repository.` : `Azure DevOps refused the branch create: ${detail}.`,
+      already ? 'branch_exists' : 'ado_branch_failed',
+      already ? 409 : 502,
+    );
+  }
+  return { name: (r.name || `refs/heads/${newBranch}`).replace(/^refs\/heads\//, ''), objectId: r.newObjectId || fromObjectId };
+}
+
 export async function adoLastCommit(org: string, project: string, repoId: string, branch: string, pat: string): Promise<GitCommitStatus | null> {
   const url =
     `${ADO_BASE}/${encodeURIComponent(org)}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repoId)}` +
@@ -426,6 +461,39 @@ export async function githubGetBranchSha(owner: string, repo: string, branch: st
   if (res.status === 404) return null;
   const j = await ghJson<{ object?: { sha: string } }>(res, 'get branch ref');
   return j.object?.sha || null;
+}
+
+/**
+ * Create a new branch ref at an existing commit (Fabric "Branch out to another
+ * workspace" — real GitHub Git Data API `POST /git/refs`). Throws a clean 409
+ * when the branch already exists (GitHub returns 422 "Reference already exists").
+ */
+export async function githubCreateBranch(
+  owner: string, repo: string, newBranch: string, fromSha: string, pat: string, base: string = GH_BASE,
+): Promise<{ name: string; sha: string }> {
+  if (!fromSha) {
+    throw new GitIntegrationError(
+      'The source branch has no commits to branch from. Sync the workspace to Git first, then branch out.',
+      'github_no_source_commit', 409,
+    );
+  }
+  const res = await ghFetch(
+    `${base}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/git/refs`,
+    pat,
+    { method: 'POST', body: JSON.stringify({ ref: `refs/heads/${newBranch}`, sha: fromSha }) },
+  );
+  if (res.status === 422) {
+    const body = await res.text().catch(() => '');
+    // 422 is "Reference already exists" (or an invalid ref name).
+    const exists = /already exists/i.test(body);
+    throw new GitIntegrationError(
+      exists ? `Branch "${newBranch}" already exists in the repository.` : `GitHub refused the branch create (422): ${body.slice(0, 200)}`,
+      exists ? 'branch_exists' : 'github_branch_failed',
+      exists ? 409 : 422,
+    );
+  }
+  const j = await ghJson<{ ref?: string; object?: { sha: string } }>(res, 'create branch');
+  return { name: (j.ref || `refs/heads/${newBranch}`).replace(/^refs\/heads\//, ''), sha: j.object?.sha || fromSha };
 }
 
 export interface GhCommitArgs {
