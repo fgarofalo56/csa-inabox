@@ -15,22 +15,54 @@ import {
 } from '@fluentui/react-components';
 import { Search20Regular } from '@fluentui/react-icons';
 import { FABRIC_ITEM_TYPES } from '@/lib/catalog/fabric-item-types';
+import { NAV_ITEMS } from '@/lib/nav/nav-items';
 
 interface Cmd { id: string; label: string; sub: string; href: string; group: string; }
 
-const PAGES: Cmd[] = [
-  { id: 'home', label: 'Home', sub: 'Hero + quick links', href: '/', group: 'Navigation' },
-  { id: 'workspaces', label: 'Workspaces', sub: 'Root primitive', href: '/workspaces', group: 'Navigation' },
-  { id: 'browse', label: 'Browse', sub: 'Shared with me + recents', href: '/browse', group: 'Navigation' },
-  { id: 'onelake', label: 'OneLake catalog', sub: 'Explore + Govern', href: '/onelake', group: 'Navigation' },
-  { id: 'monitor', label: 'Monitor', sub: 'Activities + schedules', href: '/monitor', group: 'Navigation' },
-  { id: 'realtime', label: 'Real-Time hub', sub: 'Stream sources', href: '/realtime-hub', group: 'Navigation' },
-  { id: 'copilot', label: 'Copilot', sub: 'Full-screen Copilot', href: '/copilot', group: 'Navigation' },
-  { id: 'workload-hub', label: 'Workload hub', sub: 'My + More workloads', href: '/workload-hub', group: 'Navigation' },
-  { id: 'deploy', label: 'Deployment pipelines', sub: 'Dev → Test → Prod', href: '/deployment-pipelines', group: 'Navigation' },
-  { id: 'admin', label: 'Admin portal', sub: 'Tenant settings + 7 more', href: '/admin', group: 'Navigation' },
-  { id: 'setup', label: 'Setup wizard', sub: 'Loom tenant bootstrap', href: '/setup', group: 'Navigation' },
-  // Admin subpages
+// Presentation-only one-liner hints per destination. The DESTINATIONS themselves
+// (href + label) come from the shared NAV_ITEMS source of truth, so this palette
+// can never list fewer surfaces than the left-nav rail (or drift out of sync when
+// a destination is added). A missing hint simply falls back to the label — no
+// destination is ever dropped. Mirrors left-nav.tsx's ICON_BY_HREF pattern.
+const NAV_HINT_BY_HREF: Record<string, string> = {
+  '/': 'Hero + quick links',
+  '/workspaces': 'Root primitive',
+  '/browse': 'Shared with me + recents',
+  '/onelake': 'Explore + Govern',
+  '/catalog': 'Search + govern all items',
+  '/org-reports': 'Organization report library',
+  '/semantic-model': 'Tabular models over the lakehouse',
+  '/thread': 'Cross-item lineage graph',
+  '/marketplace': 'API + Data products',
+  '/governance': 'Policies, DLP, sensitivity',
+  '/monitor': 'Activities + schedules',
+  '/realtime-hub': 'Stream sources',
+  '/activator-hub': 'Data-driven alerts',
+  '/business-events': 'Event streams + triggers',
+  '/rti-hub': 'Real-Time Intelligence catalog',
+  '/data-agent': 'Conversational data agents',
+  '/experience/data-science/home': 'Notebooks, experiments, models',
+  '/experience/warp/home': 'Warp orchestration',
+  '/copilot': 'Full-screen Copilot',
+  '/workload-hub': 'My + More workloads',
+  '/connections': 'Linked services + gateways',
+  '/deployment-pipelines': 'Dev → Test → Prod',
+  '/admin': 'Tenant settings + more',
+  '/setup': 'Loom tenant bootstrap',
+};
+
+// Navigation entries are sourced 1:1 from the canonical NAV_ITEMS list so all
+// destinations in the left-nav rail are searchable here — no hand-maintained copy.
+const NAV_PAGES: Cmd[] = NAV_ITEMS.map((it) => ({
+  id: `nav-${it.href}`,
+  label: it.label,
+  sub: NAV_HINT_BY_HREF[it.href] ?? it.label,
+  href: it.href,
+  group: 'Navigation',
+}));
+
+// Admin subpages (deep links that aren't top-level rail destinations).
+const ADMIN_PAGES: Cmd[] = [
   { id: 'a-ten', label: 'Tenant settings', sub: 'Admin · switches', href: '/admin/tenant-settings', group: 'Admin' },
   { id: 'a-cap', label: 'Capacity settings', sub: 'Admin · SKUs', href: '/admin/capacity', group: 'Admin' },
   { id: 'a-dom', label: 'Domains', sub: 'Admin · org', href: '/admin/domains', group: 'Admin' },
@@ -40,6 +72,8 @@ const PAGES: Cmd[] = [
   { id: 'a-usr', label: 'Users & licenses', sub: 'Admin · seats', href: '/admin/users', group: 'Admin' },
   { id: 'a-ws',  label: 'Workspaces (tenant-wide)', sub: 'Admin · inventory', href: '/admin/workspaces', group: 'Admin' },
 ];
+
+const PAGES: Cmd[] = [...NAV_PAGES, ...ADMIN_PAGES];
 
 const useStyles = makeStyles({
   surface: { maxWidth: '640px', width: '90vw', padding: 0 },

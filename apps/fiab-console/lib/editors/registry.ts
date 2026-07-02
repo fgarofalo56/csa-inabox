@@ -112,9 +112,6 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'operations-agent':     reg(() => import('./phase4-editors'),           'OperationsAgentEditor'),
   'data-agent':           reg(() => import('./phase4-editors'),           'DataAgentEditor'),
 
-  // v3.5 — Data Science experience home (workload landing page)
-  'data-science-home':    reg(() => import('./data-science-home-editor'), 'DataScienceHomeEditor'),
-
   // v1.5 — Native Azure-service editors (Synapse, Databricks, ADF, U-SQL)
   // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)
   // v2.1 — Synapse Spark pool + Pipeline + Warehouse alias real-REST wired (ARM + dev endpoint)
