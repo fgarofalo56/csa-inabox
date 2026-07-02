@@ -18,7 +18,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Caption1, Badge, Button, Input, Spinner, Field,
+  Caption1, Badge, Button, Input, Spinner, Field, Link,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Label, Select, Textarea, Switch,
@@ -28,6 +28,7 @@ import {
   Database20Regular, Play20Regular, Save20Regular,
   Add20Regular, Delete20Regular, ArrowSync20Regular,
   MathFormula20Regular, Sparkle20Regular, ArrowDownload20Regular, Copy20Regular,
+  Alert20Regular, Open20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { NewItemCreateGate } from '../new-item-gate';
@@ -341,6 +342,27 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   // Anomaly/forecast tile builder — native-KQL time-series ML (series_decompose)
   // over the Azure-native ADX cluster. Composes the tile's KQL, no Fabric.
   const [anomalyOpen, setAnomalyOpen] = useState(false);
+  // Set-alert-on-tile (Fabric RTD "Set alert" parity): the per-tile action
+  // creates a REAL Activator rule (sourceKind:'adx') from the tile's KQL on the
+  // ADX-native Activator runtime — lazily creating + linking a backing
+  // Activator item (state.activatorId), same pattern as the Eventstream
+  // "Add alert" quick-create. Azure-native default; no Fabric Reflex.
+  const [alertTileIdx, setAlertTileIdx] = useState<number | null>(null);
+  const [alertName, setAlertName] = useState('');
+  const [alertFireOn, setAlertFireOn] = useState<'rows' | 'condition'>('rows');
+  const [alertColumn, setAlertColumn] = useState('');
+  const [alertOperator, setAlertOperator] = useState<'gt' | 'lt' | 'gte' | 'lte' | 'eq' | 'ne' | 'contains'>('gt');
+  const [alertThreshold, setAlertThreshold] = useState('0');
+  const [alertFrequency, setAlertFrequency] = useState<'PT1M' | 'PT5M' | 'PT15M' | 'PT1H'>('PT5M');
+  const [alertEmail, setAlertEmail] = useState('');
+  const [alertBusy, setAlertBusy] = useState(false);
+  const [alertErr, setAlertErr] = useState<string | null>(null);
+  const [alertHint, setAlertHint] = useState<string | null>(null);
+  const [alertResult, setAlertResult] = useState<{
+    activatorId: string; activatorName?: string; ruleId: string; database?: string;
+    scheduled?: boolean; note?: string;
+    preview?: { count: number; fired: boolean }; previewError?: string;
+  } | null>(null);
   // Query-based param value caches: variableName → string[]
   const [paramValueCache, setParamValueCache] = useState<Record<string, string[]>>({});
   // Real KQL databases on the shared Loom ADX cluster — populates the data
@@ -587,6 +609,89 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     setTileFlyoutIdx(insertedIdx);
     setTimeout(() => runTile(insertedIdx), 0);
   }, [defaultDb, runTile]);
+
+  // Resolve the database a tile targets (explicit override → bound data source
+  // → dashboard default) — mirrors the server-side resolveTileDatabase.
+  const tileDatabase = useCallback((t: DashTile): string => {
+    if (t.database && t.database.trim()) return t.database.trim();
+    if (t.dataSourceId) {
+      const ds = dataSources.find((d) => d.id === t.dataSourceId);
+      if (ds?.database) return ds.database;
+    }
+    return defaultDb;
+  }, [dataSources, defaultDb]);
+
+  // Open the per-tile Set-alert dialog pre-filled from the tile (name, first
+  // result column, and — displayed read-only — its KQL + resolved database).
+  const openSetAlert = useCallback((idx: number) => {
+    const t = tiles[idx];
+    if (!t) return;
+    setAlertName(`${t.title}-alert`.slice(0, 60));
+    setAlertFireOn('rows');
+    setAlertColumn(t.result?.columns?.[0] || '');
+    setAlertOperator('gt');
+    setAlertThreshold('0');
+    setAlertFrequency('PT5M');
+    setAlertEmail('');
+    setAlertErr(null); setAlertHint(null); setAlertResult(null);
+    setAlertTileIdx(idx);
+  }, [tiles]);
+
+  // Create the alert: POST the tile's KQL + the dashboard context (data
+  // sources, parameters, base queries, time range — substituted server-side)
+  // to the dashboard activator route, which lazily creates + links a backing
+  // Activator item and mints a REAL sourceKind:'adx' rule on the ADX-native
+  // Activator runtime (kusto-client evaluation; ADX-scoped scheduledQueryRule
+  // when LOOM_ADX_ALERT_SCOPE is provisioned). No Fabric.
+  const doSetAlert = useCallback(async () => {
+    if (alertTileIdx === null) return;
+    const t = tiles[alertTileIdx];
+    if (!t) return;
+    setAlertBusy(true); setAlertErr(null); setAlertHint(null); setAlertResult(null);
+    try {
+      const action = alertEmail.trim() ? { target: alertEmail.trim() } : undefined;
+      const r = await fetch(`/api/items/kql-dashboard/${id}/activator`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          ruleName: alertName.trim() || undefined,
+          tileTitle: t.title,
+          tileKql: t.kql,
+          dataSourceId: t.dataSourceId || undefined,
+          database: t.database || undefined,
+          fireOn: alertFireOn,
+          ...(alertFireOn === 'condition' ? {
+            property: alertColumn.trim() || 'value',
+            operator: alertOperator,
+            threshold: alertThreshold.trim(),
+          } : {}),
+          evaluationFrequency: alertFrequency,
+          windowSize: alertFrequency,
+          ...(action ? { action } : {}),
+          dataSources,
+          parameters: params,
+          baseQueries,
+          timeRange,
+        }),
+      });
+      const ct = r.headers.get('content-type') || '';
+      const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
+      if (!j.ok) {
+        setAlertErr(j.error || `HTTP ${r.status}`);
+        setAlertHint(j.gate?.remediation || j.hint || null);
+        return;
+      }
+      setAlertResult({
+        activatorId: j.activatorId, activatorName: j.activatorName, ruleId: j.ruleId,
+        database: j.database, scheduled: j.scheduled, note: j.note,
+        preview: j.preview, previewError: j.previewError,
+      });
+    } catch (e: any) {
+      setAlertErr(e?.message || String(e));
+    } finally {
+      setAlertBusy(false);
+    }
+  }, [alertTileIdx, tiles, id, alertName, alertFireOn, alertColumn, alertOperator, alertThreshold, alertFrequency, alertEmail, dataSources, params, baseQueries, timeRange]);
 
   // Re-run ONLY the tiles whose KQL body references the given parameter
   // variable name (selective dependent-tile re-run, like Fabric re-evaluating
@@ -913,6 +1018,11 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 <div style={{ display: 'flex', gap: tokens.spacingVerticalXXS}}>
                   <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => runTile(i)} aria-label="Run tile" title="Run this tile" />
                   <Button
+                    size="small" appearance="subtle" icon={<Alert20Regular />}
+                    onClick={() => openSetAlert(i)}
+                    aria-label="Set alert on this tile"
+                    title="Set alert — create an Activator rule from this tile's KQL (evaluated on the ADX cluster; Azure-native, no Fabric)" />
+                  <Button
                     size="small" appearance="subtle" icon={<ArrowDownload20Regular />}
                     onClick={() => exportTileCsv(i)} disabled={!t.result?.ok}
                     aria-label="Export tile result to CSV"
@@ -1117,6 +1227,187 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                 <Button appearance="secondary" icon={<Delete20Regular />} onClick={() => deleteTile(tileFlyoutIdx)}>Delete tile</Button>
               )}
               <Button appearance="primary" onClick={() => setTileFlyoutIdx(null)}>Apply</Button>
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
+
+      {/* Set alert on tile — Fabric Real-Time Dashboard "Set alert" parity.
+          Creates a REAL Activator rule (sourceKind:'adx') from the tile's KQL,
+          routed through the ADX-native Activator runtime: the rule's KQL runs
+          against the tile's resolved KQL database on the Azure Data Explorer
+          cluster (kusto-client), with an ADX-scoped Azure Monitor
+          scheduledQueryRule for hands-off evaluation when LOOM_ADX_ALERT_SCOPE
+          is provisioned. A backing Activator item is lazily created + linked
+          onto this dashboard (state.activatorId). Azure-native; no Fabric. */}
+      <Dialog open={alertTileIdx !== null} onOpenChange={(_: unknown, d: any) => { if (!d.open && !alertBusy) setAlertTileIdx(null); }}>
+        <DialogSurface style={{ maxWidth: 640 }}>
+          <DialogBody>
+            <DialogTitle>
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
+                <Alert20Regular /> Set alert on tile
+              </span>
+            </DialogTitle>
+            <DialogContent>
+              {alertTileIdx !== null && tiles[alertTileIdx] && (() => {
+                const t = tiles[alertTileIdx];
+                const db = tileDatabase(t);
+                const opGlyph = { gt: '>', lt: '<', gte: '≥', lte: '≤', eq: '=', ne: '≠', contains: 'contains' }[alertOperator];
+                const freqLabel = { PT1M: '1 minute', PT5M: '5 minutes', PT15M: '15 minutes', PT1H: '1 hour' }[alertFrequency];
+                return (
+                  <>
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: tokens.spacingHorizontalS,
+                        padding: tokens.spacingVerticalS,
+                        borderRadius: tokens.borderRadiusMedium,
+                        border: `1px solid ${tokens.colorNeutralStroke2}`,
+                        background: tokens.colorNeutralBackground2,
+                      }}
+                    >
+                      <Alert20Regular style={{ flexShrink: 0, marginTop: tokens.spacingVerticalXXS, color: tokens.colorBrandForeground1 }} />
+                      <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>
+                        Creates an <strong>Activator</strong> rule from this tile&apos;s KQL, linked to this
+                        dashboard. The rule evaluates against <strong>{db}</strong> on the Azure Data
+                        Explorer cluster (Azure-native default — no Microsoft Fabric Reflex required)
+                        and fires when the condition below matches.
+                      </Caption1>
+                    </div>
+                    <Field label={`Tile query — "${t.title}"`} style={{ marginTop: tokens.spacingVerticalM }}
+                      hint="Base queries, parameters, and the dashboard time range are substituted when the rule is created.">
+                      <div
+                        style={{
+                          fontFamily: tokens.fontFamilyMonospace,
+                          fontSize: tokens.fontSizeBase200,
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-word',
+                          maxHeight: 120,
+                          overflowY: 'auto',
+                          padding: tokens.spacingVerticalS,
+                          borderRadius: tokens.borderRadiusMedium,
+                          border: `1px solid ${tokens.colorNeutralStroke2}`,
+                          background: tokens.colorNeutralBackground3,
+                          color: tokens.colorNeutralForeground1,
+                        }}
+                      >
+                        {t.kql}
+                      </div>
+                    </Field>
+                    <Field label="Alert name" style={{ marginTop: tokens.spacingVerticalM }}>
+                      <Input value={alertName} onChange={(_: unknown, d: any) => setAlertName(d.value)}
+                        placeholder={`${t.title}-alert`} aria-label="Alert name" />
+                    </Field>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM, flexWrap: 'wrap' }}>
+                      <Field label="Fire when" style={{ flex: 2, minWidth: 200 }}>
+                        <Select value={alertFireOn} aria-label="Fire when"
+                          onChange={(_: unknown, d: any) => setAlertFireOn(d.value as 'rows' | 'condition')}>
+                          <option value="rows">The query returns any rows</option>
+                          <option value="condition">A result column crosses a threshold</option>
+                        </Select>
+                      </Field>
+                      <Field label="Evaluate every" style={{ flex: 1, minWidth: 130 }}>
+                        <Select value={alertFrequency} aria-label="Evaluation frequency"
+                          onChange={(_: unknown, d: any) => setAlertFrequency(d.value)}>
+                          <option value="PT1M">1 minute</option>
+                          <option value="PT5M">5 minutes</option>
+                          <option value="PT15M">15 minutes</option>
+                          <option value="PT1H">1 hour</option>
+                        </Select>
+                      </Field>
+                    </div>
+                    {alertFireOn === 'condition' && (
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM, flexWrap: 'wrap' }}>
+                        <div style={{ flex: 2, minWidth: 150 }}>
+                          <Field label="Result column">
+                            <CfColumnField label="Alert condition column" value={alertColumn}
+                              columns={t.result?.columns || []} onChange={setAlertColumn} />
+                          </Field>
+                        </div>
+                        <Field label="Operator" style={{ flex: 1, minWidth: 120 }}>
+                          <Select value={alertOperator} aria-label="Alert operator"
+                            onChange={(_: unknown, d: any) => setAlertOperator(d.value)}>
+                            <option value="gt">greater than</option>
+                            <option value="lt">less than</option>
+                            <option value="gte">≥</option>
+                            <option value="lte">≤</option>
+                            <option value="eq">equals</option>
+                            <option value="ne">not equals</option>
+                            <option value="contains">contains</option>
+                          </Select>
+                        </Field>
+                        <Field label="Threshold" style={{ flex: 1, minWidth: 90 }}>
+                          <Input value={alertThreshold} onChange={(_: unknown, d: any) => setAlertThreshold(d.value)}
+                            placeholder="0" aria-label="Alert threshold" />
+                        </Field>
+                      </div>
+                    )}
+                    <Field label="Notify email (optional)" style={{ marginTop: tokens.spacingVerticalM }}
+                      hint="Creates a real Azure Monitor action group receiver for the rule.">
+                      <Input value={alertEmail} onChange={(_: unknown, d: any) => setAlertEmail(d.value)}
+                        placeholder="oncall@contoso.com" aria-label="Notify email" />
+                    </Field>
+                    {/* Live rule preview — mirrors the Azure portal's alert condition summary. */}
+                    <div
+                      aria-live="polite"
+                      style={{
+                        marginTop: tokens.spacingVerticalM,
+                        padding: tokens.spacingVerticalS,
+                        borderRadius: tokens.borderRadiusMedium,
+                        background: tokens.colorNeutralBackground3,
+                        border: `1px solid ${tokens.colorNeutralStroke2}`,
+                      }}
+                    >
+                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Rule preview</Caption1>
+                      <div style={{ marginTop: tokens.spacingVerticalXS, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground1 }}>
+                        {alertFireOn === 'rows'
+                          ? <>Fire when the tile query returns <strong>any rows</strong> on <strong>{db}</strong></>
+                          : <>Fire when <strong>{alertColumn.trim() || 'value'}</strong> {opGlyph} <strong>{alertThreshold.trim() || '0'}</strong> on <strong>{db}</strong></>}
+                        , evaluated every {freqLabel}
+                        {alertEmail.trim() ? <> → email <strong>{alertEmail.trim()}</strong></> : null}.
+                      </div>
+                    </div>
+                    {alertErr && (
+                      <MessageBar intent={alertHint ? 'warning' : 'error'} style={{ marginTop: tokens.spacingVerticalM }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>{alertHint ? 'Azure backend not configured' : 'Set alert failed'}</MessageBarTitle>
+                          {alertErr}{alertHint ? <><br /><Caption1>{alertHint}</Caption1></> : null}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    {alertResult && !alertErr && (
+                      <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM }}>
+                        <MessageBarBody>
+                          <MessageBarTitle>Alert created and linked</MessageBarTitle>
+                          Linked Activator <strong>{alertResult.activatorName || alertResult.activatorId}</strong> with
+                          rule <code>{alertResult.ruleId}</code> on <strong>{alertResult.database || db}</strong>.
+                          {alertResult.preview && (
+                            <> Evaluated now against the live cluster: <strong>{alertResult.preview.fired ? 'would fire' : 'would not fire'}</strong> ({alertResult.preview.count} row{alertResult.preview.count === 1 ? '' : 's'}).</>
+                          )}
+                          {' '}
+                          <Link href={`/items/activator/${alertResult.activatorId}`} target="_blank">
+                            Open the Activator <Open20Regular style={{ verticalAlign: 'middle' }} />
+                          </Link>
+                          {alertResult.previewError && (
+                            <><br /><Caption1>Live evaluation unavailable: {alertResult.previewError}</Caption1></>
+                          )}
+                          {!alertResult.scheduled && alertResult.note && (
+                            <><br /><Caption1>{alertResult.note}</Caption1></>
+                          )}
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                  </>
+                );
+              })()}
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setAlertTileIdx(null)} disabled={alertBusy}>Close</Button>
+              <Button appearance="primary" icon={alertBusy ? <Spinner size="tiny" /> : <Alert20Regular />}
+                onClick={doSetAlert}
+                disabled={alertBusy || (alertFireOn === 'condition' && !alertThreshold.trim())}>
+                {alertBusy ? 'Creating…' : 'Create alert'}
+              </Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
