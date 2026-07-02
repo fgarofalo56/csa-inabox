@@ -36,6 +36,23 @@ const COST_API = '2023-03-01';
 const BUDGETS_API = '2023-05-01';
 
 /**
+ * Per-request ceiling for a single Microsoft.CostManagement/query round-trip.
+ * The Cost Management query API is genuinely slow — a single aggregation over a
+ * Loom subscription's resource groups routinely takes 10-30s, and more when the
+ * account is under QPU throttling or the window spans many services. The shared
+ * `fetchWithTimeout` default (30s) aborted these mid-flight, so the chargeback
+ * dashboard almost always surfaced its honest timeout state instead of data.
+ * 60s matches the per-request budget the Monitor Cost tab already relies on and
+ * lands inside the route's `maxDuration = 90`. Scoped to the cost query ONLY —
+ * unrelated fast ARM/metric probes keep the 30s default. Override per-deployment
+ * with `LOOM_COST_QUERY_TIMEOUT_MS`.
+ */
+const COST_QUERY_TIMEOUT_MS: number = (() => {
+  const n = Number(process.env.LOOM_COST_QUERY_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 60_000;
+})();
+
+/**
  * Distinct set of subscriptions the Loom deployment spans (admin + DLZ + BYO).
  * Delegates to the shared scope resolver so the DLZ sub
  * (LOOM_DLZ_SUBSCRIPTION_ID) is always included — the live multi-sub bug was
@@ -78,7 +95,7 @@ async function costQuery(subscriptionId: string, body: unknown): Promise<any> {
       headers: { authorization: `Bearer ${t.token}`, 'content-type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body),
       cache: 'no-store',
-    });
+    }, COST_QUERY_TIMEOUT_MS);
     const text = await res.text();
     let json: any = null;
     try { json = text ? JSON.parse(text) : null; } catch { /* leave */ }

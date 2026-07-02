@@ -56,6 +56,18 @@ interface Gate { missing: string[]; message: string; scope?: string }
 
 type TabId = 'overview' | 'compute' | 'storage' | 'workspace' | 'timepoint';
 
+/**
+ * Longer client ceiling for the chargeback load. This route aggregates
+ * Microsoft.CostManagement across every Loom subscription — a genuinely slow
+ * query (often 10-30s, more across multiple subscriptions or under QPU
+ * throttling). The shared `clientFetch` 6s page-load default aborted it before
+ * the route could answer, so the dashboard almost always showed its timeout
+ * state instead of data. Wait for the route (server `maxDuration = 90`) with a
+ * still-bounded budget so a stalled route can't pin the spinner forever. The
+ * honest timeout error remains the final fallback if even this is exceeded.
+ */
+const CHARGEBACK_FETCH_TIMEOUT_MS = 80_000;
+
 const TIMEFRAMES: { value: string; label: string }[] = [
   { value: 'MonthToDate', label: 'Month to date' },
   { value: 'BillingMonthToDate', label: 'Billing month to date' },
@@ -193,7 +205,7 @@ export default function UsageChargebackPage() {
   const load = useCallback(async (tf: string) => {
     setLoading(true); setError(null); setGate(null);
     try {
-      const res = await clientFetch(`/api/admin/capacity/chargeback?timeframe=${encodeURIComponent(tf)}`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/admin/capacity/chargeback?timeframe=${encodeURIComponent(tf)}`, { cache: 'no-store' }, CHARGEBACK_FETCH_TIMEOUT_MS);
       if (res.status === 401) { setUnauth(true); setLoading(false); return; }
       const j = await res.json().catch(() => null);
       if (res.status === 403) { setError(j?.reason || j?.error || 'Tenant-admin access required.'); setLoading(false); return; }
