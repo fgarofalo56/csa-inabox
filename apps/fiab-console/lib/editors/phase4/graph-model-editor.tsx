@@ -130,6 +130,47 @@ interface GraphDecl {
 }
 interface GraphState { nodes: GraphDecl[]; edges: GraphDecl[]; database: string; lastMaterializedAt?: string; positions?: Record<string, { x: number; y: number }>; [k: string]: unknown }
 
+// ── No-code visual query builder (composes GQL → existing cypherToKql → /query) ──
+// Pure helpers: pick a start entity → optional relationship → target entity →
+// property filters → return/limit, and the builder composes the SAME
+// GQL/openCypher the Monaco box accepts. No new backend — the composed query
+// runs through the existing translate-and-execute route.
+type QbSubject = 'a' | 'e' | 'b';
+interface QbFilter { id: string; subject: QbSubject; property: string; op: string; value: string }
+const QB_OPS = ['==', '!=', '>', '<', '>=', '<=', 'contains', 'startswith'] as const;
+const QB_LIMITS = ['25', '50', '100', '250', '500'] as const;
+const QB_NUMERIC = new Set(['int', 'long', 'real', 'decimal', 'double', 'float', 'number']);
+const QB_SUBJECT_LABEL: Record<QbSubject, string> = { a: 'Start (a)', e: 'Relationship (e)', b: 'Target (b)' };
+
+/** Quote a filter literal per the declared property type (KQL-compatible —
+ *  the WHERE clause passes through cypherToKql verbatim into `graph-match`). */
+function qbLiteral(value: string, propType?: string): string {
+  const t = (propType || '').toLowerCase();
+  const v = value.trim();
+  if (QB_NUMERIC.has(t) && v !== '' && !Number.isNaN(Number(v))) return v;
+  if ((t === 'bool' || t === 'boolean') && /^(true|false)$/i.test(v)) return v.toLowerCase();
+  if (t === 'datetime' && v !== '') return `datetime(${v})`;
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/** Compose the GQL/openCypher MATCH … WHERE … RETURN … from builder picks. */
+function composeBuilderGql(args: {
+  source: string; edge: string; target: string;
+  filters: QbFilter[]; returns: string[];
+  typeOf: (subject: QbSubject, prop: string) => string | undefined;
+}): string {
+  const { source, edge, target, filters, returns, typeOf } = args;
+  if (!source) return '';
+  const pattern = edge
+    ? `(a:${source})-[e:${edge}]->${target ? `(b:${target})` : '(b)'}`
+    : `(a:${source})`;
+  const preds = filters
+    .filter((f) => f.property && f.value.trim() !== '' && (edge || f.subject === 'a'))
+    .map((f) => `${f.subject}.${f.property} ${f.op} ${qbLiteral(f.value, typeOf(f.subject, f.property))}`);
+  const ret = (returns.length ? returns : (edge ? ['a.id', 'b.id'] : ['a.id'])).join(', ');
+  return [`MATCH ${pattern}`, ...(preds.length ? [`WHERE ${preds.join(' and ')}`] : []), `RETURN ${ret}`].join('\n');
+}
+
 // ── Interactive, editable schema canvas (draggable + connectable) ────────────
 // Upgrades the old read-only ForceDirectedGraph picture to a real authoring
 // affordance over the SAME node/edge model: entities are draggable (positions
@@ -293,22 +334,112 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     });
   }, [setState]);
 
-  const runQuery = useCallback(async () => {
+  // Runs the given GQL (default: the Monaco box's text) through the existing
+  // cypherToKql → ADX /query route. `limitRows` (query-builder Limit) caps the
+  // rows kept for the grid client-side — marked truncated so the count stays
+  // honest. No new backend.
+  const runQuery = useCallback(async (queryText?: string, limitRows?: number) => {
+    const q = typeof queryText === 'string' ? queryText : gql;
     setQRunning(true); setQResult(null);
     try {
       const r = await fetch(`/api/items/graph-model/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          database: state.database, gql,
+          database: state.database, gql: q,
           nodeTables: arr<GraphDecl>(state.nodes).map((n) => safeT('Node_', n.name)),
           edgeTables: arr<GraphDecl>(state.edges).map((e) => safeT('Edge_', e.name)),
         }),
       });
-      setQResult(await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` })));
+      let j: any = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
+      if (j?.ok && typeof limitRows === 'number' && limitRows > 0 && Array.isArray(j.rows) && j.rows.length > limitRows) {
+        j = { ...j, rows: j.rows.slice(0, limitRows), truncated: true };
+      }
+      setQResult(j);
     } catch (e: any) { setQResult({ ok: false, error: e?.message || String(e) }); }
     finally { setQRunning(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, state.database, state.nodes, state.edges, gql]);
+
+  // ── No-code query builder state (composes GQL; runs the same /query path) ──
+  const [qbSource, setQbSource] = useState('');
+  const [qbEdge, setQbEdge] = useState('');
+  const [qbTarget, setQbTarget] = useState('');
+  const [qbFilters, setQbFilters] = useState<QbFilter[]>([]);
+  const [qbReturns, setQbReturns] = useState<string[]>([]);
+  const [qbLimit, setQbLimit] = useState('50');
+
+  const qbDeclFor = useCallback((subject: QbSubject): GraphDecl | undefined => {
+    if (subject === 'a') return arr<GraphDecl>(state.nodes).find((n) => n.name === qbSource);
+    if (subject === 'e') return arr<GraphDecl>(state.edges).find((e) => e.name === qbEdge);
+    return arr<GraphDecl>(state.nodes).find((n) => n.name === qbTarget);
+  }, [state.nodes, state.edges, qbSource, qbEdge, qbTarget]);
+
+  // Property options per pattern alias. Nodes always materialize an `id`
+  // column; edges always materialize `src` + `dst`.
+  const qbPropsFor = useCallback((subject: QbSubject): string[] => {
+    const decl = qbDeclFor(subject);
+    const base = subject === 'e' ? ['src', 'dst'] : ['id'];
+    const declared = (decl?.properties || []).map((p) => p.name).filter(Boolean);
+    return Array.from(new Set([...base, ...declared]));
+  }, [qbDeclFor]);
+
+  const qbTypeOf = useCallback((subject: QbSubject, prop: string): string | undefined => {
+    if (prop === 'id' || prop === 'src' || prop === 'dst') return 'string';
+    return qbDeclFor(subject)?.properties?.find((p) => p.name === prop)?.type;
+  }, [qbDeclFor]);
+
+  const qbSubjects: QbSubject[] = qbEdge ? ['a', 'e', 'b'] : ['a'];
+  const qbReturnOptions = useMemo(() => {
+    const out: string[] = [];
+    for (const subj of (qbEdge ? (['a', 'e', 'b'] as QbSubject[]) : (['a'] as QbSubject[]))) {
+      if (subj === 'b' && !qbTarget && !qbEdge) continue;
+      for (const p of qbPropsFor(subj)) out.push(`${subj}.${p}`);
+    }
+    return out;
+  }, [qbEdge, qbTarget, qbPropsFor]);
+
+  const composedGql = useMemo(() => composeBuilderGql({
+    source: qbSource, edge: qbEdge, target: qbTarget,
+    filters: qbFilters, returns: qbReturns, typeOf: qbTypeOf,
+  }), [qbSource, qbEdge, qbTarget, qbFilters, qbReturns, qbTypeOf]);
+
+  const qbAddFilter = () => setQbFilters((p) => [...p, {
+    id: `qf_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+    subject: 'a', property: '', op: '==', value: '',
+  }]);
+  const qbPatchFilter = (fid: string, patch: Partial<QbFilter>) => setQbFilters((p) => p.map((f) => (f.id === fid ? { ...f, ...patch } : f)));
+  const qbRemoveFilter = (fid: string) => setQbFilters((p) => p.filter((f) => f.id !== fid));
+  // Changing an entity pick invalidates filters/projections that reference
+  // properties the new type doesn't declare — clear them so the composed query
+  // only names real columns.
+  const qbPruneSubject = (subject: QbSubject, declName: string) => {
+    const list = subject === 'e' ? arr<GraphDecl>(state.edges) : arr<GraphDecl>(state.nodes);
+    const decl = list.find((d) => d.name === declName);
+    const props = new Set([
+      ...(subject === 'e' ? ['src', 'dst'] : ['id']),
+      ...((decl?.properties || []).map((p) => p.name).filter(Boolean)),
+    ]);
+    setQbFilters((p) => p.map((f) => (f.subject === subject && f.property && !props.has(f.property) ? { ...f, property: '' } : f)));
+    setQbReturns((p) => p.filter((r) => !r.startsWith(`${subject}.`) || props.has(r.slice(2))));
+  };
+  const qbSetSource = (name: string) => { setQbSource(name); qbPruneSubject('a', name); };
+  const qbSetTarget = (name: string) => { setQbTarget(name); qbPruneSubject('b', name); };
+  // Dropping the relationship invalidates e/b filters + projections.
+  const qbSetEdge = (name: string) => {
+    setQbEdge(name);
+    if (!name) {
+      setQbTarget('');
+      setQbFilters((p) => p.filter((f) => f.subject === 'a'));
+      setQbReturns((p) => p.filter((r) => r.startsWith('a.')));
+    } else {
+      qbPruneSubject('e', name);
+    }
+  };
+  const runBuilder = () => {
+    if (!composedGql) return;
+    setGql(composedGql); // learn affordance — the code box shows what the builder composed
+    void runQuery(composedGql, Number(qbLimit) || undefined);
+  };
 
   // Diagram view — when a graph-match projection returns ≥2 columns, draw the
   // first two as source → target vertices (a real, honest edge picture).
@@ -533,9 +664,104 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Write <strong>GQL / openCypher</strong> — translated to ADX <code>make-graph</code> + <code>graph-match</code> over the built tables and run live. Build the graph first so the tables have data.
         </Caption1>
+
+        {/* ── No-code visual query builder — composes GQL; same translate/run path ── */}
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+          padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+          border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+            <Flash20Regular className={s.secHeadIcon} />
+            <Subtitle2>Query builder</Subtitle2>
+            <Badge appearance="tint" color="brand">No code</Badge>
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+              Pick entities, filters and projections — the builder composes the GQL and runs it through the same openCypher → <code>graph-match</code> translation.
+            </Caption1>
+          </div>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <Field label="Start entity (a)">
+              <Dropdown value={qbSource} selectedOptions={qbSource ? [qbSource] : []} placeholder="Select node type"
+                onOptionSelect={(_, d) => qbSetSource(d.optionValue || '')}>
+                {arr<GraphDecl>(state.nodes).map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="Relationship (e, optional)">
+              <Dropdown value={qbEdge || '(none)'} selectedOptions={qbEdge ? [qbEdge] : ['__none__']} placeholder="(none)"
+                onOptionSelect={(_, d) => qbSetEdge(d.optionValue === '__none__' ? '' : (d.optionValue || ''))}>
+                <Option value="__none__" text="(none)">(none)</Option>
+                {arr<GraphDecl>(state.edges).map((e) => <Option key={e.name} value={e.name}>{e.name}</Option>)}
+              </Dropdown>
+            </Field>
+            {qbEdge && (
+              <Field label="Target entity (b)">
+                <Dropdown value={qbTarget || '(any)'} selectedOptions={qbTarget ? [qbTarget] : ['__any__']} placeholder="(any)"
+                  onOptionSelect={(_, d) => qbSetTarget(d.optionValue === '__any__' ? '' : (d.optionValue || ''))}>
+                  <Option value="__any__" text="(any)">(any)</Option>
+                  {arr<GraphDecl>(state.nodes).map((n) => <Option key={n.name} value={n.name}>{n.name}</Option>)}
+                </Dropdown>
+              </Field>
+            )}
+          </div>
+
+          {qbFilters.map((f) => (
+            <div key={f.id} style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center', minWidth: 0 }}>
+              <Dropdown size="small" value={QB_SUBJECT_LABEL[f.subject]} selectedOptions={[f.subject]} style={{ minWidth: '140px' }}
+                onOptionSelect={(_, d) => qbPatchFilter(f.id, { subject: (d.optionValue as QbSubject) || 'a', property: '' })}>
+                {qbSubjects.map((subj) => <Option key={subj} value={subj} text={QB_SUBJECT_LABEL[subj]}>{QB_SUBJECT_LABEL[subj]}</Option>)}
+              </Dropdown>
+              <Dropdown size="small" value={f.property} selectedOptions={f.property ? [f.property] : []} placeholder="Property" style={{ minWidth: '140px' }}
+                onOptionSelect={(_, d) => qbPatchFilter(f.id, { property: d.optionValue || '' })}>
+                {qbPropsFor(f.subject).map((p) => <Option key={p} value={p}>{p}</Option>)}
+              </Dropdown>
+              <Dropdown size="small" value={f.op} selectedOptions={[f.op]} style={{ minWidth: '110px' }}
+                onOptionSelect={(_, d) => qbPatchFilter(f.id, { op: d.optionValue || '==' })}>
+                {QB_OPS.map((o) => <Option key={o} value={o}>{o}</Option>)}
+              </Dropdown>
+              <Input size="small" value={f.value} placeholder="Value" style={{ minWidth: '140px' }}
+                onChange={(_, d) => qbPatchFilter(f.id, { value: d.value })} />
+              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove filter" onClick={() => qbRemoveFilter(f.id)} />
+            </div>
+          ))}
+
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+            <Button size="small" appearance="outline" icon={<Add16Regular />} disabled={!qbSource} onClick={qbAddFilter}>Add filter</Button>
+            <Field label="Return (projection)">
+              <Dropdown multiselect value={qbReturns.join(', ')} selectedOptions={qbReturns}
+                placeholder={qbEdge ? 'a.id, b.id (default)' : 'a.id (default)'} style={{ minWidth: '220px' }}
+                onOptionSelect={(_, d) => setQbReturns(d.selectedOptions)}>
+                {qbReturnOptions.map((o) => <Option key={o} value={o}>{o}</Option>)}
+              </Dropdown>
+            </Field>
+            <Field label="Limit (rows shown)">
+              <Dropdown value={qbLimit} selectedOptions={[qbLimit]} style={{ minWidth: '90px' }}
+                onOptionSelect={(_, d) => setQbLimit(d.optionValue || '50')}>
+                {QB_LIMITS.map((l) => <Option key={l} value={l}>{l}</Option>)}
+              </Dropdown>
+            </Field>
+            <Button appearance="primary" icon={<Play20Regular />} disabled={qRunning || !composedGql} onClick={runBuilder}>
+              {qRunning ? 'Running…' : 'Run built query'}
+            </Button>
+          </div>
+
+          {composedGql ? (
+            <div>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Composed query (read-only — also copied into the editor below when run):</Caption1>
+              <pre aria-label="Composed GQL query" style={{
+                margin: 0, marginTop: tokens.spacingVerticalXXS, padding: tokens.spacingVerticalS,
+                fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
+                borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
+                backgroundColor: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground2,
+              }}>{composedGql}</pre>
+            </div>
+          ) : (
+            <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Pick a start entity to compose a query.</Caption1>
+          )}
+        </div>
+
         <MonacoTextarea value={gql} onChange={setGql} language="graphql" height={120} minHeight={90} ariaLabel="Graph query (GQL / openCypher)" />
         <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
-          <Button appearance="primary" icon={<Play20Regular />} onClick={runQuery} disabled={qRunning || !gql.trim()}>{qRunning ? 'Running…' : 'Run query'}</Button>
+          <Button appearance="primary" icon={<Play20Regular />} onClick={() => runQuery()} disabled={qRunning || !gql.trim()}>{qRunning ? 'Running…' : 'Run query'}</Button>
           {qRunning && <Spinner size="extra-tiny" />}
         </div>
         {qResult && qResult.kql && (
