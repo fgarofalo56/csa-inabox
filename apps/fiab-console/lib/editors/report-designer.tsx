@@ -553,7 +553,10 @@ function wellResultAlias(f: WellField): string {
   // alias MUST collapse 'None' -> 'Sum' (not 'None of <Column>'). Otherwise a
   // what-if targetAlias / Target / Min / Max read-back built from this alias
   // would never match the real result column and silently no-op.
-  const agg = !f.aggregation || f.aggregation === 'None' ? 'Sum' : f.aggregation;
+  // Guard both the typed 'no aggregation' (undefined) case and any persisted
+  // legacy 'None' string (out-of-union stored state) — both collapse to 'Sum'
+  // to lock-step with wells-to-sql.aggProjection's default projection alias.
+  const agg = !f.aggregation || (f.aggregation as string) === 'None' ? 'Sum' : f.aggregation;
   return f.measure ? f.measure : `${agg} of ${f.column}`;
 }
 

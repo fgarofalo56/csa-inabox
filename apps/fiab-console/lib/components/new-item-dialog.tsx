@@ -17,7 +17,7 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import {
+import { shorthands,
   Dialog,
   DialogTrigger,
   DialogSurface,
@@ -169,7 +169,7 @@ const useStyles = makeStyles({
     gap: '6px',
     backgroundColor: tokens.colorNeutralBackground1,
     ':hover': {
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
       boxShadow: tokens.shadow4,
     },
   },
@@ -456,7 +456,7 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
 
   return (
     <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) reset(); }}>
-      {!hideTrigger && (
+      {hideTrigger ? <></> : (
         <DialogTrigger disableButtonEnhancement>
           <Button appearance="primary" icon={<Add24Regular />}>New item</Button>
         </DialogTrigger>

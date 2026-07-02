@@ -58,6 +58,15 @@ const useStyles = makeStyles({
   body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
   section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
   row: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
+  honest: {
+    fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3,
+    display: 'flex',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    lineHeight: tokens.lineHeightBase200,
+  },
 });
 
 type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'sensitivity' | 'danger';

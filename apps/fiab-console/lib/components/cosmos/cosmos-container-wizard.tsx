@@ -181,7 +181,7 @@ export function CosmosContainerWizard({
                 <Badge
                   key={label}
                   appearance={i === step ? 'filled' : i < step ? 'tint' : 'outline'}
-                  color={i === step ? 'brand' : i < step ? 'success' : 'informational'}
+                  color={i === step ? 'brand' : i < step ? 'success' : 'informative'}
                 >
                   {i + 1}. {label}
                 </Badge>

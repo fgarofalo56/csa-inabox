@@ -157,7 +157,7 @@ const useStyles = makeStyles({
     display: 'inline-flex', alignItems: 'center',
     gap: tokens.spacingHorizontalXS, padding: '4px 8px',
     fontSize: '11px', textTransform: 'uppercase',
-    letterSpacing: 0.4, fontWeight: 600,
+    letterSpacing: '0.4px', fontWeight: 600,
     color: 'rgba(255,255,255,0.55)',
     flex: '0 0 auto',
     cursor: 'default',

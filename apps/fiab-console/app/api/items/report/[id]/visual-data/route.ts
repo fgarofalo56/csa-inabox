@@ -416,7 +416,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   );
   const stamped = await applySensitivityStamp(session, cosmosId, bytes, 'xlsx');
   if (stamped.blocked) return NextResponse.json({ ok: false, error: stamped.blocked }, { status: 403 });
-  return new NextResponse(stamped.bytes, {
+  return new NextResponse(new Uint8Array(stamped.bytes), {
     headers: {
       'content-type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'content-disposition': `attachment; filename="${slug}-${mode}.xlsx"`,

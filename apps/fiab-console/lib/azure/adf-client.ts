@@ -1051,6 +1051,8 @@ export interface AdfLinkedService {
     annotations?: unknown[];
     parameters?: Record<string, { type: string; defaultValue?: unknown }>;
     typeProperties?: Record<string, unknown>;
+    /** Integration-runtime binding (SHIR / managed VNet IR) for the linked service. */
+    connectVia?: { referenceName: string; type: string; parameters?: Record<string, unknown> };
   };
 }
 

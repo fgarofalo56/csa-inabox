@@ -186,7 +186,7 @@ export function GraphSourceBinding({
                     placeholder="Select table" disabled={!type.sourceDatabase}
                     onOptionSelect={(_, d) => { const t = d.optionValue || ''; onChange({ sourceTable: t }); void loadColumns(type.sourceDatabase || '', t); }}
                   >
-                    {tables.map((t) => <Option key={t} value={t}><Table16Regular />&nbsp;{t}</Option>)}
+                    {tables.map((t) => <Option key={t} value={t} text={t}><Table16Regular />&nbsp;{t}</Option>)}
                   </Dropdown>
                 </Field>
               </div>
@@ -199,7 +199,7 @@ export function GraphSourceBinding({
                         multiselect value={keyVals.join(', ')} selectedOptions={keyVals} placeholder="Pick key column(s)"
                         onOptionSelect={(_, d) => setKey(d.selectedOptions, keyField as 'keyColumns')}
                       >
-                        {colNames.map((c) => <Option key={c} value={c}><Key16Regular />&nbsp;{c}</Option>)}
+                        {colNames.map((c) => <Option key={c} value={c} text={c}><Key16Regular />&nbsp;{c}</Option>)}
                       </Dropdown>
                     </Field>
                   ) : (

@@ -22,7 +22,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import {
+import { shorthands,
   Button, Tooltip, Spinner, Badge, Radio, RadioGroup,
   MessageBar, MessageBarBody, MessageBarTitle, Caption1,
   makeStyles, tokens,
@@ -54,7 +54,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 'var(--loom-radius-md)',
   },
-  labelRowCurrent: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorBrandBackground2 },
+  labelRowCurrent: { ...shorthands.borderColor(tokens.colorBrandStroke1), backgroundColor: tokens.colorBrandBackground2 },
   labelRowBlocked: { opacity: 0.55 },
   swatch: {
     display: 'inline-block', width: tokens.spacingHorizontalM, height: tokens.spacingVerticalM, borderRadius: '3px', flexShrink: 0, marginTop: tokens.spacingVerticalXS,

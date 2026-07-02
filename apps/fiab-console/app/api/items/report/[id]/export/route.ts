@@ -223,7 +223,7 @@ async function exportLoomNative(
     const bytes = Buffer.from(await res.arrayBuffer());
     const stamped = await applySensitivityStamp(session, reportId, bytes, LOOM_EXT[requested]);
     if (stamped.blocked) return NextResponse.json({ ok: false, error: stamped.blocked }, { status: 403 });
-    return new NextResponse(stamped.bytes, {
+    return new NextResponse(new Uint8Array(stamped.bytes), {
       status: 200,
       headers: {
         'content-type': mime,
@@ -315,7 +315,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const { bytes } = await getReportExportFile(workspaceId, reportId, exportId);
     const stamped = await applySensitivityStamp(session, reportId, Buffer.from(bytes), ext);
     if (stamped.blocked) return NextResponse.json({ ok: false, error: stamped.blocked }, { status: 403 });
-    return new NextResponse(stamped.bytes, {
+    return new NextResponse(new Uint8Array(stamped.bytes), {
       status: 200,
       headers: {
         'content-type': mime,

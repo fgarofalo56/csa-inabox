@@ -250,7 +250,7 @@ function EnvironmentPicker({
         placeholder={envs ? 'Select an environment' : 'Loading…'}
       >
         {(envs || []).map((e) => (
-          <Option key={e.id} value={e.id} disabled={!e.hasDataverse}>
+          <Option key={e.id} value={e.id} disabled={!e.hasDataverse} text={`${e.displayName}${e.hasDataverse ? '' : ' (no Dataverse)'}`}>
             {e.displayName} {e.hasDataverse ? '' : ' (no Dataverse)'}
           </Option>
         ))}

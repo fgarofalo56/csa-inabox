@@ -9,7 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { makeStyles, tokens, Spinner, Body1 } from '@fluentui/react-components';
+import { shorthands, makeStyles, tokens, Spinner, Body1 } from '@fluentui/react-components';
 
 interface AppDoc {
   id: string; name: string; description?: string;
@@ -31,7 +31,7 @@ const useStyles = makeStyles({
     transition: 'border-color 0.15s, transform 0.15s, box-shadow 0.15s',
     display: 'flex', flexDirection: 'column',
     ':hover': {
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
       transform: 'translateY(-2px)',
       boxShadow: tokens.shadow8,
     },

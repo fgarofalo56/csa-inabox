@@ -942,7 +942,7 @@ interface AddActionPaletteProps {
 function AddActionPalette({ existingNames, onAdd }: AddActionPaletteProps) {
   const s = useStyles();
 
-  const templates: { kind: ActionKind; label: string; icon: React.ReactNode }[] = [
+  const templates: { kind: ActionKind; label: string; icon: React.ReactElement }[] = [
     { kind: 'http', label: 'HTTP', icon: <Globe20Regular /> },
     { kind: 'compose', label: 'Compose', icon: <Compose20Regular /> },
     { kind: 'parseJson', label: 'Parse JSON', icon: <Code20Regular /> },

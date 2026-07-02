@@ -24,6 +24,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
+import type { SqlParameter } from '@azure/cosmos';
 import {
   queryAuditLog,
   PurviewNotConfiguredError,
@@ -96,7 +97,7 @@ export async function GET(req: NextRequest) {
   async function fetchCosmos(): Promise<AuditRow[]> {
     const c = await auditLogContainer();
     const where: string[] = ['c.tenantId = @tenant'];
-    const params: { name: string; value: unknown }[] = [{ name: '@tenant', value: tenantId }];
+    const params: SqlParameter[] = [{ name: '@tenant', value: tenantId }];
     if (type)  { where.push('c.kind = @kind'); params.push({ name: '@kind',  value: type  }); }
     if (since) { where.push('c.at >= @since'); params.push({ name: '@since', value: since }); }
     if (until) { where.push('c.at <= @until'); params.push({ name: '@until', value: until }); }

@@ -9,7 +9,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Body1, Caption1, makeStyles, tokens, Spinner } from '@fluentui/react-components';
+import { shorthands, Body1, Caption1, makeStyles, tokens, Spinner } from '@fluentui/react-components';
 
 interface Recent { id: string; type: string; displayName?: string; workspaceId?: string; lastTouchedAt: string; }
 
@@ -27,7 +27,7 @@ const useStyles = makeStyles({
     textDecoration: 'none', color: tokens.colorNeutralForeground1,
     transition: 'border-color 0.15s, transform 0.15s',
     display: 'flex', flexDirection: 'column',
-    ':hover': { borderColor: tokens.colorBrandStroke1, transform: 'translateY(-2px)' },
+    ':hover': { ...shorthands.borderColor(tokens.colorBrandStroke1), transform: 'translateY(-2px)' },
   },
   type: {
     fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',

@@ -48,6 +48,10 @@ import {
   type UcCreateConnectionParams, type UcForeignCatalogParams,
 } from '@/lib/sql/uc-security-builders';
 
+// Re-export the tag-pair type so API routes can import it from this client
+// module (the canonical UC surface) rather than reaching into the SQL builders.
+export type { UcTagPair } from '@/lib/sql/uc-security-builders';
+
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
@@ -1164,7 +1168,7 @@ export async function deltaSharingReadiness(): Promise<DeltaSharingReadiness> {
   const base: DeltaSharingReadiness = {
     configured: false, reachable: false, externalSharingEnabled: false,
     uamiPrincipal: uami || undefined, isMetastoreAdmin: false,
-    privileges: { createProvider: false, createShare: false, createRecipient: false },
+    privileges: { createProvider: false, createShare: false, createRecipient: false, createCatalog: false },
     canConsumeInbound: false, canPublish: false, reason: 'unknown',
   };
 

@@ -205,7 +205,7 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
     const bytes = recordsetsToXlsxBuffer(n.recordsets as any, n.messages as any);
     downloadBlob(
       `query-results-${stamp}.xlsx`,
-      new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      new Blob([new Uint8Array(bytes)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
     );
   }
 
@@ -236,7 +236,7 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
                 onOptionSelect={(_, d) => { setActiveSet(Number(d.optionValue)); setFilter(''); }}
               >
                 {recordsets.map((rs, i) => (
-                  <Option key={i} value={String(i)}>
+                  <Option key={i} value={String(i)} text={`Result set ${i + 1} — ${rs.rowCount.toLocaleString()} rows${rs.truncated ? ' (capped at 10,000)' : ''}`}>
                     Result set {i + 1} — {rs.rowCount.toLocaleString()} rows{rs.truncated ? ' (capped at 10,000)' : ''}
                   </Option>
                 ))}

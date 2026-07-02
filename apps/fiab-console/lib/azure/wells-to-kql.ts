@@ -123,6 +123,8 @@ const ROW_CAP = 1000;
  *  (never client text), so it is safe to inline while the numeric offset is a
  *  validated integer. (`days` uses the `ago(Nd)` / `now()+Nd` timespan form.) */
 const KQL_DATE_PERIOD: Record<Exclude<RelativeDateUnit, 'days'>, string> = {
+  hours: 'hour',
+  minutes: 'minute',
   months: 'month',
   years: 'year',
 };

@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
+import { shorthands,
   Badge, Body1, Button, Caption1, Checkbox, Divider, Dropdown, Field, Input, Option,
   Persona, Spinner, Subtitle2, Text, Textarea,
   MessageBar, MessageBarBody, MessageBarTitle,
@@ -55,8 +55,8 @@ const useStyles = makeStyles({
     padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalM}`, borderRadius: tokens.borderRadiusCircular,
     border: `1px solid ${tokens.colorNeutralStroke2}`, cursor: 'pointer',
   },
-  stepActive: { backgroundColor: tokens.colorBrandBackground2, borderColor: tokens.colorBrandStroke1 },
-  stepDone: { borderColor: tokens.colorPaletteGreenBorder2 },
+  stepActive: { backgroundColor: tokens.colorBrandBackground2, ...shorthands.borderColor(tokens.colorBrandStroke1) },
+  stepDone: { ...shorthands.borderColor(tokens.colorPaletteGreenBorder2) },
   stepNum: {
     width: '22px', height: '22px', borderRadius: '50%', display: 'inline-flex', alignItems: 'center',
     justifyContent: 'center', fontSize: tokens.fontSizeBase200, fontWeight: tokens.fontWeightSemibold, flexShrink: 0,

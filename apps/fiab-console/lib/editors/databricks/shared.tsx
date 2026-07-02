@@ -10,7 +10,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
+import { shorthands,
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Dropdown, Option,
   Combobox,
   Input, Field, Switch, Textarea, Tooltip, Divider,
@@ -124,10 +124,10 @@ const useStyles = makeStyles({
     border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2, color: tokens.colorNeutralForeground3,
     transitionProperty: 'background-color, border-color', transitionDuration: tokens.durationFaster,
-    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, borderColor: tokens.colorBrandStroke1, color: tokens.colorNeutralForeground2 },
+    ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, ...shorthands.borderColor(tokens.colorBrandStroke1), color: tokens.colorNeutralForeground2 },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
-  fileDropActive: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorNeutralBackground2Hover, color: tokens.colorNeutralForeground2 },
+  fileDropActive: { ...shorthands.borderColor(tokens.colorBrandStroke1), backgroundColor: tokens.colorNeutralBackground2Hover, color: tokens.colorNeutralForeground2 },
   fileDropIcon: { color: tokens.colorBrandForeground1 },
   filePicked: {
     display: 'flex', alignItems: 'center', columnGap: tokens.spacingHorizontalS,

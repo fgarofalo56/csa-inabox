@@ -873,7 +873,7 @@ function DatasetDialog({ open, editing, dataSources, reportId, onClose, onSave, 
               <Field label="Data source">
                 <Dropdown selectedOptions={[dataSourceId]} value={dataSources.find((d) => d.id === dataSourceId)?.name || ''}
                   onOptionSelect={(_, d) => setDataSourceId(d.optionValue || '')}>
-                  {dataSources.map((d) => <Option key={d.id} value={d.id}>{d.name} ({d.type})</Option>)}
+                  {dataSources.map((d) => <Option key={d.id} value={d.id} text={`${d.name} (${d.type})`}>{d.name} ({d.type})</Option>)}
                 </Dropdown>
               </Field>
               <Field label="Query (T-SQL)">

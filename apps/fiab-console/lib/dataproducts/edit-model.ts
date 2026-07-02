@@ -89,7 +89,7 @@ export function mergeDataProductPatch(
   const next: DataProductDoc = { ...current };
   for (const key of PATCHABLE_KEYS) {
     const v = (patch as Record<string, unknown>)[key as string];
-    if (v !== undefined) (next as Record<string, unknown>)[key as string] = v;
+    if (v !== undefined) (next as unknown as Record<string, unknown>)[key as string] = v;
   }
   next.updatedAt = now;
   return next;

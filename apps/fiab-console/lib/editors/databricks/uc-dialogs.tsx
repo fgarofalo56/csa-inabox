@@ -1727,7 +1727,7 @@ function ConnectionsDialog({ open, onOpenChange, warehouseId }: {
                     <Field label="Prefill from my Azure resources" style={{ minWidth: 240 }}>
                       <Dropdown placeholder="(optional) pick a resource" value={prefill ? (connectables.find((x) => x.armResourceId === prefill)?.name || '') : ''} selectedOptions={prefill ? [prefill] : []} onOpenChange={(_, d) => { if (d.open) void loadConnectables(); }} onOptionSelect={(_, d) => applyPrefill(d.optionValue || '')}>
                         {connectables.length === 0 && <Option value="" disabled>No federatable resources found</Option>}
-                        {connectables.map((x) => <Option key={x.armResourceId} value={x.armResourceId}>{x.name} ({CONN_PRESETS[CONNECTABLE_TO_FED[x.connType]]?.label})</Option>)}
+                        {connectables.map((x) => <Option key={x.armResourceId} value={x.armResourceId} text={`${x.name} (${CONN_PRESETS[CONNECTABLE_TO_FED[x.connType]]?.label})`}>{x.name} ({CONN_PRESETS[CONNECTABLE_TO_FED[x.connType]]?.label})</Option>)}
                       </Dropdown>
                     </Field>
                   </div>
@@ -1769,7 +1769,7 @@ function ConnectionsDialog({ open, onOpenChange, warehouseId }: {
                     <Field label="Connection" required style={{ minWidth: 200 }}>
                       <Dropdown placeholder="Select connection" value={fcConn} selectedOptions={fcConn ? [fcConn] : []} onOptionSelect={(_, d) => setFcConn(d.optionValue || '')}>
                         {conns.length === 0 && <Option value="" disabled>Create a connection first</Option>}
-                        {conns.map((c) => <Option key={c.name} value={c.name}>{c.name} ({c.connection_type})</Option>)}
+                        {conns.map((c) => <Option key={c.name} value={c.name} text={`${c.name} (${c.connection_type})`}>{c.name} ({c.connection_type})</Option>)}
                       </Dropdown>
                     </Field>
                     <Field label="Remote database" required style={{ minWidth: 180 }}><Input value={fcDb} onChange={(_, d) => setFcDb(d.value)} placeholder="SalesDB" /></Field>

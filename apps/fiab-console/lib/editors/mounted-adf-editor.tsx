@@ -28,7 +28,7 @@ import {
   type Node, type Edge, type NodeProps,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
-import {
+import { shorthands,
   Subtitle2, Caption1, Badge, Button, Spinner, Input, Textarea, Field,
   Tree, TreeItem, TreeItemLayout, Select, Dropdown, Option, Tooltip,
   Tab, TabList,
@@ -736,7 +736,7 @@ const useDesignerStyles = makeStyles({
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalS}`,
     borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left',
-    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, borderColor: tokens.colorBrandStroke1 },
+    ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, ...shorthands.borderColor(tokens.colorBrandStroke1) },
   },
   canvasCol: { flex: 1, minWidth: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'hidden' },
   configCol: {

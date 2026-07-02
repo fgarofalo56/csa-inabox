@@ -22,7 +22,7 @@
  */
 
 import { useCallback, useMemo, useRef, useState } from 'react';
-import {
+import { shorthands,
   Button,
   Spinner,
   MessageBar,
@@ -142,7 +142,7 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground2,
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },
   },
-  dropActive: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorBrandBackground2 },
+  dropActive: { ...shorthands.borderColor(tokens.colorBrandStroke1), backgroundColor: tokens.colorBrandBackground2 },
   countGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(120px, 1fr))', gap: tokens.spacingVerticalS },
   countCard: { padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
   countValue: { fontSize: tokens.fontSizeBase600, fontWeight: tokens.fontWeightSemibold, color: tokens.colorBrandForeground1, lineHeight: '1.1' },

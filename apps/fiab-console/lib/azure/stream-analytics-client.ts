@@ -24,7 +24,7 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-import { armBase, armScope } from './cloud-endpoints';
+import { armBase, armScope, isGovCloud } from './cloud-endpoints';
 
 const ARM_SCOPE = armScope();
 // 2021-10-01-preview is the management-plane API version that supports
@@ -587,7 +587,7 @@ export async function deleteOutput(jobName: string, outputName: string): Promise
 // ---------------------------------------------------------------------------
 
 function defaultLocation(): string {
-  return process.env.LOOM_ASA_LOCATION || (IS_GOV ? 'usgovvirginia' : 'eastus2');
+  return process.env.LOOM_ASA_LOCATION || (isGovCloud() ? 'usgovvirginia' : 'eastus2');
 }
 
 /** Poll an Azure async operation (LRO) until terminal; return the final JSON. */

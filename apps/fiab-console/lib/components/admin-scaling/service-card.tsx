@@ -181,14 +181,14 @@ export function ServiceCard({
             {utilization?.label || 'Utilization'}
           </Caption1>
           {utilizationLoading ? (
-            <ProgressBar thickness="thin" className={styles.utilBar} aria-label="Loading utilization…" />
+            <ProgressBar thickness="medium" className={styles.utilBar} aria-label="Loading utilization…" />
           ) : utilization?.available ? (
             <>
               <span className={styles.utilValue}>{fmtUtil(utilization)}</span>
               {barValue(utilization) !== null && (
                 <ProgressBar
                   value={barValue(utilization)!}
-                  thickness="thin"
+                  thickness="medium"
                   className={styles.utilBar}
                   aria-label={`${utilization.label || 'Utilization'}: ${fmtUtil(utilization)}`}
                   color={barValue(utilization)! > 0.85 ? 'error' : barValue(utilization)! > 0.65 ? 'warning' : 'success'}

@@ -15,7 +15,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { getRegistry, NoAoaiDeploymentError } from '@/lib/azure/copilot-orchestrator';
+import { getRegistry, NoAoaiDeploymentError, type ToolContext } from '@/lib/azure/copilot-orchestrator';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,8 +53,12 @@ export async function POST(
   }
 
   const started = Date.now();
+  const toolCtx: ToolContext = {
+    userOid: session.claims.oid,
+    session: { claims: { oid: session.claims.oid, upn: session.claims.upn, email: session.claims.email } },
+  };
   try {
-    const result = await tool.handler(args);
+    const result = await tool.handler(args, toolCtx);
     const serialized = JSON.stringify(result);
     const truncated = serialized.length > MAX_RESULT_BYTES;
     return NextResponse.json({

@@ -69,7 +69,9 @@ export function branchLabel(branch?: DrillBranch): string | undefined {
 
 /** The set of branches a container exposes, in display order. */
 export interface BranchDef {
-  branch: DrillBranch;
+  /** Undefined for single-branch containers (ForEach / Until) whose sole
+   *  branch is the default activity list. */
+  branch?: DrillBranch;
   label: string;
   /** Activity count currently in this branch. */
   count: number;

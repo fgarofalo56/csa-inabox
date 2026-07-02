@@ -39,7 +39,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
+import { shorthands,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Button, Input, Field, Dropdown, Option, Switch, Badge, Spinner, Divider,
   Subtitle2, Body1, Caption1, Text, Tooltip,
@@ -193,10 +193,10 @@ const useStyles = makeStyles({
     cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
     backgroundColor: tokens.colorNeutralBackground1, textAlign: 'left',
     boxShadow: tokens.shadow4, transitionDuration: tokens.durationNormal, transitionProperty: 'box-shadow, border-color',
-    ':hover': { borderColor: tokens.colorBrandStroke1, boxShadow: tokens.shadow16 },
+    ':hover': { ...shorthands.borderColor(tokens.colorBrandStroke1), boxShadow: tokens.shadow16 },
     ':focus-visible': { outline: `${tokens.strokeWidthThick} solid ${tokens.colorStrokeFocus2}`, outlineOffset: tokens.strokeWidthThin },
   },
-  cardSelected: { borderColor: tokens.colorBrandStroke1, boxShadow: tokens.shadow8 },
+  cardSelected: { ...shorthands.borderColor(tokens.colorBrandStroke1), boxShadow: tokens.shadow8 },
   cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   chip: {
     flexShrink: 0, width: '36px', height: '36px',

@@ -506,7 +506,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
           ) : (<>
             <div className={s.addBar}>
               <Field label="Environment" className={s.fieldStep}><Dropdown value={environments.find((e) => e.id === swapEnvId)?.name || ''} selectedOptions={swapEnvId ? [swapEnvId] : []} onOptionSelect={(_, d) => { setSwapEnvId(d.optionValue || ''); setSlots(null); setSwapGate(null); }} placeholder="App Service env">
-                {appserviceEnvs.map((e) => <Option key={e.id} value={e.id}>{e.name} · {e.site}</Option>)}
+                {appserviceEnvs.map((e) => <Option key={e.id} value={e.id} text={`${e.name} · ${e.site}`}>{e.name} · {e.site}</Option>)}
               </Dropdown></Field>
               <Button appearance="outline" disabled={swapBusy || !swapEnvId} onClick={loadSlots}>{swapBusy ? 'Loading…' : 'Load slots'}</Button>
             </div>

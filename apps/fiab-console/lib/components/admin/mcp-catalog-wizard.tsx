@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react';
-import {
+import { shorthands,
   Button, Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Field, Input, Dropdown, Option, Switch, Badge, Spinner,
   MessageBar, MessageBarBody, MessageBarTitle, SearchBox, Link,
@@ -59,7 +59,7 @@ const useStyles = makeStyles({
   },
   chipActive: {
     backgroundColor: tokens.colorBrandBackground2,
-    borderColor: tokens.colorBrandStroke1,
+    ...shorthands.borderColor(tokens.colorBrandStroke1),
     color: tokens.colorBrandForeground2,
     fontWeight: tokens.fontWeightSemibold,
   },

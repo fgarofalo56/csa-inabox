@@ -29,7 +29,7 @@
  */
 
 import { useMemo, useState, useEffect } from 'react';
-import {
+import { shorthands,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Button, Input, Field, Dropdown, Option, Textarea, Text, Badge,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
@@ -115,7 +115,7 @@ const useStyles = makeStyles({
     border: `2px solid ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2,
     color: tokens.colorNeutralForeground1, fontWeight: 600,
   },
-  stepDone: { color: tokens.colorNeutralForeground2, borderColor: tokens.colorBrandStroke2 },
+  stepDone: { color: tokens.colorNeutralForeground2, ...shorthands.borderColor(tokens.colorBrandStroke2) },
   stepIndex: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: '18px', height: '18px', borderRadius: '50%', fontSize: '11px',

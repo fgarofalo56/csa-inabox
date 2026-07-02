@@ -98,12 +98,12 @@ export async function PUT(req: NextRequest) {
     // Upgrade (cooler → Hot): use Copy Blob to avoid the early-deletion penalty.
     if (tier === 'Hot' && currentTier && currentTier !== 'Hot') {
       const result = await copyBlobToTier(container as KnownContainer, path, 'Hot');
-      return NextResponse.json({ ok: true, ...result, container, path });
+      return NextResponse.json({ ...result, ok: true, container, path });
     }
 
     // Downgrade / same-or-cooler: Set Blob Tier (Hot→Cool/Cold, Cool→Cold).
     const result = await setBlobTier(container as KnownContainer, path, tier as 'Cool' | 'Cold');
-    return NextResponse.json({ ok: true, ...result, container, path });
+    return NextResponse.json({ ...result, ok: true, container, path });
   } catch (e: any) {
     const status = e?.statusCode === 404 ? 404 : 502;
     return NextResponse.json(

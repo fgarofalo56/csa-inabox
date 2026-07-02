@@ -47,7 +47,7 @@
 
 import { useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
-import {
+import { shorthands,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Button, Caption1, Body1, Subtitle2, Field, Input, Dropdown, Option, SpinButton, Spinner,
   MessageBar, MessageBarBody, MessageBarTitle, Badge, Tooltip,
@@ -173,7 +173,7 @@ const useStyles = makeStyles({
     transitionProperty: 'box-shadow, transform, border-color',
     ':hover': {
       boxShadow: tokens.shadow16, transform: 'translateY(-2px)',
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
     },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: tokens.spacingHorizontalXXS },
   },

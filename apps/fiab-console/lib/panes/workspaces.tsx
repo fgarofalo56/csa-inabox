@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import {
+import { shorthands,
   Body1,
   Button,
   Input,
@@ -50,7 +50,7 @@ const useStyles = makeStyles({
     ':hover': {
       transform: 'translateY(-2px)',
       boxShadow: tokens.shadow8,
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
     },
   },
   cardName: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, marginBottom: '8px', overflowWrap: 'anywhere', wordBreak: 'break-word' },

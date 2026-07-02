@@ -10,7 +10,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import {
+import { shorthands,
   Spinner, Badge, Button, Dropdown, Option, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -53,7 +53,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
     textDecoration: 'none', color: tokens.colorNeutralForeground1,
-    ':hover': { borderColor: tokens.colorBrandStroke1 },
+    ':hover': { ...shorthands.borderColor(tokens.colorBrandStroke1) },
   },
   rowIcon: {
     width: '36px', height: '36px', borderRadius: '8px',

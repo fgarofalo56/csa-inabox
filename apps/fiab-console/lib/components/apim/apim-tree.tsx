@@ -621,14 +621,14 @@ export function ApimTree({
                   {cScope === 'product' && (
                     <Field label="Product" required style={{ marginTop: 8 }}>
                       <Dropdown placeholder="Select a product" value={products.find((p) => p.name === cTarget)?.displayName || cTarget} selectedOptions={cTarget ? [cTarget] : []} onOptionSelect={(_, d) => setCTarget(d.optionValue || '')}>
-                        {products.map((p) => <Option key={p.name} value={p.name}>{p.displayName} ({p.name})</Option>)}
+                        {products.map((p) => <Option key={p.name} value={p.name} text={`${p.displayName} (${p.name})`}>{p.displayName} ({p.name})</Option>)}
                       </Dropdown>
                     </Field>
                   )}
                   {cScope === 'api' && (
                     <Field label="API" required style={{ marginTop: 8 }}>
                       <Dropdown placeholder="Select an API" value={apis.find((a) => a.name === cTarget)?.displayName || cTarget} selectedOptions={cTarget ? [cTarget] : []} onOptionSelect={(_, d) => setCTarget(d.optionValue || '')}>
-                        {apis.map((a) => <Option key={a.name} value={a.name}>{a.displayName} ({a.name})</Option>)}
+                        {apis.map((a) => <Option key={a.name} value={a.name} text={`${a.displayName} (${a.name})`}>{a.displayName} ({a.name})</Option>)}
                       </Dropdown>
                     </Field>
                   )}

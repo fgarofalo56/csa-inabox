@@ -23,7 +23,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import {
+import { shorthands,
   Spinner, Badge, Button, MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Field, Input, Textarea, Dropdown, Option, Checkbox, Caption1, Subtitle2,
@@ -68,7 +68,7 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow2,
     transitionDuration: tokens.durationNormal, transitionProperty: 'box-shadow, border-color, transform',
-    ':hover': { boxShadow: tokens.shadow8, borderColor: tokens.colorNeutralStroke1Hover },
+    ':hover': { boxShadow: tokens.shadow8, ...shorthands.borderColor(tokens.colorNeutralStroke1Hover) },
   },
   statChip: {
     flexShrink: 0, width: '40px', height: '40px',

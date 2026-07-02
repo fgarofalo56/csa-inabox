@@ -7,7 +7,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { Input, makeStyles, tokens } from '@fluentui/react-components';
+import { shorthands, Input, makeStyles, tokens } from '@fluentui/react-components';
 import { Search20Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
@@ -25,7 +25,7 @@ const useStyles = makeStyles({
     height: '32px',
     '::placeholder': { color: 'rgba(255,255,255,0.65)' },
     ':hover': { backgroundColor: 'rgba(255,255,255,0.15)' },
-    ':focus-within': { backgroundColor: 'rgba(255,255,255,0.18)', borderColor: 'rgba(255,255,255,0.4)' },
+    ':focus-within': { backgroundColor: 'rgba(255,255,255,0.18)', ...shorthands.borderColor('rgba(255,255,255,0.4)') },
   },
   shortcut: {
     fontSize: '11px',

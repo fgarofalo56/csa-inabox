@@ -1,6 +1,6 @@
 'use client';
 
-import {
+import { shorthands,
   Subtitle1, Body1, Title2, Title3, Caption1,
   makeStyles, tokens,
 } from '@fluentui/react-components';
@@ -73,7 +73,7 @@ const useStyles = makeStyles({
     ':hover': {
       transform: 'translateY(-3px)',
       boxShadow: tokens.shadow16,
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
     },
   },
   cardIcon: {

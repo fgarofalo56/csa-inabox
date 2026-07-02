@@ -90,8 +90,18 @@ export interface RibbonDropdownItem {
   icon?: ReactElement;
 }
 
-export interface RibbonAction extends Omit<ButtonProps, 'children'> {
+export interface RibbonAction {
   label: string;
+  /** Real action handler. When omitted AND not disabled, the button renders
+   *  disabled with a "not wired" tooltip (honest, per no-vaporware.md). */
+  onClick?: () => void;
+  disabled?: boolean;
+  /** Leading Fluent icon. */
+  icon?: ReactElement;
+  /** Optional tooltip — e.g. explains why an action is grayed out. */
+  title?: string;
+  appearance?: ButtonProps['appearance'];
+  iconPosition?: 'before' | 'after';
   /** When present, the button renders as a split-style dropdown: a chevron
    *  opens a Fluent Menu of `dropdownItems` (mirrors Fabric's "Get data ▼" /
    *  "Analyze data ▼" ribbon menus). Backward-compatible — actions that only
@@ -225,7 +235,7 @@ export function Ribbon({ tabs, defaultTabId }: Props) {
                       onClick={onClick}
                       disabled={dead || disabled}
                       title={dead ? `${label} — not wired in this editor` : undefined}
-                      {...rest}
+                      icon={rest.icon}
                     >
                       {label}
                     </Button>

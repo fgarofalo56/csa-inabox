@@ -12,7 +12,7 @@
  */
 
 import { useRef } from 'react';
-import { makeStyles, tokens } from '@fluentui/react-components';
+import { shorthands, makeStyles, tokens } from '@fluentui/react-components';
 import { getPersonaPrompts, type CopilotContext } from '@/lib/azure/copilot-personas';
 
 const useStyles = makeStyles({
@@ -38,7 +38,7 @@ const useStyles = makeStyles({
     textOverflow: 'ellipsis',
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground3,
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
     },
     ':focus-visible': {
       outlineStyle: 'solid',

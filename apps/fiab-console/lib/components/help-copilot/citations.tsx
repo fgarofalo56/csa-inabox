@@ -10,7 +10,7 @@
  * Hover reveals the chunk preview.
  */
 
-import {
+import { shorthands,
   Tooltip, makeStyles, tokens, mergeClasses,
 } from '@fluentui/react-components';
 import {
@@ -48,7 +48,7 @@ const useStyles = makeStyles({
     transition: 'background-color 120ms ease, border-color 120ms ease',
     ':hover': {
       backgroundColor: tokens.colorBrandBackground2,
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
     },
     ':focus-visible': {
       outline: `2px solid ${tokens.colorBrandStroke1}`,

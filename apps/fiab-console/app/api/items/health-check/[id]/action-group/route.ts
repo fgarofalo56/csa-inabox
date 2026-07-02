@@ -128,8 +128,8 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     }
     // Azure Functions are delivered as webhook receivers to their HTTP-trigger URL.
     const webhookReceivers = [
-      ...webhooks.map((w) => ({ serviceUri: w.serviceUri, useCommonAlertSchema: w.useCommonAlertSchema })),
-      ...functions.map((f) => ({ serviceUri: f.functionUrl, useCommonAlertSchema: f.useCommonAlertSchema })),
+      ...webhooks.map((w: { serviceUri: string; useCommonAlertSchema?: boolean }) => ({ serviceUri: w.serviceUri, useCommonAlertSchema: w.useCommonAlertSchema })),
+      ...functions.map((f: { functionUrl: string; useCommonAlertSchema?: boolean }) => ({ serviceUri: f.functionUrl, useCommonAlertSchema: f.useCommonAlertSchema })),
     ];
 
     const agId = await upsertActionGroup({

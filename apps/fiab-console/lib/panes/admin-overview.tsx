@@ -17,7 +17,7 @@
  */
 import Link from 'next/link';
 import { useQuery } from '@tanstack/react-query';
-import {
+import { shorthands,
   makeStyles, mergeClasses, tokens, Badge, Tooltip, Spinner,
   MessageBar, MessageBarBody,
 } from '@fluentui/react-components';
@@ -86,7 +86,7 @@ const useStyles = makeStyles({
     ':hover': {
       transform: 'translateY(-2px)',
       boxShadow: tokens.shadow8,
-      borderColor: tokens.colorBrandStroke1,
+      ...shorthands.borderColor(tokens.colorBrandStroke1),
     },
   },
   tileHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS },

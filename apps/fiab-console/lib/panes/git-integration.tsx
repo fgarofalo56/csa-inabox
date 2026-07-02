@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Field, Input, Dropdown, Option, Button, Spinner, Badge, Divider,
+  Field, Input, Dropdown, Combobox, Option, Button, Spinner, Badge, Divider,
   Radio, RadioGroup, Caption1, Body1Strong, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
@@ -619,11 +619,11 @@ function ConnectWizard({ workspaceId, caps, onConnected }: { workspaceId: string
       )}
 
       <Field label="Branch" required hint="Pick an existing branch, or type a new name — it is created on first sync.">
-        <Dropdown freeform value={branch} selectedOptions={branches.includes(branch) ? [branch] : []} placeholder="main"
+        <Combobox freeform value={branch} selectedOptions={branches.includes(branch) ? [branch] : []} placeholder="main"
           onInput={(e) => setBranch((e.target as HTMLInputElement).value)}
           onOptionSelect={(_, d) => setBranch(d.optionValue || 'main')}>
           {branches.map((b) => <Option key={b} value={b}>{b}</Option>)}
-        </Dropdown>
+        </Combobox>
       </Field>
       <Field label="Folder" hint="Repo subfolder for the item JSON tree.">
         <Input value={folder} onChange={(_, d) => setFolder(d.value)} placeholder="loom-workspace" />

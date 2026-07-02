@@ -192,7 +192,7 @@ export function ConnectionBuilder({
                   {TYPES.map((t) => {
                     const TypeIcon = itemVisual(CONN_TILE_SLUG[t.value as keyof typeof CONN_TILE_SLUG] ?? t.value).icon;
                     return (
-                      <Option key={t.value} value={t.value} text={t.label} media={<TypeIcon />}>{t.label}</Option>
+                      <Option key={t.value} value={t.value} text={t.label}><TypeIcon /> {t.label}</Option>
                     );
                   })}
                 </Dropdown>

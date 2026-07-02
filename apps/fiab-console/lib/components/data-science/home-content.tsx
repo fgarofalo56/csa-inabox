@@ -18,7 +18,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import {
+import { shorthands,
   Spinner, Button, Badge, Text, Body1, Caption1,
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
   makeStyles, tokens,
@@ -121,7 +121,7 @@ const useStyles = makeStyles({
     ':hover': {
       boxShadow: tokens.shadow8,
       transform: 'translateY(-2px)',
-      borderColor: tokens.colorNeutralStroke1,
+      ...shorthands.borderColor(tokens.colorNeutralStroke1),
     },
   },
   learnTitle: {
