@@ -34,16 +34,23 @@
  *
  * EXTENSIBILITY
  * -------------
- * This file implements the ~30 most-used connectors with full auth + field
- * metadata. The remaining 60+ ADF connectors (Db2, Greenplum, Hive, Impala,
- * Netezza, Presto, Spark, Sybase, Vertica, Cassandra, Couchbase, ServiceNow,
- * Jira, HubSpot, Marketo, Magento, Square, Xero, Zoho, SAP BW/ECC/Table,
- * Google Cloud Storage, HDFS, Office 365, Azure Table Storage, Azure Cosmos DB
- * for PostgreSQL, Azure Search, etc.) follow the SAME `ConnectorDef` shape and
- * can be appended to `CONNECTORS` without any code change — the form renderer,
- * the BFF route, and the ARM client are all connector-agnostic. Adding one is
- * pure data: copy its "Linked service properties" / "Dataset properties" rows
- * from Microsoft Learn into a new `ConnectorDef`.
+ * This file now implements 60+ connectors with full auth + field metadata,
+ * spanning the Azure-native stores, the major relational / analytics engines
+ * (Db2, Greenplum, Hive, Impala, Netezza, Presto, Spark, Sybase, Vertica,
+ * MariaDB, …), NoSQL (MongoDB, Cassandra, Couchbase, HBase, …), object / file
+ * stores (S3, S3-compatible, Google Cloud Storage, HDFS, …), generic protocols
+ * (REST, OData, HTTP, ODBC, Web table), and SaaS apps (Salesforce + Service /
+ * Marketing Cloud, Dynamics, ServiceNow, Jira, HubSpot, Marketo, QuickBooks,
+ * Xero, Zoho, Square, Shopify, Concur, Google Ads, Office 365, …) — toward
+ * Microsoft Fabric's ~200-connector inventory. The remaining ADF connectors
+ * (SAP BW/ECC/ODP, Azure Table Storage, Azure Cosmos DB for PostgreSQL, Azure
+ * Search, Drill, Phoenix, PayPal, Amazon MWS, etc.) follow the SAME
+ * `ConnectorDef` shape and can be appended to `CONNECTORS` without any code
+ * change — the form renderer, the BFF route, and the ARM client are all
+ * connector-agnostic. Adding one is pure data: copy its "Linked service
+ * properties" / "Dataset properties" rows from Microsoft Learn into a new
+ * `ConnectorDef`. NEVER invent a connector ADF cannot create (e.g. there is no
+ * ADF "Google Analytics" or "generic JDBC" linked service).
  */
 
 // =============================================================================
@@ -127,6 +134,31 @@ export interface ConnectorDef {
    * Get-data path); the pane is not one of those callers.
    */
   directQueryCapable?: boolean;
+  /**
+   * Honest integration-runtime signal (additive, optional; existing consumers
+   * ignore it). `true` when the store is typically on-premises / in a private
+   * network and therefore usually reached through a **self-hosted integration
+   * runtime** (SHIR) — e.g. SQL Server, Teradata, SAP, HDFS, ODBC, Web table.
+   * This is an honest infra disclosure per `no-vaporware.md`, not a hard gate:
+   * the connector still renders and, with an Azure IR reachable endpoint, works.
+   */
+  needsShir?: boolean;
+  /**
+   * `true` when reaching this store privately from an Azure IR typically needs a
+   * **managed virtual network + managed private endpoint** (the store sits
+   * behind Private Link / a locked-down VNet). Honest disclosure, not a gate.
+   */
+  needsManagedVnet?: boolean;
+  /**
+   * Clouds where this connector is realistically reachable. Omitted means treat
+   * as available in every cloud (the Azure-native + generic-protocol connectors).
+   * SaaS / cross-cloud stores (Salesforce, ServiceNow, Google, Amazon S3, ...) are
+   * **commercial-first**: their public endpoints are usually NOT reachable from
+   * an air-gapped sovereign cloud, so they are tagged `['commercial']` honestly
+   * rather than implying Gov/China parity. M365-family stores that exist in
+   * GCC-High are tagged `['commercial','gov']`.
+   */
+  clouds?: ('commercial' | 'gov' | 'china')[];
 }
 
 // =============================================================================
@@ -240,7 +272,9 @@ function sqlFamilyAuthOptions(): ConnectorAuthOption[] {
 }
 
 // =============================================================================
-// The connector inventory (top ~30 by usage; extensible to all 90+).
+// The connector inventory (60+ connectors with full config metadata; extensible
+// toward Fabric's ~200). Grouped by category; ordering within the array does not
+// affect the gallery, which groups by `category`.
 // =============================================================================
 
 export const CONNECTORS: ConnectorDef[] = [
@@ -1752,6 +1786,1485 @@ export const CONNECTORS: ConnectorDef[] = [
         name: 'SharePoint list',
         locationFields: [
           { key: 'listName', label: 'List name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+
+  // =========================================================================
+  // BREADTH EXPANSION — additional real ADF/Synapse linked-service connectors,
+  // toward Microsoft Fabric's ~200-connector inventory. Every `type` below is
+  // a verbatim ADF linkedService discriminator grounded in the ARM reference
+  // (microsoft.datafactory/factories/linkedservices) + per-connector Learn
+  // pages; every dataset `type` is a verbatim factories/datasets discriminator.
+  // No invented connectors: Google Analytics and "generic JDBC" were requested
+  // but have NO ADF connector, so they are intentionally omitted. SaaS /
+  // cross-cloud stores are tagged commercial-first and on-prem stores carry an
+  // honest `needsShir`. All entries are additive (form renderer + BFF route +
+  // ARM client are connector-agnostic).
+  // =========================================================================
+
+  // --------------------------------------------------- Database / analytics ----
+  {
+    type: 'Db2',
+    name: 'IBM Db2',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DatabaseRegular',
+    description: 'IBM Db2 (LUW / z/OS). Copy source only, typically through a self-hosted IR.',
+    needsShir: true,
+    commonFields: [
+      { key: 'server', label: 'Server', kind: 'text', required: true, placeholder: 'db2.contoso.local:50000', supportsDynamic: true },
+      { key: 'database', label: 'Database', kind: 'text', required: true, supportsDynamic: true },
+      { key: 'packageCollection', label: 'Package collection', kind: 'text', hint: 'Where packages are created when querying (optional).', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+      {
+        auth: 'connectionString',
+        label: 'Connection string',
+        fields: [
+          { key: 'connectionString', label: 'Connection string', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'Db2Table',
+        name: 'Db2 table',
+        locationFields: [
+          { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+          { key: 'table', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'MariaDB',
+    name: 'MariaDB',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DatabaseRegular',
+    description: 'MariaDB server. Copy source only. V2 driver uses server / port / database + basic auth.',
+    commonFields: [
+      { key: 'server', label: 'Server', kind: 'text', placeholder: 'mariadb.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '3306' },
+      { key: 'database', label: 'Database', kind: 'text', supportsDynamic: true },
+      {
+        key: 'sslMode',
+        label: 'SSL mode',
+        kind: 'select',
+        options: [
+          { value: '0', label: 'Disabled' },
+          { value: '1', label: 'Preferred (default)' },
+          { value: '2', label: 'Required' },
+          { value: '3', label: 'Verify CA' },
+          { value: '4', label: 'Verify identity' },
+        ],
+      },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+      {
+        auth: 'connectionString',
+        label: 'Connection string (legacy)',
+        fields: [
+          { key: 'connectionString', label: 'Connection string', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'MariaDBTable',
+        name: 'MariaDB table',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Vertica',
+    name: 'Vertica',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DataWarehouseRegular',
+    description: 'Vertica analytics database. Copy source only. V2 driver uses server / port / database.',
+    commonFields: [
+      { key: 'server', label: 'Server', kind: 'text', placeholder: 'vertica.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '5433' },
+      { key: 'database', label: 'Database', kind: 'text', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'uid', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'pwd', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+      {
+        auth: 'connectionString',
+        label: 'Connection string (legacy)',
+        fields: [
+          { key: 'connectionString', label: 'Connection string', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'VerticaTable',
+        name: 'Vertica table',
+        locationFields: [
+          { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+          { key: 'table', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Greenplum',
+    name: 'Greenplum',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DataWarehouseRegular',
+    description: 'Greenplum Database. Copy source only. V2 driver uses host / port / database + basic auth.',
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', placeholder: 'greenplum.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '5432' },
+      { key: 'database', label: 'Database', kind: 'text', supportsDynamic: true },
+      {
+        key: 'sslMode',
+        label: 'SSL mode',
+        kind: 'select',
+        options: [
+          { value: '0', label: 'Disable' },
+          { value: '1', label: 'Allow' },
+          { value: '2', label: 'Prefer' },
+          { value: '3', label: 'Require' },
+          { value: '4', label: 'Verify CA' },
+          { value: '5', label: 'Verify full' },
+        ],
+      },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'pwd', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+      {
+        auth: 'connectionString',
+        label: 'Connection string (legacy)',
+        fields: [
+          { key: 'connectionString', label: 'Connection string', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'GreenplumTable',
+        name: 'Greenplum table',
+        locationFields: [
+          { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+          { key: 'table', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Netezza',
+    name: 'Netezza',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DataWarehouseRegular',
+    description: 'IBM Netezza (PureData). Copy source only, usually through a self-hosted IR.',
+    needsShir: true,
+    commonFields: [
+      { key: 'server', label: 'Server', kind: 'text', placeholder: 'netezza.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '5480' },
+      { key: 'database', label: 'Database', kind: 'text', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'uid', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'pwd', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+      {
+        auth: 'connectionString',
+        label: 'Connection string (legacy)',
+        fields: [
+          { key: 'connectionString', label: 'Connection string', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'NetezzaTable',
+        name: 'Netezza table',
+        locationFields: [
+          { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+          { key: 'table', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Presto',
+    name: 'Presto',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DataTrendingRegular',
+    description: 'Presto distributed SQL query engine. Copy source only. Anonymous or LDAP auth.',
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'presto.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '8080 (443 for SSL)' },
+      { key: 'catalog', label: 'Catalog', kind: 'text', required: true, supportsDynamic: true },
+      { key: 'enableSsl', label: 'Enable SSL', kind: 'boolean' },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'LDAP (user + password)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'PrestoObject',
+        name: 'Presto object',
+        locationFields: [
+          { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+          { key: 'table', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'SapTable',
+    name: 'SAP Table',
+    category: 'database',
+    icon: 'DatabaseRegular',
+    description: 'SAP table (RFC) from an ECC / S4HANA system. Copy source only, through a self-hosted IR + SAP .NET connector.',
+    needsShir: true,
+    commonFields: [
+      { key: 'server', label: 'Application server', kind: 'text', placeholder: 'sap.contoso.local', hint: 'For a specific application server. Use message server fields for a load-balanced connection.', supportsDynamic: true },
+      { key: 'systemNumber', label: 'System number', kind: 'text', placeholder: '00', supportsDynamic: true },
+      { key: 'clientId', label: 'Client ID', kind: 'text', placeholder: '800', supportsDynamic: true },
+      { key: 'systemId', label: 'System ID', kind: 'text', hint: 'Required for a message-server (load-balanced) connection.', supportsDynamic: true },
+      { key: 'messageServer', label: 'Message server', kind: 'text', supportsDynamic: true },
+      { key: 'messageServerService', label: 'Message server service / port', kind: 'text', supportsDynamic: true },
+      { key: 'logonGroup', label: 'Logon group', kind: 'text', supportsDynamic: true },
+      { key: 'language', label: 'Language', kind: 'text', placeholder: 'EN', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'userName', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'SapTableResource',
+        name: 'SAP table',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Sybase',
+    name: 'SAP Sybase (ASE)',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DatabaseRegular',
+    description: 'SAP Sybase ASE. Copy source only, through a self-hosted IR.',
+    needsShir: true,
+    commonFields: [
+      { key: 'server', label: 'Server', kind: 'text', required: true, placeholder: 'sybase.contoso.local', supportsDynamic: true },
+      { key: 'database', label: 'Database', kind: 'text', required: true, supportsDynamic: true },
+      { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'SybaseTable',
+        name: 'Sybase table',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Hive',
+    name: 'Hive',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DataTrendingRegular',
+    description: 'Apache Hive (HiveServer2). Copy source only. Anonymous, user, or user+password auth.',
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'hive.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '10000' },
+      { key: 'httpPath', label: 'HTTP path', kind: 'text', supportsDynamic: true },
+      { key: 'enableSsl', label: 'Enable SSL', kind: 'boolean' },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'Username',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+        ],
+      },
+      {
+        auth: 'basic',
+        label: 'Username and password',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'HiveObject',
+        name: 'Hive object',
+        locationFields: [
+          { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+          { key: 'table', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Impala',
+    name: 'Impala',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DataTrendingRegular',
+    description: 'Apache Impala. Copy source only. Anonymous, SASL username, or username+password auth.',
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'impala.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '21050' },
+      { key: 'enableSsl', label: 'Enable SSL', kind: 'boolean' },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'SASL username',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+        ],
+      },
+      {
+        auth: 'basic',
+        label: 'Username and password',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'ImpalaObject',
+        name: 'Impala object',
+        locationFields: [
+          { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+          { key: 'table', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Spark',
+    name: 'Spark',
+    directQueryCapable: true,
+    category: 'database',
+    icon: 'DataTrendingRegular',
+    description: 'Apache Spark Thrift server (Spark SQL). Copy source only.',
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'spark.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', required: true, placeholder: '10001' },
+      { key: 'httpPath', label: 'HTTP path', kind: 'text', supportsDynamic: true },
+      { key: 'enableSsl', label: 'Enable SSL', kind: 'boolean' },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'Username and password',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'SparkObject',
+        name: 'Spark object',
+        locationFields: [
+          { key: 'schema', label: 'Schema', kind: 'text', supportsDynamic: true },
+          { key: 'table', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+
+  // ---------------------------------------------------------------- NoSQL ----
+  {
+    type: 'MongoDbV2',
+    name: 'MongoDB',
+    category: 'nosql',
+    icon: 'DatabaseRegular',
+    description: 'MongoDB (recommended V2 connector). Connection string + database name.',
+    commonFields: [
+      { key: 'database', label: 'Database', kind: 'text', required: true, supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'connectionString',
+        label: 'Connection string',
+        fields: [
+          { key: 'connectionString', label: 'Connection string', kind: 'password', required: true, secret: true, hint: 'mongodb://[user:pwd@]host[:port]/[?options]' },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'MongoDbV2Collection',
+        name: 'MongoDB collection',
+        locationFields: [
+          { key: 'collectionName', label: 'Collection', kind: 'text', required: true, supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: true,
+  },
+  {
+    type: 'MongoDbAtlas',
+    name: 'MongoDB Atlas',
+    category: 'nosql',
+    icon: 'DatabaseRegular',
+    description: 'MongoDB Atlas (cloud MongoDB). Connection string + database name.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'database', label: 'Database', kind: 'text', required: true, supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'connectionString',
+        label: 'Connection string',
+        fields: [
+          { key: 'connectionString', label: 'Connection string', kind: 'password', required: true, secret: true, hint: 'mongodb+srv://… Atlas connection string.' },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'MongoDbAtlasCollection',
+        name: 'MongoDB Atlas collection',
+        locationFields: [
+          { key: 'collectionName', label: 'Collection', kind: 'text', required: true, supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: true,
+  },
+  {
+    type: 'Cassandra',
+    name: 'Cassandra',
+    category: 'nosql',
+    icon: 'DatabaseRegular',
+    description: 'Apache Cassandra. Copy source only, usually through a self-hosted IR.',
+    needsShir: true,
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'cassandra.contoso.local', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '9042' },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'CassandraTable',
+        name: 'Cassandra table',
+        locationFields: [
+          { key: 'keyspace', label: 'Keyspace', kind: 'text', supportsDynamic: true },
+          { key: 'tableName', label: 'Table', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Couchbase',
+    name: 'Couchbase',
+    category: 'nosql',
+    icon: 'DatabaseRegular',
+    description: 'Couchbase server (via ODBC driver). Copy source only, usually through a self-hosted IR.',
+    needsShir: true,
+    commonFields: [],
+    authOptions: [
+      {
+        auth: 'connectionString',
+        label: 'Connection string',
+        fields: [
+          { key: 'connectionString', label: 'Connection string', kind: 'password', required: true, secret: true, hint: 'Couchbase ODBC connection string.' },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'CouchbaseTable',
+        name: 'Couchbase table',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'HBase',
+    name: 'Apache HBase',
+    category: 'nosql',
+    icon: 'DatabaseRegular',
+    description: 'Apache HBase over its REST gateway. Copy source only.',
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: '192.168.222.160', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '9090' },
+      { key: 'httpPath', label: 'HTTP path', kind: 'text', placeholder: '/gateway/sandbox/hbase/version', supportsDynamic: true },
+      { key: 'enableSsl', label: 'Enable SSL', kind: 'boolean' },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'HBaseObject',
+        name: 'HBase object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+
+  // ----------------------------------------------------------------- File ----
+  {
+    type: 'GoogleCloudStorage',
+    name: 'Google Cloud Storage (S3 API)',
+    category: 'file',
+    icon: 'CloudRegular',
+    description: 'Google Cloud Storage via the S3-compatible API. Copy source only. Access-key auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'serviceUrl', label: 'Service URL', kind: 'text', placeholder: 'https://storage.googleapis.com', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'accessKey',
+        label: 'Access key',
+        fields: [
+          { key: 'accessKeyId', label: 'Access key ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'secretAccessKey', label: 'Secret access key', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'DelimitedText',
+        name: 'Delimited text (CSV)',
+        locationFields: [
+          { key: 'bucketName', label: 'Bucket', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'folderPath', label: 'Folder path', kind: 'text', supportsDynamic: true },
+          { key: 'fileName', label: 'File name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+      {
+        type: 'Parquet',
+        name: 'Parquet',
+        locationFields: [
+          { key: 'bucketName', label: 'Bucket', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'folderPath', label: 'Folder path', kind: 'text', supportsDynamic: true },
+          { key: 'fileName', label: 'File name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'AmazonS3Compatible',
+    name: 'Amazon S3 Compatible Storage',
+    category: 'file',
+    icon: 'CloudRegular',
+    description: 'Any S3-compatible object store (MinIO, Wasabi, Ceph, …). Copy source only. Access-key auth.',
+    commonFields: [
+      { key: 'serviceUrl', label: 'Service URL', kind: 'text', required: true, placeholder: 'https://s3.mystore.example', supportsDynamic: true },
+      { key: 'forcePathStyle', label: 'Force path-style access', kind: 'boolean', hint: 'Use path-style instead of virtual-hosted-style addressing.' },
+    ],
+    authOptions: [
+      {
+        auth: 'accessKey',
+        label: 'Access key',
+        fields: [
+          { key: 'accessKeyId', label: 'Access key ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'secretAccessKey', label: 'Secret access key', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'DelimitedText',
+        name: 'Delimited text (CSV)',
+        locationFields: [
+          { key: 'bucketName', label: 'Bucket', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'folderPath', label: 'Folder path', kind: 'text', supportsDynamic: true },
+          { key: 'fileName', label: 'File name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+      {
+        type: 'Parquet',
+        name: 'Parquet',
+        locationFields: [
+          { key: 'bucketName', label: 'Bucket', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'folderPath', label: 'Folder path', kind: 'text', supportsDynamic: true },
+          { key: 'fileName', label: 'File name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Hdfs',
+    name: 'HDFS',
+    category: 'file',
+    icon: 'FolderRegular',
+    description: 'Hadoop Distributed File System over WebHDFS. Copy source only, through a self-hosted IR.',
+    needsShir: true,
+    commonFields: [
+      { key: 'url', label: 'URL (WebHDFS endpoint)', kind: 'text', required: true, placeholder: 'http://myhost:50070/webhdfs/v1', supportsDynamic: true },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'Windows',
+        fields: [
+          { key: 'userName', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'DelimitedText',
+        name: 'Delimited text (CSV)',
+        locationFields: [
+          { key: 'folderPath', label: 'Folder path', kind: 'text', supportsDynamic: true },
+          { key: 'fileName', label: 'File name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+      {
+        type: 'Binary',
+        name: 'Binary',
+        locationFields: [
+          { key: 'folderPath', label: 'Folder path', kind: 'text', supportsDynamic: true },
+          { key: 'fileName', label: 'File name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+
+  // --------------------------------------------------- Generic protocol ----
+  {
+    type: 'Odbc',
+    name: 'ODBC',
+    category: 'generic-protocol',
+    icon: 'PlugConnectedRegular',
+    description: 'Generic ODBC data store via an installed ODBC driver. Runs through a self-hosted IR.',
+    needsShir: true,
+    commonFields: [
+      { key: 'connectionString', label: 'Connection string', kind: 'multiline', required: true, hint: 'Non-credential portion of the ODBC connection string (e.g. Driver={…};Server=…).', supportsDynamic: true },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'userName', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'OdbcTable',
+        name: 'ODBC table',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: true,
+  },
+  {
+    type: 'Web',
+    name: 'Web table (HTML)',
+    category: 'generic-protocol',
+    icon: 'GlobeRegular',
+    description: 'Extract a table from an HTML web page. Copy source only, through a self-hosted IR.',
+    needsShir: true,
+    commonFields: [
+      { key: 'url', label: 'URL', kind: 'text', required: true, placeholder: 'https://en.wikipedia.org/wiki/…', supportsDynamic: true },
+    ],
+    authOptions: [
+      { auth: 'anonymous', label: 'Anonymous', fields: [] },
+      {
+        auth: 'basic',
+        label: 'Basic',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+      {
+        auth: 'key',
+        label: 'Client certificate',
+        fields: [
+          { key: 'pfx', label: 'Certificate (base64 PFX)', kind: 'multiline', required: true, secret: true },
+          { key: 'password', label: 'Certificate password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'WebTable',
+        name: 'Web table',
+        locationFields: [
+          { key: 'index', label: 'Table index', kind: 'number', required: true, hint: 'Zero-based index of the table on the page.', supportsDynamic: true },
+          { key: 'path', label: 'Relative URL', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+
+  // ------------------------------------------------------ Services & apps ----
+  {
+    type: 'DynamicsCrm',
+    name: 'Dynamics CRM',
+    category: 'services-and-apps',
+    icon: 'AppsRegular',
+    description: 'Microsoft Dynamics CRM (online or on-premises IFD). Office365 user, AAD service principal, or managed identity.',
+    clouds: ['commercial', 'gov'],
+    commonFields: [
+      {
+        key: 'deploymentType',
+        label: 'Deployment type',
+        kind: 'select',
+        required: true,
+        options: [
+          { value: 'Online', label: 'Online' },
+          { value: 'OnPremisesWithIfd', label: 'On-premises (IFD)' },
+        ],
+      },
+      { key: 'serviceUri', label: 'Service URL', kind: 'text', placeholder: 'https://org.crm.dynamics.com', showIf: { key: 'deploymentType', equals: 'Online' }, supportsDynamic: true },
+      { key: 'organizationName', label: 'Organization name', kind: 'text', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Office 365 (user)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+      {
+        auth: 'servicePrincipal',
+        label: 'AAD service principal',
+        fields: [
+          SP_ID,
+          {
+            key: 'servicePrincipalCredentialType',
+            label: 'Credential type',
+            kind: 'select',
+            required: true,
+            options: [
+              { value: 'ServicePrincipalKey', label: 'Key / secret' },
+              { value: 'ServicePrincipalCert', label: 'Certificate (Key Vault)' },
+            ],
+          },
+          { key: 'servicePrincipalCredential', label: 'Service principal credential', kind: 'password', required: true, secret: true },
+        ],
+      },
+      { auth: 'managedIdentity', label: 'Managed identity', fields: [] },
+    ],
+    datasetTypes: [
+      {
+        type: 'DynamicsCrmEntity',
+        name: 'Dynamics CRM entity',
+        locationFields: [
+          { key: 'entityName', label: 'Entity (table) logical name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: true,
+  },
+  {
+    type: 'SalesforceServiceCloudV2',
+    name: 'Salesforce Service Cloud',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Salesforce Service Cloud (V2 connector, Bulk API 2.0). OAuth 2.0 client-credentials auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'environmentUrl', label: 'Environment URL', kind: 'text', required: true, placeholder: 'https://[domain].my.salesforce.com', supportsDynamic: true },
+      { key: 'apiVersion', label: 'API version', kind: 'text', placeholder: '55.0 (>= 47.0)', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'OAuth 2.0 client credentials',
+        fields: [
+          { key: 'clientId', label: 'Client ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'clientSecret', label: 'Client secret', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'SalesforceServiceCloudV2Object',
+        name: 'Salesforce Service Cloud object',
+        locationFields: [
+          { key: 'objectApiName', label: 'Object API name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: true,
+  },
+  {
+    type: 'SalesforceMarketingCloud',
+    name: 'Salesforce Marketing Cloud',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Salesforce Marketing Cloud. Copy source only. OAuth 2.0 client-credentials auth.',
+    clouds: ['commercial'],
+    commonFields: [],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'OAuth 2.0 client credentials',
+        fields: [
+          { key: 'clientId', label: 'Client ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'clientSecret', label: 'Client secret', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'SalesforceMarketingCloudObject',
+        name: 'Marketing Cloud object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'ServiceNowV2',
+    name: 'ServiceNow',
+    category: 'services-and-apps',
+    icon: 'AppsRegular',
+    description: 'ServiceNow (V2 connector with query builder). Basic or OAuth 2.0 auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'https://<instance>.service-now.com', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+      {
+        auth: 'oauth2',
+        label: 'OAuth 2.0',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+          { key: 'clientId', label: 'Client ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'clientSecret', label: 'Client secret', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'ServiceNowV2Object',
+        name: 'ServiceNow table',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Hubspot',
+    name: 'HubSpot',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'HubSpot marketing platform. Copy source only. OAuth 2.0 auth.',
+    clouds: ['commercial'],
+    commonFields: [],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'OAuth 2.0',
+        fields: [
+          { key: 'clientId', label: 'Client ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'clientSecret', label: 'Client secret', kind: 'password', required: true, secret: true },
+          { key: 'accessToken', label: 'Access token', kind: 'password', secret: true },
+          { key: 'refreshToken', label: 'Refresh token', kind: 'password', secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'HubspotObject',
+        name: 'HubSpot object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Marketo',
+    name: 'Marketo',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Adobe Marketo Engage. Copy source only. OAuth 2.0 (client ID + secret) auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: '123-ABC-321.mktorest.com', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'OAuth 2.0',
+        fields: [
+          { key: 'clientId', label: 'Client ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'clientSecret', label: 'Client secret', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'MarketoObject',
+        name: 'Marketo object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'QuickBooks',
+    name: 'QuickBooks Online',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Intuit QuickBooks Online. Copy source only. OAuth 2.0 auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'quickbooks.api.intuit.com', supportsDynamic: true },
+      { key: 'companyId', label: 'Company ID', kind: 'text', required: true, supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'OAuth 2.0',
+        fields: [
+          { key: 'consumerKey', label: 'Client ID (consumer key)', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'consumerSecret', label: 'Client secret (consumer secret)', kind: 'password', required: true, secret: true },
+          { key: 'accessToken', label: 'Access token', kind: 'password', required: true, secret: true },
+          { key: 'refreshToken', label: 'Refresh token', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'QuickBooksObject',
+        name: 'QuickBooks object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Xero',
+    name: 'Xero',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Xero accounting. Copy source only. OAuth 2.0 auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'api.xero.com', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'OAuth 2.0',
+        fields: [
+          { key: 'consumerKey', label: 'Consumer key', kind: 'password', required: true, secret: true },
+          { key: 'privateKey', label: 'Private key (PEM)', kind: 'multiline', required: true, secret: true, hint: 'Full .pem contents including newlines.' },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'XeroObject',
+        name: 'Xero object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Zoho',
+    name: 'Zoho',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Zoho CRM. Copy source only. Access-token auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'crm.zoho.com/crm/private', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'token',
+        label: 'Access token',
+        fields: [
+          { key: 'accessToken', label: 'Access token', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'ZohoObject',
+        name: 'Zoho object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Square',
+    name: 'Square',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Square payments platform. Copy source only. OAuth 2.0 auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'mystore.mysquare.com', supportsDynamic: true },
+      { key: 'redirectUri', label: 'Redirect URI', kind: 'text', placeholder: 'http://localhost:2500', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'OAuth 2.0',
+        fields: [
+          { key: 'clientId', label: 'Client ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'clientSecret', label: 'Client secret', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'SquareObject',
+        name: 'Square object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Shopify',
+    name: 'Shopify',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Shopify commerce platform. Copy source only. Access-token auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'mystore.myshopify.com', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'token',
+        label: 'Access token',
+        fields: [
+          { key: 'accessToken', label: 'Access token', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'ShopifyObject',
+        name: 'Shopify object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Concur',
+    name: 'SAP Concur',
+    category: 'services-and-apps',
+    icon: 'AppsRegular',
+    description: 'SAP Concur travel & expense. Copy source only. User + password + client ID.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'clientId', label: 'Client ID', kind: 'text', required: true, hint: 'Application client_id from Concur App Management.', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'User name + password',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'ConcurObject',
+        name: 'Concur object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Jira',
+    name: 'Jira',
+    category: 'services-and-apps',
+    icon: 'AppsRegular',
+    description: 'Atlassian Jira. Copy source only. User + password (or API token) auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: 'jira.example.com', supportsDynamic: true },
+      { key: 'port', label: 'Port', kind: 'number', placeholder: '443' },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (user + password / API token)',
+        fields: [
+          { key: 'username', label: 'User name', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'password', label: 'Password / API token', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'JiraObject',
+        name: 'Jira object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Magento',
+    name: 'Magento',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Magento commerce. Copy source only. Access-token auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'host', label: 'Host', kind: 'text', required: true, placeholder: '192.168.222.110/magento3', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'token',
+        label: 'Access token',
+        fields: [
+          { key: 'accessToken', label: 'Access token', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'MagentoObject',
+        name: 'Magento object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Eloqua',
+    name: 'Oracle Eloqua',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Oracle Eloqua marketing. Copy source only. Basic (sitename/username + password) auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, placeholder: 'eloqua.example.com', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'basic',
+        label: 'Basic (sitename/username + password)',
+        fields: [
+          { key: 'username', label: 'User name (sitename/username)', kind: 'text', required: true, placeholder: 'Eloqua/Alice', supportsDynamic: true },
+          { key: 'password', label: 'Password', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'EloquaObject',
+        name: 'Eloqua object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Responsys',
+    name: 'Oracle Responsys',
+    category: 'services-and-apps',
+    icon: 'CloudRegular',
+    description: 'Oracle Responsys marketing. Copy source only. Client ID + secret auth.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'endpoint', label: 'Endpoint', kind: 'text', required: true, supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'Client credentials',
+        fields: [
+          { key: 'clientId', label: 'Client ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'clientSecret', label: 'Client secret', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'ResponsysObject',
+        name: 'Responsys object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'GoogleAdWords',
+    name: 'Google Ads',
+    category: 'services-and-apps',
+    icon: 'DataTrendingRegular',
+    description: 'Google Ads (AdWords) reporting. Copy source only. OAuth 2.0 user auth + developer token.',
+    clouds: ['commercial'],
+    commonFields: [
+      { key: 'clientCustomerID', label: 'Client customer ID', kind: 'text', supportsDynamic: true },
+      { key: 'loginCustomerID', label: 'Login customer ID (manager)', kind: 'text', supportsDynamic: true },
+      { key: 'googleAdsApiVersion', label: 'API version', kind: 'text', placeholder: 'v14', supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'oauth2',
+        label: 'User authentication (OAuth)',
+        fields: [
+          { key: 'clientId', label: 'Client ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'clientSecret', label: 'Client secret', kind: 'password', required: true, secret: true },
+          { key: 'refreshToken', label: 'Refresh token', kind: 'password', required: true, secret: true },
+          { key: 'developerToken', label: 'Developer token', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'GoogleAdWordsObject',
+        name: 'Google Ads object',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
+        ],
+      },
+    ],
+    supportsSource: true,
+    supportsSink: false,
+  },
+  {
+    type: 'Office365',
+    name: 'Microsoft 365 (Office 365)',
+    category: 'services-and-apps',
+    icon: 'AppsRegular',
+    description: 'Microsoft 365 data via the Microsoft Graph data connect. Copy source only. AAD service-principal auth.',
+    clouds: ['commercial', 'gov'],
+    commonFields: [
+      { key: 'office365TenantId', label: 'Office 365 tenant ID', kind: 'text', required: true, supportsDynamic: true },
+      { key: 'servicePrincipalTenantId', label: 'Service principal tenant ID', kind: 'text', required: true, supportsDynamic: true },
+    ],
+    authOptions: [
+      {
+        auth: 'servicePrincipal',
+        label: 'AAD service principal',
+        fields: [
+          { key: 'servicePrincipalId', label: 'Service principal (client) ID', kind: 'text', required: true, supportsDynamic: true },
+          { key: 'servicePrincipalKey', label: 'Service principal key', kind: 'password', required: true, secret: true },
+        ],
+      },
+    ],
+    datasetTypes: [
+      {
+        type: 'Office365Table',
+        name: 'Microsoft 365 table',
+        locationFields: [
+          { key: 'tableName', label: 'Table name', kind: 'text', supportsDynamic: true },
         ],
       },
     ],
