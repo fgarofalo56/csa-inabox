@@ -45,6 +45,8 @@ import {
 } from '@/lib/azure/cosmos-client';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { resolveBundleItem, getBundle } from '@/lib/apps/content-bundles';
+import { substituteCellsPlaceholders } from '@/lib/apps/notebook-placeholders';
+import { appWantsSuperchargeSeed, runSuperchargeSeed } from '@/lib/apps/supercharge-seed';
 import { runProvisioning, type ProvisionReport } from '@/lib/install/provisioning-engine';
 
 export const runtime = 'nodejs';
@@ -238,10 +240,13 @@ async function runInstallJob(
         ...(bundle?.learnDoc ? { learnDoc: bundle.learnDoc } : {}),
       };
       // Notebook items: project the bundle's NotebookContent.cells into the
-      // editor's read shape so the notebook opens FULLY POPULATED.
+      // editor's read shape so the notebook opens FULLY POPULATED. Resolve the
+      // `{{ADLS_ACCOUNT}}` deployment placeholder to the real Azure-native ADLS
+      // account (LOOM_ADLS_ACCOUNT) so the persisted cells carry a valid abfss
+      // host — never the raw token that would 404 at read time.
       const nbc = bundle?.content as { kind?: string; cells?: unknown[]; defaultLang?: string } | undefined;
       if (nbc?.kind === 'notebook' && Array.isArray(nbc.cells) && nbc.cells.length > 0) {
-        state.cells = nbc.cells;
+        state.cells = substituteCellsPlaceholders(nbc.cells as Array<{ source?: unknown }>);
         state.defaultLang = nbc.defaultLang || 'pyspark';
       }
       const key = `${ref.type}::${displayName.toLowerCase()}`;
@@ -363,6 +368,22 @@ async function runInstallJob(
           result: { status: 'failed', error: e?.message || String(e), steps: [] },
         })),
       };
+    }
+
+    // ── Sample-data seed (Supercharge medallion apps) ───────────────────────
+    // Land the Bronze SOURCE parquet under Files/output/* + pre-create the
+    // lh_bronze/lh_silver/lh_gold Spark databases so the installed notebooks
+    // have real data to ingest and the medallion flows end-to-end. Best-effort:
+    // a seed failure/gate is recorded but never fails the install.
+    if (deploy && appWantsSuperchargeSeed(app.id)) {
+      await persist({ phase: 'seeding' });
+      const seedPool = (process.env.LOOM_SYNAPSE_SPARK_POOL || process.env.LOOM_SYNAPSE_DEDICATED_POOL || 'loompool').trim();
+      try {
+        const seedRes = await runSuperchargeSeed(seedPool);
+        await persist({ seed: { status: seedRes.status, error: seedRes.error, gate: seedRes.gate, at: new Date().toISOString() } });
+      } catch (e: any) {
+        await persist({ seed: { status: 'failed', error: e?.message || String(e), at: new Date().toISOString() } });
+      }
     }
 
     // ── Finalize: derive terminal status from the provision outcome ──────────

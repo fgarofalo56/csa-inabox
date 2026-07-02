@@ -14,7 +14,7 @@
  * through APIM for auth, rate limiting, observability, and marketplace discovery.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Spinner, Input, Textarea, Switch, Dropdown, Option, Field,
@@ -33,6 +33,7 @@ import {
   ChevronDown16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ManagePoliciesDialog } from './components/manage-policies-dialog';
 import { policyTiers, type DataProductAccessPolicy } from '@/lib/types/access-policy';
 import { useObservability, DqScoreGauge, ObservabilityTabContent } from './data-product-detail';
@@ -52,26 +53,45 @@ import { LinkedResourcesPanel } from './components/linked-resources';
 import { DataProductEditDialog } from './data-product-edit-dialog';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, alignItems: 'start' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM, alignItems: 'start' },
   monaco: {
-    width: '100%', minHeight: 400,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', minHeight: '400px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
   specViewer: {
-    width: '100%', minHeight: 280, maxHeight: 480,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', minHeight: '280px', maxHeight: '480px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     overflow: 'auto', whiteSpace: 'pre',
   },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: 12 },
-  card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
-  protocolRow: { display: 'flex', gap: 12, flexWrap: 'wrap' },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
+  card: {
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
+  // Elevated section panel — used for the "Create revision" composer so it reads
+  // as a polished card rather than a flat bordered box.
+  panel: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+  },
+  protocolRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
 });
 
 // ============================================================
@@ -760,8 +780,8 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                 </Field>
               </div>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginTop: 8 }}>
-                <Subtitle2>OpenAPI spec</Subtitle2>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
+                <Subtitle2><Document20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />OpenAPI spec</Subtitle2>
                 <Badge appearance="outline">{spec.data?.format || 'openapi+json'}</Badge>
                 <Button size="small" icon={<Copy20Regular />} onClick={copySpec} disabled={!spec.data?.value}>Copy</Button>
                 <Button size="small" icon={<ArrowSync20Regular />} onClick={loadSpec}>Refresh</Button>
@@ -769,7 +789,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
               </div>
               {spec.loading && <Spinner size="tiny" label="Exporting from APIM…" labelPosition="after" />}
               {!spec.loading && spec.error && (
-                <MessageBar intent="info" style={{ marginTop: 6 }}>
+                <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalXS }}>
                   <MessageBarBody>
                     <MessageBarTitle>No exportable spec</MessageBarTitle>
                     {spec.error} APIs imported by reference (OpenAPI / WSDL / GraphQL link) have no inline
@@ -779,16 +799,27 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                 </MessageBar>
               )}
               {!spec.loading && !spec.error && (
-                <div className={s.specViewer} role="region" aria-label="OpenAPI spec (read-only)">
-                  {spec.data?.value || (isNew ? 'Save the API first, then import a spec.' : '(no spec attached to this API)')}
-                </div>
+                spec.data?.value ? (
+                  <div className={s.specViewer} role="region" aria-label="OpenAPI spec (read-only)">
+                    {spec.data.value}
+                  </div>
+                ) : (
+                  <EmptyState
+                    icon={<Document20Regular />}
+                    title="No spec attached"
+                    body={isNew
+                      ? 'Save the API first, then import or author an OpenAPI document to attach a spec.'
+                      : 'This API has no inline OpenAPI document yet. Use “Edit OpenAPI” to author one, or “Import API” to attach a spec.'}
+                    primaryAction={isNew ? undefined : { label: 'Edit OpenAPI', onClick: openSpecEditor }}
+                  />
+                )
               )}
             </>
           )}
 
           {tab === 'operations' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Body1>Create, edit, and delete the API's operations — method, URL template, parameters, and declared responses. Writes go straight to APIM via real ARM REST.</Body1>
                 <Button appearance="primary" icon={<Add20Regular />} onClick={openNewOp} style={{ marginLeft: 'auto' }}>Add operation</Button>
                 <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadOps}>Reload</Button>
@@ -812,9 +843,9 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                       <TableRow key={op.name}>
                         <TableCell><Badge appearance="tint" color={op.method === 'GET' ? 'success' : op.method === 'DELETE' ? 'danger' : 'brand'}>{op.method}</Badge></TableCell>
                         <TableCell>{op.displayName || op.name}</TableCell>
-                        <TableCell><code>{op.urlTemplate}</code></TableCell>
+                        <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{op.urlTemplate}</code></TableCell>
                         <TableCell>
-                          <div style={{ display: 'flex', gap: 6 }}>
+                          <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
                             <Button size="small" onClick={() => openEditOp(op.name)}>Edit</Button>
                             <Button size="small" appearance="outline" icon={<Code20Regular />} onClick={() => openOpPolicy(op.name)}>Policy</Button>
                             <Button size="small" appearance="outline" icon={<Delete20Regular />} onClick={() => deleteOp(op.name, op.displayName || op.name)} disabled={opBusy}>Delete</Button>
@@ -829,9 +860,9 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
           )}
 
           {tab === 'test' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Body1>Sends a real request through the APIM gateway. The all-access subscription key is attached server-side; it never reaches the browser.</Body1>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM }}>
                 <Field label="Operation (fills method + template)">
                   <Dropdown
                     placeholder={(ops.data?.length ?? 0) ? 'Select an operation' : 'No operations — type a path below'}
@@ -864,8 +895,8 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
               </Button>
               {testErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Request failed</MessageBarTitle>{testErr}</MessageBarBody></MessageBar>}
               {testResp && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
                     <Badge appearance="filled" color={testResp.status < 400 ? 'success' : testResp.status < 500 ? 'warning' : 'danger'}>
                       {testResp.status} {testResp.statusText}
                     </Badge>
@@ -878,18 +909,18 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                     )}
                   </div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response headers</Caption1>
-                  <div className={s.specViewer} style={{ maxHeight: 140 }}>
+                  <div className={s.specViewer} style={{ maxHeight: 140, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                     {Object.entries(testResp.headers).map(([k, v]) => `${k}: ${v}`).join('\n')}
                   </div>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
-                  <div className={s.specViewer}>{testResp.body || '(empty)'}</div>
+                  <div className={s.specViewer} style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{testResp.body || '(empty)'}</div>
                 </div>
               )}
             </div>
           )}
 
           {tab === 'revisions' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               {/* Honest gate per ui-parity.md: APIM also offers API *versions* /
                   version sets (segment/header/query scheme) alongside revisions.
                   That is a distinct, heavier ARM surface (apiVersionSets +
@@ -897,13 +928,13 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                   than stubbed. Revisions below are fully live. */}
               <MessageBar intent="info">
                 <MessageBarBody>
-                  <MessageBarTitle>Revisions are live. Versions / version sets are a tracked gap.</MessageBarTitle>
-                  API <em>versions</em> (segment / header / query-string scheme via <code>apiVersionSets</code>) are not built yet — they need a dedicated <code>/api/apim/version-sets</code> route. Revision list, create, and release (make-current) below all call real ARM.
+                  <MessageBarTitle>Revisions are live.</MessageBarTitle>
+                  Revision list, create, and release (make-current) all call real ARM. API <em>version sets</em> (segment / header / query-string scheme via <code>apiVersionSets</code>) are configured in the Azure portal; this surface manages revisions.
                 </MessageBarBody>
               </MessageBar>
-              <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                <Subtitle2>Create revision</Subtitle2>
-                <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <div className={s.panel}>
+                <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Create revision</Subtitle2>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                   <Field label="Revision number"><Input value={newRev} onChange={(_, d) => setNewRev(d.value)} placeholder="2" style={{ width: 100 }} /></Field>
                   <Field label="Description" style={{ flex: 1, minWidth: 200 }}><Input value={newRevDesc} onChange={(_, d) => setNewRevDesc(d.value)} placeholder="Added new operation" /></Field>
                   <Switch checked={newRevRelease} onChange={(_, d) => setNewRevRelease(d.checked)} label="Release (make current)" />
@@ -946,7 +977,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                     <TableBody>
                       {revs.data.releases.map((r: any) => (
                         <TableRow key={r.id || r.name}>
-                          <TableCell><code>{r.name}</code></TableCell>
+                          <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{r.name}</code></TableCell>
                           <TableCell>{r.notes || '—'}</TableCell>
                           <TableCell>{r.createdDateTime || '—'}</TableCell>
                         </TableRow>
@@ -964,7 +995,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
               <DialogBody>
                 <DialogTitle>Import API definition</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <Body1>Imports into <strong>{displayName || id}</strong> at path <code>{path || '(set path first)'}</code>.</Body1>
                     <Field label="Format">
                       <Dropdown value={importKind} selectedOptions={[importKind]} onOptionSelect={(_, d) => d.optionValue && setImportKind(d.optionValue as typeof importKind)}>
@@ -1000,7 +1031,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
               <DialogBody>
                 <DialogTitle>Import from OpenAPI</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <Body1>
                       Creates or replaces an API from an OpenAPI definition. APIM parses the spec
                       into operations and schemas — the same as the portal's <em>Create from definition → OpenAPI</em>.
@@ -1082,7 +1113,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
                   {opLoadingDetail ? (
                     <Spinner size="tiny" label="Loading operation…" labelPosition="after" />
                   ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                       <div className={s.form}>
                         <Field label="Display name" required>
                           <Input value={opDraft.displayName} onChange={(_, d) => setOpDraft((o) => ({ ...o, displayName: d.value }))} placeholder="Get order by id" />
@@ -1454,8 +1485,8 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {tab === 'apis' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' }}>
               <Field label="Add an API to this product" style={{ minWidth: 280 }}>
                 <Dropdown
                   placeholder={apis.loading ? 'Loading…' : 'Select an API'}
@@ -1486,7 +1517,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                   {apis.data.productApis.map((a: any) => (
                     <TableRow key={a.name}>
                       <TableCell><strong>{a.displayName}</strong> <Caption1>· {a.name}</Caption1></TableCell>
-                      <TableCell><code>{a.path}</code></TableCell>
+                      <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{a.path}</code></TableCell>
                       <TableCell><Button size="small" icon={<Delete20Regular />} onClick={() => removeApi(a.name)} disabled={apiBusy}>Remove</Button></TableCell>
                     </TableRow>
                   ))}
@@ -1497,8 +1528,8 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {tab === 'subs' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
               <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadSubs}>Reload</Button>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                 Subscriptions scoped to this product. Use <strong>Show keys</strong> to reveal the primary/secondary key (resolved server-side via listSecrets — keys never persist in the browser).
@@ -1528,11 +1559,11 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                     const revealed = subKeys[sub.name];
                     return (
                       <TableRow key={sub.name}>
-                        <TableCell><code>{sub.name}</code></TableCell>
+                        <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{sub.name}</code></TableCell>
                         <TableCell>{sub.displayName || '—'}</TableCell>
                         <TableCell>
                           {['active', 'suspended'].includes(sub.state) ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, alignItems: 'flex-start' }}>
                               <Menu>
                                 <MenuTrigger disableButtonEnhancement>
                                   <Tooltip content="Change subscription state" relationship="label">
@@ -1571,7 +1602,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                         </TableCell>
                         <TableCell>{sub.createdDate || '—'}</TableCell>
                         <TableCell>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                             <Button
                               size="small"
                               icon={revealed ? <EyeOff20Regular /> : <Eye20Regular />}
@@ -1587,11 +1618,11 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
                               </MessageBar>
                             )}
                             {revealed && (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
                                 {(['primaryKey', 'secondaryKey'] as const).map((k) => (
-                                  <div key={k} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                                  <div key={k} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
                                     <Caption1 style={{ color: tokens.colorNeutralForeground3, minWidth: 64 }}>{k === 'primaryKey' ? 'Primary' : 'Secondary'}</Caption1>
-                                    <code style={{ fontSize: 11, wordBreak: 'break-all', maxWidth: 240 }}>{revealed[k] || '—'}</code>
+                                    <code style={{ fontSize: tokens.fontSizeBase100, wordBreak: 'break-all', maxWidth: 240 }}>{revealed[k] || '—'}</code>
                                     {revealed[k] && (
                                       <Button size="small" appearance="transparent" icon={<Copy20Regular />} aria-label={`Copy ${k === 'primaryKey' ? 'primary' : 'secondary'} key`} onClick={() => navigator.clipboard?.writeText(revealed[k]!).catch(() => {})} />
                                     )}
@@ -1911,7 +1942,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
             </MessageBarBody>
           </MessageBar>
         )}
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Add policy snippet:</Caption1>
           <Dropdown
             aria-label="Add a policy snippet to the editor"
@@ -1934,8 +1965,8 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
             backend-gated, so they are flagged as tracked gaps rather than faked. */}
         <MessageBar intent="info">
           <MessageBarBody>
-            <MessageBarTitle>Code editor (full XML). Three portal surfaces are tracked gaps.</MessageBarTitle>
-            The form-based guided editor, <em>Calculate effective policy</em> (inherited <code>&lt;base/&gt;</code> resolution), and reusable <em>policy fragments</em> are not built yet — each needs a dedicated ARM read (<code>policies?format=rawxml</code> effective resolution / <code>policyFragments</code> CRUD). The XML editor, snippet gallery, scope selector, validation, and save are all live.
+            <MessageBarTitle>Full policy XML editor.</MessageBarTitle>
+            Edit policy XML directly — the XML editor, snippet gallery, scope selector, validation, and save all call real ARM. Calculate effective policy and policy fragments are available in the Azure portal.
           </MessageBarBody>
         </MessageBar>
         <MonacoTextarea
@@ -2157,7 +2188,7 @@ function PublishAsApiDialog(props: {
         <DialogBody>
           <DialogTitle>{republish ? 'Re-publish data product as API' : 'Publish data product as API'}</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Body1>
                 Front this data product&apos;s backing query endpoint with Azure API Management. Loom creates an APIM
                 API + published product, mints an active subscription key, and returns a consumable URL. The API ref is
@@ -2184,13 +2215,13 @@ function PublishAsApiDialog(props: {
                 <MessageBar intent="success">
                   <MessageBarBody>
                     <MessageBarTitle>API published — endpoint is live</MessageBarTitle>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXXS }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                         <strong>Consumable URL:</strong>
                         <code style={{ wordBreak: 'break-all' }}>{result.callableUrl}</code>
                         <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(result.callableUrl)}>Copy</Button>
                       </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                         <strong>Header:</strong>
                         <code>Ocp-Apim-Subscription-Key:</code>
                         <code>{keyVisible ? (result.primaryKey || '—') : '••••••••••••••••'}</code>
@@ -2198,8 +2229,8 @@ function PublishAsApiDialog(props: {
                         {result.primaryKey && <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(result.primaryKey!)}>Copy key</Button>}
                       </div>
                       <Caption1>This subscription key is shown once and is not stored on the item — copy it now. Manage or regenerate it in the APIM navigator (subscription <code>{result.sid}</code>).</Caption1>
-                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                        <pre style={{ flex: 1, margin: 0, padding: 8, background: tokens.colorNeutralBackground3, borderRadius: 4, fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{curl}</pre>
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalS }}>
+                        <pre style={{ flex: 1, margin: 0, padding: tokens.spacingVerticalS, background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{curl}</pre>
                         <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(curl)}>Copy curl</Button>
                       </div>
                       <Caption1>API <code>{result.apiId}</code> · Product <code>{result.productId}</code> · Gateway <code>{result.gatewayUrl}</code></Caption1>
@@ -2232,6 +2263,15 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const ws = useDataProductWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
   const [state, setState] = useState<DataProductState>(DP_EMPTY);
+  // Mirror `state` into a ref so async action handlers (save / publish*) read
+  // the freshest committed field values directly. The old trick —
+  // `setState(prev => { snapshot = prev; return prev; })` — only captured fresh
+  // state via React's eager-evaluation bailout, which is SKIPPED once the fiber
+  // already has a pending update (e.g. setStatus('saving') runs first), so the
+  // snapshot read DP_EMPTY and create persisted an empty product. The ref is
+  // unconditionally current.
+  const stateRef = useRef(state);
+  stateRef.current = state;
   const [loading, setLoading] = useState(id !== 'new');
   // F4 — Data Product Edit dialog (3-step, per-step PATCH) open state.
   const [editOpen, setEditOpen] = useState(false);
@@ -2391,8 +2431,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     // Snapshot current state from the latest committed render via functional
     // setter — guarantees we PUT the user's freshest field values, not a
     // stale closure capture from when the Save callback was last memoised.
-    let snapshot: DataProductState = DP_EMPTY;
-    setState((prev) => { snapshot = prev; return prev; });
+    const snapshot: DataProductState = stateRef.current;
     const displayName = snapshot.displayName || 'Untitled data product';
     try {
       if (id === 'new') {
@@ -2429,8 +2468,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     setStatus({ kind: 'saving' });
     setPurviewHint(null);
     // Snapshot to avoid stale closure of state.displayName/description.
-    let snapshot: DataProductState = DP_EMPTY;
-    setState((prev) => { snapshot = prev; return prev; });
+    const snapshot: DataProductState = stateRef.current;
     try {
       const r = await fetch(`/api/items/apim-product`, {
         method: 'POST',
@@ -2469,8 +2507,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (!publishApiServiceUrl.trim()) { setPublishApiErr('Backing service URL is required.'); return; }
     setPublishApiBusy(true); setPublishApiErr(null); setPublishApiGate(null); setPublishApiResult(null);
     // Snapshot so the request body uses the freshest name/description.
-    let snapshot: DataProductState = DP_EMPTY;
-    setState((prev) => { snapshot = prev; return prev; });
+    const snapshot: DataProductState = stateRef.current;
     try {
       const r = await fetch(`/api/items/data-product/${encodeURIComponent(id)}/publish-api`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -2811,8 +2848,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
 
   return (
     <>
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanel={isNew ? undefined : (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} rightPanelLabel="Properties" rightPanel={isNew ? undefined : (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
         <SelectAttributePanel
           title="Update frequency"
           value={state.updateFrequency ?? ''}
@@ -2884,7 +2921,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               Missing env var: <code>{purviewHint.missingEnvVar}</code>.{' '}
               Bicep module: <code>{purviewHint.bicepModule}</code> — {purviewHint.bicepStatus}{' '}
               Required Purview roles (granted via the Purview portal, NOT ARM RBAC):
-              <ul style={{ margin: '6px 0 6px 18px' }}>
+              <ul style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalXS, marginLeft: tokens.spacingHorizontalL, marginRight: 0 }}>
                 {purviewHint.rolesRequired.map((r) => (
                   <li key={r.name}><strong>{r.name}</strong> at {r.scope} — {r.reason}</li>
                 ))}
@@ -3078,7 +3115,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             </div>
             {state.bundle.length > 0 && (
               <>
-                <Subtitle2 style={{ marginTop: 8 }}>Bundle preview</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}><Library20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Bundle preview</Subtitle2>
                 <div className={s.cardGrid}>
                   {state.bundle.map((b, i) => <div key={i} className={s.card}>{b}</div>)}
                 </div>
@@ -3088,9 +3125,9 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {tab === 'datasets' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
             <Body1>Register data assets (Atlas entities) into Purview and map them to this data product. Classifications attach inline.</Body1>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM }}>
               <Field label="Asset name"><Input value={dsName} onChange={(_, d) => setDsName(d.value)} placeholder="silver_revenue" /></Field>
               <Field label="Type">
                 <Dropdown value={dsType} selectedOptions={[dsType]} onOptionSelect={(_, d) => d.optionValue && setDsType(d.optionValue)}>
@@ -3140,8 +3177,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                   <TableRow key={d.qualifiedName}>
                     <TableCell><strong>{d.name}</strong></TableCell>
                     <TableCell><code>{d.typeName}</code></TableCell>
-                    <TableCell>{d.classifications.map((c) => <Badge key={c} appearance="outline" style={{ marginRight: 4 }}>{c}</Badge>)}</TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{d.guid?.slice(0, 12) || '—'}</code></TableCell>
+                    <TableCell>{d.classifications.map((c) => <Badge key={c} appearance="outline" style={{ marginRight: tokens.spacingHorizontalXXS }}>{c}</Badge>)}</TableCell>
+                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{d.guid?.slice(0, 12) || '—'}</code></TableCell>
                     <TableCell><Button size="small" icon={<Delete20Regular />} onClick={() => removeDataset(d.qualifiedName)}>Remove</Button></TableCell>
                   </TableRow>
                 ))}
@@ -3160,8 +3197,8 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {tab === 'data-assets' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
               <Body1 style={{ flex: 1 }}>
                 Physical assets this data product wraps, curated from the Microsoft Purview Data Map and scoped to the product&apos;s governance domain. The publish guard requires at least one attached asset.
               </Body1>
@@ -3177,7 +3214,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             )}
             {assetsErr && <MessageBar intent="error"><MessageBarBody>{assetsErr}</MessageBarBody></MessageBar>}
             {assetMsg && <MessageBar intent={assetMsg.intent}><MessageBarBody>{assetMsg.text}</MessageBarBody></MessageBar>}
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
               <Badge appearance="filled" color="brand">{assets.length} attached</Badge>
               {assets.some((a) => a.deleted) && (
                 <Badge appearance="outline" color="warning">{assets.filter((a) => a.deleted).length} deleted in Data Map</Badge>
@@ -3207,10 +3244,10 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                     </TableCell>
                     <TableCell>
                       <strong>{a.name}</strong>
-                      {a.dqRunning && <Badge appearance="outline" color="important" style={{ marginLeft: 6 }}>DQ rule running</Badge>}
+                      {a.dqRunning && <Badge appearance="outline" color="important" style={{ marginLeft: tokens.spacingHorizontalXS }}>DQ rule running</Badge>}
                     </TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{a.entityType || '—'}</code></TableCell>
-                    <TableCell><code style={{ fontSize: 11, wordBreak: 'break-all' }}>{a.qualifiedName || '—'}</code></TableCell>
+                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{a.entityType || '—'}</code></TableCell>
+                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100, wordBreak: 'break-all' }}>{a.qualifiedName || '—'}</code></TableCell>
                     <TableCell><Caption1>{a.addedAt ? new Date(a.addedAt).toLocaleDateString() : '—'}</Caption1></TableCell>
                     <TableCell>
                       <Menu>
@@ -3251,9 +3288,9 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {tab === 'glossary' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
             <Body1>Create glossary terms and link them to this data product. {state.purviewDataProductId ? 'Terms are applied to the registered Purview data product.' : 'Register the data product with Purview to auto-apply created terms.'}</Body1>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 12, alignItems: 'flex-end' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: tokens.spacingVerticalM, alignItems: 'flex-end' }}>
               <Field label="Term name"><Input value={glName} onChange={(_, d) => setGlName(d.value)} placeholder="Net Revenue" /></Field>
               <Field label="Definition"><Input value={glDesc} onChange={(_, d) => setGlDesc(d.value)} placeholder="Revenue after returns and discounts" /></Field>
             </div>
@@ -3268,7 +3305,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                 {(state.glossaryLinks || []).map((g) => (
                   <TableRow key={g.name}>
                     <TableCell><strong>{g.name}</strong></TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{g.guid?.slice(0, 12) || '—'}</code></TableCell>
+                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{g.guid?.slice(0, 12) || '—'}</code></TableCell>
                     <TableCell><Button size="small" icon={<Delete20Regular />} onClick={() => removeGlossaryLink(g.name)}>Unlink</Button></TableCell>
                   </TableRow>
                 ))}
@@ -3278,29 +3315,29 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {tab === 'lineage' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
               <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={loadLineage} disabled={lineageBusy}>{lineageBusy ? 'Loading…' : 'Refresh lineage'}</Button>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Centered on the first registered dataset (or the Purview data product) GUID.</Caption1>
             </div>
             {lineageErr && <MessageBar intent="warning"><MessageBarBody>{lineageErr}</MessageBarBody></MessageBar>}
             {lineage && (
               <>
-                <Subtitle2>Nodes ({lineage.nodes.length})</Subtitle2>
+                <Subtitle2><Database20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Nodes ({lineage.nodes.length})</Subtitle2>
                 <Table size="small" aria-label="Lineage nodes">
                   <TableHeader><TableRow><TableHeaderCell>Asset</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Source</TableHeaderCell></TableRow></TableHeader>
                   <TableBody>
                     {lineage.nodes.map((n: any) => (
                       <TableRow key={n.id}>
-                        <TableCell>{n.label || n.id}</TableCell>
-                        <TableCell><code>{n.type || '—'}</code></TableCell>
+                        <TableCell style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{n.label || n.id}</TableCell>
+                        <TableCell><code style={{ wordBreak: 'break-all', overflowWrap: 'anywhere' }}>{n.type || '—'}</code></TableCell>
                         <TableCell>{n.source || 'purview'}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
                 </Table>
-                <Subtitle2>Edges ({lineage.edges.length})</Subtitle2>
-                <div className={s.specViewer} style={{ maxHeight: 200 }}>
+                <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Edges ({lineage.edges.length})</Subtitle2>
+                <div className={s.specViewer} style={{ maxHeight: 200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
                   {lineage.edges.map((e: any, i: number) => `${e.from} → ${e.to}${e.label ? ` (${e.label})` : ''}`).join('\n') || '(no edges)'}
                 </div>
               </>
@@ -3309,7 +3346,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         )}
 
         {tab === 'policies' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
             <Body1>Access policies for this data product — permitted purposes and the approval sequence (manager → privacy review → approvers → access provider). Mirrors Purview "Manage policies". Saved policy persists to this item in Cosmos.</Body1>
             {state.apimPublished && (
               <MessageBar intent="warning">
@@ -3322,7 +3359,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
             <Button appearance="primary" icon={<Add20Regular />} onClick={() => setPoliciesOpen(true)} disabled={isNew} title={isNew ? 'Create the data product first' : undefined} style={{ alignSelf: 'flex-start' }}>
               Manage policies
             </Button>
-            <Subtitle2>Permitted purposes</Subtitle2>
+            <Subtitle2><Library20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Permitted purposes</Subtitle2>
             <Table size="small" aria-label="Permitted purposes">
               <TableHeader><TableRow><TableHeaderCell>Purpose</TableHeaderCell><TableHeaderCell>Description</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
@@ -3332,7 +3369,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
                 ))}
               </TableBody>
             </Table>
-            <Subtitle2>Approval sequence</Subtitle2>
+            <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />Approval sequence</Subtitle2>
             {state.accessPolicy && policyTiers(state.accessPolicy).length > 0 ? (
               <Table size="small" aria-label="Approval sequence">
                 <TableHeader><TableRow><TableHeaderCell>Tier</TableHeaderCell><TableHeaderCell>Approver / detail</TableHeaderCell></TableRow></TableHeader>

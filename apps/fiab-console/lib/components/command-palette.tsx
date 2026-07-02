@@ -42,11 +42,11 @@ const PAGES: Cmd[] = [
 ];
 
 const useStyles = makeStyles({
-  surface: { maxWidth: 640, width: '90vw', padding: 0 },
+  surface: { maxWidth: '640px', width: '90vw', padding: 0 },
   input: { width: '100%' },
-  list: { maxHeight: '60vh', overflowY: 'auto', marginTop: 8 },
+  list: { maxHeight: '60vh', overflowY: 'auto', marginTop: tokens.spacingVerticalS },
   item: {
-    display: 'flex', flexDirection: 'column', gap: 2,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS,
     padding: '8px 12px',
     cursor: 'pointer',
     borderLeft: '3px solid transparent',
@@ -58,14 +58,14 @@ const useStyles = makeStyles({
   groupLabel: {
     padding: '6px 12px',
     color: tokens.colorNeutralForeground3,
-    fontSize: 11,
+    fontSize: '11px',
     textTransform: 'uppercase',
   },
   hint: {
     padding: '6px 12px',
     color: tokens.colorNeutralForeground3,
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: 'flex', gap: 12,
+    display: 'flex', gap: tokens.spacingHorizontalM,
   },
 });
 

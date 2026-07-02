@@ -71,9 +71,9 @@ const DEFAULT_HINT: NonNullable<PurviewStatus['hint']> = {
 };
 
 const useStyles = makeStyles({
-  list: { marginTop: 6, marginBottom: 6, paddingLeft: 18, display: 'flex', flexDirection: 'column', gap: 2 },
-  roleRow: { fontSize: 12, color: tokens.colorNeutralForeground2 },
-  liveRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 },
+  list: { marginTop: tokens.spacingVerticalSNudge, marginBottom: tokens.spacingVerticalSNudge, paddingLeft: '18px', display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS },
+  roleRow: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 },
+  liveRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalM },
 });
 
 /**

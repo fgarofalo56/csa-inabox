@@ -39,9 +39,9 @@ const useStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalM },
   panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM },
   addRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
-  note: { color: tokens.colorNeutralForeground3, fontSize: '12px', lineHeight: 1.5 },
+  note: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, lineHeight: 1.5 },
   switchRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' },
-  formGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: 640 },
+  formGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, maxWidth: '640px' },
   tableWrap: { overflowX: 'auto' },
   actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
 });
@@ -72,7 +72,7 @@ function GateBar({ gate, error }: { gate?: GateInfo; error?: string }) {
         <MessageBarTitle>{gate ? 'Configuration required' : 'Error'}</MessageBarTitle>
         {gate?.reason ? `${gate.reason} ` : ''}
         {gate?.remediation || error}
-        {gate?.roleId && <Caption1 block style={{ marginTop: 4 }}>Network Contributor role id: {gate.roleId}</Caption1>}
+        {gate?.roleId && <Caption1 block style={{ marginTop: tokens.spacingVerticalXXS }}>Network Contributor role id: {gate.roleId}</Caption1>}
       </MessageBarBody>
     </MessageBar>
   );

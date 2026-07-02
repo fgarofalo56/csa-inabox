@@ -1659,6 +1659,39 @@ nav:
               - Variable Library: fiab/tutorials/editor-variable-library.md
               - Vector Store: fiab/tutorials/editor-vector-store.md
               - Warehouse: fiab/tutorials/editor-warehouse.md
+              - Event Grid Topic: fiab/tutorials/editor-event-grid-topic.md
+              - Event Hubs Namespace: fiab/tutorials/editor-event-hubs-namespace.md
+              - Health Check: fiab/tutorials/editor-health-check.md
+              - Lakehouse Shortcut: fiab/tutorials/editor-lakehouse-shortcut.md
+              - Ontology SDK: fiab/tutorials/editor-ontology-sdk.md
+              - Release Environment: fiab/tutorials/editor-release-environment.md
+              - Service Bus Namespace: fiab/tutorials/editor-service-bus-namespace.md
+              - Slate App: fiab/tutorials/editor-slate-app.md
+              - "Spindle (AIP Logic & agents)": fiab/tutorials/editor-aip-logic.md
+              - Workshop App: fiab/tutorials/editor-workshop-app.md
+              - Apache Airflow Job: fiab/tutorials/editor-airflow-job.md
+              - AutoML: fiab/tutorials/editor-automl.md
+              - Azure Cosmos DB Account: fiab/tutorials/editor-azure-cosmos-account.md
+              - Data API Builder: fiab/tutorials/editor-data-api-builder.md
+              - Data Marketplace: fiab/tutorials/editor-data-marketplace.md
+              - "Datamart (migration)": fiab/tutorials/editor-datamart.md
+              - Event Schema Set: fiab/tutorials/editor-event-schema-set.md
+              - Integration Runtime: fiab/tutorials/editor-integration-runtime.md
+              - Linked Service: fiab/tutorials/editor-linked-service.md
+              - Logic App: fiab/tutorials/editor-logic-app.md
+              - Mapping Data Flow: fiab/tutorials/editor-mapping-dataflow.md
+              - Materialized Lake View: fiab/tutorials/editor-materialized-lake-view.md
+              - Mirrored Databricks Catalog: fiab/tutorials/editor-mirrored-databricks.md
+              - Mounted Data Factory: fiab/tutorials/editor-mounted-adf.md
+              - PostgreSQL Flexible Server: fiab/tutorials/editor-postgres-flexible-server.md
+              - Rayfin App: fiab/tutorials/editor-rayfin-app.md
+              - Spark Environment: fiab/tutorials/editor-spark-environment.md
+              - SQL Analytics Endpoint: fiab/tutorials/editor-sql-analytics-endpoint.md
+              - SQL Database: fiab/tutorials/editor-sql-database.md
+              - Stream Analytics Job: fiab/tutorials/editor-stream-analytics-job.md
+              - Synapse Notebook: fiab/tutorials/editor-synapse-notebook.md
+              - Tapestry: fiab/tutorials/editor-tapestry.md
+              - Workspace Monitoring: fiab/tutorials/editor-workspace-monitor.md
           - Parity Gap Reports:
               - Summaries:
                   - "AI/ML editors (2026-05-26)": fiab/parity-gap/_ai-ml-summary.md
@@ -1813,6 +1846,7 @@ nav:
               - Information Protection tab: fiab/admin/security/information-protection.md
               - DLP tab: fiab/admin/security/dlp.md
               - Audit tab: fiab/admin/security/audit.md
+              - "Sharing, Endorsement & Preview-as": fiab/sharing-endorsement-preview-as.md
           - Unified Catalog:
               - Overview: fiab/catalog/index.md
               - Architecture: fiab/catalog/architecture.md

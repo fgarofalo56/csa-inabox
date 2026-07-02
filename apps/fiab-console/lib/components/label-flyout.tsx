@@ -45,11 +45,11 @@ interface Label {
 }
 
 const useStyles = makeStyles({
-  list: { display: 'flex', flexDirection: 'column', gap: 10 },
+  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalMNudge },
   labelRow: {
     display: 'flex',
     alignItems: 'flex-start',
-    gap: 8,
+    gap: tokens.spacingHorizontalS,
     padding: 'var(--loom-space-2)',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 'var(--loom-radius-md)',
@@ -57,13 +57,13 @@ const useStyles = makeStyles({
   labelRowCurrent: { borderColor: tokens.colorBrandStroke1, backgroundColor: tokens.colorBrandBackground2 },
   labelRowBlocked: { opacity: 0.55 },
   swatch: {
-    display: 'inline-block', width: 12, height: 12, borderRadius: 3, flexShrink: 0, marginTop: 4,
+    display: 'inline-block', width: tokens.spacingHorizontalM, height: tokens.spacingVerticalM, borderRadius: '3px', flexShrink: 0, marginTop: tokens.spacingVerticalXS,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
-  labelMeta: { display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 },
-  labelName: { fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 },
-  desc: { fontSize: 12, color: tokens.colorNeutralForeground3 },
-  actions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 4 },
+  labelMeta: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS, minWidth: 0 },
+  labelName: { fontWeight: 600, fontSize: '13px', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  desc: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalXS },
 });
 
 export function SensitivityLabelPane({ type, id }: Props) {

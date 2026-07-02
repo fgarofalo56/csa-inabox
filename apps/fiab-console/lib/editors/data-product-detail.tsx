@@ -44,11 +44,13 @@ import {
   ArrowSync20Regular, ArrowClockwise20Regular, BookRegular, BranchFork20Regular,
   CheckmarkCircle16Filled, CheckmarkCircleRegular, DatabaseRegular, DataTrending20Regular,
   DocumentText20Regular, Edit20Regular, KeyRegular, LockClosedRegular, Open16Regular,
-  PersonRegular, Pulse20Regular, ScanType20Regular, ShieldTask20Regular,
+  PersonRegular, Play20Regular, Pulse20Regular, ScanType20Regular, ShieldTask20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import { RequestAccessDialog } from './components/request-access-dialog';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import { findItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import type {
   DataProductDoc, DataProductDetailResponse, DataProductOwner,
@@ -62,19 +64,25 @@ import type { WorkspaceItem } from '@/lib/types/workspace';
 // ============================================================================
 
 const useObsStyles = makeStyles({
-  col: { display: 'flex', flexDirection: 'column', gap: '12px' },
-  row: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
-  gauge: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '180px' },
-  gaugeHead: { display: 'flex', alignItems: 'baseline', gap: '8px' },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '12px' },
-  actionGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' },
-  card: { padding: '12px' },
-  kql: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: '11px',
-    color: tokens.colorNeutralForeground3, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
-    margin: 0, marginTop: '4px',
+  col: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  row: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  gauge: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '180px' },
+  gaugeHead: { display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS },
+  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: tokens.spacingHorizontalM },
+  actionGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: tokens.spacingHorizontalM },
+  card: {
+    padding: tokens.spacingHorizontalM, minWidth: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
   },
-  scroll: { overflowX: 'auto', maxHeight: '260px' },
+  kql: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
+    margin: 0, marginTop: tokens.spacingVerticalXS,
+  },
+  scroll: { overflowX: 'auto', maxWidth: '100%', maxHeight: '260px' },
 });
 
 // ------------------------------------------------------------------
@@ -180,12 +188,54 @@ function ResultTable({ columns, rows }: { columns: string[]; rows: unknown[][] }
         <TableBody>
           {rows.slice(0, 50).map((row, i) => (
             <TableRow key={i}>
-              {columns.map((_, j) => <TableCell key={j}><code style={{ fontSize: 11 }}>{String((row as any[])[j] ?? '')}</code></TableCell>)}
+              {columns.map((_, j) => <TableCell key={j}><code style={{ fontSize: tokens.fontSizeBase100 }}>{String((row as any[])[j] ?? '')}</code></TableCell>)}
             </TableRow>
           ))}
           {rows.length === 0 && <TableRow><TableCell>(no rows)</TableCell></TableRow>}
         </TableBody>
       </Table>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------
+// Try it — live ADX sample preview of the product's backing data.
+// Shared by the owner detail + the consumer marketplace view so
+// "Try it" is present regardless of who is viewing the product.
+// ------------------------------------------------------------------
+function DataProductTryItPanel({ id }: { id: string }) {
+  const [loading, setLoading] = useState(false);
+  const [result, setResult] = useState<{ table?: string; kql?: string; columns: string[]; rows: unknown[][]; executionMs?: number } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [gate, setGate] = useState<{ missing: string } | null>(null);
+  const run = useCallback(async () => {
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/preview`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (j.ok) setResult({ table: j.table, kql: j.kql, columns: j.columns || [], rows: j.rows || [], executionMs: j.executionMs });
+      else if (j.gate) setGate(j.gate);
+      else setErr(j.error || `HTTP ${r.status}`);
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [id]);
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalM }}>
+      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+        Preview this data product&rsquo;s live data — a read-only sample (top 25 rows) from its backing Azure Data Explorer table.
+      </Caption1>
+      {result?.kql && <pre style={{ fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflowX: 'auto', maxWidth: '100%', margin: 0 }}>{result.kql}</pre>}
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
+        <Button appearance="primary" icon={loading ? undefined : <Play20Regular />} disabled={loading} onClick={run}>
+          {loading ? 'Running…' : result ? 'Run again' : 'Run sample query'}
+        </Button>
+        {loading && <Spinner size="tiny" label="Querying ADX…" />}
+        {result && !loading && <Caption1>{result.rows.length} row{result.rows.length !== 1 ? 's' : ''} from <strong>{result.table}</strong>{result.executionMs !== undefined ? ` (${result.executionMs}ms)` : ''}</Caption1>}
+      </div>
+      {gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Data preview not configured</MessageBarTitle>Set <code>{gate.missing}</code> (the ADX cluster URI) to enable live data preview on this deployment.</MessageBarBody></MessageBar>}
+      {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+      {result && result.columns.length > 0 && <ResultTable columns={result.columns} rows={result.rows} />}
+      {result && result.columns.length === 0 && !err && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No rows returned.</Caption1>}
     </div>
   );
 }
@@ -240,7 +290,7 @@ function TriggerScanCard({ id }: { id: string }) {
   return (
     <Card className={s.card}>
       <CardHeader header={<Body1><strong>Trigger Purview scan</strong></Body1>} description={<Caption1>Re-scan a registered data source to refresh classifications + lineage.</Caption1>} image={<ScanType20Regular />} />
-      <div className={s.col} style={{ marginTop: 8 }}>
+      <div className={s.col} style={{ marginTop: tokens.spacingVerticalS }}>
         <Field label="Data source">
           <Dropdown placeholder={sources == null ? 'Loading…' : sources.length ? 'Select a source' : 'No registered sources'} value={source} selectedOptions={source ? [source] : []} disabled={!sources?.length} onOptionSelect={(_, d) => d.optionValue && pickSource(d.optionValue)}>
             {(sources || []).map((x) => <Option key={x} value={x}>{x}</Option>)}
@@ -295,7 +345,7 @@ function ActionCard({
   return (
     <Card className={s.card}>
       <CardHeader header={<Body1><strong>{title}</strong></Body1>} description={<Caption1>{desc}</Caption1>} image={icon} />
-      <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
         <Button appearance="primary" icon={busy ? <Spinner size="extra-tiny" /> : icon} onClick={run} disabled={busy} style={{ alignSelf: 'flex-start' }}>
           {busy ? 'Running…' : title}
         </Button>
@@ -333,7 +383,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
       {loading && !obs && <Spinner size="tiny" label="Loading observability…" />}
 
       {/* ---- Health-action cards ---- */}
-      <Subtitle2><Pulse20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Health actions</Subtitle2>
+      <Subtitle2><Pulse20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Health actions</Subtitle2>
       <div className={s.actionGrid}>
         <ActionCard id={id} action="rerun-dq-check" title="Re-run DQ checks" desc="Recompute the data-quality score from live ADX KQL against the product's tables." icon={<ArrowClockwise20Regular />} onDone={refresh} />
         <ActionCard id={id} action="refresh-lineage" title="Refresh lineage" desc="Re-pull the Purview classic Data Map Atlas lineage subgraph." icon={<BranchFork20Regular />} onDone={refresh} />
@@ -341,7 +391,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
       </div>
 
       {/* ---- Data-health charts (ADX) ---- */}
-      <Subtitle2><DataTrending20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Data health (Azure Data Explorer)</Subtitle2>
+      <Subtitle2><DataTrending20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Data health (Azure Data Explorer)</Subtitle2>
       {adxGate ? (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -386,7 +436,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
                 <TableRow key={b.ruleId}>
                   <TableCell><strong>{b.name}</strong></TableCell>
                   <TableCell><code>{b.check}</code></TableCell>
-                  <TableCell><code style={{ fontSize: 11 }}>{b.scope}</code></TableCell>
+                  <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{b.scope}</code></TableCell>
                   <TableCell>{b.detail}</TableCell>
                   <TableCell><Badge appearance="filled" color={b.passed ? 'success' : 'danger'}>{b.passed ? 'pass' : 'fail'}</Badge></TableCell>
                 </TableRow>
@@ -397,7 +447,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
       )}
 
       {/* ---- Lineage graph (Purview classic Data Map) ---- */}
-      <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Lineage (Microsoft Purview Data Map)</Subtitle2>
+      <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Lineage (Microsoft Purview Data Map)</Subtitle2>
       {purviewGate ? (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -419,7 +469,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
                   <TableRow key={n.id}>
                     <TableCell>{n.label || n.id}</TableCell>
                     <TableCell><code>{n.type || '—'}</code></TableCell>
-                    <TableCell><code style={{ fontSize: 11 }}>{String(n.id).slice(0, 12)}…</code></TableCell>
+                    <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{String(n.id).slice(0, 12)}…</code></TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -429,7 +479,7 @@ export function ObservabilityTabContent({ id, obs, loading, err, refresh }: {
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Edges</Caption1>
                 <div className={s.scroll}>
                   {lineage.edges.map((e: any, i: number) => (
-                    <div key={i}><code style={{ fontSize: 11 }}>{String(e.from).slice(0, 8)}… → {String(e.to).slice(0, 8)}…{e.label ? ` (${e.label})` : ''}</code></div>
+                    <div key={i}><code style={{ fontSize: tokens.fontSizeBase100 }}>{String(e.from).slice(0, 8)}… → {String(e.to).slice(0, 8)}…{e.label ? ` (${e.label})` : ''}</code></div>
                   ))}
                 </div>
               </>
@@ -463,27 +513,33 @@ const useStyles = makeStyles({
     position: 'sticky', top: 0, zIndex: 10,
     backgroundColor: tokens.colorNeutralBackground1,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    paddingBottom: 12, marginBottom: 12,
-    display: 'flex', flexDirection: 'column', gap: 8,
+    paddingBottom: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS,
   },
-  headerRow: { display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
+  headerRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   headerSpacer: { flex: 1 },
-  badges: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  avatars: { display: 'flex', alignItems: 'center', gap: 4 },
-  actions: { display: 'flex', alignItems: 'center', gap: 8 },
-  body: { display: 'flex', flexDirection: 'column', gap: 16 },
-  card: { padding: 12 },
-  grid2: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: 16, rowGap: 8, alignItems: 'center' },
-  attrGrid: { display: 'grid', gridTemplateColumns: 'minmax(160px, 240px) 1fr', columnGap: 16, rowGap: 6 },
-  sectionTitle: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 },
-  contactRow: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' },
-  contactName: { minWidth: 180 },
-  links: { display: 'flex', flexDirection: 'column', gap: 4 },
-  link: { display: 'inline-flex', alignItems: 'center', gap: 4 },
+  badges: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, flexWrap: 'wrap' },
+  avatars: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
+  actions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  card: {
+    padding: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
+  grid2: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS, alignItems: 'center' },
+  attrGrid: { display: 'grid', gridTemplateColumns: 'minmax(160px, 240px) minmax(0, 1fr)', columnGap: tokens.spacingHorizontalL, rowGap: tokens.spacingVerticalS, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
+  contactRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  contactName: { minWidth: '180px' },
+  links: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  link: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
   muted: { color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
-  gaugeWrap: { display: 'flex', alignItems: 'center', gap: 16 },
-  healthCards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: 8 },
-  subsBar: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 },
+  gaugeWrap: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalL },
+  healthCards: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: tokens.spacingHorizontalS },
+  subsBar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS },
 });
 
 interface SubscriberRow {
@@ -542,7 +598,12 @@ function LinkList({ items }: { items?: { label: string; url: string }[] }) {
  * not own the product, the CONSUMER (F15) read-only surface. Owner detection is
  * server-authoritative (`isOwner` from GET /api/data-products/[id]).
  */
-export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id: string }) {
+export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricItemType; id: string }) {
+  // The /data-products/[id] consumer page mounts this WITHOUT the item prop.
+  // Default to the data-product catalog type so ItemEditorChrome + the owner
+  // edit form (which read item.displayName/description/category/slug) render
+  // instead of crashing the whole page.
+  const item = itemProp ?? findItemType('data-product')!;
   const s = useStyles();
   const router = useRouter();
   const pathname = usePathname();
@@ -550,11 +611,13 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
 
   // ?view=edit switches the SAME route to the full owner edit form. Returning
   // (Back / "Done") drops the param and re-renders the read-first details view.
-  const editView = searchParams?.get('view') === 'edit';
+  // A brand-new item (/items/data-product/new) goes straight into the create
+  // form instead of a dead-end "open from the Marketplace" message.
+  const editView = searchParams?.get('view') === 'edit' || id === 'new';
   const gotoEdit = useCallback((tab?: string) => {
-    const base = pathname || `/items/${item.slug}/${id}`;
+    const base = pathname || `/items/${item?.slug ?? 'data-product'}/${id}`;
     router.push(`${base}?view=edit${tab ? `&tab=${tab}` : ''}`);
-  }, [pathname, item.slug, id, router]);
+  }, [pathname, item?.slug, id, router]);
 
   const [product, setProduct] = useState<DataProductDoc | null>(null);
   const [isOwner, setIsOwner] = useState<boolean | null>(null);
@@ -564,7 +627,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
   const [loading, setLoading] = useState(id !== 'new');
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
-  const [tab, setTab] = useState<'details' | 'observability'>('details');
+  const [tab, setTab] = useState<'details' | 'observability' | 'tryit'>('details');
   const [showEmpty, setShowEmpty] = useState(false);
 
   // Owner contact-label editing (persisted via PATCH).
@@ -679,15 +742,26 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
     if (loading) return <Spinner label="Loading data product…" />;
     if (loadErr) {
       return (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>Unable to load this data product</MessageBarTitle>
-            {loadErr}
-          </MessageBarBody>
-        </MessageBar>
+        <EmptyState
+          icon={<DatabaseRegular style={{ fontSize: 44 }} />}
+          title="Couldn't open this data product"
+          body={loadErr}
+          primaryAction={{ label: 'Browse the marketplace', href: '/marketplace' }}
+          secondaryAction={{ label: 'Create a data product', href: '/items/data-product/new' }}
+        />
       );
     }
-    if (!product) return <Body1>No data product to show.</Body1>;
+    if (!product) {
+      return (
+        <EmptyState
+          icon={<DatabaseRegular style={{ fontSize: 44 }} />}
+          title="Data product not found"
+          body="This data product may have been deleted, or you may not have access to it. Browse the marketplace to find published data products, or create a new one."
+          primaryAction={{ label: 'Browse the marketplace', href: '/marketplace' }}
+          secondaryAction={{ label: 'Create a data product', href: '/items/data-product/new' }}
+        />
+      );
+    }
 
     const owners: DataProductOwner[] = product.owners ?? [];
 
@@ -720,13 +794,14 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
           </div>
         </div>
 
-        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'details' | 'observability')}>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'details' | 'observability' | 'tryit')}>
           <Tab value="details">Details</Tab>
           <Tab value="observability">Data Observability</Tab>
+          <Tab value="tryit" icon={<Play20Regular />}>Try it</Tab>
         </TabList>
 
         {tab === 'details' && (
-          <div className={s.body} style={{ marginTop: 12 }}>
+          <div className={s.body} style={{ marginTop: tokens.spacingVerticalM }}>
             {/* Description */}
             <Card className={s.card}>
               <CardHeader header={<Subtitle2>Description</Subtitle2>} />
@@ -779,7 +854,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
                     </Button>
                   </div>
                   {labelMsg && (
-                    <MessageBar intent={labelMsg.intent === 'success' ? 'success' : 'error'} style={{ marginTop: 8 }}>
+                    <MessageBar intent={labelMsg.intent === 'success' ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalS }}>
                       <MessageBarBody>{labelMsg.text}</MessageBarBody>
                     </MessageBar>
                   )}
@@ -806,7 +881,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
                 </div>
               )}
               {subs !== null && subs.length > 0 && (
-                <Table size="small" style={{ marginTop: 8 }}>
+                <Table size="small" style={{ marginTop: tokens.spacingVerticalS }}>
                   <TableBody>
                     {subs.map((sub) => (
                       <TableRow key={sub.id}>
@@ -853,7 +928,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
             {/* Health-action cards — derived from real DQ posture */}
             <div>
               <Subtitle2 className={s.sectionTitle}>Health actions</Subtitle2>
-              <div className={s.healthCards} style={{ marginTop: 8 }}>
+              <div className={s.healthCards} style={{ marginTop: tokens.spacingVerticalS }}>
                 {dqScore === null ? (
                   <Card className={s.card}>
                     <CardHeader header={<Body1>Configure data-quality rules</Body1>}
@@ -897,7 +972,7 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
         )}
 
         {tab === 'observability' && (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: tokens.spacingVerticalM }}>
             <ObservabilityTabContent
               id={id}
               obs={observability.data}
@@ -907,6 +982,8 @@ export function DataProductDetailEditor({ item, id }: { item: FabricItemType; id
             />
           </div>
         )}
+
+        {tab === 'tryit' && <DataProductTryItPanel id={id} />}
       </div>
     );
   })();
@@ -953,12 +1030,34 @@ const useConsumerStyles = makeStyles({
   ownerLine: { color: tokens.colorNeutralForeground3 },
   actions: { marginTop: tokens.spacingVerticalS },
   tabContent: { paddingTop: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'max-content 1fr', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalS, alignItems: 'baseline' },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', columnGap: tokens.spacingHorizontalXL, rowGap: tokens.spacingVerticalS, alignItems: 'baseline', overflowWrap: 'anywhere', wordBreak: 'break-word' },
   metaLabel: { color: tokens.colorNeutralForeground3, fontWeight: tokens.fontWeightSemibold },
-  card: { padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  card: {
+    padding: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
   sectionTitle: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontWeight: tokens.fontWeightSemibold },
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
   empty: { color: tokens.colorNeutralForeground3 },
+  // Try it tab
+  tryItCaption: { color: tokens.colorNeutralForeground3 },
+  tryItKql: {
+    fontFamily: 'Consolas, "Cascadia Code", monospace',
+    fontSize: tokens.fontSizeBase100,
+    color: tokens.colorNeutralForeground3,
+    background: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    whiteSpace: 'pre' as const,
+    overflowX: 'auto' as const,
+    maxWidth: '100%',
+    margin: 0,
+  },
+  tryItActions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' as const },
+  tryItScroll: { overflowX: 'auto', maxWidth: '100%', maxHeight: '360px', marginTop: tokens.spacingVerticalS },
 });
 
 const STATUS_COLOR: Record<AccessRequestStatus, 'warning' | 'success' | 'danger' | 'brand'> = {
@@ -975,12 +1074,44 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [myRequests, setMyRequests] = useState<AccessRequest[]>([]);
 
+  // Try it tab state
+  const [tryItLoading, setTryItLoading] = useState(false);
+  const [tryItResult, setTryItResult] = useState<{
+    database: string; table: string; kql: string;
+    columns: string[]; columnTypes: string[]; rows: unknown[][];
+    executionMs?: number;
+  } | null>(null);
+  const [tryItError, setTryItError] = useState<string | null>(null);
+  const [tryItGate, setTryItGate] = useState<{ missing: string } | null>(null);
+
   const loadMyRequests = useCallback(async () => {
     try {
       const r = await fetch(`/api/data-products/${id}/access-requests`);
       const j = await r.json();
       if (j.ok) setMyRequests(j.requests ?? []);
     } catch { /* non-fatal; the request panel just stays empty */ }
+  }, [id]);
+
+  const runPreview = useCallback(async () => {
+    setTryItLoading(true);
+    setTryItError(null);
+    setTryItGate(null);
+    setTryItResult(null);
+    try {
+      const r = await fetch(`/api/data-products/${id}/preview`, { method: 'POST' });
+      const j = await r.json();
+      if (j.ok) {
+        setTryItResult(j);
+      } else if (j.gate) {
+        setTryItGate(j.gate);
+      } else {
+        setTryItError(j.error || 'Preview failed');
+      }
+    } catch (e: any) {
+      setTryItError(e?.message || String(e));
+    } finally {
+      setTryItLoading(false);
+    }
   }, [id]);
 
   useEffect(() => {
@@ -1041,6 +1172,7 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
         <Tab value="overview" icon={<BookRegular />}>Overview</Tab>
         <Tab value="datasets" icon={<DatabaseRegular />}>Datasets</Tab>
         <Tab value="glossary" icon={<BookRegular />}>Glossary</Tab>
+        <Tab value="tryit" icon={<Play20Regular />}>Try it</Tab>
         <Tab value="access" icon={<KeyRegular />}>My data access</Tab>
       </TabList>
 
@@ -1071,7 +1203,11 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
           <Card className={s.card}>
             <Text className={s.sectionTitle}><DatabaseRegular /> Datasets</Text>
             {(state.datasets ?? []).length === 0 ? (
-              <Caption1 className={s.empty}>This data product has no published datasets.</Caption1>
+              <EmptyState
+                icon={<DatabaseRegular />}
+                title="No published datasets"
+                body="This data product has no datasets published to it yet. Datasets appear here once the owner adds and publishes them."
+              />
             ) : (
               <Table size="small" aria-label="Datasets">
                 <TableHeader>
@@ -1103,7 +1239,11 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
           <Card className={s.card}>
             <Text className={s.sectionTitle}><BookRegular /> Glossary terms</Text>
             {(state.glossaryLinks ?? []).length === 0 ? (
-              <Caption1 className={s.empty}>No glossary terms are linked to this data product.</Caption1>
+              <EmptyState
+                icon={<BookRegular />}
+                title="No linked glossary terms"
+                body="No business glossary terms are linked to this data product yet. Linked terms appear here once the owner associates them."
+              />
             ) : (
               <div className={s.chips}>
                 {(state.glossaryLinks ?? []).map((g) => (
@@ -1114,14 +1254,91 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
           </Card>
         )}
 
+        {activeTab === 'tryit' && (
+          <Card className={s.card}>
+            <Text className={s.sectionTitle}><Play20Regular /> Try it — sample data preview</Text>
+            <Caption1 className={s.tryItCaption}>
+              Run a live sample query against the backing Azure Data Explorer table for this data product.
+              Returns up to 25 rows.
+            </Caption1>
+            {tryItResult && (
+              <pre className={s.tryItKql}>{tryItResult.kql}</pre>
+            )}
+            <div className={s.tryItActions}>
+              <Button
+                appearance="primary"
+                icon={tryItLoading ? undefined : <Play20Regular />}
+                disabled={tryItLoading}
+                onClick={runPreview}
+              >
+                {tryItLoading ? 'Running…' : tryItResult ? 'Run again' : 'Run sample query'}
+              </Button>
+              {tryItLoading && <Spinner size="tiny" label="Querying ADX…" />}
+              {tryItResult && !tryItLoading && (
+                <Caption1 className={s.tryItCaption}>
+                  {tryItResult.rows.length} row{tryItResult.rows.length !== 1 ? 's' : ''} from{' '}
+                  <strong>{tryItResult.table}</strong>
+                  {tryItResult.executionMs !== undefined ? ` (${tryItResult.executionMs}ms)` : ''}
+                </Caption1>
+              )}
+            </div>
+            {tryItGate && (
+              <MessageBar intent="warning">
+                <MessageBarBody>
+                  <MessageBarTitle>ADX not configured</MessageBarTitle>
+                  Set the <code>{tryItGate.missing}</code> environment variable to enable live data preview on this deployment.
+                </MessageBarBody>
+              </MessageBar>
+            )}
+            {tryItError && (
+              <MessageBar intent="error">
+                <MessageBarBody>{tryItError}</MessageBarBody>
+              </MessageBar>
+            )}
+            {tryItResult && tryItResult.rows.length === 0 && (
+              <Caption1 className={s.empty}>
+                The query returned no rows. The table may be empty.
+              </Caption1>
+            )}
+            {tryItResult && tryItResult.rows.length > 0 && (
+              <div className={s.tryItScroll}>
+                <Table size="small" aria-label={`Sample data from ${tryItResult.table}`}>
+                  <TableHeader>
+                    <TableRow>
+                      {tryItResult.columns.map((col) => (
+                        <TableHeaderCell key={col}>{col}</TableHeaderCell>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {tryItResult.rows.map((row, ri) => (
+                      <TableRow key={ri}>
+                        {(row as unknown[]).map((cell, ci) => (
+                          <TableCell key={ci}>
+                            {cell === null || cell === undefined
+                              ? <span className={s.empty}>null</span>
+                              : String(cell)}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </Card>
+        )}
+
         {activeTab === 'access' && (
           <Card className={s.card}>
             <Text className={s.sectionTitle}><KeyRegular /> My data access</Text>
             {myRequests.length === 0 ? (
-              <Caption1 className={s.empty}>
-                You have no access requests for this data product yet. Use{' '}
-                <strong>Request access</strong> above to submit one.
-              </Caption1>
+              <EmptyState
+                icon={<KeyRegular />}
+                title="No access requests yet"
+                body="You have not requested access to this data product yet. Submit a purpose-bound request to get started."
+                primaryAction={isOwner ? undefined : { label: 'Request access', onClick: () => setDialogOpen(true) }}
+              />
             ) : (
               <Table size="small" aria-label="My access requests">
                 <TableHeader>

@@ -34,6 +34,14 @@ import {
   Field, Dropdown, Option,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  Home24Regular, Bot24Regular, Apps24Regular, Play24Regular, Chat24Regular,
+  Image24Regular, MicRecord24Regular, PlugConnected24Regular, BrainCircuit24Regular,
+  Beaker24Regular, ClipboardTaskListLtr24Regular, DataTrending24Regular, Gauge24Regular,
+  Globe24Regular, ShieldKeyhole24Regular, Key24Regular, History24Regular,
+  Server24Regular, Database24Regular, TaskListSquareLtr24Regular, Box24Regular,
+} from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -44,50 +52,102 @@ import { FoundryAgentsPanel } from '@/lib/components/foundry/foundry-agents';
 import { LineChart, BarChart, StatTile, type LineSeries, type Bar } from '@/lib/components/foundry/foundry-charts';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  tabBar: { padding: '8px 16px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, overflowX: 'auto' },
-  metaGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', alignItems: 'baseline' },
-  metaKey: { color: tokens.colorNeutralForeground3, fontSize: 12 },
-  tableWrap: { overflow: 'auto', maxHeight: 460, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
-  empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  secret: { fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, overflowX: 'auto' },
+  // `minmax(0,1fr)` so a long unbroken value (Discovery URL, endpoint, principal
+  // id) wraps instead of forcing the grid — and therefore the page — wider.
+  metaGrid: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' },
+  metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  // Value cells in metaGrid: wrap long strings rather than overflow horizontally.
+  metaVal: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  tableWrap: { overflow: 'auto', maxHeight: '460px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
+  empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  // Compact, designed empty for stacked sub-section empties (icon chip + copy in
+  // a dashed card) — lighter than the full hero EmptyState so several can stack
+  // in one panel without ballooning its height.
+  emptyCompact: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalM,
+    padding: tokens.spacingVerticalM,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    color: tokens.colorNeutralForeground3,
+  },
+  emptyChip: {
+    flexShrink: 0,
+    width: '40px',
+    height: '40px',
+    borderRadius: tokens.borderRadiusCircular,
+    backgroundImage: `linear-gradient(135deg, ${tokens.colorBrandBackground2}, ${tokens.colorBrandBackground})`,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: tokens.colorNeutralForegroundOnBrand,
+    fontSize: '20px',
+  },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  secret: { fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' },
   // Stat tiles laid out as an even responsive grid (no ragged flex-wrap rows).
   statRow: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
-    gap: 12,
+    gap: tokens.spacingVerticalM,
   },
   // Charts laid out two-up on wide screens, single-column when narrow.
   chartGrid: {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))',
-    gap: 16,
+    gap: tokens.spacingHorizontalL,
   },
   // A framed "card" around a chart + its heading/caption so the dashboard reads
   // as discrete panels rather than loose SVGs floating on the background.
   chartCard: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 4,
-    padding: 12,
+    gap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
-    boxShadow: tokens.shadow2,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
+    // Fixed-width SVG charts (width={420}/{620}) can exceed a narrow grid track;
+    // scroll inside the card rather than pushing the page wider.
+    minWidth: 0,
+    overflowX: 'auto',
   },
   chartTitle: { fontWeight: 600 },
   chartCaption: { color: tokens.colorNeutralForeground3 },
   detailCard: {
     display: 'flex',
     flexDirection: 'column',
-    gap: 8,
-    padding: 12,
-    marginTop: 8,
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    marginTop: tokens.spacingVerticalS,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  // Reusable elevated panel for the fine-tuning upload / create-job + criterion
+  // cards that were previously flat (border only, no elevation).
+  panelCard: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
 });
 
@@ -121,9 +181,25 @@ function GateBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notDe
   );
 }
 
-function EmptyText({ children }: { children: React.ReactNode }) {
+// Compact designed empty (gradient icon chip + copy in a dashed card) in place
+// of the former bare italic line. Used for stacked sub-section empties; the
+// existing descriptive copy at each call site flows through as the body, so no
+// call-site changes are needed — only the visual treatment is upgraded.
+function EmptyText({ children, icon }: { children: React.ReactNode; icon?: React.ReactNode }) {
   const s = useStyles();
-  return <div className={s.empty}>{children}</div>;
+  return (
+    <div className={s.emptyCompact} role="status">
+      <div className={s.emptyChip} aria-hidden>{icon ?? <Box24Regular />}</div>
+      <Body1>{children}</Body1>
+    </div>
+  );
+}
+
+// Full-pane hero empty (gradient illustration + icon + body) for panels whose
+// entire body is empty (Overview, Connections, Computes, Datastores, Jobs).
+function EmptyPane({ title, body, icon }: { title: string; body: string; icon?: React.ReactNode }) {
+  const s = useStyles();
+  return <div className={s.pad}><EmptyState icon={icon ?? <Box24Regular />} title={title} body={body} /></div>;
 }
 
 function useLazyFetch<T>(url: string, active: boolean, nonce: number = 0, acct: FoundryAccount | null = null) {
@@ -160,7 +236,7 @@ function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w
   if (ws.loading) return <div className={s.pad}><Spinner size="small" label="Loading hub…" labelPosition="after" /></div>;
   if (ws.error) return <div className={s.pad}><GateBar msg={ws.error} hint={ws.hint} notDeployed={ws.notDeployed} /></div>;
   const w = ws.data?.workspace;
-  if (!w) return <div className={s.pad}><EmptyText>No workspace data.</EmptyText></div>;
+  if (!w) return <EmptyPane icon={<Home24Regular />} title="No workspace data" body="No hub workspace metadata was returned for the selected account." />;
   const rows: [string, React.ReactNode][] = [
     ['Name', w.name],
     ['Friendly name', w.friendlyName || '—'],
@@ -183,7 +259,7 @@ function OverviewPanel({ nonce, onWorkspace }: { nonce: number; onWorkspace?: (w
         {rows.map(([k, v]) => (
           <>
             <span key={`k-${k}`} className={s.metaKey}>{k}</span>
-            <span key={`v-${k}`}>{v ?? '—'}</span>
+            <span key={`v-${k}`} className={s.metaVal}>{v ?? '—'}</span>
           </>
         ))}
       </div>
@@ -199,7 +275,7 @@ function ConnectionsPanel({ active, nonce }: { active: boolean; nonce: number })
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading connections…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const items = Array.isArray(st.data?.connections) ? st.data!.connections : [];
-  if (!items.length) return <div className={s.pad}><EmptyText>No connections registered on this hub yet.</EmptyText></div>;
+  if (!items.length) return <EmptyPane icon={<PlugConnected24Regular />} title="No connections yet" body="No connections are registered on this hub yet. Connections link the hub to Azure OpenAI, AI Search, storage and other resources." />;
   return (
     <div className={s.pad}>
       <Caption1>{items.length} connection(s)</Caption1>
@@ -265,7 +341,7 @@ function DeployModelDialog({ open, onClose, onDeployed, acct }: { open: boolean;
         <DialogBody>
           <DialogTitle>Deploy a model</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               {catalog.error && <GateBar msg={catalog.error} hint={catalog.hint} notDeployed={catalog.notDeployed} />}
               <Field label="Model">
                 {models.length > 0 ? (
@@ -389,7 +465,7 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
         </div>
       )}
 
-      <Subtitle2 style={{ marginTop: 12 }}>Online endpoints</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Online endpoints</Subtitle2>
       {eps.loading ? <Spinner size="small" /> : eps.error ? <GateBar msg={eps.error} hint={eps.hint} notDeployed={eps.notDeployed} /> : endpoints.length === 0 ? (
         <EmptyText>No managed online endpoints.</EmptyText>
       ) : (
@@ -413,7 +489,7 @@ function ModelsPanel({ active, nonce, acct }: { active: boolean; nonce: number; 
         </div>
       )}
 
-      <Subtitle2 style={{ marginTop: 12 }}>Registered models</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Registered models</Subtitle2>
       {models.loading ? <Spinner size="small" /> : models.error ? <GateBar msg={models.error} hint={models.hint} notDeployed={models.notDeployed} /> : regModels.length === 0 ? (
         <EmptyText>No registered models in this hub.</EmptyText>
       ) : (
@@ -533,11 +609,11 @@ function NetworkingPanel({ active, nonce, acct }: { active: boolean; nonce: numb
           </div>
           {msg && <MessageBar intent="info"><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
           <div className={s.metaGrid}>
-            <span className={s.metaKey}>Default ACL action</span><span>{net.defaultAction || '—'}</span>
-            <span className={s.metaKey}>IP rules</span><span>{(Array.isArray(net.ipRules) ? net.ipRules : []).join(', ') || '—'}</span>
-            <span className={s.metaKey}>VNet rules</span><span>{(Array.isArray(net.virtualNetworkRules) ? net.virtualNetworkRules : []).length}</span>
+            <span className={s.metaKey}>Default ACL action</span><span className={s.metaVal}>{net.defaultAction || '—'}</span>
+            <span className={s.metaKey}>IP rules</span><span className={s.metaVal}>{(Array.isArray(net.ipRules) ? net.ipRules : []).join(', ') || '—'}</span>
+            <span className={s.metaKey}>VNet rules</span><span className={s.metaVal}>{(Array.isArray(net.virtualNetworkRules) ? net.virtualNetworkRules : []).length}</span>
           </div>
-          <Subtitle2 style={{ marginTop: 8 }}>Private endpoints</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Private endpoints</Subtitle2>
           {(Array.isArray(net.privateEndpoints) ? net.privateEndpoints : []).length === 0 ? <EmptyText>No private endpoint connections.</EmptyText> : (
             <div className={s.tableWrap}>
               <Table aria-label="Private endpoints" size="small">
@@ -623,7 +699,7 @@ function KeysPanel({ active, nonce, acct }: { active: boolean; nonce: number; ac
           </div>
           {keys.regionalEndpoints && Object.keys(keys.regionalEndpoints).length > 0 && (
             <>
-              <Subtitle2 style={{ marginTop: 8 }}>Regional endpoints</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Regional endpoints</Subtitle2>
               <div className={s.tableWrap}>
                 <Table aria-label="Regional endpoints" size="small">
                   <TableHeader><TableRow><TableHeaderCell>Capability</TableHeaderCell><TableHeaderCell>URL</TableHeaderCell></TableRow></TableHeader>
@@ -688,7 +764,7 @@ function ComputesPanel({ active, nonce }: { active: boolean; nonce: number }) {
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading computes…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const items = Array.isArray(st.data?.computes) ? st.data!.computes : [];
-  if (!items.length) return <div className={s.pad}><EmptyText>No computes attached.</EmptyText></div>;
+  if (!items.length) return <EmptyPane icon={<Server24Regular />} title="No computes attached" body="No compute instances or clusters are attached to this hub yet." />;
   return (
     <div className={s.pad}>
       <Caption1>{items.length} compute(s)</Caption1>
@@ -725,7 +801,7 @@ function DatastoresPanel({ active, nonce }: { active: boolean; nonce: number }) 
   if (st.loading) return <div className={s.pad}><Spinner size="small" label="Loading datastores…" labelPosition="after" /></div>;
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const items = Array.isArray(st.data?.datastores) ? st.data!.datastores : [];
-  if (!items.length) return <div className={s.pad}><EmptyText>No datastores registered.</EmptyText></div>;
+  if (!items.length) return <EmptyPane icon={<Database24Regular />} title="No datastores registered" body="No datastores are registered on this hub yet. Datastores connect the hub to blob, ADLS Gen2 and other storage." />;
   return (
     <div className={s.pad}>
       <Caption1>{items.length} datastore(s)</Caption1>
@@ -763,7 +839,7 @@ function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
   if (st.error) return <div className={s.pad}><GateBar msg={st.error} hint={st.hint} notDeployed={st.notDeployed} /></div>;
   const jobs = Array.isArray(st.data?.jobs) ? st.data!.jobs : [];
   const exps = Array.isArray(st.data?.experiments) ? st.data!.experiments : [];
-  if (!jobs.length) return <div className={s.pad}><EmptyText>No jobs in this hub.</EmptyText></div>;
+  if (!jobs.length) return <EmptyPane icon={<TaskListSquareLtr24Regular />} title="No jobs in this hub" body="No experiment jobs or runs have been recorded for this hub yet." />;
   return (
     <div className={s.pad}>
       <Subtitle2>Experiments</Subtitle2>
@@ -784,7 +860,7 @@ function JobsPanel({ active, nonce }: { active: boolean; nonce: number }) {
           </TableBody>
         </Table>
       </div>
-      <Subtitle2 style={{ marginTop: 16 }}>Recent jobs</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalL }}>Recent jobs</Subtitle2>
       <div className={s.tableWrap}>
         <Table aria-label="Jobs" size="small">
           <TableHeader><TableRow>
@@ -898,14 +974,14 @@ function CreateEvalDialog({ open, onClose, onCreated, acct }: { open: boolean; o
         <DialogBody>
           <DialogTitle>Create an evaluation</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Caption1>Defines an evaluation structure (data schema + one or more graders). After creating, upload a JSONL dataset and start a run from the Runs section below — no portal hop required.</Caption1>
               <Field label="Evaluation name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="qa-accuracy-eval" /></Field>
               <Body1 style={{ fontWeight: 600 }}>Testing criteria (graders)</Body1>
               {rows.map((c, i) => (
-                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: 10, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'flex-end' }}>
-                    <Field label="Grader type" style={{ flex: 1 }}>
+                <div key={i} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, padding: tokens.spacingVerticalS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                    <Field label="Grader type" style={{ flex: 1, minWidth: 0 }}>
                       <Dropdown value={GRADER_LABEL[c.type]} selectedOptions={[c.type]} onOptionSelect={(_, d) => d.optionValue && setRow(i, { type: d.optionValue as CriterionRow['type'] })}>
                         {(Object.keys(GRADER_LABEL) as CriterionRow['type'][]).map((t) => <Option key={t} value={t}>{GRADER_LABEL[t]}</Option>)}
                       </Dropdown>
@@ -1013,7 +1089,7 @@ function StartRunDialog({ open, onClose, onStarted, evalItem, acct }: {
         <DialogBody>
           <DialogTitle>Start a run · {evalItem?.name || evalItem?.id}</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Caption1>Upload a JSONL dataset (one object per line with an <code>input</code> and <code>expected</code> field), pick the deployment to grade, and start. The run samples the model per row, then applies this evaluation’s graders.</Caption1>
               <Field label="Run name (optional)"><Input value={runName} onChange={(_, d) => setRunName(d.value)} placeholder="baseline-run" /></Field>
               <Field label="Deployment to grade" required>
@@ -1059,19 +1135,19 @@ function EvalDetailCard({ evalItem }: { evalItem: EvalSummary }) {
   return (
     <div className={s.detailCard}>
       <Body1 style={{ fontWeight: 600 }}>Evaluation details</Body1>
-      <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', alignItems: 'baseline' }}>
-        <Caption1>ID</Caption1><Caption1 style={{ fontFamily: 'monospace' }}>{evalItem.id}</Caption1>
+      <div style={{ display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline' }}>
+        <Caption1>ID</Caption1><Caption1 style={{ fontFamily: 'monospace', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{evalItem.id}</Caption1>
         <Caption1>Data-source type</Caption1><Caption1>{dsc?.type || 'custom'}</Caption1>
         <Caption1>Item schema fields</Caption1>
-        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
           {fields.length ? fields.map((f) => <Badge key={f} appearance="outline">{f}</Badge>) : <Caption1>—</Caption1>}
         </div>
       </div>
-      <Caption1 style={{ fontWeight: 600, marginTop: 4 }}>Testing criteria ({criteria.length})</Caption1>
+      <Caption1 style={{ fontWeight: 600, marginTop: tokens.spacingVerticalXS }}>Testing criteria ({criteria.length})</Caption1>
       {criteria.length === 0 ? <Caption1>No graders defined.</Caption1> : (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
           {criteria.map((c, i) => (
-            <div key={i} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+            <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', flexWrap: 'wrap' }}>
               <Badge appearance="tint" color="brand">{c?.type || 'grader'}</Badge>
               <Caption1>{c?.name || `criterion ${i + 1}`}</Caption1>
               {c?.model && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>· model: {c.model}</Caption1>}
@@ -1193,7 +1269,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
         <>
           {/* A7 — eval detail: the data-source schema + testing criteria the eval grades on. */}
           <EvalDetailCard evalItem={selected} />
-          <div className={s.toolbar} style={{ marginTop: 12 }}>
+          <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
             <Subtitle2>Runs · {selected.name || selected.id}</Subtitle2>
             <Button size="small" appearance="primary" onClick={() => setRunOpen(true)}>+ Start a run</Button>
             <Button size="small" onClick={() => loadRuns(selected)}>Reload runs</Button>
@@ -1248,7 +1324,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
               value2: r.resultCounts?.failed ?? Math.max(0, (r.resultCounts?.total ?? 0) - (r.resultCounts?.passed ?? 0)),
             }));
             return (
-              <div className={s.chartGrid} style={{ marginTop: 12 }}>
+              <div className={s.chartGrid} style={{ marginTop: tokens.spacingVerticalM }}>
                 <div className={s.chartCard}>
                   <Body1 className={s.chartTitle}>Pass-rate trend</Body1>
                   <Caption1 className={s.chartCaption}>Pass rate across this evaluation’s graded runs (oldest → newest).</Caption1>
@@ -1267,7 +1343,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
 
       {selected && selectedRun && (
         <>
-          <Subtitle2 style={{ marginTop: 12 }}>Per-row results · {selectedRun.name || selectedRun.id}</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Per-row results · {selectedRun.name || selectedRun.id}</Subtitle2>
           {items.loading ? <Spinner size="small" /> : items.error ? <GateBar msg={items.error} hint={items.hint} /> : items.list.length === 0 ? (
             <EmptyText>No output items for this run yet. Items appear once the run completes grading.</EmptyText>
           ) : (
@@ -1284,7 +1360,7 @@ function EvaluationsPanel({ active, nonce, acct }: { active: boolean; nonce: num
                       <TableCell className={s.cell}>{it.status || '—'}</TableCell>
                       <TableCell className={s.cell}>
                         {it.results.length ? it.results.map((r, i) => (
-                          <Badge key={i} appearance="tint" color={r.passed === true ? 'success' : r.passed === false ? 'danger' : 'informative'} style={{ marginRight: 4 }}>
+                          <Badge key={i} appearance="tint" color={r.passed === true ? 'success' : r.passed === false ? 'danger' : 'informative'} style={{ marginRight: tokens.spacingHorizontalXS }}>
                             {(r.name || 'grader')}{r.score !== undefined ? ` ${r.score.toFixed(2)}` : ''}{r.passed === true ? ' ✓' : r.passed === false ? ' ✗' : ''}
                           </Badge>
                         )) : '—'}
@@ -1382,7 +1458,7 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
             <StatTile label="Latency p50" value={sum.totals.p50Ms !== undefined ? `${Math.round(sum.totals.p50Ms)} ms` : '—'} />
             <StatTile label="Latency p95" value={sum.totals.p95Ms !== undefined ? `${Math.round(sum.totals.p95Ms)} ms` : '—'} />
           </div>
-          <div className={s.chartGrid} style={{ marginTop: 8 }}>
+          <div className={s.chartGrid} style={{ marginTop: tokens.spacingVerticalS }}>
             <div className={s.chartCard}>
               <Body1 className={s.chartTitle}>Request volume</Body1>
               <Caption1 className={s.chartCaption}>Requests vs failures over time.</Caption1>
@@ -1394,12 +1470,12 @@ function MonitoringPanel({ active, nonce }: { active: boolean; nonce: number }) 
               <LineChart series={tokSeries} xIsTime xLabel="time" yLabel="tokens" yFormat={(v) => fmtNum(Math.round(v))} width={480} height={220} emptyText="No token usage telemetry in this window." />
             </div>
           </div>
-          <div className={s.chartCard} style={{ marginTop: 8 }}>
+          <div className={s.chartCard} style={{ marginTop: tokens.spacingVerticalS }}>
             <Body1 className={s.chartTitle}>Latency by operation (p95)</Body1>
             <Caption1 className={s.chartCaption}>Slowest operations by 95th-percentile duration (top 12 by call count).</Caption1>
             <BarChart bars={opBars} width={620} valueFormat={(v) => `${v} ms`} emptyText="No operations recorded in this window." />
           </div>
-          <Subtitle2 style={{ marginTop: 8 }}>Operations ({sum.byOperation.length})</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Operations ({sum.byOperation.length})</Subtitle2>
           <Caption1 className={s.chartCaption}>Click a column header to sort.</Caption1>
           <div className={s.tableWrap} style={{ maxHeight: 260 }}>
             <Table size="small" aria-label="Operations" sortable>
@@ -1558,9 +1634,9 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
       {jobsState.error && <GateBar msg={jobsState.error} hint={jobsState.hint} notDeployed={jobsState.notDeployed} />}
       {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}{msg.hint ? <><br /><Caption1>{msg.hint}</Caption1></> : null}</MessageBarBody></MessageBar>}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) 1fr', gap: 16, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 360px) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, alignItems: 'start' }}>
         {/* Upload training data */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+        <div className={s.panelCard}>
           <Body1 style={{ fontWeight: 600 }}>Upload training data</Body1>
           <Caption1>JSONL with chat-format examples (one <code>{'{ "messages": [...] }'}</code> per line).</Caption1>
           <input type="file" accept=".jsonl,.json,text/plain" disabled={uploading} onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
@@ -1579,7 +1655,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
         </div>
 
         {/* Create job */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 }}>
+        <div className={s.panelCard}>
           <Body1 style={{ fontWeight: 600 }}>Create a fine-tuning job</Body1>
           <Field label="Base model">
             {fineTunable.length ? (
@@ -1604,7 +1680,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
             </Dropdown>
           </Field>
           <Field label="Suffix (optional — names the fine-tuned model)"><Input value={suffix} onChange={(_, d) => setSuffix(d.value)} placeholder="my-tuned" /></Field>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: tokens.spacingVerticalS }}>
             <Field label="Epochs"><Input type="number" value={epochs} onChange={(_, d) => setEpochs(d.value)} placeholder="auto" /></Field>
             <Field label="Batch size"><Input type="number" value={batchSize} onChange={(_, d) => setBatchSize(d.value)} placeholder="auto" /></Field>
             <Field label="LR multiplier"><Input type="number" value={lrMult} onChange={(_, d) => setLrMult(d.value)} placeholder="auto" /></Field>
@@ -1613,7 +1689,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
         </div>
       </div>
 
-      <Subtitle2 style={{ marginTop: 8 }}>Fine-tuning jobs</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Fine-tuning jobs</Subtitle2>
       {jobsState.loading ? <Spinner size="small" /> : jobs.length === 0 ? (
         <EmptyText>No fine-tuning jobs yet. Upload training data and create a job above.</EmptyText>
       ) : (
@@ -1649,7 +1725,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
 
       {selectedJob && (
         <>
-          <Subtitle2 style={{ marginTop: 12 }}>Training metrics · {selectedJob.id}</Subtitle2>
+          <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Training metrics · {selectedJob.id}</Subtitle2>
           {selectedJob.error?.message ? <GateBar msg={selectedJob.error.message} /> : null}
           {events.loading ? <Spinner size="small" /> : events.error ? <GateBar msg={events.error} /> : events.list.length === 0 ? (
             <EmptyText>No training events yet. Loss metrics appear here as the job trains.</EmptyText>
@@ -1669,7 +1745,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
                 if (valid.length) lossSeries.push({ label: 'Validation loss', color: tokens.colorPaletteRedForeground1, points: valid });
                 if (!lossSeries.length) return null;
                 return (
-                  <div className={s.chartCard} style={{ marginBottom: 12 }}>
+                  <div className={s.chartCard} style={{ marginBottom: tokens.spacingVerticalM }}>
                     <Body1 className={s.chartTitle}>Loss curve</Body1>
                     <Caption1 className={s.chartCaption}>Training and validation loss over training steps.</Caption1>
                     <LineChart series={lossSeries} xLabel="step" yLabel="loss" width={620} height={240} emptyText="No loss metrics emitted yet." />
@@ -1710,8 +1786,8 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
 
 const usePickerStyles = makeStyles({
   bar: {
-    display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap',
-    padding: '8px 16px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL}`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   grow: { flex: 1 },
@@ -1859,32 +1935,32 @@ export function FoundryHubEditor({ item, id }: { item: FabricItemType; id: strin
       <>
         <AccountPickerBar acct={acct} onSelect={onSelectAccount} onHub={onHub} />
         {crossSubHub && (
-          <div style={{ padding: '4px 16px' }}>
+          <div style={{ padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalL}` }}>
             <Badge appearance="tint" color="brand">Hub/project selected: {crossSubHub.name}</Badge>
           </div>
         )}
         <div className={s.tabBar}>
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-            <Tab value="overview">Overview</Tab>
-            <Tab value="agents">Agents</Tab>
-            <Tab value="catalog">Model catalog</Tab>
-            <Tab value="playgrounds">Playgrounds</Tab>
-            <Tab value="chat">Chat</Tab>
-            <Tab value="images">Images</Tab>
-            <Tab value="audio">Audio</Tab>
-            <Tab value="connections">Connections</Tab>
-            <Tab value="models">Models + endpoints</Tab>
-            <Tab value="fine-tuning">Fine-tuning</Tab>
-            <Tab value="evaluations">Evaluations</Tab>
-            <Tab value="monitoring">Monitoring</Tab>
-            <Tab value="quota">Quota + usage</Tab>
-            <Tab value="networking">Networking</Tab>
-            <Tab value="identity">Identity / RBAC</Tab>
-            <Tab value="keys">Keys / endpoints</Tab>
-            <Tab value="activity">Activity log</Tab>
-            <Tab value="computes">Computes</Tab>
-            <Tab value="datastores">Datastores</Tab>
-            <Tab value="jobs">Jobs</Tab>
+            <Tab value="overview" icon={<Home24Regular />}>Overview</Tab>
+            <Tab value="agents" icon={<Bot24Regular />}>Agents</Tab>
+            <Tab value="catalog" icon={<Apps24Regular />}>Model catalog</Tab>
+            <Tab value="playgrounds" icon={<Play24Regular />}>Playgrounds</Tab>
+            <Tab value="chat" icon={<Chat24Regular />}>Chat</Tab>
+            <Tab value="images" icon={<Image24Regular />}>Images</Tab>
+            <Tab value="audio" icon={<MicRecord24Regular />}>Audio</Tab>
+            <Tab value="connections" icon={<PlugConnected24Regular />}>Connections</Tab>
+            <Tab value="models" icon={<BrainCircuit24Regular />}>Models + endpoints</Tab>
+            <Tab value="fine-tuning" icon={<Beaker24Regular />}>Fine-tuning</Tab>
+            <Tab value="evaluations" icon={<ClipboardTaskListLtr24Regular />}>Evaluations</Tab>
+            <Tab value="monitoring" icon={<DataTrending24Regular />}>Monitoring</Tab>
+            <Tab value="quota" icon={<Gauge24Regular />}>Quota + usage</Tab>
+            <Tab value="networking" icon={<Globe24Regular />}>Networking</Tab>
+            <Tab value="identity" icon={<ShieldKeyhole24Regular />}>Identity / RBAC</Tab>
+            <Tab value="keys" icon={<Key24Regular />}>Keys / endpoints</Tab>
+            <Tab value="activity" icon={<History24Regular />}>Activity log</Tab>
+            <Tab value="computes" icon={<Server24Regular />}>Computes</Tab>
+            <Tab value="datastores" icon={<Database24Regular />}>Datastores</Tab>
+            <Tab value="jobs" icon={<TaskListSquareLtr24Regular />}>Jobs</Tab>
           </TabList>
         </div>
         {tab === 'overview' && <OverviewPanel nonce={nonce} onWorkspace={onWorkspace} />}

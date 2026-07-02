@@ -17,6 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import {
   callAiFn,
   NoAoaiDeploymentError,
@@ -58,6 +59,11 @@ export async function POST(req: NextRequest) {
   }
 
   try {
+    // Forward the admin-picked tenant Copilot deployment (Admin → Tenant
+    // settings → Copilot & Agents) so AI Functions resolve the same live AOAI
+    // target as the cross-item Copilot — works even when LOOM_AOAI_ENDPOINT is
+    // unset but a tenant chat model is configured. Azure-native, no Fabric.
+    opts.tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
     const { result, model, usage } = await callAiFn(fn, input, opts);
     return NextResponse.json({ ok: true, result, model, usage });
   } catch (e: any) {

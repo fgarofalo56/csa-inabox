@@ -13,6 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { listLabelPolicies, createLabelPolicy } from '@/lib/azure/scc-labels-client';
 import { handleSecurityError } from '../../_lib/error-handling';
 
@@ -22,6 +23,8 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   try {
     const policies = await listLabelPolicies();
     return NextResponse.json({ ok: true, policies, source: 'scc-powershell' });
@@ -31,6 +34,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
   const name = (body?.name || '').toString().trim();

@@ -44,7 +44,7 @@ import {
   listOwnedWorkspaces,
 } from '@/app/api/items/_lib/item-crud';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { PUBLISH_STATUSES, type PublishStatus } from '@/lib/azure/loom-data-products-search';
+import { PUBLISH_STATUSES, type PublishStatus, upsertDataProductDoc, docForDataProduct } from '@/lib/azure/loom-data-products-search';
 import {
   DATA_PRODUCT_DESCRIPTION_MAX,
   DATA_PRODUCT_AUDIENCE_VALUES,
@@ -261,6 +261,10 @@ export async function POST(req: NextRequest) {
         state,
       });
       if (!res.ok) return NextResponse.json({ ok: false, error: res.error }, { status: res.status });
+      // AWAIT the discovery-index mirror so it completes within the request
+      // (createOwnedItem fires it fire-and-forget, which isn't reliably run on
+      // the serverless/container runtime → products never indexed). Best-effort.
+      try { await upsertDataProductDoc(docForDataProduct(res.item!, session.claims.oid)); } catch { /* index is derived */ }
       return NextResponse.json({ ok: true, product: res.item });
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });

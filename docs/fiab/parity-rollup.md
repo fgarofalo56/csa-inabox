@@ -125,15 +125,15 @@ Aggregated from 60+ v2 validator gap docs in `docs/fiab/parity-gap/`. Each cell 
 | `apim-api` | **C** | Top-level settings real. Operations read-only. OpenAPI viewer is `<div>`. |
 | `apim-product` | **B** | All fields persist correctly. Missing Subscriptions/Access tabs (scope expansion). |
 | `apim-policy` | **C** | Scope routing correct. Save validates XML. No XSD/expression IntelliSense. |
-| `eventstream` | **D** | Designer is a static node list; no live preview, no transform tile UI. |
-| `eventhouse` | **D** | KQL editor textarea labeled `monaco`. No `@kusto/monaco-kusto`. |
-| `kql-database` | **D** | Same KQL-textarea BLOCKER. Schema tree partial. |
-| `kql-queryset` | **D** | Same. No multi-tab queryset surface. |
+| `eventstream` | **B** (was D — remediated task #71) | React Flow designer canvas + transform builder + add-alert / MQTT-source / SQL-operator sub-surfaces; real Event Hubs / Stream Analytics backend (namespace now deployed via `landing-zone/eventhubs.bicep`). |
+| `eventhouse` | **A-** (was D — remediated task #71) | Monaco KQL editor (`@kusto/monaco-kusto`); real ADX `.show` / `.create`; capacity / databases / OneLake-export / Delta-endpoint sub-surfaces. |
+| `kql-database` | **A-** (was D — remediated task #71) | Monaco KQL + real ADX execution; schema tree + data-connections + diagram. |
+| `kql-queryset` | **B** (was D — remediated task #71) | Monaco KQL multi-tab queryset over ADX + cross-service query. |
 | Power Platform editors | **D-F** | See `powerplatform-editors.md` — most are config stubs. |
 | Azure SQL editors | **D** | Same textarea pattern + minimal CRUD. See `azure-sql-editors.md`. |
 | Graph/Vector editors | **C-D** | gql-graph Run wired; vector-store has Cosmos NoSQL backend. |
 | Geo editors | **D** | Map preview stub. No live geo-query. See `geo-editors.md`. |
-| Fabric IQ editors | **D** | See `fabric-iq-editors.md`. |
+| Fabric IQ editors | **B** (was D — remediated task #71) | 11 editors shipped with real Azure-native backends. Per-item parity docs: [ontology](parity/ontology.md), [plan](parity/plan.md), [graph-model](parity/graph-model.md), [map](parity/map.md), [data-agent](parity/data-agent.md), [workshop-app](parity/workshop-app.md), [slate-app](parity/slate-app.md), [ontology-sdk](parity/ontology-sdk.md), [release-environment](parity/release-environment.md), [health-check](parity/health-check.md), [aip-logic](parity/aip-logic.md). |
 
 ### Top-level pages
 

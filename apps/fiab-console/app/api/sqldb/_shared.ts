@@ -86,19 +86,15 @@ export async function guardSqlDbRequest(req: NextRequest): Promise<SqlDbGuardRes
       if (!ws) {
         return { res: NextResponse.json({ ok: false, error: 'workspace not found or not owned by your tenant' }, { status: 404 }) };
       }
+      // Fabric is strictly opt-in: only resolve a Fabric SQL connection when a
+      // Fabric workspace is actually bound. When it is not, fall through to the
+      // Azure-native env default below (per no-fabric-dependency.md) — never a
+      // "bind a Fabric workspace" gate as the default path.
       const fabricWs = fabricWsIdOf(ws);
-      if (!fabricWs) {
-        return {
-          res: NextResponse.json({
-            ok: false,
-            code: 'not_configured',
-            error: 'No Fabric workspace attached to this Loom workspace.',
-            missing: 'workspace.capacity.fabricWorkspaceId',
-          }, { status: 503 }),
-        };
+      if (fabricWs) {
+        const conn = await getFabricSqlDatabaseConnection(fabricWs, itemId);
+        if (conn) { server = conn.server; database = conn.database; }
       }
-      const conn = await getFabricSqlDatabaseConnection(fabricWs, itemId);
-      if (conn) { server = conn.server; database = conn.database; }
     } catch (e: any) {
       const status = e instanceof FabricError ? e.status : 502;
       return { res: NextResponse.json({ ok: false, error: e?.message || String(e), hint: e?.hint }, { status }) };

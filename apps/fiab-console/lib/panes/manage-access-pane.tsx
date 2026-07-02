@@ -365,16 +365,16 @@ function AddRoleDialog({
               <Tab value="user">User</Tab>
               <Tab value="group">Group</Tab>
             </TabList>
-            <Field label="Search Entra" style={{ marginTop: 12 }}>
+            <Field label="Search Entra" style={{ marginTop: tokens.spacingVerticalM }}>
               <Input value={q} onChange={(_e, d) => setQ(d.value)} contentBefore={<Search16Regular />}
                 placeholder={kind === 'user' ? 'Display name or UPN' : 'Group display name'} />
             </Field>
 
             {searchGate && (
-              <MessageBar intent="warning" style={{ marginTop: 12 }}>
+              <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBarBody>
                   <MessageBarTitle>{searchGate.message}</MessageBarTitle>
-                  {searchGate.remediation && <div style={{ marginTop: 4 }}>{searchGate.remediation}</div>}
+                  {searchGate.remediation && <div style={{ marginTop: tokens.spacingVerticalXS, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{searchGate.remediation}</div>}
                 </MessageBarBody>
               </MessageBar>
             )}
@@ -382,7 +382,7 @@ function AddRoleDialog({
             <div className={styles.results}>
               {searching && <Spinner size="tiny" label="Searching Entra…" />}
               {!searching && hits.length === 0 && q.trim() && !searchGate && (
-                <div style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No matches.</div>
+                <div style={{ padding: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>No matches.</div>
               )}
               {hits.map((h) => (
                 <div key={h.id}
@@ -395,7 +395,7 @@ function AddRoleDialog({
               ))}
             </div>
 
-            <Field label="Role" style={{ marginTop: 16 }}>
+            <Field label="Role" style={{ marginTop: tokens.spacingVerticalL }}>
               <Dropdown value={role} selectedOptions={[role]}
                 onOptionSelect={(_e, d) => setRole((d.optionValue || 'Member') as WorkspaceRoleName)}>
                 <Option value="Admin">Admin — {ROLE_DESCRIPTIONS.Admin}</Option>
@@ -406,7 +406,7 @@ function AddRoleDialog({
             </Field>
 
             {error && (
-              <MessageBar intent={error.startsWith('Member added') ? 'warning' : 'error'} style={{ marginTop: 12 }}>
+              <MessageBar intent={error.startsWith('Member added') ? 'warning' : 'error'} style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBarBody>{error}</MessageBarBody>
               </MessageBar>
             )}

@@ -9,7 +9,7 @@ import { getSession } from '@/lib/auth/session';
 import { getActivator, updateActivator, deleteActivator, ActivatorError } from '@/lib/azure/activator-client';
 import { deleteMonitorActivatorRule } from '@/lib/azure/activator-monitor';
 import { loadContentBackedItem, activatorRuleFromContent } from '../../_lib/ai-content-fallback';
-import { loadOwnedItem, deleteOwnedItem } from '../../_lib/item-crud';
+import { loadOwnedItem, deleteOwnedItem, updateOwnedItem } from '../../_lib/item-crud';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -96,8 +96,28 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
   const body = await req.json().catch(() => ({}));
+
+  // ── Azure Monitor (DEFAULT) ── per no-fabric-dependency.md the activator is a
+  // Cosmos-owned item; patch its displayName/description directly (which also
+  // re-indexes the search/governance/data-product mirrors) instead of calling
+  // api.fabric.microsoft.com on the default path, matching GET/DELETE above.
+  const id = (await ctx.params).id;
+  if (!useFabric()) {
+    try {
+      const updated = await updateOwnedItem(id, 'activator', session.claims.oid, {
+        displayName: body?.displayName ? String(body.displayName) : undefined,
+        description: body?.description ? String(body.description) : undefined,
+      });
+      if (!updated) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
+      return NextResponse.json({ ok: true, backend: 'azure-monitor', activator: { id: updated.id, displayName: updated.displayName, description: updated.description, type: 'Reflex' } });
+    } catch (e: any) {
+      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
+    }
+  }
+
+  // ── Fabric Reflex (opt-in only) ──
   try {
-    const activator = await updateActivator(workspaceId, (await ctx.params).id, {
+    const activator = await updateActivator(workspaceId, id, {
       displayName: body?.displayName ? String(body.displayName) : undefined,
       description: body?.description ? String(body.description) : undefined,
     });

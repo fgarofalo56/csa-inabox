@@ -41,11 +41,11 @@ const useStyles = makeStyles({
   row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   conn: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   connIcon: { color: tokens.colorPaletteGreenForeground1 },
-  mono: { fontFamily: tokens.fontFamilyMonospace, color: tokens.colorNeutralForeground2 },
+  mono: { fontFamily: tokens.fontFamilyMonospace, color: tokens.colorNeutralForeground2, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   sectionHead: { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalS },
   grid: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))',
-    gap: tokens.spacingHorizontalM,
+    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(220px, 100%), 1fr))',
+    gap: tokens.spacingHorizontalM, minWidth: 0,
   },
   surface: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,

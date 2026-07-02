@@ -19,7 +19,9 @@
  * Azure-native default (Databricks libraries); honest 503 gate when no host.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
+import { isTenantAdmin } from '@/lib/auth/feature-gate';
+import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import {
   sparkConfigGate,
   getSparkConfig,
@@ -33,6 +35,28 @@ import {
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+
+/** Point-read the workspace on (id, ownerOid) — owner check, mirrors git/route.ts. */
+async function assertOwner(workspaceId: string, tenantId: string) {
+  const ws = await workspacesContainer();
+  try {
+    const { resource } = await ws.item(workspaceId, tenantId).read<any>();
+    if (!resource || resource.tenantId !== tenantId) return null;
+    return resource;
+  } catch (e: any) {
+    if (e?.code === 404) return null;
+    throw e;
+  }
+}
+
+/** Owner (self-service) OR tenant admin (org-wide) may configure this
+ * workspace's Spark environment. Blocks cross-workspace read/write by id.
+ * Returns a 404 when neither holds, else null. */
+async function authorizeWorkspace(s: SessionPayload, workspaceId: string): Promise<NextResponse | null> {
+  if (isTenantAdmin(s)) return null;
+  if (await assertOwner(workspaceId, s.claims.oid)) return null;
+  return NextResponse.json({ ok: false, error: 'workspace not found' }, { status: 404 });
+}
 
 function gateOr401() {
   const s = getSession();
@@ -53,6 +77,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const guard = gateOr401();
   if (guard.resp) return guard.resp;
   const { id } = await ctx.params;
+  const denied = await authorizeWorkspace(guard.session!, id);
+  if (denied) return denied;
   const clusterId = req.nextUrl.searchParams.get('clusterId') || '';
   try {
     const [clusters, config] = await Promise.all([listWorkspaceClusters(), getSparkConfig(id)]);
@@ -79,6 +105,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const guard = gateOr401();
   if (guard.resp) return guard.resp;
   const { id } = await ctx.params;
+  const denied = await authorizeWorkspace(guard.session!, id);
+  if (denied) return denied;
   const body = (await req.json().catch(() => ({}))) as {
     action?: 'save' | 'install' | 'uninstall';
     clusterId?: string;

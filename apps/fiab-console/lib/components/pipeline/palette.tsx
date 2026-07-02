@@ -9,52 +9,117 @@
  *   - drag-starts with mime type `application/x-fiab-activity` carrying the
  *     palette key (so canvas.tsx can drop+instantiate)
  *   - clicks to insert at canvas-center (keyboard-accessible alternative)
+ *
+ * Web-5.0 chrome: the palette REUSES the shared canvas-node-kit so every tile
+ * carries the SAME per-type glyph + per-category accent the canvas nodes use
+ * (`getActivityVisual`), section headers carry the kit's category glyph +
+ * accent (`CATEGORY_ICON` / `CATEGORY_ACCENT`), and tiles get accent-tinted
+ * icon chips + elevation-on-hover. Every colour/space/radius/shadow is a
+ * Fluent v9 `tokens.*` value or a `--loom-accent-*` var combined via the kit's
+ * token-only `accentTint` / `accentGradient` helpers — no raw px / hex /
+ * hardcoded shadow. The empty-search pane uses the shared `EmptyState`.
  */
 
 import { useMemo, useState } from 'react';
 import {
-  Caption1, Subtitle2, Tooltip, Input, makeStyles, tokens, Badge,
+  Caption1, Subtitle2, Tooltip, Input, makeStyles, mergeClasses, tokens, Badge,
 } from '@fluentui/react-components';
-import { Search16Regular } from '@fluentui/react-icons';
 import {
-  ACTIVITY_CATALOG, byCategory, ACTIVITY_CATEGORY_ORDER,
+  Search16Regular, ChevronDown16Regular, ChevronRight16Regular,
+  Warning16Regular,
+} from '@fluentui/react-icons';
+import {
+  ACTIVITY_CATALOG, byCategory, ACTIVITY_CATEGORY_ORDER, canvasCategoryForType,
   type ActivityCategory, type ActivityTypeDef,
 } from './activity-catalog';
-import { activityIcon } from './activity-icons';
+import {
+  getActivityVisual, CATEGORY_ACCENT, CATEGORY_ICON,
+  accentTint, accentGradient, type CanvasNodeCategory,
+} from '@/lib/components/canvas/canvas-node-kit';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
   root: {
-    display: 'flex', flexDirection: 'column', gap: 8,
-    padding: 8, minWidth: 248, maxWidth: 288,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingHorizontalS, minWidth: '248px', maxWidth: '288px',
     overflowY: 'auto', overflowX: 'hidden',
   },
-  group: { display: 'flex', flexDirection: 'column', gap: 4 },
+  group: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   header: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-    padding: '4px 6px', cursor: 'pointer',
-    backgroundColor: tokens.colorNeutralBackground3,
-    borderRadius: 4,
-    userSelect: 'none',
-  },
-  list: { display: 'flex', flexDirection: 'column', gap: 2 },
-  tile: {
-    display: 'flex', alignItems: 'center', gap: 8,
-    padding: '6px 8px', borderRadius: 4,
+    gap: tokens.spacingHorizontalXS,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+    cursor: 'pointer',
+    borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    cursor: 'grab', fontSize: 12,
+    userSelect: 'none',
     transitionProperty: 'background-color, border-color',
-    transitionDuration: '120ms',
+    transitionDuration: tokens.durationFaster,
     ':hover': {
       backgroundColor: tokens.colorNeutralBackground1Hover,
-      borderColor: tokens.colorBrandStroke1,
+    },
+  },
+  headerLeft: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
+  },
+  headerIcon: {
+    flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+    width: '24px', height: '24px',
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  chevron: {
+    flexShrink: 0,
+    display: 'inline-flex', alignItems: 'center',
+    color: tokens.colorNeutralForeground3,
+  },
+  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  tile: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS, paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS, paddingRight: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    cursor: 'grab', fontSize: tokens.fontSizeBase200,
+    transitionProperty: 'box-shadow, border-color, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-1px)',
     },
     ':active': { cursor: 'grabbing' },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0.01ms',
+      ':hover': { transform: 'none' },
+    },
   },
-  swatch: { width: 10, height: 24, borderRadius: 2, flexShrink: 0 },
-  labelCol: { display: 'flex', flexDirection: 'column', gap: 1, minWidth: 0, flex: 1 },
-  labelText: { fontWeight: 500, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  empty: { padding: '8px 6px', color: tokens.colorNeutralForeground3 },
+  tileBlocked: {
+    cursor: 'not-allowed',
+    opacity: 0.45,
+    boxShadow: tokens.shadow2,
+    ':hover': { boxShadow: tokens.shadow2, transform: 'none' },
+  },
+  iconChip: {
+    flexShrink: 0,
+    width: '28px', height: '28px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', alignItems: 'center', justifyContent: 'center',
+  },
+  labelCol: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0, flex: 1 },
+  labelText: {
+    fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1,
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  typeText: {
+    color: tokens.colorNeutralForeground3,
+    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+  },
+  footer: { marginTop: 'auto', color: tokens.colorNeutralForeground3 },
 });
 
 export interface PaletteProps {
@@ -91,11 +156,25 @@ export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
 
   const total = ACTIVITY_CATALOG.filter(matches).length;
 
+  /** Resolve the kit's accent for a palette group from its first member's canvas category. */
+  const groupAccent = (cat: ActivityCategory): string => {
+    const first = byCategory(cat)[0];
+    const canvasCat: CanvasNodeCategory = first ? canvasCategoryForType(first.type) : 'move';
+    return CATEGORY_ACCENT[canvasCat];
+  };
+
+  const groupGlyph = (cat: ActivityCategory) => {
+    const first = byCategory(cat)[0];
+    const canvasCat: CanvasNodeCategory = first ? canvasCategoryForType(first.type) : 'move';
+    return CATEGORY_ICON[canvasCat];
+  };
+
   const renderGroup = (cat: ActivityCategory, title: string) => {
     const items = byCategory(cat).filter(matches);
     if (items.length === 0) return null;
     // When searching, force-expand every group so results are visible.
     const open = q ? true : !collapsed[cat];
+    const accent = groupAccent(cat);
     return (
       <div className={s.group} key={cat}>
         <div className={s.header} role="button" tabIndex={0}
@@ -103,8 +182,19 @@ export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCollapsed((c) => ({ ...c, [cat]: !c[cat] })); } }}
           aria-expanded={open}
         >
-          <Subtitle2>{title}</Subtitle2>
-          <Caption1>{open ? '▾' : '▸'}</Caption1>
+          <span className={s.headerLeft}>
+            <span
+              className={s.headerIcon}
+              style={{ background: accentTint(accent, 14), color: accent }}
+              aria-hidden="true"
+            >
+              {groupGlyph(cat)}
+            </span>
+            <Subtitle2>{title}</Subtitle2>
+          </span>
+          <span className={s.chevron} aria-hidden="true">
+            {open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+          </span>
         </div>
         {open && (
           <div className={s.list}>
@@ -114,6 +204,8 @@ export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
               const tip = blocked
                 ? (rule?.reason || 'Not allowed at this nesting level')
                 : d.description + (d.runnable ? '' : ` — ${d.remediation || 'not runnable on this backing'}`);
+              // Reuse the SAME glyph + accent the canvas node uses for this type.
+              const { icon, accent: tileAccent } = getActivityVisual(d.type);
               return (
                 <Tooltip
                   key={d.key}
@@ -122,7 +214,7 @@ export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
                   positioning="after"
                 >
                   <div
-                    className={s.tile}
+                    className={mergeClasses(s.tile, blocked && s.tileBlocked)}
                     draggable={!blocked}
                     role="button"
                     tabIndex={0}
@@ -130,7 +222,6 @@ export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
                     data-palette-key={d.key}
                     data-runnable={d.runnable ? 'true' : 'false'}
                     data-blocked={blocked ? 'true' : 'false'}
-                    style={blocked ? { opacity: 0.45, cursor: 'not-allowed' } : undefined}
                     onDragStart={(e) => {
                       if (blocked) { e.preventDefault(); return; }
                       e.dataTransfer.setData('application/x-fiab-activity', d.key);
@@ -142,14 +233,34 @@ export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
                       if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onInsert(d); }
                     }}
                   >
-                    <div className={s.swatch} style={{ backgroundColor: d.color }} />
-                    <span style={{ flexShrink: 0, color: d.color, display: 'inline-flex', alignItems: 'center' }} aria-hidden="true">{activityIcon(d.type)}</span>
+                    <span
+                      className={s.iconChip}
+                      style={{
+                        background: accentGradient(tileAccent),
+                        color: tileAccent,
+                        border: `1px solid ${accentTint(tileAccent, 24)}`,
+                      }}
+                      aria-hidden="true"
+                    >
+                      {icon}
+                    </span>
                     <div className={s.labelCol}>
                       <span className={s.labelText}>{d.label}</span>
-                      <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{d.type}</Caption1>
+                      <Caption1 className={s.typeText}>{d.type}</Caption1>
                     </div>
                     {!d.runnable && (
-                      <Badge size="small" appearance="outline" color="warning">!</Badge>
+                      <Tooltip
+                        content={d.remediation || 'Save + validate only on this backing'}
+                        relationship="label"
+                      >
+                        <Badge
+                          size="small"
+                          appearance="tint"
+                          color="warning"
+                          icon={<Warning16Regular />}
+                          aria-label="Save only — not runnable on this backing"
+                        />
+                      </Tooltip>
                     )}
                   </div>
                 </Tooltip>
@@ -172,8 +283,15 @@ export function ActivityPalette({ onInsert, addRuleFor }: PaletteProps) {
         aria-label="Search activities"
       />
       {ACTIVITY_CATEGORY_ORDER.map((g) => renderGroup(g.id, g.label))}
-      {total === 0 && <Caption1 className={s.empty}>No activities match “{query}”.</Caption1>}
-      <Caption1 style={{ marginTop: 'auto', color: tokens.colorNeutralForeground3 }}>
+      {total === 0 && (
+        <EmptyState
+          icon={<Search16Regular />}
+          title="No activities found"
+          body={`Nothing matches “${query}”. Try a different name or activity type — e.g. “copy”, “notebook”, or “foreach”.`}
+          primaryAction={{ label: 'Clear search', appearance: 'primary', onClick: () => setQuery('') }}
+        />
+      )}
+      <Caption1 className={s.footer}>
         {ACTIVITY_CATALOG.length} activity types · drag to canvas or click to insert
       </Caption1>
     </div>

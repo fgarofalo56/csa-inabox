@@ -842,6 +842,7 @@ import {
   type TokenCredential as _TokenCredential,
 } from '@azure/identity';
 import { armBase, armScope, dfsUrl } from './cloud-endpoints';
+import { discoverResourceCoordsByName } from './resource-graph-coords';
 
 const ARM_SCOPE = armScope();
 // MI-FIRST (see top-of-file credential): never a bare DefaultAzureCredential.
@@ -875,16 +876,41 @@ export function listKnownBlobDataRoles(): Array<{ name: string; id: string }> {
   return Object.entries(BLOB_DATA_ROLES).map(([name, id]) => ({ name, id }));
 }
 
-function resolveStorageScope(container: string): string {
+/**
+ * Resolve the storage account's REAL ARM coordinates ({sub, rg}).
+ *
+ * Self-heal (systemic dlz-attach env-wiring bug): the env `LOOM_DLZ_RG` /
+ * `LOOM_SUBSCRIPTION_ID` frequently point at the ADMIN plane (or a guessed
+ * `rg-csa-loom-dlz-…` name) that the DLZ storage account does NOT live in — so
+ * an ARM call built from env 404s ("Resource group '…' could not be found").
+ * We discover where the account ACTUALLY lives BY NAME via Azure Resource Graph
+ * (cached per-process), and only fall back to env when discovery returns
+ * nothing. ARG is authoritative, so this fixes the wrong-RG case transparently.
+ */
+async function resolveStorageCoords(): Promise<{ sub: string; rg: string }> {
+  const account = getAccountName();
+  const coords = await discoverResourceCoordsByName({
+    resourceType: 'Microsoft.Storage/storageAccounts',
+    name: account,
+  }).catch(() => null);
+  const sub = coords?.subscriptionId || process.env.LOOM_SUBSCRIPTION_ID;
+  const rg = coords?.resourceGroup || process.env.LOOM_DLZ_RG;
+  if (!sub || !rg) {
+    throw new Error(
+      `Could not locate storage account "${account}" in Azure. Set LOOM_SUBSCRIPTION_ID and LOOM_DLZ_RG ` +
+      'to the account\'s real subscription + resource group, or ensure the Console identity can read the ' +
+      'subscription via Resource Graph (Reader on the DLZ subscription).',
+    );
+  }
+  return { sub, rg };
+}
+
+async function resolveStorageScope(container: string): Promise<string> {
   // Storage RBAC supports scoping to a single container via the
   // `blobServices/default/containers/<name>` sub-resource path on the
-  // storage account ARM id. We rebuild the storage account ARM id from
-  // env (LOOM_SUBSCRIPTION_ID + LOOM_DLZ_RG) + the resolved account name.
-  const sub = process.env.LOOM_SUBSCRIPTION_ID;
-  const rg = process.env.LOOM_DLZ_RG;
-  if (!sub || !rg) {
-    throw new Error('LOOM_SUBSCRIPTION_ID and LOOM_DLZ_RG required to resolve container scope');
-  }
+  // storage account ARM id. Coordinates are resolved by name (self-heal) so a
+  // wrong env RG never breaks the Permissions surface.
+  const { sub, rg } = await resolveStorageCoords();
   const account = getAccountName();
   return `/subscriptions/${sub}/resourceGroups/${rg}/providers/Microsoft.Storage/storageAccounts/${account}/blobServices/default/containers/${container}`;
 }
@@ -914,7 +940,7 @@ async function armCall<T = any>(url: string, init: RequestInit = {}): Promise<T>
 }
 
 export async function listContainerRoleAssignments(container: string): Promise<ContainerRoleAssignment[]> {
-  const scope = resolveStorageScope(container);
+  const scope = await resolveStorageScope(container);
   const url = `${armBase()}${scope}/providers/Microsoft.Authorization/roleAssignments?api-version=2022-04-01&$filter=atScope()`;
   const res = await armCall<{ value: any[] }>(url);
   const out: ContainerRoleAssignment[] = [];
@@ -941,9 +967,10 @@ export async function grantContainerRole(
   roleNameOrId: string,
   principalType: 'User' | 'Group' | 'ServicePrincipal' = 'User',
 ): Promise<ContainerRoleAssignment> {
-  const sub = process.env.LOOM_SUBSCRIPTION_ID;
-  if (!sub) throw new Error('LOOM_SUBSCRIPTION_ID required');
-  const scope = resolveStorageScope(container);
+  // Self-heal coords (see resolveStorageCoords): the role-definition id must be
+  // scoped to the SAME subscription the account lives in, not the env default.
+  const { sub } = await resolveStorageCoords();
+  const scope = await resolveStorageScope(container);
   const roleGuid = BLOB_DATA_ROLES[roleNameOrId] || roleNameOrId;
   const roleDefinitionId = `/subscriptions/${sub}/providers/Microsoft.Authorization/roleDefinitions/${roleGuid}`;
   // ARM role-assignment names are random GUIDs. Use crypto.randomUUID() so

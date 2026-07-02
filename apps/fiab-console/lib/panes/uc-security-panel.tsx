@@ -31,21 +31,22 @@ import {
 } from '@fluentui/react-components';
 import {
   ShieldKeyhole20Regular, Play20Regular, Eye20Regular, Beaker20Regular,
+  Filter20Regular, Add20Regular, Delete20Regular,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12, padding: 4, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, padding: tokens.spacingHorizontalXS, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 16,
-    display: 'flex', flexDirection: 'column', gap: 12, backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, backgroundColor: tokens.colorNeutralBackground1,
   },
-  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
-  row: { display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' },
-  actions: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
+  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end' },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
 });
 
 // ------------------------------------------------------------------
@@ -71,7 +72,7 @@ interface UcState {
   needsCatalog?: boolean;
 }
 
-type UcTab = 'mask' | 'filter' | 'current';
+type UcTab = 'mask' | 'filter' | 'policy' | 'current';
 
 export interface UcSecurityPanelProps {
   itemType: string;
@@ -192,11 +193,13 @@ export function UcSecurityPanel({ itemType, itemId, warehouseId, catalog: catalo
           <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as UcTab)}>
             <Tab value="mask" icon={<ShieldKeyhole20Regular />}>Column mask</Tab>
             <Tab value="filter" icon={<ShieldKeyhole20Regular />}>Row filter</Tab>
+            <Tab value="policy" icon={<Filter20Regular />}>ABAC policies</Tab>
             <Tab value="current" icon={<Eye20Regular />}>Current security</Tab>
           </TabList>
 
           {tab === 'mask' && <ColumnMaskWizard ctx={ctx} />}
           {tab === 'filter' && <RowFilterWizard ctx={ctx} />}
+          {tab === 'policy' && <AbacPolicyPanel ctx={ctx} />}
           {tab === 'current' && <CurrentUcSecurity sec={sec} />}
         </>
       )}
@@ -274,7 +277,7 @@ function VerifyResult({ data }: { data: VerifyData | null }) {
   const s = useStyles();
   if (!data) return null;
   return (
-    <div className={s.card} style={{ gap: 8 }}>
+    <div className={s.card} style={{ gap: tokens.spacingVerticalS }}>
       <Subtitle2>Verification — admin (Console UAMI) view</Subtitle2>
       <Caption1>
         Bound masks: {data.masksApplied.length} · bound row filters: {data.rowFiltersApplied.length} ·
@@ -527,6 +530,220 @@ function RowFilterWizard({ ctx }: { ctx: WizardCtx }) {
       <PreviewPane sql={sql} />
       <ResultBar result={result} />
       <VerifyResult data={verify} />
+    </div>
+  );
+}
+
+// ------------------------------------------------------------------
+// ABAC policies — tag-driven row filters + column masks
+// ------------------------------------------------------------------
+
+type PolicyRow = Record<string, unknown>;
+
+function AbacPolicyPanel({ ctx }: { ctx: WizardCtx }) {
+  const s = useStyles();
+  const POL_BASE = '/api/databricks/unity-catalog/policies';
+
+  const [securableType, setSecurableType] = useState<'CATALOG' | 'SCHEMA' | 'TABLE'>(
+    ctx.table ? 'TABLE' : ctx.schema ? 'SCHEMA' : 'CATALOG',
+  );
+  const [effective, setEffective] = useState(true);
+  const [policies, setPolicies] = useState<PolicyRow[]>([]);
+  const [cols, setCols] = useState<string[]>(['Policy Name', 'Policy Type', 'Catalog', 'Schema', 'Table', 'Comment']);
+  const [loading, setLoading] = useState(false);
+  const [gate, setGate] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const securableName = useMemo(() => {
+    if (securableType === 'CATALOG') return ctx.catalog;
+    if (securableType === 'SCHEMA') return ctx.schema ? `${ctx.catalog}.${ctx.schema}` : '';
+    return ctx.schema && ctx.table ? `${ctx.catalog}.${ctx.schema}.${ctx.table}` : '';
+  }, [securableType, ctx.catalog, ctx.schema, ctx.table]);
+
+  const load = useCallback(async () => {
+    if (!securableName) { setPolicies([]); return; }
+    setLoading(true); setErr(null); setGate(null);
+    try {
+      const p = new URLSearchParams({ securable_type: securableType, securable_name: securableName });
+      if (effective) p.set('effective', 'true');
+      if (ctx.warehouseId) p.set('warehouseId', ctx.warehouseId);
+      const r = await fetch(`${POL_BASE}?${p.toString()}`);
+      const j = await r.json();
+      if (j.gated) { setGate(j.error); setPolicies([]); }
+      else if (!j.ok) { setErr(j.error || 'failed to list policies'); setPolicies([]); }
+      else {
+        const rows: PolicyRow[] = j.policies || [];
+        setPolicies(rows);
+        if (rows.length) setCols(Object.keys(rows[0]));
+      }
+    } catch (e: any) { setErr(e?.message || String(e)); }
+    finally { setLoading(false); }
+  }, [securableType, securableName, effective, ctx.warehouseId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  // ---- create form ----
+  const [name, setName] = useState('');
+  const [policyType, setPolicyType] = useState<'ROW FILTER' | 'COLUMN MASK'>('ROW FILTER');
+  const [fnName, setFnName] = useState('');
+  const [toPrincipals, setToPrincipals] = useState('');
+  const [exceptPrincipals, setExceptPrincipals] = useState('');
+  const [whenKey, setWhenKey] = useState('');
+  const [whenVal, setWhenVal] = useState('');
+  const [matchKey, setMatchKey] = useState('');
+  const [matchVal, setMatchVal] = useState('');
+  const [matchAlias, setMatchAlias] = useState('');
+  const [usingCols, setUsingCols] = useState('');
+  const [orReplace, setOrReplace] = useState(false);
+  const [sql, setSql] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<ExecResult | null>(null);
+
+  const csv = (v: string) => v.split(',').map((x) => x.trim()).filter(Boolean);
+
+  const buildParams = () => {
+    const matchColumns = matchKey.trim()
+      ? [{ tagKey: matchKey.trim(), tagValue: matchVal.trim() || undefined, alias: matchAlias.trim() || undefined }]
+      : [];
+    const usingColumns = csv(usingCols).map((tok) => {
+      if (/^-?\d+$/.test(tok)) return { kind: 'int', value: tok };
+      if (/^'.*'$/.test(tok)) return { kind: 'string', value: tok.slice(1, -1) };
+      return { kind: 'alias', value: tok };
+    });
+    return {
+      name: name.trim(), orReplace, securableType, securableName,
+      policyType, functionName: fnName.trim(),
+      toPrincipals: csv(toPrincipals),
+      exceptPrincipals: csv(exceptPrincipals),
+      when: whenKey.trim() ? { tagKey: whenKey.trim(), tagValue: whenVal.trim() || undefined } : undefined,
+      matchColumns,
+      onColumnAlias: policyType === 'COLUMN MASK' ? (matchAlias.trim() || undefined) : undefined,
+      usingColumns,
+    };
+  };
+
+  const ready = !!securableName && !!name.trim() && !!fnName.trim() && !!toPrincipals.trim()
+    && (policyType === 'ROW FILTER' || !!matchAlias.trim());
+
+  const post = async (preview: boolean) => {
+    setBusy(true); setResult(null);
+    const r = await callRoute(POL_BASE, { action: 'create', preview, params: buildParams(), warehouseId: ctx.warehouseId });
+    setSql(r.sql || (preview ? '' : sql));
+    if (!preview || !r.ok) setResult(r);
+    if (!preview && r.ok) void load();
+    setBusy(false);
+  };
+  const doDrop = async (polName: string) => {
+    if (!polName) return;
+    setBusy(true); setResult(null);
+    const r = await callRoute(POL_BASE, { action: 'drop', name: polName, securable_type: securableType, securable_name: securableName, warehouseId: ctx.warehouseId });
+    setSql(r.sql || sql); setResult(r); if (r.ok) void load();
+    setBusy(false);
+  };
+
+  return (
+    <div className={s.card}>
+      <Subtitle2>ABAC policies (tag-driven row filters + column masks)</Subtitle2>
+      <Caption1>
+        One policy on a catalog / schema / table applies to every descendant table whose columns
+        carry the matched governed tags — the scalable, tag-driven evolution of per-table masks and
+        filters. Mirrors <code>CREATE POLICY … {'{ROW FILTER | COLUMN MASK}'} … FOR TABLES MATCH
+        COLUMNS has_tag_value(…)</code>.
+      </Caption1>
+
+      <div className={s.row}>
+        <Field label="Scope securable">
+          <Dropdown value={securableType} selectedOptions={[securableType]} onOptionSelect={(_, d) => setSecurableType((d.optionValue as any) || 'SCHEMA')}>
+            <Option value="CATALOG" text="Catalog">Catalog</Option>
+            <Option value="SCHEMA" text="Schema">Schema</Option>
+            <Option value="TABLE" text="Table">Table</Option>
+          </Dropdown>
+        </Field>
+        <Field label="Securable name (from tree selection)" style={{ minWidth: 280 }}>
+          <Input value={securableName} readOnly placeholder="pick a catalog / schema / table" />
+        </Field>
+        <Button appearance={effective ? 'primary' : 'outline'} onClick={() => setEffective((v) => !v)}>
+          {effective ? 'Effective (+inherited)' : 'Direct only'}
+        </Button>
+        <Button appearance="outline" onClick={() => load()} disabled={loading}>Refresh</Button>
+        {loading && <Spinner size="tiny" />}
+      </div>
+
+      {gate && (
+        <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Configuration required</MessageBarTitle>{gate}</MessageBarBody></MessageBar>
+      )}
+      {err && (
+        <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not list policies</MessageBarTitle>{err}</MessageBarBody></MessageBar>
+      )}
+      {!securableName && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>Pick a {securableType.toLowerCase()}</MessageBarTitle>
+            Select a {securableType.toLowerCase()} in the left tree (and a schema / table where needed) to scope the policy.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      <div className={s.tableWrap}>
+        <Table size="small" aria-label="ABAC policies">
+          <TableHeader><TableRow>{cols.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}<TableHeaderCell> </TableHeaderCell></TableRow></TableHeader>
+          <TableBody>
+            {policies.length === 0 && <TableRow><TableCell colSpan={cols.length + 1}><Caption1>No policies on this securable.</Caption1></TableCell></TableRow>}
+            {policies.map((p, i) => (
+              <TableRow key={i}>
+                {cols.map((c) => <TableCell key={c} className={s.mono}>{String(p[c] ?? '')}</TableCell>)}
+                <TableCell>
+                  <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={busy || !p['Policy Name']}
+                    title="Drop this policy" aria-label="Drop policy" onClick={() => doDrop(String(p['Policy Name'] || ''))} />
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+
+      <Subtitle2>Create policy</Subtitle2>
+      <div className={s.grid2}>
+        <Field label="Policy name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="mask_ssn" /></Field>
+        <Field label="Policy type" required>
+          <Dropdown value={policyType} selectedOptions={[policyType]} onOptionSelect={(_, d) => setPolicyType((d.optionValue as any) || 'ROW FILTER')}>
+            <Option value="ROW FILTER" text="Row filter">Row filter</Option>
+            <Option value="COLUMN MASK" text="Column mask">Column mask</Option>
+          </Dropdown>
+        </Field>
+      </div>
+      <Field label="UDF — fully-qualified row-filter / column-mask function" required hint="e.g. main.security.redact_ssn — needs EXECUTE on the UDF">
+        <Input value={fnName} onChange={(_, d) => setFnName(d.value)} placeholder="catalog.schema.function" />
+      </Field>
+      <div className={s.grid2}>
+        <Field label="TO principals (comma-separated)" required hint="users, groups (e.g. account users) or SPs">
+          <Input value={toPrincipals} onChange={(_, d) => setToPrincipals(d.value)} placeholder="us_analysts, account users" />
+        </Field>
+        <Field label="EXCEPT principals (optional)"><Input value={exceptPrincipals} onChange={(_, d) => setExceptPrincipals(d.value)} placeholder="admins" /></Field>
+      </div>
+      <div className={s.grid2}>
+        <Field label="WHEN table tag key (optional)" hint="has_tag / has_tag_value — limits which tables match"><Input value={whenKey} onChange={(_, d) => setWhenKey(d.value)} placeholder="sensitivity" /></Field>
+        <Field label="WHEN tag value (optional)"><Input value={whenVal} onChange={(_, d) => setWhenVal(d.value)} placeholder="high" /></Field>
+      </div>
+      <div className={s.grid2}>
+        <Field label={`MATCH COLUMNS tag key${policyType === 'COLUMN MASK' ? '' : ' (optional)'}`} hint={policyType === 'COLUMN MASK' ? 'required — identifies columns to mask' : 'optional for row filters'}>
+          <Input value={matchKey} onChange={(_, d) => setMatchKey(d.value)} placeholder="pii" />
+        </Field>
+        <Field label="MATCH COLUMNS tag value (optional)"><Input value={matchVal} onChange={(_, d) => setMatchVal(d.value)} placeholder="ssn" /></Field>
+      </div>
+      <div className={s.grid2}>
+        <Field label={`Matched-column alias${policyType === 'COLUMN MASK' ? '' : ' (optional)'}`} hint="binds the matched column for ON COLUMN / USING COLUMNS">
+          <Input value={matchAlias} onChange={(_, d) => setMatchAlias(d.value)} placeholder="ssn_col" />
+        </Field>
+        <Field label="USING COLUMNS args (comma-separated)" hint="aliases, integers, or 'strings' passed to the UDF"><Input value={usingCols} onChange={(_, d) => setUsingCols(d.value)} placeholder="ssn_col, 4" /></Field>
+      </div>
+      <div className={s.actions}>
+        <Button appearance={orReplace ? 'primary' : 'outline'} onClick={() => setOrReplace((v) => !v)}>{orReplace ? 'CREATE OR REPLACE' : 'CREATE'}</Button>
+        <Button icon={<Eye20Regular />} appearance="outline" disabled={!ready || busy} onClick={() => post(true)}>Preview SQL</Button>
+        <Button icon={<Add20Regular />} appearance="primary" disabled={!ready || busy} onClick={() => post(false)}>{busy ? 'Working…' : 'Create policy'}</Button>
+      </div>
+      <PreviewPane sql={sql} />
+      <ResultBar result={result} />
     </div>
   );
 }

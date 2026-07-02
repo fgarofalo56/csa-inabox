@@ -14,12 +14,38 @@ one-click catalog + deploy wizard. Grounded in Microsoft Learn:
 Vetting source: `temp/mcp-gov-research.md` (top-25 gov-safe MCP servers,
 permissive licenses only) and `docs/adr/0026-ms-learn-mcp-as-external-grounding.md`.
 
+> **Three catalog families (source-of-truth: `lib/mcp/catalog.ts`).** This doc now
+> covers all three families this file exports, NOT just the deploy-an-image path:
+> 1. **`MCP_CATALOG` (`DeployableMcpServer[]`)** — the authoritative gov-safety +
+>    curated library (license / `govSafe` / `airGapSafe` / `source` / `externalHosts`
+>    / `fabricFamily`) that `govMetaFor()` joins the deploy tiles to. It now also
+>    carries the **Microsoft-official deployable servers** (`github.com/microsoft/mcp`)
+>    and the **Fabric-family opt-ins** — see "Microsoft-official deployable servers"
+>    and "Fabric family" below.
+> 2. **`MCP_DEPLOY_CATALOG` (`McpCatalogEntry[]`)** — the operational subset with
+>    real, pullable HTTP/SSE images the browse-and-deploy wizard provisions.
+> 3. **`REMOTE_BUILTIN_MCP_CATALOG` (`RemoteBuiltinMcpEntry[]`)** — the new
+>    **remote built-in Microsoft MCP family**: already-hosted Microsoft HTTPS
+>    Streamable-HTTP endpoints reached per-user (NOT images). This GENERALIZES the
+>    Power BI `RemoteBuiltinMcp` / `isPbiMcpConfigured()` plumbing — see "Remote
+>    built-in Microsoft MCP family" below — and is paired with ~30 Microsoft agent
+>    skills (`lib/copilot/ms-skills.ts`, attributed to `github.com/microsoft/skills`).
+>
+> A separate, legacy 29-entry operational array also lives in
+> `lib/azure/mcp-catalog.ts` (`MCP_CATALOG` of `McpCatalogEntry`, integrity-tested
+> in `lib/azure/__tests__/mcp-catalog.test.ts`); it predates the per-field
+> `configSchema` consolidation and is **not** where the Microsoft additions live —
+> those are in `lib/mcp/catalog.ts`.
+
 > Reconciliation note (audit-t45): two parallel implementations of this surface
-> existed. The canonical one — kept and documented here — is the **per-server
-> `configSchema` + per-field Key Vault secret** path. The older single-`secretEnv`
-> implementation (`lib/azure/mcp-catalog.ts`, `lib/azure/mcp-deploy-client.ts`,
-> `lib/components/admin/mcp-catalog-panel.tsx`, `app/api/admin/mcp-catalog/*`)
-> was removed so the panel renders ONE coherent deploy surface (`ui-parity.md`).
+> existed. The canonical one — documented here — is the **per-server
+> `configSchema` + per-field Key Vault secret** path in `lib/mcp/catalog.ts`. The
+> older single-`secretEnv` modules (`lib/azure/mcp-catalog.ts`,
+> `lib/azure/mcp-deploy-client.ts`, `lib/components/admin/mcp-catalog-panel.tsx`)
+> are RETAINED (the legacy gov array + its tests still build), but the duplicate
+> `app/api/admin/mcp-catalog/*` route family was removed so the panel renders ONE
+> coherent deploy surface (`ui-parity.md`). New work — including the Microsoft
+> additions + the remote built-in family — lands ONLY in `lib/mcp/catalog.ts`.
 
 ## Capability inventory (the deploy lifecycle a platform admin performs)
 
@@ -135,21 +161,215 @@ with `LOOM_DEFAULT_FABRIC_WORKSPACE` unset.
   Azure-native servers (Azure MCP, Postgres, Kubernetes, Redis, dbhub) so IL5
   admins never see ungated SaaS tiles.
 
-## Deployable 25-server library
+## Curated gov-safety library (`MCP_CATALOG` — `DeployableMcpServer[]`)
 
-`lib/azure/mcp-catalog.ts` `MCP_CATALOG` is the curated, vetted set of **exactly
-25** deployable MCP servers (integrity-tested in `__tests__/mcp-catalog.test.ts`).
-Each entry is a real, pullable HTTP/SSE image (`mcp/*` Docker MCP catalog,
-`mcr.microsoft.com/*`, or `ghcr.io/*`), permissively licensed (Apache-2.0 / MIT),
-and carries: category, egress profile, `govSafe`/`airGapSafe`/`defaultRecommended`
-flags, `externalHosts`, optional `secretEnv` (→ Key Vault secretRef), `needsStorage`
-(→ Azure Files mount at `/data`), and a **dedicated `healthPath`** (`/health` or
-`/healthz`) wired as Container Apps liveness/readiness probes — never the MCP
-JSON-RPC endpoint, per Learn. Community-HTTP-transport entries are tagged
-`preview: true`.
+`lib/mcp/catalog.ts` `MCP_CATALOG` is the AUTHORITATIVE gov-safety + curated
+library that `govMetaFor()` joins the deploy tiles to (research-grounded in
+`temp/mcp-gov-research.md`, integrity-tested in `lib/mcp/__tests__/catalog.test.ts`,
+which asserts ≥ 25 entries + unique ids). It is **33 entries** today — the 25
+gov-research servers + Grafana + the **7 Microsoft additions** below (5 Microsoft-
+official deployables + 2 Fabric opt-ins). Each entry carries: `category`, `source`
+(`anthropic` / `microsoft` / `vendor` / `community`), `repo`, `license`,
+`govSafe` / `airGapSafe` / `defaultRecommended`, `externalHosts`, an optional
+`fabricFamily` flag, and a typed `configSchema` (one Fluent field per setting —
+`secret: true` → Key Vault secretRef; never a JSON box, per
+`loom-no-freeform-config`). Almost every entry is `transport: 'stdio'` +
+`hostVia: 'container-apps'` → `requiresHosting()` honest-gates them ("deploy to
+Container Apps for an HTTPS endpoint, then register") rather than implying they
+are already connectable; Grafana is the lone `transport: 'http'` /
+`hostVia: 'already-http'` exception.
 
-The retired single-secret path's env vars (`LOOM_CAE_ID`, `LOOM_CAE_NAME`,
-`LOOM_CAE_DEFAULT_DOMAIN`, `LOOM_MCP_CATALOG_REGISTRY`) were pruned from
-`admin-plane/main.bicep` when Implementation B was removed, so bicep and runtime
-stay in sync (no dead env). All env vars derive from module outputs — no manual
-post-deploy step.
+## Microsoft-official deployable servers (`github.com/microsoft/mcp`)
+
+Added to `MCP_CATALOG` as `source: 'microsoft'`, `hostVia: 'container-apps'`,
+all Azure-native (zero Fabric/Power BI host on the default path). Azure MCP
+(`azure`, `@azure/mcp`) and Playwright (`playwright`, `@playwright/mcp`) were
+already present and are left untouched. Confirmed via `microsoft_docs_search`
+(2026-06):
+
+| id | server | image / package | gov / air-gap | honest gate when no public image |
+|----|--------|-----------------|---------------|----------------------------------|
+| `microsoft-sql` | Microsoft SQL (Data API builder) | `mcr.microsoft.com/azure-databases/data-api-builder:latest` | govSafe ✅ / air-gap ✅ | — (real first-party image; supply the Azure SQL connection string → Key Vault) |
+| `azure-devops` | Azure DevOps | `npx @azure-devops/mcp <org>` | govSafe ✅ / air-gap ✗ (`dev.azure.com`) | — (Entra ID / PAT; a Microsoft-hosted remote `https://mcp.dev.azure.com/<org>` variant also exists) |
+| `aks` | Azure Kubernetes Service | `IMAGE_REF` (build `Azure/aks-mcp` from source) | govSafe ✅ / air-gap ✗ | **IMAGE_REF required** — no first-party public image yet; build, push to ACR, set the ref |
+| `markitdown` | MarkItDown | `uvx markitdown-mcp` | govSafe ✅ / air-gap ✅ | — (runs fully local, no external calls) |
+| `nuget` | NuGet | `IMAGE_REF` (package the NuGet MCP server) | govSafe ✅ / air-gap ✗ (`api.nuget.org`) | **IMAGE_REF required** — no first-party public image yet |
+
+Where no first-party public HTTP image exists, the entry carries a required
+`IMAGE_REF` `configSchema` field → an honest "set image ref" gate
+(`no-vaporware`), so a tile can never imply a non-existent image will deploy.
+
+## Fabric family — explicit opt-in ONLY (`no-fabric-dependency`)
+
+Two `fabricFamily: true` entries reach `api.fabric.microsoft.com` and REQUIRE a
+Microsoft Fabric capacity. They are `govSafe: false` + `defaultRecommended: false`
+→ filtered out of gov boundaries (`serversForCloud`), never auto-deployed, never
+on any default code path. Loom's Azure-native analytics (ADX / Synapse / Data API
+builder) stays the day-one default; these only augment it when an admin explicitly
+browses + deploys them.
+
+| id | server | Microsoft-hosted endpoint (remote) | Azure-native equivalent |
+|----|--------|------------------------------------|-------------------------|
+| `fabric` | Microsoft Fabric (Core) | `https://api.fabric.microsoft.com/v1/mcp/core` (Entra OAuth) | ADX / Synapse / Data API builder |
+| `fabric-rti` | Microsoft Fabric RTI | `https://api.fabric.microsoft.com/v1/mcp` | Azure Data Explorer (ADX) + Azure Monitor alerts |
+
+Both have no first-party public image (local `Fabric.Mcp.Server` builds from
+`microsoft/mcp`) → `IMAGE_REF`-gated, with the remote endpoint noted in the `desc`
+for clients that point a remote MCP at it.
+
+## Operational deploy catalog (`MCP_DEPLOY_CATALOG` — `McpCatalogEntry[]`)
+
+The browse-and-deploy wizard (`McpCatalogBrowser`) renders this operational
+subset — entries with a real, pullable HTTP/SSE image and a working transport —
+joined to gov metadata via `govMetaFor()`. Today: `github`
+(`ghcr.io/github/github-mcp-server`, streamable-HTTP), `grafana`
+(`mcp/grafana`, streamable-HTTP), `fetch` and `time` (`mcp/*`, SSE, `preview`).
+Per-field `secret: true` → Key Vault secretRef; everything else → plain env var.
+The deploy route's env vars derive from module outputs — no manual post-deploy
+step.
+
+## Remote built-in Microsoft MCP family (`REMOTE_BUILTIN_MCP_CATALOG`)
+
+A THIRD family, distinct from both image-deploy catalogs. These are
+**already-hosted Microsoft HTTPS Streamable-HTTP endpoints reached per-user** —
+there is no image to pull. It **generalizes the Power BI plumbing** (the
+literal-typed `RemoteBuiltinMcp` / `isPbiMcpConfigured()` / `pbiMcpScopeUris()`
+that already shipped) into a string-typed `RemoteBuiltinMcpEntry` so one shape
+covers Learn (no auth), the Entra-OBO servers, and GitHub (Key Vault PAT). It is
+NOT a parallel system: every entry registers as the SAME `McpServerConfig` shape
+(`source: 'remote-builtin'`), is reached by the SAME `mcp-client`
+(`resolveAuthHeader` + threaded `userToken`), and is advertised by the SAME
+`buildMcpShim` as `mcp_<slug>_<tool>`. The existing Power BI entry is **projected
+in unchanged** (`POWERBI_REMOTE_ENTRY`, still gated by `isPbiMcpConfigured()`).
+
+`McpServerConfig` (`lib/types/mcp-config.ts`) needed only backward-compatible
+widenings: `authMethod` already had `'header' | 'key-vault' | 'entra-obo'` (+
+`'none'`) with `oboResource` / `oboScopes`, and `source` already had
+`'remote-builtin'`; the one additive field is **`oboResourceKey?`** — the key the
+per-user token store is keyed by, so ARM / Graph / Foundry / Dataverse each resolve
+their OWN delegated token (defaults to `oboResource`).
+
+### Auth models + honest gates (`no-vaporware`)
+
+- **`none`** → maps to `authMethod: 'header'` with an empty value (`resolveAuthHeader`
+  emits no `Authorization` header). Microsoft Learn only.
+- **`entra-obo`** → per-user On-Behalf-Of bearer for `oboResource`/`oboScopes`,
+  minted via the SHARED Loom confidential client (`LOOM_MSAL_CLIENT_ID` +
+  `loom-msal-client-secret`) — **no new secret literal**. Each carries an honest
+  gate naming the exact `LOOM_*_ENABLED` toggle, the endpoint env, the OBO
+  resource/scope, and any tenant consent.
+- **`key-vault`** → a stored bearer (GitHub PAT, GitHub OAuth — NOT Entra),
+  resolved from a Key Vault **secretRef name** (`LOOM_GITHUB_MCP_PAT_SECRET`),
+  never a literal.
+
+### Catalog rows + endpoint provenance (`microsoft_docs_search`, 2026-06)
+
+| id | server | auth | resolved endpoint (env override) | default-on? |
+|----|--------|------|----------------------------------|-------------|
+| `ms-learn` | Microsoft Learn | none | `https://learn.microsoft.com/api/mcp` | **YES — sole default-on** |
+| `azure-arm` | Azure Resources (ARM) | entra-obo (`management.azure.com/user_impersonation`) | endpoint-env-gated (self-host w/ OBO) | opt-in |
+| `ms-foundry` | Microsoft Foundry | entra-obo (`ai.azure.com/.default`) | `https://mcp.ai.azure.com` (preview) | opt-in |
+| `github` | GitHub | key-vault PAT | `https://api.githubcopilot.com/mcp` | opt-in |
+| `ms-graph` | Microsoft Graph (Enterprise) | entra-obo (`graph.microsoft.com/.default`) | `https://mcp.svc.cloud.microsoft/enterprise` (preview) | opt-in |
+| `m365` | Microsoft 365 | entra-obo (Graph) | endpoint-env-gated (not GA) | opt-in |
+| `teams` | Microsoft Teams | entra-obo (Graph) | endpoint-env-gated (not GA) | opt-in |
+| `onedrive-sharepoint` | OneDrive & SharePoint | entra-obo (Graph) | endpoint-env-gated (not GA) | opt-in |
+| `ms-sentinel` | Microsoft Sentinel | entra-obo (`sentinel.microsoft.com/.default`) | `https://sentinel.microsoft.com/mcp/data-exploration` (preview) | opt-in |
+| `admin-center` | M365 Admin Center | entra-obo (Graph) | endpoint-env-gated (not GA) | opt-in |
+| `dataverse` | Microsoft Dataverse | entra-obo (per-org origin) | endpoint-env-gated (`https://<org>.crm.dynamics.com/api/mcp`) | opt-in |
+| `powerbi-remote` | Power BI (remote) | entra-obo (`analysis.windows.net/powerbi/api`) | `https://api.fabric.microsoft.com/v1/mcp/powerbi` | opt-in (unchanged) |
+
+**`no-fabric-dependency`:** Microsoft Learn (auth `none`, zero config) is the
+**SOLE default-on** entry — `defaultOnRemoteMcps()` returns it, and
+`listMcpServers` / `buildMcpShim` inject it as a synthetic enabled row so
+`mcp_mslearn_*` tools are live day-one with zero admin action. Every other entry
+is inert until its gate is satisfied. Where a Microsoft host is not yet GA
+(`m365` / `teams` / `onedrive-sharepoint` / `admin-center` / `azure-arm`) the
+`defaultEndpoint` is **empty** and the admin must supply `endpointEnv` first — so
+an unconfirmed host is NEVER on a live path. No `api.fabric.microsoft.com` /
+`api.powerbi.com` host appears on any default path; the Power BI + Dataverse
+(tenant-setting) + Fabric rows stay strictly opt-in.
+
+Selectors mirror the Power BI helpers: `msRemoteMcp(id)`,
+`msRemoteMcpConfigured(id)` (generalized `isPbiMcpConfigured()`),
+`msRemoteMcpScopeUris(id)` (generalized `pbiMcpScopeUris()`, deriving a per-org
+audience from the endpoint origin when `oboResource` is empty), and
+`defaultOnRemoteMcps()`.
+
+### Shim generalization (`lib/azure/mcp-shim.ts`)
+
+The one real architectural extension: `buildMcpShim` previously hard-coded
+`getPbiUserToken(oid)` for the entra-obo path. It now resolves the per-user token
+keyed by the server's `oboResourceKey ?? oboResource`, falling back to
+`getPbiUserToken` for a legacy Power BI row with no resource (back-compat). Tool
+prefixes (`mcp_<slug>_`) are derived identically by `msMcpPrefix()` in
+`ms-skills.ts` and the shim's `mcpToolPrefixSlug`.
+
+## Microsoft agent skills (`lib/copilot/ms-skills.ts`)
+
+~30 descriptors adapted from the open-source Microsoft agent skills
+(`github.com/microsoft/skills`), EXTENDING the Power BI skill plumbing rather
+than forking it: each is a `LoomCopilotSkill` (imported from
+`lib/copilot/powerbi-skills.ts`) widened additively with optional
+`mcpToolPrefix?` + `attribution?` (the `MsAgentSkill` interface). Every skill's
+`defaultTarget` is `'azure-native'` and its `toolNames` map ONE-FOR-ONE to tools
+already registered in the `LoomToolRegistry` (`loom_self_audit` / `loom_heal` /
+`item_*` / `lakehouse_*` / `adx_*` / `kql_*` / `apim_*` / `foundry_list_connections`
+/ `iq_*` …) — no new tools minted. `mcpToolPrefix` ties a skill to the OPT-IN
+Microsoft MCP that augments it once connected (`mcp_mslearn_` is default-on);
+`msSkillSystemBlock` advertises those `mcp_<slug>_*` tools when connected and
+otherwise emits the HONEST gate **verbatim from the catalog entry's `gate`** (so
+gate copy can never drift from `lib/mcp/catalog.ts`).
+
+Wiring (single source, no parallel path): `copilot-personas.ts` imports
+`MS_AGENT_SKILLS` and injects them into pane `systemPrompt`s; the orchestrator
+(`copilot-orchestrator.ts`) composes `msSkillSystemBlocksForPane(contextSlug,
+{ connectedPrefixes: msConnectedMcpPrefixes(reg) })` as an extra system message
+after running `buildMcpShim`. Grouped: infra/ops (Azure prepare/deploy/validate/
+RBAC/cost/diagnostics/compliance/storage/messaging/quotas/AI-gateway), Foundry/AI,
+data/messaging (Cosmos / Postgres / Event Hubs / Service Bus / Event Grid),
+identity/monitoring (Entra / Key Vault / Kusto / KQL / Monitor / App Insights),
+and dev (cloud-architect / mcp-builder / Learn docs / React-Flow node /
+skill-creator).
+
+## Admin UI — "Microsoft MCP servers" section (web3-ui)
+
+BFF route `app/api/admin/mcp-servers/ms-remote/route.ts` generalizes
+`powerbi/route.ts`: `GET ?id=<entry-id>` returns per-server status + the honest
+gate; `GET` with no id summarizes the whole family (no probe — the panel never
+hangs on load); `GET ?id=…&probe=1` (when configured) runs a REAL
+`initialize → tools/list` Streamable-HTTP handshake; `POST` registers the row as
+`source: 'remote-builtin'` with the right `authMethod` + `oboResource`/`oboScopes`
+/`oboResourceKey`. `mcp-servers-panel.tsx` renders the
+`MicrosoftMcpServersSection` as a card grid reusing the existing `pbiCard`
+Web-3.0 styling (Loom tokens, `shadow4 → shadow16` on hover): Learn shows
+"default-on, no auth"; OBO servers show the honest gate naming the env + scopes +
+consent; GitHub shows the Key Vault-secret gate. Deployable Microsoft entries
+appear automatically in the existing `McpCatalogBrowser`.
+
+## Remote-family bicep + env sync (`docs_source_of_truth`)
+
+- **`LOOM_MS_LEARN_MCP_ENABLED` defaults true** → Learn tools live day-one with
+  zero config (synthetic enabled row from `defaultOnRemoteMcps()`); set `=false`
+  to disable, or `LOOM_MS_LEARN_MCP_ENDPOINT` to override.
+- Per-server opt-in toggles (`LOOM_<SERVER>_MCP_ENABLED`) + endpoint/scope
+  overrides fold into the `loomBackends.mcp` sub-object — the same
+  under-the-256-ARM-param trick as `loomWarehouseBackend` / the Power BI envs.
+- OBO servers **reuse the existing confidential client** (`LOOM_MSAL_CLIENT_ID` +
+  `loom-msal-client-secret`) for the per-user OBO exchange — no new secret literal.
+- GitHub PAT via Key Vault `secretRef` only (`LOOM_GITHUB_MCP_PAT_SECRET` = the
+  secret NAME, sent as `Authorization: Bearer <PAT>`).
+
+## Rule compliance
+
+- **`no-fabric-dependency`**: Microsoft Learn (no auth) is the SOLE default-on
+  server; everything else opt-in; Fabric / Fabric-RTI / Power BI / Dataverse are
+  explicit opt-ins; no `api.fabric` / `api.powerbi` host on any default path.
+- **`no-vaporware`**: real endpoints + auth; honest Fluent MessageBar gate naming
+  the exact env / secret / scope / consent when unconfigured; `?probe=1` makes a
+  REAL `initialize → tools/list` call; not-yet-GA hosts are endpoint-env-gated.
+- **Secrets**: Key Vault `secretRef` only; OBO carries no static secret.
+- **`web3-ui`**: Loom tokens for every admin card (reuses `pbiCard`).
+- **TypeScript**: all additions are additive; the only interface widenings
+  (`LoomCopilotSkill` optional fields; `McpServerConfig.oboResourceKey?`) are
+  backward-compatible — zero new `tsc` errors atop the pre-existing baseline.

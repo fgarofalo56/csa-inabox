@@ -22,18 +22,18 @@ import type {
 } from '@/lib/azure/cosmos-account-client';
 
 const useStyles = makeStyles({
-  section: { display: 'flex', flexDirection: 'column', gap: 8 },
-  rows: { display: 'flex', flexDirection: 'column', gap: 6 },
-  row: { display: 'flex', alignItems: 'center', gap: 6 },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS },
+  rows: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge },
+  row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
   pathInput: { flex: 1 },
   group: {
-    display: 'flex', flexDirection: 'column', gap: 6,
-    padding: 8, borderRadius: tokens.borderRadiusMedium,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge,
+    padding: tokens.spacingHorizontalS, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   groupHead: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' },
-  orderDd: { minWidth: 130 },
+  orderDd: { minWidth: '130px' },
   note: { color: tokens.colorNeutralForeground3 },
   addBtn: { alignSelf: 'flex-start' },
 });

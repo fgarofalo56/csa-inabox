@@ -35,12 +35,12 @@ const SETTINGS_ROUTE = '/api/cosmos/container-settings';
 const THROUGHPUT_ROUTE = '/api/cosmos/container-throughput';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12, padding: '8px 4px', overflow: 'auto', height: '100%' },
-  head: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, padding: '8px 4px', overflow: 'auto', height: '100%' },
+  head: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   kv: { display: 'grid', gridTemplateColumns: 'max-content 1fr', gap: '4px 12px', alignItems: 'center' },
   k: { color: tokens.colorNeutralForeground3 },
-  section: { display: 'flex', flexDirection: 'column', gap: 8 },
-  actionRow: { display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS },
+  actionRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS },
   note: { color: tokens.colorNeutralForeground3 },
 });
 

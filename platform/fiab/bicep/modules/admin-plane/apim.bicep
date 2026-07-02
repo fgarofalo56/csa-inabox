@@ -195,7 +195,22 @@ resource sampleApi 'Microsoft.ApiManagement/service/apis@2024-06-01-preview' = i
     path: 'loom-sample'
     protocols: [ 'https' ]
     subscriptionRequired: true
-    serviceUrl: 'https://loom-sample.invalid'   // never called — the operation is mocked
+    serviceUrl: 'https://loom-sample.invalid'   // never called — answered by the API-level return-response policy below
+  }
+}
+
+// API-LEVEL policy: short-circuit EVERY request to the sample API with a real
+// 200 + sample JSON (return-response), so the Marketplace "Try it" works for any
+// operation/path with no backend. More robust than an operation-only mock-response
+// (which only covers the one matched operation and needs its example to resolve —
+// the cause of the live "Try it returns an error" when the call fell through to the
+// loom-sample.invalid backend).
+resource sampleApiPolicy 'Microsoft.ApiManagement/service/apis/policies@2024-06-01-preview' = if (seedSampleApi) {
+  parent: sampleApi
+  name: 'policy'
+  properties: {
+    format: 'rawxml'
+    value: '<policies><inbound><base /><return-response><set-status code="200" reason="OK" /><set-header name="Content-Type" exists-action="override"><value>application/json</value></set-header><set-body>{"message":"Hello from the Loom Sample API","method":"@(context.Request.Method)","path":"@(context.Request.Url.Path)","utc":"@(DateTime.UtcNow.ToString("o"))","note":"This sample API returns a mocked response so Try it works with no backend."}</set-body></return-response></inbound><backend><base /></backend><outbound><base /></outbound><on-error><base /></on-error></policies>'
   }
 }
 

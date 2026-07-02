@@ -8,9 +8,11 @@ import {
   Database24Filled, Flash24Filled, ChartMultiple24Filled, ShieldCheckmark24Filled,
   Sparkle24Filled, Bot24Filled, Apps24Filled, ServerLink24Filled,
   HatGraduation24Filled,
+  Rocket20Filled, History20Filled, AppsAddIn20Filled,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { PageShell } from '@/lib/components/page-shell';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { LoomLogo } from '@/lib/components/loom-logo';
 import { RecentItems } from '@/lib/components/recent-items';
@@ -20,13 +22,14 @@ const useStyles = makeStyles({
   hero: {
     background: 'var(--loom-hero-bg)',
     color: 'white',
-    paddingTop: '48px', paddingRight: '56px', paddingBottom: '48px', paddingLeft: '56px',
-    borderRadius: '18px',
-    marginBottom: '32px',
+    paddingTop: tokens.spacingVerticalXXXL, paddingRight: tokens.spacingHorizontalXXXL,
+    paddingBottom: tokens.spacingVerticalXXXL, paddingLeft: tokens.spacingHorizontalXXXL,
+    borderRadius: tokens.borderRadiusXLarge,
+    marginBottom: tokens.spacingVerticalXXL,
     display: 'flex',
     alignItems: 'center',
-    gap: '40px',
-    boxShadow: '0 12px 32px rgba(31, 111, 235, 0.18)',
+    gap: tokens.spacingHorizontalXXXL,
+    boxShadow: tokens.shadow16,
     position: 'relative',
     overflow: 'hidden',
   },
@@ -36,30 +39,35 @@ const useStyles = makeStyles({
     background: 'radial-gradient(circle at 90% 10%, rgba(255,255,255,0.18), transparent 45%), radial-gradient(circle at 10% 110%, rgba(216,159,61,0.30), transparent 50%)',
     pointerEvents: 'none',
   },
-  heroCopy: { flex: 1, position: 'relative' },
+  heroCopy: { flex: 1, minWidth: 0, position: 'relative' },
   heroTitle: { color: 'white', fontWeight: 700, letterSpacing: '-0.01em' },
-  heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: '16px', lineHeight: 1.6, maxWidth: '720px', marginTop: '14px' },
-  heroChips: { display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '24px' },
+  heroSub: { color: 'rgba(255,255,255,0.92)', fontSize: tokens.fontSizeBase400, lineHeight: 1.6, maxWidth: '720px', marginTop: tokens.spacingVerticalM },
+  heroChips: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', marginTop: tokens.spacingVerticalXL },
   chip: {
-    fontSize: '12px',
-    paddingTop: '7px', paddingRight: '14px', paddingBottom: '7px', paddingLeft: '14px',
-    borderRadius: '999px',
+    fontSize: tokens.fontSizeBase200,
+    paddingTop: tokens.spacingVerticalXS, paddingRight: tokens.spacingHorizontalM,
+    paddingBottom: tokens.spacingVerticalXS, paddingLeft: tokens.spacingHorizontalM,
+    borderRadius: tokens.borderRadiusCircular,
     backgroundColor: 'rgba(255,255,255,0.22)', border: '1px solid rgba(255,255,255,0.35)',
-    color: 'white', lineHeight: 1.4, fontWeight: 500,
+    color: 'white', lineHeight: 1.4, fontWeight: tokens.fontWeightMedium,
     whiteSpace: 'nowrap',
   },
-  sectionTitle: { marginTop: '36px', marginBottom: '16px', display: 'flex', alignItems: 'baseline', gap: '12px', flexWrap: 'wrap' },
-  grid: {
-    display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '20px',
+  sectionTitle: {
+    marginTop: tokens.spacingVerticalXXL, marginBottom: tokens.spacingVerticalL,
+    display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
   },
+  sectionHeading: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  sectionIcon: { color: tokens.colorBrandForeground1, display: 'flex', alignItems: 'center' },
   card: {
-    paddingTop: '24px', paddingRight: '24px', paddingBottom: '24px', paddingLeft: '24px',
+    paddingTop: tokens.spacingVerticalXL, paddingRight: tokens.spacingHorizontalXL,
+    paddingBottom: tokens.spacingVerticalXL, paddingLeft: tokens.spacingHorizontalXL,
     cursor: 'pointer', height: '100%',
     display: 'flex', flexDirection: 'column',
     transition: 'transform 0.15s, box-shadow 0.15s, border-color 0.15s',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1,
-    borderRadius: '12px',
+    borderRadius: tokens.borderRadiusLarge,
+    boxShadow: tokens.shadow4,
     textDecoration: 'none',
     color: tokens.colorNeutralForeground1,
     ':hover': {
@@ -69,11 +77,11 @@ const useStyles = makeStyles({
     },
   },
   cardIcon: {
-    width: '44px', height: '44px', borderRadius: '12px',
+    width: '44px', height: '44px', borderRadius: tokens.borderRadiusLarge,
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    color: 'white', marginBottom: '18px', flexShrink: 0,
+    color: tokens.colorNeutralForegroundOnBrand, marginBottom: tokens.spacingVerticalL, flexShrink: 0,
   },
-  cardTitle: { marginBottom: '8px', lineHeight: 1.3, display: 'block' },
+  cardTitle: { marginBottom: tokens.spacingVerticalXS, lineHeight: 1.3, display: 'block' },
   cardBody: { color: tokens.colorNeutralForeground3, margin: 0, lineHeight: 1.55, display: 'block' },
 });
 
@@ -135,12 +143,15 @@ export default function HomePage() {
       </section>
 
       <div className={s.sectionTitle}>
-        <Title3 as="h2">Get started</Title3>
+        <span className={s.sectionHeading}>
+          <span className={s.sectionIcon} aria-hidden><Rocket20Filled /></span>
+          <Title3 as="h2">Get started</Title3>
+        </span>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-          Press <kbd style={{ padding: '1px 6px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>/</kbd> to search, <kbd style={{ padding: '1px 6px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>Ctrl K</kbd> for the command palette
+          Press <kbd style={{ paddingTop: '1px', paddingBottom: '1px', paddingLeft: tokens.spacingHorizontalXS, paddingRight: tokens.spacingHorizontalXS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall }}>/</kbd> to search, <kbd style={{ paddingTop: '1px', paddingBottom: '1px', paddingLeft: tokens.spacingHorizontalXS, paddingRight: tokens.spacingHorizontalXS, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusSmall }}>Ctrl K</kbd> for the command palette
         </Caption1>
       </div>
-      <div className={s.grid}>
+      <TileGrid minTileWidth={280}>
         {QUICK_LINKS.map((q) => (
           <Link key={q.href} href={q.href} className={s.card}>
             <div className={s.cardIcon} style={{ background: q.tint }}>{q.icon}</div>
@@ -148,10 +159,13 @@ export default function HomePage() {
             <Body1 className={s.cardBody}>{q.body}</Body1>
           </Link>
         ))}
-      </div>
+      </TileGrid>
 
       <div className={s.sectionTitle}>
-        <Title3 as="h2">Recent</Title3>
+        <span className={s.sectionHeading}>
+          <span className={s.sectionIcon} aria-hidden><History20Filled /></span>
+          <Title3 as="h2">Recent</Title3>
+        </span>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Items you've opened or edited
         </Caption1>
@@ -159,7 +173,10 @@ export default function HomePage() {
       <RecentItems />
 
       <div className={s.sectionTitle}>
-        <Title3 as="h2">Recommended apps</Title3>
+        <span className={s.sectionHeading}>
+          <span className={s.sectionIcon} aria-hidden><AppsAddIn20Filled /></span>
+          <Title3 as="h2">Recommended apps</Title3>
+        </span>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Curated CSA solutions seeded into this tenant
         </Caption1>

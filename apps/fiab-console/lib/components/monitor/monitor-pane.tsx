@@ -46,6 +46,7 @@ import { portalLink as defenderPortalLink, portalSteps, powershellScript, canAut
 import { SignInRequired } from '@/lib/components/sign-in-required';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { MonitorHubPane } from '@/lib/panes/monitor-hub';
+import { SparkObservabilityPane } from '@/lib/panes/spark-observability';
 import { RefreshSummaryPane } from '@/lib/panes/refresh-summary';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
 import { KqlChart, type KqlChartType } from '@/lib/components/monitor/kql-chart';
@@ -108,8 +109,8 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground1,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
   },
-  statLabel: { fontSize: '11px', color: tokens.colorNeutralForeground3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
-  statValue: { fontSize: '26px', fontWeight: 700, lineHeight: 1.1 },
+  statLabel: { fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' },
+  statValue: { fontSize: tokens.fontSizeHero700, fontWeight: 700, lineHeight: 1.1 },
   statAccentSuccess: { color: tokens.colorPaletteGreenForeground1 },
   statAccentWarn: { color: tokens.colorPaletteYellowForeground1 },
   statAccentDanger: { color: tokens.colorPaletteRedForeground1 },
@@ -168,9 +169,9 @@ function StatCardSkeleton() {
   );
 }
 
-type TabKey = 'overview' | 'activities' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'refresh' | 'alerts' | 'cost' | 'security' | 'maintenance';
+type TabKey = 'overview' | 'activities' | 'spark' | 'metrics' | 'logs' | 'diagnostics' | 'activity' | 'items' | 'refresh' | 'alerts' | 'cost' | 'security' | 'maintenance';
 
-const TAB_KEYS: TabKey[] = ['overview', 'activities', 'metrics', 'logs', 'diagnostics', 'activity', 'items', 'refresh', 'alerts', 'cost', 'security', 'maintenance'];
+const TAB_KEYS: TabKey[] = ['overview', 'activities', 'spark', 'metrics', 'logs', 'diagnostics', 'activity', 'items', 'refresh', 'alerts', 'cost', 'security', 'maintenance'];
 
 export function MonitorPane() {
   const styles = useStyles();
@@ -196,6 +197,7 @@ export function MonitorPane() {
       >
         <Tab value="overview">Overview</Tab>
         <Tab value="activities">Activities</Tab>
+        <Tab value="spark">Spark</Tab>
         <Tab value="metrics">Metrics</Tab>
         <Tab value="logs">Logs (KQL)</Tab>
         <Tab value="diagnostics">Diagnostics</Tab>
@@ -211,6 +213,7 @@ export function MonitorPane() {
       {/* Only the active tab mounts → its fetch only fires when shown. */}
       {tab === 'overview' && <OverviewTab onUnauth={onUnauth} />}
       {tab === 'activities' && <MonitorHubPane />}
+      {tab === 'spark' && <SparkObservabilityPane />}
       {tab === 'metrics' && <MetricsTab onUnauth={onUnauth} />}
       {tab === 'logs' && <LogsTab onUnauth={onUnauth} />}
       {tab === 'diagnostics' && <DiagnosticsTab onUnauth={onUnauth} />}
@@ -365,7 +368,7 @@ function OverviewTab({ onUnauth }: { onUnauth: () => void }) {
           <div className={styles.healthRow}>
             <div className={styles.healthBarWrap}>
               {!healthReady ? (
-                <Skeleton aria-label="Loading health roll-up"><SkeletonItem style={{ height: 16, borderRadius: 8 }} /></Skeleton>
+                <Skeleton aria-label="Loading health roll-up"><SkeletonItem style={{ height: 16, borderRadius: tokens.borderRadiusMedium }} /></Skeleton>
               ) : healthSegments.total === 0 ? (
                 <Text size={200}>Resource Health reports no monitored resources yet.</Text>
               ) : (
@@ -564,7 +567,7 @@ function MetricsTab({ onUnauth }: { onUnauth: () => void }) {
       {loadingMetrics ? (
         <div className={styles.charts}>
           {(catalog.length ? catalog : [0, 1, 2]).map((_, i) => (
-            <Skeleton key={i} aria-label="Loading metric"><SkeletonItem style={{ height: 132, borderRadius: 10 }} /></Skeleton>
+            <Skeleton key={i} aria-label="Loading metric"><SkeletonItem style={{ height: 132, borderRadius: tokens.borderRadiusLarge }} /></Skeleton>
           ))}
         </div>
       ) : results && results.length > 0 ? (
@@ -728,7 +731,7 @@ function LogsTab({ onUnauth }: { onUnauth: () => void }) {
           onChange={(_, d) => { setQuery(d.value); }}
           rows={6}
           resize="vertical"
-          style={{ fontFamily: 'var(--loom-font-mono, monospace)', fontSize: 13 }}
+          style={{ fontFamily: 'var(--loom-font-mono, monospace)', fontSize: tokens.fontSizeBase200 }}
         />
       </div>
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
@@ -1065,7 +1068,7 @@ function MaintenanceTab({ onUnauth }: { onUnauth: () => void }) {
         title="Delta table maintenance"
         actions={<Button appearance="primary" icon={<ArrowSync20Regular />} onClick={() => setTick((t) => t + 1)}>Refresh</Button>}
       >
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: 12 }}>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalM }}>
           OPTIMIZE / VACUUM / ZORDER BY jobs submitted from a lakehouse editor and run on Synapse Spark. Refreshing
           advances each job by polling its Livy session — a cold Spark pool takes a couple minutes to warm up before
           the statement runs.
@@ -1479,7 +1482,7 @@ function CostTab({ onUnauth }: { onUnauth: () => void }) {
       <Section
         title="Cost"
         actions={
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
             <Dropdown
               aria-label="Timeframe"
               value={tfLabel}
@@ -1724,7 +1727,7 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
       </Section>
 
       {actionItems.length > 0 && (
-        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>
             <MessageBarTitle>{actionItems.length} action{actionItems.length === 1 ? '' : 's'} required</MessageBarTitle>
             {data?.secureScore ? `Resolving these raises your secure score (currently ${data.secureScore.current}/${data.secureScore.max}).` : 'Resolve the unhealthy recommendations below to improve your security posture.'}
@@ -1764,7 +1767,7 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
         <DrawerBody>
           {remRec && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                 {sevBadge(remRec.severity)}
                 <Subtitle2>{remRec.name}</Subtitle2>
               </div>
@@ -1784,12 +1787,12 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
 
               {remTab === 'portal' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
-                  <ol style={{ margin: 0, paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                  <ol style={{ margin: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                     {portalSteps({ name: remRec.name, severity: remRec.severity, assessmentName: remRec.assessmentName, remediation: remRec.remediation, portalLink: remRec.portalLink }).map((st, i) => (
                       <li key={i}><Body1>{st}</Body1></li>
                     ))}
                   </ol>
-                  <a href={defenderPortalLink({ name: remRec.name, assessmentName: remRec.assessmentName, portalLink: remRec.portalLink })} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <a href={defenderPortalLink({ name: remRec.name, assessmentName: remRec.assessmentName, portalLink: remRec.portalLink })} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
                     Open in the Defender portal <Open16Regular />
                   </a>
                 </div>

@@ -79,7 +79,7 @@ export function loomThumbUrl(slug: string): string | undefined {
 }
 
 /**
- * The 85 item-type slugs that have a real per-editor Loom doc at
+ * The 118 item-type slugs that have a real per-editor Loom doc at
  * `docs/fiab/tutorials/editor-<slug>.md` (served at
  * `<base>/fiab/tutorials/editor-<slug>/`). Kept in sync with the mkdocs.yml
  * "Editor Tutorials (per-item)" nav block. A slug NOT in this set has no Loom
@@ -106,6 +106,19 @@ export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
   'sql-server-2025-vector-index', 'synapse-dedicated-sql-pool', 'synapse-pipeline',
   'synapse-serverless-sql-pool', 'synapse-spark-pool', 'tracing', 'user-data-function',
   'usql-job', 'variable-library', 'vector-store', 'warehouse',
+  // Fabric IQ (Palantir Foundry parity) — authored wave 9
+  'workshop-app', 'slate-app', 'ontology-sdk', 'aip-logic', 'release-environment',
+  'health-check',
+  // Real-Time Intelligence / messaging + lakehouse — authored wave 9
+  'event-hubs-namespace', 'service-bus-namespace', 'event-grid-topic',
+  'lakehouse-shortcut',
+  // Backlog drain (audit #2) — the 23 remaining doc-less editor guides
+  'airflow-job', 'automl', 'azure-cosmos-account', 'data-api-builder',
+  'data-marketplace', 'datamart', 'event-schema-set', 'integration-runtime',
+  'linked-service', 'logic-app', 'mapping-dataflow', 'materialized-lake-view',
+  'mirrored-databricks', 'mounted-adf', 'postgres-flexible-server', 'rayfin-app',
+  'spark-environment', 'sql-analytics-endpoint', 'sql-database',
+  'stream-analytics-job', 'synapse-notebook', 'tapestry', 'workspace-monitor',
 ]);
 
 const REGISTRY: Record<string, LearnEntry> = {
@@ -145,21 +158,23 @@ const REGISTRY: Record<string, LearnEntry> = {
   },
   'eventstream': {
     title: 'Eventstream',
-    summary: 'Code-free streaming pipeline. Source connectors (Event Hubs, IoT Hub, Kafka, Azure SQL CDC) → optional transforms → destinations (KQL DB, Lakehouse, Activator).',
+    summary: 'Code-free streaming pipeline. Source connectors (Event Hubs, IoT Hub, Kafka, Azure SQL CDC) → operators (Filter, Manage fields, Aggregate, Group by, Expand, Union, Join) → destinations (KQL DB, Lakehouse, Activator, derived stream, Spark notebook).',
     steps: [
       'Add a source (Event Hub or IoT Hub for telemetry; Kafka for cross-cloud).',
-      'Add a destination — typically a KQL database for real-time queries plus a Lakehouse for long-term retention.',
-      'Optional: drop in transforms (filter, derived columns, manage fields) before the destination.',
+      'Drop in operators — Filter, Manage fields, Aggregate, Group by, Expand, Union, Join — then Validate (real ASA compile) and Apply to ASA.',
+      'Add destinations — a KQL database for real-time queries, a Lakehouse for retention, an Activator, a derived stream (pause/resume supported), or a Spark notebook sink.',
+      'Inspect the read-only Definition tab — the canvas is the source of truth; JSON is view-only.',
     ],
     docsUrl: 'https://learn.microsoft.com/fabric/real-time-intelligence/event-streams/overview',
   },
   'activator': {
     title: 'Activator (Reflex)',
-    summary: 'No-code event-driven automation. Watches a stream or KQL query and fires Teams/Email/Power Automate actions on conditions.',
+    summary: 'No-code event-driven automation. Watches an Eventhouse / KQL database (ADX — the default), a Log Analytics KQL query, or an Event Hub and fires Teams/Email/webhook/Power Automate actions on conditions.',
     steps: [
-      'Pick a source: a KQL queryset, semantic model measure, or Eventstream.',
-      'Define the trigger: when a value crosses a threshold or a pattern occurs.',
-      'Pick the action: Teams notification, email, or Power Automate flow.',
+      'Pick a source: the default is Eventhouse / KQL Database (ADX) — choose the database + table from live pickers; Log Analytics KQL and Event Hub are alternatives.',
+      'Define the trigger: the guided condition builder (property / operator / threshold) or a verbatim KQL query that fires when it returns rows.',
+      'Pick the action: Teams notification, email, webhook, SMS, Logic App, pipeline, notebook, or Power Automate flow (via a real Azure Monitor action group).',
+      'Trigger / Preview evaluates ADX rules on demand against real Eventhouse data; set LOOM_ADX_ALERT_SCOPE for hands-off scheduled evaluation.',
     ],
     docsUrl: 'https://learn.microsoft.com/fabric/data-activator/activator-introduction',
   },

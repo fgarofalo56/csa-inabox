@@ -48,13 +48,13 @@ const useStyles = makeStyles({
     transition: 'background-color var(--loom-motion-fast) var(--loom-motion-ease)',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
-  cardName: { fontWeight: 600, fontSize: 14 },
-  cardDesc: { fontSize: 12, color: tokens.colorNeutralForeground2, lineHeight: 1.4 },
+  cardName: { fontWeight: 600, fontSize: tokens.fontSizeBase300 },
+  cardDesc: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, lineHeight: 1.4 },
   cardCat: {
-    fontSize: 11, color: tokens.colorNeutralForeground3,
+    fontSize: '11px', color: tokens.colorNeutralForeground3,
     textTransform: 'uppercase', letterSpacing: '0.04em',
   },
-  empty: { color: tokens.colorNeutralForeground2, fontSize: 13 },
+  empty: { color: tokens.colorNeutralForeground2, fontSize: '13px' },
 });
 
 export function AppLauncher() {

@@ -48,12 +48,12 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { withRateLimit } from '@/lib/azure/rate-limiter';
 import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
 } from '@/lib/azure/copilot-orchestrator';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { cogScope } from '@/lib/azure/cloud-endpoints';
+import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import {
   dedicatedTarget,
   serverlessTarget,
@@ -88,17 +88,6 @@ function dialectFor(engine: Engine): string {
     default:
       return 'T-SQL';
   }
-}
-
-// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
-const credential = uamiArmCredential();
-
-// cogScope() is the cloud-aware AOAI `.default` scope (cognitiveservices.azure.com
-// in Commercial/GCC, cognitiveservices.azure.us in Gov) — single source of truth.
-async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken(cogScope());
-  if (!t?.token) throw new Error('Failed to acquire AOAI token');
-  return t.token;
 }
 
 // ---------- Schema grounding (soft-fail, never blocks) ----------
@@ -334,6 +323,11 @@ export async function POST(
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
 
+  // Per-principal AOAI rate limit — opt-in (LOOM_RATE_LIMIT=on). Default = no-op
+  // (returns null → identical behavior).
+  const limited = withRateLimit(session, 'aoai');
+  if (limited) return limited;
+
   const { type } = await ctx.params;
   const engine = type as Engine;
   if (!ENGINES.includes(engine)) {
@@ -381,10 +375,11 @@ export async function POST(
     );
   }
 
-  // Resolve AOAI target — same resolution order as the cross-item Copilot.
-  let target;
+  // Pre-resolve the AOAI target up-front purely to surface the honest 503
+  // no_aoai gate — same resolution order as the cross-item Copilot. aoaiChat()
+  // re-resolves internally (cfg=null → identical env/discovery path).
   try {
-    target = await resolveAoaiTarget();
+    await resolveAoaiTarget();
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -434,48 +429,10 @@ export async function POST(
   const messages = buildMessages(mode, dialect, sqlText, prompt, errorText, schema, explainPlan);
 
   try {
-    const token = await aoaiToken();
-    const apiVersion = process.env.LOOM_AOAI_API_VERSION || '2024-10-21';
-    const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(
-      target.deployment,
-    )}/chat/completions?api-version=${apiVersion}`;
-
-    const callWithTemperature = (temp?: number) =>
-      fetch(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          messages,
-          ...(temp !== undefined ? { temperature: temp } : {}),
-          max_tokens: 2048,
-        }),
-      });
-
-    let res = await callWithTemperature(0.2);
-    if (res.status === 400) {
-      const txt = await res.text();
-      // Reasoning models (o1/o3/gpt-5/MAI-*) reject non-default temperature — retry once.
-      if (
-        /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(txt) &&
-        /temperature|top_p/i.test(txt)
-      ) {
-        res = await callWithTemperature(undefined);
-      } else {
-        return NextResponse.json(
-          { ok: false, error: `AOAI 400: ${txt.slice(0, 300)}` },
-          { status: 502 },
-        );
-      }
-    }
-    if (!res.ok) {
-      const txt = await res.text();
-      return NextResponse.json(
-        { ok: false, error: `AOAI ${res.status}: ${txt.slice(0, 300)}` },
-        { status: 502 },
-      );
-    }
-    const j = await res.json();
-    const raw: string = j?.choices?.[0]?.message?.content ?? '';
+    // Unified AOAI client: same target resolution (cfg=null → env/discovery),
+    // same cogScope token, same max_completion_tokens cap (2048), same
+    // temperature (0.2) + reasoning-model temperature-only retry.
+    const raw = await aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2 });
     // Strip any stray ```sql / ```tsql fences the model may add despite instructions.
     const result =
       mode === 'explain'

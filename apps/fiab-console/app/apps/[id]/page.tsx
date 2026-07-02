@@ -46,11 +46,13 @@ const useStyles = makeStyles({
     marginBottom: tokens.spacingVerticalXXL,
     color: tokens.colorNeutralForeground2,
     maxWidth: '76ch',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
   items: {
     display: 'grid',
     gap: tokens.spacingHorizontalM,
-    gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
+    gridTemplateColumns: 'repeat(auto-fill, minmax(min(260px, 100%), 1fr))',
   },
   itemCard: {
     padding: tokens.spacingVerticalM,
@@ -134,7 +136,7 @@ export default function AppDetailPage() {
     return (
       <PageShell title="App not found">
         <MessageBar intent="warning">
-          <MessageBarBody>No app with id <code>{params.id}</code> in this tenant.</MessageBarBody>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>No app with id <code>{params.id}</code> in this tenant.</MessageBarBody>
         </MessageBar>
         <div style={{ marginTop: tokens.spacingVerticalL }}>
           <Button icon={<ArrowLeft24Regular />} onClick={() => router.push('/apps')}>
@@ -148,7 +150,7 @@ export default function AppDetailPage() {
   return (
     <PageShell title={app.name}
       actions={
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
           <Button icon={<ArrowLeft24Regular />} appearance="subtle" onClick={() => router.push('/apps')}>
             All apps
           </Button>

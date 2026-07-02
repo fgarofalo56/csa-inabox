@@ -38,7 +38,26 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
         parameters: [{ name: '@w', value: ws.id }],
       }, { partitionKey: ws.id })
       .fetchAll();
-    return NextResponse.json(resources);
+    // ADDITIVE: surface governance state as top-level fields so browse surfaces
+    // (workspace Items list view, catalog) can sort/filter on them without
+    // digging into `state`. `state.endorsement` is the canonical key (with the
+    // legacy `state.certified` boolean fallback); `state.sensitivityLabel` is
+    // the MIP-style sensitivity label. Response shape is otherwise unchanged
+    // (still a bare array of the full item docs).
+    const shaped = resources.map((it) => {
+      const st = (it.state ?? {}) as Record<string, unknown>;
+      const endorsement =
+        (typeof st.endorsement === 'string' && st.endorsement) ||
+        (st.certified ? 'Certified' : undefined) || undefined;
+      const sensitivity =
+        (typeof st.sensitivityLabel === 'string' && st.sensitivityLabel) || undefined;
+      return {
+        ...it,
+        ...(endorsement ? { endorsement } : {}),
+        ...(sensitivity ? { sensitivity } : {}),
+      };
+    });
+    return NextResponse.json(shaped);
   } catch (e: any) {
     return err(e?.message || 'Failed to list items', 500, 'cosmos_error');
   }

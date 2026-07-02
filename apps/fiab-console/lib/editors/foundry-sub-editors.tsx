@@ -20,13 +20,22 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Field, Dropdown, Option,
+  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, SkeletonItem, Field, Dropdown, Option,
   Checkbox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tab, TabList,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions, Breadcrumb, BreadcrumbItem, BreadcrumbButton,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
+import {
+  BrainCircuit20Regular, FlowchartCircle20Regular, ChartMultiple20Regular,
+  ShieldTask20Regular, Search20Regular, BranchCompare20Regular,
+  Server20Regular, Database20Regular,
+  Folder20Regular, Document20Regular, FolderOpen20Regular, ArrowUp20Regular, TableSimple20Regular,
+} from '@fluentui/react-icons';
+import { DeltaPreviewGrid, type ColStat } from './components/delta-preview-grid';
+import { EmptyState } from '@/lib/components/empty-state';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -48,24 +57,40 @@ import {
 } from '@/lib/prompt-flow/flow-dag';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   monaco: {
-    width: '100%', minHeight: 220,
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 13, padding: 12,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4,
+    width: '100%', maxWidth: '100%', minHeight: '220px', boxSizing: 'border-box',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
+    // Long single-line JSON / receipts must wrap + stay bounded, never run off-screen.
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', overflow: 'auto',
     resize: 'vertical',
   },
-  tableWrap: { overflow: 'auto', maxHeight: 480, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontSize: 12, whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis' },
-  empty: { padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
-  card: { padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6 },
-  formRow: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: '6px 16px', alignItems: 'center' },
+  tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4 },
+  cell: { fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis' },
+  empty: { padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic' },
+  card: {
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4, transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  // Section / tab header with a leading Fluent icon — modern, consistent affordance.
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  sectionIcon: { color: tokens.colorBrandForeground1, display: 'flex', alignItems: 'center' },
+  // Loading skeleton stack — replaces a bare spinner for table/list loads.
+  skeletonStack: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4,
+  },
+  formRow: { display: 'grid', gridTemplateColumns: '160px 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'center' },
   // Search Explorer query-options grid (label / control pairs, wraps responsively).
-  optGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(220px, 1fr)', gap: '8px 12px', alignItems: 'center' },
+  optGrid: { display: 'grid', gridTemplateColumns: 'max-content minmax(220px, 1fr)', gap: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`, alignItems: 'center' },
   // One vector-query builder row.
-  vqRow: { display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap', marginTop: '8px' },
+  vqRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
   // Editable field-designer cell — compact controls inside the grid.
   fdInput: { minWidth: '120px' },
   fdNum: { width: '90px' },
@@ -107,6 +132,36 @@ function ErrorBar({ msg, hint, notDeployed }: { msg: string; hint?: string; notD
 }
 
 /**
+ * Loading skeleton for a table/list load — a polished placeholder shown while
+ * data is in flight, replacing a bare `<Spinner size="small" />` so the layout
+ * doesn't jump and the wait reads as intentional.
+ */
+function TableSkeleton({ rows = 4 }: { rows?: number }) {
+  const s = useStyles();
+  return (
+    <div className={s.skeletonStack} aria-hidden>
+      {Array.from({ length: rows }).map((_, i) => (
+        <SkeletonItem key={i} size={24} />
+      ))}
+    </div>
+  );
+}
+
+/**
+ * SectionHead — a `Subtitle2` heading with a leading brand-tinted Fluent icon,
+ * for the modern "icon per section" look shared across Loom editors.
+ */
+function SectionHead({ icon, children }: { icon: ReactNode; children: ReactNode }) {
+  const s = useStyles();
+  return (
+    <div className={s.sectionHead}>
+      <span className={s.sectionIcon} aria-hidden>{icon}</span>
+      <Subtitle2>{children}</Subtitle2>
+    </div>
+  );
+}
+
+/**
  * Render an AI Search `@search.highlights` map into bolded snippets. The service
  * wraps matched terms with the request's pre/post tags (default `<em>`/`</em>`);
  * we split on those tags and bold the matched spans WITHOUT innerHTML — so a
@@ -124,7 +179,7 @@ function renderHighlights(
   const entries = Object.entries(highlights);
   if (!entries.length) return '—';
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
       {entries.map(([field, snippets], fi) => (
         <div key={fi}>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{field}: </Caption1>
@@ -220,7 +275,7 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
   if (isNew) {
     return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
-        <Subtitle2>AI Foundry projects</Subtitle2>
+        <SectionHead icon={<BrainCircuit20Regular />}>AI Foundry projects</SectionHead>
         <Caption1>Child workspaces of the Foundry hub. Inherit hub-level connections; scope flows + evaluations + data assets.</Caption1>
         <div className={s.card}>
           <Subtitle2>New project</Subtitle2>
@@ -229,12 +284,15 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
             <span>Display name</span><Input value={newDisplay} onChange={(_, d) => setNewDisplay(d.value)} placeholder="My Project" />
             <span>Description</span><Input value={newDesc} onChange={(_, d) => setNewDesc(d.value)} />
           </div>
-          <div className={s.toolbar} style={{ marginTop: 8 }}>
+          <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
             <Button appearance="primary" onClick={save} disabled={creating}>{creating ? 'Creating…' : 'Create project'}</Button>
             {saveMsg && <Caption1>{saveMsg}</Caption1>}
           </div>
         </div>
-        {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+        {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.projects || []).length === 0 ? (
+          <EmptyState icon={<BrainCircuit20Regular />} title="No projects yet"
+            body="Create a project above to scope flows, evaluations, and data assets under this Foundry hub." />
+        ) : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow>
@@ -260,9 +318,9 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.project ? (
+      {detail.loading ? <TableSkeleton rows={3} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.project ? (
         <>
-          <Subtitle2>{detail.data.project.displayName || detail.data.project.name}</Subtitle2>
+          <SectionHead icon={<BrainCircuit20Regular />}>{detail.data.project.displayName || detail.data.project.name}</SectionHead>
           <Body1>{detail.data.project.description || '—'}</Body1>
           <div className={s.formRow}>
             <span>Name</span><span>{detail.data.project.name}</span>
@@ -535,7 +593,7 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
           {runResult && (
             runResult.ok ? (
               <div className={s.card}>
-                <Subtitle2>Run output</Subtitle2>
+                <SectionHead icon={<FlowchartCircle20Regular />}>Run output</SectionHead>
                 {perNode.length > 0 && (
                   <div className={s.tableWrap}>
                     <Table size="small" aria-label="Per-node outputs">
@@ -551,8 +609,8 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
                     </Table>
                   </div>
                 )}
-                <Subtitle2 style={{ marginTop: 8 }}>Final output</Subtitle2>
-                <pre className={s.monaco} style={{ minHeight: 80 }}>{JSON.stringify(finalOutput, null, 2)}</pre>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Final output</Subtitle2>
+                <pre className={s.monaco} style={{ minHeight: 80, maxHeight: 360 }}>{JSON.stringify(finalOutput, null, 2)}</pre>
               </div>
             ) : <ErrorBar msg={runResult.error} hint={runResult.hint} notDeployed={runResult.notDeployed} />
           )}
@@ -612,7 +670,10 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
       <ProjectPicker value={project} onChange={setProject} />
-      {project && (list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+      {project && (list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.evaluations || []).length === 0 ? (
+        <EmptyState icon={<BranchCompare20Regular />} title="No evaluations yet"
+          body="Create an evaluation below to score a dataset against quality metrics (groundedness, relevance, fluency) for this project." />
+      ) : (
         <div className={s.tableWrap}>
           <Table size="small">
             <TableHeader><TableRow>
@@ -642,7 +703,7 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
           <span>Model deployment</span><Input value={form.modelDeployment} onChange={(_, d) => setForm((f) => ({ ...f, modelDeployment: d.value }))} placeholder="gpt-4o-mini" />
           <span>Evaluators</span><Input value={form.evaluators} onChange={(_, d) => setForm((f) => ({ ...f, evaluators: d.value }))} placeholder="comma-separated" />
         </div>
-        <div className={s.toolbar} style={{ marginTop: 8 }}>
+        <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
           <Button appearance="primary" onClick={create} disabled={busy}>{busy ? 'Submitting…' : 'Create evaluation'}</Button>
           {msg && <Caption1>{msg}</Caption1>}
         </div>
@@ -845,7 +906,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      <Subtitle2>Content Safety</Subtitle2>
+      <SectionHead icon={<ShieldTask20Regular />}>Content Safety</SectionHead>
       <Caption1>Live text &amp; image moderation, real RAI content-filter policies (per-category severity thresholds), and custom term/regex blocklists against the Azure AI Content Safety harm categories (hate, self-harm, sexual, violence).</Caption1>
 
       <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
@@ -871,7 +932,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
                 <Button appearance="primary" onClick={() => analyze('image')} disabled={busy || !imgB64}>Analyze image</Button>
               </div>
               {result && (result.ok
-                ? <pre className={s.monaco}>{JSON.stringify(result.result, null, 2)}</pre>
+                ? <pre className={s.monaco} style={{ maxHeight: 420 }}>{JSON.stringify(result.result, null, 2)}</pre>
                 : <ErrorBar msg={result.error} hint={result.hint} notDeployed={result.notDeployed} />)}
             </>
           )
@@ -889,7 +950,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
                   <Button size="small" onClick={reloadPolicies}>Reload</Button>
                 </div>
                 <Caption1>Responsible-AI content filters on the model-hosting account (Microsoft.CognitiveServices/accounts/raiPolicies). Each category has an independent severity threshold per source — these are the real persisted policy values used by your model deployments.</Caption1>
-                {policies.loading ? <Spinner size="small" /> : policies.error ? <ErrorBar msg={policies.error} hint={policies.hint} notDeployed={policies.notDeployed} /> : (
+                {policies.loading ? <TableSkeleton /> : policies.error ? <ErrorBar msg={policies.error} hint={policies.hint} notDeployed={policies.notDeployed} /> : (
                   <div className={s.tableWrap}>
                     <Table size="small" aria-label="RAI policies">
                       <TableHeader><TableRow>
@@ -979,7 +1040,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
               <Button size="small" onClick={reloadBlocklists}>Reload</Button>
             </div>
             <Caption1>Custom term / regex blocklists on the Content Safety data-plane. Attach one to a content-filter policy (Content filters tab) to enforce it. Max 10,000 terms total across all lists; 128 chars per term.</Caption1>
-            {blocklists.loading ? <Spinner size="small" /> : blocklists.error ? <ErrorBar msg={blocklists.error} hint={blocklists.hint} notDeployed={blocklists.notDeployed} /> : (
+            {blocklists.loading ? <TableSkeleton /> : blocklists.error ? <ErrorBar msg={blocklists.error} hint={blocklists.hint} notDeployed={blocklists.notDeployed} /> : (
               <div className={s.tableWrap}>
                 <Table size="small" aria-label="Blocklists">
                   <TableHeader><TableRow>
@@ -1029,7 +1090,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
                 <Checkbox label="Regex" checked={itemRegex} onChange={(_, d) => setItemRegex(!!d.checked)} />
                 <Button appearance="primary" disabled={blBusy || !itemText.trim()} onClick={addItem}>Add item</Button>
               </div>
-              {items.loading ? <Spinner size="small" /> : items.error ? <ErrorBar msg={items.error} /> : (
+              {items.loading ? <TableSkeleton rows={3} /> : items.error ? <ErrorBar msg={items.error} /> : (
                 <div className={s.tableWrap}>
                   <Table size="small" aria-label="Blocklist items">
                     <TableHeader><TableRow>
@@ -1117,14 +1178,17 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      <Subtitle2>Foundry traces</Subtitle2>
+      <SectionHead icon={<ChartMultiple20Regular />}>Foundry traces</SectionHead>
       <Caption1>GenAI traces from the hub’s Application Insights. Click a trace to drill into its full span tree (model calls, tool calls, token usage).</Caption1>
       <div className={s.toolbar}>
         <Field label="Window (hrs)"><Input type="number" value={String(hours)} onChange={(_, d) => setHours(Number(d.value) || 24)} /></Field>
         <Field label="Operation"><Input value={op} onChange={(_, d) => setOp(d.value)} placeholder="(any)" /></Field>
         <Button onClick={reload}>Reload</Button>
       </div>
-      {state.loading ? <Spinner size="small" /> : state.error ? <ErrorBar msg={state.error} hint={state.hint} notDeployed={state.notDeployed} /> : (
+      {state.loading ? <TableSkeleton rows={6} /> : state.error ? <ErrorBar msg={state.error} hint={state.hint} notDeployed={state.notDeployed} /> : (state.data?.traces || []).length === 0 ? (
+        <EmptyState icon={<ChartMultiple20Regular />} title="No traces in this window"
+          body="No GenAI traces were captured in the selected time window. Widen the window or run a flow/agent to generate traces, then reload." />
+      ) : (
         <div className={s.tableWrap}>
           <Table size="small">
             <TableHeader><TableRow>
@@ -1154,13 +1218,14 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
 
       {traceId && (
         <>
-          <div className={s.toolbar} style={{ marginTop: 12 }}>
-            <Subtitle2>Span tree · {traceId.slice(0, 16)}…</Subtitle2>
+          <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
+            <SectionHead icon={<FlowchartCircle20Regular />}>Span tree · {traceId.slice(0, 16)}…</SectionHead>
             <Button size="small" onClick={() => loadDetail(traceId)}>Reload spans</Button>
             <Button size="small" appearance="subtle" onClick={() => setTraceId(null)}>Close</Button>
           </div>
-          {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : tree.length === 0 ? (
-            <div className={s.empty}>No spans found for this trace.</div>
+          {detail.loading ? <TableSkeleton rows={4} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : tree.length === 0 ? (
+            <EmptyState icon={<FlowchartCircle20Regular />} title="No spans for this trace"
+              body="This trace did not record any spans, or they have not yet been ingested into Application Insights. Reload spans to retry." />
           ) : (
             <div className={s.tableWrap}>
               <Table size="small" aria-label="Span tree">
@@ -1263,12 +1328,12 @@ function AiSearchBindPicker({ id, onBound }: { id: string; onBound: () => void }
         </MessageBar>
       )}
       {state.data?.listError && !state.data?.notDeployed && <ErrorBar msg={state.data.listError} />}
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Field label="Existing index">
           <Dropdown value={pick} selectedOptions={pick ? [pick] : []}
             placeholder={state.loading ? 'Loading…' : (indexes.length ? 'Select an index' : 'No indexes on service')}
             onOptionSelect={(_, d) => d.optionValue && setPick(d.optionValue)}>
-            {indexes.map((i) => (<Option key={i.name} value={i.name}>{i.name} ({i.fieldCount} fields)</Option>))}
+            {indexes.map((i) => (<Option key={i.name} value={i.name}>{`${i.name} (${i.fieldCount} fields)`}</Option>))}
           </Dropdown>
         </Field>
         <Button appearance="primary" disabled={busy || !pick} onClick={bindExisting}>Bind</Button>
@@ -1387,7 +1452,7 @@ function SemanticConfigDesigner({
         </Caption1>
       )}
       {configs.map((c, ci) => (
-        <div key={ci} className={s.card} style={{ marginTop: 8 }}>
+        <div key={ci} className={s.card} style={{ marginTop: tokens.spacingVerticalS }}>
           <div className={s.toolbar}>
             <Field label="Name" style={{ minWidth: 220 }}>
               <Input size="small" value={c.name} aria-label={`semantic-${ci}-name`}
@@ -1404,17 +1469,17 @@ function SemanticConfigDesigner({
               {eligible.map((f) => (<Option key={f} value={f}>{f}</Option>))}
             </Dropdown>
             <span>Content fields (up to 3)</span>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
               {[0, 1, 2].map((slot) => contentPicker(ci, slot, c.prioritizedFields.prioritizedContentFields?.[slot]?.fieldName || ''))}
             </div>
             <span>Keyword fields (up to 5)</span>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
               {[0, 1, 2, 3, 4].map((slot) => keywordPicker(ci, slot, c.prioritizedFields.prioritizedKeywordsFields?.[slot]?.fieldName || ''))}
             </div>
           </div>
         </div>
       ))}
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Button appearance="primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save semantic configuration'}</Button>
         {dirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
       </div>
@@ -1484,8 +1549,8 @@ function VectorSearchDesigner({
       </Caption1>
 
       {/* Algorithms */}
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
-        <Subtitle2 style={{ fontSize: 13 }}>Algorithms ({algorithms.length})</Subtitle2>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
+        <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Algorithms ({algorithms.length})</Subtitle2>
         <Button size="small" onClick={addAlgo}>＋ Add algorithm</Button>
       </div>
       <div className={s.tableWrap}>
@@ -1540,8 +1605,8 @@ function VectorSearchDesigner({
       </div>
 
       {/* Profiles */}
-      <div className={s.toolbar} style={{ marginTop: 12 }}>
-        <Subtitle2 style={{ fontSize: 13 }}>Profiles ({profiles.length})</Subtitle2>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
+        <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Profiles ({profiles.length})</Subtitle2>
         <Button size="small" onClick={addProfile} disabled={!algoNames.length}>＋ Add profile</Button>
       </div>
       <div className={s.tableWrap}>
@@ -1569,7 +1634,7 @@ function VectorSearchDesigner({
         </Table>
       </div>
 
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Button appearance="primary" disabled={saving || !dirty} onClick={save}>{saving ? 'Saving…' : 'Save vector config'}</Button>
         {dirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
       </div>
@@ -1618,8 +1683,8 @@ function IndexerSchedulePanel({
   };
 
   return (
-    <div className={s.card} style={{ marginTop: 8 }}>
-      <Subtitle2 style={{ fontSize: 13 }}>Schedule — {indexer}</Subtitle2>
+    <div className={s.card} style={{ marginTop: tokens.spacingVerticalS }}>
+      <Subtitle2 style={{ fontSize: tokens.fontSizeBase300 }}>Schedule — {indexer}</Subtitle2>
       <div className={s.optGrid}>
         <span>Recurrence</span>
         <Dropdown size="small" value={preset || '(no schedule)'} selectedOptions={preset ? [preset] : ['']} placeholder="(no schedule)" aria-label={`schedule-${indexer}-preset`}
@@ -1651,7 +1716,7 @@ function IndexerSchedulePanel({
         Min 5 minutes (PT5M), max 24 hours (P1D). On a schedule the indexer runs automatically; pausing keeps the
         definition but stops runs. Saved via PUT /indexers/{indexer}.
       </Caption1>
-      <div className={s.toolbar} style={{ marginTop: 8 }}>
+      <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
         <Button size="small" appearance="primary" disabled={saving} onClick={() => save(false)}>{saving ? 'Saving…' : 'Save schedule'}</Button>
         <Button size="small" disabled={saving} onClick={() => save(true)}>Remove schedule</Button>
       </div>
@@ -1954,9 +2019,12 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
   if (isNew && !navIndex) {
     return chrome(
       <div className={s.pad}>
-        <Subtitle2>Azure AI Search indexes</Subtitle2>
+        <SectionHead icon={<Search20Regular />}>Azure AI Search indexes</SectionHead>
         <Caption1>Pick an index from the service navigator on the left to manage its schema, run queries, and drive its indexers — or use ＋ New to create indexes, indexers, data sources, skillsets, synonym maps and aliases.</Caption1>
-        {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+        {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.indexes || []).length === 0 ? (
+          <EmptyState icon={<Search20Regular />} title="No indexes on this service"
+            body="Use ＋ New in the service navigator on the left to create your first index, then design its fields, vector profiles, and indexers here." />
+        ) : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Fields</TableHeaderCell><TableHeaderCell>Vector</TableHeaderCell></TableRow></TableHeader>
@@ -1998,7 +2066,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
   return chrome(
     <div className={s.pad}>
-      {detail.loading ? <Spinner size="small" /> : detail.error ? (
+      {detail.loading ? <TableSkeleton rows={6} /> : detail.error ? (
         <>
           <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} />
           {!navIndex && <AiSearchBindPicker id={id} onBound={reloadDetail} />}
@@ -2006,7 +2074,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
       ) : idx && (
         <>
           <div className={s.toolbar}>
-            <Subtitle2>Index: {idx.name}</Subtitle2>
+            <SectionHead icon={<Search20Regular />}>Index: {idx.name}</SectionHead>
             {idx.vectorSearch && <Badge color="brand">vector</Badge>}
             {idx.semantic && <Badge color="success">semantic</Badge>}
             {(detail.data as any)?.source === 'bundle' && <Badge color="warning">bundle template</Badge>}
@@ -2097,7 +2165,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                             </TableCell>
                             <TableCell className={s.cell}>
                               {vector ? (
-                                <div className={s.toolbar} style={{ gap: 6 }}>
+                                <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalXS }}>
                                   <Input size="small" type="number" className={s.fdNum} aria-label={`field-${i}-dimensions`}
                                     value={f.dimensions != null ? String(f.dimensions) : ''} placeholder="dims"
                                     onChange={(_, d) => patchFieldRow(i, { dimensions: d.value ? Number(d.value) : undefined })} />
@@ -2127,7 +2195,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                     </TableBody>
                   </Table>
                 </div>
-                <div className={s.toolbar} style={{ marginTop: 8 }}>
+                <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
                   <Button appearance="primary" disabled={savingFields || !fieldsDirty} onClick={saveFields}>{savingFields ? 'Saving…' : 'Save fields'}</Button>
                   <Button disabled={!fieldsDirty} onClick={() => { setFieldRows((idx.fields || []).map(apiFieldToRow)); setFieldsDirty(false); setFieldsMsg(null); }}>Revert</Button>
                   {fieldsDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
@@ -2158,7 +2226,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                 <Subtitle2>Advanced — full definition (JSON)</Subtitle2>
                 <Caption1>The complete index definition, including vectorSearch profiles/algorithms, semantic configurations, scoring profiles and custom analyzers. Save issues a real PUT /indexes/{idx.name}.</Caption1>
                 <MonacoTextarea value={schemaText} onChange={(v) => { setSchemaText(v); setSchemaDirty(true); }} language="json" minHeight={260} />
-                <div className={s.toolbar} style={{ marginTop: 8 }}>
+                <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
                   <Button appearance="primary" disabled={savingSchema || !schemaDirty} onClick={saveSchema}>{savingSchema ? 'Saving…' : 'Save definition'}</Button>
                   <Button onClick={() => { setSchemaText(JSON.stringify(idx, null, 2)); setSchemaDirty(false); setSchemaMsg(null); }} disabled={!schemaDirty}>Revert</Button>
                   {schemaDirty && <Caption1 style={{ color: tokens.colorPaletteRedForeground1 }}>Unsaved changes</Caption1>}
@@ -2198,7 +2266,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                           onChange={(_, d) => setSemanticConfig(d.value)} placeholder="no semantic config on this index — name one" />
                       )}
                       <span>Answers / Captions</span>
-                      <div className={s.toolbar} style={{ gap: 16 }}>
+                      <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalL }}>
                         <Checkbox label="answers (extractive)" checked={answersOn} onChange={(_, d) => setAnswersOn(!!d.checked)} />
                         <Checkbox label="captions (extractive)" checked={captionsOn} onChange={(_, d) => setCaptionsOn(!!d.checked)} />
                       </div>
@@ -2243,7 +2311,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                   {highlightFields.trim() && (
                     <>
                       <span>Highlight tags</span>
-                      <div className={s.toolbar} style={{ gap: 8 }}>
+                      <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
                         <Input value={highlightPreTag} onChange={(_, d) => setHighlightPreTag(d.value)} aria-label="highlightPreTag" placeholder="<em>" style={{ maxWidth: 120 }} />
                         <Input value={highlightPostTag} onChange={(_, d) => setHighlightPostTag(d.value)} aria-label="highlightPostTag" placeholder="</em>" style={{ maxWidth: 120 }} />
                       </div>
@@ -2253,9 +2321,9 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
 
                 {/* Faceting — pick facetable fields to bucket results by. */}
                 {facetableFields.length > 0 && (
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
                     <Caption1><strong>Facets</strong> — bucket results by a facetable field (returned under <code>@search.facets</code>).</Caption1>
-                    <div className={s.toolbar} style={{ gap: 12, flexWrap: 'wrap' }}>
+                    <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
                       {facetableFields.map((f) => (
                         <Checkbox key={f} label={f} checked={selectedFacets.includes(f)}
                           aria-label={`facet-${f}`} onChange={(_, d) => toggleFacet(f, !!d.checked)} />
@@ -2265,7 +2333,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                 )}
 
                 {/* Vector-query builder (k-NN / hybrid). */}
-                <Subtitle2 style={{ marginTop: 12 }}>Vector queries</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Vector queries</Subtitle2>
                 <Caption1>
                   Add a vector query for k-NN or hybrid search. <code>text</code> uses integrated
                   vectorization (the service embeds the text via the field's vectorizer);
@@ -2310,15 +2378,15 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                     <Button size="small" appearance="subtle" onClick={() => removeVectorQuery(i)} aria-label={`vq-${i}-remove`}>Remove</Button>
                   </div>
                 ))}
-                <Button size="small" style={{ marginTop: 8 }} onClick={addVectorQuery}>＋ Add vector query</Button>
+                <Button size="small" style={{ marginTop: tokens.spacingVerticalS }} onClick={addVectorQuery}>＋ Add vector query</Button>
 
-                <div className={s.toolbar} style={{ marginTop: 12 }}>
+                <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalM }}>
                   <Button appearance="primary" onClick={runSearch} disabled={searching}>{searching ? 'Searching…' : 'Run query'}</Button>
                 </div>
 
                 {/* Raw request JSON actually posted to /docs/search. */}
                 {lastQueryBody && (
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
                     <Caption1>Request body (POST /indexes/{idx.name}/docs/search):</Caption1>
                     <pre className={s.monaco} style={{ minHeight: 0, maxHeight: 200, overflow: 'auto' }}>{JSON.stringify(lastQueryBody, null, 2)}</pre>
                   </div>
@@ -2385,9 +2453,9 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                   <span>Text</span><Input value={analyzeTxt} onChange={(_, d) => setAnalyzeTxt(d.value)} placeholder="The quick brown fox" />
                   <span>Analyzer</span><Input value={analyzer} onChange={(_, d) => setAnalyzer(d.value)} placeholder="standard.lucene" />
                 </div>
-                <Button appearance="primary" style={{ marginTop: 8 }} onClick={runAnalyze} disabled={!analyzeTxt}>Analyze</Button>
+                <Button appearance="primary" style={{ marginTop: tokens.spacingVerticalS }} onClick={runAnalyze} disabled={!analyzeTxt}>Analyze</Button>
                 {analyzeRes && (analyzeRes.ok
-                  ? <Caption1 style={{ marginTop: 8 }}>Tokens: {(analyzeRes.result?.tokens || []).map((t: any) => t.token).join(' · ') || '—'}</Caption1>
+                  ? <Caption1 style={{ marginTop: tokens.spacingVerticalS }}>Tokens: {(analyzeRes.result?.tokens || []).map((t: any) => t.token).join(' · ') || '—'}</Caption1>
                   : <ErrorBar msg={analyzeRes.error} hint={analyzeRes.hint} notDeployed={analyzeRes.notDeployed} />)}
               </div>
             </>
@@ -2406,14 +2474,14 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                   </>)}
                 </div>
               ) : <Caption1>Statistics not available (collected every few minutes; reload to refresh).</Caption1>}
-              <Button style={{ marginTop: 8 }} onClick={reloadDetail}>Reload statistics</Button>
+              <Button style={{ marginTop: tokens.spacingVerticalS }} onClick={reloadDetail}>Reload statistics</Button>
             </div>
           )}
 
           {/* ---- Indexers tab ---- */}
           {tab === 'indexers' && (
             <>
-              {indexersLoading ? <Spinner size="small" /> : indexerData && !indexerData.ok ? (
+              {indexersLoading ? <TableSkeleton /> : indexerData && !indexerData.ok ? (
                 <ErrorBar msg={indexerData.error} hint={indexerData.hint} notDeployed={indexerData.notDeployed} />
               ) : indexerData?.ok ? (
                 <>
@@ -2429,7 +2497,7 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                         <TableBody>
                           {(indexerData.indexers || []).map((ix: any) => (
                             <TableRow key={ix.name}>
-                              <TableCell className={s.cell}><strong>{ix.name}</strong>{ix.targetsThisIndex && <Badge color="brand" style={{ marginLeft: 6 }}>this index</Badge>}</TableCell>
+                              <TableCell className={s.cell}><strong>{ix.name}</strong>{ix.targetsThisIndex && <Badge color="brand" style={{ marginLeft: tokens.spacingHorizontalXS }}>this index</Badge>}</TableCell>
                               <TableCell className={s.cell}>{ix.targetIndexName || '—'}</TableCell>
                               <TableCell className={s.cell}>{ix.dataSourceName || '—'}</TableCell>
                               <TableCell className={s.cell}>{ix.skillsetName || '—'}</TableCell>
@@ -2465,17 +2533,17 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
                       />
                     );
                   })()}
-                  <Subtitle2 style={{ marginTop: 12 }}>Data sources ({(indexerData.dataSources || []).length})</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Data sources ({(indexerData.dataSources || []).length})</Subtitle2>
                   {(indexerData.dataSources || []).length === 0 ? <Caption1>No data sources.</Caption1> : (
                     <Caption1>{(indexerData.dataSources || []).map((d: any) => `${d.name}${d.type ? ` (${d.type})` : ''}`).join(' · ')}</Caption1>
                   )}
-                  <Subtitle2 style={{ marginTop: 12 }}>Skillsets ({(indexerData.skillsets || []).length})</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Skillsets ({(indexerData.skillsets || []).length})</Subtitle2>
                   {(indexerData.skillsets || []).length === 0 ? <Caption1>No skillsets.</Caption1> : (
                     <Caption1>{(indexerData.skillsets || []).map((sk: any) => `${sk.name} (${sk.skillCount} skills)`).join(' · ')}</Caption1>
                   )}
-                  <Button style={{ marginTop: 8 }} onClick={loadIndexers}>Reload</Button>
+                  <Button style={{ marginTop: tokens.spacingVerticalS }} onClick={loadIndexers}>Reload</Button>
                 </>
-              ) : <Spinner size="small" />}
+              ) : <TableSkeleton />}
             </>
           )}
         </>
@@ -2524,7 +2592,7 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
   if (isNew) {
     return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
-        <Subtitle2>Foundry computes</Subtitle2>
+        <SectionHead icon={<Server20Regular />}>Foundry computes</SectionHead>
         <div className={s.card}>
           <Subtitle2>New compute</Subtitle2>
           <div className={s.formRow}>
@@ -2546,7 +2614,10 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
           <Button appearance="primary" onClick={create} disabled={busy || !form.name}>{busy ? 'Creating…' : 'Create compute'}</Button>
           {msg && <Caption1> {msg}</Caption1>}
         </div>
-        {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+        {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (list.data?.computes || []).length === 0 ? (
+          <EmptyState icon={<Server20Regular />} title="No compute targets yet"
+            body="Create an AmlCompute cluster or ComputeInstance above to run flows, evaluations, and notebooks in this Foundry workspace." />
+        ) : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow>
@@ -2577,9 +2648,9 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
 
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.compute && (
+      {detail.loading ? <TableSkeleton rows={4} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.compute && (
         <>
-          <Subtitle2>{detail.data.compute.name}</Subtitle2>
+          <SectionHead icon={<Server20Regular />}>{detail.data.compute.name}</SectionHead>
           <div className={s.formRow}>
             <span>Type</span><span>{detail.data.compute.computeType}</span>
             <span>VM</span><span>{detail.data.compute.vmSize || '—'}</span>
@@ -2602,6 +2673,211 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
 // 8. DatasetEditor
 // =====================================================================
 
+// The five DLZ medallion containers the lakehouse data-plane allow-lists; a
+// dataset whose dataUri lands in one of these previews + profiles against the
+// PRIMARY account without an explicit account param. Others still preview via
+// the account-scoped route, but Spark profiling (table-stats) is gated to these.
+const DLZ_KNOWN_CONTAINERS = ['bronze', 'silver', 'gold', 'landing', 'csv-imports'];
+
+interface ParsedAdls { account: string; container: string; path: string; }
+
+/**
+ * Parse an `abfss://<container>@<account>.dfs.<suffix>/<path>` or
+ * `https://<account>.dfs.<suffix>/<container>/<path>` data-asset URI into its
+ * {account, container, path}. Returns null for non-ADLS URIs (azureml://, etc.)
+ * so the caller can surface an honest "not previewable" gate instead of guessing.
+ */
+function parseAdlsUri(uri: string | undefined): ParsedAdls | null {
+  if (!uri) return null;
+  const abfss = uri.match(/^abfss:\/\/([^@/]+)@([^./]+)\.dfs\.[^/]+\/(.*)$/i);
+  if (abfss) return { container: abfss[1], account: abfss[2], path: abfss[3] };
+  const https = uri.match(/^https:\/\/([^./]+)\.dfs\.[^/]+\/([^/]+)\/(.*)$/i);
+  if (https) return { account: https[1], container: https[2], path: https[3] };
+  return null;
+}
+
+/** A folder path the user is currently sitting in (prefix), plus its breadcrumb. */
+function crumbsFor(prefix: string): string[] {
+  return prefix.split('/').filter(Boolean);
+}
+
+/**
+ * AdlsBrowseDialog — modal ADLS Gen2 file browser for picking a dataset URI.
+ * Lists the real DLZ containers (/api/lakehouse/containers) then walks paths
+ * (/api/lakehouse/paths); selecting a file → uri_file, a folder → uri_folder.
+ * Emits the abfss URI the new-asset form posts. Honest gate when no container
+ * is reachable. Parity with the portal "Browse" picker when registering data.
+ */
+function AdlsBrowseDialog({ open, onClose, onPick }: {
+  open: boolean; onClose: () => void;
+  onPick: (uri: string, dataType: 'uri_file' | 'uri_folder') => void;
+}) {
+  const s = useStyles();
+  const [containers, setContainers] = useState<{ name: string; url: string }[] | null>(null);
+  const [gate, setGate] = useState<string | null>(null);
+  const [container, setContainer] = useState<string>('');
+  const [account, setAccount] = useState<string>('');
+  const [prefix, setPrefix] = useState('');
+  const [entries, setEntries] = useState<{ name: string; isDirectory: boolean; size: number }[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    setContainer(''); setPrefix(''); setEntries([]); setErr(null); setGate(null);
+    (async () => {
+      const r = await fetch('/api/lakehouse/containers');
+      const j = await r.json();
+      if (j.gate) { setGate(j.gate.remediation || j.gate.reason); setContainers([]); return; }
+      const cs = j.containers || [];
+      setContainers(cs);
+      if (!cs.length) setGate('No DLZ ADLS Gen2 containers reachable. Set LOOM_LANDING_URL / LOOM_BRONZE_URL etc.');
+    })();
+  }, [open]);
+
+  const loadPaths = useCallback(async (c: string, p: string) => {
+    setLoading(true); setErr(null);
+    const r = await fetch(`/api/lakehouse/paths?container=${encodeURIComponent(c)}&prefix=${encodeURIComponent(p)}`);
+    const j = await r.json();
+    if (!j.ok) setErr(j.error || 'List failed'); else setEntries(j.paths || []);
+    setLoading(false);
+  }, []);
+
+  const enterContainer = (c: { name: string; url: string }) => {
+    const acct = (c.url.match(/^https:\/\/([^./]+)\./i) || [])[1] || '';
+    setContainer(c.name); setAccount(acct); setPrefix(''); loadPaths(c.name, '');
+  };
+  const openDir = (name: string) => { setPrefix(name); loadPaths(container, name); };
+  const dfsHost = useMemo(() => (containers?.find((c) => c.name === container)?.url.match(/^https:\/\/([^/]+)/i) || [])[1] || `${account}.dfs.core.windows.net`, [containers, container, account]);
+  const pickUri = (path: string) => `abfss://${container}@${dfsHost}/${path.replace(/^\/+/, '')}`;
+  const goUp = () => { const next = prefix.split('/').slice(0, -1).join('/'); setPrefix(next); loadPaths(container, next); };
+
+  return (
+    <Dialog open={open} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface style={{ maxWidth: 720 }}>
+        <DialogBody>
+          <DialogTitle>Browse ADLS Gen2 for a data URI</DialogTitle>
+          <DialogContent>
+            {gate ? <ErrorBar msg={gate} notDeployed /> : !container ? (
+              containers === null ? <TableSkeleton rows={4} /> : (
+                <div className={s.tableWrap}>
+                  <Table size="small"><TableHeader><TableRow><TableHeaderCell>Container</TableHeaderCell><TableHeaderCell>Account</TableHeaderCell></TableRow></TableHeader>
+                    <TableBody>
+                      {containers.map((c) => (
+                        <TableRow key={c.name} onClick={() => enterContainer(c)} style={{ cursor: 'pointer' }}>
+                          <TableCell className={s.cell}><FolderOpen20Regular /> <strong>{c.name}</strong></TableCell>
+                          <TableCell className={s.cell}>{(c.url.match(/^https:\/\/([^./]+)\./i) || [])[1] || '—'}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody></Table>
+                </div>
+              )
+            ) : (
+              <>
+                <div className={s.toolbar}>
+                  <Breadcrumb>
+                    <BreadcrumbItem><BreadcrumbButton onClick={() => { setContainer(''); setPrefix(''); }}>{container}</BreadcrumbButton></BreadcrumbItem>
+                    {crumbsFor(prefix).map((seg) => (<BreadcrumbItem key={seg}><BreadcrumbButton>{seg}</BreadcrumbButton></BreadcrumbItem>))}
+                  </Breadcrumb>
+                  {prefix && <Button size="small" icon={<ArrowUp20Regular />} onClick={goUp}>Up</Button>}
+                  <Button size="small" appearance="primary" onClick={() => onPick(pickUri(prefix), 'uri_folder')}>Use this folder</Button>
+                </div>
+                {err && <ErrorBar msg={err} />}
+                {loading ? <TableSkeleton rows={4} /> : (
+                  <div className={s.tableWrap}>
+                    <Table size="small"><TableBody>
+                      {entries.length === 0 && <TableRow><TableCell className={s.cell}>Empty.</TableCell></TableRow>}
+                      {entries.map((e) => {
+                        const leaf = e.name.split('/').pop() || e.name;
+                        return (
+                          <TableRow key={e.name}>
+                            <TableCell className={s.cell}>
+                              {e.isDirectory
+                                ? <Button size="small" appearance="subtle" icon={<Folder20Regular />} onClick={() => openDir(e.name)}>{leaf}</Button>
+                                : <span><Document20Regular /> {leaf}</span>}
+                            </TableCell>
+                            <TableCell className={s.cell}>{e.isDirectory ? 'folder' : `${(e.size / 1024).toFixed(1)} KB`}</TableCell>
+                            <TableCell className={s.cell}><Button size="small" onClick={() => onPick(pickUri(e.name), e.isDirectory ? 'uri_folder' : 'uri_file')}>Select</Button></TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody></Table>
+                  </div>
+                )}
+              </>
+            )}
+          </DialogContent>
+          <DialogActions><Button appearance="secondary" onClick={onClose}>Close</Button></DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
+
+/**
+ * DatasetPreviewPanel — live data preview + schema profiler for a registered
+ * data asset version. Parses the asset's abfss/https dataUri, fetches up to 50
+ * rows via /api/lakehouse/preview (Synapse Serverless OPENROWSET), and renders
+ * the shared DeltaPreviewGrid. The "Profile schema" action runs a real Spark
+ * summary() via /api/lakehouse/table-stats (polled) so per-column min/max/mean/
+ * stddev/null-count + a distribution histogram fill the grid's stats panel.
+ */
+function DatasetPreviewPanel({ uri }: { uri: string | undefined }) {
+  const parsed = useMemo(() => parseAdlsUri(uri), [uri]);
+  const [pv, setPv] = useState<{ loading: boolean; cols: string[]; rows: unknown[][]; total: number; ms?: number; truncated?: boolean; error?: string } | null>(null);
+  const [stats, setStats] = useState<Record<string, ColStat> | null>(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const known = parsed ? DLZ_KNOWN_CONTAINERS.includes(parsed.container) : false;
+
+  const runPreview = useCallback(async () => {
+    if (!parsed) return;
+    setPv({ loading: true, cols: [], rows: [], total: 0 });
+    const qs = new URLSearchParams({ container: parsed.container, path: parsed.path });
+    if (!known) qs.set('account', parsed.account);
+    const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
+    const j = await r.json();
+    if (!j.ok) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.error || 'Preview failed' }); return; }
+    if (j.previewable === false) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.message || 'Not tabular — not previewable.' }); return; }
+    const allRows = (j.rows || []) as unknown[][];
+    setPv({ loading: false, cols: j.columns || [], rows: allRows.slice(0, 50), total: j.rowCount ?? allRows.length, ms: j.executionMs, truncated: allRows.length > 50 || !!j.truncated });
+  }, [parsed, known]);
+
+  useEffect(() => { if (parsed) runPreview(); else setPv(null); }, [parsed, runPreview]);
+
+  const profile = useCallback(async () => {
+    if (!parsed || !known) return;
+    setStatsLoading(true); setStatsError(null); setStats(null);
+    let qs = new URLSearchParams({ container: parsed.container, path: parsed.path });
+    let r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`);
+    let j = await r.json();
+    for (let i = 0; i < 40 && j.ok && j.status !== 'available'; i++) {
+      await new Promise((res) => setTimeout(res, 3000));
+      qs = new URLSearchParams({ jobId: j.jobId, container: parsed.container, path: parsed.path });
+      r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`); j = await r.json();
+    }
+    if (j.ok && j.status === 'available') setStats(j.stats || {});
+    else setStatsError(j.error || 'Profiler timed out.');
+    setStatsLoading(false);
+  }, [parsed, known]);
+
+  if (!uri) return <Caption1>This version has no data URI.</Caption1>;
+  if (!parsed) return <ErrorBar msg={`URI is not an ADLS path (${uri}). In-browser preview supports abfss:// / https:// DLZ paths.`} notDeployed />;
+  if (pv?.loading || !pv) return <TableSkeleton rows={6} />;
+  if (pv.error) return <ErrorBar msg={pv.error} />;
+  return (
+    <>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' }}>
+        <Button size="small" icon={<TableSimple20Regular />} onClick={runPreview}>Reload preview</Button>
+        <Button size="small" appearance="primary" disabled={!known || statsLoading} onClick={profile}>{statsLoading ? 'Profiling…' : 'Profile schema'}</Button>
+        {!known && <Caption1>Schema profiler runs on the DLZ medallion containers (bronze/silver/gold/landing/csv-imports); this asset is in <code>{parsed.container}</code>.</Caption1>}
+      </div>
+      <DeltaPreviewGrid columns={pv.cols} rows={pv.rows} rowCount={Math.min(pv.total, 50)} executionMs={pv.ms} truncated={pv.truncated}
+        columnStats={stats} statsLoading={statsLoading} statsError={statsError} mode="file" />
+    </>
+  );
+}
+
 export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const isNew = id === 'new' || id === 'create';
@@ -2622,6 +2898,12 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   const [typeFilter, setTypeFilter] = useState<string>('');
   const [form, setForm] = useState({ name: '', dataType: 'uri_folder', dataUri: '', version: '1', description: '' });
   const [msg, setMsg] = useState<string | null>(null);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [tab, setTab] = useState<'versions' | 'preview' | 'lineage' | 'quality'>('versions');
+  const [diffA, setDiffA] = useState<string>('');
+  const [diffB, setDiffB] = useState<string>('');
+  const [lineage] = useApi<{ producers: any[]; consumers: any[]; jobsScanned: number }>(
+    isNew ? null : `/api/items/dataset/${encodeURIComponent(id)}/lineage${project ? `?project=${encodeURIComponent(project)}` : ''}`, [id, project]);
 
   const create = async () => {
     setMsg(null);
@@ -2638,7 +2920,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
   if (isNew) {
     return <Shell item={item} id={id} ribbon={ribbon}>
       <div className={s.pad}>
-        <Subtitle2>Foundry datasets</Subtitle2>
+        <SectionHead icon={<Database20Regular />}>Foundry datasets</SectionHead>
         <div className={s.toolbar}>
           <Field label="Scope">
             <Dropdown value={project || 'hub'} selectedOptions={[project || 'hub']}
@@ -2669,14 +2951,21 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
               <Option value="uri_folder">uri_folder</Option>
               <Option value="mltable">mltable</Option>
             </Dropdown>
-            <span>URI</span><Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." />
+            <span>URI</span>
+            <div className={s.toolbar} style={{ gap: tokens.spacingHorizontalS }}>
+              <Input value={form.dataUri} onChange={(_, d) => setForm((f) => ({ ...f, dataUri: d.value }))} placeholder="azureml:// or abfss://..." style={{ flex: 1, minWidth: 240 }} />
+              <Button icon={<FolderOpen20Regular />} onClick={() => setBrowseOpen(true)}>Browse…</Button>
+            </div>
             <span>Version</span><Input value={form.version} onChange={(_, d) => setForm((f) => ({ ...f, version: d.value }))} />
             <span>Description</span><Input value={form.description} onChange={(_, d) => setForm((f) => ({ ...f, description: d.value }))} />
           </div>
           <Button appearance="primary" onClick={create} disabled={!form.name || !form.dataUri}>Create asset</Button>
           {msg && <Caption1> {msg}</Caption1>}
         </div>
-        {list.loading ? <Spinner size="small" /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : (
+        {list.loading ? <TableSkeleton /> : list.error ? <ErrorBar msg={list.error} hint={list.hint} notDeployed={list.notDeployed} /> : filtered.length === 0 ? (
+          <EmptyState icon={<Database20Regular />} title="No data assets yet"
+            body="Register a uri_file, uri_folder, or mltable asset above to use it in flows, evaluations, and training jobs. Adjust the scope or type filter to broaden the list." />
+        ) : (
           <div className={s.tableWrap}>
             <Table size="small">
               <TableHeader><TableRow>
@@ -2697,33 +2986,94 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
           </div>
         )}
       </div>
+      <AdlsBrowseDialog open={browseOpen} onClose={() => setBrowseOpen(false)}
+        onPick={(uri, dataType) => { setForm((f) => ({ ...f, dataUri: uri, dataType })); setBrowseOpen(false); }} />
     </Shell>;
   }
 
+  // Active version drives the preview/profile panel — latest by default.
+  const versions: any[] = detail.data?.versions || [];
+  const activeUri = detail.data?.asset?.dataUri || versions[0]?.dataUri;
+
   return <Shell item={item} id={id} ribbon={ribbon}>
     <div className={s.pad}>
-      {detail.loading ? <Spinner size="small" /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.asset && (
+      {detail.loading ? <TableSkeleton rows={4} /> : detail.error ? <ErrorBar msg={detail.error} hint={detail.hint} notDeployed={detail.notDeployed} /> : detail.data?.asset && (
         <>
-          <Subtitle2>{detail.data.asset.name}</Subtitle2>
+          <SectionHead icon={<Database20Regular />}>{detail.data.asset.name}</SectionHead>
           <Body1>{detail.data.asset.description || '—'}</Body1>
-          <div className={s.tableWrap}>
-            <Table size="small">
-              <TableHeader><TableRow>
-                <TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
-                <TableHeaderCell>URI</TableHeaderCell><TableHeaderCell>Created</TableHeaderCell>
-              </TableRow></TableHeader>
-              <TableBody>
-                {(detail.data.versions || []).map((v: any) => (
-                  <TableRow key={v.version}>
-                    <TableCell className={s.cell}><strong>{v.version}</strong></TableCell>
-                    <TableCell className={s.cell}>{v.dataType || '—'}</TableCell>
-                    <TableCell className={s.cell}>{v.dataUri || '—'}</TableCell>
-                    <TableCell className={s.cell}>{v.createdAt || '—'}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+          <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)}>
+            <Tab value="versions">Versions ({versions.length})</Tab>
+            <Tab value="preview">Data &amp; schema</Tab>
+            <Tab value="lineage">Lineage</Tab>
+            <Tab value="quality">Quality &amp; drift</Tab>
+          </TabList>
+          {tab === 'versions' && (
+            <>
+            {versions.length >= 2 && (
+              <div className={s.toolbar} style={{ alignItems: 'flex-end' }}>
+                <Field label="Diff A">
+                  <Dropdown value={diffA || versions[0]?.version} selectedOptions={[diffA || versions[0]?.version]}
+                    onOptionSelect={(_, d) => setDiffA(d.optionValue || '')}>
+                    {versions.map((v: any) => <Option key={v.version} value={String(v.version)}>{`v${v.version}`}</Option>)}
+                  </Dropdown>
+                </Field>
+                <Field label="Diff B">
+                  <Dropdown value={diffB || versions[1]?.version} selectedOptions={[diffB || versions[1]?.version]}
+                    onOptionSelect={(_, d) => setDiffB(d.optionValue || '')}>
+                    {versions.map((v: any) => <Option key={v.version} value={String(v.version)}>{`v${v.version}`}</Option>)}
+                  </Dropdown>
+                </Field>
+                {(() => {
+                  const a = versions.find((v: any) => String(v.version) === (diffA || String(versions[0]?.version)));
+                  const b = versions.find((v: any) => String(v.version) === (diffB || String(versions[1]?.version)));
+                  if (!a || !b) return null;
+                  const changed = a.dataUri !== b.dataUri || a.dataType !== b.dataType;
+                  return <Caption1>{changed ? `URI/type changed: ${a.dataType}→${b.dataType}` : 'No URI/type change between versions'}</Caption1>;
+                })()}
+              </div>
+            )}
+            <div className={s.tableWrap}>
+              <Table size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>URI</TableHeaderCell><TableHeaderCell>Created</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {versions.map((v: any) => (
+                    <TableRow key={v.version}>
+                      <TableCell className={s.cell}><strong>{v.version}</strong></TableCell>
+                      <TableCell className={s.cell}>{v.dataType || '—'}</TableCell>
+                      <TableCell className={s.cell}>{v.dataUri || '—'}</TableCell>
+                      <TableCell className={s.cell}>{v.createdAt || '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+            </>
+          )}
+          {tab === 'preview' && <DatasetPreviewPanel uri={activeUri} />}
+          {tab === 'lineage' && (
+            lineage.loading ? <TableSkeleton rows={3} /> : lineage.error ? <ErrorBar msg={lineage.error} notDeployed={lineage.notDeployed} /> : (
+              (lineage.data?.producers?.length || lineage.data?.consumers?.length) ? (
+                <div className={s.tableWrap}>
+                  <Table size="small">
+                    <TableHeader><TableRow><TableHeaderCell>Role</TableHeaderCell><TableHeaderCell>Job</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell></TableRow></TableHeader>
+                    <TableBody>
+                      {(lineage.data?.producers || []).map((p: any) => <TableRow key={`pr-${p.name}`}><TableCell><Badge appearance="tint" color="brand">producer</Badge></TableCell><TableCell className={s.cell}>{p.displayName || p.name}</TableCell><TableCell className={s.cell}>{p.jobType}</TableCell><TableCell className={s.cell}>{p.status}</TableCell></TableRow>)}
+                      {(lineage.data?.consumers || []).map((c: any) => <TableRow key={`co-${c.name}`}><TableCell><Badge appearance="tint">consumer</Badge></TableCell><TableCell className={s.cell}>{c.displayName || c.name}</TableCell><TableCell className={s.cell}>{c.jobType}</TableCell><TableCell className={s.cell}>{c.status}</TableCell></TableRow>)}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : <EmptyState icon={<Database20Regular />} title="No lineage yet" body={`Scanned ${lineage.data?.jobsScanned ?? 0} AML jobs; none reference this asset's URI as input or output. Run a job consuming/producing this dataset to populate lineage.`} />
+            )
+          )}
+          {tab === 'quality' && (
+            <MessageBar intent="warning"><MessageBarBody>
+              <MessageBarTitle>Data quality / drift requires a Data Drift monitor</MessageBarTitle>
+              Quality profiling + drift use an AML Data Drift monitor (or Synapse data quality scan) over this asset. Provision one and set <code>LOOM_DRIFT_MONITOR</code>; the Data &amp; schema tab already profiles the active version live.
+            </MessageBarBody></MessageBar>
+          )}
         </>
       )}
     </div>

@@ -22,7 +22,13 @@ import crypto from 'node:crypto';
 import type { UserClaims } from './msal';
 
 export const COOKIE_NAME = 'loom_session';
-export const MAX_AGE_SECS = 60 * 60 * 8; // 8h
+/**
+ * Session cookie lifetime (seconds) — BOTH the cookie `Max-Age` and, when
+ * sliding sessions are enabled, the session payload `exp` window. Overridable
+ * via LOOM_SESSION_MAX_AGE_SECS; default 8h (28800). Default-unset value is
+ * byte-for-byte the previous literal.
+ */
+export const MAX_AGE_SECS = Number(process.env.LOOM_SESSION_MAX_AGE_SECS) || 60 * 60 * 8; // 8h
 const ALG = 'aes-256-gcm';
 const IV_LEN = 12;
 const TAG_LEN = 16;
@@ -71,6 +77,29 @@ export function getSession(): SessionPayload | null {
 
 export function clearSessionCookieHeader(): string {
   return `${COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
+}
+
+/**
+ * Whether SLIDING sessions are enabled (default ON via
+ * LOOM_SESSION_SLIDING_ENABLED). When ON, the auth-callback (and the
+ * /api/auth/refresh route) set the session `exp` to `now + MAX_AGE_SECS` so the
+ * cookie's logical expiry tracks its Max-Age (8h) rather than the ~60m MSAL
+ * ACCESS-token expiry — fixing the hourly-logout bug (the access token is
+ * claims-only here and re-acquired from the MSAL cache on demand). When OFF, the
+ * callback reverts byte-for-byte to deriving `exp` from the access-token expiry,
+ * making the change migration-safe + reversible by a single env flip.
+ */
+export function sessionSlidingEnabled(): boolean {
+  return (process.env.LOOM_SESSION_SLIDING_ENABLED ?? 'true').toLowerCase() !== 'false';
+}
+
+/**
+ * Set-Cookie header that (re-)issues the encrypted session cookie with the
+ * SAME flags the auth-callback uses. Shared so the silent-refresh route re-mints
+ * the cookie byte-identically (no new crypto, no drift in Path/Max-Age/flags).
+ */
+export function setSessionCookieHeader(value: string): string {
+  return `${COOKIE_NAME}=${value}; Path=/; Max-Age=${MAX_AGE_SECS}; HttpOnly; Secure; SameSite=Lax`;
 }
 
 // ---------------------------------------------------------------------------

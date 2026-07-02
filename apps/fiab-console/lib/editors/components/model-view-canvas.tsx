@@ -34,18 +34,34 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import {
-  Badge, Button, Caption1, Text, Tooltip, Spinner, Field, Input, Dropdown, Option, Switch,
+  Badge, Button, Caption1, Text, Tooltip, Spinner, Field, Input, Dropdown, Option, Switch, Checkbox,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens,
+  makeStyles, mergeClasses, tokens,
 } from '@fluentui/react-components';
 import {
   FullScreenMaximize20Regular, Organization20Regular,
-  DocumentTable16Regular, Key16Regular, Add20Regular, Delete16Regular,
-  MathFormula20Regular, Play16Regular,
+  DocumentTable16Regular, Key16Regular, Add20Regular,
+  MathFormula20Regular, Play16Regular, Sparkle20Regular,
 } from '@fluentui/react-icons';
+import { accentTint, accentGradient, portStyle } from '@/lib/components/canvas/canvas-node-kit';
+// Shared drag-to-resize host: supplies the definite outer height React Flow
+// needs to frame fitView and persists the per-surface height to localStorage.
+// Pointer + keyboard + ARIA live in the primitive; this surface only declares
+// its bounds/storage key (mirrors pipeline-designer.tsx wiring).
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+
+/**
+ * Table-card accent — theme-aware `--loom-accent-blue` (defined light + dark in
+ * app/globals.css). The Model-view card deliberately is NOT forced into the
+ * shared `CanvasNode` shape: a table card carries per-column connect handles
+ * (key-to-key relationship drawing), which `CanvasNode` does not model. Instead
+ * it reuses the kit's token-only tint/gradient helpers so the chrome (gradient
+ * header, icon chip, accent rail, hover elevation) reads as the same product.
+ */
+const TABLE_ACCENT = 'var(--loom-accent-blue)';
 
 // ---------------------------------------------------------------------------
 // Public model — kept in sync with the model BFF routes
@@ -77,6 +93,14 @@ export interface ModelRelationship {
   cardinality: Cardinality;
   crossFilter: CrossFilter;
   active: boolean;
+  /**
+   * Assume referential integrity — when true the engine may use an INNER join
+   * across this relationship (every value on the many side exists on the one
+   * side), which the warehouse/lakehouse query path can lower to a faster join.
+   * Only meaningful for many-to-one / one-to-one; persisted onto
+   * `StoredRelationship.assumeReferentialIntegrity` (back-compat optional).
+   */
+  assumeReferentialIntegrity?: boolean;
   /** 'uc' when the FK originated from Unity Catalog INFORMATION_SCHEMA. */
   source?: 'cosmos' | 'uc';
 }
@@ -115,7 +139,128 @@ export interface TableCardNodeData {
   [key: string]: unknown;
 }
 
+/**
+ * Table-card chrome — token-only, theme-aware, hover-elevated, mirroring the
+ * shared `CanvasNode` look (accent rail + gradient header + icon chip + hover
+ * shadow4→shadow16) without forcing this card into the kit's node shape, which
+ * does not model per-column connect handles. All motion is gated behind
+ * `prefers-reduced-motion: reduce`.
+ */
+const nodeStyles = makeStyles({
+  card: {
+    position: 'relative',
+    width: `${NODE_W}px`,
+    borderRadius: tokens.borderRadiusXLarge,
+    background: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
+    userSelect: 'none',
+    overflow: 'hidden',
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': {
+      boxShadow: tokens.shadow16,
+      transform: 'translateY(-1px)',
+    },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0.01ms',
+      ':hover': { transform: 'none' },
+    },
+  },
+  cardSelected: {
+    border: `1px solid ${tokens.colorBrandStroke1}`,
+    boxShadow: `0 0 0 2px ${TABLE_ACCENT}`,
+  },
+  // Accent rail down the left edge (anchors the table category colour).
+  rail: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '6px',
+    background: TABLE_ACCENT,
+    zIndex: 1,
+  },
+  header: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalS,
+    paddingBottom: tokens.spacingVerticalS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalS,
+    marginLeft: '6px',
+    background: accentGradient(TABLE_ACCENT),
+    borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  iconChip: {
+    flexShrink: 0,
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: accentTint(TABLE_ACCENT, 14),
+    color: TABLE_ACCENT,
+  },
+  cols: {
+    display: 'flex',
+    flexDirection: 'column',
+    marginLeft: '6px',
+  },
+  colRow: {
+    position: 'relative',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    fontSize: tokens.fontSizeBase100,
+    minHeight: '18px',
+  },
+  // Primary-key rows get a faint accent wash so keys read first.
+  colRowPk: {
+    background: accentTint(TABLE_ACCENT, 6),
+  },
+  colName: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    overflow: 'hidden',
+  },
+  keyGlyph: {
+    display: 'inline-flex',
+    color: 'var(--loom-accent-amber)',
+  },
+  colType: {
+    color: tokens.colorNeutralForeground4,
+    flexShrink: 0,
+  },
+  more: {
+    color: tokens.colorNeutralForeground4,
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    marginLeft: '6px',
+  },
+  empty: {
+    color: tokens.colorNeutralForeground4,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    marginLeft: '6px',
+  },
+});
+
 function TableCardNodeImpl({ data, selected }: NodeProps) {
+  const styles = nodeStyles();
   const { table } = data as TableCardNodeData;
   const cols = table.columns || [];
   const shown = cols.slice(0, MAX_COLS);
@@ -125,74 +270,58 @@ function TableCardNodeImpl({ data, selected }: NodeProps) {
       id={`model-table-${table.id}`}
       data-model-table-id={table.id}
       aria-label={`Table ${table.id}`}
-      style={{
-        position: 'relative',
-        width: NODE_W,
-        borderRadius: 8,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.08)',
-        userSelect: 'none',
-        overflow: 'hidden',
-      }}
+      className={mergeClasses(styles.card, selected && styles.cardSelected)}
     >
-      {/* Header bar */}
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 6,
-        padding: '6px 10px',
-        background: tokens.colorNeutralBackground2,
-        borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-      }}>
-        <span style={{ color: 'var(--loom-accent-blue)', display: 'inline-flex' }}><DocumentTable16Regular fontSize={16} /></span>
+      {/* Accent rail anchoring the table category colour. */}
+      <span className={styles.rail} aria-hidden="true" />
+
+      {/* Gradient header — icon chip + table name + schema badge. */}
+      <div className={styles.header}>
+        <span className={styles.iconChip} aria-hidden="true"><DocumentTable16Regular fontSize={16} /></span>
         <Text size={200} weight="semibold" truncate wrap={false} style={{ flex: 1 }}>{table.name}</Text>
         <Badge size="extra-small" appearance="tint" color="informative">{table.schema}</Badge>
       </div>
 
       {/* Whole-card target/source handles (used as a fallback when a precise
           column handle isn't grabbed). */}
-      <Handle type="target" position={Position.Left} id="__table" style={{ width: 8, height: 8, background: 'var(--loom-accent-blue)', border: 'none', left: -4, top: 16 }} />
-      <Handle type="source" position={Position.Right} id="__table" style={{ width: 8, height: 8, background: 'var(--loom-accent-blue)', border: 'none', right: -4, top: 16 }} />
+      <Handle type="target" position={Position.Left} id="__table" style={{ ...portStyle('in', TABLE_ACCENT), left: -6, top: 16 }} />
+      <Handle type="source" position={Position.Right} id="__table" style={{ ...portStyle('out', TABLE_ACCENT), right: -6, top: 16 }} />
 
       {/* Column rows — each carries a column-level source + target handle so a
           relationship can be drawn key-to-key. `nodrag` keeps clicks from
           dragging the whole card. */}
-      <div style={{ display: 'flex', flexDirection: 'column' }}>
+      <div className={styles.cols}>
         {shown.map((c) => (
           <div
             key={c.name}
-            className="nodrag"
-            style={{
-              position: 'relative',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
-              padding: '2px 12px', fontSize: 11, minHeight: 18,
-            }}
+            className={mergeClasses('nodrag', styles.colRow, c.isPk && styles.colRowPk)}
           >
             <Handle
               type="target" position={Position.Left} id={`col:${c.name}`}
-              style={{ width: 7, height: 7, background: tokens.colorNeutralStroke1, border: 'none', left: -3 }}
+              style={{ ...portStyle('in', TABLE_ACCENT), left: -6 }}
             />
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4, overflow: 'hidden' }}>
-              {c.isPk && <span style={{ color: 'var(--loom-accent-amber, #b8860b)', display: 'inline-flex' }}><Key16Regular fontSize={12} /></span>}
+            <span className={styles.colName}>
+              {c.isPk && <span className={styles.keyGlyph}><Key16Regular fontSize={12} /></span>}
               <span style={{
                 color: tokens.colorNeutralForeground1,
-                fontWeight: c.isPk ? 600 : 400,
+                fontWeight: c.isPk ? tokens.fontWeightSemibold : tokens.fontWeightRegular,
                 overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
               }}>{c.name}</span>
             </span>
-            <span style={{ color: tokens.colorNeutralForeground4, flexShrink: 0 }}>{c.type}</span>
+            <span className={styles.colType}>{c.type}</span>
             <Handle
               type="source" position={Position.Right} id={`col:${c.name}`}
-              style={{ width: 7, height: 7, background: tokens.colorNeutralStroke1, border: 'none', right: -3 }}
+              style={{ ...portStyle('out', TABLE_ACCENT), right: -6 }}
             />
           </div>
         ))}
         {cols.length > shown.length && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground4, padding: '2px 12px' }}>
+          <Caption1 className={styles.more}>
             +{cols.length - shown.length} more
           </Caption1>
         )}
         {cols.length === 0 && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground4, padding: '4px 12px' }}>(no columns)</Caption1>
+          <Caption1 className={styles.empty}>(no columns)</Caption1>
         )}
       </div>
     </div>
@@ -237,6 +366,142 @@ function colFromHandle(handle: string | null | undefined): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Autodetect relationships — a pure, client-side heuristic over the REAL loaded
+// schema (props.tables). It proposes M:1 foreign-key relationships toward the
+// table where the matched column is a primary key, using the same naming
+// conventions a star-schema warehouse follows (`<Dim>Key` / `<Dim>Id` on the
+// fact, or an exact shared key-name). Proposals feed a review dialog; accepted
+// rows are created through the SAME `onCreateRelationship` route the manual
+// dialog uses — no new BFF route, no mock proposals.
+// ---------------------------------------------------------------------------
+
+export interface RelProposal {
+  fromTable: string;   // many side (the referencing / fact table)
+  fromColumn: string;
+  toTable: string;     // one side (the table whose PK is referenced)
+  toColumn: string;
+  cardinality: Cardinality;  // always 'many-to-one' for an inferred FK
+  /** Human-readable rationale shown in the review list. */
+  reason: string;
+  /** Stable dedup / accept-map key. */
+  key: string;
+}
+
+/** Strip length/precision (e.g. `varchar(50)` → `varchar`) and lowercase. */
+function baseType(t?: string): string {
+  if (!t) return '';
+  return t.toLowerCase().replace(/\([^)]*\)/g, '').trim();
+}
+
+/** Coarse type family so e.g. `int` ↔ `bigint` and `varchar` ↔ `nvarchar` match. */
+function typeFamily(t?: string): string {
+  const b = baseType(t);
+  if (!b) return '';
+  if (/(int|long|numeric|decimal|number|money|bit|serial)/.test(b)) return 'num';
+  if (/(char|text|string|clob)/.test(b)) return 'str';
+  if (/(uuid|guid|uniqueidentifier)/.test(b)) return 'uid';
+  if (/(date|time|timestamp)/.test(b)) return 'date';
+  return b;
+}
+
+/** Lenient join-type compatibility — unknown types (missing on either end) pass. */
+function typesCompatible(a?: string, b?: string): boolean {
+  const fa = typeFamily(a);
+  const fb = typeFamily(b);
+  if (!fa || !fb) return true;            // schema didn't carry a type — allow
+  if (fa === fb) return true;
+  // uid columns are commonly typed as strings on one side
+  return (fa === 'uid' && fb === 'str') || (fa === 'str' && fb === 'uid');
+}
+
+/** Primary-key columns for a table — flagged `isPk`, else a key-named fallback. */
+function pkColumns(t: ModelTable): ModelColumn[] {
+  const flagged = t.columns.filter((c) => c.isPk);
+  if (flagged.length) return flagged;
+  const nm = t.name.toLowerCase();
+  const singular = nm.endsWith('s') ? nm.slice(0, -1) : nm;
+  const cand = new Set(['id', `${nm}id`, `${nm}key`, `${singular}id`, `${singular}key`]);
+  return t.columns.filter((c) => cand.has(c.name.toLowerCase()));
+}
+
+function relKey(ft: string, fc: string, tt: string, tc: string): string {
+  return `${ft}::${fc}->${tt}::${tc}`.toLowerCase();
+}
+
+/**
+ * Propose FK relationships from a set of tables, skipping any that already
+ * exist (in either orientation). Pure — no I/O, unit-testable.
+ */
+export function detectRelationships(tables: ModelTable[], existing: ModelRelationship[]): RelProposal[] {
+  const proposals: RelProposal[] = [];
+  const seen = new Set<string>();
+
+  // Existing relationships (both orientations) are off-limits.
+  const taken = new Set<string>();
+  for (const r of existing) {
+    taken.add(relKey(r.fromTable, r.fromColumn, r.toTable, r.toColumn));
+    taken.add(relKey(r.toTable, r.toColumn, r.fromTable, r.fromColumn));
+  }
+
+  const pkMap = new Map<string, ModelColumn[]>(tables.map((t) => [t.id, pkColumns(t)]));
+
+  for (const a of tables) {
+    const aPkNames = new Set((pkMap.get(a.id) || []).map((p) => p.name.toLowerCase()));
+    for (const b of tables) {
+      if (a.id === b.id) continue;
+      const bPks = pkMap.get(b.id) || [];
+      if (!bPks.length) continue;
+
+      const bn = b.name.toLowerCase();
+      const bSingular = bn.endsWith('s') ? bn.slice(0, -1) : bn;
+      const refNames = new Set<string>();
+      for (const n of [bn, bSingular]) {
+        refNames.add(`${n}key`);
+        refNames.add(`${n}id`);
+        refNames.add(`${n}_id`);
+        refNames.add(`${n}_key`);
+      }
+
+      for (const colA of a.columns) {
+        const cl = colA.name.toLowerCase();
+        let target: ModelColumn | undefined;
+        let why = '';
+
+        const exact = bPks.find((p) => p.name.toLowerCase() === cl);
+        if (exact) {
+          // Exact shared key-name. Skip when the column is also A's own PK —
+          // two same-named PKs are ambiguous (no inferable direction).
+          if (aPkNames.has(cl)) continue;
+          target = exact;
+          why = 'shared key name';
+        } else if (refNames.has(cl)) {
+          // `<Dim>Key` / `<Dim>Id` naming convention → B's primary key.
+          target = bPks[0];
+          why = 'naming convention';
+        }
+        if (!target) continue;
+        if (!typesCompatible(colA.type, target.type)) continue;
+
+        const k = relKey(a.id, colA.name, b.id, target.name);
+        if (seen.has(k) || taken.has(k)) continue;
+        seen.add(k);
+        proposals.push({
+          fromTable: a.id,
+          fromColumn: colA.name,
+          toTable: b.id,
+          toColumn: target.name,
+          cardinality: 'many-to-one',
+          reason: `${a.name}.${colA.name} → ${b.name}.${target.name} · ${why}`,
+          key: k,
+        });
+      }
+    }
+  }
+  return proposals;
+}
+
+
+// ---------------------------------------------------------------------------
 // Canvas
 // ---------------------------------------------------------------------------
 
@@ -244,22 +509,40 @@ const useStyles = makeStyles({
   shell: {
     position: 'relative',
     width: '100%',
-    height: '520px',
+    // Fills the wrapping <ResizableCanvasRegion>, which now owns the definite
+    // pixel height React Flow needs to frame fitView and makes it user-resizable
+    // + persisted (was a fixed height:520px before the region took ownership).
+    height: '100%',
+    minHeight: 0,
     overflow: 'hidden',
     backgroundColor: tokens.colorNeutralBackground3,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '8px',
+    borderRadius: tokens.borderRadiusXLarge,
   },
   toolbar: {
-    display: 'flex', gap: '4px', alignItems: 'center',
+    display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center',
     backgroundColor: tokens.colorNeutralBackground1,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px', padding: '4px',
+    borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingHorizontalXS,
   },
   empty: {
     position: 'absolute', inset: '0', display: 'flex', flexDirection: 'column',
-    alignItems: 'center', justifyContent: 'center', gap: '6px', textAlign: 'center', padding: '24px',
+    alignItems: 'center', justifyContent: 'center', gap: tokens.spacingVerticalS, textAlign: 'center', padding: tokens.spacingHorizontalXXL,
   },
+  // Autodetect review dialog — empty gallery state (no proposals found).
+  adEmpty: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalS, textAlign: 'center',
+    paddingTop: tokens.spacingVerticalXXL, paddingBottom: tokens.spacingVerticalXXL,
+    color: tokens.colorNeutralForeground3,
+  },
+  adList: {
+    maxHeight: '320px', overflowY: 'auto',
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+  },
+  // Faint hint under the referential-integrity switch.
+  riHint: { color: tokens.colorNeutralForeground3 },
 });
 
 export interface ModelViewCanvasProps {
@@ -285,8 +568,19 @@ function ModelViewCanvasInner({
   const [cardinality, setCardinality] = useState<Cardinality>('many-to-one');
   const [crossFilter, setCrossFilter] = useState<CrossFilter>('single');
   const [active, setActive] = useState(true);
+  // Assume-referential-integrity is only valid when the "one" side is on the
+  // to-end (many-to-one / one-to-one); the switch is disabled otherwise.
+  const [assumeRI, setAssumeRI] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const riValid = cardinality === 'many-to-one' || cardinality === 'one-to-one';
+
+  // Autodetect-relationships review dialog state.
+  const [adOpen, setAdOpen] = useState(false);
+  const [proposals, setProposals] = useState<RelProposal[]>([]);
+  const [adAccepted, setAdAccepted] = useState<Record<string, boolean>>({});
+  const [adBusy, setAdBusy] = useState(false);
+  const [adErr, setAdErr] = useState<string | null>(null);
 
   const positions = useMemo(() => gridLayout(tables), [tables]);
 
@@ -315,8 +609,13 @@ function ModelViewCanvasInner({
           sourceHandle: `col:${r.fromColumn}`,
           targetHandle: `col:${r.toColumn}`,
           type: 'smoothstep',
+          // FLAG: the `⇄` is a cardinality/cross-filter notation marker rendered
+          // inside the edge LABEL text (the Power BI Model-view "both directions"
+          // glyph), not a UI icon — Fluent icons can't be embedded in a React
+          // Flow string edge label. Acceptable per the kit rules as a textual
+          // cardinality marker alongside the `1`/`*` ends.
           label: `${ends.from} — ${ends.to}${r.crossFilter === 'both' ? ' ⇄' : ''}`,
-          labelStyle: { fontSize: 10, fill: tokens.colorNeutralForeground2 },
+          labelStyle: { fontSize: tokens.fontSizeBase100, fill: tokens.colorNeutralForeground2 },
           animated: false,
           style: {
             stroke: color,
@@ -343,6 +642,7 @@ function ModelViewCanvasInner({
       setCardinality('many-to-one');
       setCrossFilter('single');
       setActive(true);
+      setAssumeRI(false);
       setDlgOpen(true);
       return;
     }
@@ -351,6 +651,7 @@ function ModelViewCanvasInner({
     setCardinality('many-to-one');
     setCrossFilter('single');
     setActive(true);
+    setAssumeRI(false);
     setDlgOpen(true);
   }, [readOnly]);
 
@@ -369,6 +670,8 @@ function ModelViewCanvasInner({
         cardinality,
         crossFilter,
         active,
+        // RI only applies on the many-to-one / one-to-one shapes; otherwise off.
+        assumeReferentialIntegrity: riValid ? assumeRI : false,
       });
       setDlgOpen(false);
       setDraft(null);
@@ -377,7 +680,58 @@ function ModelViewCanvasInner({
     } finally {
       setBusy(false);
     }
-  }, [draft, cardinality, crossFilter, active, onCreateRelationship]);
+  }, [draft, cardinality, crossFilter, active, riValid, assumeRI, onCreateRelationship]);
+
+  // --- Autodetect relationships ------------------------------------------
+  // Open the review dialog seeded with proposals from the REAL loaded schema.
+  const openAutodetect = useCallback(() => {
+    const found = detectRelationships(tables, relationships);
+    setProposals(found);
+    setAdAccepted(Object.fromEntries(found.map((p) => [p.key, true])));
+    setAdErr(null);
+    setAdOpen(true);
+  }, [tables, relationships]);
+
+  // Create every accepted proposal through the same onCreateRelationship route
+  // the manual dialog uses. Errors are surfaced; partial success is honest.
+  const applyAutodetect = useCallback(async () => {
+    const toCreate = proposals.filter((p) => adAccepted[p.key] !== false);
+    if (!toCreate.length) { setAdOpen(false); return; }
+    setAdBusy(true); setAdErr(null);
+    let created = 0;
+    const failures: string[] = [];
+    for (const p of toCreate) {
+      try {
+        const fromShort = p.fromTable.split('.').pop();
+        const toShort = p.toTable.split('.').pop();
+        await onCreateRelationship({
+          name: `FK_${fromShort}_${toShort}_${p.fromColumn}`.replace(/[^A-Za-z0-9_]/g, '_'),
+          fromTable: p.fromTable,
+          fromColumn: p.fromColumn,
+          toTable: p.toTable,
+          toColumn: p.toColumn,
+          cardinality: p.cardinality,
+          crossFilter: 'single',
+          active: true,
+          assumeReferentialIntegrity: false,
+        });
+        created += 1;
+      } catch (e: any) {
+        failures.push(`${p.reason}: ${e?.message || String(e)}`);
+      }
+    }
+    setAdBusy(false);
+    if (failures.length) {
+      setAdErr(`Created ${created} of ${toCreate.length}. ${failures.length} failed — ${failures.join('; ')}`);
+    } else {
+      setAdOpen(false);
+    }
+  }, [proposals, adAccepted, onCreateRelationship]);
+
+  const acceptedCount = useMemo(
+    () => proposals.filter((p) => adAccepted[p.key] !== false).length,
+    [proposals, adAccepted],
+  );
 
   const onEdgeClick = useCallback(async (_: React.MouseEvent, edge: Edge) => {
     if (readOnly) return;
@@ -391,6 +745,16 @@ function ModelViewCanvasInner({
     tables.find((t) => t.id === tableId)?.columns || [];
 
   return (
+    // User-resizable outer height (drag the bottom grip or use the keyboard),
+    // persisted per-surface. Bounds: minPx 320 (the inherent floor for the
+    // table-card grid) up to ~80vh, default 520 — matching the shell's prior
+    // fixed height so first paint is visually unchanged.
+    <ResizableCanvasRegion
+      storageKey="semantic-model-view"
+      defaultPx={520}
+      minPx={320}
+      ariaLabel="Resize model diagram canvas height"
+    >
     <div className={st.shell} data-testid="model-view-canvas" aria-label="Model view relationship canvas">
       <ReactFlow
         nodes={rfNodes}
@@ -411,6 +775,30 @@ function ModelViewCanvasInner({
         deleteKeyCode={null}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color={tokens.colorNeutralStroke2} />
+        <Panel position="top-left">
+          <div className={st.toolbar}>
+            <Tooltip
+              content={
+                readOnly
+                  ? 'Resume the compute to autodetect relationships'
+                  : tables.length < 2
+                    ? 'Load at least two tables to autodetect relationships'
+                    : 'Scan the loaded schema and propose foreign-key relationships'
+              }
+              relationship="label"
+            >
+              <Button
+                size="small"
+                appearance="subtle"
+                icon={<Sparkle20Regular />}
+                onClick={openAutodetect}
+                disabled={readOnly || tables.length < 2}
+              >
+                Autodetect relationships
+              </Button>
+            </Tooltip>
+          </div>
+        </Panel>
         <Panel position="top-right">
           <div className={st.toolbar}>
             <Tooltip content="Auto-layout" relationship="label">
@@ -441,13 +829,13 @@ function ModelViewCanvasInner({
           <DialogBody>
             <DialogTitle>Create relationship</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 {err && (
                   <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not create</MessageBarTitle>{err}</MessageBarBody></MessageBar>
                 )}
                 {draft && (
                   <>
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                       <Field label="From table" style={{ flex: 1 }}>
                         <Input value={draft.fromTable} readOnly aria-label="From table" />
                       </Field>
@@ -461,7 +849,7 @@ function ModelViewCanvasInner({
                         </Dropdown>
                       </Field>
                     </div>
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                       <Field label="To table" style={{ flex: 1 }}>
                         <Input value={draft.toTable} readOnly aria-label="To table" />
                       </Field>
@@ -475,7 +863,7 @@ function ModelViewCanvasInner({
                         </Dropdown>
                       </Field>
                     </div>
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                       <Field label="Cardinality" style={{ flex: 1 }}>
                         <Dropdown
                           value={cardinality}
@@ -496,6 +884,19 @@ function ModelViewCanvasInner({
                       </Field>
                     </div>
                     <Switch checked={active} label="Active relationship" onChange={(_, d) => setActive(!!d.checked)} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+                      <Switch
+                        checked={riValid && assumeRI}
+                        disabled={!riValid}
+                        label="Assume referential integrity"
+                        onChange={(_, d) => setAssumeRI(!!d.checked)}
+                      />
+                      <Caption1 className={st.riHint}>
+                        {riValid
+                          ? 'Every value on the many side exists on the one side — lets the query path use a faster INNER join.'
+                          : 'Available only for many-to-one or one-to-one relationships.'}
+                      </Caption1>
+                    </div>
                   </>
                 )}
               </div>
@@ -509,7 +910,96 @@ function ModelViewCanvasInner({
           </DialogBody>
         </DialogSurface>
       </Dialog>
+
+      {/* Autodetect-relationships review dialog — proposals from the REAL schema */}
+      <Dialog open={adOpen} onOpenChange={(_, d) => { if (!adBusy) setAdOpen(d.open); }}>
+        <DialogSurface style={{ maxWidth: 720 }}>
+          <DialogBody>
+            <DialogTitle>Autodetect relationships</DialogTitle>
+            <DialogContent>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                {adErr && (
+                  <MessageBar intent="error">
+                    <MessageBarBody><MessageBarTitle>Some relationships could not be created</MessageBarTitle>{adErr}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {proposals.length === 0 ? (
+                  <div className={st.adEmpty}>
+                    <Sparkle20Regular fontSize={28} />
+                    <Text weight="semibold">No new relationships detected</Text>
+                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                      Loom looks for <code>&lt;Table&gt;Key</code> / <code>&lt;Table&gt;Id</code> columns or shared
+                      key names with compatible types. Add key columns, or draw one by dragging between column keys.
+                    </Caption1>
+                  </div>
+                ) : (
+                  <>
+                    <MessageBar intent="info">
+                      <MessageBarBody>
+                        Proposed from the loaded schema. Each accepted row is created as a many-to-one relationship
+                        through the same backend as a manual relationship; existing relationships are skipped.
+                      </MessageBarBody>
+                    </MessageBar>
+                    <div className={st.adList}>
+                      <Table aria-label="Detected relationship proposals" size="small">
+                        <TableHeader>
+                          <TableRow>
+                            <TableHeaderCell style={{ width: '44px' }}>
+                              <Checkbox
+                                aria-label="Select all proposals"
+                                checked={acceptedCount === proposals.length ? true : acceptedCount === 0 ? false : 'mixed'}
+                                onChange={(_, d) => setAdAccepted(Object.fromEntries(proposals.map((p) => [p.key, !!d.checked])))}
+                              />
+                            </TableHeaderCell>
+                            <TableHeaderCell>From (many)</TableHeaderCell>
+                            <TableHeaderCell>To (one)</TableHeaderCell>
+                            <TableHeaderCell>Match</TableHeaderCell>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {proposals.map((p) => {
+                            const checked = adAccepted[p.key] !== false;
+                            return (
+                              <TableRow key={p.key}>
+                                <TableCell>
+                                  <Checkbox
+                                    aria-label={`Accept ${p.reason}`}
+                                    checked={checked}
+                                    onChange={() => setAdAccepted((prev) => ({ ...prev, [p.key]: !(prev[p.key] !== false) }))}
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <code style={{ fontSize: tokens.fontSizeBase100 }}>{p.fromTable.split('.').pop()}.{p.fromColumn}</code>
+                                </TableCell>
+                                <TableCell>
+                                  <code style={{ fontSize: tokens.fontSizeBase100 }}>{p.toTable.split('.').pop()}.{p.toColumn}</code>
+                                </TableCell>
+                                <TableCell><Caption1>{p.reason.split('·').pop()?.trim()}</Caption1></TableCell>
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </>
+                )}
+              </div>
+            </DialogContent>
+            <DialogActions>
+              <Button appearance="secondary" onClick={() => setAdOpen(false)} disabled={adBusy}>
+                {proposals.length === 0 ? 'Close' : 'Cancel'}
+              </Button>
+              {proposals.length > 0 && (
+                <Button appearance="primary" onClick={applyAutodetect} disabled={adBusy || acceptedCount === 0}>
+                  {adBusy ? 'Creating…' : `Create ${acceptedCount} relationship${acceptedCount === 1 ? '' : 's'}`}
+                </Button>
+              )}
+            </DialogActions>
+          </DialogBody>
+        </DialogSurface>
+      </Dialog>
     </div>
+    </ResizableCanvasRegion>
   );
 }
 
@@ -539,6 +1029,8 @@ interface ModelResponse {
   state?: string;
   /** Honest gate text surfaced when the backing compute is offline. */
   notice?: string;
+  /** Route's own compute probe — false when the backing compute is offline. */
+  computeReady?: boolean;
 }
 
 export interface ModelViewPanelProps {
@@ -564,8 +1056,8 @@ function buildUrl(engine: ModelEngine, id: string, query?: Record<string, string
 }
 
 const panelStyles = makeStyles({
-  wrap: { display: 'flex', flexDirection: 'column', gap: 12 },
-  measuresHead: { display: 'flex', alignItems: 'center', gap: 8 },
+  wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  measuresHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
 
 export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, measureKind, onUseInQuery }: ModelViewPanelProps) {
@@ -717,7 +1209,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
           New measure
         </Button>
       </div>
-      <div style={{ overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+      <div style={{ overflow: 'auto', maxHeight: 240, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
         <Table aria-label="Measures" size="small">
           <TableHeader>
             <TableRow>
@@ -736,7 +1228,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
                 <TableCell>{m.schema ? `${m.schema}.${m.name}` : m.name}</TableCell>
                 <TableCell><Badge appearance="outline" color={m.kind === 'cosmos' ? 'informative' : 'brand'}>{m.kind}</Badge></TableCell>
                 <TableCell style={{ maxWidth: 420, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  <code style={{ fontSize: 11 }}>{m.expression.slice(0, 160)}</code>
+                  <code style={{ fontSize: tokens.fontSizeBase100 }}>{m.expression.slice(0, 160)}</code>
                 </TableCell>
                 <TableCell>
                   <Tooltip content="Load this measure into the Query tab" relationship="label">
@@ -762,7 +1254,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
           <DialogBody>
             <DialogTitle>New measure</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 {mErr && (
                   <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Could not save measure</MessageBarTitle>{mErr}</MessageBarBody></MessageBar>
                 )}
@@ -773,7 +1265,7 @@ export function ModelViewPanel({ engine, id, query, ready, notReadyMessage, meas
                       : 'A Databricks measure is stored as Loom tabular metadata and is usable as a query CTE (no Power BI / Fabric dependency).'}
                   </MessageBarBody>
                 </MessageBar>
-                <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                   {measureKind === 'tvf' && (
                     <Field label="Schema" style={{ width: 160 }}>
                       <Input value={mSchema} onChange={(_, d) => setMSchema(d.value)} placeholder="dbo" />

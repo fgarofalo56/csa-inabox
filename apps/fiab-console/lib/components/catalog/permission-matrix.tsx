@@ -26,6 +26,7 @@ import {
 import { CheckmarkCircle24Regular, DismissCircle24Regular } from '@fluentui/react-icons';
 import { Section } from '@/lib/components/ui/section';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
+import { loomDocUrl } from '@/lib/learn/content';
 
 const useStyles = makeStyles({
   // left gutter so content never touches the sidebar's vertical rule
@@ -202,7 +203,7 @@ export function PermissionMatrix() {
         <Text as="p" className={s.intro}>
           Pick a securable, a principal, and a Loom role. Loom maps the role to
           Unity Catalog privileges or Fabric workspace roles per the table in{' '}
-          <a href="/docs/fiab/catalog/permissions">docs</a>.
+          <a href={loomDocUrl('fiab/catalog/permissions')} target="_blank" rel="noreferrer">docs</a>.
         </Text>
 
         <div className={s.formGrid}>

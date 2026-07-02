@@ -49,6 +49,7 @@ import {
   MoreHorizontal20Regular, Folder20Regular, Open20Regular, ArrowClockwise20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible-side-panel';
 import { ResultsPanel } from './components/results-panel';
 import type { BatchQueryResponse } from './components/results-panel';
 import { buildConnectionStrings, getSqlHostSuffix } from './components/connection-strings-builder';
@@ -61,6 +62,7 @@ import { ShareDialog } from './components/share-dialog';
 import { SqlScalePanel } from './components/sql-scale-panel';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performance-dashboard';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -128,75 +130,87 @@ const PG_SKUS = [
 //    in-grid search) — shared by the Query and Schema tabs below. ──
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' },
-  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 12, minHeight: 160 },
-  resultMeta: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 8, flexWrap: 'wrap' },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  treePad: { padding: 8, display: 'flex', flexDirection: 'column', gap: 10 },
-  formRow: { display: 'flex', flexDirection: 'column', gap: 4 },
-  formGrid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
+  resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '160px' },
+  resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  treePad: { padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  formGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: tokens.spacingHorizontalM },
   select: {
-    padding: 6, borderRadius: 4, border: `1px solid ${tokens.colorNeutralStroke2}`,
+    padding: tokens.spacingVerticalXS, borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
     background: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground1,
   },
-  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
+  card: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
   fullWidth: { width: '100%' },
-  resultActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
+  resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   treeWrap: {
     flex: 1, minHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '4px', overflow: 'hidden',
+    borderRadius: tokens.borderRadiusMedium, overflow: 'hidden',
   },
-  ruleGrid: { display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '12px', alignItems: 'end' },
+  ruleGrid: { display: 'grid', gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto', gap: tokens.spacingHorizontalM, alignItems: 'end' },
   // ---- Saved queries panel ----
-  qpToolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  qpFolders: { display: 'flex', flexDirection: 'column', gap: 16, marginTop: 4 },
-  qpFolderHead: { display: 'flex', gap: 8, alignItems: 'center', paddingBottom: 4, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
-  qpList: { display: 'flex', flexDirection: 'column', gap: 2, marginTop: 6 },
+  qpToolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  qpFolders: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, marginTop: tokens.spacingVerticalXS },
+  qpFolderHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', paddingBottom: tokens.spacingVerticalXS, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+  qpList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, marginTop: tokens.spacingVerticalXS },
   qpRow: {
-    display: 'flex', alignItems: 'center', gap: 8, padding: '6px 8px', borderRadius: 4,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusMedium,
     cursor: 'pointer', border: '1px solid transparent',
   },
   qpRowSel: { background: tokens.colorNeutralBackground1Selected, border: `1px solid ${tokens.colorBrandStroke1}` },
   qpRowMain: { display: 'flex', flexDirection: 'column', gap: 0, minWidth: 0, flex: 1 },
   qpName: { fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  qpMeta: { color: tokens.colorNeutralForeground3, fontSize: 11, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
-  qpEmpty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic', padding: '8px 0' },
+  qpMeta: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  qpEmpty: { color: tokens.colorNeutralForeground3, fontStyle: 'italic', padding: `${tokens.spacingVerticalS} 0` },
   // ── Copilot side pane (Query tab) ──
-  queryRow: { display: 'flex', gap: 12, alignItems: 'stretch', minHeight: 0 },
-  queryMain: { flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 8 },
+  queryRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'stretch', minHeight: 0, flexWrap: 'wrap' },
+  queryMain: { flex: 1, minWidth: '320px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   copilotPane: {
-    width: 340, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 8,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 10,
-    background: tokens.colorNeutralBackground2, maxHeight: 560,
+    flexGrow: 0, flexShrink: 1, flexBasis: '340px', minWidth: 0, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalS,
+    background: tokens.colorNeutralBackground2, maxHeight: '560px', boxShadow: tokens.shadow4,
   },
-  copilotHead: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
-  copilotHeadActions: { marginLeft: 'auto', display: 'flex', gap: 4 },
+  copilotHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
+  copilotHeadActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   copilotLog: {
-    flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 8,
-    minHeight: 160, paddingRight: 4,
+    flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    minHeight: '160px', paddingRight: tokens.spacingHorizontalXS,
   },
   msgUser: {
     alignSelf: 'flex-end', maxWidth: '92%', background: tokens.colorBrandBackground2,
-    color: tokens.colorNeutralForeground1, borderRadius: 6, padding: '6px 8px', fontSize: 12,
+    color: tokens.colorNeutralForeground1, borderRadius: tokens.borderRadiusLarge, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, fontSize: tokens.fontSizeBase200,
   },
   msgAssistant: {
     alignSelf: 'flex-start', maxWidth: '100%', background: tokens.colorNeutralBackground1,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: '6px 8px',
-    fontSize: 12, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
+    fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
   },
-  msgFoot: { display: 'flex', gap: 4, marginTop: 4, flexWrap: 'wrap' },
-  copilotInputRow: { display: 'flex', flexDirection: 'column', gap: 6 },
+  msgFoot: { display: 'flex', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' },
+  copilotInputRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   codeBlock: {
-    fontFamily: 'Consolas, monospace', fontSize: 12, background: tokens.colorNeutralBackground3,
-    borderRadius: 4, padding: '6px 8px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-    margin: '4px 0',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3,
+    borderRadius: tokens.borderRadiusMedium, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+    margin: `${tokens.spacingVerticalXS} 0`,
   },
-  connCard: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 },
-  connCodeWrap: { position: 'relative', background: tokens.colorNeutralBackground3, borderRadius: 4, padding: 8 },
-  connCode: { fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, color: tokens.colorNeutralForeground1 },
-  connCopyBtn: { position: 'absolute', top: 4, right: 4 },
+  connCard: {
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalL,
+    backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  connCodeWrap: { position: 'relative', background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalS },
+  connCode: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, color: tokens.colorNeutralForeground1 },
+  connCopyBtn: { position: 'absolute', top: tokens.spacingVerticalXS, right: tokens.spacingHorizontalXS },
 });
 
 // ---- content-type guarded fetch ----------------------------------------
@@ -578,7 +592,13 @@ function SqlServerAdminPanel({
   }
 
   if (!server) {
-    return <Caption1>Pick a server on the <strong>Connect</strong> tab (or in the left pane) to manage firewall, Microsoft Entra admin, and geo-replication.</Caption1>;
+    return (
+      <EmptyState
+        icon={<ShieldKeyhole20Regular />}
+        title="No server selected"
+        body="Pick a server on the Connect tab (or in the left pane) to manage firewall rules, the Microsoft Entra admin, and active geo-replication."
+      />
+    );
   }
 
   return (
@@ -599,8 +619,8 @@ function SqlServerAdminPanel({
               {fwRules.map((r) => (
                 <TableRow key={r.name}>
                   <TableCell><strong>{r.name}</strong></TableCell>
-                  <TableCell><code style={{ fontSize: 11 }}>{r.startIpAddress}</code></TableCell>
-                  <TableCell><code style={{ fontSize: 11 }}>{r.endIpAddress}</code></TableCell>
+                  <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.startIpAddress}</code></TableCell>
+                  <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.endIpAddress}</code></TableCell>
                   <TableCell>
                     <Tooltip content={`Delete firewall rule ${r.name}`} relationship="label">
                       <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label={`Delete firewall rule ${r.name}`} disabled={fwBusy} onClick={() => setConfirmDeleteRule(r.name)}>Delete</Button>
@@ -622,7 +642,7 @@ function SqlServerAdminPanel({
       {/* Microsoft Entra admin — Microsoft.Sql/servers/administrators (Azure SQL only) */}
       {family === 'azure-sql' ? (
         <div className={s.card}>
-          <Subtitle2>Microsoft Entra admin — {server}</Subtitle2>
+          <Subtitle2><PeopleTeam20Regular style={{ verticalAlign: 'middle' }} /> Microsoft Entra admin — {server}</Subtitle2>
           <MessageBar intent="info"><MessageBarBody>
             <MessageBarTitle>Microsoft.Sql/servers/administrators</MessageBarTitle>
             Sets the server's Microsoft Entra (Azure AD) admin via ARM. The console UAMI itself must be the Entra admin (or a member of the admin group) for the TDS query path to authenticate.
@@ -638,7 +658,7 @@ function SqlServerAdminPanel({
         </div>
       ) : (
         <div className={s.card}>
-          <Subtitle2>Microsoft Entra admin</Subtitle2>
+          <Subtitle2><PeopleTeam20Regular style={{ verticalAlign: 'middle' }} /> Microsoft Entra admin</Subtitle2>
           <MessageBar intent="warning"><MessageBarBody>
             <MessageBarTitle>Entra auth on PostgreSQL is principal-based</MessageBarTitle>
             PostgreSQL flexible servers don't expose a single server-level <code>administrators</code> ARM resource; Entra principals are created in-engine via <code>pgaadauth_create_principal</code>. The Query tab runs over the real <code>pg</code> wire protocol with an Entra token — register the console identity once (<code>SELECT * FROM pgaadauth_create_principal('&lt;console-uami-name&gt;', false, false)</code>) and set <code>LOOM_POSTGRES_AAD_USER</code> to that name. Honest gate — not a fake form.
@@ -649,7 +669,7 @@ function SqlServerAdminPanel({
       {/* Geo-replication — createMode=Secondary (Azure SQL only) */}
       {family === 'azure-sql' ? (
         <div className={s.card}>
-          <Subtitle2>Active geo-replication — {database || '(select a database)'}</Subtitle2>
+          <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle' }} /> Active geo-replication — {database || '(select a database)'}</Subtitle2>
           <MessageBar intent="info"><MessageBarBody>
             <MessageBarTitle>Microsoft.Sql/servers/databases · createMode=Secondary</MessageBarTitle>
             Creates a readable geo-secondary of the selected database on a replica server via ARM REST. Long-running; ARM continues async after acceptance.
@@ -679,7 +699,7 @@ function SqlServerAdminPanel({
         </div>
       ) : (
         <div className={s.card}>
-          <Subtitle2>Geo-replication</Subtitle2>
+          <Subtitle2><BranchFork20Regular style={{ verticalAlign: 'middle' }} /> Geo-replication</Subtitle2>
           <MessageBar intent="warning"><MessageBarBody>
             <MessageBarTitle>PostgreSQL read replicas use a distinct ARM surface</MessageBarTitle>
             PG flexible-server read replicas are created via <code>Microsoft.DBforPostgreSQL/flexibleServers</code> with <code>createMode=Replica</code> + <code>sourceServerResourceId</code>, not the Azure SQL secondary-database path. Wire a PG replica route to manage it here. Honest gate.
@@ -814,7 +834,15 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   // Only the Azure SQL (T-SQL) family is wired to the SQL Copilot; PostgreSQL /
   // SQL MI fall outside the T-SQL prompt contract and stay honest-gated.
   const copilotEligible = family === 'azure-sql' && !!server && !!database;
-  const [copilotOpen, setCopilotOpen] = useState(false);
+  // SQL Copilot pane open/collapsed persists PER SURFACE — collapsed hands the
+  // query canvas its width back, leaving a thin re-expand rail. `collapsed` is
+  // the inverse of `copilotOpen`, so every existing call site (incl. the
+  // `(v) => !v` updater + `setCopilotOpen(true/false)`) keeps working.
+  const [copilotCollapsed, setCopilotCollapsed] = useCollapsibleState(`sql-copilot.${id}`, true);
+  const copilotOpen = !copilotCollapsed;
+  const setCopilotOpen = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
+    setCopilotCollapsed((prev) => !(typeof v === 'function' ? (v as (p: boolean) => boolean)(!prev) : v));
+  }, [setCopilotCollapsed]);
   const [copilotMessages, setCopilotMessages] = useState<{ role: 'user' | 'assistant'; text: string }[]>([]);
   const [copilotLoading, setCopilotLoading] = useState(false);
   const [copilotGate, setCopilotGate] = useState<string | null>(null);
@@ -1469,7 +1497,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               FQDN: <code>{serverFqdn}</code>
               <Tooltip content="Copy FQDN" relationship="label">
                 <Button size="small" appearance="subtle" icon={<Copy20Regular />} aria-label="Copy server FQDN"
-                  onClick={() => navigator.clipboard?.writeText(serverFqdn)} style={{ marginLeft: 4 }} />
+                  onClick={() => navigator.clipboard?.writeText(serverFqdn)} style={{ marginLeft: tokens.spacingHorizontalXS }} />
               </Tooltip>
             </Caption1>
           )}
@@ -1516,7 +1544,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                           <TableRow key={x.id}>
                             <TableCell><strong>{x.name}</strong></TableCell>
                             <TableCell>{x.location}</TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{x.fqdn}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{x.fqdn}</code></TableCell>
                             <TableCell><Button size="small" appearance="subtle" onClick={() => { pickServer('azure-sql', x.name); setTab('query'); }}>Connect</Button></TableCell>
                           </TableRow>
                         ))}
@@ -1525,7 +1553,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   </div>
                 )}
 
-              <Subtitle2 style={{ marginTop: 8 }}>SQL Managed Instances ({inv?.mi.instances.length ?? 0})</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>SQL Managed Instances ({inv?.mi.instances.length ?? 0})</Subtitle2>
               {miGate
                 ? <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>SQL MI not reachable</MessageBarTitle>{miGate}</MessageBarBody></MessageBar>
                 : (
@@ -1538,7 +1566,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                             <TableCell><strong>{x.name}</strong></TableCell>
                             <TableCell>{x.state}</TableCell>
                             <TableCell>{x.location}</TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{x.fqdn}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{x.fqdn}</code></TableCell>
                             <TableCell><Button size="small" appearance="subtle" onClick={() => pickServer('managed-instance', x.name)}>Select</Button></TableCell>
                           </TableRow>
                         ))}
@@ -1547,7 +1575,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   </div>
                 )}
 
-              <Subtitle2 style={{ marginTop: 8 }}>PostgreSQL Flexible Servers ({inv?.postgres.servers.length ?? 0})</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>PostgreSQL Flexible Servers ({inv?.postgres.servers.length ?? 0})</Subtitle2>
               {pgGate
                 ? <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>PostgreSQL not reachable</MessageBarTitle>{pgGate} · Grant the console UAMI <code>Reader</code> on the subscription; the provider is <code>Microsoft.DBforPostgreSQL/flexibleServers</code>.</MessageBarBody></MessageBar>
                 : (
@@ -1560,7 +1588,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                             <TableCell><strong>{x.name}</strong></TableCell>
                             <TableCell>PG {x.version}</TableCell>
                             <TableCell>{x.location}</TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{x.fqdn}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{x.fqdn}</code></TableCell>
                             <TableCell><Button size="small" appearance="subtle" onClick={() => { pickServer('postgres', x.name); setTab('query'); }}>Connect</Button></TableCell>
                           </TableRow>
                         ))}
@@ -1573,7 +1601,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               {/* ---- Connection strings (ADO.NET / JDBC / ODBC / PHP / Go) ---- */}
               {family === 'azure-sql' && serverFqdn && (
                 <div className={s.connCard}>
-                  <Subtitle2>Connection strings</Subtitle2>
+                  <Subtitle2><PlugConnected20Regular style={{ verticalAlign: 'middle' }} /> Connection strings</Subtitle2>
                   {!database ? (
                     <Caption1>Select a database (left pane or a <strong>Connect</strong> button above) to generate driver-ready strings.</Caption1>
                   ) : (
@@ -1745,7 +1773,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <div className={s.toolbar}>
                 <Badge appearance="filled" color="brand">{family === 'postgres' ? 'PostgreSQL' : family === 'managed-instance' ? 'SQL MI' : 'Azure SQL'}</Badge>
                 <Caption1>server: <strong>{server || 'not set'}</strong>{family !== 'managed-instance' && <>, db: <strong>{database || 'not set'}</strong></>}</Caption1>
-                <div style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+                <div style={{ marginLeft: 'auto', display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS }}>
                   <Tooltip content={family !== 'azure-sql' ? 'SQL Copilot is Azure SQL (T-SQL) only' : !(server && database) ? 'Connect a server + database first' : 'Fix / Explain / NL→T-SQL + inline ghost text'} relationship="label">
                     <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={copilotOpen ? <Sparkle20Filled /> : <Sparkle20Regular />}
                       onClick={() => setCopilotOpen((v) => !v)} disabled={family !== 'azure-sql'}>
@@ -1792,7 +1820,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                   )}
                   {copilotEligible && (
                     <Caption1>
-                      <Sparkle20Regular style={{ verticalAlign: 'middle', fontSize: 14 }} /> Copilot inline completion is on while the pane is open —
+                      <Sparkle20Regular style={{ verticalAlign: 'middle', fontSize: tokens.fontSizeBase200 }} /> Copilot inline completion is on while the pane is open —
                       write <code>-- describe what you want</code> on a new line and press <strong>Tab</strong> to accept the ghost-text T-SQL.
                     </Caption1>
                   )}
@@ -1868,6 +1896,9 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                     </div>
                   </div>
                 )}
+                {!copilotOpen && family === 'azure-sql' && (
+                  <CollapsedRail side="right" label="SQL Copilot" onExpand={() => setCopilotOpen(true)} />
+                )}
               </div>
             </>
           )}
@@ -1895,7 +1926,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
           {tab === 'schema' && (
             <>
               {!server ? (
-                <Caption1>Pick a server on the <strong>Connect</strong> tab (or left pane) to browse database objects.</Caption1>
+                <EmptyState
+                  icon={<Table20Regular />}
+                  title="No database selected"
+                  body="Pick a server on the Connect tab (or the left pane) to browse tables, views, procedures, functions, and schemas over live TDS."
+                />
               ) : family === 'azure-sql' ? (
                 <>
                   <div className={s.toolbar}>
@@ -1931,7 +1966,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               {/* INFORMATION_SCHEMA fallback grid (works for any reachable engine via the query path). */}
               {server && (
                 <>
-                  <div className={s.toolbar} style={{ marginTop: 8 }}>
+                  <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
                     <Caption1>INFORMATION_SCHEMA.TABLES on <strong>{database || server || 'not set'}</strong></Caption1>
                     <Button size="small" appearance="outline" onClick={loadSchema} disabled={schemaLoading || !server}>Refresh</Button>
                   </div>
@@ -1957,7 +1992,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             family === 'azure-sql'
               ? (server && database
                   ? <SqlSecurityPanel itemType="azure-sql-database" itemId={id} server={server} database={database} />
-                  : <Caption1>Pick a server + database on the <strong>Connect</strong> tab to manage object/column GRANT, Row-Level Security and Dynamic Data Masking.</Caption1>)
+                  : <EmptyState
+                      icon={<ShieldKeyhole20Regular />}
+                      title="No database selected"
+                      body="Pick a server and database on the Connect tab to manage object/column GRANT, Row-Level Security, and Dynamic Data Masking."
+                    />)
               : (
                 <MessageBar intent="info">
                   <MessageBarBody>
@@ -1973,7 +2012,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
             family === 'azure-sql'
               ? (server && database
                   ? <ShareDialog itemId={id} server={server} database={database} open={true} />
-                  : <Caption1>Pick an Azure SQL server + database on the <strong>Connect</strong> tab to assign Azure RBAC roles at the database scope.</Caption1>)
+                  : <EmptyState
+                      icon={<PeopleTeam20Regular />}
+                      title="No database selected"
+                      body="Pick an Azure SQL server and database on the Connect tab to assign Azure RBAC roles at the database scope."
+                    />)
               : (
                 <MessageBar intent="info">
                   <MessageBarBody>
@@ -2124,14 +2167,14 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                 <MessageBar intent="info">
                   <MessageBarBody>
                     <MessageBarTitle>One-time: grant the factory managed identity write access</MessageBarTitle>
-                    <code style={{ fontSize: 11, whiteSpace: 'pre-wrap' }}>{getDataMsg.factoryMiPrincipalHint}</code>
+                    <code style={{ display: 'block', maxWidth: '100%', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{getDataMsg.factoryMiPrincipalHint}</code>
                   </MessageBarBody>
                 </MessageBar>
               )}
 
               {/* Run receipt — verify rows landed via a COUNT(*) in the Query tab. */}
               <div className={s.card}>
-                <Subtitle2>Pipeline run receipt</Subtitle2>
+                <Subtitle2><Play20Regular style={{ verticalAlign: 'middle' }} /> Pipeline run receipt</Subtitle2>
                 <Caption1>
                   After running the pipeline / dataflow in ADF Studio, paste its <strong>Run ID</strong> and click{' '}
                   <strong>Check count delta</strong> — it switches to the Query tab with a <code>SELECT COUNT(*)</code>{' '}
@@ -2214,7 +2257,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       {mirror.bronze.basePath && (
                         <Tooltip content="Copy Bronze base path" relationship="label">
                           <Button size="small" appearance="subtle" icon={<Copy20Regular />}
-                            onClick={() => navigator.clipboard?.writeText(String(mirror.bronze.basePath))} style={{ marginLeft: 4 }} />
+                            onClick={() => navigator.clipboard?.writeText(String(mirror.bronze.basePath))} style={{ marginLeft: tokens.spacingHorizontalXS }} />
                         </Tooltip>
                       )}
                     </Caption1>
@@ -2229,8 +2272,8 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                           {t.error ? <> — {t.error}</> : null}
                         </Caption1>
                         {t.openrowset && (
-                          <div className={s.cell} style={{ whiteSpace: 'pre-wrap', display: 'flex', gap: 4, alignItems: 'flex-start' }}>
-                            <code style={{ flex: 1 }}>{t.openrowset}</code>
+                          <div className={s.cell} style={{ whiteSpace: 'pre-wrap', display: 'flex', gap: tokens.spacingVerticalXS, alignItems: 'flex-start' }}>
+                            <code style={{ flex: 1, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{t.openrowset}</code>
                             <Tooltip content="Copy Synapse Serverless query" relationship="label">
                               <Button size="small" appearance="subtle" icon={<Copy20Regular />}
                                 onClick={() => navigator.clipboard?.writeText(String(t.openrowset))} />
@@ -2251,7 +2294,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
               <DialogBody>
                 <DialogTitle>{editingQueryId ? 'Rename / edit saved query' : 'Save query'}</DialogTitle>
                 <DialogContent>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                     <Field label="Name" required>
                       <Input value={saveName} onChange={(_, d) => setSaveName(d.value)} placeholder="Top customers by revenue" maxLength={120} />
                     </Field>
@@ -2279,7 +2322,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                         value={saveSql}
                         onChange={(_, d) => setSaveSql(d.value)}
                         rows={8}
-                        textarea={{ style: { fontFamily: 'Consolas, monospace', fontSize: 12 } }}
+                        textarea={{ style: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 } }}
                         aria-label="SQL text to save"
                       />
                     </Field>
@@ -2305,7 +2348,11 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
                       id={id} server={server} database={database}
                       currentSku={databasesFull.find((d) => d.name === database)?.sku}
                     />
-                  : <Caption1>Pick a server <strong>and</strong> database on the <strong>Connect</strong> tab to change its compute &amp; storage (DTU / vCore / serverless).</Caption1>)
+                  : <EmptyState
+                      icon={<TopSpeed20Regular />}
+                      title="No database selected"
+                      body="Pick a server and database on the Connect tab to change its compute & storage (DTU / vCore / serverless auto-pause and max storage)."
+                    />)
               : (
                 <MessageBar intent="info">
                   <MessageBarBody>

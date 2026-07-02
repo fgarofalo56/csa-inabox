@@ -83,7 +83,14 @@ const SUBS_URL = `${armBase()}/subscriptions?api-version=2022-12-01`;
 const ARM_LIST_API_VERSION = '2021-04-01';
 const MAX_SUBSCRIPTIONS = 200;
 const MAX_PAGES_PER_LIST = 50;
-const ARM_FALLBACK_BUDGET_MS = 25_000;
+// Wall-clock budget for the ARM control-plane fallback enumeration. A cross-
+// subscription sweep (subscriptions list → per-sub, per-type resource list with
+// nextLink paging) legitimately takes 20-35s on a large tenant, so this budget
+// must be >= the client's per-call ceiling (CONNECTABLES_TIMEOUT_MS = 40s in
+// register-existing-source-dialog.tsx). At the old 25s the server aborted the
+// fallback mid-enumeration and returned a premature "no access" gate even though
+// resources were still being discovered. Kept in step with the client timeout.
+const ARM_FALLBACK_BUDGET_MS = 40_000;
 
 interface ArgRow {
   id: string;

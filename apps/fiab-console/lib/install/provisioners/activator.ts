@@ -14,78 +14,26 @@
  * LOOM_SUBSCRIPTION_ID aren't set, the rule(s) can't be scoped — we surface the
  * exact env var to set; the item still installs to Cosmos.
  *   https://learn.microsoft.com/rest/api/monitor/scheduled-query-rules
+ *
+ * The Azure Monitor path delegates each rule to the CANONICAL
+ * createMonitorActivatorRule() in lib/azure/activator-monitor.ts — the SAME
+ * function the live editor / rules BFF route uses — so the MonitorRuleRecord
+ * shape we persist to the Cosmos item's state.rules is byte-identical to what
+ * the editor, pane, and rules route consume. A deployed (catalog / use-case)
+ * activator therefore behaves exactly like a net-new one: every per-rule
+ * Start/Stop/Enable/Disable/Delete/Trigger action keys off a real backing
+ * scheduledQueryRule recorded in state.rules (no empty array, no stub).
  */
 import { listActivators, createActivator, addRule, ActivatorError, listRules } from '@/lib/azure/activator-client';
+import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import {
-  upsertActionGroup,
-  upsertScheduledQueryRule,
-  MonitorNotConfiguredError,
-  MonitorError,
-} from '@/lib/azure/monitor-client';
+  createMonitorActivatorRule,
+  type MonitorRuleRecord,
+} from '@/lib/azure/activator-monitor';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
-
-/** Sanitize a display name into an ARM resource name (alnum / - / _, ≤ 90). */
-function safeRuleName(displayName: string, suffix: string): string {
-  const base = displayName.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70) || 'loom-activator';
-  return `${base}-${suffix}`.slice(0, 90);
-}
-
-/** Map a Loom condition operator to its KQL operator. */
-function kqlOperator(op?: string): string {
-  switch ((op || '').toLowerCase()) {
-    case 'gt': case 'greaterthan': case '>': return '>';
-    case 'lt': case 'lessthan': case '<': return '<';
-    case 'gte': case 'greaterthanorequal': case '>=': return '>=';
-    case 'lte': case 'lessthanorequal': case '<=': return '<=';
-    case 'ne': case 'notequal': case '!=': return '!=';
-    case 'contains': return 'contains';
-    case 'eq': case 'equal': case '==': default: return '==';
-  }
-}
-
-/** Quote a KQL scalar: numbers verbatim, everything else as a string literal. */
-function kqlValue(v: any): string {
-  if (v === null || v === undefined || v === '') return '""';
-  if (typeof v === 'number') return String(v);
-  if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) return v.trim();
-  return `"${String(v).replace(/"/g, '\\"')}"`;
-}
-
-/**
- * Build the alert KQL for one rule. If the rule already carries a `query`, use
- * it verbatim. Otherwise compose `<table> | where <property> <op> <value>` from
- * the structured condition (the activator wizard's condProperty/Operator/Value).
- * The alert fires when this query returns ≥1 row (Count > 0).
- */
-function buildRuleQuery(rule: any): { query: string; note?: string } {
-  if (typeof rule?.query === 'string' && rule.query.trim()) {
-    return { query: rule.query.trim() };
-  }
-  const cond = rule?.condition || {};
-  const table =
-    rule?.sourceTable || rule?.table || rule?.stream || rule?.eventTable ||
-    process.env.LOOM_ACTIVATOR_DEFAULT_TABLE || 'AppEvents_CL';
-  const property = cond.property || cond.field || cond.condProperty || 'value';
-  const op = kqlOperator(cond.operator || cond.condOperator);
-  const value = cond.value ?? cond.condValue ?? 0;
-  const query = `${table}\n| where ${property} ${op} ${kqlValue(value)}`;
-  const note = rule?.sourceTable || rule?.table
-    ? undefined
-    : `Alert query targets table '${table}' — set the rule's sourceTable (or LOOM_ACTIVATOR_DEFAULT_TABLE) to point at your data.`;
-  return { query, note };
-}
-
-/** Extract email recipients from a rule's action (Loom wizard: actKind/actTarget). */
-function ruleEmails(rule: any): string[] {
-  const action = rule?.action || {};
-  const targets: string[] = [];
-  for (const v of [action.target, action.actTarget, action.email, action.to, action.recipients]) {
-    if (Array.isArray(v)) targets.push(...v);
-    else if (typeof v === 'string') targets.push(...v.split(/[;,]/));
-  }
-  return targets.map((t) => t.trim()).filter((t) => t.includes('@'));
-}
 
 function rulesFromContent(content: any): any[] {
   if (content?.kind === 'activator' && content.rule) return [content.rule];
@@ -101,55 +49,63 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
     return { status: 'created', secondaryIds: { backend: 'azure-monitor' }, steps: [...steps, 'No rules in bundle; activator item created (Azure Monitor backend, no alert rules to author).'] };
   }
 
-  // One shared action group built from the union of rule emails.
-  const allEmails = Array.from(new Set(rules.flatMap(ruleEmails)));
-  let actionGroupId: string | undefined;
-  try {
-    actionGroupId = await upsertActionGroup({
-      name: safeRuleName(input.displayName, 'ag'),
-      shortName: (input.displayName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom',
-      emails: allEmails,
-    });
-    steps.push(`Action group ready (${allEmails.length} email receiver(s)).`);
-  } catch (e: any) {
-    if (e instanceof MonitorNotConfiguredError) {
-      return {
-        status: 'remediation',
-        gate: {
-          reason: 'Azure Monitor not configured for this deployment.',
-          remediation: `Set ${e.missing.join(' / ')} so the Activator can create alert rules + action groups. (No Microsoft Fabric required.)`,
-          link: 'https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-create-log-alert-rule',
-        },
-        steps,
-      };
-    }
-    steps.push(`Action group creation failed (${e?.message || e}); creating rules without notifications.`);
-  }
-
-  let created = 0;
-  let lastRuleId: string | undefined;
+  // Author each bundle rule via the CANONICAL Azure Monitor runtime helper so
+  // the persisted record == exactly what the editor / pane / rules route read
+  // (single source of truth — no local upsertActionGroup/upsertScheduledQueryRule
+  // duplication). createMonitorActivatorRule builds the rule's action group from
+  // its action config (email / SMS / webhook / Logic App) and the scheduledQuery
+  // rule, returning a full MonitorRuleRecord (id == azureRuleName, query, state,
+  // severity, schedule, …).
+  const records: MonitorRuleRecord[] = [];
   for (const r of rules) {
-    const { query, note } = buildRuleQuery(r);
-    if (note) steps.push(note);
     try {
-      const id = await upsertScheduledQueryRule({
-        name: safeRuleName(input.displayName, (r.name || `rule${created}`).replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 16)),
-        description: r.description || `Loom activator rule '${r.name || 'rule'}' from ${input.appId}`,
-        query,
-        severity: typeof r.severity === 'number' ? r.severity : 2,
-        actionGroupIds: actionGroupId ? [actionGroupId] : undefined,
+      // The bundle's ActivatorContent.rule.condition is {metric, op, threshold}
+      // (lib/apps/content-bundles/types.ts:267), but buildRuleQuery() (which
+      // createMonitorActivatorRule composes the alert KQL with) only understands
+      // the canonical {property, operator, value} — it has NO metric/op/threshold
+      // alias, and ActivatorContent.rule has no verbatim `query` to short-circuit
+      // on. Passing the bundle condition through unchanged would therefore ALWAYS
+      // fall to buildRuleQuery's defaults (property='value', operator='==',
+      // value=0) and persist a semantically WRONG KQL plus a condition shape the
+      // editor's Edit (openEditRule reads cond.property/cond.field) can't read.
+      // Normalize BYTE-IDENTICALLY to the bundle projection (ai-content-fallback.ts:
+      // 283-287) so the persisted MonitorRuleRecord == that fallback's row; the
+      // record's condition (createMonitorActivatorRule sets condition: input.condition)
+      // is then itself the normalized shape.
+      const cond =
+        r.condition &&
+        (r.condition.metric !== undefined || r.condition.op !== undefined || r.condition.threshold !== undefined)
+          ? { property: r.condition.metric, operator: r.condition.op, value: r.condition.threshold }
+          : r.condition;
+      const rec = await createMonitorActivatorRule(input.displayName, {
+        name: r.name,
+        condition: cond,
+        action: r.action,
+        query: typeof r.query === 'string' ? r.query : undefined,
+        sourceTable: typeof r.sourceTable === 'string' ? r.sourceTable : undefined,
+        severity: typeof r.severity === 'number' ? r.severity : undefined,
+        evaluationFrequency: typeof r.evaluationFrequency === 'string' ? r.evaluationFrequency : undefined,
+        // A bundle's ActivatorContent.rule (content-bundles/types.ts) carries only
+        // `window` — it has NO `windowSize` — so the deployed rule's intended
+        // lookback was silently dropped to the PT5M default. Honor the bundle
+        // `window` while still respecting an explicit `windowSize` from the
+        // array-form `content.rules` (which may carry the canonical field name).
+        windowSize: typeof r.windowSize === 'string' ? r.windowSize : (typeof r.window === 'string' ? r.window : undefined),
       });
-      lastRuleId = id;
-      created += 1;
+      records.push(rec);
+      if (rec.note) steps.push(rec.note);
       steps.push(`Created Azure Monitor alert rule for '${r.name || 'rule'}'.`);
     } catch (e: any) {
+      // Keep the existing honest Azure infra-gates verbatim — createMonitorActivatorRule
+      // throws the SAME error types (MonitorNotConfiguredError / MonitorError) as the
+      // local path it replaces. Neither is a Fabric gate.
       if (e instanceof MonitorNotConfiguredError) {
         return {
           status: 'remediation',
           gate: {
-            reason: 'Azure Monitor alert scope not configured.',
-            remediation: `Set ${e.missing.join(' / ')} (the Log Analytics workspace the alert query runs against). No Microsoft Fabric required.`,
-            link: 'https://learn.microsoft.com/azure/azure-monitor/logs/log-analytics-workspace-overview',
+            reason: 'Azure Monitor not configured for this deployment.',
+            remediation: `Set ${e.missing.join(' / ')} so the Activator can create alert rules + action groups. (No Microsoft Fabric required.)`,
+            link: 'https://learn.microsoft.com/azure/azure-monitor/alerts/alerts-create-log-alert-rule',
           },
           steps,
         };
@@ -169,9 +125,33 @@ async function provisionAzureMonitor(input: any, steps: string[]): Promise<Provi
     }
   }
 
+  const created = records.length;
+
+  // Option B persistence: write the authored MonitorRuleRecord[] back onto the
+  // Cosmos activator item's state.rules using the SAME write path the rules BFF
+  // route proves works (itemsContainer().item(id, workspaceId).read/replace).
+  // Best-effort — a persistence failure is logged into steps[] and NEVER throws,
+  // so it cannot sink the install. (Without this, a deployed activator lands
+  // with an empty state.rules and every editor/pane action reads as dead/404.)
+  if (created > 0) {
+    try {
+      const items = await itemsContainer();
+      const { resource: cur } = await items.item(input.cosmosItemId, input.workspaceId).read<WorkspaceItem>();
+      if (cur) {
+        const next: WorkspaceItem = { ...cur, state: { ...(cur.state || {}), rules: records }, updatedAt: new Date().toISOString() };
+        await items.item(cur.id, cur.workspaceId).replace(next);
+        steps.push(`Persisted ${created} activator rule(s) to the item state.rules so the editor + pane are self-sufficient.`);
+      } else {
+        steps.push('Authored alert rules but the activator item was not found to persist state.rules (editor falls back to the bundle projection).');
+      }
+    } catch (e: any) {
+      steps.push(`Authored alert rules but failed to persist state.rules (editor falls back to the bundle projection): ${e?.message || String(e)}`);
+    }
+  }
+
   return {
     status: created > 0 ? 'created' : 'remediation',
-    resourceId: lastRuleId,
+    resourceId: records[records.length - 1]?.azureRuleName,
     secondaryIds: { backend: 'azure-monitor', rulesCreated: String(created) },
     ...(created === 0 ? { gate: { reason: 'No alert rules could be created.', remediation: 'See step log for the per-rule errors above.' } } : {}),
     steps,

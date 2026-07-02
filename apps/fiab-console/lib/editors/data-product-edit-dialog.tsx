@@ -41,15 +41,19 @@ import {
 import type { DataProductDoc } from '@/lib/dataproducts/edit-model';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 540 },
-  steps: { display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 },
-  row: { display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 200 },
-  endorseRow: { display: 'flex', gap: 10, alignItems: 'center' },
-  hint: { color: tokens.colorNeutralForeground3 },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '540px' },
+  steps: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginBottom: tokens.spacingVerticalXS },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: '200px' },
+  endorseRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  hint: { color: tokens.colorNeutralForeground3, minWidth: 0 },
+  // Long, dynamic strings (user-typed names, raw error text) must wrap rather
+  // than force horizontal overflow inside the bounded dialog surface.
+  wrap: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
   saveBar: {
-    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12,
-    paddingTop: 6, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM,
+    flexWrap: 'wrap',
+    paddingTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
   },
 });
 
@@ -212,7 +216,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
       <DialogSurface style={{ maxWidth: 720 }}>
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
               <Edit20Regular />
               Edit data product
               {endorsed && <Badge appearance="tint" color="brand" size="small">Endorsed</Badge>}
@@ -238,7 +242,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
               {loading && <Spinner size="tiny" label="Loading data product…" />}
               {loadErr && (
                 <MessageBar intent="error">
-                  <MessageBarBody><MessageBarTitle>Cannot load</MessageBarTitle>{loadErr}</MessageBarBody>
+                  <MessageBarBody className={s.wrap}><MessageBarTitle>Cannot load</MessageBarTitle>{loadErr}</MessageBarBody>
                 </MessageBar>
               )}
 
@@ -252,7 +256,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
                       </Field>
                       {dupName && (
                         <MessageBar intent="warning">
-                          <MessageBarBody>
+                          <MessageBarBody className={s.wrap}>
                             A data product named <strong>{dupName}</strong> already exists. Saving is still
                             allowed — names are not required to be unique.
                           </MessageBarBody>
@@ -367,14 +371,14 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
                   </div>
 
                   {save.kind === 'ok' && (
-                    <MessageBar intent="success"><MessageBarBody>{save.msg}</MessageBarBody></MessageBar>
+                    <MessageBar intent="success"><MessageBarBody className={s.wrap}>{save.msg}</MessageBarBody></MessageBar>
                   )}
                   {save.kind === 'err' && (
-                    <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{save.msg}</MessageBarBody></MessageBar>
+                    <MessageBar intent="error"><MessageBarBody className={s.wrap}><MessageBarTitle>Save failed</MessageBarTitle>{save.msg}</MessageBarBody></MessageBar>
                   )}
                   {save.kind === 'conflict' && (
                     <MessageBar intent="warning">
-                      <MessageBarBody>
+                      <MessageBarBody className={s.wrap}>
                         <MessageBarTitle>Document changed elsewhere</MessageBarTitle>
                         {save.msg} — close this dialog and re-open it to reload the latest version before editing again.
                       </MessageBarBody>

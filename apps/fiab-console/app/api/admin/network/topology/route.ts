@@ -18,6 +18,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   getNetworkTopology, topologySubscriptionScope, TopologyGraphError,
 } from '@/lib/azure/network-topology-graph';
@@ -28,6 +29,10 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // Estate-wide network topology (Resource Graph across the deployment's subs via
+  // the Console UAMI) is not per-user data — restrict to tenant admins.
+  const gate = requireTenantAdmin(session);
+  if (gate) return gate;
 
   const subscriptions = topologySubscriptionScope();
   if (!subscriptions.length) {

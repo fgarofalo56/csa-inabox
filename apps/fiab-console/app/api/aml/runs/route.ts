@@ -39,6 +39,11 @@ interface RunSearchInput {
   filter?: string;
   maxResults?: number;
   orderBy?: string[];
+  runViewType?: 'ACTIVE_ONLY' | 'DELETED_ONLY' | 'ALL';
+}
+
+function clampViewType(v: unknown): 'ACTIVE_ONLY' | 'DELETED_ONLY' | 'ALL' {
+  return v === 'DELETED_ONLY' || v === 'ALL' ? v : 'ACTIVE_ONLY';
 }
 
 function clampMax(n: unknown): number {
@@ -53,6 +58,7 @@ async function run(input: RunSearchInput) {
     filter: input.filter,
     maxResults: input.maxResults,
     orderBy: input.orderBy,
+    runViewType: input.runViewType,
   });
   return NextResponse.json({ ok: true, configured: true, runs });
 }
@@ -99,6 +105,7 @@ export async function GET(req: NextRequest) {
       filter,
       maxResults: maxResultsRaw ? clampMax(maxResultsRaw) : undefined,
       orderBy,
+      runViewType: clampViewType(url.searchParams.get('runViewType')),
     });
   } catch (e) {
     return gate(e);
@@ -128,6 +135,7 @@ export async function POST(req: NextRequest) {
       filter: body.filter ? String(body.filter) : undefined,
       maxResults: body.maxResults != null ? clampMax(body.maxResults) : undefined,
       orderBy,
+      runViewType: clampViewType(body.runViewType),
     });
   } catch (e) {
     return gate(e);

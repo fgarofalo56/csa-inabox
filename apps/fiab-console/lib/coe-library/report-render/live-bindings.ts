@@ -12,17 +12,20 @@
  *
  * Azure-native only (no-fabric-dependency.md): never contacts Power BI / Fabric.
  * Honest (no-vaporware.md): every resolver returns REAL data or an explicit
- *   {source:'error'|'sample', note} explaining exactly why it fell back — never
- *   zeros-as-data, never a fabricated value. Entities with no first-party Loom
- *   backend are left sample-backed and clearly tagged.
+ *   {source:'error'|'empty', note} explaining exactly why there are no rows —
+ *   never zeros-as-data, never a fabricated value, and NEVER bundled SAMPLE
+ *   rows. Entities with no first-party Loom backend return a real EMPTY result.
  *
  * Each resolver returns an {@link EntityBindingResult}:
  *   - {source:'live',  table}  → real rows from the customer's estate
- *   - {source:'sample', note}  → a real query ran but produced nothing usable,
- *                                 OR the source has no live binding → caller
- *                                 renders the bundled SAMPLE and shows `note`
+ *   - {source:'empty', note}   → a real query ran but produced no rows, OR the
+ *                                 source has no live binding → caller renders a
+ *                                 REAL EMPTY table (schema, zero rows) + `note`
  *   - {source:'error', note}   → the backend errored / isn't provisioned;
- *                                 caller renders SAMPLE and shows the gate note
+ *                                 caller renders a REAL EMPTY table + the gate
+ *
+ * There is NO sample-data render path: a missing / empty / errored source shows
+ * zero real rows, never fabricated sample rows.
  */
 
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
@@ -43,7 +46,7 @@ import type { SampleData, SampleTable } from './tmdl-sample';
 // ---------------------------------------------------------------------------
 
 /** Per-entity provenance after a live render. */
-export type EntitySource = 'live' | 'sample' | 'error';
+export type EntitySource = 'live' | 'empty' | 'error';
 
 export interface EntityBindingResult {
   source: EntitySource;
@@ -216,9 +219,9 @@ const PRIVILEGED_ROLES = new Set(
 // ---------------------------------------------------------------------------
 // Resolvers — one per (templateId, entity) with a real Loom backend.
 //   Each returns an EntityBindingResult. They NEVER fabricate: an empty/short
-//   real result is returned as {source:'sample', note}; a backend error as
-//   {source:'error', note}. The caller renders the bundled SAMPLE in both
-//   fallback cases and surfaces `note` inline.
+//   real result is returned as {source:'empty', note}; a backend error as
+//   {source:'error', note}. The caller renders a REAL EMPTY table (zero rows)
+//   in both fallback cases and surfaces `note` inline — never bundled SAMPLE.
 // ---------------------------------------------------------------------------
 
 type Resolver = (params: ReportParams, ctx: RenderCtx) => Promise<EntityBindingResult>;
@@ -250,7 +253,7 @@ const resolveCost: Resolver = async (params, ctx) => {
       if (sum.subscriptionErrors.length) {
         return { source: 'error', note: `Cost Management: ${sum.subscriptionErrors[0].error}` };
       }
-      return { source: 'sample', note: 'Cost Management returned no usage for the current month-to-date; showing sample.' };
+      return { source: 'empty', note: 'Azure Cost Management returned no month-to-date usage for this scope.' };
     }
     return {
       source: 'live',
@@ -267,7 +270,7 @@ const resolveBudget: Resolver = async (_params, ctx) => {
   try {
     const sum = await costSummary(ctx);
     if (!sum.budgets.length) {
-      return { source: 'sample', note: 'No Azure Consumption budgets are defined in scope; showing sample.' };
+      return { source: 'empty', note: 'No Azure Consumption budgets are defined in scope.' };
     }
     const rows = sum.budgets.map((b) => ({
       SubscriptionName: b.subscription,
@@ -311,7 +314,7 @@ AppTraces
       }))
       .filter((r) => r.Month);
     if (!rows.length) {
-      return { source: 'sample', note: 'No CSA Loom usage telemetry in Log Analytics (AppTraces) for the last 180 days; showing sample.' };
+      return { source: 'empty', note: 'No CSA Loom usage telemetry in Log Analytics (AppTraces) for the last 180 days.' };
     }
     return {
       source: 'live',
@@ -343,7 +346,7 @@ Resources
       ResourceCount: num(d.ResourceCount),
     }));
     if (!rows.length) {
-      return { source: 'sample', note: 'Azure Resource Graph returned no resources (grant the Console identity Reader on the subscription); showing sample.' };
+      return { source: 'empty', note: 'Azure Resource Graph returned no resources (grant the Console identity Reader on the subscription).' };
     }
     return {
       source: 'live',
@@ -384,7 +387,7 @@ authorizationresources
       };
     });
     if (!rows.length) {
-      return { source: 'sample', note: 'Azure Resource Graph returned no role assignments (grant Reader on the subscription); showing sample.' };
+      return { source: 'empty', note: 'Azure Resource Graph returned no role assignments (grant Reader on the subscription).' };
     }
     return {
       source: 'live',
@@ -401,7 +404,7 @@ const resolveSecureScore: Resolver = async (_params, ctx) => {
   try {
     const d = await ctx.once<DefenderSummary>('defender', () => getDefenderSummary());
     if (!d.secureScore) {
-      return { source: 'sample', note: 'No Defender for Cloud secure score is available for this subscription yet; showing sample.' };
+      return { source: 'empty', note: 'No Defender for Cloud secure score is available for this subscription yet.' };
     }
     const rows = [{
       SubscriptionName: d.subscriptionId,
@@ -416,6 +419,175 @@ const resolveSecureScore: Resolver = async (_params, ctx) => {
     };
   } catch (e: any) {
     return { source: 'error', note: gateNote(e, 'Defender for Cloud', 'Security Reader on the subscription') };
+  }
+};
+
+/** security-compliance-posture / Policy Compliance → ARG policyresources (compliance states by initiative). */
+const resolvePolicyCompliance: Resolver = async (params) => {
+  try {
+    const query = `
+policyresources
+| where type == 'microsoft.policyinsights/policystates'
+| extend ComplianceState = tostring(properties.complianceState),
+         PolicyInitiative = tostring(properties.policySetDefinitionName)
+| extend PolicyInitiative = iff(isempty(PolicyInitiative), 'Standalone policies', PolicyInitiative)
+| where isnotempty(ComplianceState)
+| summarize ResourceCount = count() by PolicyInitiative, ComplianceState
+| order by ResourceCount desc
+| take 200`.trim();
+    const data = await runArg(query, params.subscriptionIds);
+    const rows = data.map((d) => ({
+      PolicyInitiative: String(d.PolicyInitiative ?? 'Standalone policies'),
+      ComplianceState: String(d.ComplianceState ?? ''),
+      ResourceCount: num(d.ResourceCount),
+    }));
+    if (!rows.length) {
+      return { source: 'empty', note: 'Azure Policy has no compliance states in scope (assign a regulatory-compliance initiative to populate).' };
+    }
+    return {
+      source: 'live',
+      note: 'Live from Azure Resource Graph — Azure Policy compliance states by initiative.',
+      table: { columns: ['PolicyInitiative', 'ComplianceState', 'ResourceCount'], rows },
+    };
+  } catch (e: any) {
+    return { source: 'error', note: gateNote(e, 'Azure Policy (Resource Graph)', 'Reader on the subscription') };
+  }
+};
+
+/** resource-inventory-sprawl / Orphans → ARG Resources (unattached disks / NICs / public IPs). */
+const resolveOrphans: Resolver = async (params) => {
+  try {
+    const query = `
+Resources
+| where (type =~ 'microsoft.compute/disks' and isnull(properties.managedBy))
+     or (type =~ 'microsoft.network/networkinterfaces' and isnull(properties.virtualMachine))
+     or (type =~ 'microsoft.network/publicipaddresses' and isnull(properties.ipConfiguration))
+| extend OrphanType = case(
+    type =~ 'microsoft.compute/disks', 'Unattached managed disk',
+    type =~ 'microsoft.network/networkinterfaces', 'Orphaned network interface',
+    type =~ 'microsoft.network/publicipaddresses', 'Unassociated public IP',
+    'Other')
+| summarize Count = count() by OrphanType
+| order by Count desc`.trim();
+    const data = await runArg(query, params.subscriptionIds);
+    const rows = data.map((d) => ({
+      OrphanType: String(d.OrphanType ?? ''),
+      Count: num(d.Count),
+      // Monthly-waste $ requires a price sheet we do not fetch — leave null (honest unknown), never a fabricated estimate.
+      EstMonthlyWaste: null as number | null,
+    }));
+    if (!rows.length) {
+      return { source: 'empty', note: 'Azure Resource Graph found no orphaned disks / NICs / public IPs in scope.' };
+    }
+    return {
+      source: 'live',
+      note: 'Live from Azure Resource Graph — orphaned resources by type (monthly-waste estimate requires a price sheet, shown blank).',
+      table: { columns: ['OrphanType', 'Count', 'EstMonthlyWaste'], rows },
+    };
+  } catch (e: any) {
+    return { source: 'error', note: gateNote(e, 'Azure Resource Graph', 'Reader on the subscription') };
+  }
+};
+
+/** landing-zone-conformance / Conformance → ARG policyresources (policy control conformance by design area). */
+const resolveConformance: Resolver = async (params) => {
+  try {
+    const query = `
+policyresources
+| where type == 'microsoft.policyinsights/policystates'
+| extend Status = tostring(properties.complianceState),
+         Control = tostring(properties.policyDefinitionName),
+         DesignArea = tostring(properties.policyDefinitionGroupNames[0]),
+         SubscriptionName = subscriptionId
+| where isnotempty(Control)
+| extend DesignArea = iff(isempty(DesignArea), 'General', DesignArea)
+| summarize by DesignArea, Control, Status, SubscriptionName
+| take 300`.trim();
+    const data = await runArg(query, params.subscriptionIds);
+    const rows = data.map((d) => ({
+      DesignArea: String(d.DesignArea ?? 'General'),
+      Control: String(d.Control ?? ''),
+      Status: String(d.Status ?? ''),
+      SubscriptionName: String(d.SubscriptionName ?? ''),
+    }));
+    if (!rows.length) {
+      return { source: 'empty', note: 'Azure Policy has no policy-control states in scope for landing-zone conformance.' };
+    }
+    return {
+      source: 'live',
+      note: 'Live from Azure Resource Graph — Azure Policy control conformance grouped by design area.',
+      table: { columns: ['DesignArea', 'Control', 'Status', 'SubscriptionName'], rows },
+    };
+  } catch (e: any) {
+    return { source: 'error', note: gateNote(e, 'Azure Policy (Resource Graph)', 'Reader on the management group') };
+  }
+};
+
+/** landing-zone-conformance / Subscriptions → ARG policyresources (per-subscription conformance %). */
+const resolveSubscriptions: Resolver = async (params) => {
+  try {
+    const query = `
+policyresources
+| where type == 'microsoft.policyinsights/policystates'
+| extend Status = tostring(properties.complianceState), SubscriptionName = subscriptionId
+| where isnotempty(Status)
+| summarize Compliant = countif(Status =~ 'Compliant'), Total = count() by SubscriptionName
+| where Total > 0
+| extend ConformancePct = round(100.0 * Compliant / Total, 1)
+| project SubscriptionName, ConformancePct
+| order by ConformancePct asc
+| take 200`.trim();
+    const data = await runArg(query, params.subscriptionIds);
+    const rows = data.map((d) => ({
+      SubscriptionName: String(d.SubscriptionName ?? ''),
+      // Management group / environment are not carried on a policy-state row — leave blank (honest), never invented.
+      ManagementGroup: '',
+      Environment: '',
+      ConformancePct: num(d.ConformancePct),
+    }));
+    if (!rows.length) {
+      return { source: 'empty', note: 'Azure Policy has no per-subscription compliance states in scope yet.' };
+    }
+    return {
+      source: 'live',
+      note: 'Live from Azure Resource Graph — per-subscription Azure Policy conformance percentage.',
+      table: { columns: ['SubscriptionName', 'ManagementGroup', 'Environment', 'ConformancePct'], rows },
+    };
+  } catch (e: any) {
+    return { source: 'error', note: gateNote(e, 'Azure Policy (Resource Graph)', 'Reader on the management group') };
+  }
+};
+
+/** operational-health-sla / Incidents → ARG alertsmanagementresources (fired alerts by severity). */
+const resolveIncidents: Resolver = async (params) => {
+  try {
+    const query = `
+alertsmanagementresources
+| where type =~ 'microsoft.alertsmanagement/alerts'
+| extend Severity = tostring(properties.essentials.severity),
+         ServiceName = tostring(properties.essentials.targetResourceType)
+| where isnotempty(Severity)
+| summarize IncidentCount = count() by Severity, ServiceName
+| order by IncidentCount desc
+| take 200`.trim();
+    const data = await runArg(query, params.subscriptionIds);
+    const rows = data.map((d) => ({
+      Severity: String(d.Severity ?? ''),
+      ServiceName: String(d.ServiceName ?? ''),
+      IncidentCount: num(d.IncidentCount),
+      // MTTR requires an incident-resolution feed we do not query — leave null (honest unknown), never fabricated.
+      MttrMinutes: null as number | null,
+    }));
+    if (!rows.length) {
+      return { source: 'empty', note: 'Azure Monitor has no fired alerts in scope (MTTR requires an incident-resolution feed, shown blank).' };
+    }
+    return {
+      source: 'live',
+      note: 'Live from Azure Resource Graph — Azure Monitor fired alerts by severity and target service (MTTR shown blank).',
+      table: { columns: ['Severity', 'ServiceName', 'IncidentCount', 'MttrMinutes'], rows },
+    };
+  } catch (e: any) {
+    return { source: 'error', note: gateNote(e, 'Azure Monitor alerts (Resource Graph)', 'Monitoring Reader on the subscription') };
   }
 };
 
@@ -447,12 +619,21 @@ const LIVE_BINDINGS: Record<string, Record<string, Resolver>> = {
   },
   'resource-inventory-sprawl': {
     Resources: resolveResources,
+    Orphans: resolveOrphans,
   },
   'identity-access-governance': {
     'Role Assignments': resolveRoleAssignments,
   },
   'security-compliance-posture': {
     'Secure Score': resolveSecureScore,
+    'Policy Compliance': resolvePolicyCompliance,
+  },
+  'landing-zone-conformance': {
+    Conformance: resolveConformance,
+    Subscriptions: resolveSubscriptions,
+  },
+  'operational-health-sla': {
+    Incidents: resolveIncidents,
   },
 };
 
@@ -567,7 +748,7 @@ export function getBuilderSource(id: string): BuilderSource | undefined {
 
 /**
  * Resolve one builder source against the customer's estate. Returns the real
- * {columns, rows} (live) or an EntityBindingResult with source 'sample'/'error'
+ * {columns, rows} (live) or an EntityBindingResult with source 'empty'/'error'
  * and an honest note — never fabricated. Shares the same RenderCtx so multiple
  * tiles backed by the same plane (e.g. cost + budgets) reuse one upstream call.
  */
@@ -610,12 +791,14 @@ export function liveEntities(templateId: string): string[] {
 }
 
 /**
- * Resolve LIVE data for a whole report against the customer's estate, merging
- * with the bundled sample for entities that have no live binding (or that error
- * / return nothing). Returns the per-entity render data + truthful provenance.
+ * Resolve LIVE data for a whole report against the customer's estate. Every
+ * entity renders REAL rows (its resolver's live output) or a REAL EMPTY table
+ * (schema, zero rows) when there is no binding / the query returned nothing /
+ * the backend errored — NEVER bundled SAMPLE rows. Returns the per-entity render
+ * data + truthful provenance.
  *
- * `sample` is the parsed bundled SampleData; its keys define the entity set, so
- * every entity is tagged in `dataSources` (live / sample / error).
+ * `sample` is the parsed bundled table-set; only its COLUMN SCHEMA is reused (to
+ * keep each visual's field mapping intact) — its rows are never rendered.
  */
 export async function resolveLiveReport(
   templateId: string,
@@ -630,7 +813,7 @@ export async function resolveLiveReport(
     entities.map(async (entity): Promise<[string, EntityBindingResult]> => {
       const resolver = LIVE_BINDINGS[templateId]?.[entity];
       if (!resolver) {
-        return [entity, { source: 'sample', note: 'No live Azure binding for this dataset yet; showing sample.' }];
+        return [entity, { source: 'empty', note: 'No live Azure data source is bound to this dataset yet; showing no rows.' }];
       }
       try {
         return [entity, await resolver(params, ctx)];
@@ -644,7 +827,14 @@ export async function resolveLiveReport(
   const dataSources: Record<string, EntityBindingResult> = {};
   for (const [entity, result] of results) {
     dataSources[entity] = result;
-    live[entity] = result.source === 'live' && result.table ? result.table : sample[entity];
+    // Live rows when available; otherwise a REAL EMPTY table with the entity's
+    // column schema (zero rows) — never the bundled SAMPLE rows.
+    live[entity] = result.source === 'live' && result.table ? result.table : emptyLike(sample[entity]);
   }
   return { live, dataSources, params };
+}
+
+/** A real EMPTY table carrying the entity's column schema but zero rows (never fabricated). */
+export function emptyLike(table: SampleTable | undefined): SampleTable {
+  return { columns: table?.columns ? [...table.columns] : [], rows: [] };
 }

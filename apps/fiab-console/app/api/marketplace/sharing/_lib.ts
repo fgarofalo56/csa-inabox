@@ -75,7 +75,7 @@ export function sharingErrorResponse(e: any): NextResponse {
         gated: true,
         error: `Delta Sharing publishing is unavailable: ${msg}`,
         hint:
-          'Grant the Loom Console UAMI the metastore sharing privileges (CREATE SHARE, CREATE RECIPIENT, CREATE PROVIDER) — or make it a metastore admin — and ensure Delta Sharing is enabled on the Unity Catalog metastore. Run scripts/csa-loom/grant-databricks-delta-sharing.sh (a metastore admin executes `GRANT CREATE SHARE/RECIPIENT/PROVIDER ON METASTORE TO `<uami>``). Subscribing to inbound shares needs only workspace access.',
+          'Grant the Loom Console UAMI the FULL Unity Catalog metastore sharing privilege set — CREATE PROVIDER (register an inbound share from an activation file), CREATE CATALOG (subscribe = create a catalog from the share so you can query it), CREATE SHARE + CREATE RECIPIENT (publish outbound) — or make it a metastore admin. A Databricks metastore admin runs scripts/csa-loom/grant-databricks-delta-sharing.sh (or `GRANT CREATE PROVIDER/CATALOG/SHARE/RECIPIENT ON METASTORE TO `<uami>``); the UAMI cannot grant itself. The push-button day-one bootstrap applies these automatically (csa-loom-post-deploy-bootstrap "Grant Databricks Delta Sharing"). After subscribing, query the new catalog from a Databricks SQL warehouse (set LOOM_DATABRICKS_SQL_WAREHOUSE_ID) or a Databricks notebook.',
       },
       { status: 501 },
     );

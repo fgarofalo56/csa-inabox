@@ -197,7 +197,7 @@ export function ApimPoliciesPane() {
       {error && (
         <MessageBar intent="error">
           <MessageBarTitle>Policy error</MessageBarTitle>
-          <MessageBarBody>{error}</MessageBarBody>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{error}</MessageBarBody>
         </MessageBar>
       )}
       {savedNote && (
@@ -235,6 +235,7 @@ export function ApimPoliciesPane() {
             borderRadius: tokens.borderRadiusMedium,
             border: `1px solid ${tokens.colorNeutralStroke2}`,
             minHeight: '400px',
+            maxWidth: '100%',
             resize: 'vertical',
             backgroundColor: tokens.colorNeutralBackground1,
             color: tokens.colorNeutralForeground1,

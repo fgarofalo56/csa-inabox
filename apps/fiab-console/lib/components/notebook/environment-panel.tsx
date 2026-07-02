@@ -69,17 +69,17 @@ const BASE_IMAGES: { label: string; value: string }[] = [
 ];
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 520, minHeight: 360 },
-  row: { display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' },
-  grow: { flex: 1, minWidth: 220 },
-  tableWrap: { overflow: 'auto', maxHeight: 280, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, minWidth: '520px', minHeight: '360px' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
+  grow: { flex: 1, minWidth: '220px' },
+  tableWrap: { overflow: 'auto', maxHeight: '280px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   pre: {
-    fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre-wrap',
-    background: tokens.colorNeutralBackground3, padding: 10, borderRadius: 4,
-    border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: 200, overflow: 'auto',
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    background: tokens.colorNeutralBackground3, padding: tokens.spacingHorizontalMNudge, borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, maxHeight: '200px', overflow: 'auto',
   },
-  chips: { display: 'flex', flexWrap: 'wrap', gap: 6 },
-  section: { display: 'flex', flexDirection: 'column', gap: 8 },
+  chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalSNudge },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS },
 });
 
 export function EnvironmentPanel(props: EnvironmentPanelProps) {

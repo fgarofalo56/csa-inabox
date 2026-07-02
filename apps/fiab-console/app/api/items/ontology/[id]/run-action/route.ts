@@ -23,8 +23,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
-import { parseOntologyHierarchy } from '@/lib/editors/_family-utils';
-import { weaveGate, runActionType, normalizeActionTypes } from '@/lib/azure/weave-ontology-store';
+import { objectTypeNames, normalizeOntoActionTypes, validateActionRun } from '@/lib/editors/ontology-model';
+import { weaveGate, runActionType, type WeaveActionType } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
 
 export const runtime = 'nodejs';
@@ -36,18 +36,6 @@ function err(error: string, status: number, code?: string, gate?: Record<string,
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}), ...(gate ? { gate } : {}) }, { status });
 }
 
-/** Accept only scalar param values; the action's object id passes through too. */
-function sanitizeParams(raw: unknown): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
-  if (raw && typeof raw === 'object') {
-    for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
-      if (!/^[A-Za-z_][\w]{0,62}$/.test(k)) continue;
-      if (typeof v === 'string' || typeof v === 'boolean' || (typeof v === 'number' && Number.isFinite(v))) out[k] = v;
-    }
-  }
-  return out;
-}
-
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401, 'unauthenticated');
@@ -55,7 +43,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (!id || id === 'new') return NextResponse.json({ ok: true, actionTypes: [] });
   const onto = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
   if (!onto) return err('ontology not found', 404, 'not_found');
-  const actionTypes = normalizeActionTypes(((onto.state || {}) as Record<string, unknown>).actionTypes);
+  const actionTypes = normalizeOntoActionTypes(((onto.state || {}) as Record<string, unknown>).actionTypes);
   return NextResponse.json({ ok: true, actionTypes });
 }
 
@@ -68,26 +56,32 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const body = await req.json().catch(() => ({} as Record<string, unknown>));
   const actionName = String((body as { action?: string }).action || '').trim();
   if (!actionName) return err('action is required', 400, 'bad_request');
-  const params = sanitizeParams((body as { params?: unknown }).params);
-  // The object id is not a "scalar property" — pass it through verbatim if given.
-  const rawId = (body as { params?: { id?: unknown } }).params?.id;
-  if (rawId !== undefined && rawId !== null && rawId !== '') params.id = String(rawId);
+  const rawParams = ((body as { params?: unknown }).params || {}) as Record<string, unknown>;
 
   const onto = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
   if (!onto) return err('ontology not found', 404, 'not_found');
   const state = (onto.state || {}) as Record<string, unknown>;
-  const actionTypes = normalizeActionTypes(state.actionTypes);
+  const actionTypes = normalizeOntoActionTypes(state.actionTypes);
   const action = actionTypes.find((a) => a.name === actionName);
   if (!action) {
     return err(`Action "${actionName}" is not declared on this ontology. Add it under Action types first.`, 409, 'undeclared_action');
   }
 
-  // The action's objectType must still be a declared ontology class (a class
-  // could have been removed from the DSL after the action was declared).
-  const classNames = new Set(parseOntologyHierarchy(String(state.source || '')).map((c) => c.name));
+  // The action's objectType must still be a declared object type (it could have
+  // been removed after the action was declared).
+  const classNames = objectTypeNames(state);
   if (!classNames.has(action.objectType)) {
     return err(`Action "${actionName}" targets object type "${action.objectType}" which is no longer declared on this ontology.`, 409, 'undeclared_type');
   }
+
+  // Validate + coerce the typed parameters against the declared schema.
+  const validated = validateActionRun(action, rawParams);
+  if (!validated.ok) return err(validated.error, 400, 'invalid_parameters');
+  const runParams: Record<string, unknown> = { ...validated.values };
+  // The target object id (update/delete) is not a declared property — pass it
+  // through verbatim when supplied.
+  const rawId = (rawParams as { id?: unknown }).id;
+  if (rawId !== undefined && rawId !== null && rawId !== '') runParams.id = String(rawId);
 
   const gate = weaveGate();
   if (gate) {
@@ -98,7 +92,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   try {
-    const result = await runActionType(action, params);
+    const weaveAction: WeaveActionType = { name: action.name, objectType: action.objectType, kind: action.kind };
+    const result = await runActionType(weaveAction, runParams);
     return NextResponse.json(result);
   } catch (e: unknown) {
     const status = e instanceof PostgresError ? e.status : 502;

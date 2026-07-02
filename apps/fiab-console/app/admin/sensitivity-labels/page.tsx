@@ -25,9 +25,9 @@ interface SensitivityLabel {
 }
 
 const useStyles = makeStyles({
-  swatch: { width: '16px', height: '16px', borderRadius: '3px', display: 'inline-block', verticalAlign: 'middle', marginRight: '8px', flexShrink: 0 },
+  swatch: { width: '16px', height: '16px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block', verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS, flexShrink: 0 },
   swatchRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
-  colorRow: { display: 'flex', gap: tokens.spacingHorizontalXS },
+  colorRow: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
   presetSwatch: { width: '28px', height: '28px', borderRadius: tokens.borderRadiusMedium, cursor: 'pointer' },
 });
 

@@ -20,7 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
-import { parseOntologyHierarchy } from '@/lib/editors/_family-utils';
+import { objectTypeNames, objectTypeByName, validateObjectInstance } from '@/lib/editors/ontology-model';
 import { weaveGate, createObject, listObjects } from '@/lib/azure/weave-ontology-store';
 import { PostgresError } from '@/lib/azure/postgres-flex-client';
 
@@ -33,12 +33,14 @@ function err(error: string, status: number, code?: string, gate?: Record<string,
   return NextResponse.json({ ok: false, error, ...(code ? { code } : {}), ...(gate ? { gate } : {}) }, { status });
 }
 
-/** Resolve the ontology + its declared class names (case-exact). */
+/**
+ * Resolve the ontology's declared object-type names — prefers the structured
+ * `state.objectTypes[]` model and falls back to the legacy `state.source` DSL.
+ */
 async function declaredTypes(id: string, oid: string): Promise<Set<string> | null> {
   const onto = await loadOwnedItem(id, ITEM_TYPE, oid);
   if (!onto) return null;
-  const source = String(((onto.state || {}) as Record<string, unknown>).source || '');
-  return new Set(parseOntologyHierarchy(source).map((c) => c.name));
+  return objectTypeNames((onto.state || {}) as Record<string, unknown>);
 }
 
 /** Only scalar property values are accepted (string/number/boolean). */
@@ -95,11 +97,20 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!objectType) return err('objectType is required', 400, 'bad_request');
   const props = sanitizeProps((body as { properties?: unknown }).properties);
 
-  const types = await declaredTypes(id, s.claims.oid);
-  if (!types) return err('ontology not found', 404, 'not_found');
+  const onto = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
+  if (!onto) return err('ontology not found', 404, 'not_found');
+  const state = (onto.state || {}) as Record<string, unknown>;
+  const types = objectTypeNames(state);
   if (!types.has(objectType)) {
     return err(`"${objectType}" is not a declared object type on this ontology`, 409, 'undeclared_type');
   }
+
+  // Validate the supplied props against the object type's typed property schema
+  // (required present, declared keys only, numeric/boolean coercion). When the
+  // type declares no properties (legacy) any scalar bag is accepted.
+  const ot = objectTypeByName(state, objectType);
+  const validated = validateObjectInstance(ot, props);
+  if (!validated.ok) return err(validated.error, 400, 'invalid_properties');
 
   const gate = weaveGate();
   if (gate) {
@@ -110,7 +121,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   try {
-    const object = await createObject(objectType, props);
+    const object = await createObject(objectType, validated.values as Record<string, unknown>);
     return NextResponse.json({ ok: true, object }, { status: 201 });
   } catch (e: unknown) {
     const status = e instanceof PostgresError ? e.status : 502;

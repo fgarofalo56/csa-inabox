@@ -138,7 +138,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       runtimeStatus: published ? 'published' : 'draft',
       runtimeNote: published
         ? 'Topology published to a Fabric Eventstream item. Activate nodes in the Fabric portal to start streaming.'
-        : 'Draft — design the topology and Publish to Fabric to create the live Eventstream item.',
+        : 'Draft — design the topology and Provision to Azure (Event Hub + Stream Analytics) to stand up the live stream. Publishing to Fabric is an opt-in alternative.',
       fabricEventstreamId: item.state?.fabricEventstreamId ?? null,
       fabricWorkspaceId: item.state?.fabricWorkspaceId ?? null,
       lastPublishedAt: item.state?.lastPublishedAt ?? null,

@@ -10,6 +10,8 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { tenantSettingsContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
   defaultSettings,
@@ -97,6 +99,16 @@ export async function PUT(req: NextRequest) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
   const tenantId = s.claims.oid;
+  // HARD admin gate — this writes tenant-wide governance toggles (DLP,
+  // sensitivity labels, feature enablement). The pdpCheck below is DEFAULT-OFF
+  // (returns null when LOOM_PDP_ENFORCE is unset), so it CANNOT be the sole
+  // authorization for a privileged write. Require a tenant admin first; keep the
+  // pdpCheck as an additional shadow/enforce layer.
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
+  // PDP gate (default-off / shadow-ready). Admin write to tenant-wide toggles.
+  const blocked = await pdpCheck(s, { level: 'domain', id: tenantId }, 'admin');
+  if (blocked) return blocked;
   const body = await req.json().catch(() => ({}));
   const incoming = body?.settings;
   const incomingScope = body?.scopeConfig;

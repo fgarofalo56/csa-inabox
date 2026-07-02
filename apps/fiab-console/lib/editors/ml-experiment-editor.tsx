@@ -6,7 +6,9 @@
  *
  * Parity target: the Azure ML Studio "Jobs / Experiment" experience —
  *   - a sortable + filterable runs table (sort any metric/param/attribute,
- *     free-text filter client-side, MLflow filter string server-side),
+ *     free-text filter client-side, MLflow filter string server-side, plus an
+ *     Active/Archived lifecycle filter that surfaces soft-deleted runs and
+ *     restores them via runs/restore),
  *   - run detail: metric step charts, params, tags, and the artifact tree,
  *   - compare-runs: an overlaid metric step chart + a parallel-coordinates plot
  *     across the selected runs.
@@ -29,7 +31,7 @@
  * coordinates render the same data the Studio Metrics/Compare tabs do.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactElement } from 'react';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Spinner, Checkbox,
   Tab, TabList,
@@ -41,9 +43,12 @@ import {
 import {
   ArrowSortUp16Regular, ArrowSortDown16Regular, ArrowSort16Regular,
   Folder16Regular, Document16Regular, ChevronRight16Regular, ChevronDown16Regular,
+  BeakerRegular, DataHistogramRegular, DataLineRegular, ChartMultipleRegular,
+  TableSimpleRegular, FlashRegular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemBrowseGate } from './new-item-gate';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import {
@@ -54,19 +59,24 @@ import {
 } from './_ml-experiment-utils';
 
 const useStyles = makeStyles({
-  pad: { padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px' },
+  pad: { padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   card: {
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: '12px',
+    borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingVerticalM,
     background: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transition: 'box-shadow 0.15s ease, transform 0.15s ease',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
-  toolbar: { display: 'flex', gap: '8px', alignItems: 'flex-end', flexWrap: 'wrap' },
+  sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  sectionIcon: { color: tokens.colorBrandForeground1, display: 'inline-flex', flexShrink: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' },
   sortHeader: { cursor: 'pointer', userSelect: 'none' },
-  mono: { fontFamily: 'monospace', fontSize: '12px' },
-  legendRow: { display: 'flex', alignItems: 'center', gap: '6px' },
-  swatch: { width: '12px', height: '12px', borderRadius: '2px', display: 'inline-block' },
-  treeRow: { display: 'flex', alignItems: 'center', gap: '4px', padding: '2px 0', fontSize: '13px' },
+  mono: { fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  legendRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  swatch: { width: '12px', height: '12px', borderRadius: tokens.borderRadiusSmall, display: 'inline-block' },
+  treeRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXXS} 0`, fontSize: tokens.fontSizeBase300, minWidth: 0 },
 });
 
 interface MlflowExperimentLite { experimentId: string; name: string; lastUpdateTime?: number; tags?: Record<string, string> }
@@ -111,7 +121,7 @@ function MetricStepChart({ series, metricLabel }: { series: ChartSeries[]; metri
   const yTicks = [yMin, (yMin + yMax) / 2, yMax];
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label={`Metric ${metricLabel} step chart`}
-      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground2, maxWidth: W }}>
+      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, background: tokens.colorNeutralBackground2, maxWidth: W }}>
       {yTicks.map((t, i) => (
         <g key={i}>
           <line x1={padL} y1={sy(t)} x2={W - padR} y2={sy(t)} stroke={tokens.colorNeutralStroke3} strokeWidth={1} />
@@ -156,7 +166,7 @@ function ParallelCoordinates({ runs, axes }: { runs: MlflowRunLite[]; axes: Para
   const valY = (norm: number) => padT + innerH - norm * innerH;
   return (
     <svg width="100%" viewBox={`0 0 ${W} ${H}`} role="img" aria-label="Parallel coordinates of selected runs"
-      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, background: tokens.colorNeutralBackground2, maxWidth: W }}>
+      style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, background: tokens.colorNeutralBackground2, maxWidth: W }}>
       {/* axes */}
       {axes.map((ax, i) => (
         <g key={columnId(ax.col)}>
@@ -225,12 +235,12 @@ function ArtifactTree({ runId }: { runId: string }) {
     });
   }, [children, fetchPath]);
 
-  const renderLevel = (path: string, depth: number): JSX.Element[] => {
+  const renderLevel = (path: string, depth: number): ReactElement[] => {
     const nodes = children[path];
     if (!nodes) return [];
     return nodes.flatMap((node) => {
       const isOpen = open.has(node.path);
-      const rows: JSX.Element[] = [
+      const rows: ReactElement[] = [
         <div key={node.path} className={s.treeRow} style={{ paddingLeft: depth * 18 }}>
           {node.isDir ? (
             <span
@@ -242,16 +252,22 @@ function ArtifactTree({ runId }: { runId: string }) {
               style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center' }}
             >
               {isOpen ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
-              <Folder16Regular style={{ margin: '0 4px' }} />
+              <Folder16Regular style={{ margin: `0 ${tokens.spacingHorizontalXS}`, color: tokens.colorBrandForeground1 }} />
             </span>
           ) : (
-            <span style={{ display: 'inline-flex', alignItems: 'center', paddingLeft: 16 }}>
-              <Document16Regular style={{ margin: '0 4px' }} />
+            <span style={{ display: 'inline-flex', alignItems: 'center', paddingLeft: tokens.spacingHorizontalL }}>
+              <Document16Regular style={{ margin: `0 ${tokens.spacingHorizontalXS}`, color: tokens.colorNeutralForeground3 }} />
             </span>
           )}
-          <span>{node.path.split('/').pop() || node.path}</span>
-          {!node.isDir && <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 8 }}>{fmtBytes(node.fileSize)}</Caption1>}
-          {node.isDir && loading[node.path] && <Spinner size="extra-tiny" style={{ marginLeft: 8 }} />}
+          <span style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{node.path.split('/').pop() || node.path}</span>
+          {!node.isDir && <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: tokens.spacingHorizontalS }}>{fmtBytes(node.fileSize)}</Caption1>}
+          {!node.isDir && (
+            <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalXS, marginLeft: tokens.spacingHorizontalS }}>
+              <a href={`/api/aml/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(node.path)}`} target="_blank" rel="noreferrer" aria-label={`Preview ${node.path}`}>preview</a>
+              <a href={`/api/aml/runs/${encodeURIComponent(runId)}/artifact?path=${encodeURIComponent(node.path)}&download=1`} aria-label={`Download ${node.path}`}>download</a>
+            </span>
+          )}
+          {node.isDir && loading[node.path] && <Spinner size="extra-tiny" style={{ marginLeft: tokens.spacingHorizontalS }} />}
         </div>,
       ];
       if (node.isDir && isOpen) rows.push(...renderLevel(node.path, depth + 1));
@@ -329,6 +345,8 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const [localSearch, setLocalSearch] = useState('');
   const [serverFilter, setServerFilter] = useState('');
   const [applying, setApplying] = useState(false);
+  // lifecycle: ACTIVE_ONLY (default) vs DELETED_ONLY (archived / soft-deleted)
+  const [lifecycle, setLifecycle] = useState<'ACTIVE_ONLY' | 'DELETED_ONLY'>('ACTIVE_ONLY');
 
   // selection
   const [detailRunId, setDetailRunId] = useState<string | null>(null);
@@ -349,7 +367,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs`);
+      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs?runViewType=${lifecycle}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setLoading(false); return; }
       if (j.configured === false) { setConfigured(false); setHint(j.hint || null); setRuns([]); setLoading(false); return; }
@@ -360,7 +378,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
       setDetailRunId((prev) => (prev && rows.some((x) => x.runId === prev) ? prev : rows[0]?.runId || null));
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setLoading(false); }
-  }, [id]);
+  }, [id, lifecycle]);
   useEffect(() => { load(); }, [load]);
 
   // ---- server query (MLflow filter + orderBy) via /api/aml/runs ----
@@ -369,8 +387,9 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
       // No resolved id (e.g. older route) — re-run name resolution + filter.
       setApplying(true);
       try {
-        const qs = serverFilter ? `?filter=${encodeURIComponent(serverFilter)}` : '';
-        const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs${qs}`);
+        const params = new URLSearchParams({ runViewType: lifecycle });
+        if (serverFilter) params.set('filter', serverFilter);
+        const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs?${params.toString()}`);
         const j = await r.json();
         if (j.ok && j.configured !== false) setRuns(Array.isArray(j.runs) ? j.runs : []);
         else if (j.configured === false) { setConfigured(false); setHint(j.hint || null); }
@@ -388,6 +407,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
           filter: serverFilter || undefined,
           orderBy,
           maxResults: 1000,
+          runViewType: lifecycle,
         }),
       });
       const j = await r.json();
@@ -396,7 +416,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
       setRuns(Array.isArray(j.runs) ? j.runs : []);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setApplying(false); }
-  }, [experiment, id, serverFilter, sortCol, sortDir]);
+  }, [experiment, id, serverFilter, sortCol, sortDir, lifecycle]);
 
   // ---- detail metric history ----
   const selectedRun = useMemo(() => runs.find((r) => r.runId === detailRunId) || null, [runs, detailRunId]);
@@ -476,6 +496,22 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
   const openDetail = useCallback((runId: string) => { setDetailRunId(runId); setView('detail'); setDetailTab('metrics'); }, []);
 
+  // Run lifecycle actions (delete / clone / archive / restore) — real MLflow REST.
+  const [actionBusy, setActionBusy] = useState<string | null>(null);
+  const [actionMsg, setActionMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+  const runAction = useCallback(async (runId: string, action: 'delete' | 'clone' | 'archive' | 'restore') => {
+    setActionBusy(`${action}:${runId}`); setActionMsg(null);
+    try {
+      const r = await fetch(`/api/aml/runs/${encodeURIComponent(runId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) });
+      const j = await r.json();
+      if (!j.ok) { setActionMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
+      if (j.configured === false) { setActionMsg({ intent: 'error', text: j.hint || 'MLflow not configured' }); return; }
+      setActionMsg({ intent: 'success', text: j.message || `${action} done` });
+      await load();
+    } catch (e: any) { setActionMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setActionBusy(null); }
+  }, [load]);
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Experiment', actions: [
@@ -525,8 +561,11 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
           {!loading && configured && (
             <>
-              <div style={{ display: 'flex', alignItems: 'baseline', gap: 12, flexWrap: 'wrap' }}>
-                <Subtitle2>Experiment: {experiment?.name || id}</Subtitle2>
+              <div style={{ display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
+                <span className={s.sectionHeader}>
+                  <BeakerRegular className={s.sectionIcon} aria-hidden />
+                  <Subtitle2>Experiment: {experiment?.name || id}</Subtitle2>
+                </span>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   {experiment?.experimentId ? `id ${experiment.experimentId} · ` : ''}{runs.length} run(s)
                 </Caption1>
@@ -540,8 +579,19 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
               {/* ---------- RUNS ---------- */}
               {view === 'runs' && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge }}>
                   <div className={s.toolbar}>
+                    <Field label="Show" style={{ minWidth: 140 }}>
+                      <Dropdown
+                        value={lifecycle === 'DELETED_ONLY' ? 'Archived' : 'Active'}
+                        selectedOptions={[lifecycle]}
+                        onOptionSelect={(_, d) => { setLifecycle((d.optionValue as 'ACTIVE_ONLY' | 'DELETED_ONLY') || 'ACTIVE_ONLY'); setChecked(new Set()); }}
+                        aria-label="Run lifecycle filter"
+                      >
+                        <Option value="ACTIVE_ONLY">Active</Option>
+                        <Option value="DELETED_ONLY">Archived</Option>
+                      </Dropdown>
+                    </Field>
                     <Field label="Filter rows (name / param / metric)" style={{ minWidth: 240 }}>
                       <Input value={localSearch} onChange={(_, d) => setLocalSearch(d.value)} placeholder="e.g. lr, accuracy, run-42" />
                     </Field>
@@ -560,15 +610,16 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                       <Button appearance="subtle" onClick={() => { setServerFilter(''); load(); }} disabled={applying}>Clear</Button>
                     )}
                   </div>
+                  {actionMsg && <MessageBar intent={actionMsg.intent === 'success' ? 'success' : 'error'}><MessageBarBody>{actionMsg.text}</MessageBarBody></MessageBar>}
 
                   {runs.length === 0 ? (
-                    <MessageBar intent="info">
-                      <MessageBarBody>
-                        <MessageBarTitle>No runs for this experiment</MessageBarTitle>
-                        Log a run with <code>mlflow.start_run()</code> + <code>mlflow.log_metric()</code> under{' '}
-                        <strong>{experiment?.name || id}</strong>.
-                      </MessageBarBody>
-                    </MessageBar>
+                    <EmptyState
+                      icon={<BeakerRegular />}
+                      title={lifecycle === 'DELETED_ONLY' ? 'No archived runs' : 'No runs for this experiment'}
+                      body={lifecycle === 'DELETED_ONLY'
+                        ? `No deleted/archived runs under "${experiment?.name || id}". Archive or delete a run from the Active view, then switch back here to restore it.`
+                        : `Log a run with mlflow.start_run() + mlflow.log_metric() under "${experiment?.name || id}", then reload to see its runs, metric step charts, params, tags, and artifacts.`}
+                    />
                   ) : (
                     <div style={{ overflowX: 'auto' }}>
                       <Table aria-label="MLflow runs" size="small">
@@ -594,6 +645,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                                 p:{k} {sortIcon({ kind: 'param', field: k })}
                               </TableHeaderCell>
                             ))}
+                            <TableHeaderCell>Actions</TableHeaderCell>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
@@ -626,6 +678,19 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                                 const v = r.params.find((p) => p.key === k)?.value;
                                 return <TableCell key={`p-${r.runId}-${k}`} className={s.mono}>{v ?? '—'}</TableCell>;
                               })}
+                              <TableCell>
+                                <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' }}>
+                                  <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'clone')}>Clone</Button>
+                                  {lifecycle === 'DELETED_ONLY' ? (
+                                    <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'restore')}>{actionBusy === `restore:${r.runId}` ? '…' : 'Restore'}</Button>
+                                  ) : (
+                                    <>
+                                      <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'archive')}>Archive</Button>
+                                      <Button size="small" appearance="subtle" disabled={!!actionBusy} onClick={() => runAction(r.runId, 'delete')}>{actionBusy === `delete:${r.runId}` ? '…' : 'Delete'}</Button>
+                                    </>
+                                  )}
+                                </div>
+                              </TableCell>
                             </TableRow>
                           ))}
                         </TableBody>
@@ -642,9 +707,12 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
               {/* ---------- DETAIL ---------- */}
               {view === 'detail' && selectedRun && (
-                <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <Subtitle2>Run: {selectedRun.runName || selectedRun.runId}</Subtitle2>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                  <span className={s.sectionHeader}>
+                    <FlashRegular className={s.sectionIcon} aria-hidden />
+                    <Subtitle2>Run: {selectedRun.runName || selectedRun.runId}</Subtitle2>
+                  </span>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                     <Badge appearance="outline" color={statusColor(selectedRun.status)}>{selectedRun.status || '—'}</Badge>
                     <Badge appearance="outline">start: {fmtEpochMs(selectedRun.startTime)}</Badge>
                     <Badge appearance="outline">end: {fmtEpochMs(selectedRun.endTime)}</Badge>
@@ -659,7 +727,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                   </TabList>
 
                   {detailTab === 'metrics' && (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
                       <div className={s.toolbar}>
                         <Field label="Metric">
                           <Dropdown
@@ -681,18 +749,20 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                         <MetricStepChart metricLabel={detailMetric} series={[{ runId: selectedRun.runId, label: selectedRun.runName || selectedRun.runId, color: compareColor(0), points: detailHistory }]} />
                       )}
                       {selectedRun.metrics.length > 0 && (
-                        <Table aria-label="Latest metric values" size="small">
-                          <TableHeader><TableRow><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell>Latest value</TableHeaderCell><TableHeaderCell>Step</TableHeaderCell></TableRow></TableHeader>
-                          <TableBody>
-                            {selectedRun.metrics.map((m) => (
-                              <TableRow key={m.key}>
-                                <TableCell className={s.mono}>{m.key}</TableCell>
-                                <TableCell className={s.mono}>{m.value}</TableCell>
-                                <TableCell className={s.mono}>{m.step ?? '—'}</TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                          <Table aria-label="Latest metric values" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Metric</TableHeaderCell><TableHeaderCell>Latest value</TableHeaderCell><TableHeaderCell>Step</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {selectedRun.metrics.map((m) => (
+                                <TableRow key={m.key}>
+                                  <TableCell className={s.mono}>{m.key}</TableCell>
+                                  <TableCell className={s.mono}>{m.value}</TableCell>
+                                  <TableCell className={s.mono}>{m.step ?? '—'}</TableCell>
+                                </TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       )}
                     </div>
                   )}
@@ -701,14 +771,16 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                     selectedRun.params.length === 0
                       ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No params logged.</Caption1>
                       : (
-                        <Table aria-label="Run params" size="small">
-                          <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
-                          <TableBody>
-                            {selectedRun.params.map((p) => (
-                              <TableRow key={p.key}><TableCell className={s.mono}>{p.key}</TableCell><TableCell className={s.mono}>{p.value}</TableCell></TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                          <Table aria-label="Run params" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {selectedRun.params.map((p) => (
+                                <TableRow key={p.key}><TableCell className={s.mono}>{p.key}</TableCell><TableCell className={s.mono}>{p.value}</TableCell></TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       )
                   )}
 
@@ -717,14 +789,16 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                     return tags.length === 0
                       ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No user tags (mlflow.* system tags hidden).</Caption1>
                       : (
-                        <Table aria-label="Run tags" size="small">
-                          <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
-                          <TableBody>
-                            {tags.map((t) => (
-                              <TableRow key={t.key}><TableCell className={s.mono}>{t.key}</TableCell><TableCell className={s.mono}>{t.value}</TableCell></TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
+                        <div style={{ overflowX: 'auto', maxWidth: '100%' }}>
+                          <Table aria-label="Run tags" size="small">
+                            <TableHeader><TableRow><TableHeaderCell>Key</TableHeaderCell><TableHeaderCell>Value</TableHeaderCell></TableRow></TableHeader>
+                            <TableBody>
+                              {tags.map((t) => (
+                                <TableRow key={t.key}><TableCell className={s.mono}>{t.key}</TableCell><TableCell className={s.mono}>{t.value}</TableCell></TableRow>
+                              ))}
+                            </TableBody>
+                          </Table>
+                        </div>
                       );
                   })()}
 
@@ -734,13 +808,16 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
 
               {/* ---------- COMPARE ---------- */}
               {view === 'compare' && (
-                <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                  <Subtitle2>Compare {checkedRuns.length} runs</Subtitle2>
+                <div className={s.card} style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
+                  <span className={s.sectionHeader}>
+                    <ChartMultipleRegular className={s.sectionIcon} aria-hidden />
+                    <Subtitle2>Compare {checkedRuns.length} runs</Subtitle2>
+                  </span>
                   {checkedRuns.length < 2 ? (
                     <MessageBar intent="info"><MessageBarBody>Select at least 2 runs (checkboxes in the Runs tab) to compare.</MessageBarBody></MessageBar>
                   ) : (
                     <>
-                      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                         {checkedRuns.map((r, i) => (
                           <span key={r.runId} className={s.legendRow}>
                             <span className={s.swatch} style={{ background: compareColor(i) }} />
@@ -749,7 +826,10 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                         ))}
                       </div>
 
-                      <Subtitle2>Overlaid metric step chart</Subtitle2>
+                      <span className={s.sectionHeader}>
+                        <DataLineRegular className={s.sectionIcon} aria-hidden />
+                        <Subtitle2>Overlaid metric step chart</Subtitle2>
+                      </span>
                       <div className={s.toolbar}>
                         <Field label="Metric">
                           <Dropdown
@@ -768,12 +848,18 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                         ? <MetricStepChart metricLabel={compareMetric} series={compareSeries} />
                         : !compareLoading && compareMetric && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No step history for <code>{compareMetric}</code> on the selected runs.</Caption1>}
 
-                      <Subtitle2 style={{ marginTop: 8 }}>Parallel coordinates</Subtitle2>
+                      <span className={s.sectionHeader} style={{ marginTop: tokens.spacingVerticalS }}>
+                        <DataHistogramRegular className={s.sectionIcon} aria-hidden />
+                        <Subtitle2>Parallel coordinates</Subtitle2>
+                      </span>
                       {parallelAxes.length > 0
                         ? <ParallelCoordinates runs={checkedRuns} axes={parallelAxes} />
                         : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No numeric metrics/params to plot across the selected runs.</Caption1>}
 
-                      <Subtitle2 style={{ marginTop: 8 }}>Side-by-side</Subtitle2>
+                      <span className={s.sectionHeader} style={{ marginTop: tokens.spacingVerticalS }}>
+                        <TableSimpleRegular className={s.sectionIcon} aria-hidden />
+                        <Subtitle2>Side-by-side</Subtitle2>
+                      </span>
                       <div style={{ overflowX: 'auto' }}>
                         <Table aria-label="Compare runs" size="small">
                           <TableHeader>

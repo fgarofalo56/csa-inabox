@@ -22,7 +22,10 @@
  * The ONLY freeform slot is the Filter step's single WHERE expression box.
  */
 
-import { useCallback, useMemo, useRef, useState } from 'react';
+import {
+  useCallback, useEffect, useMemo, useRef, useState,
+  type ReactNode, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent,
+} from 'react';
 import {
   ReactFlow, ReactFlowProvider, Background, BackgroundVariant, Controls, MiniMap, Panel,
   useReactFlow, useNodesState, useEdgesState, Handle, Position,
@@ -38,8 +41,9 @@ import {
   createTableColumn, useArrowNavigationGroup,
   type TableColumnDefinition, type TableColumnSizingOptions,
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
-  makeStyles, shorthands, tokens,
+  makeStyles, mergeClasses, shorthands, tokens,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Add20Regular, Delete20Regular, Play20Regular, Table20Regular,
   Filter20Regular, ColumnTriple20Regular, GroupList20Regular, BranchFork20Regular,
@@ -50,6 +54,10 @@ import {
   formatCell as fmtCsvCell, columnIsNumeric, toCsv, rowMatchesFilter,
 } from '@/lib/editors/components/delta-preview-grid-utils';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import {
+  CanvasNode, CATEGORY_ACCENT, portStyle,
+  type CanvasVisual, type CanvasNodeCategory,
+} from '@/lib/components/canvas/canvas-node-kit';
 import {
   compileGraph,
   VQ_JOIN_KINDS,
@@ -133,7 +141,8 @@ const useStyles = makeStyles({
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     overflow: 'hidden',
-    minHeight: '420px',
+    // Fills the user-resizable ResizableCanvasRegion (which now owns the height).
+    height: '100%',
   },
   palette: {
     display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap',
@@ -152,46 +161,58 @@ const useStyles = makeStyles({
   },
   empty: {
     position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-    pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: 24,
+    pointerEvents: 'none', color: tokens.colorNeutralForeground3, zIndex: 1, textAlign: 'center', padding: tokens.spacingVerticalXXL,
   },
   sqlBar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   resultBar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   resultSpacer: { flex: 1 },
-  filterInput: { maxWidth: 240 },
+  filterInput: { maxWidth: '240px' },
   tableWrap: {
-    overflow: 'auto', maxHeight: 320,
+    overflow: 'auto', maxHeight: '320px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
   resultLoading: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
-    gap: tokens.spacingHorizontalS, minHeight: 120,
+    gap: tokens.spacingHorizontalS, minHeight: '120px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
     color: tokens.colorNeutralForeground3,
   },
   cell: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
-    whiteSpace: 'nowrap', maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'nowrap', maxWidth: '360px', overflow: 'hidden', textOverflow: 'ellipsis',
   },
   nullCell: { color: tokens.colorNeutralForeground4, fontStyle: 'italic' },
-  aggRow: { display: 'flex', gap: 4, alignItems: 'center' },
-  checkList: { display: 'flex', flexDirection: 'column', gap: 2, maxHeight: 180, overflowY: 'auto', paddingLeft: 2 },
+  aggRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
+  checkList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, maxHeight: '180px', overflowY: 'auto', paddingLeft: tokens.spacingHorizontalXXS },
 });
 
 // ============================================================
 // React Flow custom node
 // ============================================================
 
-const STEP_COLOR: Record<VqStepKind, string> = {
-  source: '#0078d4',
-  filter: '#7719aa',
-  'select-columns': '#7719aa',
-  'keep-top-rows': '#7719aa',
-  'group-by': '#7719aa',
-  sort: '#7719aa',
-  join: '#107c10',
+/**
+ * VqStepKind → one of the 5 Web-5.0 canvas categories (drives the accent var +
+ * gradient header via the shared kit). source = move (blue); the transform
+ * steps = transform (violet); join (Merge) = iteration (amber).
+ */
+const STEP_CATEGORY: Record<VqStepKind, CanvasNodeCategory> = {
+  source: 'move',
+  filter: 'transform',
+  'select-columns': 'transform',
+  'keep-top-rows': 'transform',
+  'group-by': 'transform',
+  sort: 'transform',
+  join: 'iteration',
+  // Wave-3 Warp transform-builder steps — all transform-flavored except sink (move).
+  derive: 'transform',
+  rename: 'transform',
+  cast: 'transform',
+  dedup: 'transform',
+  union: 'iteration',
+  sink: 'move',
 };
 
 function stepIcon(kind: VqStepKind) {
@@ -207,43 +228,41 @@ function stepIcon(kind: VqStepKind) {
   }
 }
 
-const HANDLE: React.CSSProperties = { width: 11, height: 11, borderRadius: '50%', background: tokens.colorNeutralBackground1, zIndex: 3 };
+/** Header type-label for a step kind ('Source' for the source node). */
+function STEP_LABEL_FOR(kind: VqStepKind): string {
+  return kind === 'source' ? 'Source' : STEP_LABEL[kind];
+}
 
 function VqFlowNodeImpl({ data, selected }: NodeProps) {
   const d = data as unknown as VqNodeData;
-  const color = STEP_COLOR[d.kind] || '#7719aa';
+  const category = STEP_CATEGORY[d.kind] || 'transform';
+  const accent = CATEGORY_ACCENT[category];
   const isJoin = d.kind === 'join';
+  const visual: CanvasVisual = { icon: stepIcon(d.kind), category, accent };
   return (
-    <div
-      data-vq-kind={d.kind}
-      data-vq-label={d.label}
-      aria-label={`${d.kind} ${d.label}`}
-      style={{
-        position: 'relative', width: 186, padding: '10px 12px', borderRadius: 6,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
-        display: 'flex', gap: 8, alignItems: 'flex-start', cursor: 'pointer', userSelect: 'none',
+    <CanvasNode
+      width={186}
+      title={d.label}
+      typeLabel={STEP_LABEL_FOR(d.kind)}
+      visual={visual}
+      selected={selected}
+      rootProps={{
+        'data-vq-kind': d.kind,
+        'data-vq-label': d.label,
+        'aria-label': `${d.kind} ${d.label}`,
       }}
     >
       {d.kind !== 'source' && !isJoin && (
-        <Handle id="in" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '50%', border: `2px solid ${tokens.colorBrandStroke1}` }} />
+        <Handle id="in" type="target" position={Position.Left} style={{ ...portStyle('in', accent), left: -6, top: '50%' }} />
       )}
       {isJoin && (
         <>
-          <Handle id="in-left" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '34%', border: `2px solid ${tokens.colorBrandStroke1}` }} />
-          <Handle id="in-right" type="target" position={Position.Left} style={{ ...HANDLE, left: -6, top: '70%', border: `2px solid ${color}` }} />
+          <Handle id="in-left" type="target" position={Position.Left} style={{ ...portStyle('in', accent), left: -6, top: '34%' }} />
+          <Handle id="in-right" type="target" position={Position.Left} style={{ ...portStyle('out', accent), left: -6, top: '70%' }} />
         </>
       )}
-      <Handle id="out" type="source" position={Position.Right} style={{ ...HANDLE, right: -6, top: '50%', border: `2px solid ${color}` }} />
-
-      <div style={{ width: 6, alignSelf: 'stretch', borderRadius: 2, background: color }} />
-      <div style={{ color, display: 'flex', alignItems: 'center', flexShrink: 0 }}>{stepIcon(d.kind)}</div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0, flex: 1 }}>
-        <div style={{ fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{d.label}</div>
-        <Badge appearance="filled" size="small" style={{ backgroundColor: color, color: '#fff', alignSelf: 'flex-start' }}>{d.kind}</Badge>
-      </div>
-    </div>
+      <Handle id="out" type="source" position={Position.Right} style={{ ...portStyle('out', accent), right: -6, top: '50%' }} />
+    </CanvasNode>
   );
 }
 const VqFlowNode = memo(VqFlowNodeImpl);
@@ -585,7 +604,19 @@ function CanvasInner(props: VisualQueryCanvasProps) {
   return (
     <div className={s.root}>
       <div className={s.body}>
-        <div className={s.canvas} data-canvas="visual-query" onDrop={onDrop} onDragOver={onDragOver}>
+        {/* Canvas region — user-resizable height (drag the grip below the canvas,
+            or focus it and use Arrow / Shift+Arrow / Home / End). Height is
+            persisted per-surface in localStorage; the canvas FILLS this region,
+            handing React Flow the definite px height fitView needs. Canvas
+            behaviour / nodes / edges are unchanged. The inspector column is
+            untouched. */}
+        <ResizableCanvasRegion
+          storageKey="visual-query"
+          defaultPx={420}
+          minPx={280}
+          ariaLabel="Resize visual query canvas height"
+        >
+          <div className={s.canvas} data-canvas="visual-query" onDrop={onDrop} onDragOver={onDragOver} style={{ flex: 1, height: '100%', minHeight: 0 }}>
           <ReactFlow
             nodes={renderNodes}
             edges={edges}
@@ -633,7 +664,8 @@ function CanvasInner(props: VisualQueryCanvasProps) {
               <Caption1>Click <strong>Add table</strong> to drop a source onto the canvas, then add Filter / Choose columns / Group by steps and Merge two chains. The generated SQL updates live below.</Caption1>
             </div>
           )}
-        </div>
+          </div>
+        </ResizableCanvasRegion>
 
         {/* Applied Steps / inspector */}
         <aside className={s.inspector} aria-label="Applied steps">
@@ -685,9 +717,9 @@ function CanvasInner(props: VisualQueryCanvasProps) {
           <MessageBarBody>
             <MessageBarTitle>Grant the Console identity a SQL login</MessageBarTitle>
             {result.gate?.reason || result.error || 'The Console managed identity is not a SQL login on this pool/warehouse.'}
-            {result.gate?.remediation && <div style={{ marginTop: 6 }}>{result.gate.remediation}</div>}
+            {result.gate?.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}>{result.gate.remediation}</div>}
             {result.gate?.sql && (
-              <pre style={{ marginTop: 8, padding: 8, borderRadius: 6, overflowX: 'auto', fontSize: 12, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>
+              <pre style={{ marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusLarge, overflowX: 'auto', fontSize: tokens.fontSizeBase200, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre' }}>
                 {result.gate.sql}
               </pre>
             )}
@@ -797,7 +829,7 @@ function CanvasInner(props: VisualQueryCanvasProps) {
                   </Dropdown>
                 </Field>
               )}
-              <div style={{ display: 'flex', gap: 8 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                 <Field label="Schema" style={{ flex: 1 }}>
                   <Input value={addSchema} placeholder={dialect === 'tsql' ? 'dbo' : '(optional)'} onChange={(_, d) => setAddSchema(d.value)} />
                 </Field>
@@ -824,6 +856,13 @@ const STEP_LABEL: Record<Exclude<VqStepKind, 'source'>, string> = {
   'group-by': 'Group by',
   sort: 'Sort rows',
   join: 'Merge',
+  // Wave-3 Warp transform-builder steps.
+  derive: 'Derived column',
+  rename: 'Rename columns',
+  cast: 'Change type',
+  dedup: 'Remove duplicates',
+  union: 'Append (Union)',
+  sink: 'Sink',
 };
 
 function formatCell(v: unknown): string {
@@ -851,7 +890,7 @@ function StepInspector({
   const d = node.data as unknown as VqNodeData;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
       <Label weight="semibold">Step · {d.kind}</Label>
 
       {d.kind === 'source' && (

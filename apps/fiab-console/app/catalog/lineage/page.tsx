@@ -9,8 +9,9 @@ import {
 
 const useStyles = makeStyles({
   form: {
-    display: 'grid', gridTemplateColumns: '1fr 2fr 1fr auto', gap: 12, alignItems: 'flex-end',
-    marginBottom: 16, padding: 12, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8,
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr) auto', gap: tokens.spacingHorizontalM, alignItems: 'flex-end',
+    maxWidth: '100%',
+    marginBottom: tokens.spacingVerticalL, padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
   },
 });
 
@@ -23,7 +24,7 @@ export default function CatalogLineagePage() {
 
   return (
     <CatalogShell sectionTitle="Lineage" sectionBadge="Federated">
-      <Body1 style={{ marginBottom: 12 }}>
+      <Body1 style={{ marginBottom: tokens.spacingVerticalM }}>
         Enter a Purview asset GUID, a Unity Catalog table full name, or a Fabric workspace ID. Loom hits the right back-end and overlays the lineage subgraph below.
       </Body1>
 

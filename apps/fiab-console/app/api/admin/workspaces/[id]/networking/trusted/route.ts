@@ -13,17 +13,16 @@
  * Azure-native — NO Fabric dependency. Honest gates per _gate.ts.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listTrustedInstances, addTrustedInstance, removeTrustedInstance } from '@/lib/clients/networking-client';
-import { networkingErrorResponse } from '../_gate';
+import { networkingErrorResponse, authorizeNetworking } from '../_gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+  const g = await authorizeNetworking(ctx);
+  if (g.resp) return g.resp;
+  const { id } = g;
   try {
     const instances = await listTrustedInstances(id);
     return NextResponse.json({ ok: true, instances });
@@ -33,9 +32,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+  const g = await authorizeNetworking(ctx);
+  if (g.resp) return g.resp;
+  const { id } = g;
   const body = await req.json().catch(() => ({}));
   const label = String(body?.label || '').trim();
   const ipCidr = String(body?.ipCidr || '').trim();
@@ -51,9 +50,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 }
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+  const g = await authorizeNetworking(ctx);
+  if (g.resp) return g.resp;
+  const { id } = g;
   const instanceId = req.nextUrl.searchParams.get('instanceId')
     || (await req.json().catch(() => ({})))?.instanceId;
   if (!instanceId) return NextResponse.json({ ok: false, error: 'instanceId required' }, { status: 400 });

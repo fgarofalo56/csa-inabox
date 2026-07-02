@@ -7,6 +7,9 @@
  *   - slug, displayName, description, category
  *   - components[]: which item types to spawn + default state per component
  *   - estimatedMonthlyCostUsd (rough order of magnitude, F8 sizing)
+ *   - instructions: what the spawned product is + how to use it
+ *   - nextSteps[]: ordered actions after spawn to make it live
+ *   - references[]: Learn / architecture-center links for the pattern
  *
  * Add new templates by appending to this array. The Instantiate endpoint
  * walks `components[]` and calls createOwnedItem for each.
@@ -32,6 +35,10 @@ export interface DataProductTemplate {
     | 'Geospatial';
   estimatedMonthlyCostUsd: number;
   components: TemplateComponent[];
+  /** Plain-language summary of the product the user gets once spawned. */
+  instructions: string;
+  /** Ordered follow-up actions to take the product from scaffold → live. */
+  nextSteps: string[];
   references?: { label: string; href: string }[];
 }
 
@@ -50,6 +57,13 @@ export const CURATED_TEMPLATES: readonly DataProductTemplate[] = [
       { slug: 'adf-pipeline', label: 'Silver → Gold pipeline', description: 'Aggregate + transform.' },
       { slug: 'synapse-dedicated-sql-pool', label: 'Warehouse pool', description: 'DW100c, paused overnight.' },
     ],
+    instructions: 'Spawns the three medallion lakehouses (ADLS Gen2 + Delta), two ADF pipelines to move Bronze→Silver→Gold, and a Synapse dedicated SQL pool serving the Gold marts. Each item opens in its own editor wired to a real Azure backend — no Fabric capacity required.',
+    nextSteps: [
+      'Open the Bronze→Silver pipeline and bind a Copy activity to your source dataset.',
+      'Define Silver conformed tables and Gold star-schema marts in the lakehouses.',
+      'Resume the warehouse pool and build a semantic model over the Gold marts.',
+    ],
+    references: [{ label: 'Modern data warehouse architecture', href: 'https://learn.microsoft.com/azure/architecture/example-scenario/dataplate2e/data-platform-end-to-end' }],
   },
   {
     slug: 'lambda-architecture',
@@ -63,6 +77,13 @@ export const CURATED_TEMPLATES: readonly DataProductTemplate[] = [
       { slug: 'lakehouse', label: 'Cold path lakehouse', description: 'Long-term Delta storage.' },
       { slug: 'adf-pipeline', label: 'Reconciliation pipeline', description: 'Hot+cold merge job.' },
     ],
+    instructions: 'A dual-path streaming product: Event Hubs ingestion feeds a hot path (ADX/KQL) for sub-second queries and a cold path (Delta lakehouse) for replay/accuracy, reconciled daily by an ADF pipeline. Azure-native end to end.',
+    nextSteps: [
+      'Point the EventHub stream at your producer and confirm throughput.',
+      'Create hot-path tables + update policies in the ADX database.',
+      'Schedule the reconciliation pipeline to merge hot + cold nightly.',
+    ],
+    references: [{ label: 'Lambda architecture', href: 'https://learn.microsoft.com/azure/architecture/data-guide/big-data/' }],
   },
   {
     slug: 'kappa-architecture',
@@ -75,6 +96,13 @@ export const CURATED_TEMPLATES: readonly DataProductTemplate[] = [
       { slug: 'databricks-notebook', label: 'Streaming notebook', description: 'Structured Streaming job.' },
       { slug: 'lakehouse', label: 'Delta lakehouse', description: 'Streaming sink.' },
     ],
+    instructions: 'A single-path streaming product: Event Hubs (Capture on) → Databricks Structured Streaming notebook → Delta lakehouse. No batch layer — re-process by replaying Capture or Delta time travel.',
+    nextSteps: [
+      'Enable Capture on the EventHub stream for replayability.',
+      'Attach the streaming notebook to a cluster and start the readStream→writeStream.',
+      'Verify Delta sink commits and set a checkpoint location.',
+    ],
+    references: [{ label: 'Kappa architecture', href: 'https://learn.microsoft.com/azure/architecture/data-guide/big-data/' }],
   },
   {
     slug: 'medallion-on-databricks',
@@ -89,6 +117,13 @@ export const CURATED_TEMPLATES: readonly DataProductTemplate[] = [
       { slug: 'databricks-notebook', label: 'Gold DLT', description: 'Aggregations.' },
       { slug: 'databricks-job', label: 'DLT pipeline job', description: 'Triggered + continuous modes.' },
     ],
+    instructions: 'A Databricks-native medallion: Auto Loader ingests to Bronze, Delta Live Tables declaratively build Silver + Gold, Unity Catalog governs. The DLT job orchestrates the three notebooks in triggered or continuous mode.',
+    nextSteps: [
+      'Provision the DLT cluster and point Bronze Auto Loader at your cloudFiles path.',
+      'Register the catalog/schema in Unity Catalog for governance.',
+      'Run the DLT pipeline job and confirm Bronze→Silver→Gold tables materialize.',
+    ],
+    references: [{ label: 'Databricks medallion', href: 'https://learn.microsoft.com/azure/databricks/lakehouse/medallion' }],
   },
   {
     slug: 'iot-analytics',
@@ -102,6 +137,13 @@ export const CURATED_TEMPLATES: readonly DataProductTemplate[] = [
       { slug: 'kql-dashboard', label: 'Fleet dashboard', description: 'Real-time tiles.' },
       { slug: 'activator', label: 'Anomaly activator', description: 'KQL rules + email/Teams.' },
     ],
+    instructions: 'End-to-end IoT telemetry: device data via the IoT Hub EventHub-compatible endpoint → ADX time-series DB → real-time fleet dashboard, with an Activator firing email/Teams alerts on KQL anomaly rules (Azure Monitor-backed, no Fabric).',
+    nextSteps: [
+      'Bind the IoT Hub bridge to your hub’s built-in endpoint.',
+      'Create telemetry tables + rollup policies in the ADX DB.',
+      'Author dashboard tiles and define anomaly rules on the Activator.',
+    ],
+    references: [{ label: 'Azure Data Explorer for IoT', href: 'https://learn.microsoft.com/azure/data-explorer/ingest-data-iot-hub' }],
   },
   {
     slug: 'federated-mesh',
@@ -115,6 +157,13 @@ export const CURATED_TEMPLATES: readonly DataProductTemplate[] = [
       { slug: 'apim-policy', label: 'JWT + rate-limit policy', description: 'Validate + throttle.' },
       { slug: 'data-product', label: 'Catalog data product', description: 'Marketplace entry.' },
     ],
+    instructions: 'A data-mesh domain product: an APIM product + API surfaced behind a JWT-validate + rate-limit policy, registered as a marketplace data product so consumers can discover and subscribe. Central catalog + access policy.',
+    nextSteps: [
+      'Bind the domain API to your backend OpenAPI and import operations.',
+      'Tune the JWT + rate-limit policy and assign the product quota.',
+      'Publish the data product to the marketplace for consumer subscriptions.',
+    ],
+    references: [{ label: 'Data mesh on Azure', href: 'https://learn.microsoft.com/azure/cloud-adoption-framework/scenarios/cloud-scale-analytics/architectures/data-mesh' }],
   },
   {
     slug: 'rag-agent-platform',
@@ -131,6 +180,13 @@ export const CURATED_TEMPLATES: readonly DataProductTemplate[] = [
       { slug: 'content-safety', label: 'Safety guardrails', description: 'Hate/violence thresholds.' },
       { slug: 'tracing', label: 'Operation tracing', description: 'App Insights spans.' },
     ],
+    instructions: 'A full RAG agent stack: a versioned document corpus → AI Search hybrid (BM25 + vector) index → AI Foundry project hosting a grounded prompt-flow, fenced by Content Safety guardrails and traced into App Insights.',
+    nextSteps: [
+      'Load documents into the corpus lakehouse and run the indexer.',
+      'Wire the prompt-flow to the hybrid index + your chat deployment.',
+      'Set content-safety thresholds and confirm traces land in App Insights.',
+    ],
+    references: [{ label: 'RAG with AI Search', href: 'https://learn.microsoft.com/azure/search/retrieval-augmented-generation-overview' }],
   },
   {
     slug: 'geospatial-pipeline',
@@ -144,5 +200,12 @@ export const CURATED_TEMPLATES: readonly DataProductTemplate[] = [
       { slug: 'synapse-serverless-sql-pool', label: 'Geo query surface', description: 'OPENROWSET on enriched lake.' },
       { slug: 'geo-map', label: 'Visualization map', description: 'Azure Maps or OSM fallback.' },
     ],
+    instructions: 'A spatial enrichment product: a geo dataset (GeoJSON/Parquet+WKB) → enrichment pipeline (H3 res-7 cell + buffer) → Synapse Serverless OPENROWSET query surface, visualized on an Azure Maps (OSM fallback) map.',
+    nextSteps: [
+      'Upload your source geo dataset and confirm the WKB/GeoJSON schema.',
+      'Run the enrichment pipeline to add H3 cells + buffers.',
+      'Query the enriched lake via OPENROWSET and bind it to the map.',
+    ],
+    references: [{ label: 'Synapse serverless SQL', href: 'https://learn.microsoft.com/azure/synapse-analytics/sql/on-demand-workspace-overview' }],
   },
 ];

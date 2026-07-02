@@ -23,6 +23,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { envConfigContainer, auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
   updateContainerAppEnv,
@@ -199,6 +200,10 @@ export async function PUT(req: NextRequest) {
   const gate = await enforceCapability(session, CAP, 'Admin');
   if (gate) return gate;
   const tenantId = session!.claims.oid;
+  // PDP gate (default-off no-op): tenant-admin env-config write is a domain-level
+  // admin action. Additive — with LOOM_PDP_ENFORCE unset this returns null.
+  const blocked = await pdpCheck(session!, { level: 'domain', id: tenantId }, 'admin');
+  if (blocked) return blocked;
   const who = session!.claims.upn || session!.claims.email || tenantId;
 
   const body = await req.json().catch(() => ({}));

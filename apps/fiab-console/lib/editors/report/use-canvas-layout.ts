@@ -1,0 +1,1124 @@
+'use client';
+
+/**
+ * useCanvasLayout — drag-resize + drag-to-reposition for the Report Designer canvas.
+ *
+ * Power BI report-authoring parity (ui-parity.md): in the real Power BI canvas a
+ * visual is resized by dragging its corner grip and repositioned by dragging its
+ * header. This hook is the Loom-native equivalent for the `report-designer.tsx`
+ * 12-column canvas grid. It is intentionally the ONE file that owns this
+ * interaction so the designer only has to *mount* the props it returns:
+ *
+ *   • {@link CanvasLayout.getResizeHandleProps} → spread onto a small corner grip
+ *     inside each visual card. Pointer-drag updates the visual's column span
+ *     (`w`, clamped to `[minSpan..columns]`) and row-height (`h`, in grid row
+ *     units). Arrow keys give a keyboard-accessible resize.
+ *   • {@link CanvasLayout.getDragHandleProps} → spread onto a header grab handle.
+ *     HTML5 drag with a DISTINCT mime (`application/x-loom-visual`) so it never
+ *     collides with the Fields-pane chip drags (which use `application/json`).
+ *   • {@link CanvasLayout.getDropTargetProps} → spread onto each visual card. It
+ *     also carries the `data-loom-vcard` anchor the resize math measures against.
+ *     Dropping a dragged visual before/after this card reorders the list and
+ *     repacks `x/y`.
+ *
+ * Everything is a pure state-mutation that delegates to the designer's own
+ * `mutateVisual(id, fn)` / `mutatePage(fn)` — there is NO backend here and no new
+ * persistence: `w/h` (and the additive `x/y`) already round-trip through
+ * PUT /api/items/report/[id]/definition `layout`. The hook holds only transient
+ * pointer/drag bookkeeping in refs.
+ *
+ * no-vaporware.md: this is wiring over real, already-persisted state — not a
+ * stub. The existing S/M/L/XL size buttons and Move-left/right actions in the
+ * designer remain as the documented keyboard-accessible fallbacks; this hook
+ * ADDS direct manipulation on top (additive, the shipped designer is untouched).
+ *
+ * Wave-2 (multi-select Arrange) ADDS, all additive + pure where possible:
+ *   • {@link alignVisuals}/{@link distributeVisuals}/{@link groupVisuals}/
+ *     {@link ungroupVisuals}/{@link moveVisualBlock}/{@link snapToGrid} — pure,
+ *     React-free array→array math (unit-testable like `packGridPositions`),
+ *     operating on the additive grid `x/y/w/h` + `groupId`. The hook exposes
+ *     imperative `alignVisuals`/`distributeVisuals`/`group`/`ungroup` that just
+ *     delegate to `mutatePage` with these ops — no new persistence.
+ *   • `lockedIds` option → the drag-handle + resize-grip return INERT props and
+ *     the keyboard/imperative resize+move are no-ops for a locked id (Lock parity).
+ *   • `snapToGrid` option (default true) → wires the designer's "Snap to grid"
+ *     toggle: a reposition drag repacks `x/y` into grid flow only when snap is on.
+ *   • Group move → dragging any member of a `groupId` relocates the whole group
+ *     as a contiguous block (via {@link moveVisualBlock}).
+ *
+ * web3-ui.md: this file emits NO styling beyond two behavioural inline props
+ * (`touchAction`/`cursor`, which no Fluent token expresses) — the grip element
+ * and its token-based styling live in the designer. The hook is framework-pure
+ * (React only) and generic over the visual/page shape, so it stays decoupled
+ * from the designer's private `DVisual`/`DPage` types.
+ *
+ * This file has NO default export.
+ */
+
+import { useCallback, useRef, useState } from 'react';
+import type {
+  CSSProperties,
+  DragEvent as ReactDragEvent,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from 'react';
+
+// ── Inherent layout constants (no Fluent token expresses these) ──────────────
+/** Canvas grid column count — mirrors the designer's `repeat(12, …)` grid. */
+const DEFAULT_COLUMNS = 12;
+/** Minimum column span for a visual — matches the designer's `Math.max(2, …)`. */
+const DEFAULT_MIN_SPAN = 2;
+/** Pixels per grid row-height unit, used to translate a vertical drag into `h`
+ *  steps (the card's `minHeight:180px` ≈ 4 rows ⇒ ~45px/row; 48 reads cleanly). */
+const DEFAULT_ROW_UNIT_PX = 48;
+/** Distinct DnD payload type so visual-reorder drags never trip the Fields-pane
+ *  chip drops (those use `application/json`) and vice-versa. */
+const VISUAL_DND_MIME = 'application/x-loom-visual';
+/** The card anchor attribute the resize math measures column-width against. */
+const CARD_ATTR = 'data-loom-vcard';
+
+// ── Public shapes (structural — a designer `DVisual`/`DPage` satisfies these) ─
+
+/** The minimal visual contract this hook reads/writes. `x/y` are additive and
+ *  optional — the hook sets them on reorder; consumers that don't read them keep
+ *  working off list order alone. `groupId` is additive too (Arrange → Group):
+ *  members carrying the same id move together on a reposition drag. */
+export interface CanvasVisualLike {
+  id: string;
+  /** Column span on the canvas grid. */
+  w: number;
+  /** Row-height hint, in grid row units. */
+  h: number;
+  /** Optional grid column origin (packed on reorder). */
+  x?: number;
+  /** Optional grid row origin (packed on reorder). */
+  y?: number;
+  /** Optional group id (Arrange → Group). Members reposition together. */
+  groupId?: string;
+}
+
+/** The minimal page contract — anything carrying an ordered `visuals` array. */
+export interface CanvasPageLike<V extends CanvasVisualLike> {
+  visuals: V[];
+}
+
+export interface UseCanvasLayoutOptions<
+  V extends CanvasVisualLike,
+  P extends CanvasPageLike<V>,
+> {
+  /** The active page's visuals (read for keyboard nudges + clamping). */
+  visuals: V[];
+  /** The designer's per-visual mutator (already marks the report dirty). */
+  mutateVisual: (id: string, fn: (v: V) => V) => void;
+  /** The designer's active-page mutator (used for reorder + repack). */
+  mutatePage: (fn: (p: P) => P) => void;
+  /** Grid columns (default 12). */
+  columns?: number;
+  /** Minimum column span (default 2). */
+  minSpan?: number;
+  /** Pixels per row-height unit for the vertical resize math (default 48). */
+  rowUnitPx?: number;
+  /** When true (default) reorder also repacks `x/y` into grid flow positions. */
+  assignPositions?: boolean;
+  /** Snap-to-grid toggle (default true). When ON, a reposition drag reflows the
+   *  cards into the 12-col grid flow (repacks `x/y`). When OFF, the dragged
+   *  visual still reorders, but `x/y` are left untouched so manually-tuned
+   *  positions survive — wiring the designer's "Snap to grid" toggle to a real
+   *  effect (the column-step resize is intrinsic to the integer grid either way).
+   *  Composes with {@link assignPositions}: packing happens only when BOTH are on. */
+  snapToGrid?: boolean;
+  /** Ids whose card is locked (Arrange → Lock). The reposition drag-handle and
+   *  the resize grip return inert props for a locked id, and the keyboard/
+   *  imperative resize + move are no-ops — full Lock parity. Unset = nothing
+   *  locked (the shipped default, so existing callers are unaffected). */
+  lockedIds?: Set<string>;
+}
+
+/** Where a hovered drop would land relative to the target card. */
+export type DropSide = 'before' | 'after';
+
+/** Spread onto the corner resize grip element. */
+export interface ResizeHandleProps {
+  role: 'slider';
+  tabIndex: number;
+  'aria-label': string;
+  'aria-orientation': 'horizontal';
+  'aria-valuemin': number;
+  'aria-valuemax': number;
+  'aria-valuenow': number;
+  'aria-valuetext': string;
+  /** True when the visual is locked — the grip renders but does nothing. */
+  'aria-disabled'?: boolean;
+  style: CSSProperties;
+  onPointerDown: (e: ReactPointerEvent<HTMLElement>) => void;
+  onPointerMove: (e: ReactPointerEvent<HTMLElement>) => void;
+  onPointerUp: (e: ReactPointerEvent<HTMLElement>) => void;
+  onLostPointerCapture: (e: ReactPointerEvent<HTMLElement>) => void;
+  onPointerCancel: (e: ReactPointerEvent<HTMLElement>) => void;
+  onKeyDown: (e: ReactKeyboardEvent<HTMLElement>) => void;
+  onClick: (e: ReactMouseEvent<HTMLElement>) => void;
+}
+
+/** Spread onto the header grab handle that starts a reposition drag. */
+export interface DragHandleProps {
+  /** `false` when the visual is locked (drag disabled), else `true`. */
+  draggable: boolean;
+  'aria-label': string;
+  /** True when the visual is locked — the handle renders but can't start a drag. */
+  'aria-disabled'?: boolean;
+  style: CSSProperties;
+  onDragStart: (e: ReactDragEvent<HTMLElement>) => void;
+  onDragEnd: (e: ReactDragEvent<HTMLElement>) => void;
+  onClick: (e: ReactMouseEvent<HTMLElement>) => void;
+}
+
+/** Spread onto a visual card so it is a reorder drop target + resize anchor. */
+export interface DropTargetProps {
+  [CARD_ATTR]: string;
+  onDragOver: (e: ReactDragEvent<HTMLElement>) => void;
+  onDragLeave: (e: ReactDragEvent<HTMLElement>) => void;
+  onDrop: (e: ReactDragEvent<HTMLElement>) => void;
+}
+
+export interface CanvasLayout {
+  /** Id of the visual being pointer-resized, else null (for an active affordance). */
+  resizingId: string | null;
+  /** True while a pointer resize is in progress. */
+  isResizing: boolean;
+  /** Id of the visual being dragged to reposition, else null. */
+  draggingId: string | null;
+  /** Current hovered drop position (for an insertion indicator), else null. */
+  dropIndicator: { id: string; side: DropSide } | null;
+  /** Props for the corner resize grip of `visual`. */
+  getResizeHandleProps: (visual: CanvasVisualLike) => ResizeHandleProps;
+  /** Props for the header grab handle of `visual`. */
+  getDragHandleProps: (visual: CanvasVisualLike) => DragHandleProps;
+  /** Props for `visual`'s card (drop target + `data-loom-vcard` anchor). */
+  getDropTargetProps: (visual: CanvasVisualLike) => DropTargetProps;
+  /** Keyboard/imperative: set an absolute column span (clamped). */
+  setWidth: (id: string, w: number) => void;
+  /** Keyboard/imperative: set an absolute row-height (≥1). */
+  setHeight: (id: string, h: number) => void;
+  /** Keyboard/imperative: nudge span/height by deltas (clamped). */
+  resizeBy: (id: string, dW: number, dH: number) => void;
+  /** Keyboard/imperative: move a visual one slot earlier (-1) or later (+1). */
+  move: (id: string, dir: -1 | 1) => void;
+  /** Whether snap-to-grid is active (reflects the `snapToGrid` option). */
+  snapEnabled: boolean;
+  /** True when `id` is in the locked set (drag/resize disabled). */
+  isLocked: (id: string) => boolean;
+  /** Arrange → Align: align the selected ids' left/center/right (x) or
+   *  top/middle/bottom (y) to the selection's bounding box. */
+  alignVisuals: (ids: Iterable<string>, edge: AlignEdge) => void;
+  /** Arrange → Distribute: equalize the gaps between the selected ids along the axis. */
+  distributeVisuals: (ids: Iterable<string>, axis: DistributeAxis) => void;
+  /** Arrange → Group: stamp one new shared `groupId` on the selected ids. */
+  group: (ids: Iterable<string>) => void;
+  /** Arrange → Ungroup: clear the given `groupId` from every member. */
+  ungroup: (groupId: string) => void;
+}
+
+// ── pure helpers (exported for unit-testing the math without React) ───────────
+
+/** Round + clamp a column span into `[min..max]`. */
+export function clampSpan(w: number, min: number, max: number): number {
+  const n = Math.round(Number(w));
+  if (!Number.isFinite(n)) return min;
+  return Math.min(max, Math.max(min, n));
+}
+
+/** Clamp a row-height to a whole number ≥ 1. */
+export function clampRows(h: number): number {
+  const n = Math.round(Number(h));
+  return Number.isFinite(n) ? Math.max(1, n) : 1;
+}
+
+/**
+ * Pack visuals into left-to-right grid-flow `x/y` origins given their spans —
+ * the Azure-native equivalent of an absolute-position layout, derived purely
+ * from order + span so it stays consistent with the document-flow grid the
+ * designer renders. Additive: `x/y` are stamped via an `as V` assertion so a
+ * `DVisual` without declared `x/y` still type-checks and round-trips at runtime.
+ */
+export function packGridPositions<V extends CanvasVisualLike>(
+  visuals: V[],
+  columns: number = DEFAULT_COLUMNS,
+  minSpan: number = DEFAULT_MIN_SPAN,
+): V[] {
+  let col = 0;
+  let row = 0;
+  return visuals.map((v) => {
+    const span = clampSpan(v.w, minSpan, columns);
+    if (col + span > columns) {
+      col = 0;
+      row += 1;
+    }
+    const placed = { ...v, x: col, y: row } as V;
+    col += span;
+    return placed;
+  });
+}
+
+/** Move `draggedId` to just before/after `targetId`, preserving every other
+ *  element's order. Returns the original array if the move is a no-op. */
+export function reorderVisuals<V extends CanvasVisualLike>(
+  visuals: V[],
+  draggedId: string,
+  targetId: string,
+  side: DropSide,
+): V[] {
+  if (draggedId === targetId) return visuals;
+  const from = visuals.findIndex((v) => v.id === draggedId);
+  if (from < 0) return visuals;
+  const next = visuals.slice();
+  const [moved] = next.splice(from, 1);
+  let to = next.findIndex((v) => v.id === targetId);
+  if (to < 0) return visuals;
+  if (side === 'after') to += 1;
+  next.splice(to, 0, moved);
+  return next;
+}
+
+// ── multi-select ARRANGE math (pure, React-free, unit-testable) ───────────────
+// These operate on the additive grid coords (x/y/w/h) that `packGridPositions`
+// stamps. They are the Loom-native equivalent of Power BI's Format → Align /
+// Distribute / Group commands, kept as pure array→array transforms (like
+// `packGridPositions`/`reorderVisuals`) so they can be unit-tested without React
+// and reused by the designer's Arrange toolbar. No backend, no new persistence —
+// x/y/groupId already round-trip through /definition `layout`.
+
+/** Which edge an {@link alignVisuals} call snaps the selection to. */
+export type AlignEdge = 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom';
+/** Axis a {@link distributeVisuals} call equalizes gaps along. */
+export type DistributeAxis = 'horizontal' | 'vertical';
+
+/** Read the grid origin/size, tolerating an unpacked visual (undefined ⇒ 0/1). */
+const gx = (v: CanvasVisualLike): number => (Number.isFinite(Number(v.x)) ? Number(v.x) : 0);
+const gy = (v: CanvasVisualLike): number => (Number.isFinite(Number(v.y)) ? Number(v.y) : 0);
+const gw = (v: CanvasVisualLike): number => Math.max(1, Number(v.w) || 1);
+const gh = (v: CanvasVisualLike): number => Math.max(1, Number(v.h) || 1);
+
+/**
+ * Align the selected visuals to the selection's bounding box on one edge.
+ * Horizontal edges move `x` (`left`→minLeft, `right`→maxRight−w,
+ * `center`→box-center−w/2); vertical edges move `y` (`top`/`bottom`/`middle`).
+ * Non-selected visuals are returned untouched (same reference); a selected
+ * visual already on the target keeps its reference too, so this never churns
+ * unchanged cards. A selection smaller than 2 is a no-op (nothing to align to).
+ */
+export function alignVisuals<V extends CanvasVisualLike>(
+  visuals: V[],
+  ids: Set<string>,
+  edge: AlignEdge,
+): V[] {
+  const selected = visuals.filter((v) => ids.has(v.id));
+  if (selected.length < 2) return visuals;
+  const minLeft = Math.min(...selected.map(gx));
+  const maxRight = Math.max(...selected.map((v) => gx(v) + gw(v)));
+  const minTop = Math.min(...selected.map(gy));
+  const maxBottom = Math.max(...selected.map((v) => gy(v) + gh(v)));
+  const cx = (minLeft + maxRight) / 2;
+  const cy = (minTop + maxBottom) / 2;
+  return visuals.map((v) => {
+    if (!ids.has(v.id)) return v;
+    switch (edge) {
+      case 'left':   { const nx = Math.max(0, minLeft); return nx === gx(v) ? v : { ...v, x: nx }; }
+      case 'right':  { const nx = Math.max(0, maxRight - gw(v)); return nx === gx(v) ? v : { ...v, x: nx }; }
+      case 'center': { const nx = Math.max(0, Math.round(cx - gw(v) / 2)); return nx === gx(v) ? v : { ...v, x: nx }; }
+      case 'top':    { const ny = Math.max(0, minTop); return ny === gy(v) ? v : { ...v, y: ny }; }
+      case 'bottom': { const ny = Math.max(0, maxBottom - gh(v)); return ny === gy(v) ? v : { ...v, y: ny }; }
+      case 'middle': { const ny = Math.max(0, Math.round(cy - gh(v) / 2)); return ny === gy(v) ? v : { ...v, y: ny }; }
+      default:       return v;
+    }
+  });
+}
+
+/**
+ * Equalize the gaps between the selected visuals along `axis`. The outermost two
+ * (by their start coord) keep their position; the inner ones are re-spaced so
+ * every inter-visual gap is equal (`(span − Σsizes) / (n−1)`), matching Power
+ * BI's "Distribute horizontally/vertically". Needs ≥3 selected (with <3 there is
+ * no interior gap to equalize) — otherwise a no-op. Coords stay whole grid cells
+ * (rounded); unchanged visuals keep their reference.
+ */
+export function distributeVisuals<V extends CanvasVisualLike>(
+  visuals: V[],
+  ids: Set<string>,
+  axis: DistributeAxis,
+): V[] {
+  const selected = visuals.filter((v) => ids.has(v.id));
+  if (selected.length < 3) return visuals;
+  const horiz = axis === 'horizontal';
+  const start = (v: CanvasVisualLike) => (horiz ? gx(v) : gy(v));
+  const size = (v: CanvasVisualLike) => (horiz ? gw(v) : gh(v));
+  const sorted = selected.slice().sort((a, b) => start(a) - start(b));
+  const first = sorted[0];
+  const last = sorted[sorted.length - 1];
+  const span = (start(last) + size(last)) - start(first);
+  const sumSizes = sorted.reduce((acc, v) => acc + size(v), 0);
+  const gap = (span - sumSizes) / (sorted.length - 1);
+  const placed = new Map<string, number>();
+  let cursor = start(first);
+  for (const v of sorted) {
+    placed.set(v.id, Math.max(0, Math.round(cursor)));
+    cursor += size(v) + gap;
+  }
+  return visuals.map((v) => {
+    if (!ids.has(v.id)) return v;
+    const s = placed.get(v.id);
+    if (s == null) return v;
+    if (horiz) return s === gx(v) ? v : { ...v, x: s };
+    return s === gy(v) ? v : { ...v, y: s };
+  });
+}
+
+/** Mint a short, collision-resistant group id (uid). */
+function makeGroupId(): string {
+  return `grp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Stamp one new shared `groupId` on every selected visual (Arrange → Group).
+ * A group needs ≥2 members, else this is a no-op. The id is generated unless
+ * `gid` is supplied (the override keeps the op deterministic for unit tests).
+ */
+export function groupVisuals<V extends CanvasVisualLike>(
+  visuals: V[],
+  ids: Set<string>,
+  gid: string = makeGroupId(),
+): V[] {
+  let count = 0;
+  for (const v of visuals) if (ids.has(v.id)) count += 1;
+  if (count < 2) return visuals;
+  return visuals.map((v) => (ids.has(v.id) ? ({ ...v, groupId: gid } as V) : v));
+}
+
+/** Clear `groupId` from every member of `groupId` (Arrange → Ungroup). No-op
+ *  (same array reference) when no visual carries that id. */
+export function ungroupVisuals<V extends CanvasVisualLike>(
+  visuals: V[],
+  groupId: string,
+): V[] {
+  if (!visuals.some((v) => v.groupId === groupId)) return visuals;
+  return visuals.map((v) => (v.groupId === groupId ? ({ ...v, groupId: undefined } as V) : v));
+}
+
+/**
+ * Move a contiguous BLOCK of visuals (all `blockIds`, in their current relative
+ * order) to just before/after `targetId`, preserving every non-member's order —
+ * the group-aware generalization of {@link reorderVisuals}. Dropping a block
+ * onto one of its own members is a no-op. Returns the original array reference on
+ * any no-op so callers can skip the repack/mutation.
+ */
+export function moveVisualBlock<V extends CanvasVisualLike>(
+  visuals: V[],
+  blockIds: Set<string>,
+  targetId: string,
+  side: DropSide,
+): V[] {
+  if (blockIds.has(targetId)) return visuals; // can't drop a group onto itself
+  const block = visuals.filter((v) => blockIds.has(v.id));
+  if (!block.length) return visuals;
+  const rest = visuals.filter((v) => !blockIds.has(v.id));
+  let to = rest.findIndex((v) => v.id === targetId);
+  if (to < 0) return visuals;
+  if (side === 'after') to += 1;
+  const next = rest.slice();
+  next.splice(to, 0, ...block);
+  return next;
+}
+
+/** Snap `value` to the nearest multiple of `cell` (cell ≥ 1). The standalone
+ *  grid-snap clamp behind the designer's "Snap to grid" affordance. */
+export function snapToGrid(value: number, cell: number): number {
+  const c = Math.max(1, Math.round(Number(cell)) || 1);
+  const n = Number(value);
+  if (!Number.isFinite(n)) return 0;
+  return Math.round(n / c) * c;
+}
+
+/** True when a drag event is a visual-reorder drag (not a Fields-pane chip). */
+function isVisualDrag(e: ReactDragEvent<HTMLElement>): boolean {
+  const types = e.dataTransfer?.types;
+  if (!types) return false;
+  for (let i = 0; i < types.length; i += 1) {
+    if (types[i] === VISUAL_DND_MIME) return true;
+  }
+  return false;
+}
+
+/** Insert before/after based on the pointer's horizontal position over a card. */
+function sideFromEvent(e: ReactDragEvent<HTMLElement>): DropSide {
+  const rect = e.currentTarget.getBoundingClientRect();
+  return e.clientX - rect.left < rect.width / 2 ? 'before' : 'after';
+}
+
+// ── transient pointer-resize bookkeeping ──────────────────────────────────────
+
+interface ResizeDrag {
+  id: string;
+  startX: number;
+  startY: number;
+  startW: number;
+  startH: number;
+  /** Measured card width per column at grab time — the resize sensitivity. */
+  pxPerCol: number;
+  /** Last committed span/height during this drag (avoids redundant mutations). */
+  curW: number;
+  curH: number;
+}
+
+/**
+ * Wire drag-resize + drag-to-reposition for the report canvas grid.
+ *
+ * @example
+ * const layout = useCanvasLayout({ visuals: page.visuals, mutateVisual, mutatePage });
+ * // card:   <div {...layout.getDropTargetProps(v)} style={{ gridColumn: `span ${v.w}` }}>
+ * // header: <span {...layout.getDragHandleProps(v)} aria-hidden><DotsIcon/></span>
+ * // grip:   <span {...layout.getResizeHandleProps(v)} className={styles.grip} />
+ */
+export function useCanvasLayout<
+  V extends CanvasVisualLike,
+  P extends CanvasPageLike<V> = CanvasPageLike<V>,
+>(opts: UseCanvasLayoutOptions<V, P>): CanvasLayout {
+  const {
+    visuals,
+    mutateVisual,
+    mutatePage,
+    columns = DEFAULT_COLUMNS,
+    minSpan = DEFAULT_MIN_SPAN,
+    rowUnitPx = DEFAULT_ROW_UNIT_PX,
+    assignPositions = true,
+    snapToGrid: snapEnabled = true,
+    lockedIds,
+  } = opts;
+
+  const [resizingId, setResizingId] = useState<string | null>(null);
+  const [draggingId, setDraggingId] = useState<string | null>(null);
+  const [dropIndicator, setDropIndicator] = useState<{ id: string; side: DropSide } | null>(null);
+
+  // Render-synced mirrors so pointer/keyboard handlers read live values without
+  // tearing down and rebuilding on every state change.
+  const visualsRef = useRef(visuals);
+  visualsRef.current = visuals;
+  const resizeRef = useRef<ResizeDrag | null>(null);
+  // Live locked-set mirror so the handle short-circuits + imperative guards read
+  // the current set without forcing every getter callback to re-create.
+  const lockedRef = useRef<Set<string> | undefined>(lockedIds);
+  lockedRef.current = lockedIds;
+
+  /** True when `id` is locked (drag/resize disabled). */
+  const isLocked = useCallback((id: string): boolean => !!lockedRef.current?.has(id), []);
+  // Reposition repacks `x/y` only when BOTH auto-positioning AND snap are on —
+  // turning the designer's "Snap to grid" toggle off preserves manual positions.
+  const doPack = assignPositions && snapEnabled;
+
+  // ── imperative / keyboard primitives ───────────────────────────────────────
+  const resizeBy = useCallback((id: string, dW: number, dH: number) => {
+    if (lockedRef.current?.has(id)) return; // locked: no resize (Lock parity)
+    const v = visualsRef.current.find((x) => x.id === id);
+    if (!v) return;
+    const w = clampSpan((Number(v.w) || minSpan) + dW, minSpan, columns);
+    const h = clampRows((Number(v.h) || 1) + dH);
+    mutateVisual(id, (cur) => (cur.w === w && cur.h === h ? cur : { ...cur, w, h }));
+  }, [mutateVisual, columns, minSpan]);
+
+  const setWidth = useCallback((id: string, w: number) => {
+    if (lockedRef.current?.has(id)) return;
+    const span = clampSpan(w, minSpan, columns);
+    mutateVisual(id, (cur) => (cur.w === span ? cur : { ...cur, w: span }));
+  }, [mutateVisual, columns, minSpan]);
+
+  const setHeight = useCallback((id: string, h: number) => {
+    if (lockedRef.current?.has(id)) return;
+    const rows = clampRows(h);
+    mutateVisual(id, (cur) => (cur.h === rows ? cur : { ...cur, h: rows }));
+  }, [mutateVisual]);
+
+  const move = useCallback((id: string, dir: -1 | 1) => {
+    if (lockedRef.current?.has(id)) return; // locked: position is fixed
+    mutatePage((p) => {
+      const idx = p.visuals.findIndex((v) => v.id === id);
+      const to = idx + dir;
+      if (idx < 0 || to < 0 || to >= p.visuals.length) return p;
+      const next = p.visuals.slice();
+      const [moved] = next.splice(idx, 1);
+      next.splice(to, 0, moved);
+      return { ...p, visuals: doPack ? packGridPositions(next, columns, minSpan) : next };
+    });
+  }, [mutatePage, doPack, columns, minSpan]);
+
+  // ── resize grip (pointer + keyboard) ────────────────────────────────────────
+  const getResizeHandleProps = useCallback((visual: CanvasVisualLike): ResizeHandleProps => {
+    // Locked: the grip still renders for layout parity but does nothing — inert
+    // props (no pointer/keyboard mutation, tabIndex −1, aria-disabled).
+    if (isLocked(visual.id)) {
+      const span = clampSpan(visual.w, minSpan, columns);
+      const noop = () => { /* locked — inert */ };
+      return {
+        role: 'slider',
+        tabIndex: -1,
+        'aria-label': 'Resize disabled — visual is locked.',
+        'aria-orientation': 'horizontal',
+        'aria-valuemin': minSpan,
+        'aria-valuemax': columns,
+        'aria-valuenow': span,
+        'aria-valuetext': `Locked at width ${span} of ${columns} columns`,
+        'aria-disabled': true,
+        style: { touchAction: 'none', cursor: 'not-allowed' },
+        onPointerDown: noop,
+        onPointerMove: noop,
+        onPointerUp: noop,
+        onLostPointerCapture: noop,
+        onPointerCancel: noop,
+        onKeyDown: noop,
+        onClick: (e) => e.stopPropagation(),
+      };
+    }
+    const onPointerDown = (e: ReactPointerEvent<HTMLElement>) => {
+      if (e.button > 0) return; // primary button / touch / pen only
+      e.preventDefault();
+      e.stopPropagation();
+      const grip = e.currentTarget;
+      const card = grip.closest(`[${CARD_ATTR}]`) as HTMLElement | null;
+      const startW = clampSpan(visual.w, minSpan, columns);
+      const rect = card?.getBoundingClientRect();
+      // Width-per-column measured at grab time. Fall back to an even split of the
+      // grip's owner viewport when the card anchor is absent.
+      const pxPerCol = rect && startW > 0
+        ? rect.width / startW
+        : Math.max(1, (grip.ownerDocument?.documentElement.clientWidth ?? 960) / columns);
+      resizeRef.current = {
+        id: visual.id,
+        startX: e.clientX,
+        startY: e.clientY,
+        startW,
+        startH: clampRows(visual.h),
+        pxPerCol,
+        curW: startW,
+        curH: clampRows(visual.h),
+      };
+      try { grip.setPointerCapture(e.pointerId); } catch { /* best-effort */ }
+      setResizingId(visual.id);
+    };
+
+    const onPointerMove = (e: ReactPointerEvent<HTMLElement>) => {
+      const d = resizeRef.current;
+      if (!d || d.id !== visual.id) return;
+      const nextW = clampSpan(d.startW + Math.round((e.clientX - d.startX) / d.pxPerCol), minSpan, columns);
+      const nextH = clampRows(d.startH + Math.round((e.clientY - d.startY) / rowUnitPx));
+      if (nextW === d.curW && nextH === d.curH) return; // only on a whole-step change
+      d.curW = nextW;
+      d.curH = nextH;
+      // Commit on each step (cheap: w/h are not in the visual's query signature,
+      // so this never re-queries the model). React re-renders the card at the new
+      // span — no direct DOM writes, no post-drag flash, no cleanup leak.
+      mutateVisual(visual.id, (v) => (v.w === nextW && v.h === nextH ? v : { ...v, w: nextW, h: nextH }));
+    };
+
+    const endResize = (e: ReactPointerEvent<HTMLElement>) => {
+      const d = resizeRef.current;
+      if (!d || d.id !== visual.id) return;
+      resizeRef.current = null;
+      try { e.currentTarget.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      setResizingId(null);
+    };
+
+    const onKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
+      let handled = true;
+      switch (e.key) {
+        case 'ArrowRight': resizeBy(visual.id, 1, 0); break;
+        case 'ArrowLeft': resizeBy(visual.id, -1, 0); break;
+        case 'ArrowDown': resizeBy(visual.id, 0, 1); break;
+        case 'ArrowUp': resizeBy(visual.id, 0, -1); break;
+        case 'Home': setWidth(visual.id, minSpan); break;
+        case 'End': setWidth(visual.id, columns); break;
+        default: handled = false;
+      }
+      if (handled) { e.preventDefault(); e.stopPropagation(); }
+    };
+
+    const span = clampSpan(visual.w, minSpan, columns);
+    return {
+      role: 'slider',
+      tabIndex: 0,
+      'aria-label': 'Resize visual. Left/Right arrows change width, Up/Down change height.',
+      'aria-orientation': 'horizontal',
+      'aria-valuemin': minSpan,
+      'aria-valuemax': columns,
+      'aria-valuenow': span,
+      'aria-valuetext': `Width ${span} of ${columns} columns, height ${clampRows(visual.h)} rows`,
+      style: { touchAction: 'none', cursor: 'nwse-resize' },
+      onPointerDown,
+      onPointerMove,
+      onPointerUp: endResize,
+      onLostPointerCapture: endResize,
+      onPointerCancel: endResize,
+      onKeyDown,
+      onClick: (e) => e.stopPropagation(), // never toggle card selection from the grip
+    };
+  }, [mutateVisual, resizeBy, setWidth, columns, minSpan, rowUnitPx, isLocked]);
+
+  // ── reposition: header grab handle ──────────────────────────────────────────
+  const getDragHandleProps = useCallback((visual: CanvasVisualLike): DragHandleProps => {
+    // Locked: the handle renders but can't start a drag (inert, non-draggable).
+    if (isLocked(visual.id)) {
+      const noop = () => { /* locked — inert */ };
+      return {
+        draggable: false,
+        'aria-label': 'Reposition disabled — visual is locked.',
+        'aria-disabled': true,
+        style: { cursor: 'not-allowed' },
+        onDragStart: noop,
+        onDragEnd: noop,
+        onClick: (e) => e.stopPropagation(),
+      };
+    }
+    return {
+      draggable: true,
+      'aria-label': 'Reorder visual (drag), or use the Move actions.',
+      style: { cursor: 'grab' },
+      onDragStart: (e) => {
+        e.stopPropagation();
+        try {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData(VISUAL_DND_MIME, visual.id);
+          e.dataTransfer.setData('text/plain', visual.id); // some engines require a payload
+        } catch { /* ignore */ }
+        setDraggingId(visual.id);
+      },
+      onDragEnd: () => {
+        setDraggingId(null);
+        setDropIndicator(null);
+      },
+      onClick: (e) => e.stopPropagation(),
+    };
+  }, [isLocked]);
+
+  // ── reposition: card drop target (+ resize measurement anchor) ──────────────
+  const getDropTargetProps = useCallback((visual: CanvasVisualLike): DropTargetProps => ({
+    [CARD_ATTR]: visual.id,
+    onDragOver: (e) => {
+      if (!isVisualDrag(e)) return; // ignore Fields-pane chip drags entirely
+      e.preventDefault();
+      try { e.dataTransfer.dropEffect = 'move'; } catch { /* ignore */ }
+      const side = sideFromEvent(e);
+      setDropIndicator((prev) =>
+        prev && prev.id === visual.id && prev.side === side ? prev : { id: visual.id, side });
+    },
+    onDragLeave: (e) => {
+      // Only clear when the pointer actually left this card (not a child enter).
+      const related = e.relatedTarget as Node | null;
+      if (related && e.currentTarget.contains(related)) return;
+      setDropIndicator((prev) => (prev && prev.id === visual.id ? null : prev));
+    },
+    onDrop: (e) => {
+      if (!isVisualDrag(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const draggedId = e.dataTransfer.getData(VISUAL_DND_MIME) || e.dataTransfer.getData('text/plain');
+      const side = sideFromEvent(e);
+      setDropIndicator(null);
+      setDraggingId(null);
+      if (!draggedId || draggedId === visual.id) return;
+      mutatePage((p) => {
+        const dragged = p.visuals.find((v) => v.id === draggedId);
+        // Group-aware: dragging any member of a group relocates the whole group
+        // as a contiguous block (the others follow); a lone visual reorders alone.
+        const gid = dragged?.groupId;
+        const reordered = gid
+          ? moveVisualBlock(p.visuals, new Set(p.visuals.filter((v) => v.groupId === gid).map((v) => v.id)), visual.id, side)
+          : reorderVisuals(p.visuals, draggedId, visual.id, side);
+        if (reordered === p.visuals) return p;
+        return { ...p, visuals: doPack ? packGridPositions(reordered, columns, minSpan) : reordered };
+      });
+    },
+  }), [mutatePage, doPack, columns, minSpan]);
+
+  // ── imperative Arrange (Align / Distribute / Group / Ungroup) ────────────────
+  // Each delegates to `mutatePage` with the matching pure op, so the math is the
+  // same array→array transform unit tests exercise. They mutate the persisted
+  // x/y/groupId (which round-trip through /definition `layout`), never re-query.
+  const asSet = (ids: Iterable<string>): Set<string> => (ids instanceof Set ? ids : new Set(ids));
+
+  const alignSelection = useCallback((ids: Iterable<string>, edge: AlignEdge) => {
+    const set = asSet(ids);
+    if (set.size < 2) return;
+    mutatePage((p) => {
+      const next = alignVisuals(p.visuals, set, edge);
+      return next === p.visuals ? p : { ...p, visuals: next };
+    });
+  }, [mutatePage]);
+
+  const distributeSelection = useCallback((ids: Iterable<string>, axis: DistributeAxis) => {
+    const set = asSet(ids);
+    if (set.size < 3) return;
+    mutatePage((p) => {
+      const next = distributeVisuals(p.visuals, set, axis);
+      return next === p.visuals ? p : { ...p, visuals: next };
+    });
+  }, [mutatePage]);
+
+  const groupSelection = useCallback((ids: Iterable<string>) => {
+    const set = asSet(ids);
+    if (set.size < 2) return;
+    mutatePage((p) => {
+      const next = groupVisuals(p.visuals, set);
+      return next === p.visuals ? p : { ...p, visuals: next };
+    });
+  }, [mutatePage]);
+
+  const ungroupSelection = useCallback((groupId: string) => {
+    if (!groupId) return;
+    mutatePage((p) => {
+      const next = ungroupVisuals(p.visuals, groupId);
+      return next === p.visuals ? p : { ...p, visuals: next };
+    });
+  }, [mutatePage]);
+
+  return {
+    resizingId,
+    isResizing: resizingId !== null,
+    draggingId,
+    dropIndicator,
+    getResizeHandleProps,
+    getDragHandleProps,
+    getDropTargetProps,
+    setWidth,
+    setHeight,
+    resizeBy,
+    move,
+    snapEnabled,
+    isLocked,
+    alignVisuals: alignSelection,
+    distributeVisuals: distributeSelection,
+    group: groupSelection,
+    ungroup: ungroupSelection,
+  };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ABSOLUTE FREE-FORM LAYOUT (Power BI Desktop parity) — pure, React-free math
+// ════════════════════════════════════════════════════════════════════════════
+// The wave-4 canvas (./free-form-canvas.tsx) abandons the 12-column document flow
+// for an ABSOLUTE page, where each visual owns a pixel rect `{ x, y, w, h, z }` on
+// a fixed-aspect sheet (default 1280×720, the PBI 16:9 page). These helpers are
+// the Loom-native equivalents of PBI's move / resize / snap-to-grid / smart-guide
+// / align / distribute / z-order math — kept as pure transforms (like
+// packGridPositions/reorderVisuals above) so the canvas component stays thin and
+// the math is unit-testable without React. They persist nothing themselves; the
+// designer commits the resulting rects into `visual.config.layout` via /definition.
+
+/** An absolute page rect in canvas px. `z` is the paint order (Selection pane). */
+export interface AbsRect { x: number; y: number; w: number; h: number; z?: number }
+/** Page dimensions in canvas px. */
+export interface PageDims { width: number; height: number }
+/** The 8 resize-handle ids (4 corners + 4 edges). */
+export type ResizeHandle = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w';
+
+/** Minimum visual size (px) — a visual never resizes below this (PBI clamps too). */
+export const MIN_W = 80;
+export const MIN_H = 60;
+
+const r1 = (n: number): number => Math.round(Number.isFinite(n) ? n : 0);
+
+/** Clamp a rect to ≥ (`minW`,`minH`) and inside `[0..page]` — the min-size
+ *  parameterized core of {@link clampRect}. Free-form ELEMENTS (wave-7) reuse
+ *  this so a thin shape (a `line`/`arrow` can be ~2px tall, below the visual
+ *  {@link MIN_H}) still stays on the sheet instead of being forced up to the
+ *  visual minimum. Like {@link clampRect} it never shrinks a rect below the min
+ *  just to fit — a too-big rect is pinned to 0. `minW`/`minH` floor at 1px. */
+export function clampRectMin(rect: AbsRect, page: PageDims, minW: number, minH: number): AbsRect {
+  const mw = Math.max(1, r1(minW));
+  const mh = Math.max(1, r1(minH));
+  const w = Math.max(mw, Math.min(page.width, r1(rect.w)));
+  const h = Math.max(mh, Math.min(page.height, r1(rect.h)));
+  const x = Math.max(0, Math.min(page.width - w, r1(rect.x)));
+  const y = Math.max(0, Math.min(page.height - h, r1(rect.y)));
+  return { x, y, w, h, z: rect.z };
+}
+
+/** Clamp a rect to ≥ the visual min size ({@link MIN_W}/{@link MIN_H}) and inside
+ *  `[0..page]` (keeps a visual on the sheet, but never shrinks it below the min
+ *  just to fit — a too-big rect is pinned to 0). Delegates to {@link clampRectMin}. */
+export function clampRect(rect: AbsRect, page: PageDims): AbsRect {
+  return clampRectMin(rect, page, MIN_W, MIN_H);
+}
+
+/** Snap every coordinate of a rect to the nearest `cell` multiple. */
+export function snapRect(rect: AbsRect, cell: number): AbsRect {
+  const c = Math.max(1, r1(cell));
+  const s = (n: number) => Math.round(n / c) * c;
+  return { x: s(rect.x), y: s(rect.y), w: Math.max(MIN_W, s(rect.w)), h: Math.max(MIN_H, s(rect.h)), z: rect.z };
+}
+
+/** Apply a pointer delta to a rect for the given resize handle, enforcing the
+ *  min size by pinning the moving edge (so a corner drag past the min anchors the
+ *  opposite edge — exactly like dragging a PBI frame grip). */
+export function resizeRect(origin: AbsRect, handle: ResizeHandle, dx: number, dy: number): AbsRect {
+  let { x, y, w, h } = origin;
+  const right = origin.x + origin.w;
+  const bottom = origin.y + origin.h;
+  if (handle.includes('e')) w = origin.w + dx;
+  if (handle.includes('s')) h = origin.h + dy;
+  if (handle.includes('w')) { x = origin.x + dx; w = origin.w - dx; }
+  if (handle.includes('n')) { y = origin.y + dy; h = origin.h - dy; }
+  // enforce min by clamping the moving edge against the fixed one
+  if (w < MIN_W) { if (handle.includes('w')) x = right - MIN_W; w = MIN_W; }
+  if (h < MIN_H) { if (handle.includes('n')) y = bottom - MIN_H; h = MIN_H; }
+  return { x: r1(x), y: r1(y), w: r1(w), h: r1(h), z: origin.z };
+}
+
+/**
+ * Smart-guide snapping (PBI "smart guides"): align the moving rect's edges/centers
+ * to nearby visuals + the page, within `threshold` px. For a MOVE (no `handle`)
+ * the whole rect shifts onto the best vertical + horizontal guide. For a RESIZE
+ * (`handle` set) only the moving edge(s) snap (the opposite edge is anchored).
+ * Returns the snapped rect plus the guide-line coordinates to draw.
+ */
+export function computeGuides(
+  rect: AbsRect,
+  others: AbsRect[],
+  page: PageDims,
+  threshold = 6,
+  handle?: ResizeHandle,
+): { snapped: AbsRect; vLines: number[]; hLines: number[] } {
+  // candidate vertical lines (x) + horizontal lines (y) from peers + page frame
+  const xs: number[] = [0, page.width / 2, page.width];
+  const ys: number[] = [0, page.height / 2, page.height];
+  for (const o of others) {
+    xs.push(o.x, o.x + o.w / 2, o.x + o.w);
+    ys.push(o.y, o.y + o.h / 2, o.y + o.h);
+  }
+  const nearest = (anchors: number[], cands: number[]): { delta: number; line: number } | null => {
+    let best: { delta: number; line: number } | null = null;
+    for (const a of anchors) for (const c of cands) {
+      const d = c - a;
+      if (Math.abs(d) <= threshold && (!best || Math.abs(d) < Math.abs(best.delta))) best = { delta: d, line: c };
+    }
+    return best;
+  };
+  let { x, y, w, h } = rect;
+  const vLines: number[] = [];
+  const hLines: number[] = [];
+
+  if (!handle) {
+    const vx = nearest([x, x + w / 2, x + w], xs);
+    if (vx) { x += vx.delta; vLines.push(vx.line); }
+    const hy = nearest([y, y + h / 2, y + h], ys);
+    if (hy) { y += hy.delta; hLines.push(hy.line); }
+  } else {
+    const right = x + w; const bottom = y + h;
+    if (handle.includes('w')) { const s = nearest([x], xs); if (s) { x += s.delta; w -= s.delta; vLines.push(s.line); } }
+    if (handle.includes('e')) { const s = nearest([right], xs); if (s) { w += s.delta; vLines.push(s.line); } }
+    if (handle.includes('n')) { const s = nearest([y], ys); if (s) { y += s.delta; h -= s.delta; hLines.push(s.line); } }
+    if (handle.includes('s')) { const s = nearest([bottom], ys); if (s) { h += s.delta; hLines.push(s.line); } }
+  }
+  return { snapped: { x: r1(x), y: r1(y), w: Math.max(MIN_W, r1(w)), h: Math.max(MIN_H, r1(h)), z: rect.z }, vLines, hLines };
+}
+
+/** Visuals whose rect INTERSECTS the marquee rect (PBI rubber-band select). */
+export function marqueeHits(
+  marquee: AbsRect,
+  visuals: Array<{ id: string; layout: AbsRect }>,
+): string[] {
+  const mx2 = marquee.x + marquee.w;
+  const my2 = marquee.y + marquee.h;
+  return visuals
+    .filter((v) => {
+      const r = v.layout;
+      return r.x < mx2 && r.x + r.w > marquee.x && r.y < my2 && r.y + r.h > marquee.y;
+    })
+    .map((v) => v.id);
+}
+
+/**
+ * Back-compat: migrate legacy FLOW-grid visuals (12-col `w` span + `h` row units)
+ * to absolute `layout` rects via a left-to-right shelf-pack in reading order — so
+ * a report authored on the old grid opens as a sensible, non-overlapping free-form
+ * page. `cols` columns of width `page.width/cols`; a visual's px height derives
+ * from the old `minHeight: max(180, h*40)` card rule; shelves wrap when a row is
+ * full and stack at the running max bottom. Idempotent for already-absolute input
+ * (callers gate on a `unit:'px'` marker before invoking this).
+ */
+export function migrateFlowToAbsolute<T extends { w?: number; h?: number }>(
+  visuals: T[],
+  page: PageDims,
+  cols = 12,
+  gap = 12,
+): Array<T & { layout: AbsRect }> {
+  const colW = page.width / cols;
+  let cursorCol = 0;
+  let shelfTop = gap;
+  let shelfH = 0;
+  return visuals.map((v, i) => {
+    const span = Math.min(cols, Math.max(1, Math.round(Number(v.w) || 6)));
+    const hUnits = Math.max(1, Math.round(Number(v.h) || 4));
+    const pw = Math.round(span * colW - gap);
+    const ph = Math.max(MIN_H, Math.max(180, hUnits * 40));
+    if (cursorCol + span > cols) { cursorCol = 0; shelfTop += shelfH + gap; shelfH = 0; }
+    const x = Math.round(cursorCol * colW + gap / 2);
+    const y = Math.round(shelfTop);
+    cursorCol += span;
+    shelfH = Math.max(shelfH, ph);
+    return { ...v, layout: { x, y, w: Math.max(MIN_W, pw), h: ph, z: i } };
+  });
+}
+
+/** Align selected absolute rects to the selection's bounding box on one edge
+ *  (PBI Format → Align). ≥2 selected; non-selected returned untouched. */
+export function absAlign<V extends { id: string; layout: AbsRect }>(
+  visuals: V[], ids: Set<string>, edge: AlignEdge,
+): V[] {
+  const sel = visuals.filter((v) => ids.has(v.id));
+  if (sel.length < 2) return visuals;
+  const minL = Math.min(...sel.map((v) => v.layout.x));
+  const maxR = Math.max(...sel.map((v) => v.layout.x + v.layout.w));
+  const minT = Math.min(...sel.map((v) => v.layout.y));
+  const maxB = Math.max(...sel.map((v) => v.layout.y + v.layout.h));
+  const cx = (minL + maxR) / 2; const cy = (minT + maxB) / 2;
+  return visuals.map((v) => {
+    if (!ids.has(v.id)) return v;
+    const L = v.layout; let nx = L.x; let ny = L.y;
+    switch (edge) {
+      case 'left': nx = minL; break;
+      case 'right': nx = maxR - L.w; break;
+      case 'center': nx = Math.round(cx - L.w / 2); break;
+      case 'top': ny = minT; break;
+      case 'bottom': ny = maxB - L.h; break;
+      case 'middle': ny = Math.round(cy - L.h / 2); break;
+    }
+    return (nx === L.x && ny === L.y) ? v : { ...v, layout: { ...L, x: nx, y: ny } };
+  });
+}
+
+/** Distribute selected absolute rects so inter-visual gaps are equal along the
+ *  axis (PBI Distribute horizontally/vertically). ≥3 selected. */
+export function absDistribute<V extends { id: string; layout: AbsRect }>(
+  visuals: V[], ids: Set<string>, axis: DistributeAxis,
+): V[] {
+  const sel = visuals.filter((v) => ids.has(v.id));
+  if (sel.length < 3) return visuals;
+  const horiz = axis === 'horizontal';
+  const start = (v: V) => (horiz ? v.layout.x : v.layout.y);
+  const size = (v: V) => (horiz ? v.layout.w : v.layout.h);
+  const sorted = sel.slice().sort((a, b) => start(a) - start(b));
+  const first = sorted[0]; const last = sorted[sorted.length - 1];
+  const span = (start(last) + size(last)) - start(first);
+  const sumSizes = sorted.reduce((acc, v) => acc + size(v), 0);
+  const gap = (span - sumSizes) / (sorted.length - 1);
+  const placed = new Map<string, number>();
+  let cursor = start(first);
+  for (const v of sorted) { placed.set(v.id, Math.round(cursor)); cursor += size(v) + gap; }
+  return visuals.map((v) => {
+    if (!ids.has(v.id)) return v;
+    const s = placed.get(v.id);
+    if (s == null) return v;
+    const L = v.layout;
+    return horiz
+      ? (s === L.x ? v : { ...v, layout: { ...L, x: s } })
+      : (s === L.y ? v : { ...v, layout: { ...L, y: s } });
+  });
+}
+
+/** Re-number `layout.z` so the selected ids paint in front (front) or behind
+ *  (back) every other visual, preserving relative order otherwise. */
+export function reorderZ<V extends { id: string; layout: AbsRect }>(
+  visuals: V[], ids: Set<string>, dir: 'front' | 'back',
+): V[] {
+  const ordered = visuals
+    .map((v, i) => ({ v, i, z: Number.isFinite(Number(v.layout.z)) ? Number(v.layout.z) : i }))
+    .sort((a, b) => (a.z - b.z) || (a.i - b.i));
+  const picked = ordered.filter((o) => ids.has(o.v.id));
+  const rest = ordered.filter((o) => !ids.has(o.v.id));
+  const seq = dir === 'front' ? [...rest, ...picked] : [...picked, ...rest];
+  const zById = new Map<string, number>();
+  seq.forEach((o, i) => zById.set(o.v.id, i));
+  return visuals.map((v) => {
+    const nz = zById.get(v.id);
+    return nz != null && nz !== v.layout.z ? { ...v, layout: { ...v.layout, z: nz } } : v;
+  });
+}
+
+/**
+ * Single-step z-layering (PBI "Bring forward" / "Send backward") — the one-slot
+ * complement to {@link reorderZ}'s extreme bring-to-front / send-to-back. Orders
+ * the visuals by `layout.z`, then hops each selected node one position toward
+ * `dir` past the nearest NON-selected neighbour (selected nodes keep their
+ * relative order and shift as a contiguous block, never leapfrogging one
+ * another), and renumbers `layout.z` to the new 0..n−1 paint order. Pure +
+ * React-free like its sibling; unchanged visuals keep their reference. Wired to
+ * Ctrl+] / Ctrl+[ on the free-form canvas, run over the UNION of data visuals +
+ * elements so the two share ONE z-order per page (PBI parity).
+ */
+export function reorderZStep<V extends { id: string; layout: AbsRect }>(
+  visuals: V[], ids: Set<string>, dir: 'forward' | 'backward',
+): V[] {
+  if (!ids || ids.size === 0) return visuals;
+  const ordered = visuals
+    .map((v, i) => ({ v, i, z: Number.isFinite(Number(v.layout.z)) ? Number(v.layout.z) : i }))
+    .sort((a, b) => (a.z - b.z) || (a.i - b.i));
+  const sel = (o: { v: V }): boolean => ids.has(o.v.id);
+  const swap = (a: number, b: number): void => { const t = ordered[a]; ordered[a] = ordered[b]; ordered[b] = t; };
+  if (dir === 'forward') {
+    // toward the front (higher index): walk front→back so a selected run shifts
+    // one slot ahead of the nearest unselected neighbour without leapfrogging.
+    for (let i = ordered.length - 2; i >= 0; i -= 1) {
+      if (sel(ordered[i]) && !sel(ordered[i + 1])) swap(i, i + 1);
+    }
+  } else {
+    // toward the back (lower index): walk back→front for the mirror behaviour.
+    for (let i = 1; i < ordered.length; i += 1) {
+      if (sel(ordered[i]) && !sel(ordered[i - 1])) swap(i, i - 1);
+    }
+  }
+  const zById = new Map<string, number>();
+  ordered.forEach((o, i) => zById.set(o.v.id, i));
+  return visuals.map((v) => {
+    const nz = zById.get(v.id);
+    return nz != null && nz !== v.layout.z ? { ...v, layout: { ...v.layout, z: nz } } : v;
+  });
+}
+
+// ── free-form ELEMENT insert geometry (text/image/shape/button/navigators) ────
+// Padding / position / size factory for the wave-7 canvas elements that ride the
+// SAME absolute sheet (and z-space) as data visuals. Kept here with the rest of
+// the free-form math so the element registry (canvas-elements.tsx) + the designer
+// stay thin — they only pick a kind and let this place it.
+
+/** The free-form element kinds whose default insert footprint this module knows.
+ *  A structural mirror of the registry's `ElementKind` (canvas-elements.tsx),
+ *  declared locally so this lower-level math needs no circular import back. */
+export type ElementLayoutKind =
+  | 'textBox' | 'image' | 'shape' | 'button' | 'pageNavigator' | 'bookmarkNavigator';
+
+/** Per-kind default insert footprint (px) — the element equivalent of the
+ *  free-form `addVisual` default-drop size, sized to each kind's natural shape. */
+const ELEMENT_FOOTPRINT: Record<ElementLayoutKind, { w: number; h: number }> = {
+  textBox:           { w: 240, h: 64 },
+  image:             { w: 240, h: 180 },
+  shape:             { w: 200, h: 160 },
+  button:            { w: 160, h: 48 },
+  pageNavigator:     { w: 360, h: 48 },
+  bookmarkNavigator: { w: 360, h: 48 },
+};
+
+/**
+ * Default insert rect for a new free-form ELEMENT. Mirrors the free-form
+ * `addVisual` drop convention: a per-kind footprint, a down-right cascade (base
+ * 40px, +28px per step, wrapping every 6) so successive inserts never stack
+ * exactly, and `z = index` so a freshly added element provisionally paints on
+ * top of the page's current `index` nodes. Clamped onto the sheet via
+ * {@link clampRectMin} with a tiny (2px) min so even a thin footprint is admitted
+ * unchanged. The host owns the authoritative z (max-existing + 1); `index` is the
+ * cascade ordinal — pass the page's current visual + element count.
+ */
+export function defaultElementLayout(
+  kind: ElementLayoutKind, page: PageDims, index = 0,
+): AbsRect {
+  const fp = ELEMENT_FOOTPRINT[kind] ?? { w: 240, h: 120 };
+  const n = Math.max(0, r1(index));
+  const off = (n % 6) * 28;
+  return clampRectMin({ x: 40 + off, y: 40 + off, w: fp.w, h: fp.h, z: n }, page, 2, 2);
+}

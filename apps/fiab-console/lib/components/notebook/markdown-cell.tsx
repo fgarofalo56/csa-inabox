@@ -11,13 +11,14 @@ import {
 } from '@fluentui/react-icons';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import { renderMarkdown } from '@/lib/notebook/render-markdown';
 
 const useStyles = makeStyles({
   shell: {
     display: 'flex',
     flexDirection: 'column',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
+    borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
   },
   shellActive: { border: `1px solid ${tokens.colorBrandStroke1}` },
@@ -38,7 +39,7 @@ const useStyles = makeStyles({
     zIndex: 999,
   },
   header: {
-    display: 'flex', alignItems: 'center', gap: 8,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: '4px 8px',
     backgroundColor: tokens.colorNeutralBackground2,
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -54,8 +55,8 @@ const useStyles = makeStyles({
     ':active': { cursor: 'grabbing' },
   },
   editor: {
-    width: '100%', minHeight: 80,
-    fontFamily: 'Consolas, monospace', fontSize: 13, padding: 8,
+    width: '100%', minHeight: '80px',
+    fontFamily: 'Consolas, monospace', fontSize: '13px', padding: tokens.spacingHorizontalS,
     border: 'none', outline: 'none',
     backgroundColor: tokens.colorNeutralBackground3,
     color: tokens.colorNeutralForeground1, resize: 'vertical',
@@ -71,44 +72,58 @@ const useStyles = makeStyles({
     resize: 'none',
   },
   rendered: {
-    padding: 12,
-    fontSize: 14,
+    padding: tokens.spacingHorizontalM,
+    fontSize: tokens.fontSizeBase300,
     lineHeight: 1.5,
     color: tokens.colorNeutralForeground1,
+    overflowX: 'auto',
+    // GFM tables — bordered, padded, header-tinted so they actually look like tables.
+    '& table.md-table': {
+      borderCollapse: 'collapse',
+      width: 'auto',
+      maxWidth: '100%',
+      margin: `${tokens.spacingVerticalS} 0`,
+      fontSize: tokens.fontSizeBase200,
+    },
+    '& table.md-table th, & table.md-table td': {
+      border: `1px solid ${tokens.colorNeutralStroke2}`,
+      padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`,
+      textAlign: 'left',
+      verticalAlign: 'top',
+    },
+    '& table.md-table th': {
+      backgroundColor: tokens.colorNeutralBackground3,
+      fontWeight: tokens.fontWeightSemibold,
+    },
+    '& table.md-table tr:nth-child(even) td': { backgroundColor: tokens.colorNeutralBackground2 },
+    // fenced code blocks + inline code
+    '& pre.md-code': {
+      backgroundColor: tokens.colorNeutralBackground3,
+      border: `1px solid ${tokens.colorNeutralStroke2}`,
+      borderRadius: tokens.borderRadiusMedium,
+      padding: tokens.spacingHorizontalM,
+      overflowX: 'auto',
+      fontFamily: tokens.fontFamilyMonospace,
+      fontSize: tokens.fontSizeBase200,
+    },
+    '& code': { fontFamily: tokens.fontFamilyMonospace, fontSize: '0.92em' },
+    '& blockquote': {
+      margin: `${tokens.spacingVerticalS} 0`,
+      paddingLeft: tokens.spacingHorizontalM,
+      borderLeft: `3px solid ${tokens.colorNeutralStroke1}`,
+      color: tokens.colorNeutralForeground2,
+    },
+    '& h1, & h2, & h3, & h4': { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalXS },
+    '& ul, & ol': { paddingLeft: tokens.spacingHorizontalXL, margin: `${tokens.spacingVerticalXS} 0` },
+    '& img': { maxWidth: '100%', borderRadius: tokens.borderRadiusSmall },
+    '& a': { color: tokens.colorBrandForegroundLink },
   },
   renderedMaximized: {
     flex: 1,
     overflow: 'auto',
   },
-  tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: 11 },
+  tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: '11px' },
 });
-
-// Minimal markdown renderer: headings (#/##/###), bold (**x**), italic (*x*), code (`x`), bullet lists (-), links [t](u).
-// Good enough for v1 — defer react-markdown until N+3 polish.
-function renderMarkdown(src: string): string {
-  let html = src
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  // Headings
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  // Bold / italic / inline code
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-  // Links
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-  // Bullet lists
-  html = html.replace(/^(?:- (.+)(?:\n|$))+/gm, (block) => {
-    const lis = block.split('\n').filter(Boolean).map(l => '<li>' + l.replace(/^- /, '') + '</li>').join('');
-    return '<ul>' + lis + '</ul>';
-  });
-  // Paragraph breaks
-  html = html.split(/\n\n+/).map(p => /<\/(h\d|ul|ol|pre)>/.test(p) ? p : '<p>' + p.replace(/\n/g, '<br/>') + '</p>').join('');
-  return html;
-}
 
 export interface MarkdownCellProps {
   cell: NotebookCell;
@@ -220,6 +235,7 @@ export function MarkdownCell({ cell, active, onFocus, onChange, onDelete, onMove
           readOnly={locked}
           height={maximized ? 'calc(100% - 56px)' : 160}
           minHeight={80}
+          autoHeight={!maximized}
           ariaLabel={`Markdown cell ${cell.id}`}
           className={mergeClasses(locked && s.editorLocked)}
         />

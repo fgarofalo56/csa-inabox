@@ -30,6 +30,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { listSensitivityLabels, MipNotConfiguredError } from '@/lib/azure/mip-graph-client';
 import {
@@ -89,6 +90,8 @@ function extractPbiArtifact(item: any): { pbiArtifactId?: string; pbiArtifactTyp
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const tenantId = s.claims.oid;
 
   try {
@@ -176,6 +179,8 @@ interface ResultRow {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
 
   const body = await req.json().catch(() => ({}));
   const rawItems: Array<{ id: string; workspaceId: string }> = Array.isArray(body?.items) ? body.items : [];

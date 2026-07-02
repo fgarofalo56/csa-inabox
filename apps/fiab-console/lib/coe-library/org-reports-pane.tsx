@@ -5,8 +5,10 @@
  *
  * Surfaces every CoE report a colleague has published to the organization
  * (GET /api/org-reports). Any authenticated member can browse the gallery and
- * Open a report (read-only) rendered by <ReportCanvas> from the bundled PBIP
- * (real PBIR + TMDL SAMPLE data). Azure-native: no Power BI / Fabric workspace.
+ * Open a report (read-only) rendered by <ReportCanvas> from the bundled PBIR
+ * against the deployment's LIVE Azure estate (real data — never sample rows;
+ * unbound entities render with no rows + an inline note). Azure-native: no Power
+ * BI / Fabric workspace.
  *
  * This is the missing "consumer" half of the CoE library: admins clone +
  * publish in Admin → Organizational visuals; everyone else views here.
@@ -110,9 +112,10 @@ export function OrgReportsPane(): React.ReactElement {
       >
         <Body1 style={{ color: tokens.colorNeutralForeground2, lineHeight: 1.5, marginBottom: tokens.spacingVerticalM }}>
           Reports your colleagues have published from the Cloud Center of Excellence (CoE) template library.
-          Open any one to view it (read-only) with clearly-labelled sample data — connect it to your live
-          Azure estate by cloning the source template in Admin → Organizational visuals. No Microsoft Fabric
-          or Power BI workspace is required.
+          Open any one to view it (read-only) rendered against your <strong>live Azure estate</strong> (Cost
+          Management, Log Analytics, Azure Resource Graph, Azure Policy, Defender) — real data, no sample.
+          Entities without a bound source render with no rows and an inline note. No Microsoft Fabric or Power BI
+          workspace is required.
         </Body1>
 
         {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
@@ -167,7 +170,7 @@ export function OrgReportsPane(): React.ReactElement {
         fetchUrl={openReport ? `/api/org-reports/render?id=${encodeURIComponent(openReport.id)}${openReport.kind === 'dashboard' ? '&kind=dashboard' : ''}` : null}
         title={openReport?.displayName}
         publishedBadge
-        defaultLive={false}
+        lockLive
       />
     </>
   );

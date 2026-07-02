@@ -10,8 +10,9 @@
  * notebook execute route) and gets back a single corrected-code proposal the
  * editor surfaces as an approve-diff. Accepting it replaces the cell source.
  *
- * Real backend (per no-vaporware.md): calls AOAI chat-completions with an AAD
- * bearer token (cognitiveservices scope, env-driven audience for Gov clouds).
+ * Real backend (per no-vaporware.md): calls AOAI chat-completions via the unified
+ * aoai-chat-client (cogScope token — cognitiveservices.azure.us in Gov, .com in
+ * Commercial — and the shared max_completion_tokens request contract).
  * No mocks, no canned strings. When AOAI is unconfigured the handler returns an
  * honest 503 `code:'no_aoai'` gate naming the exact env vars to set, and the
  * pane surfaces it in a Fluent MessageBar.
@@ -30,14 +31,11 @@ import {
 } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { copilotSessionsContainer } from '@/lib/azure/cosmos-client';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { aoaiChat } from '@/lib/azure/aoai-chat-client';
 import { buildCellFixMessages, parseCellFixResponse } from '@/lib/copilot/notebook-tools';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
-const credential = uamiArmCredential();
 
 export async function GET() {
   const session = getSession();
@@ -113,10 +111,12 @@ export async function POST(req: NextRequest) {
     .join('\n');
 
   // Resolve the AOAI target — tenant admin config first, then env/discovery.
-  let target;
+  // Pre-resolve here purely to surface the honest 503 `no_aoai` gate; the unified
+  // aoai-chat-client re-resolves (harmlessly) from the same tenant config below.
+  let tenantConfig: Awaited<ReturnType<typeof loadTenantCopilotConfig>> | null = null;
   try {
-    const tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
-    target = await resolveAoaiTarget(tenantConfig);
+    tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
+    await resolveAoaiTarget(tenantConfig);
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -128,21 +128,6 @@ export async function POST(req: NextRequest) {
       { ok: false, code: 'no_aoai', error: e?.message || String(e), hint },
       { status: 503 },
     );
-  }
-
-  // Acquire the AOAI bearer with the env-driven audience (honors Gov clouds —
-  // LOOM_AOAI_AUDIENCE is stamped by admin-plane/main.bicep).
-  let token: string;
-  try {
-    const audience = (process.env.LOOM_AOAI_AUDIENCE || 'https://cognitiveservices.azure.com').replace(
-      /\/$/,
-      '',
-    );
-    const t = await credential.getToken(`${audience}/.default`);
-    if (!t?.token) throw new Error('Failed to acquire AOAI token');
-    token = t.token;
-  } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 502 });
   }
 
   const messages = buildCellFixMessages({
@@ -162,47 +147,15 @@ export async function POST(req: NextRequest) {
   let summary = '';
   let rootCause = '';
   try {
-    const apiVersion = process.env.LOOM_AOAI_API_VERSION || target.apiVersion || '2024-10-21';
-    const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(
-      target.deployment,
-    )}/chat/completions?api-version=${apiVersion}`;
-
-    const callWithTemperature = (temp?: number) =>
-      fetch(url, {
-        method: 'POST',
-        headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          messages,
-          ...(temp !== undefined ? { temperature: temp } : {}),
-          max_tokens: 2048,
-        }),
-      });
-
-    let res = await callWithTemperature(0.2);
-    if (res.status === 400) {
-      const txt = await res.text();
-      // Reasoning models (o1/o3/gpt-5/MAI-*) reject non-default temperature — retry once.
-      if (
-        /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(txt) &&
-        /temperature|top_p/i.test(txt)
-      ) {
-        res = await callWithTemperature(undefined);
-      } else {
-        return NextResponse.json(
-          { ok: false, error: `AOAI 400: ${txt.slice(0, 300)}` },
-          { status: 502 },
-        );
-      }
-    }
-    if (!res.ok) {
-      const txt = await res.text();
-      return NextResponse.json(
-        { ok: false, error: `AOAI ${res.status}: ${txt.slice(0, 300)}` },
-        { status: 502 },
-      );
-    }
-    const j = await res.json();
-    const raw: string = j?.choices?.[0]?.message?.content ?? '';
+    // Unified AOAI client: resolves the same tenant-config target, mints a
+    // cogScope token, sends max_completion_tokens=2048 @ temperature 0.2, and
+    // retries once without temperature on the reasoning-model sampling 400.
+    const raw = await aoaiChat({
+      messages,
+      maxCompletionTokens: 2048,
+      temperature: 0.2,
+      cfg: tenantConfig,
+    });
     // Parse the structured { summary, rootCause, proposedCode } reply (with an
     // honest fence-stripping fallback when the model doesn't emit clean JSON).
     const fix = parseCellFixResponse(raw);

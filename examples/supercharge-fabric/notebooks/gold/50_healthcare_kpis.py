@@ -60,9 +60,9 @@ def _get_arg(name: str, default=None):
 
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
-source_table = "lh_silver.dbo.silver_healthcare_encounters"
-target_kpis = "lh_gold.dbo.gold_healthcare_kpis"
-target_readmit = "lh_gold.dbo.gold_healthcare_readmission_risk"
+source_table = "lh_silver.silver_healthcare_encounters"
+target_kpis = "lh_gold.gold_healthcare_kpis"
+target_readmit = "lh_gold.gold_healthcare_readmission_risk"
 
 # CMS DRG weights (simplified top-10 for CMI calculation)
 DRG_WEIGHTS = {

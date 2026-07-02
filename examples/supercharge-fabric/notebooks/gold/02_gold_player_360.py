@@ -87,12 +87,12 @@ def _notebook_exit(status: str) -> None:
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
 # Source tables (three-part names for schema-enabled Lakehouses)
-player_table = "lh_silver.dbo.silver_player_master"
-slot_table = "lh_silver.dbo.silver_slot_cleansed"
-financial_table = "lh_silver.dbo.silver_financial_reconciled"
+player_table = "lh_silver.silver_player_master"
+slot_table = "lh_silver.silver_slot_cleansed"
+financial_table = "lh_silver.silver_financial_reconciled"
 
 # Target
-target_table = "lh_gold.dbo.gold_player_360"
+target_table = "lh_gold.gold_player_360"
 
 # Business parameters
 THEO_SLOT_PCT = 0.08  # 8% slot theoretical
@@ -156,11 +156,11 @@ print(f"Players with slot activity: {df_slot_activity.count():,}")
 # COMMAND ----------
 
 # Check if table games Silver exists
-if spark.catalog.tableExists("lh_silver.dbo.silver_table_enriched"):
+if spark.catalog.tableExists("lh_silver.silver_table_enriched"):
     # Column mapping: silver_table_enriched has drop_amount (= buy-in) and
     # actual_win_loss (= house win). Cash out is derived from these. Session
     # windows derive from event_timestamp since no explicit session columns exist.
-    df_table_activity = spark.table("lh_silver.dbo.silver_table_enriched") \
+    df_table_activity = spark.table("lh_silver.silver_table_enriched") \
         .filter(col("player_id").isNotNull()) \
         .groupBy("player_id") \
         .agg(

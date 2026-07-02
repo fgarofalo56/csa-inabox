@@ -162,6 +162,7 @@ const useStyles = makeStyles({
     display: 'flex',
     gap: tokens.spacingHorizontalM,
     alignItems: 'flex-start',
+    minWidth: 0,
     padding: tokens.spacingVerticalL,
     borderRadius: tokens.borderRadiusLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -172,6 +173,9 @@ const useStyles = makeStyles({
     ':hover': { boxShadow: tokens.shadow8, transform: 'translateY(-2px)', border: `1px solid ${tokens.colorBrandStroke1}` },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '2px' },
   },
+  // Long file-path tokens in example prompts (e.g. gold/snapshots/…parquet)
+  // have no spaces; break them so the card never overflows horizontally.
+  exampleText: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   exampleIcon: { color: tokens.colorBrandForeground1, flexShrink: 0, marginTop: '2px' },
   loadingRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: tokens.spacingVerticalM },
   // ── Console wrapper (when launched) ───────────────────────────────────
@@ -189,6 +193,9 @@ const useStyles = makeStyles({
   // ── Residual inline-style extractions ─────────────────────────────────
   brandIcon: { color: tokens.colorBrandForeground1 },
   flushTitle: { margin: 0 },
+  // Session-prompt table cell: break long unbroken tokens (file paths) so
+  // the fixed-width Prompt column never pushes the table off-screen.
+  cellWrap: { display: 'block', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   // Hero glyph: on the brand gradient, so foreground-on-brand (was '#fff').
   heroIconGlyph: { width: '38px', height: '38px', color: tokens.colorNeutralForegroundOnBrand },
   // Outline CTA over the always-dark hero gradient — on-brand text (was inline
@@ -203,7 +210,10 @@ const useStyles = makeStyles({
     borderLeftColor: 'rgba(255,255,255,0.4)',
   },
   gatedBar: { marginBottom: tokens.spacingVerticalXXL },
-  remediationNote: { marginTop: tokens.spacingVerticalS },
+  // AOAI error / remediation strings can be long unbroken blobs (endpoint
+  // URLs, error codes); break them so the gate bar never overflows.
+  gateText: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  remediationNote: { marginTop: tokens.spacingVerticalS, overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 const EXAMPLES = [
@@ -269,7 +279,11 @@ export default function CopilotPage() {
     {
       key: 'prompt', label: 'Prompt', width: 420, sortable: true, filterable: true,
       getValue: (r) => r.prompt || '(no prompt)',
-      render: (r) => <Text weight="semibold">{(r.prompt || '(no prompt)').slice(0, 120)}</Text>,
+      render: (r) => (
+        <Text weight="semibold" className={styles.cellWrap}>
+          {(r.prompt || '(no prompt)').slice(0, 120)}
+        </Text>
+      ),
     },
     { key: 'stepCount', label: 'Steps', width: 90, sortable: true, filterable: false, getValue: (r) => r.stepCount },
     {
@@ -351,10 +365,12 @@ export default function CopilotPage() {
         <MessageBar intent={status.aoai?.ok ? 'warning' : 'info'} className={styles.gatedBar}>
           <MessageBarBody>
             <MessageBarTitle>Orchestrator not fully ready</MessageBarTitle>
-            {status.aoai?.ok
-              ? `AOAI reachable (${status.aoai.deployment}) but no tools are registered yet.`
-              : `Azure OpenAI is not reachable — ${status.aoai?.error || 'unknown error'}. ` +
-                `The ${toolCount} registered tools can still be invoked directly inside the console.`}
+            <span className={styles.gateText}>
+              {status.aoai?.ok
+                ? `AOAI reachable (${status.aoai.deployment}) but no tools are registered yet.`
+                : `Azure OpenAI is not reachable — ${status.aoai?.error || 'unknown error'}. ` +
+                  `The ${toolCount} registered tools can still be invoked directly inside the console.`}
+            </span>
             {status.aoai?.remediation && (
               <div className={styles.remediationNote}>{status.aoai.remediation}</div>
             )}
@@ -406,7 +422,7 @@ export default function CopilotPage() {
               onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setLaunched(true); } }}
             >
               <Sparkle20Regular className={styles.exampleIcon} />
-              <Body1>{ex}</Body1>
+              <Body1 className={styles.exampleText}>{ex}</Body1>
             </div>
           ))}
         </div>

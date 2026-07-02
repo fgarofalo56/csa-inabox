@@ -8,8 +8,12 @@
  *   - Send a test event over the REAL HTTPS data-plane (works today, no AMQP).
  *   - Peek recent events from the source (real AMQP receive). Event Hubs has no
  *     HTTPS receive path, so when @azure/event-hubs + LOOM_EVENTHUB_RECEIVE_ENABLED
- *     aren't present the peek route returns an honest 501 dependency-gate, which
- *     this drawer renders as a precise MessageBar (never faked events).
+ *     aren't present the eventstream peek route falls back to reading the newest
+ *     rows from the stream's ADX ingestion sink table (real Azure Data Explorer
+ *     query — also works under private networking); the drawer flags those rows
+ *     with an info MessageBar naming the sink. Only when NEITHER AMQP receive
+ *     NOR an ADX sink is available does the route return the honest 501
+ *     dependency-gate, rendered as a precise MessageBar (never faked events).
  *
  * Two backends, one UI:
  *   - kind 'eventhub'    → /api/eventhubs/data-explorer (op=peek|send, hub)
@@ -63,6 +67,10 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
   const [gate, setGate] = useState<{ title: string; detail: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sent, setSent] = useState<string | null>(null);
+  // Set when the peeked events came from the eventstream's ADX ingestion sink
+  // (the always-real fallback when AMQP receive isn't enabled) — rendered as an
+  // info MessageBar naming the sink table so the operator knows the source.
+  const [adxNote, setAdxNote] = useState<string | null>(null);
   // 409 from a not-yet-provisioned eventstream → offer in-place provisioning.
   const [needsProvision, setNeedsProvision] = useState<{ detail: string; canProvision: boolean; link?: string } | null>(null);
   const [provisionBusy, setProvisionBusy] = useState(false);
@@ -72,7 +80,7 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
   const [seededFor, setSeededFor] = useState<string | null>(null);
   if (open && seededFor !== title) {
     setSeededFor(title);
-    setEvents(null); setGate(null); setError(null); setSent(null);
+    setEvents(null); setGate(null); setError(null); setSent(null); setAdxNote(null);
     setNeedsProvision(null); setProvisioned(null);
   }
   if (!open && seededFor !== null) setSeededFor(null);
@@ -138,7 +146,7 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
 
   async function peek() {
     if (!target) return;
-    setPeekBusy(true); setEvents(null); setGate(null); setError(null); setNeedsProvision(null);
+    setPeekBusy(true); setEvents(null); setGate(null); setError(null); setNeedsProvision(null); setAdxNote(null);
     try {
       const res = await fetch(peekUrl());
       const j = await res.json().catch(() => ({}));
@@ -151,6 +159,11 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
       }
       if (handle409(res.status, j)) return;
       if (!res.ok || !j.ok) { setError(j.error || `Peek failed (HTTP ${res.status}).`); return; }
+      // ADX-sink fallback: the route read real rows from the stream's KQL
+      // Database destination because AMQP receive isn't enabled — flag it.
+      if (j.source === 'adx-sink') {
+        setAdxNote(j.note || `Showing rows from the stream's ADX sink table${j.sink?.table ? ` '${j.sink.table}'` : ''} (live AMQP receive is not enabled).`);
+      }
       setEvents(Array.isArray(j.events) ? j.events : []);
     } catch (e: any) { setError(e?.message || String(e)); }
     finally { setPeekBusy(false); }
@@ -232,10 +245,22 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
             </MessageBarBody>
           </MessageBar>
         )}
+        {adxNote && (
+          <MessageBar intent="info" className={styles.section}>
+            <MessageBarBody>
+              <MessageBarTitle>Previewing from the ADX ingestion sink</MessageBarTitle>
+              {adxNote}
+            </MessageBarBody>
+          </MessageBar>
+        )}
         {error && <MessageBar intent="error" className={styles.section}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
         {events && events.length === 0 && (
-          <Body1 style={{ marginTop: 12 }}>No events in the peeked window. Send a test event, then peek again.</Body1>
+          <Body1 style={{ marginTop: tokens.spacingVerticalM, display: 'block' }}>
+            {adxNote
+              ? 'No rows in the sink table yet. Send a test event and let the stream’s ASA job land it in ADX, then peek again.'
+              : 'No events in the peeked window. Send a test event, then peek again.'}
+          </Body1>
         )}
         {events && events.map((ev, i) => (
           <div key={i} className={styles.event}>

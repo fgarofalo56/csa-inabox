@@ -74,8 +74,9 @@ const useStyles = makeStyles({
   clickRow: { cursor: 'pointer' },
   drawer: { width: '440px', maxWidth: '94vw' },
   drawerBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, paddingBottom: tokens.spacingVerticalXXL },
-  metaGrid: { display: 'grid', gridTemplateColumns: '120px 1fr', rowGap: tokens.spacingVerticalS, columnGap: tokens.spacingHorizontalM, alignItems: 'center' },
+  metaGrid: { display: 'grid', gridTemplateColumns: 'minmax(0, 120px) minmax(0, 1fr)', rowGap: tokens.spacingVerticalS, columnGap: tokens.spacingHorizontalM, alignItems: 'center' },
   metaLabel: { color: tokens.colorNeutralForeground3 },
+  metaValue: { minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   actions: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   actionRow: { display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   filterChips: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalM },
@@ -219,8 +220,8 @@ export default function GovernanceCatalogPage() {
       key: 'displayName', label: 'Name', sortable: true, filterable: true,
       getValue: (a) => a.displayName,
       render: (a) => (
-        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-          <strong>{a.displayName}</strong>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, minWidth: 0, flexWrap: 'wrap' }}>
+          <strong style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{a.displayName}</strong>
           {a.endorsement && (
             <Badge appearance="tint" color={a.endorsement === 'Certified' ? 'success' : 'brand'} size="small" icon={<ShieldCheckmark16Regular />}>
               {a.endorsement}
@@ -264,7 +265,7 @@ export default function GovernanceCatalogPage() {
         )
         : (
           <a href={`/items/${a.itemType}/${a.id}`} onClick={(e) => e.stopPropagation()}
-            style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 12 }}>
+            style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 }}>
             Open <Open16Regular />
           </a>
         ),
@@ -273,10 +274,10 @@ export default function GovernanceCatalogPage() {
 
   return (
     <GovernanceShell sectionTitle="Data catalog">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Single inventory across every Lakehouse, Warehouse, Semantic Model, KQL DB, Mirrored DB, Data Product, and Vector Store in your tenant.
         {source && (
-          <Badge appearance="outline" color={source === 'aisearch' ? 'brand' : 'informative'} size="small" style={{ marginLeft: 8 }}>
+          <Badge appearance="outline" color={source === 'aisearch' ? 'brand' : 'informative'} size="small" style={{ marginLeft: tokens.spacingHorizontalS }}>
             source: {source}
           </Badge>
         )}
@@ -340,7 +341,7 @@ export default function GovernanceCatalogPage() {
       />
 
       {reindexMsg && (
-        <MessageBar intent={reindexMsg.ok ? 'success' : 'warning'} style={{ marginBottom: 12 }}>
+        <MessageBar intent={reindexMsg.ok ? 'success' : 'warning'} style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>{reindexMsg.text}</MessageBarBody>
         </MessageBar>
       )}
@@ -433,13 +434,13 @@ export default function GovernanceCatalogPage() {
                 </MessageBar>
               )}
 
-              {selected.description && <Body1 style={{ color: tokens.colorNeutralForeground2 }}>{selected.description}</Body1>}
+              {selected.description && <Body1 style={{ color: tokens.colorNeutralForeground2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{selected.description}</Body1>}
 
               <div className={s.metaGrid}>
-                <Caption1 className={s.metaLabel}>Workspace</Caption1><Caption1>{selected.workspaceName}</Caption1>
-                <Caption1 className={s.metaLabel}>Owner</Caption1><Caption1>{selected.ownerUpn || selected.owner}</Caption1>
+                <Caption1 className={s.metaLabel}>Workspace</Caption1><Caption1 className={s.metaValue}>{selected.workspaceName}</Caption1>
+                <Caption1 className={s.metaLabel}>Owner</Caption1><Caption1 className={s.metaValue}>{selected.ownerUpn || selected.owner}</Caption1>
                 <Caption1 className={s.metaLabel}>Domain</Caption1>
-                <Caption1>{selected.domainId ? (domains.find((d) => d.id === selected.domainId)?.name || selected.domainId) : '—'}</Caption1>
+                <Caption1 className={s.metaValue}>{selected.domainId ? (domains.find((d) => d.id === selected.domainId)?.name || selected.domainId) : '—'}</Caption1>
                 <Caption1 className={s.metaLabel}>Classifications</Caption1>
                 <div className={s.classChips}>
                   {selected.classifications?.length
@@ -463,7 +464,7 @@ export default function GovernanceCatalogPage() {
 
               <Divider />
 
-              <Title3 as="h3" style={{ fontSize: tokens.fontSizeBase400 }}><Key16Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Request access</Title3>
+              <Title3 as="h3" style={{ fontSize: tokens.fontSizeBase400 }}><Key16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalSNudge }} />Request access</Title3>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                 Records a request the owner reviews in the asset activity and grants in Governance → Policies.
               </Caption1>

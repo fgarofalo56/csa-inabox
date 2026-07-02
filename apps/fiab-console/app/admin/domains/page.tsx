@@ -55,14 +55,15 @@ type PurviewStatus =
   | { configured: false; gated: boolean; hint: string };
 
 const useStyles = makeStyles({
-  nameCell: { display: 'flex', alignItems: 'center', gap: '8px', minWidth: 0 },
+  nameCell: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   createGrid: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   dialogIntro: { marginBottom: tokens.spacingVerticalM },
-  wsName: { flex: 1 },
+  wsName: { flex: 1, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   wsRow: {
-    display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 8px',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
   },
+  overrideRow: { overflowWrap: 'anywhere', wordBreak: 'break-word' },
 });
 
 const SCOPE_LABEL: Record<string, string> = {
@@ -161,7 +162,7 @@ export default function DomainsPage() {
     if (!moveFor) return;
     setMoving(true); setActionErr(null);
     try {
-      const r = await fetch(`/api/admin/domains?id=${encodeURIComponent(moveFor.id)}`, {
+      const r = await clientFetch(`/api/admin/domains?id=${encodeURIComponent(moveFor.id)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ parentId: moveParent || null }),
       });
@@ -497,7 +498,7 @@ function AssignWorkspacesDialog({ domain, onClose, onDone }: {
                 <MessageBarBody>
                   <MessageBarTitle>Some workspaces are already assigned to another domain</MessageBarTitle>
                   {override.map((w) => (
-                    <div key={w.id}>• <strong>{w.name || w.id}</strong> is currently in “{w.domain}”.</div>
+                    <div key={w.id} className={s.overrideRow}>• <strong>{w.name || w.id}</strong> is currently in “{w.domain}”.</div>
                   ))}
                   Reassigning will override the previous association. Continue?
                 </MessageBarBody>

@@ -23,13 +23,13 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { executeMgmtCommand, KustoError, defaultDatabase } from '@/lib/azure/kusto-client';
+import { createTable, ingestInline, dropTable, KustoError, defaultDatabase } from '@/lib/azure/kusto-client';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const GEO_KQL = `
-.create-or-alter table SampleEarthquakes (
+.create-merge table SampleEarthquakes (
   EventId: string, Place: string, Magnitude: real, Depth: real,
   Latitude: real, Longitude: real, EventTime: datetime
 )
@@ -50,7 +50,7 @@ eq-010,Mexico City MX,4.8,35.0,19.4326,-99.1332,2026-01-22T23:59:00Z
 `;
 
 const GRAPH_KQL = `
-.create-or-alter table SampleSocialGraph (
+.create-merge table SampleSocialGraph (
   Source: string, Target: string, EdgeType: string, Weight: real, Since: datetime
 )
 `;
@@ -75,7 +75,7 @@ carol,frank,follows,1.0,2026-01-10T00:00:00Z
 // Node tables carry `id` (the make-graph node key) + entity properties; the
 // located entities (Person, Org, Location) carry name + lat/lon so the geo pane
 // can plot them. Edge tables carry `src`/`dst` (matching the prelude's
-// `make-graph src --> dst with __nodes on id`) + a `timestamp` so the timeline
+// `make-graph src --> dst with LoomNodes on id`) + a `timestamp` so the timeline
 // pane can bin them. This is a small, real, self-consistent investigation:
 // people who know each other, belong to orgs, are located in cities, and attend
 // events — exactly the link/geo/timeline shape Gotham-class analysis works on.
@@ -84,7 +84,7 @@ carol,frank,follows,1.0,2026-01-10T00:00:00Z
 const INV_TABLES: Array<{ name: string; create: string; ingest: string }> = [
   {
     name: 'Node_Person',
-    create: `.create-or-alter table Node_Person (id: string, name: string, role: string, lat: real, lon: real)`,
+    create: `.create-merge table Node_Person (id: string, name: string, role: string, lat: real, lon: real)`,
     ingest: `.ingest inline into table Node_Person <|
 p-alice,Alice Reyes,Analyst,38.9072,-77.0369
 p-bob,Bob Tan,Courier,40.7128,-74.0060
@@ -95,7 +95,7 @@ p-frank,Frank Moretti,Fixer,41.9028,12.4964`,
   },
   {
     name: 'Node_Org',
-    create: `.create-or-alter table Node_Org (id: string, name: string, kind: string, lat: real, lon: real)`,
+    create: `.create-merge table Node_Org (id: string, name: string, kind: string, lat: real, lon: real)`,
     ingest: `.ingest inline into table Node_Org <|
 o-meridian,Meridian Holdings,ShellCo,51.5074,-0.1278
 o-castor,Castor Logistics,Front,40.7128,-74.0060
@@ -103,7 +103,7 @@ o-aurora,Aurora Trust,Bank,38.9072,-77.0369`,
   },
   {
     name: 'Node_Location',
-    create: `.create-or-alter table Node_Location (id: string, name: string, country: string, lat: real, lon: real)`,
+    create: `.create-merge table Node_Location (id: string, name: string, country: string, lat: real, lon: real)`,
     ingest: `.ingest inline into table Node_Location <|
 l-dc,Washington DC,US,38.9072,-77.0369
 l-nyc,New York,US,40.7128,-74.0060
@@ -113,7 +113,7 @@ l-sto,Stockholm,SE,59.3293,18.0686`,
   },
   {
     name: 'Node_Event',
-    create: `.create-or-alter table Node_Event (id: string, name: string, eventTime: datetime)`,
+    create: `.create-merge table Node_Event (id: string, name: string, eventTime: datetime)`,
     ingest: `.ingest inline into table Node_Event <|
 e-handoff1,Handoff at DC,2026-02-03T14:00:00Z
 e-wire1,Wire transfer,2026-02-10T09:30:00Z
@@ -121,7 +121,7 @@ e-meet1,Meeting in London,2026-02-18T16:45:00Z`,
   },
   {
     name: 'Edge_Knows',
-    create: `.create-or-alter table Edge_Knows (src: string, dst: string, weight: real, timestamp: datetime)`,
+    create: `.create-merge table Edge_Knows (src: string, dst: string, weight: real, timestamp: datetime)`,
     ingest: `.ingest inline into table Edge_Knows <|
 p-alice,p-bob,0.9,2026-01-05T00:00:00Z
 p-alice,p-carol,0.7,2026-01-12T00:00:00Z
@@ -132,7 +132,7 @@ p-eve,p-frank,0.4,2026-02-15T00:00:00Z`,
   },
   {
     name: 'Edge_MemberOf',
-    create: `.create-or-alter table Edge_MemberOf (src: string, dst: string, since: datetime, timestamp: datetime)`,
+    create: `.create-merge table Edge_MemberOf (src: string, dst: string, since: datetime, timestamp: datetime)`,
     ingest: `.ingest inline into table Edge_MemberOf <|
 p-carol,o-meridian,2025-11-01T00:00:00Z,2025-11-01T00:00:00Z
 p-bob,o-castor,2025-12-01T00:00:00Z,2025-12-01T00:00:00Z
@@ -141,7 +141,7 @@ p-frank,o-meridian,2026-01-15T00:00:00Z,2026-01-15T00:00:00Z`,
   },
   {
     name: 'Edge_LocatedAt',
-    create: `.create-or-alter table Edge_LocatedAt (src: string, dst: string, timestamp: datetime)`,
+    create: `.create-merge table Edge_LocatedAt (src: string, dst: string, timestamp: datetime)`,
     ingest: `.ingest inline into table Edge_LocatedAt <|
 p-alice,l-dc,2026-02-03T13:00:00Z
 p-bob,l-nyc,2026-02-04T10:00:00Z
@@ -151,7 +151,7 @@ p-eve,l-sto,2026-02-12T08:00:00Z`,
   },
   {
     name: 'Edge_Attended',
-    create: `.create-or-alter table Edge_Attended (src: string, dst: string, timestamp: datetime)`,
+    create: `.create-merge table Edge_Attended (src: string, dst: string, timestamp: datetime)`,
     ingest: `.ingest inline into table Edge_Attended <|
 p-alice,e-handoff1,2026-02-03T14:00:00Z
 p-bob,e-handoff1,2026-02-03T14:05:00Z
@@ -160,6 +160,52 @@ p-carol,e-meet1,2026-02-18T16:45:00Z
 p-frank,e-meet1,2026-02-18T16:50:00Z`,
   },
 ];
+
+/**
+ * Parse a `.create-merge table X (schema)` + `.ingest inline into table X <| <csv>`
+ * pair into the structured pieces the PROVEN kusto-client helpers want:
+ *   - `name`   : bare table name
+ *   - `schema` : `col:type, col:type` CSL string for `createTable()`
+ *   - `rows`   : `string[][]` of CSV cell values for `ingestInline()`
+ *
+ * The earlier hand-rolled `.set-or-replace … datatable(…)` approach kept hitting
+ * SYN0002; instead we drive the table create + data load through the same client
+ * functions the eventhouse Get-Data wizard uses (`createTable` + `ingestInline`),
+ * which are the documented real end-to-end ADX path.
+ */
+function parseTable(create: string, ingest: string): { name: string; schema: string; rows: string[][] } {
+  const m = create.match(/\.create(?:-merge|-or-alter)?\s+table\s+(\S+)\s*\(([\s\S]*?)\)/);
+  if (!m) throw new Error(`load-sample: cannot parse create command: ${create.slice(0, 80)}`);
+  const name = m[1];
+  // Bracket every column name so KQL reserved keywords used as columns (e.g.
+  // `kind` on Node_Org) parse correctly — `.create table T (['kind']:string)`.
+  // Bracketing a non-keyword identifier is also always valid, so this is safe
+  // for all columns. (geo/graph have no reserved names; investigation's `kind`
+  // triggered SYN0002 as a bare identifier.)
+  const schema = m[2]
+    .split(',')
+    .map((c) => {
+      const [col, type] = c.split(':').map((x) => x.trim());
+      return `['${col.replace(/'/g, "\\'")}']:${(type || 'string').toLowerCase()}`;
+    })
+    .join(', ');
+  const lines = ingest.split('\n');
+  const sepIdx = lines.findIndex((l) => l.includes('<|'));
+  const rows = lines.slice(sepIdx + 1).map((l) => l.trim()).filter(Boolean).map((l) => l.split(','));
+  return { name, schema, rows };
+}
+
+/**
+ * Drop → create → ingest one sample table via the proven kusto-client helpers.
+ * Drop-first makes re-running idempotent (overwrites rather than appending).
+ */
+async function loadTable(db: string, create: string, ingest: string): Promise<string> {
+  const { name, schema, rows } = parseTable(create, ingest);
+  await dropTable(db, name);             // .drop table ["name"] ifexists  (idempotent)
+  await createTable(db, name, schema);   // .create table ["name"] (col:type, …)
+  await ingestInline(db, name, rows);    // .ingest inline into table ["name"] <| csv
+  return name;
+}
 
 export async function POST(req: NextRequest) {
   const s = getSession();
@@ -174,19 +220,14 @@ export async function POST(req: NextRequest) {
 
   try {
     if (kind === 'investigation') {
-      // Materialize every Node_*/Edge_* table Tapestry discovers.
-      for (const t of INV_TABLES) {
-        await executeMgmtCommand(db, t.create);
-        await executeMgmtCommand(db, t.ingest);
-      }
-      return NextResponse.json({ ok: true, db, kind, tables: INV_TABLES.map((t) => t.name) });
+      const tables: string[] = [];
+      for (const t of INV_TABLES) tables.push(await loadTable(db, t.create, t.ingest));
+      return NextResponse.json({ ok: true, db, kind, tables });
     }
 
     const create = kind === 'geo' ? GEO_KQL : GRAPH_KQL;
     const ingest = kind === 'geo' ? GEO_INGEST : GRAPH_INGEST;
-    const table = kind === 'geo' ? 'SampleEarthquakes' : 'SampleSocialGraph';
-    await executeMgmtCommand(db, create);
-    await executeMgmtCommand(db, ingest);
+    const table = await loadTable(db, create, ingest);
     return NextResponse.json({ ok: true, db, table, kind });
   } catch (e: any) {
     const status = e instanceof KustoError ? e.status : 502;

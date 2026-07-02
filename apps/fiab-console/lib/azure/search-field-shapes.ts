@@ -82,6 +82,13 @@ export interface SearchRequest {
   /** Semantic captions, e.g. `extractive` / `extractive|highlight-true`. Semantic only. */
   captions?: string;
   count?: boolean;
+  /**
+   * Pure-vector query: omit the full-text `search` term entirely so ranking is
+   * vector-only (per Learn, a vector-only query sends `vectorQueries` WITHOUT
+   * `search`; including `search:'*'` would fuse a match-all text ranking via
+   * RRF). Only honored when `vectorQueries` is non-empty.
+   */
+  pureVector?: boolean;
 }
 
 /**
@@ -94,7 +101,10 @@ export interface SearchRequest {
  */
 export function buildSearchBody(req: SearchRequest): any {
   const body: any = {};
-  body.search = req.search && req.search.length ? req.search : '*';
+  // Pure-vector queries omit `search` entirely (vector-only ranking).
+  if (!(req.pureVector && req.vectorQueries?.length)) {
+    body.search = req.search && req.search.length ? req.search : '*';
+  }
   if (req.filter) body.filter = req.filter;
   if (typeof req.top === 'number') body.top = req.top;
   if (req.select) body.select = req.select;

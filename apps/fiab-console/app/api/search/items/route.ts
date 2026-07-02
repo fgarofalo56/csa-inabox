@@ -37,7 +37,7 @@ export async function POST(req: NextRequest) {
         const hits = docs.map(d => ({
           kind: d.kind,
           type: d.itemType,
-          id: d.kind === 'workspace' ? d.workspaceId : d.id.replace(/^it:/, ''),
+          id: d.kind === 'workspace' ? d.workspaceId : d.id.replace(/^it[:_]/, ''),
           name: d.displayName,
           workspaceId: d.workspaceId,
           snippet: d.description || '',

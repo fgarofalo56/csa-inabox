@@ -52,6 +52,26 @@ ADF SHIR.
 
 Zero ❌. The only ⚠️ is the documented Purview-key honest gate (a Microsoft data-plane fact, not a Loom gap).
 
+## Alternative — managed-VNet IR + managed private endpoints (no VMSS) {#purview-managed-vnet}
+
+For a source **behind Private Link** you don't have to run a SHIR VMSS at all.
+A Purview **managed-VNet Integration Runtime** hosts the scan compute inside
+Purview's own managed VNet and reaches each PE-locked source through an approved
+**managed private endpoint** (commit `8704e7ef`):
+
+| Capability | Loom coverage | Backend |
+|---|---|---|
+| Create the managed VNet | built ✅ | `upsertPurviewManagedVnet` → `PUT /scan/managedvirtualnetworks/{mvnet}` |
+| Create the managed-VNet IR (kind `Managed`) | built ✅ | `upsertPurviewManagedVnetIr` → `PUT /scan/integrationruntimes/{ir}` |
+| List / create managed private endpoints to a source | built ✅ | `list/upsertPurviewManagedPrivateEndpoint` → `PUT /scan/managedvirtualnetworks/{mvnet}/managedprivateendpoints/{name}` (`groupId` = sub-resource, e.g. `blob` / `dfs` / `sqlServer`) |
+| Approve the managed PE on the target | honest-gate ⚠️ | one-time resource-owner approval (portal / `az network private-endpoint-connection approve`); the panel surfaces the exact step + URL + CLI |
+
+BFF: `app/api/admin/scaling/compute/purview-managed-vnet/route.ts`; client
+`purview-client.ts`; UI in `ScaleManagePanel`. Use the **managed-VNet IR** for
+Azure PaaS sources behind Private Link (Storage / Azure SQL / …) and the
+**SHIR VMSS** (above) for on-prem / VM-hosted sources a managed PE can't reach.
+See also [purview-setup §managed-VNet IR](../purview-setup.md#purview-managed-vnet-ir).
+
 ## Backend per control
 
 - Scale-up engine: `vmss-client.ts` `ensureShirUp()` — `getVmssStatus` → PATCH

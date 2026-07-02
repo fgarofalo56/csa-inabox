@@ -32,16 +32,16 @@ import { ClassificationPane } from './classification-flyout';
 interface Props { type: string; id: string; }
 
 const useStyles = makeStyles({
-  row: { display: 'flex', gap: 4 },
-  list: { display: 'flex', flexDirection: 'column', gap: 8 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalXS },
+  list: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS },
   card: {
     padding: 'var(--loom-space-2)',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: 'var(--loom-radius-md)',
   },
-  meta: { fontSize: 11, color: tokens.colorNeutralForeground3 },
+  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3 },
   shareUrl: {
-    fontSize: 12, fontFamily: 'monospace',
+    fontSize: tokens.fontSizeBase200, fontFamily: 'monospace',
     padding: 'var(--loom-space-2)',
     backgroundColor: tokens.colorNeutralBackground2,
     borderRadius: 'var(--loom-radius-sm)',

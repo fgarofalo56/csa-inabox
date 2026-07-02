@@ -21,7 +21,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ReportModel } from './pbir-parse';
 import type { SampleData } from './tmdl-sample';
 
-export type EntitySource = 'live' | 'sample' | 'error';
+export type EntitySource = 'live' | 'empty' | 'error';
 export interface EntityProvenance { source: EntitySource; note?: string }
 
 export interface ReportParams {
@@ -36,7 +36,7 @@ export interface ReportParams {
 export interface ReportPayload {
   model: ReportModel;
   sample: SampleData;
-  /** Live render: per-entity render data (live table when available, else sample). */
+  /** Live render: per-entity render data (live table when available, else a real empty table). */
   live?: SampleData;
   /** Live render: per-entity provenance for truthful labelling. */
   dataSources?: Record<string, EntityProvenance>;
@@ -45,7 +45,7 @@ export interface ReportPayload {
   template?: { title: string; description?: string; category?: string };
   published?: boolean;
   mode?: string;
-  /** Set when the whole live render failed defensively; UI shows sample. */
+  /** Set when the whole live render failed defensively; per-entity tables render empty. */
   liveError?: string;
 }
 

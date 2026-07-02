@@ -23,11 +23,11 @@ import {
 import { Database20Regular, ArrowSync16Regular, Storage20Regular } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  wrap: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 16 },
-  head: { display: 'flex', alignItems: 'center', gap: 6 },
-  row: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
+  wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge, marginTop: tokens.spacingVerticalL },
+  head: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge },
+  row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%' },
   path: {
-    fontFamily: 'Consolas, monospace', fontSize: 11,
+    fontFamily: 'Consolas, monospace', fontSize: '11px',
     color: tokens.colorNeutralForeground3, wordBreak: 'break-all',
   },
   item: { cursor: 'grab' },

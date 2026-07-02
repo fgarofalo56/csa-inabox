@@ -218,38 +218,57 @@ export async function upsertDataProductDoc(doc: DataProductDoc): Promise<void> {
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
       body: JSON.stringify({ value: [{ '@search.action': 'mergeOrUpload', ...d }] }),
     });
+    // The AI Search "index documents" API returns HTTP 200 even when a doc
+    // fails — the per-document status is in the body's `value[].status`. So a
+    // failure can be EITHER a non-2xx HTTP code (batch/schema error) OR a 200
+    // with a per-doc error. Treat both as failure.
+    const failureOf = async (r: Response): Promise<string | null> => {
+      const text = await r.text();
+      if (!r.ok) return `HTTP ${r.status}: ${text.slice(0, 240)}`;
+      try {
+        const j = JSON.parse(text);
+        const bad = (j?.value || []).find((v: any) => typeof v?.statusCode === 'number' && v.statusCode >= 400);
+        if (bad) return `doc ${bad.key}: ${bad.statusCode} ${bad.errorMessage || ''}`.slice(0, 240);
+      } catch { /* non-JSON 200 — treat as success */ }
+      return null;
+    };
+
     // Ensure the index exists + reconcile its schema on first write.
     await ensureDataProductsIndex();
-    let res = await post(doc as unknown as Record<string, unknown>);
-    if (!res.ok) {
-      const t = await res.text();
+    let fail = await failureOf(await post(doc as unknown as Record<string, unknown>));
+    if (fail) {
       // Unknown field (index predates a doc field) → reconcile + retry; then
       // strip optional new fields and retry so the doc still indexes.
-      if (/does not exist|not a known field|unknown field|cannot be found|property/i.test(t)) {
-        await ensureDataProductsIndex();
-        res = await post(doc as unknown as Record<string, unknown>);
-        if (!res.ok) {
-          const { accessModel, ...rest } = doc as DataProductDoc & Record<string, unknown>;
-          void accessModel;
-          await post(rest);
-        }
+      await ensureDataProductsIndex();
+      fail = await failureOf(await post(doc as unknown as Record<string, unknown>));
+      if (fail) {
+        const { accessModel, ...rest } = doc as DataProductDoc & Record<string, unknown>;
+        void accessModel;
+        fail = await failureOf(await post(rest));
       }
     }
-  } catch {
-    /* swallow — index is best-effort */
+    if (fail) {
+      // Surface the real reason in container logs (best-effort index, never
+      // throws) — this was silently swallowed, hiding why products never indexed.
+      console.warn(`[loom-data-products] upsert of ${doc.id} failed: ${fail}`);
+    }
+  } catch (e: any) {
+    console.warn(`[loom-data-products] upsert threw: ${e?.message || String(e)}`);
   }
 }
 
-/** Best-effort delete by index doc id. */
+/** Best-effort delete by index doc id. Tolerates the legacy `dp:` colon form —
+ *  the stored key uses `dp_` (colons are invalid AI Search keys), so sanitize. */
 export async function deleteDataProductDoc(id: string): Promise<void> {
   if (!isDataProductsSearchConfigured()) return;
   try {
     const svc = serviceName();
     const tok = await searchToken();
+    const key = id.replace(/:/g, '_');
     await fetchWithTimeout(`${serviceBase(svc)}/indexes/${DATA_PRODUCTS_INDEX}/docs/index?api-version=${SEARCH_API}`, {
       method: 'POST',
       headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ value: [{ '@search.action': 'delete', id }] }),
+      body: JSON.stringify({ value: [{ '@search.action': 'delete', id: key }] }),
     });
   } catch {
     /* swallow */
@@ -394,7 +413,11 @@ export function docForDataProduct(
   const ps = String(state.publishStatus || 'Draft') as PublishStatus;
   const domain = state.domain ? String(state.domain) : undefined;
   return {
-    id: `dp:${item.id}`,
+    // AI Search document keys may only contain letters, digits, _, -, =.
+    // A colon (the old `dp:` prefix) is INVALID and 400'd every upsert
+    // ("Invalid document key") — which is why no data product ever indexed.
+    // Use an underscore separator; the GUID's dashes are allowed.
+    id: `dp_${item.id}`,
     tenantId,
     workspaceId: item.workspaceId,
     displayName: item.displayName,

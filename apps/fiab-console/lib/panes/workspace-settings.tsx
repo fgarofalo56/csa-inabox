@@ -354,9 +354,9 @@ function M365Tab({ ws, onSaved }: { ws: Workspace; onSaved: (w: Workspace) => vo
       {results.length > 0 && (
         <div className={styles.resultBox}>
           {results.map((g) => (
-            <div key={g.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '6px 4px', gap: 8 }}>
+            <div key={g.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalXS}`, gap: tokens.spacingHorizontalS }}>
               <span style={{ display: 'flex', flexDirection: 'column', minWidth: 0 }}>
-                <span>{g.displayName}</span>
+                <span style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{g.displayName}</span>
                 {g.mail && <Caption1 className={styles.note}>{g.mail}</Caption1>}
               </span>
               <Button size="small" disabled={busy} onClick={() => callM365({ action: 'link', groupId: g.id })}>Link</Button>

@@ -162,13 +162,13 @@ export function AddDataAssetsPanel({
         <DialogBody>
           <DialogTitle>Add data assets</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
               <Body1>
                 Search the Microsoft Purview Data Map for physical assets this data product wraps.
                 Results are scoped to the product&apos;s governance domain collection.
               </Body1>
 
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
                 <Input
                   style={{ flex: 1, minWidth: 240 }}
                   value={q}
@@ -176,7 +176,7 @@ export function AddDataAssetsPanel({
                   contentBefore={<Search20Regular />}
                   placeholder="Search assets by keyword (e.g. sales, revenue, customer)…"
                 />
-                <div style={{ display: 'flex', gap: 4 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
                   {TYPE_CHIPS.map((t) => (
                     <ToggleButton
                       key={t}
@@ -198,7 +198,7 @@ export function AddDataAssetsPanel({
                     {hint.missingEnvVar && <>Set <code>{hint.missingEnvVar}</code>. </>}
                     {hint.bicepModule && <>Bicep module: <code>{hint.bicepModule}</code>{hint.bicepStatus ? ` — ${hint.bicepStatus}` : ''}. </>}
                     {Array.isArray(hint.rolesRequired) && hint.rolesRequired.length > 0 && (
-                      <ul style={{ margin: '6px 0 6px 18px' }}>
+                      <ul style={{ margin: `${tokens.spacingVerticalS} 0 ${tokens.spacingVerticalS} 18px` }}>
                         {hint.rolesRequired.map((role) => (
                           <li key={role.name}><strong>{role.name}</strong> at {role.scope} — {role.reason}</li>
                         ))}
@@ -214,7 +214,7 @@ export function AddDataAssetsPanel({
               {loading && <Spinner size="tiny" label="Searching the Data Map…" />}
 
               {!hint && (
-                <div style={{ maxHeight: 360, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 }}>
+                <div style={{ maxHeight: 360, overflow: 'auto', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium }}>
                   <Table size="small" aria-label="Data Map search results">
                     <TableHeader>
                       <TableRow>
@@ -242,10 +242,10 @@ export function AddDataAssetsPanel({
                             </TableCell>
                             <TableCell>
                               <strong>{r.name}</strong>
-                              {already && <Badge appearance="outline" color="informative" style={{ marginLeft: 6 }}>attached</Badge>}
+                              {already && <Badge appearance="outline" color="informative" style={{ marginLeft: tokens.spacingHorizontalS }}>attached</Badge>}
                             </TableCell>
-                            <TableCell><code style={{ fontSize: 11 }}>{r.entityType || '—'}</code></TableCell>
-                            <TableCell><code style={{ fontSize: 11, wordBreak: 'break-all' }}>{r.qualifiedName || '—'}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.entityType || '—'}</code></TableCell>
+                            <TableCell><code style={{ fontSize: tokens.fontSizeBase100, wordBreak: 'break-all' }}>{r.qualifiedName || '—'}</code></TableCell>
                           </TableRow>
                         );
                       })}
@@ -255,7 +255,7 @@ export function AddDataAssetsPanel({
               )}
 
               {!hint && (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
                   <Button size="small" appearance="subtle" icon={<ChevronLeft20Regular />}
                     disabled={offset === 0 || loading} onClick={() => setOffset((o) => Math.max(0, o - LIMIT))}>
                     Previous

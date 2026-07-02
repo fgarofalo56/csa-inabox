@@ -39,8 +39,10 @@ const useStyles = makeStyles({
     lineHeight: tokens.lineHeightBase400,
     maxWidth: '760px',
     marginBottom: tokens.spacingVerticalL,
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
   },
-  empty: { color: tokens.colorNeutralForeground3 },
+  empty: { color: tokens.colorNeutralForeground3, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   badgeRow: { display: 'inline-flex', gap: tokens.spacingHorizontalXS },
 });
 

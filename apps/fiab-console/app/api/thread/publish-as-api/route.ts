@@ -22,7 +22,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { createOwnedItem, loadOwnedItem } from '../../items/_lib/item-crud';
+import { createOwnedItem, loadOwnedItem, listOwnedWorkspaces } from '../../items/_lib/item-crud';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { listColumns } from '@/lib/azure/sql-objects-client';
 import {
@@ -64,9 +64,24 @@ export async function POST(req: NextRequest) {
   }
   if (!apiName) return NextResponse.json({ ok: false, error: 'name the API' }, { status: 400 });
 
-  // Owner-scoped: confirm the caller owns the source item.
-  const src = await loadOwnedItem(from.id, from.type, oid);
-  if (!src) return NextResponse.json({ ok: false, error: 'source item not found' }, { status: 404 });
+  // The API is built from the Azure-native warehouse BACKEND (the env-configured
+  // Synapse dedicated pool resolved below), not from the specific source item —
+  // so a brand-new/unsaved pool, or one surfaced by the resource navigator
+  // rather than saved as a Loom item, must still work. Use the source item's
+  // workspace when we can load it; otherwise place the new DAB item in the
+  // caller's first workspace. Only fail if the tenant has no workspace at all.
+  const src = await loadOwnedItem(from.id, from.type, oid).catch(() => null);
+  let targetWorkspaceId = src?.workspaceId;
+  if (!targetWorkspaceId) {
+    const wss = await listOwnedWorkspaces(oid).catch(() => []);
+    targetWorkspaceId = wss[0]?.id;
+  }
+  if (!targetWorkspaceId) {
+    return NextResponse.json(
+      { ok: false, error: 'No workspace is available to place the API in. Create a workspace first, then retry.' },
+      { status: 400 },
+    );
+  }
 
   let target;
   try {
@@ -155,7 +170,7 @@ export async function POST(req: NextRequest) {
   }
 
   const res = await createOwnedItem(session, 'data-api-builder', {
-    workspaceId: src.workspaceId,
+    workspaceId: targetWorkspaceId,
     displayName: apiName,
     description: `REST + GraphQL API over ${schema}.${name}, created via Thread.`,
     state: { dabConfig: cfg, dabConfigJson: emitDabConfigJson(cfg) },

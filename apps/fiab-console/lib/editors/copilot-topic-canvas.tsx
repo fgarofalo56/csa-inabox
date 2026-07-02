@@ -24,7 +24,9 @@ import {
 import {
   Add20Regular, Delete20Regular, ArrowUp16Regular, ArrowDown16Regular,
   Chat20Regular, QuestionCircle20Regular, BranchFork20Regular, Flow20Regular, Code20Regular,
+  ChatMultiple20Regular, BotSparkle24Regular,
 } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import {
   parseTopicFlow, serializeTopicFlow, isStructuredRepresentable, newStepId,
@@ -32,23 +34,36 @@ import {
 } from '@/lib/copilot-studio/topic-model';
 
 const useStyles = makeStyles({
-  wrap: { display: 'flex', flexDirection: 'column', gap: 12, minWidth: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  steps: { display: 'flex', flexDirection: 'column', gap: 10 },
+  wrap: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  steps: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorNeutralForeground1 },
+  sectionIcon: { display: 'flex', color: tokens.colorBrandForeground1 },
   node: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
-    padding: 12, display: 'flex', flexDirection: 'column', gap: 8,
-    backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    backgroundColor: tokens.colorNeutralBackground1, minWidth: 0,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16 },
   },
-  nodeHead: { display: 'flex', alignItems: 'center', gap: 8, justifyContent: 'space-between' },
-  nodeHeadLeft: { display: 'flex', alignItems: 'center', gap: 8 },
-  nodeActions: { display: 'flex', gap: 4 },
-  addRow: { display: 'flex', gap: 6, flexWrap: 'wrap' },
+  nodeHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, justifyContent: 'space-between', minWidth: 0 },
+  nodeHeadLeft: {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
+  nodeActions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexShrink: 0 },
+  addRow: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
   branch: {
-    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: 4,
-    padding: 8, display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4,
+    border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
+    padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginTop: tokens.spacingVerticalXXS,
+    minWidth: 0,
   },
-  phraseRow: { display: 'flex', gap: 6, alignItems: 'center' },
+  phraseRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', minWidth: 0 },
+  phraseInput: { flexGrow: 1, minWidth: 0 },
+  condBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
 
 // Each step carries a client id for stable React keys; kept out of the model.
@@ -182,7 +197,7 @@ export function CopilotTopicCanvas({ flowYaml, triggerPhrases, onChange, ariaLab
         {triggerPhrases.length === 0 && <Caption1>No trigger phrases yet — add at least one.</Caption1>}
         {triggerPhrases.map((p, i) => (
           <div key={i} className={s.phraseRow}>
-            <Input style={{ flex: 1 }} value={p} placeholder="e.g. reset my password" onChange={(_, d) => setPhrase(i, d.value)} />
+            <Input className={s.phraseInput} value={p} placeholder="e.g. reset my password" onChange={(_, d) => setPhrase(i, d.value)} />
             <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => removePhrase(i)} aria-label="Remove phrase" />
           </div>
         ))}
@@ -190,9 +205,18 @@ export function CopilotTopicCanvas({ flowYaml, triggerPhrases, onChange, ariaLab
       </div>
 
       {/* Steps */}
-      <Subtitle2>Conversation steps</Subtitle2>
+      <div className={s.sectionHead}>
+        <span className={s.sectionIcon} aria-hidden><ChatMultiple20Regular /></span>
+        <Subtitle2>Conversation steps</Subtitle2>
+      </div>
       <div className={s.steps}>
-        {steps.length === 0 && <Caption1>No steps yet — add a Message, Question, Condition, or Action below.</Caption1>}
+        {steps.length === 0 && (
+          <EmptyState
+            icon={<BotSparkle24Regular />}
+            title="No steps yet"
+            body="Add a Message, Question, Condition, or Action below to build out what this topic does when triggered."
+          />
+        )}
         {steps.map((st, idx) => (
           <div key={st._id} className={s.node}>
             <div className={s.nodeHead}>
@@ -311,7 +335,7 @@ function ConditionBody({ step, onPatch }: { step: ConditionStep & { _id: string 
   const firstMessage = (b: ConditionStep['branches'][number]) =>
     (b.steps.find((x) => x.kind === 'message') as any)?.text || '';
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div className={s.condBody}>
       <Caption1>Branch on a condition; each branch can reply with a message. Use Code view for richer branch bodies.</Caption1>
       {step.branches.map((b, bi) => (
         <div key={bi} className={s.branch}>

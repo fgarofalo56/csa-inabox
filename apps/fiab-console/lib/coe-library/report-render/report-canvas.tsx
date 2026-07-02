@@ -11,8 +11,11 @@
  * polyline; donut/pie as arcs; tableEx/matrix as a dense table. Unknown visual
  * types degrade to an honest "preview not supported yet" tile (never a crash).
  *
- * The data is clearly-labelled SAMPLE data (a Fluent MessageBar says so and
- * points at connecting live Azure sources via the report parameters).
+ * In live mode the data is REAL — resolved from the deployment's Azure estate,
+ * with each visual labelled by its true provenance (live / empty / honest gate);
+ * unbound or empty entities render with no rows, never fabricated sample rows.
+ * In the admin template-preview (sample) mode the bundled TMDL preview rows are
+ * shown behind a clearly-labelled MessageBar.
  */
 
 import * as React from 'react';
@@ -323,7 +326,7 @@ function ProvenanceDot({ prov }: { prov: EntityProvenance }) {
     : prov.source === 'error'
       ? <Warning16Regular className={s.provError} />
       : <Database16Regular className={s.provSample} />;
-  const label = prov.source === 'live' ? 'Live' : prov.source === 'error' ? 'Gate' : 'Sample';
+  const label = prov.source === 'live' ? 'Live' : prov.source === 'error' ? 'Gate' : 'No data';
   return (
     <Tooltip relationship="description" content={prov.note || `${label} data`} withArrow>
       <span className={s.provDot} aria-label={`${label}: ${prov.note || ''}`}>{icon}</span>
@@ -405,21 +408,21 @@ function liveSummary(dataSources?: Record<string, EntityProvenance>): { intent: 
   const entries = Object.entries(dataSources || {});
   const live = entries.filter(([, p]) => p.source === 'live');
   const errored = entries.filter(([, p]) => p.source === 'error');
-  const sample = entries.filter(([, p]) => p.source === 'sample');
-  if (live.length && !errored.length && !sample.length) {
+  const empty = entries.filter(([, p]) => p.source === 'empty');
+  if (live.length && !errored.length && !empty.length) {
     return { intent: 'success', text: `Live from your Azure estate — ${live.map(([e]) => e).join(', ')}.` };
   }
   if (live.length) {
     const parts: string[] = [`Live: ${live.map(([e]) => e).join(', ')}`];
-    if (sample.length) parts.push(`sample (no live binding): ${sample.map(([e]) => e).join(', ')}`);
+    if (empty.length) parts.push(`no rows: ${empty.map(([e]) => e).join(', ')}`);
     if (errored.length) parts.push(`needs setup: ${errored.map(([e]) => e).join(', ')}`);
     return { intent: 'warning', text: parts.join(' · ') };
   }
   return {
     intent: 'warning',
     text: errored.length
-      ? `No live data yet — ${errored.map(([e]) => e).join(', ')} need provisioning/permissions (hover each tile). Showing sample.`
-      : 'No live Azure binding for this report yet — showing sample data.',
+      ? `No live data yet — ${errored.map(([e]) => e).join(', ')} need provisioning/permissions (hover each tile).`
+      : 'No live data source is bound to this report yet — showing no rows (hover each tile).',
   };
 }
 

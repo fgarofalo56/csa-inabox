@@ -12,13 +12,12 @@
  *
  * Auth:
  *   - Synapse TDS: inherits the UAMI credential chain from synapse-sql-client.ts.
- *   - AOAI token: ChainedTokenCredential(ManagedIdentityCredential, Default) →
- *     cogScope() (cloud-aware: cognitiveservices.azure.us in Gov).
- *
- * The AOAI data-plane target is resolved through the orchestrator's
- * resolveAoaiTarget() (env LOOM_AOAI_ENDPOINT/DEPLOYMENT → tenant config →
- * Foundry discovery). Imported dynamically to avoid a static import cycle with
- * copilot-orchestrator (which statically imports registerDaxTools).
+ *   - AOAI chat: delegated to the unified aoai-chat-client, which owns the
+ *     cogScope() managed-identity token (cloud-aware: cognitiveservices.azure.us
+ *     in Gov) plus the AOAI data-plane target resolution — tenant Copilot config
+ *     → env LOOM_AOAI_ENDPOINT/DEPLOYMENT → Foundry discovery via
+ *     resolveAoaiTarget(cfg). The tenant config is loaded here (dynamic import,
+ *     no static cycle) and forwarded as `cfg`.
  *
  * Env deps (all existing — no new infra):
  *   LOOM_AOAI_ENDPOINT / LOOM_AOAI_DEPLOYMENT — AOAI chat target
@@ -26,14 +25,7 @@
  *   LOOM_UAMI_CLIENT_ID — Console UAMI client id
  */
 
-import {
-  ChainedTokenCredential,
-  DefaultAzureCredential,
-  ManagedIdentityCredential,
-} from '@azure/identity';
-import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
-
-import { cogScope } from '@/lib/azure/cloud-endpoints';
+import { aoaiChat as aoaiChatClient } from '@/lib/azure/aoai-chat-client';
 import { executeQuery, dedicatedTarget } from '@/lib/azure/synapse-sql-client';
 import {
   readModelState,
@@ -42,85 +34,46 @@ import {
   type LoomModelState,
 } from '@/app/api/items/_lib/model-store';
 import { buildTSqlProbe, stripFence } from '@/lib/copilot/dax-probe';
-import type { LoomToolRegistry, ToolContext, AoaiTarget } from '@/lib/azure/copilot-orchestrator';
+import type { LoomToolRegistry, ToolContext } from '@/lib/azure/copilot-orchestrator';
 
-// ---------- AOAI credential (mirrors copilot-orchestrator.ts) ----------
-
-const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
-const credential = uamiClientId
-  ? new ChainedTokenCredential(
-      new AcaManagedIdentityCredential(),
-      new ManagedIdentityCredential({ clientId: uamiClientId }),
-      new DefaultAzureCredential(),
-    )
-  : new DefaultAzureCredential();
-
-async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken(cogScope());
-  if (!t?.token) throw new Error('Failed to acquire AOAI token for the DAX Copilot.');
-  return t.token;
-}
+// ---------- AOAI chat (delegated to the unified aoai-chat-client) ----------
 
 /**
- * Resolve the AOAI chat target for a caller. Loads the tenant's admin-selected
- * Copilot config (account + deployment) and feeds it to the orchestrator's
- * resolver, which falls back to env / Foundry discovery. Dynamic import breaks
- * the static cycle with copilot-orchestrator.
+ * One-shot AOAI chat completion (no tools), delegated to the unified
+ * aoai-chat-client. The client owns target resolution (tenant Copilot config →
+ * env LOOM_AOAI_ENDPOINT/DEPLOYMENT → Foundry discovery via
+ * resolveAoaiTarget(cfg)), the cogScope managed-identity token (cloud-aware:
+ * cognitiveservices.azure.us in Gov), the `max_completion_tokens` contract, and
+ * the temperature-only retry for reasoning models that reject a non-default
+ * temperature — byte-for-byte with the prior hand-rolled fetch.
+ *
+ * The tenant's admin-selected Copilot config is loaded here and forwarded as
+ * `cfg` so the client resolves the exact same target. The dynamic import of
+ * copilot-config-store mirrors the prior pattern (no static cycle). `.trim()` is
+ * preserved; when `jsonObject` is set we still return the raw (trimmed) string —
+ * callers run their own tolerant JSON.parse — so this stays behavior-identical
+ * (NOT aoaiChatJson, which would throw on non-JSON). A missing deployment still
+ * throws NoAoaiDeploymentError, preserving the honest 503 gate at the route.
  */
-async function getAoaiTarget(userOid: string): Promise<AoaiTarget> {
-  const [{ resolveAoaiTarget }, { loadTenantCopilotConfig }] = await Promise.all([
-    import('@/lib/azure/copilot-orchestrator'),
-    import('@/lib/azure/copilot-config-store'),
-  ]);
-  const cfg = await loadTenantCopilotConfig(userOid).catch(() => null);
-  return resolveAoaiTarget(cfg);
-}
-
-/** One-shot AOAI chat completion (no tools). Cloud-portable via getAoaiTarget. */
 async function aoaiChat(
   userOid: string,
   system: string,
   user: string,
   opts: { maxTokens?: number; temperature?: number; jsonObject?: boolean } = {},
 ): Promise<string> {
-  const target = await getAoaiTarget(userOid);
-  const token = await aoaiToken();
-  const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const payload: Record<string, unknown> = {
+  const { loadTenantCopilotConfig } = await import('@/lib/azure/copilot-config-store');
+  const cfg = await loadTenantCopilotConfig(userOid).catch(() => null);
+  const out = await aoaiChatClient({
     messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    max_tokens: opts.maxTokens ?? 400,
-  };
-  if (opts.temperature !== undefined) payload.temperature = opts.temperature;
-  if (opts.jsonObject) payload.response_format = { type: 'json_object' };
-
-  const send = (body: Record<string, unknown>) =>
-    fetch(url, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
-    });
-
-  let res = await send(payload);
-  // Newer reasoning models reject non-default temperature — retry without it.
-  if (res.status === 400 && opts.temperature !== undefined) {
-    const t = await res.text();
-    if (/temperature|top_p|unsupported_value|does not support/i.test(t)) {
-      const { temperature, ...rest } = payload;
-      res = await send(rest);
-    } else {
-      throw new Error(`AOAI chat failed 400: ${t.slice(0, 300)}`);
-    }
-  }
-  if (!res.ok) {
-    const t = await res.text();
-    throw new Error(`AOAI chat failed ${res.status}: ${t.slice(0, 300)}`);
-  }
-  const body = await res.json();
-  return String(body?.choices?.[0]?.message?.content ?? '').trim();
+    maxCompletionTokens: opts.maxTokens ?? 400,
+    temperature: opts.temperature,
+    responseFormat: opts.jsonObject ? 'json_object' : undefined,
+    cfg,
+  });
+  return out.trim();
 }
 
 /** Strip ```dax / ``` fences a model sometimes wraps an expression in. */

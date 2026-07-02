@@ -15,9 +15,28 @@
 
 import {
   Field, Dropdown, Option, Caption1, Badge, MessageBar, MessageBarBody,
-  tokens,
+  makeStyles, tokens,
 } from '@fluentui/react-components';
 import type { AdfDataset } from '@/lib/azure/adf-client';
+
+const useStyles = makeStyles({
+  // Trigger keeps a sensible floor so a short field doesn't crush long names.
+  dropdown: { minWidth: '240px' },
+  // Let the popup grow with its content (up to a readable cap) instead of
+  // matching the narrow trigger width and clipping long dataset names like
+  // `Retail_OLTP_Mirror_Azure_SQL__s_dbo_Customers`. Scrolls past the cap.
+  listbox: {
+    minWidth: '240px',
+    maxWidth: 'min(560px, 90vw)',
+    maxHeight: '40vh',
+  },
+  // Wrap long names onto multiple lines rather than truncating mid-token; the
+  // full name is also exposed via the `title` tooltip below.
+  option: {
+    whiteSpace: 'normal',
+    wordBreak: 'break-word',
+  },
+});
 
 export interface DatasetPickerProps {
   label: string;
@@ -33,6 +52,7 @@ export interface DatasetPickerProps {
 export function DatasetPicker({
   label, value, onChange, datasets, gateError, required, hint,
 }: DatasetPickerProps) {
+  const s = useStyles();
   const selected = datasets.find((d) => d.name === value);
   const hasData = datasets.length > 0;
 
@@ -44,6 +64,11 @@ export function DatasetPicker({
         </MessageBar>
       )}
       <Dropdown
+        className={s.dropdown}
+        listbox={{ className: s.listbox }}
+        // Selected value truncates in the trigger button — expose the full name
+        // on hover so it's always recoverable.
+        title={value || undefined}
         placeholder={hasData ? 'Select a dataset' : 'No datasets available'}
         value={value || ''}
         selectedOptions={value ? [value] : []}
@@ -55,7 +80,9 @@ export function DatasetPicker({
       >
         <Option value="" text="(none)">(none)</Option>
         {datasets.map((d) => (
-          <Option key={d.name} value={d.name} text={d.name}>{d.name}</Option>
+          <Option key={d.name} value={d.name} text={d.name} title={d.name} className={s.option}>
+            {d.name}
+          </Option>
         ))}
       </Dropdown>
       {selected && (

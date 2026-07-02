@@ -35,27 +35,29 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Tree, TreeItem, TreeItemLayout,
   Button, Input, Field, Caption1, Badge, Spinner, Dropdown, Option, Textarea,
+  Checkbox, Divider,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   Tooltip, MessageBar, MessageBarBody, MessageBarTitle,
-  makeStyles, tokens,
+  makeStyles, tokens, Label, Body1Strong, Body1,
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync16Regular, Delete16Regular, Open16Regular,
   Search20Regular, Warning20Regular, Play16Regular, ArrowCounterclockwise16Regular,
   DocumentBulletList20Regular, DataUsage20Regular, Database20Regular,
   BrainCircuit20Regular, TextBulletListSquare20Regular, BranchFork20Regular,
-  Bug20Regular,
+  Bug20Regular, ChevronDown16Regular, ChevronRight16Regular,
+  BrainCircuit20Regular as BrainCircuit16Regular, Dismiss16Regular, Add16Regular,
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 8, height: '100%', minWidth: 240 },
-  header: { display: 'flex', alignItems: 'center', gap: 4, justifyContent: 'space-between' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, padding: tokens.spacingHorizontalS, height: '100%', minWidth: '240px' },
+  header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },
-  groupLayout: { display: 'flex', alignItems: 'center', gap: 6, width: '100%' },
-  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
-  leafRow: { display: 'flex', alignItems: 'center', gap: 4, width: '100%' },
-  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 2 },
+  groupLayout: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, width: '100%' },
+  groupActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
+  leafRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, width: '100%' },
+  leafActions: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS },
 });
 
 const R = {
@@ -88,6 +90,269 @@ function statusColor(status?: string) {
   if (status === 'inProgress') return 'warning' as const;
   if (status === 'transientFailure' || status === 'error') return 'danger' as const;
   return 'informative' as const;
+}
+
+// ---------------------------------------------------------------
+// Skillset builder types + helpers
+// ---------------------------------------------------------------
+
+type SkillType =
+  | '#Microsoft.Skills.Text.SplitSkill'
+  | '#Microsoft.Skills.Text.V3.EntityRecognitionSkill'
+  | '#Microsoft.Skills.Text.KeyPhraseExtractionSkill'
+  | '#Microsoft.Skills.Text.LanguageDetectionSkill'
+  | '#Microsoft.Skills.Text.MergeSkill'
+  | '#Microsoft.Skills.Vision.OcrSkill'
+  | '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill';
+
+interface SkillIo { name: string; source: string; targetName?: string }
+
+interface BuiltSkill {
+  id: string; // local UUID for React key
+  type: SkillType;
+  context: string;
+  // SplitSkill
+  textSplitMode?: 'pages' | 'sentences';
+  maximumPageLength?: number;
+  // EntityRecognitionSkill
+  categories?: string[];
+  minimumPrecision?: number;
+  // KeyPhraseExtractionSkill
+  defaultLanguageCode?: string;
+  // OcrSkill
+  detectOrientation?: boolean;
+  // AzureOpenAIEmbeddingSkill
+  resourceUri?: string;
+  deploymentId?: string;
+  modelName?: string;
+  // inputs/outputs
+  inputs: SkillIo[];
+  outputs: SkillIo[];
+}
+
+const SKILL_LABELS: Record<SkillType, string> = {
+  '#Microsoft.Skills.Text.SplitSkill': 'Split text',
+  '#Microsoft.Skills.Text.V3.EntityRecognitionSkill': 'Entity recognition',
+  '#Microsoft.Skills.Text.KeyPhraseExtractionSkill': 'Key phrase extraction',
+  '#Microsoft.Skills.Text.LanguageDetectionSkill': 'Language detection',
+  '#Microsoft.Skills.Text.MergeSkill': 'Merge text',
+  '#Microsoft.Skills.Vision.OcrSkill': 'OCR',
+  '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill': 'Azure OpenAI embedding',
+};
+
+const SKILL_TYPES = Object.keys(SKILL_LABELS) as SkillType[];
+
+const ENTITY_CATEGORIES = ['Person', 'Location', 'Organization', 'Quantity', 'DateTime', 'URL', 'Email', 'PersonType', 'Event', 'Product', 'Skill', 'Address', 'PhoneNumber', 'IPAddress'];
+
+function mkOut(name: string, targetName?: string): SkillIo {
+  return { name, source: '', targetName: targetName || name };
+}
+
+function defaultSkill(type: SkillType): BuiltSkill {
+  const base: BuiltSkill = { id: Math.random().toString(36).slice(2), type, context: '/document', inputs: [{ name: 'text', source: '/document/content' }], outputs: [mkOut('output')] };
+  if (type === '#Microsoft.Skills.Text.SplitSkill') return { ...base, textSplitMode: 'pages', maximumPageLength: 5000, inputs: [{ name: 'text', source: '/document/content' }], outputs: [mkOut('textItems')] };
+  if (type === '#Microsoft.Skills.Text.V3.EntityRecognitionSkill') return { ...base, categories: ['Organization'], minimumPrecision: 0.5, outputs: [mkOut('organizations')] };
+  if (type === '#Microsoft.Skills.Text.KeyPhraseExtractionSkill') return { ...base, defaultLanguageCode: 'en', outputs: [mkOut('keyPhrases')] };
+  if (type === '#Microsoft.Skills.Text.LanguageDetectionSkill') return { ...base, inputs: [], outputs: [mkOut('languageCode')] };
+  if (type === '#Microsoft.Skills.Text.MergeSkill') return { ...base, inputs: [{ name: 'text', source: '/document/content' }, { name: 'itemsToInsert', source: '/document/pages/*' }], outputs: [mkOut('mergedText')] };
+  if (type === '#Microsoft.Skills.Vision.OcrSkill') return { ...base, detectOrientation: true, inputs: [{ name: 'image', source: '/document/normalized_images/*' }], outputs: [mkOut('text')] };
+  if (type === '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill') return { ...base, resourceUri: '', deploymentId: 'text-embedding-ada-002', modelName: 'text-embedding-ada-002', inputs: [{ name: 'text', source: '/document/content' }], outputs: [mkOut('embedding')] };
+  return base;
+}
+
+function serializeSkill(s: BuiltSkill): Record<string, any> {
+  const base: Record<string, any> = {
+    '@odata.type': s.type,
+    context: s.context,
+    inputs: s.inputs.filter((i) => i.name).map((i) => ({ name: i.name, source: i.source })),
+    outputs: s.outputs.filter((o) => o.name).map((o) => ({ name: o.name, targetName: o.targetName || o.name })),
+  };
+  if (s.type === '#Microsoft.Skills.Text.SplitSkill') {
+    base.textSplitMode = s.textSplitMode || 'pages';
+    if (s.maximumPageLength) base.maximumPageLength = s.maximumPageLength;
+  }
+  if (s.type === '#Microsoft.Skills.Text.V3.EntityRecognitionSkill') {
+    if (s.categories?.length) base.categories = s.categories;
+    if (s.minimumPrecision != null) base.minimumPrecision = s.minimumPrecision;
+  }
+  if (s.type === '#Microsoft.Skills.Text.KeyPhraseExtractionSkill' && s.defaultLanguageCode) {
+    base.defaultLanguageCode = s.defaultLanguageCode;
+  }
+  if (s.type === '#Microsoft.Skills.Vision.OcrSkill') {
+    base.detectOrientation = !!s.detectOrientation;
+  }
+  if (s.type === '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill') {
+    if (s.resourceUri) base.resourceUri = s.resourceUri;
+    if (s.deploymentId) base.deploymentId = s.deploymentId;
+    if (s.modelName) base.modelName = s.modelName;
+  }
+  return base;
+}
+
+function assembleSkillsetDef(name: string, skills: BuiltSkill[]): Record<string, any> {
+  return { name, skills: skills.map(serializeSkill) };
+}
+
+// ---- SkillCard sub-component ----
+function SkillCard({ skill, onChange, onRemove }: { skill: BuiltSkill; onChange: (s: BuiltSkill) => void; onRemove: () => void }) {
+  const [open, setOpen] = useState(true);
+
+  const upd = (patch: Partial<BuiltSkill>) => onChange({ ...skill, ...patch });
+
+  const setInput = (idx: number, field: 'name' | 'source', val: string) => {
+    const inputs = skill.inputs.map((r, i) => i === idx ? { ...r, [field]: val } : r);
+    upd({ inputs });
+  };
+  const addInput = () => upd({ inputs: [...skill.inputs, { name: '', source: '' }] });
+  const removeInput = (idx: number) => upd({ inputs: skill.inputs.filter((_, i) => i !== idx) });
+
+  const setOutput = (idx: number, field: 'name' | 'targetName', val: string) => {
+    const outputs = skill.outputs.map((r, i) => i === idx ? { ...r, [field]: val } : r);
+    upd({ outputs });
+  };
+  const addOutput = () => upd({ outputs: [...skill.outputs, { name: '', source: '', targetName: '' }] });
+  const removeOutput = (idx: number) => upd({ outputs: skill.outputs.filter((_, i) => i !== idx) });
+
+  const toggleCategory = (cat: string) => {
+    const cats = skill.categories || [];
+    upd({ categories: cats.includes(cat) ? cats.filter((c) => c !== cat) : [...cats, cat] });
+  };
+
+  const cardStyle: React.CSSProperties = {
+    border: `1px solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
+    marginTop: tokens.spacingVerticalS,
+    background: tokens.colorNeutralBackground2,
+  };
+  const headerStyle: React.CSSProperties = {
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    cursor: 'pointer', userSelect: 'none',
+  };
+  const rowStyle: React.CSSProperties = { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalXS };
+
+  return (
+    <div style={cardStyle}>
+      <div style={headerStyle} onClick={() => setOpen((o) => !o)} role="button" tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpen((o) => !o); } }}>
+        <BrainCircuit16Regular style={{ color: tokens.colorBrandForeground1, flexShrink: 0 }} />
+        <Body1Strong style={{ flex: 1 }}>{SKILL_LABELS[skill.type]}</Body1Strong>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{skill.type.split('.').pop()}</Caption1>
+        {open ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+        <Button size="small" appearance="subtle" icon={<Dismiss16Regular />}
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          aria-label="Remove skill" style={{ marginLeft: tokens.spacingHorizontalXS }} />
+      </div>
+
+      {open && (
+        <div style={{ marginTop: tokens.spacingVerticalS }}>
+          <Field label="Context path" style={{ marginBottom: tokens.spacingVerticalS }}>
+            <Input size="small" value={skill.context} onChange={(_, d) => upd({ context: d.value })} placeholder="/document" />
+          </Field>
+
+          {/* SplitSkill */}
+          {skill.type === '#Microsoft.Skills.Text.SplitSkill' && (
+            <>
+              <Field label="Split mode" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Dropdown size="small" value={skill.textSplitMode || 'pages'} selectedOptions={[skill.textSplitMode || 'pages']}
+                  onOptionSelect={(_, d) => upd({ textSplitMode: (d.optionValue as any) || 'pages' })}>
+                  <Option value="pages">pages</Option>
+                  <Option value="sentences">sentences</Option>
+                </Dropdown>
+              </Field>
+              <Field label="Max page length (chars)" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Input size="small" type="number" value={String(skill.maximumPageLength ?? 5000)}
+                  onChange={(_, d) => upd({ maximumPageLength: parseInt(d.value) || 5000 })} />
+              </Field>
+            </>
+          )}
+
+          {/* EntityRecognitionSkill */}
+          {skill.type === '#Microsoft.Skills.Text.V3.EntityRecognitionSkill' && (
+            <>
+              <Label size="small" style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Categories</Label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
+                {ENTITY_CATEGORIES.map((cat) => (
+                  <Checkbox key={cat} size="medium" label={cat} checked={(skill.categories || []).includes(cat)}
+                    onChange={() => toggleCategory(cat)} />
+                ))}
+              </div>
+              <Field label="Min precision (0–1)" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Input size="small" type="number" value={String(skill.minimumPrecision ?? 0.5)}
+                  onChange={(_, d) => upd({ minimumPrecision: parseFloat(d.value) || 0 })} />
+              </Field>
+            </>
+          )}
+
+          {/* KeyPhraseExtractionSkill */}
+          {skill.type === '#Microsoft.Skills.Text.KeyPhraseExtractionSkill' && (
+            <Field label="Default language code" style={{ marginBottom: tokens.spacingVerticalS }}>
+              <Input size="small" value={skill.defaultLanguageCode || 'en'}
+                onChange={(_, d) => upd({ defaultLanguageCode: d.value })} placeholder="en" />
+            </Field>
+          )}
+
+          {/* OcrSkill */}
+          {skill.type === '#Microsoft.Skills.Vision.OcrSkill' && (
+            <div style={{ marginBottom: tokens.spacingVerticalS }}>
+              <Checkbox label="Detect orientation" checked={!!skill.detectOrientation}
+                onChange={(_, d) => upd({ detectOrientation: !!d.checked })} />
+            </div>
+          )}
+
+          {/* AzureOpenAIEmbeddingSkill */}
+          {skill.type === '#Microsoft.Skills.Text.AzureOpenAIEmbeddingSkill' && (
+            <>
+              <Field label="Resource URI" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Input size="small" value={skill.resourceUri || ''}
+                  onChange={(_, d) => upd({ resourceUri: d.value })} placeholder="https://my-aoai.openai.azure.com" />
+              </Field>
+              <Field label="Deployment ID" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Input size="small" value={skill.deploymentId || ''}
+                  onChange={(_, d) => upd({ deploymentId: d.value })} placeholder="text-embedding-ada-002" />
+              </Field>
+              <Field label="Model name" style={{ marginBottom: tokens.spacingVerticalS }}>
+                <Input size="small" value={skill.modelName || ''}
+                  onChange={(_, d) => upd({ modelName: d.value })} placeholder="text-embedding-ada-002" />
+              </Field>
+            </>
+          )}
+
+          {/* Inputs */}
+          <Body1Strong style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>Inputs</Body1Strong>
+          {skill.inputs.map((inp, idx) => (
+            <div key={idx} style={rowStyle}>
+              <Input size="small" style={{ flex: 1 }} placeholder="name" value={inp.name}
+                onChange={(_, d) => setInput(idx, 'name', d.value)} />
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>←</Caption1>
+              <Input size="small" style={{ flex: 2 }} placeholder="/document/content" value={inp.source}
+                onChange={(_, d) => setInput(idx, 'source', d.value)} />
+              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove input"
+                onClick={() => removeInput(idx)} />
+            </div>
+          ))}
+          <Button size="small" appearance="subtle" icon={<Add16Regular />} style={{ marginTop: tokens.spacingVerticalXS }}
+            onClick={addInput}>Add input</Button>
+
+          {/* Outputs */}
+          <Body1Strong style={{ display: 'block', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalXS }}>Outputs</Body1Strong>
+          {skill.outputs.map((out, idx) => (
+            <div key={idx} style={rowStyle}>
+              <Input size="small" style={{ flex: 1 }} placeholder="name" value={out.name}
+                onChange={(_, d) => setOutput(idx, 'name', d.value)} />
+              <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>→</Caption1>
+              <Input size="small" style={{ flex: 2 }} placeholder="targetName" value={out.targetName || ''}
+                onChange={(_, d) => setOutput(idx, 'targetName', d.value)} />
+              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove output"
+                onClick={() => removeOutput(idx)} />
+            </div>
+          ))}
+          <Button size="small" appearance="subtle" icon={<Add16Regular />} style={{ marginTop: tokens.spacingVerticalXS }}
+            onClick={addOutput}>Add output</Button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export interface AiSearchServiceTreeProps {
@@ -144,8 +409,11 @@ export function AiSearchServiceTree({
   const [cDsConn, setCDsConn] = useState('');
   const [cDsContainer, setCDsContainer] = useState('');
   const [cDsQuery, setCDsQuery] = useState('');
-  // skillset (JSON)
-  const [cSkillsetJson, setCSkillsetJson] = useState('');
+  // skillset builder
+  const [cSkillsetSkills, setCSkillsetSkills] = useState<BuiltSkill[]>([]);
+  const [cSkillsetAdvancedOpen, setCSkillsetAdvancedOpen] = useState(false);
+  const [cSkillsetAdvancedJson, setCSkillsetAdvancedJson] = useState('');
+  const [cSkillsetAdvancedDirty, setCSkillsetAdvancedDirty] = useState(false);
   // synonym map
   const [cSynonyms, setCSynonyms] = useState('');
   // alias
@@ -215,7 +483,8 @@ export function AiSearchServiceTree({
     setCreateGroup(g); setCreateError(null);
     setCName(''); setCDataSource(''); setCTargetIndex(''); setCSkillset('');
     setCDsType('azureblob'); setCDsConn(''); setCDsContainer(''); setCDsQuery('');
-    setCSkillsetJson(''); setCSynonyms(''); setCAliasIndex(''); setCDebugIndexer('');
+    setCSkillsetSkills([]); setCSkillsetAdvancedOpen(false); setCSkillsetAdvancedJson(''); setCSkillsetAdvancedDirty(false);
+    setCSynonyms(''); setCAliasIndex(''); setCDebugIndexer('');
   }, []);
 
   const submitCreate = useCallback(async () => {
@@ -233,9 +502,17 @@ export function AiSearchServiceTree({
         if (!cName.trim() || !cDsConn.trim() || !cDsContainer.trim()) { setCreateError('Name, connection string and container are required.'); setBusy(false); return; }
         route = R.datasources; payload = { name: cName.trim(), type: cDsType, connectionString: cDsConn.trim(), container: cDsContainer.trim(), ...(cDsQuery.trim() ? { query: cDsQuery.trim() } : {}) };
       } else if (createGroup === 'skillset') {
+        if (!cName.trim()) { setCreateError('Skillset name is required.'); setBusy(false); return; }
         let def: any;
-        try { def = JSON.parse(cSkillsetJson); } catch (e: any) { setCreateError(`Invalid JSON: ${e?.message}`); setBusy(false); return; }
-        if (cName.trim() && !def.name) def.name = cName.trim();
+        if (cSkillsetAdvancedDirty && cSkillsetAdvancedJson.trim()) {
+          // Power user edited the advanced JSON — use that verbatim (with name patch).
+          try { def = JSON.parse(cSkillsetAdvancedJson); } catch (e: any) { setCreateError(`Advanced JSON is invalid: ${e?.message}`); setBusy(false); return; }
+          if (!def.name) def.name = cName.trim();
+        } else {
+          // Guided builder — assemble from the skill cards.
+          if (cSkillsetSkills.length === 0) { setCreateError('Add at least one skill.'); setBusy(false); return; }
+          def = assembleSkillsetDef(cName.trim(), cSkillsetSkills);
+        }
         route = R.skillsets; payload = { definition: def };
       } else if (createGroup === 'synonymmap') {
         if (!cName.trim() || !cSynonyms.trim()) { setCreateError('Name and rules are required.'); setBusy(false); return; }
@@ -260,7 +537,7 @@ export function AiSearchServiceTree({
     } finally {
       setBusy(false);
     }
-  }, [createGroup, cName, cDataSource, cTargetIndex, cSkillset, cDsType, cDsConn, cDsContainer, cDsQuery, cSkillsetJson, cSynonyms, cAliasIndex, cDebugIndexer, debugStorageConn, loadAll, loadDebugSessions]);
+  }, [createGroup, cName, cDataSource, cTargetIndex, cSkillset, cDsType, cDsConn, cDsContainer, cDsQuery, cSkillsetSkills, cSkillsetAdvancedDirty, cSkillsetAdvancedJson, cSynonyms, cAliasIndex, cDebugIndexer, debugStorageConn, loadAll, loadDebugSessions]);
 
   const delDebugSession = useCallback(async (name: string) => {
     setBusy(true); setError(null);
@@ -607,7 +884,7 @@ export function AiSearchServiceTree({
 
       {/* Create dialog */}
       <Dialog open={createGroup !== null} onOpenChange={(_, d) => { if (!d.open) setCreateGroup(null); }}>
-        <DialogSurface style={{ maxWidth: 560 }}>
+        <DialogSurface style={{ maxWidth: createGroup === 'skillset' ? 680 : 560 }}>
           <DialogBody>
             <DialogTitle>
               New {createGroup === 'index' ? 'index'
@@ -683,20 +960,103 @@ export function AiSearchServiceTree({
 
               {createGroup === 'skillset' && (
                 <>
-                  <Field label="Skillset definition (JSON)" required>
-                    <Textarea
-                      value={cSkillsetJson}
-                      onChange={(_, d) => setCSkillsetJson(d.value)}
-                      resize="vertical"
-                      style={{ minHeight: 220, fontFamily: 'Consolas, monospace', fontSize: 12 }}
-                      placeholder={'{\n  "name": "my-skillset",\n  "skills": [\n    {\n      "@odata.type": "#Microsoft.Skills.Text.V3.EntityRecognitionSkill",\n      "categories": ["Organization"],\n      "context": "/document",\n      "inputs": [{ "name": "text", "source": "/document/content" }],\n      "outputs": [{ "name": "organizations", "targetName": "orgs" }]\n    }\n  ]\n}'}
-                    />
+                  {/* Name field is shared above for all groups except skillset — render it inline here */}
+                  <Field label="Name" required style={{ marginBottom: tokens.spacingVerticalS }}>
+                    <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="lowercase-with-dashes" />
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
-                    Skillsets are rich (built-in + custom skills, knowledge stores, projections) — authored as a full JSON
-                    definition and sent via <code>PUT /skillsets/{'{name}'}</code>. A guided skill-by-skill designer is not
-                    built yet (see "Not yet wired").
+
+                  {/* Skill list */}
+                  <Body1Strong style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>
+                    Skills ({cSkillsetSkills.length})
+                  </Body1Strong>
+
+                  {cSkillsetSkills.length === 0 && (
+                    <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalS }}>
+                      No skills yet — add one below to start building the enrichment pipeline.
+                    </Caption1>
+                  )}
+
+                  <div style={{ maxHeight: 340, overflowY: 'auto' }}>
+                    {cSkillsetSkills.map((sk, idx) => (
+                      <SkillCard
+                        key={sk.id}
+                        skill={sk}
+                        onChange={(updated) => {
+                          setCSkillsetSkills((prev) => prev.map((s, i) => i === idx ? updated : s));
+                          setCSkillsetAdvancedDirty(false);
+                        }}
+                        onRemove={() => {
+                          setCSkillsetSkills((prev) => prev.filter((_, i) => i !== idx));
+                          setCSkillsetAdvancedDirty(false);
+                        }}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Add skill picker */}
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS }}>
+                    <Dropdown
+                      size="small"
+                      placeholder="Add a skill…"
+                      style={{ flex: 1 }}
+                      onOptionSelect={(_, d) => {
+                        if (!d.optionValue) return;
+                        setCSkillsetSkills((prev) => [...prev, defaultSkill(d.optionValue as SkillType)]);
+                        setCSkillsetAdvancedDirty(false);
+                      }}
+                    >
+                      {SKILL_TYPES.map((t) => (
+                        <Option key={t} value={t} text={SKILL_LABELS[t]}>{SKILL_LABELS[t]}</Option>
+                      ))}
+                    </Dropdown>
+                  </div>
+
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
+                    Assembled skillset is sent via <code>PUT /skillsets/{'{name}'}</code>.
                   </Caption1>
+
+                  {/* Advanced JSON collapsible — secondary, collapsed by default */}
+                  <Divider style={{ margin: `${tokens.spacingVerticalM} 0 ${tokens.spacingVerticalXS}` }} />
+                  <div
+                    style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, cursor: 'pointer', userSelect: 'none' }}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => {
+                      if (!cSkillsetAdvancedOpen) {
+                        // Sync the assembled JSON into the textarea on first open (if not dirty).
+                        if (!cSkillsetAdvancedDirty && cName.trim()) {
+                          setCSkillsetAdvancedJson(JSON.stringify(assembleSkillsetDef(cName.trim(), cSkillsetSkills), null, 2));
+                        }
+                      }
+                      setCSkillsetAdvancedOpen((o) => !o);
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setCSkillsetAdvancedOpen((o) => !o); } }}
+                  >
+                    {cSkillsetAdvancedOpen ? <ChevronDown16Regular /> : <ChevronRight16Regular />}
+                    <Body1 style={{ color: tokens.colorNeutralForeground2 }}>Advanced — edit raw JSON</Body1>
+                    {cSkillsetAdvancedDirty && (
+                      <Badge size="small" appearance="tint" color="warning">custom JSON active</Badge>
+                    )}
+                  </div>
+
+                  {cSkillsetAdvancedOpen && (
+                    <>
+                      <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
+                        Edit the assembled JSON directly. When saved, this overrides the guided builder above.
+                        Clear this field to return to the guided builder.
+                      </Caption1>
+                      <Textarea
+                        value={cSkillsetAdvancedJson}
+                        onChange={(_, d) => {
+                          setCSkillsetAdvancedJson(d.value);
+                          setCSkillsetAdvancedDirty(!!d.value.trim());
+                        }}
+                        resize="vertical"
+                        style={{ marginTop: tokens.spacingVerticalXS, minHeight: 180, fontFamily: 'Consolas, monospace', fontSize: 12, width: '100%' }}
+                        placeholder={'{\n  "name": "my-skillset",\n  "skills": [...]\n}'}
+                      />
+                    </>
+                  )}
                 </>
               )}
 

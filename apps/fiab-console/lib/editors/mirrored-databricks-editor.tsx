@@ -27,20 +27,26 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular, Delete20Regular, Save20Regular,
+  Info20Regular, BookDatabase20Regular, TableSimple20Regular, PlugConnected20Regular,
+  Settings20Regular, ShieldKeyhole20Regular, DatabaseSearch24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { OneLakeSecurityTab } from './components/onelake-security-tab';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 240 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  treePad: { padding: tokens.spacingVerticalS },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  commentCell: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '240px' },
+  sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorBrandForeground1 },
+  schemaSelect: { minWidth: '200px' },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean }
@@ -89,6 +95,20 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const [createOpen, setCreateOpen] = useState(false);
   const [cName, setCName] = useState('');
   const [cCatalog, setCCatalog] = useState('');
+  // Real Unity Catalog list for the picker (empty → honest freeform fallback).
+  const [ucCatalogs, setUcCatalogs] = useState<string[]>([]);
+  useEffect(() => {
+    if (!createOpen) return;
+    let live = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/items/mirrored-databricks/catalogs');
+        const j = await r.json();
+        if (live && j.ok && Array.isArray(j.catalogs)) setUcCatalogs(j.catalogs);
+      } catch { /* keep freeform fallback */ }
+    })();
+    return () => { live = false; };
+  }, [createOpen]);
   const [cHostname, setCHostname] = useState('');
   const [cDesc, setCDesc] = useState('');
   const [cBusy, setCBusy] = useState(false);
@@ -257,7 +277,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Mirrored Databricks</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mirrored Databricks</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && mirrors === null && <Spinner size="tiny" label="Loading…" />}
           {mirrors && mirrors.length === 0 && !listErr && <Caption1>No mirrors yet.</Caption1>}
@@ -276,12 +296,12 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
         <>
           <div className={s.tabs}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)}>
-              <Tab value="overview">Overview</Tab>
-              <Tab value="catalog">Catalog</Tab>
-              <Tab value="tables">Tables</Tab>
-              <Tab value="sql">SQL endpoint</Tab>
-              <Tab value="security">Security</Tab>
-              <Tab value="settings">Settings</Tab>
+              <Tab value="overview" icon={<Info20Regular />}>Overview</Tab>
+              <Tab value="catalog" icon={<BookDatabase20Regular />}>Catalog</Tab>
+              <Tab value="tables" icon={<TableSimple20Regular />}>Tables</Tab>
+              <Tab value="sql" icon={<PlugConnected20Regular />}>SQL endpoint</Tab>
+              <Tab value="security" icon={<ShieldKeyhole20Regular />}>Security</Tab>
+              <Tab value="settings" icon={<Settings20Regular />}>Settings</Tab>
             </TabList>
           </div>
           <div className={s.pad}>
@@ -314,8 +334,16 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                     <DialogTitle>Mount a Databricks Unity Catalog</DialogTitle>
                     <DialogContent>
                       <Field label="Display name" required><Input value={cName} onChange={(_, d) => setCName(d.value)} /></Field>
-                      <Field label="Unity Catalog name" required hint="The UC catalog to mirror, e.g. main / sales / lakehouse_silver">
-                        <Input value={cCatalog} onChange={(_, d) => setCCatalog(d.value)} placeholder="main" />
+                      <Field label="Unity Catalog name" required hint={ucCatalogs.length > 0 ? 'Pick the Unity Catalog to mirror.' : 'The UC catalog to mirror, e.g. main / sales / lakehouse_silver'}>
+                        {ucCatalogs.length > 0 ? (
+                          <Dropdown placeholder="Select a catalog…" value={cCatalog}
+                            selectedOptions={cCatalog ? [cCatalog] : []}
+                            onOptionSelect={(_, d) => { if (d.optionValue) setCCatalog(d.optionValue); }}>
+                            {ucCatalogs.map((c) => <Option key={c} value={c} text={c}>{c}</Option>)}
+                          </Dropdown>
+                        ) : (
+                          <Input value={cCatalog} onChange={(_, d) => setCCatalog(d.value)} placeholder="main" />
+                        )}
                       </Field>
                       <Field label="Databricks hostname (optional override)" hint="Defaults to LOOM_DATABRICKS_HOSTNAME">
                         <Input value={cHostname} onChange={(_, d) => setCHostname(d.value)} placeholder="adb-xxxx.azuredatabricks.net" />
@@ -358,12 +386,22 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
 
             {tab === 'overview' && (
               <>
-                {!active && <Caption1>Pick a mirror from the left panel, or click "New mirror".</Caption1>}
+                {!active && (
+                  <EmptyState
+                    icon={<DatabaseSearch24Regular />}
+                    title="No mirror selected"
+                    body="Pick a mirrored Databricks catalog from the left panel, or create one to mount a Unity Catalog as a read-only OneLake mirror."
+                    primaryAction={workspaceId ? { label: 'New mirror', onClick: () => setCreateOpen(true) } : undefined}
+                  />
+                )}
                 {active && (
                   <>
-                    <Subtitle2>{active.displayName}</Subtitle2>
-                    <Caption1>Catalog: <code>{active.catalogName || '—'}</code></Caption1>
-                    <Caption1>Hostname: <code>{active.hostname || process.env.NEXT_PUBLIC_LOOM_DATABRICKS_HOSTNAME || '(uses LOOM_DATABRICKS_HOSTNAME)'}</code></Caption1>
+                    <div className={s.sectionHead}>
+                      <Database20Regular />
+                      <Subtitle2>{active.displayName}</Subtitle2>
+                    </div>
+                    <Caption1>Catalog: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{active.catalogName || '—'}</code></Caption1>
+                    <Caption1>Hostname: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{active.hostname || process.env.NEXT_PUBLIC_LOOM_DATABRICKS_HOSTNAME || '(uses LOOM_DATABRICKS_HOSTNAME)'}</code></Caption1>
                     <MessageBar intent="info">
                       <MessageBarBody>
                         <MessageBarTitle>How Loom drives this</MessageBarTitle>
@@ -378,7 +416,13 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
 
             {tab === 'catalog' && (
               <>
-                {!mirrorId && <Caption1>Select a mirror first.</Caption1>}
+                {!mirrorId && (
+                  <EmptyState
+                    icon={<BookDatabase20Regular />}
+                    title="Select a mirror"
+                    body="Choose a mirrored Databricks catalog from the left panel to browse its Unity Catalog schemas."
+                  />
+                )}
                 {mirrorId && schemas === null && <Spinner size="small" label="Calling Unity Catalog…" labelPosition="after" />}
                 {schemasErr && (
                   <MessageBar intent="warning">
@@ -389,7 +433,14 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                     </MessageBarBody>
                   </MessageBar>
                 )}
-                {schemas && schemas.length === 0 && !schemasErr && <Caption1>No schemas found in this catalog.</Caption1>}
+                {schemas && schemas.length === 0 && !schemasErr && (
+                  <EmptyState
+                    icon={<BookDatabase20Regular />}
+                    title="No schemas found"
+                    body="This Unity Catalog has no schemas, or none are visible to the Console identity. Verify the catalog name and USE CATALOG grant, then refresh."
+                    primaryAction={mirrorId ? { label: 'Refresh', onClick: refresh, appearance: 'outline' } : undefined}
+                  />
+                )}
                 {schemas && schemas.length > 0 && (
                   <div className={s.tableWrap}>
                     <Table aria-label="UC schemas" size="small">
@@ -404,7 +455,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                           <TableRow key={sc.full_name || sc.name}>
                             <TableCell className={s.cell}>{sc.name}</TableCell>
                             <TableCell className={s.cell}>{sc.full_name || '—'}</TableCell>
-                            <TableCell>{sc.comment || '—'}</TableCell>
+                            <TableCell className={s.commentCell}>{sc.comment || '—'}</TableCell>
                             <TableCell>
                               <Button size="small" appearance="primary" onClick={() => { setSchemaName(sc.name); setTables(null); setTab('tables'); }}>Browse tables</Button>
                             </TableCell>
@@ -419,7 +470,13 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
 
             {tab === 'tables' && (
               <>
-                {!mirrorId && <Caption1>Select a mirror first.</Caption1>}
+                {!mirrorId && (
+                  <EmptyState
+                    icon={<TableSimple20Regular />}
+                    title="Select a mirror"
+                    body="Choose a mirrored Databricks catalog from the left panel, then pick a schema to inspect its Unity Catalog tables."
+                  />
+                )}
                 {mirrorId && (
                   <div className={s.toolbar}>
                     <Caption1 id="mirror-schema-label">Schema</Caption1>
@@ -430,7 +487,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                         value={schemaName}
                         selectedOptions={schemaName ? [schemaName] : []}
                         onOptionSelect={(_, d) => { if (d.optionValue) { setSchemaName(d.optionValue); setTables(null); } }}
-                        style={{ minWidth: 200 }}
+                        className={s.schemaSelect}
                       >
                         {schemas.map((sc) => <Option key={sc.full_name || sc.name} value={sc.name} text={sc.name}>{sc.name}</Option>)}
                       </Dropdown>
@@ -445,7 +502,14 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                 )}
                 {tables === null && schemaName && <Spinner size="small" label="Loading tables…" labelPosition="after" />}
                 {tablesErr && <MessageBar intent="error"><MessageBarBody>{tablesErr}</MessageBarBody></MessageBar>}
-                {tables && tables.length === 0 && !tablesErr && schemaName && <Caption1>Schema <code>{schemaName}</code> has no tables.</Caption1>}
+                {tables && tables.length === 0 && !tablesErr && schemaName && (
+                  <EmptyState
+                    icon={<TableSimple20Regular />}
+                    title="No tables in this schema"
+                    body={`Schema "${schemaName}" has no tables, or none are visible to the Console identity. Pick another schema or refresh the catalog metadata.`}
+                    primaryAction={mirrorId ? { label: 'List tables', onClick: () => mirrorId && schemaName && loadTables(workspaceId, mirrorId, schemaName), appearance: 'outline' } : undefined}
+                  />
+                )}
                 {tables && tables.length > 0 && (
                   <div className={s.tableWrap}>
                     <Table aria-label="UC tables" size="small">
@@ -461,7 +525,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                             <TableCell className={s.cell}>{t.name}</TableCell>
                             <TableCell>{t.table_type || '—'}</TableCell>
                             <TableCell>{t.data_source_format || '—'}</TableCell>
-                            <TableCell>{t.comment || '—'}</TableCell>
+                            <TableCell className={s.commentCell}>{t.comment || '—'}</TableCell>
                           </TableRow>
                         ))}
                       </TableBody>
@@ -473,10 +537,16 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
 
             {tab === 'sql' && (
               <>
-                {!mirrorId && <Caption1>Select a mirror first.</Caption1>}
+                {!mirrorId && (
+                  <EmptyState
+                    icon={<PlugConnected20Regular />}
+                    title="Select a mirror"
+                    body="Choose a mirrored Databricks catalog from the left panel to see its paired Synapse Serverless SQL analytics endpoint."
+                  />
+                )}
                 {mirrorId && (
                   <div className={s.toolbar}>
-                    <Subtitle2>SQL analytics endpoint</Subtitle2>
+                    <span className={s.sectionHead}><PlugConnected20Regular /><Subtitle2>SQL analytics endpoint</Subtitle2></span>
                     <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} disabled={sqlBusy}
                       onClick={() => loadSqlEndpoint(workspaceId, mirrorId)}>Refresh</Button>
                   </div>
@@ -492,13 +562,13 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                           to a Synapse Serverless SQL endpoint{sqlInfo.viewCount ? <> with <strong>{sqlInfo.viewCount}</strong> Delta view(s)</> : ''}.
                         </MessageBarBody>
                       </MessageBar>
-                      <Caption1>Endpoint: <code>{sqlInfo.endpoint || '(set LOOM_SYNAPSE_WORKSPACE)'}</code></Caption1>
-                      <Caption1>Database: <code>{sqlInfo.database || '—'}</code></Caption1>
+                      <Caption1>Endpoint: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sqlInfo.endpoint || '(set LOOM_SYNAPSE_WORKSPACE)'}</code></Caption1>
+                      <Caption1>Database: <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sqlInfo.database || '—'}</code></Caption1>
                       <MessageBar intent="info">
                         <MessageBarBody>
                           <MessageBarTitle>Query it</MessageBarTitle>
                           Connect any T-SQL client to the endpoint above and run e.g.
-                          <code style={{ display: 'block', marginTop: 4, fontFamily: 'Consolas, monospace' }}>
+                          <code style={{ display: 'block', marginTop: tokens.spacingVerticalXS, fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' }}>
                             USE [{sqlInfo.database || 'loom_dbxmirror_…'}]; SELECT TOP 100 * FROM [dbo].[&lt;schema&gt;_&lt;table&gt;];
                           </code>
                           Each view reads the UC table&apos;s Delta files directly (OPENROWSET FORMAT=&apos;delta&apos;) over ADLS Gen2 — Azure-native, no Fabric.
@@ -522,7 +592,13 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
 
             {tab === 'settings' && (
               <>
-                {!active && <Caption1>Select a mirror first.</Caption1>}
+                {!active && (
+                  <EmptyState
+                    icon={<Settings20Regular />}
+                    title="Select a mirror"
+                    body="Choose a mirrored Databricks catalog from the left panel to edit its catalog name and Databricks hostname override."
+                  />
+                )}
                 {active && (
                   <>
                     <Field label="Unity Catalog name"><Input value={editCatalog} onChange={(_, d) => setEditCatalog(d.value)} /></Field>

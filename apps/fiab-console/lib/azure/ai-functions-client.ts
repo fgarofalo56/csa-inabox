@@ -25,6 +25,9 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from './copilot-orchestrator';
+import { buildAoaiBody } from './aoai-model-contract';
+import { cogScope } from './cloud-endpoints';
+import type { TenantCopilotConfig } from '@/lib/types/copilot-config';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -61,6 +64,15 @@ export interface AiFnOptions {
   fields?: string[];
   /** Target language for `translate` (e.g. "Spanish", "fr-FR"). */
   targetLang?: string;
+  /**
+   * Admin-picked tenant Copilot config (Admin → Tenant settings → Copilot &
+   * Agents). When supplied it is forwarded to `resolveAoaiTarget` so an
+   * admin-selected Foundry account + chat deployment is honored even when the
+   * `LOOM_AOAI_*` env vars are unset. Threaded by the BFF callers, which load
+   * it via `loadTenantCopilotConfig(session.claims.oid)`. The library client has
+   * no session of its own, so it relies on the caller to populate this.
+   */
+  tenantConfig?: TenantCopilotConfig | null;
 }
 
 export interface AiFnUsage {
@@ -76,7 +88,7 @@ export interface AiFnResult {
 }
 
 async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken('https://cognitiveservices.azure.com/.default');
+  const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token for AI Functions');
   return t.token;
 }
@@ -137,22 +149,27 @@ export async function callAiFn(
   input: string,
   options: AiFnOptions = {},
 ): Promise<AiFnResult> {
-  const target = await resolveAoaiTarget();
+  const target = await resolveAoaiTarget(options.tenantConfig ?? false);
   const token = await aoaiToken();
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
 
   const messages = [
-    { role: 'system', content: systemPromptFor(fn, options) },
-    { role: 'user', content: input },
+    { role: 'system' as const, content: systemPromptFor(fn, options) },
+    { role: 'user' as const, content: input },
   ];
-  const base: Record<string, unknown> = { messages, max_tokens: options.maxTokens ?? 800 };
 
   // Single round-trip with the reasoning-model temperature fallback copied
-  // verbatim from data-agent-client.ts::runChat.
+  // verbatim from data-agent-client.ts::runChat. Body built via the shared
+  // model contract (centralizes the max_completion_tokens key + canonical
+  // ordering); `temperature` is omitted on the retry shape (withTemp=false).
   const send = async (withTemp: boolean) => fetchWithTimeout(url, {
     method: 'POST',
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-    body: JSON.stringify(withTemp ? { ...base, temperature: 0 } : base),
+    body: JSON.stringify(buildAoaiBody({
+      messages,
+      maxCompletionTokens: options.maxTokens ?? 800,
+      temperature: withTemp ? 0 : undefined,
+    })),
   }, LLM_FETCH_TIMEOUT_MS);
 
   let res = await send(true);

@@ -54,7 +54,7 @@ const useStyles = makeStyles({
   headTitle: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase200, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   spacer: { flex: 1 },
   body: { padding: tokens.spacingHorizontalM },
-  tableScroll: { maxHeight: 340, overflowY: 'auto' },
+  tableScroll: { maxHeight: '340px', overflowY: 'auto' },
   // markdown
   md: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
@@ -72,7 +72,7 @@ const useStyles = makeStyles({
   changeTh: { textAlign: 'left', padding: '4px 12px 4px 0', color: tokens.colorNeutralForeground3, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   changeTd: { padding: '4px 12px 4px 0', borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, verticalAlign: 'top', wordBreak: 'break-word' },
   rawDetails: { fontSize: tokens.fontSizeBase200 },
-  rawPre: { whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto', fontSize: tokens.fontSizeBase200, margin: 0, fontFamily: 'var(--loom-font-mono, ui-monospace, Menlo, monospace)' },
+  rawPre: { whiteSpace: 'pre-wrap', maxHeight: '320px', overflow: 'auto', fontSize: tokens.fontSizeBase200, margin: 0, fontFamily: 'var(--loom-font-mono, ui-monospace, Menlo, monospace)' },
 });
 
 // ---------------------------------------------------------------------------

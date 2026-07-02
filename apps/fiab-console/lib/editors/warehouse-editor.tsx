@@ -217,17 +217,22 @@ export function useWarehouseCopilot(
 const useStyles = makeStyles({
   assistBar: {
     display: 'flex',
-    gap: '6px',
-    padding: '4px 8px',
+    gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     alignItems: 'center',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   assistResult: {
     fontFamily: 'Consolas, "Cascadia Code", monospace',
-    fontSize: '12px',
+    fontSize: tokens.fontSizeBase200,
     whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere',
+    wordBreak: 'break-word',
     margin: 0,
+    maxWidth: '100%',
+    maxHeight: '320px',
+    overflowY: 'auto',
     overflowX: 'auto',
   },
 });
@@ -342,7 +347,7 @@ export function WarehouseCopilotPanels({ copilot }: { copilot: WarehouseCopilot 
           <Input
             size="small"
             autoFocus
-            style={{ flex: 1 }}
+            style={{ flex: 1, minWidth: 0 }}
             placeholder="Describe the query (e.g. 'top 10 customers by revenue last quarter')…"
             value={copilot.prompt}
             onChange={(_: unknown, d: any) => copilot.setPrompt(d.value)}
@@ -385,9 +390,9 @@ export function WarehouseCopilotPanels({ copilot }: { copilot: WarehouseCopilot 
       {(copilot.view === 'suggestion' || copilot.view === 'explain-result') && copilot.result && (
         <MessageBar
           intent={copilot.view === 'explain-result' ? 'info' : 'success'}
-          style={{ margin: '4px 0 0' }}
+          style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}
         >
-          <MessageBarBody>
+          <MessageBarBody style={{ minWidth: 0 }}>
             <pre className={s.assistResult}>{copilot.result}</pre>
           </MessageBarBody>
           <MessageBarActions>
@@ -403,8 +408,10 @@ export function WarehouseCopilotPanels({ copilot }: { copilot: WarehouseCopilot 
         </MessageBar>
       )}
       {copilot.error && (
-        <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
-          <MessageBarBody>{copilot.error}</MessageBarBody>
+        <MessageBar intent="error" style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+            {copilot.error}
+          </MessageBarBody>
           <MessageBarActions>
             <Button size="small" onClick={copilot.dismissError}>
               Dismiss

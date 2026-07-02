@@ -39,20 +39,24 @@ import {
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Play20Regular, Delete20Regular, BoxMultiple20Regular,
-  Save20Regular, Database20Regular, FullScreenMaximize20Regular,
+  Save20Regular, Database20Regular, FullScreenMaximize20Regular, LockClosed20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
-  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: '8px 8px 0' },
-  tableWrap: { overflow: 'auto', maxHeight: 360, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  field: { display: 'flex', flexDirection: 'column', gap: 4, minWidth: 220 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  treePad: { padding: tokens.spacingVerticalS },
+  tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
+  tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '220px' },
+  // Long ARM / REST error strings must wrap and stay bounded instead of forcing
+  // the editor to scroll horizontally.
+  errBody: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%' },
+  errScroll: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: '180px', overflowY: 'auto' },
 });
 
 interface WorkspaceLite { id: string; name: string }
@@ -214,7 +218,7 @@ export function MountedAdfEditor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Mounted factories</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS }}>Mounted factories</Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && mounts === null && <Spinner size="tiny" label="Loading…" />}
           {mounts && mounts.length === 0 && <Caption1>No mounts yet.</Caption1>}
@@ -264,7 +268,7 @@ export function MountedAdfEditor({ item, id }: Props) {
                         <Field label="Subscription id" required><Input value={cSub} onChange={(_, d) => setCSub(d.value)} placeholder="00000000-0000-0000-0000-000000000000" /></Field>
                         <Field label="Resource group" required><Input value={cRg} onChange={(_, d) => setCRg(d.value)} placeholder="rg-data" /></Field>
                         <Field label="Factory name" required><Input value={cFactory} onChange={(_, d) => setCFactory(d.value)} placeholder="adf-prod" /></Field>
-                        {cErr && <MessageBar intent="error"><MessageBarBody>{cErr}</MessageBarBody></MessageBar>}
+                        {cErr && <MessageBar intent="error"><MessageBarBody className={s.errBody}>{cErr}</MessageBarBody></MessageBar>}
                         <MessageBar intent="info">
                           <MessageBarBody>
                             The Loom Console UAMI must hold <strong>Data Factory Contributor</strong> (or at least Reader) on the referenced factory. Grant via portal IAM or <code>az role assignment create</code>.
@@ -282,17 +286,17 @@ export function MountedAdfEditor({ item, id }: Props) {
               </div>
             )}
 
-            {ws.error && <MessageBar intent="error"><MessageBarBody>{ws.error}</MessageBarBody></MessageBar>}
-            {detailErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ARM error</MessageBarTitle>{detailErr}</MessageBarBody></MessageBar>}
+            {ws.error && <MessageBar intent="error"><MessageBarBody className={s.errBody}>{ws.error}</MessageBarBody></MessageBar>}
+            {detailErr && <MessageBar intent="error"><MessageBarBody className={s.errScroll}><MessageBarTitle>ARM error</MessageBarTitle>{detailErr}</MessageBarBody></MessageBar>}
             {partialErr && (
               <MessageBar intent="warning">
-                <MessageBarBody>
+                <MessageBarBody className={s.errScroll}>
                   <MessageBarTitle>Partial load</MessageBarTitle>
                   Some ARM calls failed: {Object.entries(partialErr).map(([k, v]) => <div key={k}><strong>{k}</strong>: {v}</div>)}
                 </MessageBarBody>
               </MessageBar>
             )}
-            {runMsg && <MessageBar intent={runMsg.startsWith('Run started') ? 'success' : 'error'}><MessageBarBody>{runMsg}</MessageBarBody></MessageBar>}
+            {runMsg && <MessageBar intent={runMsg.startsWith('Run started') ? 'success' : 'error'}><MessageBarBody className={s.errBody}>{runMsg}</MessageBarBody></MessageBar>}
 
             {tab === 'pipelines' && (
               <>
@@ -498,7 +502,7 @@ function DataFlowsTab() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 }}>
       <div className={s.toolbar}>
         <Badge appearance="filled" color="brand" icon={<Database20Regular />}>Mapping Data Flows</Badge>
         <div className={s.field}>
@@ -519,7 +523,7 @@ function DataFlowsTab() {
                 <Field label="Name" required hint="1-260 chars: letters, digits, underscore">
                   <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="transform_orders" />
                 </Field>
-                {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
               </DialogContent>
               <DialogActions>
                 <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -532,7 +536,7 @@ function DataFlowsTab() {
         {selected && <Button appearance="subtle" icon={<Delete20Regular />} onClick={() => del(selected)}>Delete</Button>}
       </div>
 
-      {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF REST error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+      {err && <MessageBar intent="error"><MessageBarBody className={s.errScroll}><MessageBarTitle>ADF REST error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
 
       <MappingDataFlowDesigner name={selected} datasets={datasets} reloadKey={reloadKey} />
     </div>
@@ -688,15 +692,15 @@ function definitionToModel(properties: any): DfModel {
 
 const useNodeStyles = makeStyles({
   node: {
-    width: 196, borderRadius: tokens.borderRadiusMedium,
+    width: '196px', borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke1}`,
     backgroundColor: tokens.colorNeutralBackground1,
     boxShadow: tokens.shadow4, overflow: 'hidden', cursor: 'pointer',
   },
-  selected: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: 1 },
-  bar: { height: 4 },
-  body: { padding: '8px 10px', display: 'flex', flexDirection: 'column', gap: 2 },
-  name: { fontWeight: 600, fontSize: 13, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
+  selected: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '1px' },
+  bar: { height: tokens.spacingVerticalXS },
+  body: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalMNudge}`, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
+  name: { fontWeight: 600, fontSize: tokens.fontSizeBase300, color: tokens.colorNeutralForeground1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' },
 });
 
 interface DfNodeData extends Record<string, unknown> { stream: DfStream }
@@ -719,26 +723,29 @@ function DfNode({ data, selected }: NodeProps) {
 const nodeTypes = { dfNode: DfNode };
 
 const useDesignerStyles = makeStyles({
-  shell: { display: 'flex', flexDirection: 'column', gap: 8, flex: 1, minHeight: 0 },
-  topbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  threePane: { display: 'flex', flex: 1, minHeight: 460, gap: 8 },
+  shell: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, flex: 1, minHeight: 0 },
+  topbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  // Let the user drag the data-flow designer taller; bounded + scrollable children.
+  threePane: { display: 'flex', flex: 1, minHeight: '460px', gap: tokens.spacingHorizontalS, resize: 'vertical', overflow: 'hidden', boxSizing: 'border-box' },
   palette: {
-    flexShrink: 0, width: 200, padding: 8, display: 'flex', flexDirection: 'column', gap: 6,
+    flexShrink: 0, width: '200px', padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalSNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },
   tile: {
-    display: 'flex', flexDirection: 'column', gap: 2, padding: '6px 8px',
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, padding: `${tokens.spacingVerticalSNudge} ${tokens.spacingHorizontalS}`,
     borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground1, cursor: 'pointer', textAlign: 'left',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover, borderColor: tokens.colorBrandStroke1 },
   },
   canvasCol: { flex: 1, minWidth: 0, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'hidden' },
   configCol: {
-    flexShrink: 0, width: 300, padding: 12, display: 'flex', flexDirection: 'column', gap: 10,
+    flexShrink: 0, width: '300px', minWidth: 0, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalMNudge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1, overflow: 'auto',
   },
+  // Long ADF REST error / save-result strings wrap + stay bounded.
+  errBody: { overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', maxHeight: '180px', overflowY: 'auto' },
 });
 
 interface DesignerProps {
@@ -929,14 +936,14 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
         </Button>
         <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} onClick={() => load(name)}>Refresh</Button>
         <Button size="small" appearance="subtle" icon={<FullScreenMaximize20Regular />} onClick={() => rf.fitView({ padding: 0.2 })}>Fit</Button>
-        <Tooltip content="Live data preview needs an ADF data-flow debug session" relationship="label">
-          <Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => setPreviewGate(true)}>Data preview</Button>
+        <Tooltip content="Live data preview needs an ADF data-flow debug session (createDataFlowDebugSession + executeDataFlowDebugCommand)" relationship="label">
+          <Button size="small" appearance="subtle" icon={<LockClosed20Regular />} onClick={() => setPreviewGate(true)}>Data preview (needs debug cluster)</Button>
         </Tooltip>
       </div>
 
       {loading && <Spinner size="small" label="Reading data flow from ADF…" labelPosition="after" />}
-      {err && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>ADF REST error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
-      {msg && <MessageBar intent={msg.startsWith('Save failed') ? 'error' : 'success'}><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
+      {err && <MessageBar intent="error"><MessageBarBody className={s.errBody}><MessageBarTitle>ADF REST error</MessageBarTitle>{err}</MessageBarBody></MessageBar>}
+      {msg && <MessageBar intent={msg.startsWith('Save failed') ? 'error' : 'success'}><MessageBarBody className={s.errBody}>{msg}</MessageBarBody></MessageBar>}
       {previewGate && (
         <MessageBar intent="warning">
           <MessageBarBody>
@@ -961,7 +968,7 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
                 onClick={() => addTransform(t.kind)}
                 onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); addTransform(t.kind); } }}
               >
-                <span style={{ fontWeight: 600, borderLeft: `3px solid ${t.color}`, paddingLeft: 6 }}>{t.label}</span>
+                <span style={{ fontWeight: 600, borderLeft: `3px solid ${t.color}`, paddingLeft: tokens.spacingHorizontalSNudge }}>{t.label}</span>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{t.desc}</Caption1>
               </div>
             </Tooltip>

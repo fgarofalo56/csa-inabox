@@ -72,8 +72,8 @@ def _notebook_exit(status: str) -> None:
 batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 
 # Source and target (three-part names for schema-enabled Lakehouses)
-source_table = "lh_silver.dbo.silver_slot_cleansed"
-target_table = "lh_gold.dbo.gold_slot_performance"
+source_table = "lh_silver.silver_slot_cleansed"
+target_table = "lh_gold.gold_slot_performance"
 
 # Business parameters
 THEORETICAL_HOLD_PCT = 0.08  # 8% theoretical hold

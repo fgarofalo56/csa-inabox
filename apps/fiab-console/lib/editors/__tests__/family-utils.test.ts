@@ -28,7 +28,7 @@ import {
   parseUdfFunctions,
   normalizeDaSources, guessDaSourceType, daSupportsExampleQueries,
   shapeDaHistory, canSendDaQuestion,
-  safeSqlIdent, buildInsertSql, buildUpdateSql, buildDeleteSql,
+  safeSqlIdent, buildInsertSql, buildUpdateSql, buildDeleteSql, buildAtelierWhere,
 } from '../_family-utils';
 
 // ============================================================
@@ -68,6 +68,50 @@ describe('buildDeleteSql', () => {
     const r = buildDeleteSql('Order', 'Id', '7');
     expect(r.sql).toBe('DELETE FROM [Order] WHERE [Id] = @k');
     expect(r.params).toEqual([{ name: 'k', value: '7' }]);
+  });
+});
+
+// ============================================================
+// buildAtelierWhere — Workshop object-set-filter → parameterised WHERE
+// (powers the filter-drives-a-table binding + chart/metric aggregates)
+// ============================================================
+describe('buildAtelierWhere', () => {
+  it('returns an empty clause for no / undefined filters', () => {
+    expect(buildAtelierWhere(undefined)).toEqual({ clause: '', params: [] });
+    expect(buildAtelierWhere([])).toEqual({ clause: '', params: [] });
+  });
+  it('builds a parameterised equality predicate (value bound, never concatenated)', () => {
+    const r = buildAtelierWhere([{ column: 'Status', op: 'eq', value: 'open' }]);
+    expect(r.clause).toBe(' WHERE [Status] = @f0');
+    expect(r.params).toEqual([{ name: 'f0', value: 'open' }]);
+  });
+  it('maps every operator and ANDs multiple predicates with distinct param names', () => {
+    const r = buildAtelierWhere([
+      { column: 'Amount', op: 'gte', value: '100' },
+      { column: 'Region', op: 'ne', value: 'EU' },
+    ]);
+    expect(r.clause).toBe(' WHERE [Amount] >= @f0 AND [Region] <> @f1');
+    expect(r.params).toEqual([{ name: 'f0', value: '100' }, { name: 'f1', value: 'EU' }]);
+  });
+  it('wraps contains / startsWith in LIKE with bound wildcards', () => {
+    expect(buildAtelierWhere([{ column: 'Name', op: 'contains', value: 'ab' }]))
+      .toEqual({ clause: ' WHERE [Name] LIKE @f0', params: [{ name: 'f0', value: '%ab%' }] });
+    expect(buildAtelierWhere([{ column: 'Name', op: 'startsWith', value: 'ab' }]))
+      .toEqual({ clause: ' WHERE [Name] LIKE @f0', params: [{ name: 'f0', value: 'ab%' }] });
+  });
+  it('skips predicates with an unsafe column identifier (injection-safe) or empty value', () => {
+    const r = buildAtelierWhere([
+      { column: 'Status; DROP TABLE x', op: 'eq', value: 'open' }, // unsafe ident → skipped
+      { column: 'Region', op: 'eq', value: '' },                    // empty value → skipped
+      { column: 'Tier', op: 'eq', value: 'gold' },                  // kept
+    ]);
+    expect(r.clause).toBe(' WHERE [Tier] = @f0');
+    expect(r.params).toEqual([{ name: 'f0', value: 'gold' }]);
+  });
+  it('honours startIndex so callers can compose clauses without param collisions', () => {
+    const r = buildAtelierWhere([{ column: 'A', op: 'eq', value: '1' }], 3);
+    expect(r.clause).toBe(' WHERE [A] = @f3');
+    expect(r.params).toEqual([{ name: 'f3', value: '1' }]);
   });
 });
 

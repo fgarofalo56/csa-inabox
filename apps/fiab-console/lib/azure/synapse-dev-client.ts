@@ -380,6 +380,72 @@ export async function setSparkPoolAutoPause(
   return jsonOrThrow<SparkPool>(r, `setSparkPoolAutoPause(${name})`);
 }
 
+/**
+ * Full Configuration-tab save for a Spark Big Data pool — the inline
+ * equivalent of the Azure portal's pool "Settings" blade. PATCHes any subset
+ * of { nodeSize, sparkVersion, autoPause, autoScale, nodeCount } against the
+ * ARM bigDataPools resource in a single call so the editor can persist every
+ * field at once (no per-field round-trips).
+ *
+ * autoScale.enabled=false clears autoscale and a fixed `nodeCount` is applied
+ * instead; autoScale.enabled=true applies min/max and Synapse ignores
+ * nodeCount. autoPause.enabled=false disables idle pausing. The Synapse RP
+ * accepts a partial `properties` PATCH, so we only send what changed + the
+ * required `location`.
+ */
+export async function updateBigDataPool(
+  name: string,
+  spec: {
+    nodeSize?: SparkPool['properties']['nodeSize'];
+    sparkVersion?: string;
+    autoPause?: { enabled: boolean; delayInMinutes?: number };
+    autoScale?: { enabled: boolean; minNodeCount?: number; maxNodeCount?: number };
+    nodeCount?: number;
+    location?: string;
+  },
+): Promise<SparkPool> {
+  const properties: Record<string, unknown> = {};
+  if (spec.nodeSize) properties.nodeSize = spec.nodeSize;
+  if (spec.sparkVersion) properties.sparkVersion = spec.sparkVersion;
+  if (spec.autoPause) {
+    if (spec.autoPause.enabled && (spec.autoPause.delayInMinutes == null || spec.autoPause.delayInMinutes < 5)) {
+      throw new Error('updateBigDataPool: autoPause.delayInMinutes must be ≥ 5 when enabled');
+    }
+    properties.autoPause = spec.autoPause.enabled
+      ? { enabled: true, delayInMinutes: spec.autoPause.delayInMinutes }
+      : { enabled: false };
+  }
+  if (spec.autoScale) {
+    if (spec.autoScale.enabled) {
+      const min = Number(spec.autoScale.minNodeCount);
+      const max = Number(spec.autoScale.maxNodeCount);
+      if (!Number.isFinite(min) || !Number.isFinite(max) || min < 3 || max < min) {
+        throw new Error('updateBigDataPool: autoScale.minNodeCount must be ≥ 3 and ≤ maxNodeCount');
+      }
+      properties.autoScale = { enabled: true, minNodeCount: min, maxNodeCount: max };
+    } else {
+      properties.autoScale = { enabled: false };
+      if (typeof spec.nodeCount === 'number') {
+        if (spec.nodeCount < 3) throw new Error('updateBigDataPool: nodeCount must be ≥ 3');
+        properties.nodeCount = spec.nodeCount;
+      }
+    }
+  } else if (typeof spec.nodeCount === 'number') {
+    if (spec.nodeCount < 3) throw new Error('updateBigDataPool: nodeCount must be ≥ 3');
+    properties.nodeCount = spec.nodeCount;
+  }
+  if (!Object.keys(properties).length) {
+    throw new Error('updateBigDataPool: no properties to update');
+  }
+  const body: Record<string, unknown> = { properties };
+  if (spec.location) body.location = spec.location;
+  const r = await callArm(`${armBase()}/bigDataPools/${name}?api-version=${ARM_API}`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SparkPool>(r, `updateBigDataPool(${name})`);
+}
+
 // ============================================================
 // Spark Livy batch jobs (dev endpoint)
 // ============================================================
@@ -877,6 +943,12 @@ export interface LivySessionSizing {
   driverMemory?: string;     // e.g. "4g"
   driverCores?: number;
   heartbeatTimeoutInSecond?: number;  // session idle timeout
+  /**
+   * spark.* properties for the Livy session `conf` (from a config preset, the
+   * notebook config builder, and/or the Synapse→Log-Analytics diagnostic
+   * defaults). Applied at session create — a conf change needs a new session.
+   */
+  conf?: Record<string, string>;
 }
 
 export async function createLivySessionAsync(
@@ -900,6 +972,22 @@ export async function createLivySessionAsync(
   if (typeof sizing?.heartbeatTimeoutInSecond === 'number' && sizing.heartbeatTimeoutInSecond > 0) {
     request.heartbeatTimeoutInSecond = sizing.heartbeatTimeoutInSecond;
   }
+  // spark.* properties (preset + builder + Synapse→LA diagnostics) → Livy `conf`.
+  // Also inject fs.azure.createRemoteFileSystemDuringInitialization=true so the
+  // ABFS driver auto-creates the workspace's default filesystem (the `synapse`
+  // container that backs fs.defaultFS + the Hive warehouse) on first access.
+  // On this deployment that container was never provisioned, so EVERY relative
+  // path write ("Files/…") 404'd ("filesystem does not exist") and EVERY Hive
+  // catalog op (SHOW DATABASES / CREATE DATABASE / saveAsTable / spark.table)
+  // threw "null path" — because the warehouse dir pointed at a non-existent
+  // container. Creating it once (idempotent — a no-op when it already exists)
+  // makes managed-table catalog ops and relative paths work for every notebook
+  // run + the sample-data seed. Caller confs win on key conflicts.
+  const conf: Record<string, string> = {
+    'spark.hadoop.fs.azure.createRemoteFileSystemDuringInitialization': 'true',
+    ...(sizing?.conf || {}),
+  };
+  request.conf = conf;
   const r = await callDev(
     `/livyApi/versions/${LIVY_API}/sparkPools/${poolName}/sessions`,
     { method: 'POST', body: JSON.stringify(request) },
@@ -1148,5 +1236,142 @@ export async function deleteDedicatedSqlPool(name: string): Promise<void> {
   );
   if (r.ok || r.status === 202 || r.status === 204 || r.status === 404) return;
   throw new Error(`deleteDedicatedSqlPool(${name}) failed ${r.status}: ${await r.text()}`);
+}
+
+// ============================================================
+// Integration runtimes (ARM)
+//
+// Synapse pipelines run on Integration Runtimes exactly like ADF — the
+// difference is only the ARM resource provider and api-version:
+//   Microsoft.Synapse/workspaces/{ws}/integrationRuntimes  (2021-06-01)
+//   vs ADF's Microsoft.DataFactory/factories/{f}/integrationruntimes (2018-06-01).
+//
+// The IR property shape (Managed | SelfHosted + typeProperties) is identical,
+// so the engine-agnostic spec builder in
+// `lib/pipeline/integration-runtime-catalog.ts` feeds both. These functions
+// mirror adf-client's IR surface (list / getStatus / upsert / start / stop /
+// delete / listAuthKeys) so the same IntegrationRuntimeManager UI drives the
+// Synapse backend. Real ARM REST, no mocks (no-vaporware); the DLZ self-heal in
+// `callArm` covers the multi-sub dlz-attach topology automatically.
+//
+// Grounded in @azure/arm-synapse IntegrationRuntimes (beginCreate / beginStart /
+// beginStop / get / listByWorkspace) + Microsoft.Synapse/workspaces/
+// integrationRuntimes 2021-06-01 template reference.
+// ============================================================
+
+export interface SynapseIntegrationRuntime {
+  id?: string;
+  name: string;
+  type?: string;
+  etag?: string;
+  properties: {
+    type: 'Managed' | 'SelfHosted' | string;
+    description?: string;
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export interface SynapseIntegrationRuntimeStatus {
+  name?: string;
+  properties?: {
+    type?: string;
+    state?:
+      | 'Initial' | 'Stopped' | 'Started' | 'Starting' | 'Stopping'
+      | 'NeedRegistration' | 'Online' | 'Limited' | 'Offline' | 'AccessDenied'
+      | string;
+    typeProperties?: Record<string, unknown>;
+  };
+}
+
+export interface SynapseIntegrationRuntimeAuthKeys { authKey1?: string; authKey2?: string }
+
+/**
+ * Honest config gate for the workspace-level Synapse IR routes. Returns the
+ * exact missing env var so the BFF can 503 with a precise MessageBar (matching
+ * adfConfigGate). `sub()` accepts LOOM_SYNAPSE_SUB or LOOM_SUBSCRIPTION_ID,
+ * `rg()` needs LOOM_DLZ_RG, `ws()` needs LOOM_SYNAPSE_WORKSPACE. Null when
+ * fully configured.
+ */
+export function synapseConfigGate(): { missing: string } | null {
+  if (!process.env.LOOM_SYNAPSE_SUB && !process.env.LOOM_SUBSCRIPTION_ID) return { missing: 'LOOM_SUBSCRIPTION_ID' };
+  if (!process.env.LOOM_DLZ_RG) return { missing: 'LOOM_DLZ_RG' };
+  if (!process.env.LOOM_SYNAPSE_WORKSPACE) return { missing: 'LOOM_SYNAPSE_WORKSPACE' };
+  return null;
+}
+
+export async function listSynapseIntegrationRuntimes(): Promise<SynapseIntegrationRuntime[]> {
+  const r = await callArm(`${armBase()}/integrationRuntimes?api-version=${ARM_API}`);
+  const body = await jsonOrThrow<{ value: SynapseIntegrationRuntime[] }>(r, 'listSynapseIntegrationRuntimes');
+  return body.value || [];
+}
+
+export async function getSynapseIntegrationRuntimeStatus(name: string): Promise<SynapseIntegrationRuntimeStatus> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}/getStatus?api-version=${ARM_API}`,
+    { method: 'POST' },
+  );
+  return jsonOrThrow<SynapseIntegrationRuntimeStatus>(r, `getSynapseIntegrationRuntimeStatus(${name})`);
+}
+
+export async function upsertSynapseIntegrationRuntime(
+  name: string,
+  spec: SynapseIntegrationRuntime,
+): Promise<SynapseIntegrationRuntime> {
+  const body = { properties: spec.properties };
+  const r = await callArm(`${armBase()}/integrationRuntimes/${encodeURIComponent(name)}?api-version=${ARM_API}`, {
+    method: 'PUT',
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow<SynapseIntegrationRuntime>(r, `upsertSynapseIntegrationRuntime(${name})`);
+}
+
+export async function startSynapseIr(name: string): Promise<void> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}/start?api-version=${ARM_API}`,
+    { method: 'POST' },
+  );
+  // Start is a long-running operation (202 + Location). The 202 means accepted —
+  // the node set comes online asynchronously; the manager re-reads status.
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`startSynapseIr failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function stopSynapseIr(name: string): Promise<void> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}/stop?api-version=${ARM_API}`,
+    { method: 'POST' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 202) {
+    throw new Error(`stopSynapseIr failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+export async function deleteSynapseIr(name: string): Promise<void> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}?api-version=${ARM_API}`,
+    { method: 'DELETE' },
+  );
+  if (!r.ok && r.status !== 200 && r.status !== 202 && r.status !== 204) {
+    throw new Error(`deleteSynapseIr failed ${r.status}: ${await r.text()}`);
+  }
+}
+
+/**
+ * Retrieve the registration ("install") keys for a Self-Hosted Synapse IR — the
+ * keys an operator pastes into the Microsoft Integration Runtime gateway to
+ * register a node with this workspace.
+ *
+ * Synapse management action: POST .../integrationRuntimes/{name}/listAuthKeys
+ * (grounded in @azure/arm-synapse IntegrationRuntimeAuthKeys_List →
+ * { authKey1, authKey2 }). The keys are secrets — the BFF returns them only to
+ * an authenticated session and never persists them.
+ */
+export async function listSynapseIrAuthKeys(name: string): Promise<SynapseIntegrationRuntimeAuthKeys> {
+  const r = await callArm(
+    `${armBase()}/integrationRuntimes/${encodeURIComponent(name)}/listAuthKeys?api-version=${ARM_API}`,
+    { method: 'POST' },
+  );
+  return jsonOrThrow<SynapseIntegrationRuntimeAuthKeys>(r, `listSynapseIrAuthKeys(${name})`);
 }
 

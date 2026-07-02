@@ -51,7 +51,7 @@ describe('EventstreamEditor — Push destinations to ASA', () => {
   it('renders the ASA job input + per-kind destination ribbon actions', async () => {
     render(<EventstreamEditor item={makeItem('eventstream', 'Eventstream')} id="es-fixture" />);
     await waitFor(() => {
-      expect(screen.getAllByText('Design here, publish to Fabric').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Design here, provision to Azure (Fabric optional)').length).toBeGreaterThan(0);
     });
     // The four supported destination wizards appear as ribbon actions.
     expect(screen.getAllByRole('button', { name: /^kql database$/i }).length).toBeGreaterThan(0);

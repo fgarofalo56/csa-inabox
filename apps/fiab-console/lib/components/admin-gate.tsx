@@ -23,7 +23,7 @@ export interface AdminGateProps {
 }
 
 const useStyles = makeStyles({
-  link: { color: tokens.colorBrandForeground1, marginLeft: 4, display: 'inline-flex', alignItems: 'center', gap: 4 },
+  link: { color: tokens.colorBrandForeground1, marginLeft: tokens.spacingHorizontalXS, display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
 });
 
 export function AdminGate({ surface, backendRoute, envVar, cosmosContainer, bicepModule, deepLink, deepLinkLabel, extra }: AdminGateProps) {

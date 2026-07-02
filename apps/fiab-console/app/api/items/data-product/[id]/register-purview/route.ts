@@ -70,7 +70,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       'Purview businessDomainId is required',
       422,
       {
-        hint: 'The data-product editor does not yet expose a governance-domain picker (Phase 2 of the parity spec). Set state.domain to a Purview businessDomainId GUID before registering. Until a domain picker ships, you can populate this by editing the Cosmos record directly or by running scripts/csa-loom/grant-purview-rbac.sh which seeds the default `csa-loom-default` governance domain.',
+        hint: "Select a domain in the 'Governance domain' picker on the data-product editor's Overview tab (it resolves to the required Purview businessDomainId GUID), then save and re-register. If Purview isn't provisioned the picker falls back to a GUID input.",
         field: 'state.domain',
       },
     );
@@ -81,7 +81,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       'state.domain must be a Purview businessDomainId GUID, not a free-text label',
       422,
       {
-        hint: 'Purview requires the businessDomainId (a GUID returned by GET /datagovernance/catalog/businessdomains), not a label like "Finance" or "Sales". Phase 2 of the parity spec adds a governance-domain Dropdown that resolves labels to ids automatically. Until then, look up the GUID in the Purview portal under Catalog management → Governance domains, paste it into state.domain, save, then re-register.',
+        hint: "Purview requires the businessDomainId (a GUID returned by GET /datagovernance/catalog/businessdomains), not a label like \"Finance\" or \"Sales\". Use the 'Governance domain' picker on the editor's Overview tab, which resolves the label to the businessDomainId GUID automatically; if it shows a GUID input (Purview unprovisioned), look up the GUID in the Purview portal under Catalog management → Governance domains.",
         field: 'state.domain',
         received: domain,
       },

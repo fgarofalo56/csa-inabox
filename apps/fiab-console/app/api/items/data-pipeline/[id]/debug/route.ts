@@ -21,15 +21,16 @@ function err(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
-export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
+export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
+  const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
   const body = await req.json().catch(() => ({}));
   try {
     const items = await itemsContainer();
-    const { resource } = await items.item(ctx.params.id, workspaceId).read<WorkspaceItem>();
+    const { resource } = await items.item(id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'data-pipeline') return err('pipeline not found', 404);
     const adfName = (resource.state as any)?.adfPipelineName;
     if (!adfName) return err('Pipeline has no ADF backing — save first', 409);

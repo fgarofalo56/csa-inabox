@@ -16,9 +16,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Subtitle2, Body1, Caption1, Badge, Button, Input, Dropdown, Option, Field,
-  Tab, TabList, Spinner,
+  Tab, TabList, Spinner, RadioGroup, Radio,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   Tree, TreeItem, TreeItemLayout,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -29,8 +30,10 @@ import {
   DocumentTable20Regular, Play20Regular, Server20Regular,
   ArrowSync20Regular, Save20Regular, Bug20Regular, Checkmark20Regular,
   Clock20Regular, Link20Regular, Add20Regular, Settings20Regular,
+  PlugConnected20Regular, Database20Regular, Dismiss24Regular,
 } from '@fluentui/react-icons';
 import { ManagePanel } from '@/lib/components/pipeline/manage-panel';
+import { PipelineManageHub } from '@/lib/components/pipeline/pipeline-manage-hub';
 import { FactoryResourcesTree } from '@/lib/components/pipeline/factory-resources-tree';
 import { AdfCdcEditor } from '@/lib/adf/adf-cdc-editor';
 import { SynapseWorkspaceTree } from '@/lib/components/pipeline/synapse-workspace-tree';
@@ -42,6 +45,8 @@ import { BackendStateBar } from '@/lib/components/backend-state-bar';
 import { extractActivities, writeActivitiesToSpec, type PipelineActivity } from '@/lib/components/pipeline/pipeline-dag-view';
 import { PipelineDesigner, type PipelineDesignerHandle } from '@/lib/components/pipeline/pipeline-designer';
 import { ParametersPane, VariablesPane, SettingsPane } from '@/lib/components/pipeline/pipeline-config-panes';
+import { TriggerWizard } from '@/lib/components/pipeline/trigger-wizard';
+import type { ParamBinding } from '@/lib/components/pipeline/param-source-picker';
 import {
   paramsFromSpec, paramsToSpec, varsFromSpec, varsToSpec,
   type PipelineParameter, type PipelineVariable, type PipelineSpec,
@@ -49,14 +54,30 @@ import {
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { safePipelineJson } from './pipeline-fetch';
 import { AzureResourcePicker } from '@/lib/components/azure/azure-resource-picker';
+import { LinkedServiceGallery } from '@/lib/components/pipeline/linked-service-gallery';
+import { IntegrationRuntimeManager } from '@/lib/components/pipeline/integration-runtime-manager';
+import type { PipelineRuntimeContext } from '@/lib/components/pipeline/types';
+import { createItem } from '@/lib/api/workspaces';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
+// Common Azure regions for the "Create new factory" location picker (Commercial
+// + US Government). The default is the chosen resource group's location.
+const ADF_FACTORY_REGIONS = [
+  'eastus', 'eastus2', 'centralus', 'southcentralus', 'westus', 'westus2', 'westus3',
+  'northcentralus', 'westcentralus', 'canadacentral', 'northeurope', 'westeurope',
+  'uksouth', 'francecentral', 'germanywestcentral', 'switzerlandnorth',
+  'norwayeast', 'swedencentral', 'eastasia', 'southeastasia', 'japaneast',
+  'australiaeast', 'centralindia', 'koreacentral', 'brazilsouth', 'uaenorth',
+  // US Government
+  'usgovvirginia', 'usgovarizona', 'usgovtexas',
+];
+
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12 },
-  gate: { padding: 16, display: 'flex', flexDirection: 'column', gap: 16, maxWidth: 720 },
-  row: { display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap' },
-  field: { flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', gap: 4 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0, maxWidth: '100%' },
+  gate: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, maxWidth: '720px', minWidth: 0 },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
+  field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
 });
 
 export interface ActivityTemplate {
@@ -88,9 +109,31 @@ interface PipelineRunDTO {
 }
 
 export function PipelineEditorCore({
-  item, id, config,
-}: { item: FabricItemType; id: string; config: PipelineEditorConfig }) {
+  item, id, config, runtimeContext,
+}: {
+  item: FabricItemType;
+  id: string;
+  config: PipelineEditorConfig;
+  /**
+   * Optional runtime context so the unified DataPipelineEditor can drive this
+   * same core with a runtime selector (adf / synapse / fabric). When omitted the
+   * behaviour is IDENTICAL to today: the runtime is inferred from `config.slug`
+   * (adf-pipeline → adf, synapse-pipeline → synapse) and every existing caller
+   * (the Synapse / Adf wrappers) keeps compiling and rendering unchanged.
+   */
+  runtimeContext?: PipelineRuntimeContext;
+}) {
   const s = useStyles();
+  const router = useRouter();
+  // A `/new` route lands here with the literal id "new" and NO Cosmos item yet
+  // (e.g. "+ New item" opened from home, before any workspace is chosen). We must
+  // NOT drive the per-item bind / spec / run routes with "new" — loadPipelineItem
+  // 404s on it ("Item new (<slug>) not found"). Instead we guard those effects
+  // off and render a create-gate that creates a REAL Loom item first, then
+  // redirects to the real GUID where the existing bind/run/save flow works.
+  const isNew = id === 'new';
+  // Per-item route base. Only ever fetched for a REAL id — every per-item effect
+  // below short-circuits while `isNew`, so this never carries the literal "new".
   const apiBase = `/api/items/${config.slug}/${encodeURIComponent(id)}`;
 
   // ---- Binding state ----
@@ -107,11 +150,49 @@ export function PipelineEditorCore({
   const [bindBusy, setBindBusy] = useState(false);
   const [bindError, setBindError] = useState<string | null>(null);
 
+  // ---- New-item create gate (isNew only) ----
+  // A `/new` route has no Cosmos item, so binding can't run. The gate picks a
+  // Loom workspace + name and creates a REAL item via createItem (no mock), then
+  // redirects to its GUID. itemType MUST equal config.slug ('adf-pipeline' |
+  // 'synapse-pipeline') because the bind route's loadPipelineItem filters Cosmos
+  // on c.itemType=@t — the created type has to match the slug the editor binds
+  // through, or the per-item routes 404 after redirect.
+  const [createWorkspaces, setCreateWorkspaces] = useState<Array<{ id: string; name: string }> | null>(null);
+  const [createWsError, setCreateWsError] = useState<string | null>(null);
+  const [createWsLoading, setCreateWsLoading] = useState(isNew);
+  const [createWorkspaceId, setCreateWorkspaceId] = useState('');
+  const [createName, setCreateName] = useState('');
+  const [createBusy, setCreateBusy] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  // Effective runtime: the explicit runtimeContext wins (unified editor), else
+  // it's inferred from the slug. Azure-native 'adf' is the DEFAULT per
+  // no-fabric-dependency.md; 'fabric' is never auto-selected here.
+  const runtime = runtimeContext?.runtime ?? (config.slug === 'synapse-pipeline' ? 'synapse' : 'adf');
+
   // Cross-subscription factory selection (ADF only). Lets the operator point
   // this pipeline item at WHICH Data Factory — across every subscription they
-  // have RBAC for — before binding to one of its pipelines.
-  const isAdf = config.slug === 'adf-pipeline';
+  // have RBAC for — before binding to one of its pipelines. ADF surfaces show
+  // for the adf-pipeline slug OR when the unified editor selects runtime 'adf'.
+  const isAdf = runtime === 'adf';
   const [factory, setFactory] = useState<{ id: string; name: string; subscriptionId: string; resourceGroup: string } | null>(null);
+
+  // ---- Backing-service "Create new" affordances (bind gate) ----
+  // Each picker is Use-existing | Create-new. Use-existing is the default and is
+  // unchanged from today; Create-new opens a STRUCTURED wizard (no JSON) that
+  // calls the real ARM/REST route, then refreshes the pipeline list / counts.
+  const [factoryMode, setFactoryMode] = useState<'existing' | 'create'>('existing');
+  // New-factory wizard state — name + target RG (carries subscriptionId via the
+  // AzureResourcePicker) + location. POSTs /api/adf/factories/create (Contract E#1).
+  const [newFactoryName, setNewFactoryName] = useState('');
+  const [newFactoryRg, setNewFactoryRg] = useState<{ id: string; name: string; subscriptionId: string; resourceGroup: string; location: string } | null>(null);
+  const [newFactoryLocation, setNewFactoryLocation] = useState('');
+  const [factoryCreateBusy, setFactoryCreateBusy] = useState(false);
+  const [factoryCreateError, setFactoryCreateError] = useState<string | null>(null);
+  // Linked-service / integration-runtime create-new dialogs (reuse the shared
+  // structured wizards — connector gallery + IR type catalog; real ARM REST).
+  const [lsDialogOpen, setLsDialogOpen] = useState(false);
+  const [irDialogOpen, setIrDialogOpen] = useState(false);
 
   // ---- Spec / run state ----
   const [spec, setSpec] = useState<string>('');
@@ -128,6 +209,13 @@ export function PipelineEditorCore({
 
   // ---- Manage (factory resources) dialog state — ADF only ----
   const [manageOpen, setManageOpen] = useState(false);
+  // Catalog-driven Manage hub (connector gallery + dataset wizard) — Wave-2
+  // authoring foundation, surfaced additively alongside the quick ManagePanel.
+  const [manageHubOpen, setManageHubOpen] = useState(false);
+  const [manageHubTab, setManageHubTab] = useState<'linked-services' | 'datasets' | 'integration-runtimes'>('linked-services');
+  const openManageHub = useCallback((t: 'linked-services' | 'datasets' | 'integration-runtimes') => {
+    setManageHubTab(t); setManageHubOpen(true);
+  }, []);
   const [openCdc, setOpenCdc] = useState<string | null>(null);
   // Bump to force the navigator (ADF Factory Resources / Synapse Workspace
   // Resources) to re-list after a bind/create/manage action mutates the backend.
@@ -143,14 +231,24 @@ export function PipelineEditorCore({
   const [triggersList, setTriggersList] = useState<Array<{ name: string; type?: string; runtimeState?: string }>>([]);
   const [triggersBusy, setTriggersBusy] = useState(false);
   const [triggersError, setTriggersError] = useState<string | null>(null);
-  const [newTriggerName, setNewTriggerName] = useState('');
-  const [newTriggerHour, setNewTriggerHour] = useState(0);
-  const [newTriggerMinute, setNewTriggerMinute] = useState(0);
+  // Deepened "Add trigger → New" wizard (Schedule / Tumbling / Storage event /
+  // Custom event + trigger-parameter mapping). Replaces the inline schedule-only
+  // form; the existing list (start/stop/delete) stays in the manage dialog.
+  const [triggerWizardOpen, setTriggerWizardOpen] = useState(false);
+  // Which schedule-time param sources the deployment exposes (KV / App Config),
+  // surfaced as the honest gate hint inside the wizard's value-source picker.
+  const [paramSources, setParamSources] = useState<{ kvAvailable: boolean; appConfigAvailable: boolean }>(
+    { kvAvailable: true, appConfigAvailable: true },
+  );
 
   // ------------------------------------------------------------------
   // Binding
   // ------------------------------------------------------------------
   const loadBinding = useCallback(async () => {
+    // Never GET /api/items/<slug>/new/bind — the route 404s on the literal "new"
+    // (no Cosmos doc), which used to paint a spurious red bind-error banner on a
+    // fresh /new before any user action. The create-gate handles `isNew`.
+    if (isNew) { setBindingLoading(false); return; }
     setBindingLoading(true); setBindError(null);
     try {
       const res = await fetch(`${apiBase}/bind`);
@@ -166,12 +264,54 @@ export function PipelineEditorCore({
     } finally {
       setBindingLoading(false);
     }
-  }, [apiBase, pickName]);
+  }, [apiBase, pickName, isNew]);
 
   useEffect(() => { loadBinding(); }, [loadBinding]);
 
+  // Load the Loom workspace catalog for the create-gate picker (isNew only).
+  // Reuses the {ok, workspaces:[{id,name}]} shape every editor's picker expects.
+  useEffect(() => {
+    if (!isNew) return;
+    let cancelled = false;
+    (async () => {
+      setCreateWsLoading(true); setCreateWsError(null);
+      try {
+        const r = await fetch('/api/loom/workspaces');
+        const j = await r.json();
+        if (cancelled) return;
+        if (!j.ok) { setCreateWsError(j.error || `HTTP ${r.status}`); setCreateWorkspaces([]); }
+        else { setCreateWorkspaces(Array.isArray(j.workspaces) ? j.workspaces : []); }
+      } catch (e: any) {
+        if (!cancelled) { setCreateWsError(e?.message || String(e)); setCreateWorkspaces([]); }
+      } finally {
+        if (!cancelled) setCreateWsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isNew]);
+
+  // Create a REAL Loom pipeline item, then reopen the page on its GUID. After
+  // the redirect the existing bind/run/save flow works against the real item
+  // via the matching slug. No mock; Azure-native adf/synapse default.
+  const createPipelineItem = useCallback(async () => {
+    if (!createWorkspaceId || !createName.trim() || createBusy) return;
+    setCreateBusy(true); setCreateError(null);
+    try {
+      const created = await createItem(createWorkspaceId, {
+        itemType: config.slug,            // MUST equal the bind route's slug
+        displayName: createName.trim(),
+      });
+      router.replace(`/items/${encodeURIComponent(config.slug)}/${encodeURIComponent(created.id)}`);
+    } catch (e: any) {
+      setCreateError(e?.message || String(e));
+      setCreateBusy(false);               // keep busy through the redirect on success
+    }
+  }, [createWorkspaceId, createName, createBusy, config.slug, router]);
+
   const bindTo = useCallback(async (name: string, create: boolean) => {
-    if (!name.trim()) return;
+    // Binding only makes sense for a real, persisted item — a `/new` route has
+    // no GUID to bind against (the create-gate creates one first).
+    if (isNew || !name.trim()) return;
     setBindBusy(true); setBindError(null);
     try {
       const res = await fetch(`${apiBase}/bind`, {
@@ -190,7 +330,44 @@ export function PipelineEditorCore({
     } finally {
       setBindBusy(false);
     }
-  }, [apiBase, loadBinding]);
+  }, [apiBase, loadBinding, isNew]);
+
+  // Create a NEW Data Factory across any subscription/RG the operator can reach,
+  // then select it (setFactory) so binding can proceed against it. Real ARM PUT
+  // via the create route (Contract E#1) — no mock. The honest 403 gate message
+  // (Console UAMI lacks Contributor on the RG) is surfaced verbatim from the
+  // route, per no-vaporware.md.
+  const createFactory = useCallback(async () => {
+    const name = newFactoryName.trim();
+    const target = newFactoryRg;
+    const location = (newFactoryLocation || target?.location || '').trim();
+    if (!name || !target || !location) return;
+    setFactoryCreateBusy(true); setFactoryCreateError(null);
+    try {
+      const res = await fetch('/api/adf/factories/create', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name,
+          location,
+          subscriptionId: target.subscriptionId,
+          resourceGroup: target.resourceGroup || target.name,
+        }),
+      });
+      const { ok, data, error: e } = await safePipelineJson(res);
+      if (!ok || !data?.factory) { setFactoryCreateError(e || data?.error || 'factory create failed'); return; }
+      const f = data.factory as { id: string; name: string; subscriptionId: string; resourceGroup: string };
+      setFactory({ id: f.id, name: f.name, subscriptionId: f.subscriptionId, resourceGroup: f.resourceGroup });
+      setFactoryMode('existing');
+      setNewFactoryName('');
+      setFactoryRefreshKey((k) => k + 1);
+      // Re-list pipelines in the (now bindable) factory.
+      await loadBinding();
+    } catch (e: any) {
+      setFactoryCreateError(e?.message || String(e));
+    } finally {
+      setFactoryCreateBusy(false);
+    }
+  }, [newFactoryName, newFactoryRg, newFactoryLocation, loadBinding]);
 
   // ------------------------------------------------------------------
   // Spec + runs (only meaningful once bound; routes 412 otherwise)
@@ -222,8 +399,10 @@ export function PipelineEditorCore({
   }, [apiBase, runsAfterDays, runsStatus]);
 
   useEffect(() => {
-    if (bound) { loadPipeline(); loadRuns(); }
-  }, [bound, loadPipeline, loadRuns]);
+    // Spec + runs only load for a real, bound item. `bound` stays null while
+    // `isNew` (loadBinding short-circuits), so this never targets "new".
+    if (bound && !isNew) { loadPipeline(); loadRuns(); }
+  }, [bound, isNew, loadPipeline, loadRuns]);
 
   const save = useCallback(async () => {
     if (!bound) return;
@@ -294,6 +473,7 @@ export function PipelineEditorCore({
         type: t.properties?.type || t.type,
         runtimeState: t.properties?.runtimeState || t.runtimeState,
       })));
+      if (data.paramSources) setParamSources(data.paramSources);
     } catch (e: any) { setTriggersError(e?.message || String(e)); }
   }, [apiBase]);
 
@@ -313,34 +493,30 @@ export function PipelineEditorCore({
     finally { setTriggersBusy(false); }
   }, [apiBase, loadTriggers]);
 
-  const createTrigger = useCallback(async () => {
-    if (!newTriggerName.trim()) return;
+  // Create ANY ADF trigger type from the deepened guided wizard's structured
+  // payload (no cron / no JSON). `properties` is the assembled ADF trigger
+  // `properties` object; `paramBindings` carry per-parameter VALUE sources
+  // (direct / Key Vault / App Config) the BFF route resolves server-side. The
+  // wizard already bakes trigger-output expressions into properties.pipelines[].
+  const createTriggerWith = useCallback(async (
+    name: string,
+    properties: Record<string, unknown>,
+    paramBindings: Record<string, ParamBinding>,
+  ) => {
+    if (!bound || !name.trim()) return;
     setTriggersBusy(true); setTriggersError(null);
     try {
-      const now = new Date(); now.setUTCSeconds(0, 0);
       const res = await fetch(`${apiBase}/triggers`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: newTriggerName.trim(),
-          properties: {
-            type: 'ScheduleTrigger',
-            runtimeState: 'Stopped',
-            typeProperties: {
-              recurrence: {
-                frequency: 'Day', interval: 1, startTime: now.toISOString(), timeZone: 'UTC',
-                schedule: { hours: [newTriggerHour], minutes: [newTriggerMinute] },
-              },
-            },
-          },
-        }),
+        body: JSON.stringify({ name: name.trim(), properties, parameterBindings: paramBindings }),
       });
       const { ok, error: e } = await safePipelineJson(res);
       if (!ok) throw new Error(e || 'create failed');
-      setNewTriggerName('');
+      setTriggerWizardOpen(false);
       await loadTriggers();
     } catch (e: any) { setTriggersError(e?.message || String(e)); }
     finally { setTriggersBusy(false); }
-  }, [apiBase, newTriggerName, newTriggerHour, newTriggerMinute, loadTriggers]);
+  }, [apiBase, bound, loadTriggers]);
 
   // ------------------------------------------------------------------
   // Activities — extracted from the spec; the designer (palette + canvas)
@@ -441,7 +617,10 @@ export function PipelineEditorCore({
     // backend is selected on the ManagePanel below.
     const manageGroup: RibbonTab['groups'] = [{
       label: 'Manage', actions: [
-        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes' : 'Linked services and datasets' },
+        { label: 'Manage', icon: <Settings20Regular />, onClick: () => setManageOpen(true), title: isAdf ? 'Linked services, datasets and integration runtimes (quick)' : 'Linked services and datasets (quick)' },
+        { label: 'Linked services', icon: <PlugConnected20Regular />, onClick: () => openManageHub('linked-services'), title: 'Connector gallery — browse 30+ connectors, create, edit and delete connections' },
+        { label: 'Datasets', icon: <Database20Regular />, onClick: () => openManageHub('datasets'), title: 'Dataset wizard — create, edit and delete datasets (connector → connection → shape → schema)' },
+        { label: 'Integration runtimes', icon: <Server20Regular />, onClick: () => openManageHub('integration-runtimes'), title: 'Azure auto-resolve / Self-Hosted / Azure-SSIS integration runtimes' },
       ],
     }];
     return [
@@ -462,7 +641,7 @@ export function PipelineEditorCore({
         ] },
       ] },
     ];
-  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers]);
+  }, [config.supportsValidate, isAdf, busy, bound, dirty, save, kick, validate, openTriggers, openManageHub]);
 
   // ------------------------------------------------------------------
   // Render
@@ -477,6 +656,98 @@ export function PipelineEditorCore({
       </MessageBarBody>
     </MessageBar>
   );
+
+  // ------------------------------------------------------------------
+  // [BUG A] New-item create gate. A `/new` route (e.g. "+ New item" from home)
+  // has no Cosmos item, so the per-item bind route can't run with the literal
+  // "new" (it 404s). Render a create-gate that creates a REAL Loom item first,
+  // then redirects to its GUID where the full bind/run/save flow takes over.
+  // This single change fixes BOTH the data-pipeline delegation path
+  // (AdfPipelineEditor / SynapsePipelineEditor) and the direct
+  // /items/adf-pipeline/new + /items/synapse-pipeline/new routes — all funnel
+  // through PipelineEditorCore. All hooks above run unconditionally, so this
+  // early return is hooks-safe.
+  // ------------------------------------------------------------------
+  if (isNew) {
+    const wsList = createWorkspaces || [];
+    const noWorkspaces = !createWsLoading && !createWsError && wsList.length === 0;
+    const selectedWsName = wsList.find((w) => w.id === createWorkspaceId)?.name || '';
+    const canCreate = !createBusy && !!createWorkspaceId && !!createName.trim();
+    const createRibbon: RibbonTab[] = [
+      { id: 'home', label: 'Home', groups: [
+        { label: 'New', actions: [
+          { label: createBusy ? 'Creating…' : 'Create pipeline', icon: <Add20Regular />,
+            onClick: canCreate ? createPipelineItem : undefined, disabled: !canCreate,
+            title: !createWorkspaceId ? 'Select a workspace' : !createName.trim() ? 'Enter a pipeline name' : undefined },
+        ] },
+      ] },
+    ];
+    return (
+      <ItemEditorChrome item={item} id={id} ribbon={createRibbon} main={
+        <div className={s.gate}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+            <Subtitle2>New {isAdf ? 'Data Factory' : 'Synapse'} pipeline</Subtitle2>
+            <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+              Pick a Loom workspace and name this pipeline. Loom creates the item, then opens the
+              full editor where you bind it to a real {config.containerLabel} pipeline and
+              Save / Run / Validate / Triggers run against the real Azure backend.
+            </Body1>
+          </div>
+
+          {createWsError && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
+                {createWsError}
+                <br /><Caption1>The Cosmos `workspaces` container must be reachable and the Console UAMI granted data access.</Caption1>
+              </MessageBarBody>
+            </MessageBar>
+          )}
+          {noWorkspaces && (
+            <MessageBar intent="warning">
+              <MessageBarBody>
+                <MessageBarTitle>Create or select a workspace first</MessageBarTitle>
+                You don’t have any Loom workspaces yet. Create one (Home → New workspace), then return to create a pipeline.
+              </MessageBarBody>
+            </MessageBar>
+          )}
+
+          <Field label="Workspace">
+            <Dropdown
+              placeholder={createWsLoading ? 'Loading workspaces…' : noWorkspaces ? 'No workspaces available' : 'Select a workspace'}
+              value={selectedWsName}
+              selectedOptions={createWorkspaceId ? [createWorkspaceId] : []}
+              disabled={createWsLoading || noWorkspaces || createBusy}
+              onOptionSelect={(_, d) => setCreateWorkspaceId(d.optionValue || '')}
+            >
+              {wsList.map((w) => (<Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>))}
+            </Dropdown>
+          </Field>
+          <Field label="Pipeline name">
+            <Input
+              value={createName}
+              onChange={(_, d) => setCreateName(d.value)}
+              placeholder="ingest_orders"
+              disabled={createBusy}
+              onKeyDown={(e) => { if (e.key === 'Enter' && canCreate) createPipelineItem(); }}
+            />
+          </Field>
+          <div className={s.row}>
+            <Button appearance="primary" icon={<Add20Regular />} onClick={createPipelineItem} disabled={!canCreate}>
+              {createBusy ? 'Creating…' : 'Create pipeline'}
+            </Button>
+            {createBusy && <Spinner size="tiny" />}
+          </div>
+          {createError && (
+            <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>
+          )}
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Creates the item in Cosmos and opens the full editor, where binding + the primary actions run against the real backend.
+          </Caption1>
+        </div>
+      } />
+    );
+  }
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
@@ -516,14 +787,14 @@ export function PipelineEditorCore({
               {bindGate}
               {preview && Array.isArray(preview?.properties?.activities) && preview.properties.activities.length > 0 && (
                 <div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS }}>
                     <Subtitle2>Starter graph from this app</Subtitle2>
                     <Badge appearance="outline">
                       {preview.properties.activities.length} activit{preview.properties.activities.length === 1 ? 'y' : 'ies'}
                     </Badge>
                     <Badge appearance="filled" color="informative">Preview · read-only</Badge>
                   </div>
-                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalS }}>
                     This pipeline was installed from an app with a fully built-out activity graph
                     (every activity, dependency, and parameter shown below). Bind it to a real
                     {` ${config.containerLabel}`} pipeline above to push this graph live and enable
@@ -538,37 +809,152 @@ export function PipelineEditorCore({
                 </div>
               )}
               {isAdf && (
-                <div>
-                  <Subtitle2>Select a Data Factory (any subscription)</Subtitle2>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  <Subtitle2>Data Factory</Subtitle2>
                   <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
-                    Pick which Azure Data Factory backs this pipeline — across every subscription your account can see (Azure Resource Graph, your RBAC).
+                    Use an existing Azure Data Factory across any subscription your account can see (Azure Resource Graph, your RBAC), or create a new one.
                   </Body1>
-                  <div style={{ marginTop: 8 }}>
-                    <AzureResourcePicker
-                      type="Microsoft.DataFactory/factories"
-                      label="Data Factory"
-                      placeholder="Select a factory across all subscriptions"
-                      value={factory?.id}
-                      onChange={(r) => setFactory(r)}
-                    />
-                  </div>
-                  {factory && (
-                    <MessageBar intent="info" style={{ marginTop: 8 }}>
-                      <MessageBarBody>
-                        <MessageBarTitle>Factory selected: {factory.name}</MessageBarTitle>
-                        Pipeline binding below lists pipelines from the deployment-default factory
-                        (LOOM_ADF_NAME / LOOM_DLZ_RG). If <strong>{factory.name}</strong> is a different
-                        factory, grant the Loom UAMI &quot;Data Factory Contributor&quot; on it and set
-                        LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID to point at it, or use the
-                        MountedDataFactory editor which targets an external factory by reference.
-                      </MessageBarBody>
-                    </MessageBar>
+                  <RadioGroup
+                    layout="horizontal"
+                    value={factoryMode}
+                    onChange={(_, d) => { setFactoryMode(d.value as 'existing' | 'create'); setFactoryCreateError(null); }}
+                  >
+                    <Radio value="existing" label="Use existing factory" />
+                    <Radio value="create" label="Create new factory" />
+                  </RadioGroup>
+
+                  {factoryMode === 'existing' ? (
+                    <>
+                      <AzureResourcePicker
+                        type="Microsoft.DataFactory/factories"
+                        label="Data Factory"
+                        placeholder="Select a factory across all subscriptions"
+                        value={factory?.id}
+                        onChange={(r) => setFactory(r)}
+                      />
+                      {factory && (
+                        <MessageBar intent="info">
+                          <MessageBarBody>
+                            <MessageBarTitle>Factory selected: {factory.name}</MessageBarTitle>
+                            Pipeline binding below lists pipelines from the deployment-default factory
+                            (LOOM_ADF_NAME / LOOM_DLZ_RG). If <strong>{factory.name}</strong> is a different
+                            factory, grant the Loom UAMI &quot;Data Factory Contributor&quot; on it and set
+                            LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID to point at it, or use the
+                            MountedDataFactory editor which targets an external factory by reference.
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </>
+                  ) : (
+                    // Create-new factory wizard — name + target resource group
+                    // (carries the subscription) + location. Real ARM PUT via
+                    // /api/adf/factories/create (Contract E#1). No JSON textarea.
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '560px' }}>
+                      <Field label="New factory name" required hint="Globally unique within Azure; 3-63 chars, letters/digits/hyphens.">
+                        <Input
+                          value={newFactoryName}
+                          onChange={(_, d) => { setNewFactoryName(d.value); setFactoryCreateError(null); }}
+                          placeholder="adf-loom-myteam"
+                        />
+                      </Field>
+                      <AzureResourcePicker
+                        type="Microsoft.Resources/subscriptions/resourceGroups"
+                        label="Target resource group"
+                        placeholder="Select a resource group (across all subscriptions)"
+                        value={newFactoryRg?.id}
+                        onChange={(r) => {
+                          setNewFactoryRg(r);
+                          // Default the factory's region to the resource group's
+                          // location; the operator can override below.
+                          if (r?.location && !newFactoryLocation) setNewFactoryLocation(r.location);
+                          setFactoryCreateError(null);
+                        }}
+                      />
+                      <Field label="Location" required hint="Azure region for the new Data Factory.">
+                        <Dropdown
+                          placeholder="Select a region"
+                          value={newFactoryLocation}
+                          selectedOptions={newFactoryLocation ? [newFactoryLocation] : []}
+                          onOptionSelect={(_, d) => setNewFactoryLocation(d.optionValue || '')}
+                        >
+                          {ADF_FACTORY_REGIONS.map((r) => (<Option key={r} value={r} text={r}>{r}</Option>))}
+                        </Dropdown>
+                      </Field>
+                      <div className={s.row}>
+                        <Button
+                          appearance="primary"
+                          icon={<Add20Regular />}
+                          disabled={factoryCreateBusy || !newFactoryName.trim() || !newFactoryRg || !(newFactoryLocation || newFactoryRg?.location)}
+                          onClick={createFactory}
+                        >
+                          {factoryCreateBusy ? 'Creating…' : 'Create factory'}
+                        </Button>
+                      </div>
+                      {factoryCreateError && (
+                        <MessageBar intent="error">
+                          <MessageBarBody>
+                            <MessageBarTitle>Could not create the factory</MessageBarTitle>
+                            {factoryCreateError}
+                          </MessageBarBody>
+                        </MessageBar>
+                      )}
+                    </div>
                   )}
                 </div>
               )}
+
+              {!isAdf && (
+                // Synapse runtime: the workspace picker's "Create new" is an
+                // HONEST infra-gate (Contract E#4) — workspace provisioning is a
+                // heavy deploy out of scope for in-editor creation. "Use existing"
+                // remains fully functional via the env-pinned workspace.
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                  <Subtitle2>Synapse workspace</Subtitle2>
+                  <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                    Pipelines below are listed from the deployment-bound Synapse workspace.
+                  </Body1>
+                  <MessageBar intent="warning">
+                    <MessageBarBody>
+                      <MessageBarTitle>Create a new Synapse workspace from infrastructure</MessageBarTitle>
+                      Provisioning a Synapse Analytics workspace is a full infrastructure deploy, not an
+                      in-editor create. Deploy one with the bicep module
+                      <code> platform/fiab/bicep/modules/data/synapse.bicep</code> and set
+                      <code> LOOM_SYNAPSE_WORKSPACE</code> on the Console to point this editor at it. Using an
+                      existing workspace (the binding below) works today with no further action.
+                    </MessageBarBody>
+                  </MessageBar>
+                </div>
+              )}
+
+              {/* Backing services — Linked services & Integration runtimes.
+                  Use-existing (the Manage hub, opened from the ribbon) | Create-new
+                  (a STRUCTURED wizard: connector gallery → typed fields → name, or
+                  IR type catalog → typed fields → name). Both POST the EXISTING
+                  real ARM REST routes (no JSON textarea, no mock). IRs are
+                  ADF-only (Synapse uses its own workspace IRs). */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
+                <Subtitle2>Backing services</Subtitle2>
+                <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
+                  Connect data stores (linked services){isAdf ? ' and integration runtimes' : ''} this pipeline&apos;s
+                  activities use. Use existing ones, or create new ones with a guided wizard — all real Azure REST.
+                </Body1>
+                <div className={s.row}>
+                  <Button appearance="secondary" icon={<Add20Regular />} onClick={() => setLsDialogOpen(true)}>
+                    Create linked service
+                  </Button>
+                  {isAdf && (
+                    <Button appearance="secondary" icon={<Add20Regular />} onClick={() => setIrDialogOpen(true)}>
+                      Create integration runtime
+                    </Button>
+                  )}
+                  <Button appearance="subtle" icon={<PlugConnected20Regular />} onClick={() => openManageHub('linked-services')}>
+                    Manage existing
+                  </Button>
+                </div>
+              </div>
               <div>
                 <Subtitle2>Bind to an existing pipeline</Subtitle2>
-                <div className={s.row} style={{ marginTop: 8 }}>
+                <div className={s.row} style={{ marginTop: tokens.spacingVerticalS }}>
                   <div className={s.field}>
                     <Field label={`Pipeline in this ${config.containerLabel}`}>
                       <Dropdown
@@ -592,7 +978,7 @@ export function PipelineEditorCore({
                 <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground3 }}>
                   Creates an empty pipeline in the {config.containerLabel} via the real REST API and binds this item to it.
                 </Body1>
-                <div className={s.row} style={{ marginTop: 8 }}>
+                <div className={s.row} style={{ marginTop: tokens.spacingVerticalS }}>
                   <div className={s.field}>
                     <Field label="New pipeline name">
                       <Input value={newName} onChange={(_, d) => setNewName(d.value)} placeholder="ingest_orders" />
@@ -609,8 +995,8 @@ export function PipelineEditorCore({
             </div>
           ) : (
             <>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <Badge appearance="filled" color="brand">{bound}</Badge>
+              <div style={{ display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 }}>
+                <Badge appearance="filled" color="brand" style={{ maxWidth: '100%', overflowWrap: 'anywhere', wordBreak: 'break-word', height: 'auto' }}>{bound}</Badge>
                 <Badge appearance="outline">{activityCount} activit{activityCount === 1 ? 'y' : 'ies'}</Badge>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
                 {validation && <Badge appearance="filled" color={validation.ok ? 'success' : 'danger'}>{validation.ok ? 'Validated' : 'Invalid'}</Badge>}
@@ -643,7 +1029,12 @@ export function PipelineEditorCore({
                 />
               )}
               {tab === 'parameters' && (
-                <ParametersPane parameters={pipelineParameters} onChange={setPipelineParameters} />
+                <ParametersPane
+                  parameters={pipelineParameters}
+                  variables={pipelineVariables}
+                  onChange={setPipelineParameters}
+                  pipelineId={id}
+                />
               )}
               {tab === 'variables' && (
                 <VariablesPane variables={pipelineVariables} onChange={setPipelineVariables} />
@@ -661,7 +1052,7 @@ export function PipelineEditorCore({
               )}
               {tab === 'runs' && (
                 <div style={{ overflow: 'auto' }}>
-                  <div style={{ display: 'flex', gap: 12, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: 8 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingVerticalM, alignItems: 'flex-end', flexWrap: 'wrap', marginBottom: tokens.spacingVerticalS }}>
                     <Field label="Window">
                       <Dropdown
                         value={runsAfterDays === 1 ? 'Last 24 hours' : runsAfterDays === 14 ? 'Last 14 days' : runsAfterDays === 30 ? 'Last 30 days' : 'Last 7 days'}
@@ -698,7 +1089,7 @@ export function PipelineEditorCore({
                       {runs.length === 0 && (<TableRow><TableCell colSpan={5}><Caption1>No runs in window.</Caption1></TableCell></TableRow>)}
                       {runs.map((r) => (
                         <TableRow key={r.runId}>
-                          <TableCell><code style={{ fontSize: 11 }}>{r.runId.slice(0, 8)}…</code></TableCell>
+                          <TableCell><code style={{ fontSize: tokens.fontSizeBase100 }}>{r.runId.slice(0, 8)}…</code></TableCell>
                           <TableCell><Badge appearance="filled" color={r.status === 'Succeeded' ? 'success' : r.status === 'Failed' ? 'danger' : r.status === 'InProgress' ? 'warning' : 'informative'}>{r.status || '—'}</Badge></TableCell>
                           <TableCell>{r.runStart ? new Date(r.runStart).toLocaleString() : '—'}</TableCell>
                           <TableCell>{r.durationInMs != null ? `${(r.durationInMs / 1000).toFixed(1)}s` : '—'}</TableCell>
@@ -725,6 +1116,82 @@ export function PipelineEditorCore({
               }
             }}
           />
+
+          {/* Catalog-driven Manage hub — connector gallery (create/edit/delete
+              linked services) + dataset wizard (create/edit/delete) + the
+              Integration runtimes tab. Factory/workspace-level; the ADF IR tab is
+              factory-scoped (deployment-default factory via /api/adf/
+              integration-runtimes), so itemId/workspaceId are not needed. */}
+          <PipelineManageHub
+            open={manageHubOpen}
+            onOpenChange={(open) => {
+              setManageHubOpen(open);
+              if (!open) {
+                if (isAdf) setFactoryRefreshKey((k) => k + 1);
+                else setWorkspaceRefreshKey((k) => k + 1);
+              }
+            }}
+            engine={isAdf ? 'adf' : 'synapse'}
+            initialTab={manageHubTab}
+          />
+
+          {/* Create-new LINKED SERVICE (bind-gate entry point) — reuses the
+              shared structured connector wizard: a searchable connector gallery →
+              per-connector typed fields (NO JSON textarea) → name, posting the
+              real /api/adf/linked-services (or /api/synapse/linkedservices) ARM
+              upsert. On create we bump the navigator so the new connection shows
+              in its live counts. */}
+          <Dialog open={lsDialogOpen} onOpenChange={(_, d) => { if (!d.open) setLsDialogOpen(false); }}>
+            <DialogSurface style={{ maxWidth: '920px', width: '92vw' }}>
+              <DialogBody>
+                <DialogTitle
+                  action={<Button appearance="subtle" icon={<Dismiss24Regular />} aria-label="Close" onClick={() => setLsDialogOpen(false)} />}>
+                  New linked service
+                </DialogTitle>
+                <DialogContent>
+                  <LinkedServiceGallery
+                    engine={isAdf ? 'adf' : 'synapse'}
+                    hideExisting
+                    onSelected={() => {
+                      setLsDialogOpen(false);
+                      if (isAdf) setFactoryRefreshKey((k) => k + 1);
+                      else setWorkspaceRefreshKey((k) => k + 1);
+                    }}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button appearance="secondary" onClick={() => setLsDialogOpen(false)}>Cancel</Button>
+                </DialogActions>
+              </DialogBody>
+            </DialogSurface>
+          </Dialog>
+
+          {/* Create-new INTEGRATION RUNTIME (bind-gate entry point, ADF only) —
+              reuses the shared IR manager (factory-scoped → /api/adf/
+              integration-runtimes). Type catalog (Azure / Self-Hosted / Azure-SSIS)
+              → typed config fields (NO JSON), real ARM upsert. */}
+          {isAdf && (
+            <Dialog open={irDialogOpen} onOpenChange={(_, d) => { if (!d.open) setIrDialogOpen(false); }}>
+              <DialogSurface style={{ maxWidth: '860px', width: '92vw' }}>
+                <DialogBody>
+                  <DialogTitle
+                    action={<Button appearance="subtle" icon={<Dismiss24Regular />} aria-label="Close" onClick={() => setIrDialogOpen(false)} />}>
+                    Integration runtimes
+                  </DialogTitle>
+                  <DialogContent>
+                    <IntegrationRuntimeManager
+                      factoryScoped
+                      engine="adf"
+                      onSelect={() => { setFactoryRefreshKey((k) => k + 1); }}
+                    />
+                  </DialogContent>
+                  <DialogActions>
+                    <Button appearance="secondary" onClick={() => setIrDialogOpen(false)}>Close</Button>
+                  </DialogActions>
+                </DialogBody>
+              </DialogSurface>
+            </Dialog>
+          )}
 
           {/* Change Data Capture (preview) detail panel — opened from the
               Factory Resources navigator. Inspect status + source→target
@@ -758,8 +1225,11 @@ export function PipelineEditorCore({
               <DialogBody>
                 <DialogTitle>Triggers — {bound}</DialogTitle>
                 <DialogContent>
-                  <Caption1>Schedule triggers that fire this pipeline. Start/stop or create a daily schedule trigger inline (real REST).</Caption1>
-                  <div style={{ overflow: 'auto', marginTop: 8, marginBottom: 12 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                    <Caption1 style={{ flex: 1, minWidth: '200px' }}>Triggers that fire this pipeline — schedule, tumbling window, storage event, or custom event. Start / stop / delete existing ones, or create a new one with the guided wizard (real ARM REST).</Caption1>
+                    <Button size="small" appearance="primary" icon={<Add20Regular />} disabled={triggersBusy} onClick={() => { setTriggersError(null); setTriggerWizardOpen(true); }}>New trigger</Button>
+                  </div>
+                  <div style={{ overflow: 'auto', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalM }}>
                     <Table aria-label="Triggers for pipeline" size="small">
                       <TableHeader><TableRow>
                         <TableHeaderCell>Name</TableHeaderCell>
@@ -775,7 +1245,7 @@ export function PipelineEditorCore({
                             <TableCell><code>{t.type || '—'}</code></TableCell>
                             <TableCell><Badge appearance="filled" color={t.runtimeState === 'Started' ? 'success' : t.runtimeState === 'Stopped' ? 'informative' : 'warning'}>{t.runtimeState || '—'}</Badge></TableCell>
                             <TableCell>
-                              <div style={{ display: 'flex', gap: 4 }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingVerticalXS }}>
                                 <Button size="small" disabled={triggersBusy || t.runtimeState === 'Started'} onClick={() => triggerAction(t.name, 'start')}>Start</Button>
                                 <Button size="small" disabled={triggersBusy || t.runtimeState !== 'Started'} onClick={() => triggerAction(t.name, 'stop')}>Stop</Button>
                                 <Button size="small" appearance="subtle" disabled={triggersBusy} onClick={() => triggerAction(t.name, 'delete')}>Delete</Button>
@@ -786,21 +1256,31 @@ export function PipelineEditorCore({
                       </TableBody>
                     </Table>
                   </div>
-                  <Subtitle2>Create new daily schedule trigger</Subtitle2>
-                  <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: 12, marginTop: 8 }}>
-                    <Field label="Name"><Input value={newTriggerName} onChange={(_, d) => setNewTriggerName(d.value)} placeholder="daily-orders" /></Field>
-                    <Field label="UTC hour (0-23)"><Input type="number" min={0} max={23} value={String(newTriggerHour)} onChange={(_, d) => setNewTriggerHour(Math.max(0, Math.min(23, Number(d.value) || 0)))} /></Field>
-                    <Field label="Minute (0-59)"><Input type="number" min={0} max={59} value={String(newTriggerMinute)} onChange={(_, d) => setNewTriggerMinute(Math.max(0, Math.min(59, Number(d.value) || 0)))} /></Field>
-                  </div>
-                  {triggersError && (<MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Trigger action failed</MessageBarTitle>{triggersError}</MessageBarBody></MessageBar>)}
+                  {triggersError && (<MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Trigger action failed</MessageBarTitle>{triggersError}</MessageBarBody></MessageBar>)}
                 </DialogContent>
                 <DialogActions>
                   <Button appearance="secondary" onClick={() => setTriggersOpen(false)} disabled={triggersBusy}>Close</Button>
-                  <Button appearance="primary" onClick={createTrigger} disabled={triggersBusy || !newTriggerName.trim()}>{triggersBusy ? 'Working…' : 'Create trigger'}</Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>
           </Dialog>
+
+          {/* Deepened "Add trigger → New" wizard — Schedule / Tumbling window /
+              Storage event / Custom event with structured controls + per-param
+              trigger-output / value-source mapping (no cron / no JSON). Created
+              triggers round-trip the trigger JSON on the real ARM REST. */}
+          <TriggerWizard
+            open={triggerWizardOpen}
+            onClose={() => { setTriggerWizardOpen(false); setTriggersError(null); }}
+            onCreate={createTriggerWith}
+            onActivate={(name) => triggerAction(name, 'start')}
+            pipelineParams={pipelineParameters}
+            engine={isAdf ? 'adf' : 'synapse'}
+            kvAvailable={paramSources.kvAvailable}
+            appConfigAvailable={paramSources.appConfigAvailable}
+            busy={triggersBusy}
+            error={triggersError}
+          />
         </div>
       }
     />

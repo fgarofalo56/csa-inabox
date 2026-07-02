@@ -50,23 +50,33 @@ Lakehouse (Delta) · Eventhouse (direct or processed ingestion modes) · Activat
 
 | Component | Status | Loom build target |
 |---|---|---|
-| Visual canvas | ❌ none | New React component with react-flow or similar |
-| Source picker | partial (Cosmos persistence) | Wire to Event Hubs / Cosmos CDC / ADX / Blob Storage event registrations |
+| Visual canvas | ✅ built | Eventstream React Flow canvas (source → transform → destination nodes) |
+| Source picker | Event Hubs source deployable | Event Hubs namespace now shipped (`event-hubs-namespace` item); Cosmos CDC / ADX / Blob Storage event registrations still incremental |
 | Transform nodes | partial (Cosmos persistence) | Implement Filter/Aggregate/GroupBy/Join/Union via Azure Stream Analytics OR Kusto inline ingestion mappings |
 | Destination Lakehouse | ❌ | Wire to existing Loom Lakehouse (writes Delta to ADLS) |
 | Destination Eventhouse | partial | Wire to existing Loom ADX (Eventhouse equivalent) |
 | Destination Activator | ❌ | Wire to existing loom-activator-engine container app |
 
 ## Backend mapping
-- **Event Hubs** for streaming ingress (need to deploy in bicep — `Microsoft.EventHub/namespaces`)
+- **Event Hubs** for streaming ingress — **now deployed** via
+  `platform/fiab/bicep/modules/landing-zone/eventhubs.bicep`
+  (`Microsoft.EventHub/namespaces`) and managed in the console as the
+  **`event-hubs-namespace`** item (commit `e1f2aab2`; parity doc
+  `parity/event-hubs-namespace.md`). A companion **Service Bus** namespace
+  (`servicebus.bicep` / `service-bus-namespace` item) and **Event Grid** topic
+  (`eventgrid.bicep` / `event-grid-topic` item) shipped in the same wave.
 - **Azure Stream Analytics** OR **ADX inline ingestion mappings** for transforms
 - **ADX `.ingest` commands** when destination is Eventhouse
 - **Loom Activator engine container** (already deployed) for Activator destination
 
-## Required Azure resources (currently missing)
-- Event Hubs namespace + hub
-- Azure Stream Analytics job (optional, if not using ADX-only path)
-- Kusto ingestion mapping resources
+## Required Azure resources
+- Event Hubs namespace + hub — **shipped** (`landing-zone/eventhubs.bicep`; the
+  `event-hubs-namespace` console item). Grant the Console UAMI **Azure Event Hubs
+  Data Owner** for Send/receive.
+- Azure Stream Analytics job — optional (only if not using the ADX-only transform
+  path); still to wire for the full no-code transform surface.
+- Kusto ingestion mapping resources — created per-eventstream at run time against
+  the existing ADX cluster.
 
 ## Estimated effort
 3-4 sessions. Stream designer alone is 1-2 sessions of UI work. Backend wiring + bicep is another. Then per-source + per-destination wiring is incremental.

@@ -1,21 +1,43 @@
 'use client';
 
 /**
- * OutputPane — bottom-area (or Output tab) view of recent pipeline runs.
+ * OutputPane — the bottom-area (or Output tab) of the Data Pipeline editor.
  *
- * Calls /api/items/data-pipeline/[id]/output for the run list, and
- * /api/items/data-pipeline/[id]/output?runId=... for the per-activity
- * breakdown when a run is selected.
+ * Two sub-experiences, one for each thing ADF Studio surfaces under the canvas
+ * (the parent editor mounts this on its "Output" top tab):
  *
- * No mock arrays — empty array reflects an honestly-empty ADF history.
+ *   • MONITOR — recent pipeline runs (queryPipelineRuns): runId, status, start,
+ *     end, duration, invoked-by, message; expand a run for its per-activity runs
+ *     (queryActivityRuns). This is the historical run-history view, with the
+ *     Log-Analytics fallback for runs older than ADF's 45-day native window.
+ *   • DEBUG — dispatch a debug run and watch each activity execute live (see
+ *     `DebugRunPanel`).
+ *
+ * Backend (real REST only, no mocks — no-vaporware.md):
+ *   GET  /api/items/data-pipeline/[id]/output                 → run list
+ *   GET  /api/items/data-pipeline/[id]/output?runId=…         → per-activity runs
+ *   POST /api/items/data-pipeline/[id]/debug                  → debug dispatch
+ *
+ * An empty array reflects an honestly-empty ADF history — never a placeholder.
+ *
+ * The prop signature is preserved (`{ workspaceId, pipelineId }`) so the existing
+ * editor mount keeps working unchanged; the parameter/picker props are optional
+ * additions the editor can wire to drive the Debug tab's per-run parameters.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Caption1, Button, Subtitle2, Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
+  Caption1, Button, Subtitle2, Text,
+  Table, TableHeader, TableHeaderCell, TableBody, TableRow, TableCell,
+  TabList, Tab,
   MessageBar, MessageBarBody, makeStyles, tokens, Badge, Spinner,
 } from '@fluentui/react-components';
-import { ArrowSync20Regular, ChevronRight20Regular, ChevronDown20Regular } from '@fluentui/react-icons';
+import {
+  ArrowSync20Regular, ChevronRight20Regular, ChevronDown20Regular,
+  History20Regular, Bug20Regular,
+} from '@fluentui/react-icons';
+import { DebugRunPanel, statusBadge, fmtDuration } from './debug-monitor-panel';
+import type { PipelineParameter } from './types';
 
 interface RunRow {
   runId: string;
@@ -38,41 +60,97 @@ interface ActivityRow {
   input?: unknown;
   output?: unknown;
   error?: string | null;
+  errorCode?: string | null;
 }
+
+type OutputTab = 'monitor' | 'debug';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: 8, padding: 12, overflow: 'auto', flex: 1, minHeight: 0 },
-  header: { display: 'flex', gap: 8, alignItems: 'center' },
-  detailBox: {
-    padding: 12,
-    backgroundColor: tokens.colorNeutralBackground3,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: 4,
-    overflow: 'auto',
-    maxHeight: 240,
+  root: { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 },
+  tabs: {
+    paddingLeft: tokens.spacingHorizontalM,
+    borderBottom: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground2,
   },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 11, whiteSpace: 'pre-wrap', wordBreak: 'break-all' },
+  monitor: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingHorizontalM, overflow: 'auto', flex: 1, minHeight: 0,
+  },
+  header: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
+  detailBox: {
+    padding: tokens.spacingHorizontalM,
+    backgroundColor: tokens.colorNeutralBackground3,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderRadius: tokens.borderRadiusMedium,
+    overflow: 'auto',
+    maxHeight: '320px',
+  },
+  activityRow: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    marginBottom: tokens.spacingVerticalS,
+  },
+  activityHead: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  mono: {
+    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0,
+  },
+  errText: { color: tokens.colorPaletteRedForeground1 },
 });
-
-function statusBadge(s?: string) {
-  switch (s) {
-    case 'Succeeded': return <Badge appearance="filled" color="success" size="small">Succeeded</Badge>;
-    case 'Failed':    return <Badge appearance="filled" color="danger" size="small">Failed</Badge>;
-    case 'InProgress':return <Badge appearance="filled" color="brand" size="small">InProgress</Badge>;
-    case 'Queued':    return <Badge appearance="outline" size="small">Queued</Badge>;
-    case 'Cancelled': return <Badge appearance="filled" color="warning" size="small">Cancelled</Badge>;
-    case 'Skipped':   return <Badge appearance="filled" color="subtle" size="small">Skipped</Badge>;
-    default:          return <Badge appearance="outline" size="small">{s || '—'}</Badge>;
-  }
-}
 
 export interface OutputPaneProps {
   workspaceId: string;
   pipelineId: string;
+  /** Declared pipeline parameters — forwarded to the Debug tab's per-run fields. */
+  pipelineParams?: PipelineParameter[];
+  /** Param/variable/activity names for the Debug tab's `@{}` expression picker. */
+  paramNames?: string[];
+  variableNames?: string[];
+  activityNames?: string[];
 }
 
-export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
+export function OutputPane({
+  workspaceId, pipelineId, pipelineParams, paramNames, variableNames, activityNames,
+}: OutputPaneProps) {
   const s = useStyles();
+  const [tab, setTab] = useState<OutputTab>('monitor');
+
+  return (
+    <div className={s.root}>
+      <TabList
+        className={s.tabs}
+        selectedValue={tab}
+        onTabSelect={(_, d) => setTab(d.value as OutputTab)}
+        size="small"
+      >
+        <Tab value="monitor" icon={<History20Regular />}>Monitor</Tab>
+        <Tab value="debug" icon={<Bug20Regular />}>Debug</Tab>
+      </TabList>
+
+      {tab === 'monitor' && (
+        <MonitorView workspaceId={workspaceId} pipelineId={pipelineId} styles={s} />
+      )}
+      {tab === 'debug' && (
+        <DebugRunPanel
+          workspaceId={workspaceId}
+          pipelineId={pipelineId}
+          pipelineParams={pipelineParams}
+          paramNames={paramNames}
+          variableNames={variableNames}
+          activityNames={activityNames}
+        />
+      )}
+    </div>
+  );
+}
+
+/** MONITOR — recent pipeline runs + per-activity drill-down (queryPipelineRuns). */
+function MonitorView({
+  workspaceId, pipelineId, styles: s,
+}: {
+  workspaceId: string;
+  pipelineId: string;
+  styles: ReturnType<typeof useStyles>;
+}) {
   const [runs, setRuns] = useState<RunRow[] | null>(null);
   const [laFallback, setLaFallback] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -86,7 +164,7 @@ export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
     if (!workspaceId || !pipelineId) return;
     setLoading(true); setErr(null);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: 'no-store' });
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'failed'); setRuns([]); setLaFallback(false); }
       else { setRuns(j.runs || []); setLaFallback(!!j.laFallback); }
@@ -96,15 +174,15 @@ export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
     } finally { setLoading(false); }
   }, [workspaceId, pipelineId]);
 
-  useEffect(() => { loadRuns(); }, [loadRuns]);
+  useEffect(() => { void loadRuns(); }, [loadRuns]);
 
-  const toggleRun = async (runId: string) => {
+  const toggleRun = useCallback(async (runId: string) => {
     if (expanded === runId) { setExpanded(null); return; }
     setExpanded(runId);
     if (activities[runId]) return;
     setActivitiesLoading((m) => ({ ...m, [runId]: true }));
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`);
+      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`, { cache: 'no-store' });
       const j = await r.json();
       if (!j.ok) {
         setActivitiesErr((m) => ({ ...m, [runId]: j.error || 'failed' }));
@@ -116,10 +194,10 @@ export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
     } finally {
       setActivitiesLoading((m) => ({ ...m, [runId]: false }));
     }
-  };
+  }, [expanded, activities, pipelineId, workspaceId]);
 
   return (
-    <div className={s.root}>
+    <div className={s.monitor}>
       <div className={s.header}>
         <Subtitle2>Recent runs ({runs?.length ?? 0})</Subtitle2>
         <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadRuns}>Refresh</Button>
@@ -138,13 +216,13 @@ export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
         </MessageBar>
       )}
       {!err && runs && runs.length === 0 && (
-        <Caption1>No runs yet for this pipeline. Click <strong>Run</strong> or <strong>Debug</strong> in the ribbon to dispatch one.</Caption1>
+        <Caption1>No runs yet for this pipeline. Click <strong>Run</strong> or open the <strong>Debug</strong> tab to dispatch one.</Caption1>
       )}
       {runs && runs.length > 0 && (
         <Table size="small" aria-label="Pipeline runs">
           <TableHeader>
             <TableRow>
-              <TableHeaderCell style={{ width: 32 }}></TableHeaderCell>
+              <TableHeaderCell style={{ width: '32px' }} />
               <TableHeaderCell>Run ID</TableHeaderCell>
               <TableHeaderCell>Status</TableHeaderCell>
               <TableHeaderCell>Invoked by</TableHeaderCell>
@@ -156,58 +234,16 @@ export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
           </TableHeader>
           <TableBody>
             {runs.map((r) => (
-              <>
-                <TableRow key={r.runId}>
-                  <TableCell>
-                    <Button size="small" appearance="subtle"
-                      icon={expanded === r.runId ? <ChevronDown20Regular /> : <ChevronRight20Regular />}
-                      onClick={() => toggleRun(r.runId)}
-                      aria-label={expanded === r.runId ? 'Collapse' : 'Expand'}
-                    />
-                  </TableCell>
-                  <TableCell className={s.mono}><code>{r.runId.slice(0, 8)}</code></TableCell>
-                  <TableCell>{statusBadge(r.status)}</TableCell>
-                  <TableCell>{r.invokedBy || '—'}</TableCell>
-                  <TableCell className={s.mono}>{r.start || '—'}</TableCell>
-                  <TableCell className={s.mono}>{r.end || '—'}</TableCell>
-                  <TableCell>{r.durationMs ? `${Math.round(r.durationMs / 100) / 10}s` : '—'}</TableCell>
-                  <TableCell>{r.message || ''}</TableCell>
-                </TableRow>
-                {expanded === r.runId && (
-                  <TableRow key={`${r.runId}-detail`}>
-                    <TableCell colSpan={8}>
-                      <div className={s.detailBox}>
-                        {activitiesLoading[r.runId] && <Spinner size="tiny" label="Loading activity output…" />}
-                        {activitiesErr[r.runId] && (
-                          <MessageBar intent="error">
-                            <MessageBarBody>{activitiesErr[r.runId]}</MessageBarBody>
-                          </MessageBar>
-                        )}
-                        {(activities[r.runId] || []).length === 0 && !activitiesLoading[r.runId] && (
-                          <Caption1>No per-activity records returned by ADF for this run.</Caption1>
-                        )}
-                        {(activities[r.runId] || []).map((a) => (
-                          <div key={a.id} style={{ marginBottom: 8 }}>
-                            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                              <strong>{a.name}</strong>
-                              <Badge appearance="outline" size="small">{a.type}</Badge>
-                              {statusBadge(a.status)}
-                              {a.durationMs && <Caption1>{Math.round(a.durationMs / 100) / 10}s</Caption1>}
-                            </div>
-                            {a.error && <div className={s.mono} style={{ color: tokens.colorPaletteRedForeground1 }}>{a.error}</div>}
-                            {a.output ? (
-                              <details>
-                                <summary><Caption1>output</Caption1></summary>
-                                <div className={s.mono}>{JSON.stringify(a.output, null, 2).slice(0, 2000)}</div>
-                              </details>
-                            ) : null}
-                          </div>
-                        ))}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                )}
-              </>
+              <RunRows
+                key={r.runId}
+                r={r}
+                isOpen={expanded === r.runId}
+                activities={activities[r.runId]}
+                loading={!!activitiesLoading[r.runId]}
+                error={activitiesErr[r.runId]}
+                onToggle={() => toggleRun(r.runId)}
+                styles={s}
+              />
             ))}
           </TableBody>
         </Table>
@@ -215,3 +251,76 @@ export function OutputPane({ workspaceId, pipelineId }: OutputPaneProps) {
     </div>
   );
 }
+
+/** A single run row + its expandable per-activity detail (MONITOR drill-down). */
+function RunRows({
+  r, isOpen, activities, loading, error, onToggle, styles: s,
+}: {
+  r: RunRow;
+  isOpen: boolean;
+  activities?: ActivityRow[];
+  loading: boolean;
+  error?: string;
+  onToggle: () => void;
+  styles: ReturnType<typeof useStyles>;
+}) {
+  const list = activities || [];
+  return (
+    <>
+      <TableRow>
+        <TableCell>
+          <Button size="small" appearance="subtle"
+            icon={isOpen ? <ChevronDown20Regular /> : <ChevronRight20Regular />}
+            onClick={onToggle}
+            aria-label={isOpen ? 'Collapse' : 'Expand'}
+          />
+        </TableCell>
+        <TableCell><code className={s.mono}>{r.runId.slice(0, 8)}</code></TableCell>
+        <TableCell>{statusBadge(r.status)}</TableCell>
+        <TableCell>{r.invokedBy || '—'}</TableCell>
+        <TableCell><span className={s.mono}>{r.start || '—'}</span></TableCell>
+        <TableCell><span className={s.mono}>{r.end || '—'}</span></TableCell>
+        <TableCell>{fmtDuration(r.durationMs)}</TableCell>
+        <TableCell>{r.message || ''}</TableCell>
+      </TableRow>
+      {isOpen && (
+        <TableRow>
+          <TableCell colSpan={8}>
+            <div className={s.detailBox}>
+              {loading && <Spinner size="tiny" label="Loading activity output…" />}
+              {error && (
+                <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>
+              )}
+              {list.length === 0 && !loading && !error && (
+                <Caption1>No per-activity records returned by ADF for this run.</Caption1>
+              )}
+              {list.map((a) => (
+                <div key={a.id} className={s.activityRow}>
+                  <div className={s.activityHead}>
+                    <Text weight="semibold">{a.name}</Text>
+                    <Badge appearance="outline" size="small">{a.type}</Badge>
+                    {statusBadge(a.status)}
+                    {a.durationMs ? <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{fmtDuration(a.durationMs)}</Caption1> : null}
+                  </div>
+                  {a.error && (
+                    <pre className={`${s.mono} ${s.errText}`}>
+                      {a.errorCode ? `[${a.errorCode}] ` : ''}{a.error}
+                    </pre>
+                  )}
+                  {a.output ? (
+                    <details>
+                      <summary><Caption1>output</Caption1></summary>
+                      <pre className={s.mono}>{JSON.stringify(a.output, null, 2).slice(0, 2000)}</pre>
+                    </details>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </TableCell>
+        </TableRow>
+      )}
+    </>
+  );
+}
+
+export default OutputPane;

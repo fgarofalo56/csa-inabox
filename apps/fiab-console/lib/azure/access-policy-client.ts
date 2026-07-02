@@ -297,6 +297,34 @@ export async function denySchemaAccess(input: SchemaDenyInput): Promise<SchemaDe
   }
 }
 
+/**
+ * Enumerate the Entra principals that currently hold any data-access role
+ * (db_datareader / db_datawriter / db_owner) in the env-bound Synapse dedicated
+ * pool. Used by the protection-policy reconciler to compute "live − allow" and
+ * REVOKE members not on the policy allow-list (positive-grant + remove-others —
+ * apps cannot author Azure DENY). Returns names (UPNs) so they compare 1:1 with
+ * the SQL grant path (which keys on principalName). Honest gate when the
+ * warehouse is unset. Real TDS query — no mock.
+ */
+export async function listWarehousePrincipals(): Promise<{ principals: string[] } | { gate: string }> {
+  let target;
+  try { target = dedicatedTarget(); }
+  catch {
+    return { gate: 'The Azure-native warehouse is not configured: set LOOM_SYNAPSE_WORKSPACE and LOOM_SYNAPSE_DEDICATED_POOL to list/converge warehouse access.' };
+  }
+  const res = await synapseExecute(
+    target,
+    `SELECT DISTINCT m.name FROM sys.database_role_members rm\n` +
+      `  JOIN sys.database_principals r ON r.principal_id = rm.role_principal_id\n` +
+      `  JOIN sys.database_principals m ON m.principal_id = rm.member_principal_id\n` +
+      `  WHERE r.name IN ('db_datareader','db_datawriter','db_owner') AND m.type IN ('E','X','S');`,
+  );
+  const principals = (res.rows || [])
+    .map((r) => String((r as unknown[])[0] ?? '').trim())
+    .filter(Boolean);
+  return { principals };
+}
+
 /** Inverse of {@link denySchemaAccess}: REVOKE the schema DENY (best-effort). */
 export async function revokeSchemaDeny(input: SchemaDenyInput): Promise<void> {
   try {

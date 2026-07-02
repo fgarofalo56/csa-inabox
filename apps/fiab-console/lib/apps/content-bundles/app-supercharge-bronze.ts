@@ -13,6 +13,7 @@
  */
 import type { AppBundle, NotebookContent } from './types';
 import type { NotebookCell } from '@/lib/types/notebook-cell';
+import { NOTEBOOK_ARG_PREAMBLE } from './_notebook-preamble';
 
 const CELLS_BRONZE_01_BRONZE_SLOT_TELEMETRY: NotebookCell[] = [
   {
@@ -152,7 +153,7 @@ const CELLS_BRONZE_02_BRONZE_PLAYER_PROFILE: NotebookCell[] = [
   {
     "id": "bronze-02-bronze-player-profile-c1",
     "type": "code",
-    "source": "# ---------------------------------------------------------------------------\n# Fabric/local compatibility shim\n# ---------------------------------------------------------------------------\nimport os\n\ntry:\n    import notebookutils  # Fabric runtime\n    def _get_arg(name, default=None):\n        try:\n            return notebookutils.notebook.getArgument(name, default)\n        except Exception:\n            return os.environ.get(name.upper(), default)\n    def _notebook_exit(status: str) -> None:\n        notebookutils.notebook.exit(status)\nexcept ImportError:\n    try:\n        import mssparkutils  # legacy Synapse/Fabric runtime\n        def _get_arg(name, default=None):\n            try:\n                return mssparkutils.notebook.getArgument(name, default)\n            except Exception:\n                return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            mssparkutils.notebook.exit(status)\n    except ImportError:\n        def _get_arg(name, default=None):\n            return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            raise SystemExit(status)\n\n\n# MAGIC %md\n# MAGIC ## Configuration",
+    "source": NOTEBOOK_ARG_PREAMBLE + "# MAGIC %md\n# MAGIC ## Configuration",
     "lang": "pyspark"
   },
   {
@@ -305,7 +306,7 @@ const CELLS_BRONZE_03_BRONZE_FINANCIAL_TXN: NotebookCell[] = [
   {
     "id": "bronze-03-bronze-financial-txn-c1",
     "type": "code",
-    "source": "# ---------------------------------------------------------------------------\n# Fabric/local compatibility shim\n# ---------------------------------------------------------------------------\nimport os\n\ntry:\n    import notebookutils  # Fabric runtime\n    def _get_arg(name, default=None):\n        try:\n            return notebookutils.notebook.getArgument(name, default)\n        except Exception:\n            return os.environ.get(name.upper(), default)\n    def _notebook_exit(status: str) -> None:\n        notebookutils.notebook.exit(status)\nexcept ImportError:\n    try:\n        import mssparkutils  # legacy Synapse/Fabric runtime\n        def _get_arg(name, default=None):\n            try:\n                return mssparkutils.notebook.getArgument(name, default)\n            except Exception:\n                return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            mssparkutils.notebook.exit(status)\n    except ImportError:\n        def _get_arg(name, default=None):\n            return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            raise SystemExit(status)\n\n\n# MAGIC %md\n# MAGIC ## Configuration",
+    "source": NOTEBOOK_ARG_PREAMBLE + "# MAGIC %md\n# MAGIC ## Configuration",
     "lang": "pyspark"
   },
   {
@@ -447,7 +448,7 @@ const CELLS_BRONZE_04_BRONZE_COMPLIANCE: NotebookCell[] = [
   {
     "id": "bronze-04-bronze-compliance-c1",
     "type": "code",
-    "source": "# ---------------------------------------------------------------------------\n# Fabric/local compatibility shim\n# ---------------------------------------------------------------------------\nimport os\n\ntry:\n    import notebookutils  # Fabric runtime\n    def _get_arg(name, default=None):\n        try:\n            return notebookutils.notebook.getArgument(name, default)\n        except Exception:\n            return os.environ.get(name.upper(), default)\n    def _notebook_exit(status: str) -> None:\n        notebookutils.notebook.exit(status)\nexcept ImportError:\n    try:\n        import mssparkutils  # legacy Synapse/Fabric runtime\n        def _get_arg(name, default=None):\n            try:\n                return mssparkutils.notebook.getArgument(name, default)\n            except Exception:\n                return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            mssparkutils.notebook.exit(status)\n    except ImportError:\n        def _get_arg(name, default=None):\n            return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            raise SystemExit(status)\n\n\n# MAGIC %md\n# MAGIC ## Configuration",
+    "source": NOTEBOOK_ARG_PREAMBLE + "# MAGIC %md\n# MAGIC ## Configuration",
     "lang": "pyspark"
   },
   {
@@ -589,7 +590,7 @@ const CELLS_BRONZE_05_BRONZE_TABLE_GAMES: NotebookCell[] = [
   {
     "id": "bronze-05-bronze-table-games-c1",
     "type": "code",
-    "source": "# ---------------------------------------------------------------------------\n# Fabric/local compatibility shim\n# ---------------------------------------------------------------------------\nimport os\n\ntry:\n    import notebookutils  # Fabric runtime\n    def _get_arg(name, default=None):\n        try:\n            return notebookutils.notebook.getArgument(name, default)\n        except Exception:\n            return os.environ.get(name.upper(), default)\n    def _notebook_exit(status: str) -> None:\n        notebookutils.notebook.exit(status)\nexcept ImportError:\n    try:\n        import mssparkutils  # legacy Synapse/Fabric runtime\n        def _get_arg(name, default=None):\n            try:\n                return mssparkutils.notebook.getArgument(name, default)\n            except Exception:\n                return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            mssparkutils.notebook.exit(status)\n    except ImportError:\n        def _get_arg(name, default=None):\n            return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            raise SystemExit(status)\n\n\n# MAGIC %md\n# MAGIC ## Configuration",
+    "source": NOTEBOOK_ARG_PREAMBLE + "# MAGIC %md\n# MAGIC ## Configuration",
     "lang": "pyspark"
   },
   {
@@ -731,7 +732,7 @@ const CELLS_BRONZE_06_BRONZE_SECURITY_EVENTS: NotebookCell[] = [
   {
     "id": "bronze-06-bronze-security-events-c1",
     "type": "code",
-    "source": "# ---------------------------------------------------------------------------\n# Fabric/local compatibility shim\n# ---------------------------------------------------------------------------\nimport os\n\ntry:\n    import notebookutils  # Fabric runtime\n    def _get_arg(name, default=None):\n        try:\n            return notebookutils.notebook.getArgument(name, default)\n        except Exception:\n            return os.environ.get(name.upper(), default)\n    def _notebook_exit(status: str) -> None:\n        notebookutils.notebook.exit(status)\nexcept ImportError:\n    try:\n        import mssparkutils  # legacy Synapse/Fabric runtime\n        def _get_arg(name, default=None):\n            try:\n                return mssparkutils.notebook.getArgument(name, default)\n            except Exception:\n                return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            mssparkutils.notebook.exit(status)\n    except ImportError:\n        def _get_arg(name, default=None):\n            return os.environ.get(name.upper(), default)\n        def _notebook_exit(status: str) -> None:\n            raise SystemExit(status)\n\n\n# MAGIC %md\n# MAGIC ## Configuration",
+    "source": NOTEBOOK_ARG_PREAMBLE + "# MAGIC %md\n# MAGIC ## Configuration",
     "lang": "pyspark"
   },
   {
@@ -3111,7 +3112,7 @@ const CELLS_BRONZE_50_HEALTHCARE_ADMISSIONS: NotebookCell[] = [
   {
     "id": "bronze-50-healthcare-admissions-c2",
     "type": "code",
-    "source": "import os\nfrom datetime import datetime\n\nfrom pyspark.sql import SparkSession\nfrom pyspark.sql.functions import (\n    col,\n    current_timestamp,\n    input_file_name,\n    lit,\n    to_timestamp,\n)\nfrom pyspark.sql.types import (\n    DoubleType,\n    IntegerType,\n    StringType,\n    StructField,\n    StructType,\n    TimestampType,\n)\n\n\ndef _get_arg(name: str, default=None):\n    \"\"\"Read a notebook parameter from Fabric/Synapse runtime, env var, or default.\"\"\"\n    try:\n        import notebookutils\n        return notebookutils.notebook.getArgument(name, default)\n    except Exception:\n        try:\n            import mssparkutils\n            return mssparkutils.notebook.getArgument(name, default)\n        except Exception:\n            return os.environ.get(name.upper(), default)\n\n\nSOURCE_PATH = _get_arg(\"source_path\", \"Files/landing/healthcare/\")\nTARGET_TABLE = \"lh_bronze.dbo.bronze_healthcare_admissions\"\nBATCH_ID = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n\nprint(f\"Source: {SOURCE_PATH}\")\nprint(f\"Target: {TARGET_TABLE}\")\nprint(f\"Batch ID: {BATCH_ID}\")",
+    "source": "import os\nfrom datetime import datetime\n\nfrom pyspark.sql import SparkSession\nfrom pyspark.sql.functions import (\n    col,\n    current_timestamp,\n    input_file_name,\n    lit,\n    to_timestamp,\n)\nfrom pyspark.sql.types import (\n    DoubleType,\n    IntegerType,\n    StringType,\n    StructField,\n    StructType,\n    TimestampType,\n)\n\n\ndef _get_arg(name: str, default=None):\n    \"\"\"Read a notebook parameter from Fabric/Synapse runtime, env var, or default.\"\"\"\n    try:\n        import notebookutils\n        return notebookutils.notebook.getArgument(name, default)\n    except Exception:\n        try:\n            import mssparkutils\n            return mssparkutils.notebook.getArgument(name, default)\n        except Exception:\n            return os.environ.get(name.upper(), default)\n\n\nSOURCE_PATH = _get_arg(\"source_path\", \"Files/landing/healthcare/\")\nTARGET_TABLE = \"lh_bronze.bronze_healthcare_admissions\"\nBATCH_ID = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n\nprint(f\"Source: {SOURCE_PATH}\")\nprint(f\"Target: {TARGET_TABLE}\")\nprint(f\"Batch ID: {BATCH_ID}\")",
     "lang": "pyspark"
   },
   {

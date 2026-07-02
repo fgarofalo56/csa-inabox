@@ -343,6 +343,7 @@ export interface FoundryDeployment {
   endpointName: string;
   model?: string;
   instanceType?: string;
+  instanceCount?: number;
   provisioningState?: string;
   appInsightsEnabled?: boolean;
 }
@@ -369,6 +370,7 @@ function shapeDeployment(raw: any, endpointName: string): FoundryDeployment {
     endpointName,
     model: p.model,
     instanceType: p.instanceType,
+    instanceCount: typeof raw?.sku?.capacity === 'number' ? raw.sku.capacity : (typeof p.scaleSettings?.instanceCount === 'number' ? p.scaleSettings.instanceCount : undefined),
     provisioningState: p.provisioningState,
     appInsightsEnabled: p.appInsightsEnabled,
   };
@@ -398,6 +400,49 @@ export async function listDeployments(): Promise<FoundryDeployment[]> {
     }
   }
   return all;
+}
+
+/** Deployments under ONE endpoint (deploy history per endpoint, ws-scoped). */
+export async function listEndpointDeployments(endpointName: string, workspaceName?: string): Promise<FoundryDeployment[]> {
+  if (!workspaceName) {
+    const rows = await pagedList(`/onlineEndpoints/${encodeURIComponent(endpointName)}/deployments`).catch((e) => {
+      if (e instanceof FoundryError && e.status === 404) return [];
+      throw e;
+    });
+    return rows.map((r) => shapeDeployment(r, endpointName));
+  }
+  const res = await armFetch(`${workspaceArmBase(workspaceName)}/onlineEndpoints/${encodeURIComponent(endpointName)}/deployments`, { apiVersion: ML_API });
+  if (res.status === 404) return [];
+  const j = await readJson<{ value?: any[] }>(res);
+  return (j?.value || []).map((r) => shapeDeployment(r, endpointName));
+}
+
+/** Blue-green: set the traffic split (deployment → 0-100) on an endpoint. Real ARM PUT. */
+export async function setEndpointTraffic(endpointName: string, traffic: Record<string, number>, workspaceName?: string): Promise<FoundryEndpoint> {
+  const path = `${workspaceArmBase(workspaceName)}/onlineEndpoints/${encodeURIComponent(endpointName)}`;
+  // Read the live endpoint first so the traffic PUT echoes its EXISTING identity,
+  // location, and authMode — hard-coding SystemAssigned would clobber an endpoint
+  // that uses a UserAssigned (or None) identity. Fall back to SystemAssigned only
+  // when the endpoint has no identity to preserve.
+  const existing = await readJson<any>(await armFetch(path, { apiVersion: ML_API }));
+  const location = existing?.location || (await workspaceLocation(workspaceName));
+  const identity = existing?.identity || { type: 'SystemAssigned' };
+  const props: Record<string, unknown> = { traffic };
+  if (existing?.properties?.authMode) props.authMode = existing.properties.authMode;
+  const armBody = { location, identity, properties: props };
+  const res = await armFetch(path, { apiVersion: ML_API, method: 'PUT', body: JSON.stringify(armBody) });
+  if (res.status === 202) return { id: '', name: endpointName, provisioningState: 'Updating', traffic };
+  const j = await readJson<any>(res);
+  return shapeEndpoint(j);
+}
+
+/** Delete a managed online endpoint (and its deployments). Real ARM DELETE. */
+export async function deleteOnlineEndpoint(endpointName: string, workspaceName?: string): Promise<void> {
+  const res = await armFetch(`${workspaceArmBase(workspaceName)}/onlineEndpoints/${encodeURIComponent(endpointName)}`, { apiVersion: ML_API, method: 'DELETE' });
+  if (res.status !== 200 && res.status !== 202 && res.status !== 204) {
+    const t = await res.text().catch(() => '');
+    throw new FoundryError(res.status, t, `Endpoint delete failed: ${t.slice(0, 240)}`);
+  }
 }
 
 // ---------------- Computes ----------------
@@ -1698,12 +1743,18 @@ export async function vectorSearch(name: string, opts: {
  */
 export function buildVectorIndexDefinition(opts: {
   indexName: string; dim: number; metric: 'cosine' | 'euclidean' | 'dotProduct';
-  vectorField?: string; contentField?: string;
+  vectorField?: string; contentField?: string; algorithm?: 'hnsw' | 'exhaustiveKnn';
 }): any {
   const vectorField = opts.vectorField || 'embedding';
   const contentField = opts.contentField || 'content';
   const profileName = 'loom-vec-profile';
-  const algoName = 'loom-hnsw';
+  // Vector search algorithm: HNSW (approximate, fast — the default) or
+  // exhaustiveKnn (brute-force, exact — best for small corpora / recall checks).
+  const algoKind = opts.algorithm === 'exhaustiveKnn' ? 'exhaustiveKnn' : 'hnsw';
+  const algoName = `loom-${algoKind}`;
+  const algorithm = algoKind === 'exhaustiveKnn'
+    ? { name: algoName, kind: 'exhaustiveKnn', exhaustiveKnnParameters: { metric: opts.metric } }
+    : { name: algoName, kind: 'hnsw', hnswParameters: { metric: opts.metric, m: 4, efConstruction: 400, efSearch: 500 } };
   return {
     name: opts.indexName,
     fields: [
@@ -1715,7 +1766,7 @@ export function buildVectorIndexDefinition(opts: {
       },
     ],
     vectorSearch: {
-      algorithms: [{ name: algoName, kind: 'hnsw', hnswParameters: { metric: opts.metric, m: 4, efConstruction: 400, efSearch: 500 } }],
+      algorithms: [algorithm],
       profiles: [{ name: profileName, algorithm: algoName }],
     },
   };
@@ -1894,6 +1945,29 @@ export async function getDataAsset(name: string, workspaceName?: string): Promis
       createdAt: v.systemData?.createdAt,
     })),
   };
+}
+
+/** Producers + consumers of a data asset, derived from real AML jobs that
+ *  reference it (inputs = consumers, outputs = producers). No mock data. */
+export async function getDataAssetLineage(name: string, workspaceName?: string): Promise<{ producers: any[]; consumers: any[]; jobsScanned: number }> {
+  const res = await armFetch(`${workspaceArmBase(workspaceName)}/jobs`, { apiVersion: ML_API });
+  const j = await readJson<{ value?: any[] }>(res);
+  const jobs = j?.value || [];
+  const producers: any[] = []; const consumers: any[] = [];
+  // Match the asset name only as a delimited path/ref SEGMENT — a full azureml
+  // ref (azureml:<name>:<ver>), an ARM data path (.../data/<name>/versions/1),
+  // or a host/path token — never a loose substring (so "data" won't false-match
+  // "metadata", "sales" won't match "wholesale").
+  const target = name.toLowerCase();
+  const matches = (o: any) =>
+    o && typeof o.uri === 'string' && o.uri.toLowerCase().split(/[/:]+/).includes(target);
+  for (const job of jobs) {
+    const p = job?.properties || {};
+    const row = { name: job?.name, displayName: p.displayName, status: p.status, jobType: p.jobType };
+    if (Object.values(p.inputs || {}).some(matches)) consumers.push(row);
+    if (Object.values(p.outputs || {}).some(matches)) producers.push(row);
+  }
+  return { producers, consumers, jobsScanned: jobs.length };
 }
 
 export async function createDataAsset(name: string, body: {

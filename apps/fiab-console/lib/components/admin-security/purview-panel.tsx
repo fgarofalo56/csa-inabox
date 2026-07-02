@@ -57,10 +57,10 @@ const useStyles = makeStyles({
     flexWrap: 'wrap',
   },
   grow: { marginRight: 'auto' },
-  filter: { minWidth: 220 },
+  filter: { minWidth: '220px' },
   fieldStack: {
     display: 'flex', flexDirection: 'column',
-    gap: tokens.spacingVerticalM, minWidth: 360,
+    gap: tokens.spacingVerticalM, minWidth: '360px',
   },
   linkOut: {
     display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,

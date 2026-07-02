@@ -19,49 +19,71 @@
  * workspace (.claude/rules/no-fabric-dependency.md).
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type CSSProperties } from 'react';
+import { useRouter } from 'next/navigation';
 import {
-  Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
-  Tab, TabList, Field, Dropdown, Option,
+  Title2, Subtitle2, Body1, Caption1, Badge, Button, Input, Textarea, Spinner, Switch, Divider,
+  Tab, TabList, Field, Dropdown, Option, Checkbox, SearchBox,
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
-  MessageBar, MessageBarBody, MessageBarTitle,
+  Accordion, AccordionItem, AccordionHeader, AccordionPanel,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
+  MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, Dismiss16Regular, Link20Regular, Code20Regular,
   Flash20Regular, Rocket20Regular, Play20Regular, Database20Regular,
   Copy16Regular, Checkmark16Regular, BrainCircuit20Regular,
+  History20Regular, Bug20Regular,
+  ArrowSwap20Regular, People20Regular, Tag20Regular, ChevronRight20Regular,
+  CheckmarkCircle20Regular, DismissCircle20Regular, Cloud20Regular, Branch20Regular,
+  Settings20Regular, Warning20Regular, Pulse20Regular, Alert20Regular,
+  ArrowUp16Regular, ArrowDown16Regular, Wrench20Regular, Braces20Regular,
+  Clock20Regular, DataHistogram20Regular, TextField20Regular, Beaker20Regular,
+  Globe20Regular, CloudArrowUp20Regular, Open20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
+import { SlateAppBuilder, type SlateQueryDef, type SlateWidgetDef, type SlateVariable } from './slate/slate-app-builder';
+import { WorkshopAppBuilder, type WorkshopWidget, type WorkshopVariable } from './workshop/workshop-app-builder';
+import { deriveObjectProperties } from './_palantir-codegen';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import {
+  CHECK_TYPE_LIBRARY, CHECK_FAMILY_META, COMPARISON_OPERATORS, AGGREGATIONS,
+  buildCheckQuery, type CheckTypeDef, type CheckFamily, type CheckField,
+} from '@/app/api/items/health-check/_lib/check-types';
+import type { OntologyEntityBinding } from './_family-utils';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
 const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: 0 },
   section: {
-    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0,
     padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform', transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
   },
   sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   sectionIcon: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', width: '32px', height: '32px',
     borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
   },
-  hint: { color: tokens.colorNeutralForeground3 },
+  hint: { color: tokens.colorNeutralForeground3, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   addBar: {
     display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap',
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, backgroundColor: tokens.colorNeutralBackground2,
   },
   row: {
-    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0,
     padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium,
     border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1,
   },
   spacer: { flex: 1 },
-  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM },
+  grid2: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(280px, 100%), 1fr))', gap: tokens.spacingHorizontalM },
   modeBar: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap',
     padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
@@ -73,8 +95,9 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
+  traceHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
   codeWrap: {
-    display: 'flex', flexDirection: 'column', overflow: 'hidden',
+    display: 'flex', flexDirection: 'column', overflow: 'hidden', minWidth: 0,
     borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   codeHead: {
@@ -83,11 +106,12 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   code: {
-    fontFamily: tokens.fontFamilyMonospace, fontSize: '12px', lineHeight: '18px',
-    whiteSpace: 'pre', overflow: 'auto', maxHeight: '420px', margin: 0,
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, lineHeight: '18px',
+    whiteSpace: 'pre', overflow: 'auto', minHeight: '120px', maxHeight: '60vh', margin: 0,
+    resize: 'vertical', boxSizing: 'border-box',
     padding: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground2,
   },
-  tableWrap: { overflowX: 'auto', borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}` },
+  tableWrap: { overflowX: 'auto', minWidth: 0, borderRadius: tokens.borderRadiusLarge, border: `1px solid ${tokens.colorNeutralStroke2}`, boxShadow: tokens.shadow4 },
   empty: {
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalXL, color: tokens.colorNeutralForeground3, textAlign: 'center',
@@ -98,10 +122,92 @@ const useStyles = makeStyles({
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM,
     paddingTop: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
   },
+  fieldWide: { minWidth: '280px' },
+  fieldStep: { minWidth: '260px' },
+  fieldMed: { minWidth: '200px' },
+  fieldNarrow: { minWidth: '140px' },
   mutedCaption: { color: tokens.colorNeutralForeground3 },
   errorCaption: { color: tokens.colorPaletteRedForeground1 },
-  dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: '420px' },
+  dialogForm: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 'min(420px, 100%)', maxWidth: '100%' },
   dialogScroll: { maxHeight: '52vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS },
+  scopeBar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
+  scopeScroll: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS,
+    maxHeight: '40vh', overflowY: 'auto', paddingRight: tokens.spacingHorizontalXS, minWidth: 0,
+  },
+  chipBar: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS, alignItems: 'center', minWidth: 0 },
+  rowText: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  tabStrip: { paddingBottom: tokens.spacingVerticalXS },
+  pipelineLane: { display: 'flex', alignItems: 'stretch', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', overflowX: 'auto', paddingBottom: tokens.spacingVerticalS, minWidth: 0 },
+  stageCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '200px', maxWidth: '320px',
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+  },
+  connector: {
+    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+    gap: tokens.spacingVerticalXXS, color: tokens.colorNeutralForeground3, alignSelf: 'center', minWidth: '44px',
+  },
+  cardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, flexWrap: 'wrap' },
+  cardActions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center' },
+  kv: { display: 'flex', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, minWidth: 0 },
+  statGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(180px, 100%), 1fr))', gap: tokens.spacingHorizontalM, minWidth: 0 },
+  statTile: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusXLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform', transitionDuration: tokens.durationNormal, transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)' },
+  },
+  statHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3 },
+  cTotal: { color: tokens.colorBrandForeground1 },
+  cHealthy: { color: tokens.colorPaletteGreenForeground1 },
+  cFiring: { color: tokens.colorPaletteRedForeground1 },
+  cDisabled: { color: tokens.colorNeutralForeground3 },
+  runPanel: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground2, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  },
+  rowActions: { display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end' },
+  blockCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minWidth: 0,
+    padding: tokens.spacingVerticalL, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow', transitionDuration: tokens.durationNormal, transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow8 },
+  },
+  blockCardHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', minWidth: 0 },
+  blockIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '30px', height: '30px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  blockBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
+  blockGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(220px, 100%), 1fr))', gap: tokens.spacingHorizontalM, minWidth: 0 },
+  toolCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0,
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusMedium,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground2,
+  },
+  blockConnector: { display: 'flex', alignItems: 'center', justifyContent: 'center', color: tokens.colorNeutralForeground4, paddingTop: tokens.spacingVerticalXXS, paddingBottom: tokens.spacingVerticalXXS },
+  outPill: {
+    display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS,
+    fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200,
+  },
+  checkTile: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 0, textAlign: 'left', cursor: 'pointer',
+    padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform', transitionDuration: tokens.durationNormal, transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow16, transform: 'translateY(-1px)', border: `1px solid ${tokens.colorBrandStroke1}` },
+    ':focus-visible': { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '2px' },
+  },
+  checkTileHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0 },
+  checkTileIcon: {
+    display: 'flex', alignItems: 'center', justifyContent: 'center', width: '28px', height: '28px', flexShrink: 0,
+    borderRadius: tokens.borderRadiusMedium, backgroundColor: tokens.colorBrandBackground2, color: tokens.colorBrandForeground1,
+  },
+  galleryFamily: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
 });
 
 /** Code/output viewer with a working copy-to-clipboard control. */
@@ -224,7 +330,13 @@ function SectionHead({ icon, title, hint }: { icon: ReactNode; title: string; hi
 
 interface OntologySummary { id: string; displayName: string; workspaceId: string; classCount: number }
 interface OntologyClassLite { name: string; parent?: string; description?: string }
-interface OntologySurface { id: string; displayName: string; classes: OntologyClassLite[]; links: Array<{ from: string; to: string; kind: string }>; bindings: unknown[] }
+interface OntologyActionLite { name: string; objectType: string; kind: 'create' | 'update' | 'delete'; params?: string[] }
+interface OntologySurface {
+  id: string; displayName: string; classes: OntologyClassLite[];
+  links: Array<{ from: string; to: string; kind: string }>;
+  bindings: OntologyEntityBinding[];
+  actionTypes?: OntologyActionLite[];
+}
 
 /** Shared hook: load the bind-ontology surface for an ontology-bound item type. */
 function useOntologyBinding(slug: string, id: string) {
@@ -272,136 +384,82 @@ function useOntologyBinding(slug: string, id: string) {
 
 // ───────────────────────── Workshop app (Atelier) ─────────────────────────
 interface WorkshopAction { id: string; label: string; kind: 'create' | 'update' | 'delete'; entity: string }
+interface WorkshopVersion { version: string; url: string; hostname: string; staticSiteName: string; createdAt: string; widgetCount: number }
 interface WorkshopState {
   boundOntologyId?: string; boundOntologyName?: string;
-  objectViews?: string[]; actions?: WorkshopAction[]; [k: string]: unknown;
+  objectViews?: string[]; actions?: WorkshopAction[];
+  // New app-builder model (canvas widgets + typed variables), persisted to Cosmos.
+  widgets?: WorkshopWidget[]; variables?: WorkshopVariable[];
+  // Real SWA publish history (Microsoft.Web/staticSites) persisted to Cosmos.
+  versions?: WorkshopVersion[]; staticSiteName?: string; lastPublishedUrl?: string; lastPublishedAt?: string;
+  // Set by the slate-workshop-app demote-to-template scaffold: the backing
+  // Data API Builder item this Workshop app was wired to (proves the template
+  // created REAL, navigable sibling items — no placeholder).
+  dataApiItemId?: string; dataApiBaseUrl?: string;
+  [k: string]: unknown;
 }
 
 export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<WorkshopState>('workshop-app', id, { objectViews: [], actions: [] });
+  const router = useRouter();
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<WorkshopState>('workshop-app', id, { widgets: [], variables: [] });
   const onto = useOntologyBinding('workshop-app', id);
   const [pickOnto, setPickOnto] = useState('');
-  const [actLabel, setActLabel] = useState('');
-  const [actKind, setActKind] = useState<'create' | 'update' | 'delete'>('create');
-  const [actEntity, setActEntity] = useState('');
+  // Publish → Azure Static Web Apps (mirrors the Slate app's real SWA publish).
+  const [pubOpen, setPubOpen] = useState(false);
+  const [pubBusy, setPubBusy] = useState(false);
+  const [pubMsg, setPubMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [pubFiles, setPubFiles] = useState<Array<{ name: string; content: string }>>([]);
+  const [pubFileTab, setPubFileTab] = useState('index.html');
 
   const classes = onto.surface?.classes || [];
-  const objectViews = Array.isArray(state.objectViews) ? state.objectViews : [];
-  const actions = Array.isArray(state.actions) ? state.actions : [];
+  const entityTypes = useMemo(() => classes.map((c) => c.name), [classes]);
+  const widgets = Array.isArray(state.widgets) ? state.widgets : [];
+  const variables = Array.isArray(state.variables) ? state.variables : [];
+  const versions = Array.isArray(state.versions) ? state.versions : [];
+  // Widgets the publish route embeds in the deployed bundle (text/button always;
+  // data widgets need a bound object type).
+  const publishableCount = useMemo(
+    () => widgets.filter((w) => w.kind === 'text' || w.kind === 'button' || !!w.entityType).length,
+    [widgets],
+  );
 
-  const toggleView = useCallback((name: string) => {
-    setState((p) => {
-      const cur = Array.isArray(p.objectViews) ? p.objectViews : [];
-      return { ...p, objectViews: cur.includes(name) ? cur.filter((v) => v !== name) : [...cur, name] };
-    });
-  }, [setState]);
+  const onWidgetsChange = useCallback((next: WorkshopWidget[]) => setState((p) => ({ ...p, widgets: next })), [setState]);
+  const onVariablesChange = useCallback((next: WorkshopVariable[]) => setState((p) => ({ ...p, variables: next })), [setState]);
 
-  const addAction = useCallback(() => {
-    const label = actLabel.trim(); if (!label || !actEntity) return;
-    setState((p) => ({ ...p, actions: [...(Array.isArray(p.actions) ? p.actions : []), { id: `act_${Date.now()}`, label, kind: actKind, entity: actEntity }] }));
-    setActLabel(''); setActEntity('');
-  }, [actLabel, actKind, actEntity, setState]);
-
-  const removeAction = useCallback((aid: string) => {
-    setState((p) => ({ ...p, actions: (Array.isArray(p.actions) ? p.actions : []).filter((a) => a.id !== aid) }));
-  }, [setState]);
-
-  // Run a real "list" data action against the bound ontology's warehouse source
-  // (Synapse dedicated SQL pool via /run-action) or surface an honest gate.
-  const [runEntity, setRunEntity] = useState('');
-  const [runBusy, setRunBusy] = useState(false);
-  const [runMsg, setRunMsg] = useState<{ intent: 'error' | 'warning'; text: string } | null>(null);
-  const [runResult, setRunResult] = useState<{ entityType: string; columns: string[]; rows: unknown[][] } | null>(null);
-  const runActionList = useCallback(async (entityType: string) => {
-    setRunBusy(true); setRunMsg(null); setRunResult(null); setRunEntity(entityType);
+  const publish = useCallback(async () => {
+    setPubBusy(true); setPubMsg(null);
     try {
-      const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/run-action`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entityType, op: 'list', top: 50 }),
+      // Persist the latest widgets/variables first so Publish deploys the current app.
+      if (dirty) await save();
+      const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/publish`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
-        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
-        setRunMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        const gate = j?.gate ? ` ${j.gate.reason || ''} ${j.gate.remediation || ''}` : '';
+        setPubMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
         return;
       }
-      setRunResult({ entityType, columns: Array.isArray(j.columns) ? j.columns : [], rows: Array.isArray(j.rows) ? j.rows : [] });
-    } catch (e: any) { setRunMsg({ intent: 'error', text: e?.message || String(e) }); }
-    finally { setRunBusy(false); }
-  }, [id]);
-
-  // Real CRUD write actions (create / update / delete) against the bound
-  // ontology's warehouse source via /run-action. The form columns derive from
-  // the action's object type — no freeform SQL. After a successful write we
-  // re-run the list for that entity so the grid reflects the change (proving
-  // end-to-end CRUD).
-  const [openAction, setOpenAction] = useState<WorkshopAction | null>(null);
-  const [formColumns, setFormColumns] = useState<string[]>([]);
-  const [colsBusy, setColsBusy] = useState(false);
-  const [formValues, setFormValues] = useState<Record<string, string>>({});
-  const [formKeyColumn, setFormKeyColumn] = useState('');
-  const [formKey, setFormKey] = useState('');
-  const [writeBusy, setWriteBusy] = useState(false);
-  const [writeMsg, setWriteMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
-
-  // Open an action's form. Derive the input fields from the entity's real
-  // warehouse columns (a single list query against /run-action) so the form
-  // matches the ontology-declared shape — no freeform JSON / SQL.
-  const beginAction = useCallback(async (a: WorkshopAction) => {
-    setOpenAction(a); setFormValues({}); setFormKeyColumn(''); setFormKey(''); setWriteMsg(null); setFormColumns([]);
-    if (a.kind === 'create' || a.kind === 'update') {
-      setColsBusy(true);
-      try {
-        const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/run-action`, {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ entityType: a.entity, op: 'list', top: 1 }),
-        });
-        const j = await r.json().catch(() => ({}));
-        if (j?.ok && Array.isArray(j.columns)) setFormColumns(j.columns as string[]);
-        else if (!j?.ok) { const gate = j?.gate ? ` ${j.gate.remediation || ''}` : ''; setWriteMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` }); }
-      } catch (e: any) { setWriteMsg({ intent: 'error', text: e?.message || String(e) }); }
-      finally { setColsBusy(false); }
-    }
-  }, [id]);
-
-  const submitWrite = useCallback(async () => {
-    if (!openAction) return;
-    setWriteBusy(true); setWriteMsg(null);
-    try {
-      const values: Record<string, string> = {};
-      for (const [k, v] of Object.entries(formValues)) { if (v !== '') values[k] = v; }
-      const payload: Record<string, unknown> = { entityType: openAction.entity, op: openAction.kind };
-      if (openAction.kind === 'create' || openAction.kind === 'update') payload.values = values;
-      if (openAction.kind === 'update') {
-        if (formKeyColumn.trim()) payload.keyColumn = formKeyColumn.trim();
-        payload.key = formKey;
-      }
-      const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/run-action`, {
-        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
-      });
-      const j = await r.json().catch(() => ({}));
-      if (!j?.ok) {
-        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
-        setWriteMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
-        return;
-      }
-      setWriteMsg({ intent: 'success', text: `${openAction.kind} succeeded — ${j.recordsAffected ?? 0} row(s) affected.` });
-      const entity = openAction.entity;
-      setOpenAction(null);
-      // Reflect the change in the result grid.
-      runActionList(entity);
-    } catch (e: any) { setWriteMsg({ intent: 'error', text: e?.message || String(e) }); }
-    finally { setWriteBusy(false); }
-  }, [openAction, formValues, formKeyColumn, formKey, id, runActionList]);
+      setPubMsg({ intent: 'success', text: `Published ${j.version} → Azure Static Web App “${j.staticSiteName}”.${j.url ? ` Live at ${j.url}.` : ''}${j.tokenRetrieved ? ' Deployment token retrieved.' : ''}` });
+      if (Array.isArray(j.files)) { setPubFiles(j.files); setPubFileTab(j.files[0]?.name || 'index.html'); }
+      await reload(); // pull the new versions[] from Cosmos
+    } catch (e: any) { setPubMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setPubBusy(false); }
+  }, [id, dirty, save, reload]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'App', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || !dirty },
       ]},
+      { label: 'Deploy', actions: [
+        { label: 'Publish…', onClick: () => { setPubMsg(null); setPubOpen(true); }, disabled: false },
+      ]},
     ]},
   ], [save, saving, dirty]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Workshop app" intro="An operational low-code app bound to a Loom Ontology. Object views render the ontology's entity types; actions write back through the bound Lakehouse/Warehouse. Azure-native — no Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Workshop app" intro="An operational low-code app builder bound to a Loom Ontology. Place widgets — object tables, charts, KPIs, filters, forms and buttons — on a drag-resize canvas, drive them with typed variables, and wire events, all over the ontology's Azure-native Synapse warehouse. No Fabric required." />;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -409,16 +467,27 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
           <MessageBarTitle>Workshop app (Palantir Workshop → Atelier)</MessageBarTitle>
-          Bind a Loom Ontology, choose which object types become app pages, and define write-back actions. The app runs on Azure Container Apps over the ontology's bound Lakehouse/Warehouse — no Microsoft Fabric required.
+          Bind a Loom Ontology, then build an operational low-code app on the canvas — object tables, charts, KPIs, filters, forms and buttons over the ontology's entity types, driven by typed variables and event wiring. Runs on Azure Container Apps over the ontology's bound Synapse warehouse — no Microsoft Fabric required.
         </MessageBarBody></MessageBar>
 
+        {state.dataApiItemId && (
+          <MessageBar intent="success"><MessageBarBody>
+            <MessageBarTitle>Wired to a Data API</MessageBarTitle>
+            This app was scaffolded with a backing Data API Builder item as its query surface{state.dataApiBaseUrl ? <> at <strong>{String(state.dataApiBaseUrl)}</strong></> : ''}.
+            <Button appearance="transparent" size="small" icon={<Link20Regular />}
+              onClick={() => router.push(`/items/data-api-builder/${encodeURIComponent(String(state.dataApiItemId))}`)}>
+              Open Data API
+            </Button>
+          </MessageBarBody></MessageBar>
+        )}
+
         <div className={s.section}>
-          <SectionHead icon={<Link20Regular />} title="Bound ontology" hint="Pick a saved Ontology; its object/link types become the app's object views." />
+          <SectionHead icon={<Link20Regular />} title="Bound ontology" hint="Pick a saved Ontology; its object types become the app's data sources (widgets bind to them)." />
           {!onto.loaded ? <div className={s.empty}><Spinner size="tiny" /></div> : onto.ontologies.length === 0 ? (
             <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here.</MessageBarBody></MessageBar>
           ) : (
             <div className={s.addBar}>
-              <Field label="Ontology" style={{ minWidth: 280 }}>
+              <Field label="Ontology" className={s.fieldWide}>
                 <Dropdown value={onto.ontologies.find((o) => o.id === (pickOnto || onto.boundOntologyId))?.displayName || ''}
                   selectedOptions={[(pickOnto || onto.boundOntologyId)]}
                   onOptionSelect={(_, d) => setPickOnto(d.optionValue || '')} placeholder="Select an ontology">
@@ -433,153 +502,274 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
           {onto.msg && <MessageBar intent={onto.msg.intent}><MessageBarBody>{onto.msg.text}</MessageBarBody></MessageBar>}
         </div>
 
+        <WorkshopAppBuilder id={id} entityTypes={entityTypes} widgets={widgets} variables={variables}
+          onWidgetsChange={onWidgetsChange} onVariablesChange={onVariablesChange} />
+
+        {/* Publish history — real Azure Static Web Apps versions persisted to Cosmos. */}
         <div className={s.section}>
-          <SectionHead icon={<Database20Regular />} title="Object views" hint="Choose which ontology object types render as app pages." />
-          {classes.length === 0 ? <div className={s.empty}><Caption1>Bind an ontology with object types to choose views.</Caption1></div> : (
-            classes.map((c) => (
-              <div key={c.name} className={s.row}>
-                <Body1><strong>{c.name}</strong></Body1>
-                {c.parent && <Caption1 className={s.hint}>: {c.parent}</Caption1>}
-                <span className={s.spacer} />
-                <Button size="small" appearance="subtle" icon={<Play20Regular />} disabled={runBusy} onClick={() => runActionList(c.name)} title="List rows from the bound warehouse source">
-                  {runBusy && runEntity === c.name ? 'Running…' : 'List rows'}
-                </Button>
-                <Button size="small" appearance={objectViews.includes(c.name) ? 'primary' : 'outline'} onClick={() => toggleView(c.name)}>
-                  {objectViews.includes(c.name) ? 'In app' : 'Add view'}
-                </Button>
-              </div>
-            ))
-          )}
-          {runMsg && <MessageBar intent={runMsg.intent}><MessageBarBody>{runMsg.text}</MessageBarBody></MessageBar>}
-          {runResult && (
-            runResult.rows.length === 0 ? (
-              <div className={s.empty}><Caption1>No rows in <strong>{runResult.entityType}</strong> yet — use a create action to add one.</Caption1></div>
-            ) : (
-              <div className={s.tableWrap}>
-              <Table size="small" aria-label={`${runResult.entityType} rows`}>
-                <TableHeader><TableRow>{runResult.columns.map((col) => <TableHeaderCell key={col}>{col}</TableHeaderCell>)}</TableRow></TableHeader>
+          <SectionHead icon={<CloudArrowUp20Regular />} title="Publish → Azure Static Web Apps" hint="Each publish generates the app bundle from the canvas (widgets read live Synapse rows via the run-action API), provisions (or updates) a real Microsoft.Web/staticSites resource, and records a version. Azure-native — no Fabric." />
+          <div className={s.addBar}>
+            <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={() => { setPubMsg(null); setPubOpen(true); }}>Publish…</Button>
+            {state.lastPublishedUrl && (
+              <Button appearance="outline" icon={<Open20Regular />} onClick={() => window.open(String(state.lastPublishedUrl), '_blank', 'noopener')}>Open live app</Button>
+            )}
+          </div>
+          {versions.length === 0 ? (
+            <div className={s.empty}><Caption1>Not published yet — click Publish to create an Azure Static Web App and record the first version.</Caption1></div>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label="Publish history">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Static Web App</TableHeaderCell>
+                  <TableHeaderCell>URL</TableHeaderCell><TableHeaderCell>Widgets</TableHeaderCell><TableHeaderCell>Published</TableHeaderCell>
+                </TableRow></TableHeader>
                 <TableBody>
-                  {runResult.rows.slice(0, 50).map((row, ri) => (
-                    <TableRow key={ri}>{(Array.isArray(row) ? row : []).map((cell, ci) => <TableCell key={ci}>{cell === null || cell === undefined ? '' : String(cell)}</TableCell>)}</TableRow>
+                  {versions.map((v) => (
+                    <TableRow key={v.version + v.createdAt}>
+                      <TableCell><Badge appearance="tint" color="brand">{v.version}</Badge></TableCell>
+                      <TableCell>{v.staticSiteName}</TableCell>
+                      <TableCell>{v.url
+                        ? <Button appearance="transparent" size="small" icon={<Open20Regular />} onClick={() => window.open(v.url, '_blank', 'noopener')}>{v.hostname || 'open'}</Button>
+                        : <Caption1 className={s.mutedCaption}>provisioning…</Caption1>}</TableCell>
+                      <TableCell>{v.widgetCount}</TableCell>
+                      <TableCell>{v.createdAt ? new Date(v.createdAt).toLocaleString() : '—'}</TableCell>
+                    </TableRow>
                   ))}
                 </TableBody>
               </Table>
-              </div>
-            )
+            </div>
           )}
         </div>
 
-        <div className={s.section}>
-          <SectionHead icon={<Flash20Regular />} title="Write-back actions" hint="Define create / update actions over the bound object types." />
-          <div className={s.addBar}>
-            <Field label="Action label"><Input value={actLabel} onChange={(_, d) => setActLabel(d.value)} placeholder="e.g. Approve order" /></Field>
-            <Field label="Kind"><Dropdown value={actKind} selectedOptions={[actKind]} onOptionSelect={(_, d) => setActKind((d.optionValue as 'create' | 'update' | 'delete') || 'create')}>
-              <Option value="create">create</Option><Option value="update">update</Option><Option value="delete">delete</Option>
-            </Dropdown></Field>
-            <Field label="Object type" style={{ minWidth: 200 }}>
-              <Dropdown value={actEntity} selectedOptions={actEntity ? [actEntity] : []} onOptionSelect={(_, d) => setActEntity(d.optionValue || '')} placeholder={classes.length ? 'Select object' : 'Bind an ontology first'}>
-                {classes.map((c) => <Option key={c.name} value={c.name}>{c.name}</Option>)}
-              </Dropdown>
-            </Field>
-            <Button appearance="primary" icon={<Add20Regular />} disabled={!actLabel.trim() || !actEntity} onClick={addAction}>Add action</Button>
+        {pubFiles.length > 0 && (
+          <div className={s.section}>
+            <SectionHead icon={<Code20Regular />} title="Generated Static Web Apps bundle" hint="The bundle the last publish generated from the canvas. Push these files with the SWA deployment token retrieved by Publish (SWA CLI / GitHub Action) — data widgets read live rows through this console's run-action API." />
+            <TabList selectedValue={pubFileTab} onTabSelect={(_, d) => setPubFileTab(d.value as string)}>
+              {pubFiles.map((f) => <Tab key={f.name} value={f.name}>{f.name}</Tab>)}
+            </TabList>
+            <CodeBlock ariaLabel={`${pubFileTab} source`} content={pubFiles.find((f) => f.name === pubFileTab)?.content || ''} />
           </div>
-          {actions.length === 0 ? <div className={s.empty}><Caption1>No actions yet.</Caption1></div> : actions.map((a) => (
-            <div key={a.id} className={s.row}>
-              <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
-              <Body1><strong>{a.label}</strong></Body1>
-              <Caption1 className={s.hint}>→ {a.entity}</Caption1>
-              <span className={s.spacer} />
-              <Button size="small" appearance="primary" icon={<Play20Regular />} onClick={() => beginAction(a)} title={`Run "${a.label}" (${a.kind} on ${a.entity})`}>Run</Button>
-              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${a.label}`} onClick={() => removeAction(a.id)}>Remove</Button>
-            </div>
-          ))}
-          {writeMsg && !openAction && <MessageBar intent={writeMsg.intent}><MessageBarBody>{writeMsg.text}</MessageBarBody></MessageBar>}
-        </div>
+        )}
 
-        {/* Real-CRUD action runner: derives form fields from the entity's
-            warehouse columns, POSTs create/update/delete to /run-action, and
-            refreshes the result grid on success. */}
-        <Dialog open={!!openAction} onOpenChange={(_, d) => { if (!d.open) { setOpenAction(null); setWriteMsg(null); } }}>
+        <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+
+        <Dialog open={pubOpen} onOpenChange={(_, d) => { if (!d.open) setPubOpen(false); }}>
           <DialogSurface>
             <DialogBody>
-              <DialogTitle>{openAction ? `${openAction.label} — ${openAction.kind} ${openAction.entity}` : 'Run action'}</DialogTitle>
+              <DialogTitle>Publish to Azure Static Web Apps</DialogTitle>
               <DialogContent>
                 <div className={s.dialogForm}>
-                  {colsBusy && <Spinner size="tiny" label="Loading columns…" labelPosition="after" />}
-                  {openAction?.kind === 'delete' && (
-                    <MessageBar intent="warning"><MessageBarBody>
-                      Deletes a row from <strong>{openAction.entity}</strong> by its key column and value. This writes to the bound warehouse and cannot be undone.
-                    </MessageBarBody></MessageBar>
-                  )}
-                  {(openAction?.kind === 'update' || openAction?.kind === 'delete') && (
-                    <>
-                      <Field label="Key column" hint="The primary-key column to match (or set keyColumns on the ontology binding).">
-                        <Input value={formKeyColumn} onChange={(_, d) => setFormKeyColumn(d.value)} placeholder="e.g. Id" />
-                      </Field>
-                      <Field label="Key value" hint="The value of the row to update / delete.">
-                        <Input value={formKey} onChange={(_, d) => setFormKey(d.value)} placeholder="e.g. 42" />
-                      </Field>
-                    </>
-                  )}
-                  {(openAction?.kind === 'create' || openAction?.kind === 'update') && (
-                    formColumns.length === 0 && !colsBusy ? (
-                      <MessageBar intent="info"><MessageBarBody>
-                        No columns discovered for {openAction?.entity}. The table may be empty or not yet bound; ensure a Warehouse table is mapped to this entity type on the ontology.
-                      </MessageBarBody></MessageBar>
-                    ) : (
-                      <div className={s.dialogScroll}>
-                        <div className={s.dialogForm}>
-                          {formColumns.map((col) => (
-                            <Field key={col} label={col}>
-                              <Input value={formValues[col] ?? ''} onChange={(_, d) => setFormValues((p) => ({ ...p, [col]: d.value }))} placeholder={`${col} value`} />
-                            </Field>
-                          ))}
-                        </div>
-                      </div>
-                    )
-                  )}
-                  {writeMsg && openAction && <MessageBar intent={writeMsg.intent}><MessageBarBody>{writeMsg.text}</MessageBarBody></MessageBar>}
+                  <MessageBar intent="info"><MessageBarBody>
+                    Publish generates the app bundle from the canvas, provisions (or updates) a real <strong>Microsoft.Web/staticSites</strong> resource, and retrieves its SWA deployment token — the credential the SWA CLI / GitHub Action uses to push the bundle. Requires <strong>LOOM_SWA_SUBSCRIPTION_ID</strong> + <strong>LOOM_SWA_RESOURCE_GROUP</strong> (optional <strong>LOOM_SWA_LOCATION</strong>) and the Console UAMI granted <strong>Website Contributor</strong> on that resource group. Azure-native — no Microsoft Fabric.
+                  </MessageBarBody></MessageBar>
+                  <Caption1 className={s.hint}>
+                    {publishableCount} widget{publishableCount === 1 ? '' : 's'} will be embedded in the deployed bundle (data widgets need a bound object type).
+                    {dirty ? ' Unsaved changes are saved automatically before publishing.' : ''}
+                  </Caption1>
+                  {pubMsg && <MessageBar intent={pubMsg.intent}><MessageBarBody>{pubMsg.text}</MessageBarBody></MessageBar>}
                 </div>
               </DialogContent>
               <DialogActions>
-                <Button appearance="secondary" onClick={() => { setOpenAction(null); setWriteMsg(null); }}>Cancel</Button>
-                <Button appearance="primary" disabled={writeBusy || colsBusy} icon={writeBusy ? <Spinner size="tiny" /> : undefined} onClick={submitWrite}>{writeBusy ? 'Running…' : `Run ${openAction?.kind ?? ''}`}</Button>
+                <Button appearance="secondary" onClick={() => setPubOpen(false)}>Close</Button>
+                <Button appearance="primary" icon={pubBusy ? <Spinner size="tiny" /> : <CloudArrowUp20Regular />} disabled={pubBusy || publishableCount === 0} onClick={publish}>
+                  {pubBusy ? 'Publishing…' : 'Publish now'}
+                </Button>
               </DialogActions>
             </DialogBody>
           </DialogSurface>
         </Dialog>
-
-        <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
       </div>
     } />
   );
 }
 
 // ───────────────────────── Ontology SDK (OSDK) ─────────────────────────
-interface OsdkState { boundOntologyId?: string; boundOntologyName?: string; objectCount?: number; lastGeneratedAt?: string; [k: string]: unknown }
+interface OsdkState {
+  boundOntologyId?: string; boundOntologyName?: string;
+  objectCount?: number; linkCount?: number; actionCount?: number; lastGeneratedAt?: string;
+  selectedObjectTypes?: string[]; selectedLinkTypes?: string[]; selectedActionTypes?: string[];
+  /** DAB runtime origin (Azure Container Apps) the live "Try it" explorer proxies. */
+  serviceUrl?: string;
+  [k: string]: unknown;
+}
+interface GeneratedSdk { typescript: string; python: string; dabConfig: unknown; actions: string; objectCount: number; linkCount: number; actionCount: number; propertyCount: number }
+
+/** Stable identity for a link in the scope selector (kind + endpoints). */
+function osdkLinkKey(l: { from: string; to: string; kind: string }): string { return `${l.kind}:${l.from}->${l.to}`; }
+function osdkLinkLabel(l: { from: string; to: string; kind: string }): string { return `${l.from} —${l.kind}→ ${l.to}`; }
+
+// ── OSDK live "Try it" API Explorer — proxies the real DAB runtime (REST + GraphQL) ──
+interface OsdkTryResult { columns: string[]; rows: unknown[][]; url?: string; rowCount?: number; raw?: unknown; error?: string; gate?: { reason: string; remediation: string } }
+
+function OsdkTryIt({ id, objectTypes, serviceUrl, onServiceUrl }: {
+  id: string; objectTypes: string[]; serviceUrl: string; onServiceUrl: (v: string) => void;
+}) {
+  const s = useStyles();
+  const [mode, setMode] = useState<'rest' | 'graphql'>('rest');
+  const [objectType, setObjectType] = useState('');
+  const [first, setFirst] = useState('25');
+  const [filter, setFilter] = useState('');
+  const [gql, setGql] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [res, setRes] = useState<OsdkTryResult | null>(null);
+
+  useEffect(() => { if (!objectType && objectTypes.length) setObjectType(objectTypes[0]); }, [objectTypes, objectType]);
+  useEffect(() => {
+    if (!gql && objectType) setGql(`{\n  ${objectType.charAt(0).toLowerCase()}${objectType.slice(1)}s {\n    items { __typename }\n  }\n}`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [objectType]);
+
+  const run = useCallback(async () => {
+    setBusy(true); setRes(null);
+    try {
+      const body = mode === 'graphql'
+        ? { mode, graphql: gql }
+        : { mode, objectType, first: Number(first) || 25, filter: filter.trim() || undefined };
+      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/query`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setRes({ columns: [], rows: [], error: j?.error || `HTTP ${r.status}`, gate: j?.gate }); return; }
+      setRes({ columns: j.columns || [], rows: j.rows || [], url: j.url, rowCount: j.rowCount, raw: j.raw });
+    } catch (e: any) { setRes({ columns: [], rows: [], error: e?.message || String(e) }); }
+    finally { setBusy(false); }
+  }, [id, mode, objectType, first, filter, gql]);
+
+  return (
+    <div className={s.section}>
+      <SectionHead icon={<Beaker20Regular />} title="Try it — live API Explorer" hint="Run real REST (OData) + GraphQL requests against the Data API Builder runtime that serves this ontology on Azure Container Apps. Results are live rows — no mock data." />
+      <Field label="DAB runtime service URL" hint="This SDK's Data API origin (set at Publish, or point at the shared preview runtime). Blank falls back to LOOM_DAB_PREVIEW_URL.">
+        <Input value={serviceUrl} onChange={(_, d) => onServiceUrl(d.value)} placeholder="https://dab-loom.<region>.azurecontainerapps.io" />
+      </Field>
+      <TabList selectedValue={mode} onTabSelect={(_, d) => { setMode(d.value as 'rest' | 'graphql'); setRes(null); }}>
+        <Tab value="rest" icon={<Globe20Regular />}>REST</Tab>
+        <Tab value="graphql" icon={<Braces20Regular />}>GraphQL</Tab>
+      </TabList>
+
+      {mode === 'rest' ? (
+        <div className={s.addBar}>
+          <Field label="Object type" className={s.fieldMed}>
+            <Dropdown value={objectType} selectedOptions={objectType ? [objectType] : []} placeholder={objectTypes.length ? 'Select object type' : 'Bind an ontology first'}
+              onOptionSelect={(_, d) => setObjectType(d.optionValue || '')}>
+              {objectTypes.map((t) => <Option key={t} value={t}>{t}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="$first" className={s.fieldNarrow}><Input type="number" value={first} onChange={(_, d) => setFirst(d.value)} /></Field>
+          <Field label="$filter (OData, optional)" className={s.fieldWide}><Input value={filter} onChange={(_, d) => setFilter(d.value)} placeholder="Status eq 'active'" /></Field>
+          <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} disabled={busy || !objectType} onClick={run}>{busy ? 'Running…' : 'Run'}</Button>
+        </div>
+      ) : (
+        <>
+          <Field label="GraphQL query">
+            <Textarea value={gql} onChange={(_, d) => setGql(d.value)} rows={6} resize="vertical" placeholder={'{\n  employees { items { id name } }\n}'} />
+          </Field>
+          <div className={s.addBar}>
+            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Play20Regular />} disabled={busy || !gql.trim()} onClick={run}>{busy ? 'Running…' : 'Run'}</Button>
+          </div>
+        </>
+      )}
+
+      {res?.gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Configure the Data API runtime</MessageBarTitle>{res.gate.reason} {res.gate.remediation}</MessageBarBody></MessageBar>}
+      {res?.error && !res.gate && <MessageBar intent="error"><MessageBarBody>{res.error}</MessageBarBody></MessageBar>}
+      {res && !res.error && (
+        <>
+          {res.url && <Caption1 className={s.hint}><strong>Request:</strong> <span className={s.outPill}>{mode.toUpperCase()} {res.url}</span></Caption1>}
+          <Caption1 className={s.hint}>{res.rowCount ?? res.rows.length} row(s)</Caption1>
+          {res.rows.length === 0 ? <div className={s.empty}><Caption1>The request succeeded but returned no rows.</Caption1></div> : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label="Try it result">
+                <TableHeader><TableRow>{res.columns.map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+                <TableBody>
+                  {res.rows.slice(0, 50).map((row, ri) => (
+                    <TableRow key={ri}>{res.columns.map((_, ci) => <TableCell key={ci}>{row[ci] === null || row[ci] === undefined ? '' : String(row[ci])}</TableCell>)}</TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
 
 export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { loading } = useItemState<OsdkState>('ontology-sdk', id, {});
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<OsdkState>('ontology-sdk', id, {});
   const onto = useOntologyBinding('ontology-sdk', id);
   const [pickOnto, setPickOnto] = useState('');
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState<string | null>(null);
-  const [gen, setGen] = useState<{ typescript: string; python: string; dabConfig: unknown; objectCount: number } | null>(null);
-  const [tab, setTab] = useState<'ts' | 'py' | 'dab'>('ts');
+  const [gen, setGen] = useState<GeneratedSdk | null>(null);
+  const [tab, setTab] = useState<'ts' | 'py' | 'actions' | 'dab'>('ts');
   const [pubBusy, setPubBusy] = useState(false);
   const [pubMsg, setPubMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  // Scope selector state.
+  const [scopeTab, setScopeTab] = useState<'objects' | 'links' | 'actions'>('objects');
+  const [filter, setFilter] = useState('');
+  const [selObj, setSelObj] = useState<Set<string>>(new Set());
+  const [selLink, setSelLink] = useState<Set<string>>(new Set());
+  const [selAct, setSelAct] = useState<Set<string>>(new Set());
+  const seededFor = useRef<string>('');
+
+  const classes = onto.surface?.classes || [];
+  const links = onto.surface?.links || [];
+  const actionTypes = onto.surface?.actionTypes || [];
+  const bindings = onto.surface?.bindings || [];
+  const surfaceId = onto.surface?.id || '';
+
+  // Real typed-property derivation (same pure fn the codegen route uses) so the
+  // selector can show each object type's declared members.
+  const propsByType = useMemo(
+    () => deriveObjectProperties(classes, bindings, actionTypes.map((a) => ({ name: a.name, objectType: a.objectType, kind: a.kind, params: a.params }))),
+    [classes, bindings, actionTypes],
+  );
+
+  // Seed the selection from persisted state (else "all") whenever the bound
+  // surface changes. Guarded by surface id so binding a new ontology re-seeds.
+  useEffect(() => {
+    if (!onto.loaded || loading || !onto.surface) return;
+    if (seededFor.current === surfaceId) return;
+    const allObj = classes.map((c) => c.name);
+    const allLink = links.map(osdkLinkKey);
+    const allAct = actionTypes.map((a) => a.name);
+    const so = Array.isArray(state.selectedObjectTypes) ? state.selectedObjectTypes.filter((n) => allObj.includes(n)) : allObj;
+    const sl = Array.isArray(state.selectedLinkTypes) ? state.selectedLinkTypes.filter((n) => allLink.includes(n)) : allLink;
+    const sa = Array.isArray(state.selectedActionTypes) ? state.selectedActionTypes.filter((n) => allAct.includes(n)) : allAct;
+    setSelObj(new Set(so)); setSelLink(new Set(sl)); setSelAct(new Set(sa));
+    seededFor.current = surfaceId;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [surfaceId, onto.loaded, loading]);
+
+  // Mirror a selection change into persisted item state (deferred out of the set
+  // updater) so Save (Ctrl+S) persists the chosen scope to Cosmos.
+  const persist = useCallback((patch: Partial<OsdkState>) => {
+    queueMicrotask(() => setState((p) => ({ ...p, ...patch })));
+  }, [setState]);
+  const applyObj = useCallback((next: Set<string>) => { setSelObj(next); persist({ selectedObjectTypes: [...next] }); }, [persist]);
+  const applyLink = useCallback((next: Set<string>) => { setSelLink(next); persist({ selectedLinkTypes: [...next] }); }, [persist]);
+  const applyAct = useCallback((next: Set<string>) => { setSelAct(next); persist({ selectedActionTypes: [...next] }); }, [persist]);
+  const toggle = (set: Set<string>, key: string) => { const n = new Set(set); n.has(key) ? n.delete(key) : n.add(key); return n; };
 
   const generate = useCallback(async () => {
     setGenBusy(true); setGenErr(null);
     try {
-      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/generate`, { method: 'POST' });
+      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/generate`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ selectedObjectTypes: [...selObj], selectedLinkTypes: [...selLink], selectedActionTypes: [...selAct] }),
+      });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setGenErr(j?.error || `HTTP ${r.status}`); return; }
-      setGen({ typescript: j.typescript, python: j.python, dabConfig: j.dabConfig, objectCount: j.objectCount });
+      const next: GeneratedSdk = {
+        typescript: j.typescript, python: j.python, dabConfig: j.dabConfig, actions: j.actions || '',
+        objectCount: j.objectCount || 0, linkCount: j.linkCount || 0, actionCount: j.actionCount || 0, propertyCount: j.propertyCount || 0,
+      };
+      setGen(next);
+      setTab((t) => (t === 'actions' && !next.actions) ? 'ts' : t);
     } catch (e: any) { setGenErr(e?.message || String(e)); }
     finally { setGenBusy(false); }
-  }, [id]);
+  }, [id, selObj, selLink, selAct]);
 
   const publish = useCallback(async () => {
     setPubBusy(true); setPubMsg(null);
@@ -598,16 +788,36 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
     finally { setPubBusy(false); }
   }, [id]);
 
+  const canGenerate = !!onto.boundOntologyId && selObj.size > 0;
+
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'SDK', actions: [
-        { label: genBusy ? 'Generating…' : 'Generate SDK', onClick: generate, disabled: genBusy || !onto.boundOntologyId },
+        { label: saving ? 'Saving…' : 'Save scope', onClick: () => save(), disabled: saving || !dirty },
+        { label: genBusy ? 'Generating…' : 'Generate SDK', onClick: generate, disabled: genBusy || !canGenerate },
         { label: pubBusy ? 'Publishing…' : 'Publish to APIM', onClick: publish, disabled: pubBusy || !onto.boundOntologyId },
       ]},
     ]},
-  ], [generate, genBusy, onto.boundOntologyId, publish, pubBusy]);
+  ], [save, saving, dirty, generate, genBusy, canGenerate, onto.boundOntologyId, publish, pubBusy]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Ontology SDK" intro="A typed TypeScript / Python client + REST Data API over an Ontology's object, link, and action types. Generated via Microsoft Data API Builder on Azure Container Apps — no Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Ontology SDK" intro="A typed TypeScript / Python client + REST Data API over an Ontology's object, link, and action types. Scope it to the types you need, generate typed write-back actions, and publish through APIM — via Microsoft Data API Builder on Azure Container Apps. No Fabric required." />;
+
+  // Filtered rows for the active scope tab.
+  const f = filter.trim().toLowerCase();
+  const objRows = classes.filter((c) => !f || c.name.toLowerCase().includes(f) || (c.description || '').toLowerCase().includes(f));
+  const linkRows = links.filter((l) => !f || osdkLinkLabel(l).toLowerCase().includes(f));
+  const actRows = actionTypes.filter((a) => !f || a.name.toLowerCase().includes(f) || a.objectType.toLowerCase().includes(f));
+
+  const selectAllCurrent = () => {
+    if (scopeTab === 'objects') applyObj(new Set(classes.map((c) => c.name)));
+    else if (scopeTab === 'links') applyLink(new Set(links.map(osdkLinkKey)));
+    else applyAct(new Set(actionTypes.map((a) => a.name)));
+  };
+  const clearCurrent = () => {
+    if (scopeTab === 'objects') applyObj(new Set());
+    else if (scopeTab === 'links') applyLink(new Set());
+    else applyAct(new Set());
+  };
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -615,7 +825,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
           <MessageBarTitle>Ontology SDK (Palantir OSDK)</MessageBarTitle>
-          Bind an Ontology, then generate a typed TypeScript + Python client and a real dab-config.json over its object / link types. The Data API runs on Microsoft Data API Builder (Azure Container Apps) and publishes through APIM — no Fabric required.
+          Bind an Ontology, scope the SDK to the object / link / action types you need, then generate typed TypeScript + Python clients (with <strong>applyCreate / applyUpdate / applyDelete</strong> write-back methods) and a real dab-config.json. The Data API runs on Microsoft Data API Builder (Azure Container Apps) and publishes through APIM — no Fabric required.
         </MessageBarBody></MessageBar>
 
         <div className={s.section}>
@@ -624,7 +834,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
             <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here.</MessageBarBody></MessageBar>
           ) : (
             <div className={s.addBar}>
-              <Field label="Ontology" style={{ minWidth: 280 }}>
+              <Field label="Ontology" className={s.fieldWide}>
                 <Dropdown value={onto.ontologies.find((o) => o.id === (pickOnto || onto.boundOntologyId))?.displayName || ''}
                   selectedOptions={[(pickOnto || onto.boundOntologyId)]} onOptionSelect={(_, d) => setPickOnto(d.optionValue || '')} placeholder="Select an ontology">
                   {onto.ontologies.map((o) => <Option key={o.id} value={o.id} text={o.displayName}>{`${o.displayName} (${o.classCount} objects)`}</Option>)}
@@ -633,7 +843,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
               <Button appearance="primary" icon={<Database20Regular />} disabled={onto.busy || !(pickOnto || onto.boundOntologyId)} onClick={() => onto.bind(pickOnto || onto.boundOntologyId)}>
                 {onto.busy ? 'Binding…' : 'Bind ontology'}
               </Button>
-              <Button appearance="outline" icon={<Code20Regular />} disabled={genBusy || !onto.boundOntologyId} onClick={generate}>
+              <Button appearance="outline" icon={<Code20Regular />} disabled={genBusy || !canGenerate} onClick={generate}>
                 {genBusy ? 'Generating…' : 'Generate SDK'}
               </Button>
               <Button appearance="outline" icon={<Rocket20Regular />} disabled={pubBusy || !onto.boundOntologyId} onClick={publish}>
@@ -646,14 +856,131 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
           {pubMsg && <MessageBar intent={pubMsg.intent}><MessageBarBody>{pubMsg.text}</MessageBarBody></MessageBar>}
         </div>
 
+        {/* Ontology scope selector — choose which object / link / action types the
+            SDK includes. Persisted to Cosmos; the /generate route filters by it. */}
+        <div className={s.section}>
+          <SectionHead icon={<Database20Regular />} title="SDK scope" hint="Choose which object, link, and action types the generated SDK includes. The token and generated client are scoped to exactly these entities." />
+          {!onto.boundOntologyId ? (
+            <div className={s.empty}><Caption1>Bind an ontology to choose the SDK scope.</Caption1></div>
+          ) : classes.length === 0 ? (
+            <MessageBar intent="warning"><MessageBarBody>The bound ontology has no object types yet. Add entities to it, then re-bind.</MessageBarBody></MessageBar>
+          ) : (
+            <>
+              <TabList selectedValue={scopeTab} onTabSelect={(_, d) => { setScopeTab(d.value as 'objects' | 'links' | 'actions'); setFilter(''); }}>
+                <Tab value="objects">Objects · {selObj.size}/{classes.length}</Tab>
+                <Tab value="links">Links · {selLink.size}/{links.length}</Tab>
+                <Tab value="actions">Actions · {selAct.size}/{actionTypes.length}</Tab>
+              </TabList>
+              <div className={s.scopeBar}>
+                <SearchBox value={filter} onChange={(_, d) => setFilter(d.value)} placeholder={`Filter ${scopeTab}…`} className={s.fieldMed} />
+                <span className={s.spacer} />
+                <Button size="small" appearance="subtle" onClick={selectAllCurrent}>Select all</Button>
+                <Button size="small" appearance="subtle" onClick={clearCurrent}>Clear</Button>
+              </div>
+
+              {scopeTab === 'objects' && (
+                <div className={s.scopeScroll}>
+                  {objRows.length === 0 ? <div className={s.empty}><Caption1>No matching object types.</Caption1></div> : objRows.map((c) => {
+                    const props = propsByType[c.name];
+                    const keyProp = props?.find((p) => p.isKey);
+                    return (
+                      <div key={c.name} className={s.row}>
+                        <Checkbox checked={selObj.has(c.name)} onChange={() => applyObj(toggle(selObj, c.name))} aria-label={`Include ${c.name}`} />
+                        <div className={s.rowText}>
+                          <Body1><strong>{c.name}</strong>{c.parent ? <Caption1 as="span" className={s.hint}> : {c.parent}</Caption1> : null}</Body1>
+                          {c.description && <Caption1 className={s.hint}>{c.description}</Caption1>}
+                          <div className={s.chipBar}>
+                            {keyProp && <Badge appearance="tint" color="brand">key: {keyProp.name}</Badge>}
+                            {props ? props.filter((p) => !p.isKey).slice(0, 10).map((p) => <Badge key={p.name} appearance="outline">{p.name}: {p.tsType}</Badge>)
+                              : <Caption1 className={s.mutedCaption}>untyped (no column bindings)</Caption1>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {scopeTab === 'links' && (
+                <div className={s.scopeScroll}>
+                  {links.length === 0 ? <div className={s.empty}><Caption1>This ontology declares no link types.</Caption1></div>
+                    : linkRows.length === 0 ? <div className={s.empty}><Caption1>No matching link types.</Caption1></div>
+                    : linkRows.map((l) => {
+                      const k = osdkLinkKey(l); const endpointsIncluded = selObj.has(l.from) && selObj.has(l.to);
+                      return (
+                        <div key={k} className={s.row}>
+                          <Checkbox checked={selLink.has(k)} onChange={() => applyLink(toggle(selLink, k))} aria-label={`Include ${osdkLinkLabel(l)}`} />
+                          <Body1>{l.from} <Badge appearance="tint">{l.kind}</Badge> {l.to}</Body1>
+                          <span className={s.spacer} />
+                          {!endpointsIncluded && <Badge appearance="tint" color="warning">endpoint excluded</Badge>}
+                        </div>
+                      );
+                    })}
+                </div>
+              )}
+
+              {scopeTab === 'actions' && (
+                <div className={s.scopeScroll}>
+                  {actionTypes.length === 0 ? (
+                    <MessageBar intent="info"><MessageBarBody>This ontology declares no write-back action types. Add create / update / delete actions on the Ontology to generate typed applyAction methods here.</MessageBarBody></MessageBar>
+                  ) : actRows.length === 0 ? <div className={s.empty}><Caption1>No matching action types.</Caption1></div> : actRows.map((a) => {
+                    const targetIncluded = selObj.has(a.objectType);
+                    return (
+                      <div key={a.name} className={s.row}>
+                        <Checkbox checked={selAct.has(a.name)} onChange={() => applyAct(toggle(selAct, a.name))} aria-label={`Include ${a.name}`} />
+                        <Badge appearance="tint" color={a.kind === 'create' ? 'success' : a.kind === 'delete' ? 'danger' : 'brand'}>{a.kind}</Badge>
+                        <div className={s.rowText}>
+                          <Body1><strong>{a.name}</strong> <Caption1 as="span" className={s.hint}>→ {a.objectType}</Caption1></Body1>
+                          {a.params && a.params.length > 0 && <Caption1 className={s.hint}>params: {a.params.join(', ')}</Caption1>}
+                        </div>
+                        <span className={s.spacer} />
+                        {!targetIncluded && <Badge appearance="tint" color="warning">object excluded</Badge>}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <Caption1 className={s.mutedCaption}>
+                Generating includes <strong>{selObj.size}</strong> object type{selObj.size === 1 ? '' : 's'}
+                {selLink.size > 0 ? <>, {selLink.size} link{selLink.size === 1 ? '' : 's'}</> : null}
+                {selAct.size > 0 ? <>, {selAct.size} action{selAct.size === 1 ? '' : 's'}</> : null}. Links / actions to excluded object types are skipped.
+              </Caption1>
+            </>
+          )}
+          <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+        </div>
+
         {gen && (
           <div className={s.section}>
-            <SectionHead icon={<Code20Regular />} title={`Generated SDK (${gen.objectCount} object types)`} hint="Real typed clients + dab-config.json. Copy into your project." />
-            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'ts' | 'py' | 'dab')}>
-              <Tab value="ts">TypeScript</Tab><Tab value="py">Python</Tab><Tab value="dab">dab-config.json</Tab>
+            <SectionHead icon={<Code20Regular />} title="Generated SDK" hint={`${gen.objectCount} object type${gen.objectCount === 1 ? '' : 's'} · ${gen.actionCount} action${gen.actionCount === 1 ? '' : 's'} · ${gen.propertyCount} typed propert${gen.propertyCount === 1 ? 'y' : 'ies'}. Real typed clients + dab-config.json — copy into your project.`} />
+            {gen.propertyCount === 0 && (
+              <MessageBar intent="info"><MessageBarBody>
+                <MessageBarTitle>Untyped object properties</MessageBarTitle>
+                No column bindings are declared on this ontology yet, so the interfaces use an untyped property bag. Bind a Lakehouse / Warehouse source on the Ontology (with key + writable columns) to emit typed members. Precise scalar typing (int / decimal / datetime / bool) is introspected from the source schema in a later pass.
+              </MessageBarBody></MessageBar>
+            )}
+            <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'ts' | 'py' | 'actions' | 'dab')}>
+              <Tab value="ts">TypeScript</Tab>
+              <Tab value="py">Python</Tab>
+              {gen.actions ? <Tab value="actions">Actions</Tab> : null}
+              <Tab value="dab">dab-config.json</Tab>
             </TabList>
-            <CodeBlock ariaLabel="Generated SDK source" content={tab === 'ts' ? gen.typescript : tab === 'py' ? gen.python : JSON.stringify(gen.dabConfig, null, 2)} />
+            <CodeBlock ariaLabel="Generated SDK source" content={
+              tab === 'ts' ? gen.typescript
+                : tab === 'py' ? gen.python
+                : tab === 'actions' ? gen.actions
+                : JSON.stringify(gen.dabConfig, null, 2)
+            } />
           </div>
+        )}
+
+        {onto.boundOntologyId && (
+          <OsdkTryIt
+            id={id}
+            objectTypes={[...selObj].length ? [...selObj] : classes.map((c) => c.name)}
+            serviceUrl={String(state.serviceUrl || '')}
+            onServiceUrl={(v) => setState((p) => ({ ...p, serviceUrl: v }))}
+          />
         )}
       </div>
     } />
@@ -661,39 +988,62 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
 }
 
 // ───────────────────────── Slate app ─────────────────────────
-interface SlateWidgetDef { id: string; title: string; kind: 'table' | 'chart' | 'metric'; query: string }
-interface SlateState { apiBaseUrl?: string; widgets?: SlateWidgetDef[]; lastGeneratedAt?: string; [k: string]: unknown }
+interface SlateVersion { version: string; url: string; hostname: string; staticSiteName: string; createdAt: string; widgetCount: number }
+interface SlateState {
+  apiBaseUrl?: string; widgets?: SlateWidgetDef[]; queries?: SlateQueryDef[]; variables?: SlateVariable[]; lastGeneratedAt?: string;
+  // Real SWA publish history (Microsoft.Web/staticSites) persisted to Cosmos.
+  versions?: SlateVersion[]; staticSiteName?: string; lastPublishedUrl?: string; lastPublishedAt?: string;
+  // Set by the rayfin-azure-stack demote-to-template scaffold: the backing
+  // Azure Functions API item this SWA web tier calls (apiBaseUrl is seeded to
+  // its route). Proves the template wired a REAL Functions sibling.
+  functionItemId?: string;
+  [k: string]: unknown;
+}
 
 export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<SlateState>('slate-app', id, { apiBaseUrl: '/api', widgets: [] });
-  const [wTitle, setWTitle] = useState('');
-  const [wKind, setWKind] = useState<'table' | 'chart' | 'metric'>('table');
-  const [wQuery, setWQuery] = useState('');
+  const router = useRouter();
+  const { state, setState, loading, saving, error, savedAt, save, reload, dirty } = useItemState<SlateState>('slate-app', id, { apiBaseUrl: '/api', widgets: [], queries: [], variables: [] });
   const [genBusy, setGenBusy] = useState(false);
   const [genErr, setGenErr] = useState<string | null>(null);
   const [files, setFiles] = useState<Array<{ name: string; content: string }>>([]);
   const [fileTab, setFileTab] = useState('index.html');
+  // Publish → Azure Static Web Apps.
+  const [pubOpen, setPubOpen] = useState(false);
+  const [pubBusy, setPubBusy] = useState(false);
+  const [pubMsg, setPubMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   const widgets = Array.isArray(state.widgets) ? state.widgets : [];
+  const queries = Array.isArray(state.queries) ? state.queries : [];
+  const variables = Array.isArray(state.variables) ? state.variables : [];
+  const versions = Array.isArray(state.versions) ? state.versions : [];
 
-  const addWidget = useCallback(() => {
-    const title = wTitle.trim(); const query = wQuery.trim();
-    if (!title || !query) return;
-    setState((p) => ({ ...p, widgets: [...(Array.isArray(p.widgets) ? p.widgets : []), { id: `w_${Date.now()}`, title, kind: wKind, query }] }));
-    setWTitle(''); setWQuery('');
-  }, [wTitle, wKind, wQuery, setState]);
+  // Map the builder's typed widgets back onto the static-SWA codegen contract
+  // ({id,title,kind,query}). REST-bound widgets carry a real path so the
+  // generated bundle stays deployable; KQL/SQL/text/container widgets (which a
+  // static SWA can't execute) are simply omitted from the bundle.
+  const widgetsForCodegen = useMemo(() => {
+    const byId = new Map(queries.map((q) => [q.id, q]));
+    return widgets.map((w) => {
+      let query = '';
+      if (w.queryId) { const q = byId.get(w.queryId); if (q?.type === 'rest-dab') query = q.path || ''; }
+      else if (w.query) query = w.query;
+      const kind: 'table' | 'chart' | 'metric' = w.kind === 'chart' || w.kind === 'metric' ? w.kind : 'table';
+      return { id: w.id, title: w.title, kind, query };
+    }).filter((w) => w.query);
+  }, [widgets, queries]);
 
-  const removeWidget = useCallback((wid: string) => {
-    setState((p) => ({ ...p, widgets: (Array.isArray(p.widgets) ? p.widgets : []).filter((w) => w.id !== wid) }));
-  }, [setState]);
+  const setApiBaseUrl = useCallback((v: string) => setState((p) => ({ ...p, apiBaseUrl: v })), [setState]);
+  const onQueriesChange = useCallback((next: SlateQueryDef[]) => setState((p) => ({ ...p, queries: next })), [setState]);
+  const onWidgetsChange = useCallback((next: SlateWidgetDef[]) => setState((p) => ({ ...p, widgets: next })), [setState]);
+  const onVariablesChange = useCallback((next: SlateVariable[]) => setState((p) => ({ ...p, variables: next })), [setState]);
 
   const generate = useCallback(async () => {
     setGenBusy(true); setGenErr(null);
     try {
       const r = await fetch(`/api/items/slate-app/${encodeURIComponent(id)}/generate`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ apiBaseUrl: state.apiBaseUrl || '/api', widgets }),
+        body: JSON.stringify({ apiBaseUrl: state.apiBaseUrl || '/api', widgets: widgetsForCodegen }),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setGenErr(j?.error || `HTTP ${r.status}`); return; }
@@ -701,18 +1051,41 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
       setFileTab((j.files?.[0]?.name) || 'index.html');
     } catch (e: any) { setGenErr(e?.message || String(e)); }
     finally { setGenBusy(false); }
-  }, [id, state.apiBaseUrl, widgets]);
+  }, [id, state.apiBaseUrl, widgetsForCodegen]);
+
+  const publish = useCallback(async () => {
+    setPubBusy(true); setPubMsg(null);
+    try {
+      // Persist the latest queries/widgets first so Publish deploys the current app.
+      if (dirty) await save();
+      const r = await fetch(`/api/items/slate-app/${encodeURIComponent(id)}/publish`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.reason || ''} ${j.gate.remediation || ''}` : '';
+        setPubMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setPubMsg({ intent: 'success', text: `Published ${j.version} → Azure Static Web App “${j.staticSiteName}”.${j.url ? ` Live at ${j.url}.` : ''}${j.tokenRetrieved ? ' Deployment token retrieved.' : ''}` });
+      await reload(); // pull the new versions[] from Cosmos
+    } catch (e: any) { setPubMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setPubBusy(false); }
+  }, [id, dirty, save, reload]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'App', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || !dirty },
-        { label: genBusy ? 'Generating…' : 'Generate bundle', onClick: generate, disabled: genBusy || widgets.length === 0 },
+        { label: genBusy ? 'Generating…' : 'Generate bundle', onClick: generate, disabled: genBusy || widgetsForCodegen.length === 0 },
+      ]},
+      { label: 'Deploy', actions: [
+        { label: 'Publish…', onClick: () => { setPubMsg(null); setPubOpen(true); }, disabled: false },
       ]},
     ]},
-  ], [save, saving, dirty, generate, genBusy, widgets.length]);
+  ], [save, saving, dirty, generate, genBusy, widgetsForCodegen.length]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Slate app" intro="A custom HTML/JS dashboard app over an Ontology Data API. Loom generates a deployable Azure Static Web Apps bundle — no Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Slate app" intro="A live dashboard / app builder over Azure-native data (ADX, Synapse serverless, DAB REST). Compose queries + widgets on a drag-resize canvas, drive them with variables + interactions, preview live, then publish to Azure Static Web Apps — no Fabric required." />;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -720,39 +1093,39 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
           <MessageBarTitle>Slate app (Palantir Slate)</MessageBarTitle>
-          Compose widgets over an Ontology Data API endpoint, then generate a deployable Azure Static Web Apps bundle (index.html + app.js + config). No Microsoft Fabric required.
+          Build a live app: define queries (REST / KQL / SQL over Azure-native backends), place widgets on the drag-resize canvas, wire variables + interactions, and preview them bound to real data. Publish to Azure Static Web Apps when ready. No Microsoft Fabric required.
         </MessageBarBody></MessageBar>
 
         <div className={s.section}>
-          <SectionHead icon={<Database20Regular />} title="Data API base" hint="The DAB / Ontology-SDK REST base the generated app calls (e.g. /api or an APIM URL)." />
-          <Field label="API base URL"><Input value={String(state.apiBaseUrl || '/api')} onChange={(_, d) => setState((p) => ({ ...p, apiBaseUrl: d.value }))} placeholder="/api" /></Field>
+          <SectionHead icon={<Database20Regular />} title="Data API base" hint="The DAB / Ontology-SDK REST base that REST queries + write-backs resolve against (e.g. /api or an APIM URL). KQL / SQL queries hit ADX / Synapse directly." />
+          <Field label="API base URL"><Input value={String(state.apiBaseUrl || '/api')} onChange={(_, d) => setApiBaseUrl(d.value)} placeholder="/api" /></Field>
+          {state.functionItemId && (
+            <Caption1 className={s.hint}>
+              Backed by an Azure Functions API scaffolded with this app — the base URL above points at its route.
+              <Button appearance="transparent" size="small" icon={<Link20Regular />}
+                onClick={() => router.push(`/items/user-data-function/${encodeURIComponent(String(state.functionItemId))}`)}>
+                Open Functions API
+              </Button>
+            </Caption1>
+          )}
         </div>
 
-        <div className={s.section}>
-          <SectionHead icon={<Add20Regular />} title="Widgets" hint="Each widget binds a title to a REST query path (e.g. customer)." />
-          <div className={s.addBar}>
-            <Field label="Title"><Input value={wTitle} onChange={(_, d) => setWTitle(d.value)} placeholder="Open orders" /></Field>
-            <Field label="Kind"><Dropdown value={wKind} selectedOptions={[wKind]} onOptionSelect={(_, d) => setWKind((d.optionValue as 'table' | 'chart' | 'metric') || 'table')}>
-              <Option value="table">table</Option><Option value="metric">metric</Option><Option value="chart">chart</Option>
-            </Dropdown></Field>
-            <Field label="Query path" style={{ minWidth: 200 }}><Input value={wQuery} onChange={(_, d) => setWQuery(d.value)} placeholder="order" /></Field>
-            <Button appearance="primary" icon={<Add20Regular />} disabled={!wTitle.trim() || !wQuery.trim()} onClick={addWidget}>Add widget</Button>
-          </div>
-          {widgets.length === 0 ? <div className={s.empty}><Caption1>No widgets yet.</Caption1></div> : widgets.map((w) => (
-            <div key={w.id} className={s.row}>
-              <Badge appearance="tint">{w.kind}</Badge>
-              <Body1><strong>{w.title}</strong></Body1>
-              <Caption1 className={s.hint}>→ {w.query}</Caption1>
-              <span className={s.spacer} />
-              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${w.title}`} onClick={() => removeWidget(w.id)}>Remove</Button>
-            </div>
-          ))}
-          {genErr && <MessageBar intent="error"><MessageBarBody>{genErr}</MessageBarBody></MessageBar>}
-        </div>
+        <SlateAppBuilder
+          id={id}
+          apiBaseUrl={String(state.apiBaseUrl || '/api')}
+          queries={queries}
+          widgets={widgets}
+          variables={variables}
+          onQueriesChange={onQueriesChange}
+          onWidgetsChange={onWidgetsChange}
+          onVariablesChange={onVariablesChange}
+        />
+
+        {genErr && <MessageBar intent="error"><MessageBarBody>{genErr}</MessageBarBody></MessageBar>}
 
         {files.length > 0 && (
           <div className={s.section}>
-            <SectionHead icon={<Code20Regular />} title="Generated Static Web Apps bundle" hint="Copy these files into your SWA repo, or wire them through a release-environment promotion." />
+            <SectionHead icon={<Code20Regular />} title="Generated Static Web Apps bundle" hint="Copy these files into your SWA repo, or push them with the deployment token retrieved by Publish. REST-bound widgets are embedded; KQL / SQL widgets run live in Preview but aren't part of the static bundle." />
             <TabList selectedValue={fileTab} onTabSelect={(_, d) => setFileTab(d.value as string)}>
               {files.map((f) => <Tab key={f.name} value={f.name}>{f.name}</Tab>)}
             </TabList>
@@ -760,46 +1133,201 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
           </div>
         )}
 
+        {/* Publish history — real Azure Static Web Apps versions persisted to Cosmos. */}
+        <div className={s.section}>
+          <SectionHead icon={<CloudArrowUp20Regular />} title="Publish → Azure Static Web Apps" hint="Each publish provisions (or updates) a real Microsoft.Web/staticSites resource and records a version. Azure-native — no Fabric." />
+          <div className={s.addBar}>
+            <Button appearance="primary" icon={<CloudArrowUp20Regular />} onClick={() => { setPubMsg(null); setPubOpen(true); }}>Publish…</Button>
+            {state.lastPublishedUrl && (
+              <Button appearance="outline" icon={<Open20Regular />} onClick={() => window.open(String(state.lastPublishedUrl), '_blank', 'noopener')}>Open live app</Button>
+            )}
+          </div>
+          {versions.length === 0 ? (
+            <div className={s.empty}><Caption1>Not published yet — click Publish to create an Azure Static Web App and record the first version.</Caption1></div>
+          ) : (
+            <div className={s.tableWrap}>
+              <Table size="small" aria-label="Publish history">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Static Web App</TableHeaderCell>
+                  <TableHeaderCell>URL</TableHeaderCell><TableHeaderCell>Widgets</TableHeaderCell><TableHeaderCell>Published</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {versions.map((v) => (
+                    <TableRow key={v.version + v.createdAt}>
+                      <TableCell><Badge appearance="tint" color="brand">{v.version}</Badge></TableCell>
+                      <TableCell>{v.staticSiteName}</TableCell>
+                      <TableCell>{v.url
+                        ? <Button appearance="transparent" size="small" icon={<Open20Regular />} onClick={() => window.open(v.url, '_blank', 'noopener')}>{v.hostname || 'open'}</Button>
+                        : <Caption1 className={s.mutedCaption}>provisioning…</Caption1>}</TableCell>
+                      <TableCell>{v.widgetCount}</TableCell>
+                      <TableCell>{v.createdAt ? new Date(v.createdAt).toLocaleString() : '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </div>
+
         <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+
+        <Dialog open={pubOpen} onOpenChange={(_, d) => { if (!d.open) setPubOpen(false); }}>
+          <DialogSurface>
+            <DialogBody>
+              <DialogTitle>Publish to Azure Static Web Apps</DialogTitle>
+              <DialogContent>
+                <div className={s.dialogForm}>
+                  <MessageBar intent="info"><MessageBarBody>
+                    Publish provisions (or updates) a real <strong>Microsoft.Web/staticSites</strong> resource for this app and retrieves its SWA deployment token — the credential the SWA CLI / GitHub Action uses to push the generated bundle. Requires <strong>LOOM_SWA_SUBSCRIPTION_ID</strong> + <strong>LOOM_SWA_RESOURCE_GROUP</strong> (optional <strong>LOOM_SWA_LOCATION</strong>) and the Console UAMI granted <strong>Website Contributor</strong> on that resource group. Azure-native — no Microsoft Fabric.
+                  </MessageBarBody></MessageBar>
+                  <Caption1 className={s.hint}>
+                    {widgetsForCodegen.length} REST-bound widget{widgetsForCodegen.length === 1 ? '' : 's'} will be embedded in the deployed bundle.
+                    {dirty ? ' Unsaved changes are saved automatically before publishing.' : ''}
+                  </Caption1>
+                  {pubMsg && <MessageBar intent={pubMsg.intent}><MessageBarBody>{pubMsg.text}</MessageBarBody></MessageBar>}
+                </div>
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setPubOpen(false)}>Close</Button>
+                <Button appearance="primary" icon={pubBusy ? <Spinner size="tiny" /> : <CloudArrowUp20Regular />} disabled={pubBusy} onClick={publish}>
+                  {pubBusy ? 'Publishing…' : 'Publish now'}
+                </Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
       </div>
     } />
   );
 }
 
 // ───────────────────────── Release environment (Apollo → Shuttle) ─────────────────────────
+type EnvType = 'dev' | 'test' | 'staging' | 'preprod' | 'prod' | 'custom';
+type TargetKind = 'workspace' | 'appservice' | 'ade';
+const ENV_TYPES: EnvType[] = ['dev', 'test', 'staging', 'preprod', 'prod', 'custom'];
+function envTypeColor(t?: EnvType): 'brand' | 'informative' | 'warning' | 'severe' | 'success' | 'subtle' {
+  switch (t) {
+    case 'dev': return 'informative';
+    case 'test': return 'brand';
+    case 'staging': return 'warning';
+    case 'preprod': return 'severe';
+    case 'prod': return 'success';
+    default: return 'subtle';
+  }
+}
 interface ReleaseStage { id: string; name: string; workspace?: string }
-interface Promotion { id: string; fromStage: string; toStage: string; note?: string; environmentDefinition?: string; promotedAt: string; promotedBy?: string }
-interface ReleaseState { stages?: ReleaseStage[]; promotions?: Promotion[]; [k: string]: unknown }
+interface ReleaseEnvironment {
+  id: string; name: string; type: EnvType; order: number; targetKind: TargetKind;
+  workspace?: string; subscriptionId?: string; resourceGroup?: string; site?: string; slot?: string;
+  region?: string; deploymentIdentity?: string; tags?: string; currentVersion?: string;
+}
+interface PipelineEdge { id: string; from: string; to: string; mode: 'manual' | 'auto'; approvalsRequired: number; approvers?: string }
+interface ReleaseVersion { id: string; version: string; buildId?: string; commit?: string; image?: string; notes?: string; createdAt: string }
+interface ApprovalRecord { by: string; at: string; decision: 'approve' | 'reject'; comment?: string }
+interface Promotion {
+  id: string; fromStage: string; toStage: string; note?: string; environmentDefinition?: string; version?: string;
+  status?: 'completed' | 'pending' | 'rejected'; approvalsRequired?: number; approvals?: ApprovalRecord[];
+  promotedAt: string; promotedBy?: string; deployedEnvironment?: { name: string; provisioningState: string };
+}
+interface SwapRecord { id: string; site: string; resourceGroup: string; sourceSlot?: string; targetSlot: string; action: string; status: number; at: string; by?: string }
+interface ReleaseState {
+  environments?: ReleaseEnvironment[]; pipeline?: PipelineEdge[]; versions?: ReleaseVersion[];
+  promotions?: Promotion[]; swaps?: SwapRecord[]; stages?: ReleaseStage[]; [k: string]: unknown;
+}
 interface ArmDeploymentLite { name: string; resourceGroup?: string; provisioningState?: string; timestamp?: string }
+interface SlotLite { name: string; state?: string; defaultHostName?: string }
+
+/** Migrate legacy flat `stages` into the rich environment model so existing items aren't empty. */
+function migrateEnvs(p: ReleaseState): ReleaseEnvironment[] {
+  const envs = Array.isArray(p.environments) ? p.environments : [];
+  if (envs.length) return envs;
+  const legacy = Array.isArray(p.stages) ? p.stages : [];
+  return legacy.map((st, i) => ({ id: st.id, name: st.name, type: 'custom' as EnvType, order: i, targetKind: 'workspace' as TargetKind, workspace: st.workspace }));
+}
 
 export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<ReleaseState>('release-environment', id, { stages: [], promotions: [] });
-  const [stageName, setStageName] = useState('');
-  const [stageWs, setStageWs] = useState('');
-  const [fromStage, setFromStage] = useState('');
-  const [toStage, setToStage] = useState('');
-  const [promoNote, setPromoNote] = useState('');
-  const [envDef, setEnvDef] = useState('');
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<ReleaseState>('release-environment', id, { environments: [], pipeline: [], versions: [], promotions: [] });
+  const [tab, setTab] = useState('environments');
+
+  // Route-managed logs (real Cosmos via the promote/approve/swap/arm routes).
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [devCenter, setDevCenter] = useState(false);
-  const [promoMsg, setPromoMsg] = useState<{ intent: 'success' | 'error'; text: string } | null>(null);
+
+  // Environment add-form.
+  const [envName, setEnvName] = useState('');
+  const [envType, setEnvType] = useState<EnvType>('dev');
+  const [targetKind, setTargetKind] = useState<TargetKind>('workspace');
+  const [envWorkspace, setEnvWorkspace] = useState('');
+  const [envSub, setEnvSub] = useState('');
+  const [envRg, setEnvRg] = useState('');
+  const [envSite, setEnvSite] = useState('');
+  const [envSlot, setEnvSlot] = useState('');
+  const [envRegion, setEnvRegion] = useState('');
+  const [envIdentity, setEnvIdentity] = useState('');
+  const [envTags, setEnvTags] = useState('');
+
+  // Pipeline edge add-form.
+  const [edgeFrom, setEdgeFrom] = useState('');
+  const [edgeTo, setEdgeTo] = useState('');
+  const [edgeMode, setEdgeMode] = useState<'manual' | 'auto'>('manual');
+  const [edgeApprovals, setEdgeApprovals] = useState('0');
+  const [edgeApprovers, setEdgeApprovers] = useState('');
+
+  // Version add-form.
+  const [verName, setVerName] = useState('');
+  const [verBuild, setVerBuild] = useState('');
+  const [verCommit, setVerCommit] = useState('');
+  const [verImage, setVerImage] = useState('');
+  const [verNotes, setVerNotes] = useState('');
+
+  // Promote form.
+  const [fromStage, setFromStage] = useState('');
+  const [toStage, setToStage] = useState('');
+  const [promoVersion, setPromoVersion] = useState('');
+  const [promoNote, setPromoNote] = useState('');
+  const [envDef, setEnvDef] = useState('');
+  const [promoMsg, setPromoMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [promoBusy, setPromoBusy] = useState(false);
+
+  // Approvals.
+  const [apprComment, setApprComment] = useState<Record<string, string>>({});
+  const [apprBusy, setApprBusy] = useState(false);
+  const [apprMsg, setApprMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+
+  // Slot swap.
+  const [swapEnvId, setSwapEnvId] = useState('');
+  const [slots, setSlots] = useState<SlotLite[] | null>(null);
+  const [swapSource, setSwapSource] = useState('');
+  const [swapTarget, setSwapTarget] = useState('');
+  const [swapAction, setSwapAction] = useState<'swap' | 'apply' | 'complete' | 'cancel'>('swap');
+  const [swapGate, setSwapGate] = useState<string | null>(null);
+  const [swapMsg, setSwapMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [swapBusy, setSwapBusy] = useState(false);
+
+  // ARM history.
   const [arm, setArm] = useState<ArmDeploymentLite[] | null>(null);
   const [armGate, setArmGate] = useState<string | null>(null);
   const [armBusy, setArmBusy] = useState(false);
 
-  const stages = Array.isArray(state.stages) ? state.stages : [];
+  const environments = useMemo<ReleaseEnvironment[]>(
+    () => [...migrateEnvs(state)].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    [state],
+  );
+  const pipeline = Array.isArray(state.pipeline) ? state.pipeline : [];
+  const versions = Array.isArray(state.versions) ? state.versions : [];
+  const swaps = Array.isArray(state.swaps) ? state.swaps : [];
+  const appserviceEnvs = environments.filter((e) => e.targetKind === 'appservice');
+  const pending = promotions.filter((p) => p.status === 'pending');
 
-  // Load promotions + devcenter flag from the promote route (real Cosmos).
-  useEffect(() => {
-    (async () => {
-      try {
-        const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/promote`);
-        const j = await r.json().catch(() => ({}));
-        if (j?.ok) { setPromotions(Array.isArray(j.promotions) ? j.promotions : []); setDevCenter(!!j.devCenterConfigured); }
-      } catch { /* ignore */ }
-    })();
+  const loadPromotions = useCallback(async () => {
+    try {
+      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/promote`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) { setPromotions(Array.isArray(j.promotions) ? j.promotions : []); setDevCenter(!!j.devCenterConfigured); }
+    } catch { /* ignore */ }
   }, [id]);
+  useEffect(() => { if (id && id !== 'new') void loadPromotions(); }, [id, loadPromotions]);
 
   const loadArm = useCallback(async () => {
     setArmBusy(true); setArmGate(null);
@@ -813,31 +1341,146 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
     finally { setArmBusy(false); }
   }, [id]);
 
-  const addStage = useCallback(() => {
-    const name = stageName.trim(); if (!name) return;
-    setState((p) => ({ ...p, stages: [...(Array.isArray(p.stages) ? p.stages : []), { id: `st_${Date.now()}`, name, workspace: stageWs.trim() || undefined }] }));
-    setStageName(''); setStageWs('');
-  }, [stageName, stageWs, setState]);
+  const addEnvironment = useCallback(() => {
+    const name = envName.trim(); if (!name) return;
+    setState((p) => {
+      const cur = migrateEnvs(p);
+      const order = cur.reduce((m, e) => Math.max(m, e.order ?? 0), -1) + 1;
+      const next: ReleaseEnvironment = {
+        id: `env_${Date.now()}`, name, type: envType, order, targetKind,
+        workspace: envWorkspace.trim() || undefined, subscriptionId: envSub.trim() || undefined,
+        resourceGroup: envRg.trim() || undefined, site: envSite.trim() || undefined, slot: envSlot.trim() || undefined,
+        region: envRegion.trim() || undefined, deploymentIdentity: envIdentity.trim() || undefined, tags: envTags.trim() || undefined,
+      };
+      return { ...p, environments: [...cur, next] };
+    });
+    setEnvName(''); setEnvWorkspace(''); setEnvSub(''); setEnvRg(''); setEnvSite(''); setEnvSlot(''); setEnvRegion(''); setEnvIdentity(''); setEnvTags('');
+  }, [envName, envType, targetKind, envWorkspace, envSub, envRg, envSite, envSlot, envRegion, envIdentity, envTags, setState]);
 
-  const removeStage = useCallback((sid: string) => {
-    setState((p) => ({ ...p, stages: (Array.isArray(p.stages) ? p.stages : []).filter((x) => x.id !== sid) }));
+  const removeEnvironment = useCallback((eid: string) => {
+    setState((p) => ({ ...p, environments: migrateEnvs(p).filter((x) => x.id !== eid) }));
+  }, [setState]);
+
+  const moveEnvironment = useCallback((eid: string, dir: -1 | 1) => {
+    setState((p) => {
+      const cur = [...migrateEnvs(p)].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+      const i = cur.findIndex((x) => x.id === eid); const j = i + dir;
+      if (i < 0 || j < 0 || j >= cur.length) return p;
+      [cur[i], cur[j]] = [cur[j], cur[i]];
+      return { ...p, environments: cur.map((e, k) => ({ ...e, order: k })) };
+    });
+  }, [setState]);
+
+  const addEdge = useCallback(() => {
+    if (!edgeFrom || !edgeTo || edgeFrom === edgeTo) return;
+    setState((p) => ({ ...p, pipeline: [...(Array.isArray(p.pipeline) ? p.pipeline : []), {
+      id: `edge_${Date.now()}`, from: edgeFrom, to: edgeTo, mode: edgeMode,
+      approvalsRequired: Math.max(0, Number(edgeApprovals) || 0), approvers: edgeApprovers.trim() || undefined,
+    }] }));
+    setEdgeApprovers('');
+  }, [edgeFrom, edgeTo, edgeMode, edgeApprovals, edgeApprovers, setState]);
+
+  const removeEdge = useCallback((edid: string) => {
+    setState((p) => ({ ...p, pipeline: (Array.isArray(p.pipeline) ? p.pipeline : []).filter((x) => x.id !== edid) }));
+  }, [setState]);
+
+  const addVersion = useCallback(() => {
+    const v = verName.trim(); if (!v) return;
+    setState((p) => ({ ...p, versions: [{
+      id: `ver_${Date.now()}`, version: v, buildId: verBuild.trim() || undefined, commit: verCommit.trim() || undefined,
+      image: verImage.trim() || undefined, notes: verNotes.trim() || undefined, createdAt: new Date().toISOString(),
+    }, ...(Array.isArray(p.versions) ? p.versions : [])] }));
+    setVerName(''); setVerBuild(''); setVerCommit(''); setVerImage(''); setVerNotes('');
+  }, [verName, verBuild, verCommit, verImage, verNotes, setState]);
+
+  const removeVersion = useCallback((vid: string) => {
+    setState((p) => ({ ...p, versions: (Array.isArray(p.versions) ? p.versions : []).filter((x) => x.id !== vid) }));
   }, [setState]);
 
   const promote = useCallback(async () => {
-    if (!fromStage || !toStage) { setPromoMsg({ intent: 'error', text: 'Pick both stages.' }); return; }
-    setPromoMsg(null);
+    if (!fromStage || !toStage) { setPromoMsg({ intent: 'error', text: 'Pick both environments.' }); return; }
+    setPromoBusy(true); setPromoMsg(null);
     try {
       const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/promote`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ fromStage, toStage, note: promoNote.trim() || undefined, environmentDefinition: envDef.trim() || undefined }),
+        body: JSON.stringify({ fromStage, toStage, version: promoVersion.trim() || undefined, note: promoNote.trim() || undefined, environmentDefinition: envDef.trim() || undefined }),
       });
       const j = await r.json().catch(() => ({}));
-      if (!j?.ok) { setPromoMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
+      if (!j?.ok) {
+        const text = j?.gate ? `${j.gate.reason} ${j.gate.remediation}` : (j?.error || `HTTP ${r.status}`);
+        setPromoMsg({ intent: j?.gate ? 'warning' : 'error', text });
+        return;
+      }
       setPromotions(Array.isArray(j.promotions) ? j.promotions : []);
-      setPromoMsg({ intent: 'success', text: `Promoted ${fromStage} → ${toStage}.` });
+      const dep = j.deployedEnvironment;
+      setPromoMsg({
+        intent: 'success',
+        text: j.pending
+          ? `Promotion ${fromStage} → ${toStage} queued for approval — clear it in the Approvals tab.`
+          : dep
+            ? `Promoted ${fromStage} → ${toStage}. Azure Deployment Environment "${dep.name}" → ${dep.provisioningState}.`
+            : `Promoted ${fromStage} → ${toStage}.`,
+      });
       setPromoNote('');
     } catch (e: any) { setPromoMsg({ intent: 'error', text: e?.message || String(e) }); }
-  }, [id, fromStage, toStage, promoNote, envDef]);
+    finally { setPromoBusy(false); }
+  }, [id, fromStage, toStage, promoVersion, promoNote, envDef]);
+
+  const decide = useCallback(async (promotionId: string, decision: 'approve' | 'reject') => {
+    setApprBusy(true); setApprMsg(null);
+    try {
+      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/approve`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ promotionId, decision, comment: (apprComment[promotionId] || '').trim() || undefined }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (Array.isArray(j.promotions)) setPromotions(j.promotions);
+      if (!j?.ok) {
+        const text = j?.gate ? `${j.gate.reason} ${j.gate.remediation}` : (j?.error || `HTTP ${r.status}`);
+        setApprMsg({ intent: 'warning', text });
+        return;
+      }
+      setApprMsg({ intent: 'success', text: `Recorded ${decision}.${j.promotion?.status === 'completed' ? ' Promotion completed + deployed.' : j.promotion?.status === 'rejected' ? ' Promotion rejected.' : ''}` });
+      setApprComment((m) => ({ ...m, [promotionId]: '' }));
+    } catch (e: any) { setApprMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setApprBusy(false); }
+  }, [id, apprComment]);
+
+  const loadSlots = useCallback(async () => {
+    const env = environments.find((e) => e.id === swapEnvId);
+    setSwapGate(null); setSwapMsg(null); setSlots(null);
+    if (!env?.resourceGroup || !env?.site) { setSwapMsg({ intent: 'warning', text: 'Selected environment needs a resource group and App Service site.' }); return; }
+    setSwapBusy(true);
+    try {
+      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/swap?resourceGroup=${encodeURIComponent(env.resourceGroup)}&site=${encodeURIComponent(env.site)}`);
+      const j = await r.json().catch(() => ({}));
+      if (j?.ok) setSlots(Array.isArray(j.slots) ? j.slots : []);
+      else if (j?.gate) setSwapGate(j.gate.remediation || j.gate.reason);
+      else setSwapMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` });
+    } catch (e: any) { setSwapMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSwapBusy(false); }
+  }, [environments, swapEnvId, id]);
+
+  const runSwap = useCallback(async () => {
+    const env = environments.find((e) => e.id === swapEnvId);
+    if (!env?.resourceGroup || !env?.site) { setSwapMsg({ intent: 'warning', text: 'Selected environment needs a resource group and App Service site.' }); return; }
+    if (!swapTarget.trim()) { setSwapMsg({ intent: 'warning', text: 'Pick a target slot.' }); return; }
+    setSwapBusy(true); setSwapMsg(null); setSwapGate(null);
+    try {
+      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/swap`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ resourceGroup: env.resourceGroup, site: env.site, sourceSlot: swapSource.trim() || undefined, targetSlot: swapTarget.trim(), action: swapAction }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const text = j?.gate ? `${j.gate.reason} ${j.gate.remediation}` : (j?.error || `HTTP ${r.status}`);
+        setSwapMsg({ intent: j?.gate ? 'warning' : 'error', text });
+        return;
+      }
+      setSwapMsg({ intent: 'success', text: `Slot ${swapAction} on ${env.site} (${swapSource.trim() || 'production'} ↔ ${swapTarget.trim()}) accepted — ARM HTTP ${j.result?.status}.` });
+    } catch (e: any) { setSwapMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSwapBusy(false); }
+  }, [environments, swapEnvId, swapSource, swapTarget, swapAction, id]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -848,7 +1491,33 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
     ]},
   ], [save, saving, dirty, loadArm, armBusy]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create release environment" intro="Promotion / release orchestration across workspaces, with real Azure Resource Manager deployment history and optional Azure Deployment Environments. No Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create release environment" intro="Promotion / release orchestration across environments (dev → test → prod) with a promotion pipeline, approval gates, release versions, and real App Service slot swaps + Azure Deployment Environments. Azure-native — no Fabric required." />;
+
+  // Pipeline lane: ordered environment cards joined by connectors that surface
+  // each consecutive edge's mode + gate (Fabric Deployment Pipelines style).
+  const laneNodes: ReactNode[] = [];
+  environments.forEach((e, i) => {
+    laneNodes.push(
+      <div key={e.id} className={s.stageCard}>
+        <div className={s.cardHead}><Cloud20Regular /><Subtitle2>{e.name}</Subtitle2><Badge appearance="tint" color={envTypeColor(e.type)}>{e.type}</Badge></div>
+        <Caption1 className={s.hint}>{e.targetKind}{e.site ? ` · ${e.site}${e.slot ? `/${e.slot}` : ''}` : e.workspace ? ` · ${e.workspace}` : ''}</Caption1>
+        <Badge appearance="outline">{e.currentVersion ? `v ${e.currentVersion}` : 'no version'}</Badge>
+      </div>,
+    );
+    if (i < environments.length - 1) {
+      const next = environments[i + 1];
+      const edge = pipeline.find((x) => x.from === e.name && x.to === next.name);
+      laneNodes.push(
+        <div key={`c_${e.id}`} className={s.connector}>
+          <ChevronRight20Regular />
+          {edge
+            ? <Badge size="small" appearance="tint" color={edge.mode === 'auto' ? 'success' : 'informative'}>{edge.mode}</Badge>
+            : <Caption1 className={s.hint}>no edge</Caption1>}
+          {edge && edge.approvalsRequired > 0 && <Badge size="small" appearance="tint" color="warning">gate {edge.approvalsRequired}</Badge>}
+        </div>,
+      );
+    }
+  });
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -856,48 +1525,265 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
           <MessageBarTitle>Release environment (Palantir Apollo → Shuttle)</MessageBarTitle>
-          Model dev → test → prod stages over Loom workspaces, review real Azure Resource Manager deployments, and record promotions.{devCenter ? ' Azure Deployment Environments is configured — name a catalog environment definition when promoting.' : ' Set LOOM_DEVCENTER_PROJECT to provision catalog-driven Azure Deployment Environments.'} No Fabric required.
+          Model dev → test → prod environments, wire a promotion pipeline with approval gates, track release versions, and execute real Azure promotions — App Service slot swaps and Azure Deployment Environments.{devCenter ? ' Azure Deployment Environments is configured — name a catalog environment definition when promoting.' : ' Set LOOM_DEVCENTER_PROJECT to provision catalog-driven Azure Deployment Environments.'} No Fabric required.
         </MessageBarBody></MessageBar>
 
-        <div className={s.section}>
-          <SectionHead icon={<Rocket20Regular />} title="Stages" hint="Promotion stages, each mapped to a Loom workspace." />
-          <div className={s.addBar}>
-            <Field label="Stage name"><Input value={stageName} onChange={(_, d) => setStageName(d.value)} placeholder="prod" /></Field>
-            <Field label="Workspace (optional)"><Input value={stageWs} onChange={(_, d) => setStageWs(d.value)} placeholder="workspace id / name" /></Field>
-            <Button appearance="primary" icon={<Add20Regular />} disabled={!stageName.trim()} onClick={addStage}>Add stage</Button>
-          </div>
-          {stages.length === 0 ? <div className={s.empty}><Caption1>No stages yet.</Caption1></div> : stages.map((st) => (
-            <div key={st.id} className={s.row}>
-              <Badge appearance="tint" color="brand">{st.name}</Badge>
-              {st.workspace && <Caption1 className={s.hint}>↳ {st.workspace}</Caption1>}
-              <span className={s.spacer} />
-              <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${st.name}`} onClick={() => removeStage(st.id)}>Remove</Button>
-            </div>
-          ))}
-        </div>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as string)} className={s.tabStrip}>
+          <Tab value="environments" icon={<Cloud20Regular />}>Environments</Tab>
+          <Tab value="pipeline" icon={<Branch20Regular />}>Pipeline</Tab>
+          <Tab value="promote" icon={<Rocket20Regular />}>Promote / Swap</Tab>
+          <Tab value="approvals" icon={<People20Regular />}>Approvals{pending.length ? ` (${pending.length})` : ''}</Tab>
+          <Tab value="versions" icon={<Tag20Regular />}>Versions</Tab>
+          <Tab value="history" icon={<History20Regular />}>History</Tab>
+        </TabList>
 
+        {/* ───────── Environments ───────── */}
+        {tab === 'environments' && (
         <div className={s.section}>
-          <SectionHead icon={<Flash20Regular />} title="Promote" hint="Record a promotion between two stages." />
+          <SectionHead icon={<Cloud20Regular />} title="Environments" hint="dev → test → prod environments as first-class objects, ordered into a promotion sequence." />
           <div className={s.addBar}>
-            <Field label="From" style={{ minWidth: 140 }}><Dropdown value={fromStage} selectedOptions={fromStage ? [fromStage] : []} onOptionSelect={(_, d) => setFromStage(d.optionValue || '')} placeholder="from">
-              {stages.map((st) => <Option key={st.id} value={st.name}>{st.name}</Option>)}
+            <Field label="Name" className={s.fieldNarrow}><Input value={envName} onChange={(_, d) => setEnvName(d.value)} placeholder="prod" /></Field>
+            <Field label="Type" className={s.fieldNarrow}><Dropdown value={envType} selectedOptions={[envType]} onOptionSelect={(_, d) => setEnvType((d.optionValue as EnvType) || 'dev')}>
+              {ENV_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
             </Dropdown></Field>
-            <Field label="To" style={{ minWidth: 140 }}><Dropdown value={toStage} selectedOptions={toStage ? [toStage] : []} onOptionSelect={(_, d) => setToStage(d.optionValue || '')} placeholder="to">
-              {stages.map((st) => <Option key={st.id} value={st.name}>{st.name}</Option>)}
+            <Field label="Target" className={s.fieldNarrow}><Dropdown value={targetKind} selectedOptions={[targetKind]} onOptionSelect={(_, d) => setTargetKind((d.optionValue as TargetKind) || 'workspace')}>
+              <Option value="workspace">Loom workspace</Option><Option value="appservice">App Service + slot</Option><Option value="ade">Deployment env</Option>
+            </Dropdown></Field>
+            {targetKind === 'workspace' && <Field label="Workspace"><Input value={envWorkspace} onChange={(_, d) => setEnvWorkspace(d.value)} placeholder="workspace id / name" /></Field>}
+            {targetKind === 'appservice' && <>
+              <Field label="Resource group" className={s.fieldNarrow}><Input value={envRg} onChange={(_, d) => setEnvRg(d.value)} placeholder="rg-loom" /></Field>
+              <Field label="Site" className={s.fieldNarrow}><Input value={envSite} onChange={(_, d) => setEnvSite(d.value)} placeholder="loom-app" /></Field>
+              <Field label="Slot" className={s.fieldNarrow}><Input value={envSlot} onChange={(_, d) => setEnvSlot(d.value)} placeholder="staging" /></Field>
+            </>}
+            {targetKind === 'ade' && <Field label="Resource group" className={s.fieldNarrow}><Input value={envRg} onChange={(_, d) => setEnvRg(d.value)} placeholder="rg-loom" /></Field>}
+            {targetKind !== 'workspace' && <Field label="Subscription" className={s.fieldNarrow}><Input value={envSub} onChange={(_, d) => setEnvSub(d.value)} placeholder="sub id (optional)" /></Field>}
+            <Field label="Region" className={s.fieldNarrow}><Input value={envRegion} onChange={(_, d) => setEnvRegion(d.value)} placeholder="eastus" /></Field>
+            <Field label="Identity" className={s.fieldNarrow}><Input value={envIdentity} onChange={(_, d) => setEnvIdentity(d.value)} placeholder="UAMI (optional)" /></Field>
+            <Field label="Tags" className={s.fieldNarrow}><Input value={envTags} onChange={(_, d) => setEnvTags(d.value)} placeholder="team=data" /></Field>
+            <Button appearance="primary" icon={<Add20Regular />} disabled={!envName.trim()} onClick={addEnvironment}>Add environment</Button>
+          </div>
+          {environments.length === 0 ? <div className={s.empty}><Caption1>No environments yet — add dev / test / prod above.</Caption1></div> : (
+            <div className={s.grid2}>
+              {environments.map((e) => (
+                <div key={e.id} className={s.stageCard}>
+                  <div className={s.cardHead}>
+                    <Cloud20Regular /><Subtitle2>{e.name}</Subtitle2>
+                    <Badge appearance="tint" color={envTypeColor(e.type)}>{e.type}</Badge>
+                    <span className={s.spacer} /><Caption1 className={s.hint}>#{(e.order ?? 0) + 1}</Caption1>
+                  </div>
+                  <div className={s.kv}><Caption1 className={s.hint}>Target</Caption1><Caption1>{e.targetKind}</Caption1></div>
+                  {e.targetKind === 'workspace' && e.workspace && <div className={s.kv}><Caption1 className={s.hint}>Workspace</Caption1><Caption1>{e.workspace}</Caption1></div>}
+                  {e.targetKind === 'appservice' && <div className={s.kv}><Caption1 className={s.hint}>Site / slot</Caption1><Caption1>{e.site || '—'}{e.slot ? ` / ${e.slot}` : ''}</Caption1></div>}
+                  {e.resourceGroup && <div className={s.kv}><Caption1 className={s.hint}>Resource group</Caption1><Caption1>{e.resourceGroup}</Caption1></div>}
+                  {e.region && <div className={s.kv}><Caption1 className={s.hint}>Region</Caption1><Caption1>{e.region}</Caption1></div>}
+                  {e.deploymentIdentity && <div className={s.kv}><Caption1 className={s.hint}>Identity</Caption1><Caption1>{e.deploymentIdentity}</Caption1></div>}
+                  {e.tags && <div className={s.kv}><Caption1 className={s.hint}>Tags</Caption1><Caption1>{e.tags}</Caption1></div>}
+                  <div className={s.kv}><Caption1 className={s.hint}>Installed version</Caption1><Badge appearance="outline">{e.currentVersion || 'none'}</Badge></div>
+                  <div className={s.cardActions}>
+                    <Button size="small" appearance="subtle" onClick={() => moveEnvironment(e.id, -1)}>↑ Up</Button>
+                    <Button size="small" appearance="subtle" onClick={() => moveEnvironment(e.id, 1)}>↓ Down</Button>
+                    <span className={s.spacer} />
+                    <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${e.name}`} onClick={() => removeEnvironment(e.id)}>Remove</Button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+        </div>
+        )}
+
+        {/* ───────── Pipeline ───────── */}
+        {tab === 'pipeline' && (
+        <div className={s.section}>
+          <SectionHead icon={<Branch20Regular />} title="Promotion pipeline" hint="Directed promotion paths between environments, each with a manual/auto mode and an optional approval gate." />
+          {environments.length === 0 ? <div className={s.empty}><Caption1>Add environments first.</Caption1></div> : <div className={s.pipelineLane}>{laneNodes}</div>}
+          <div className={s.addBar}>
+            <Field label="From" className={s.fieldNarrow}><Dropdown value={edgeFrom} selectedOptions={edgeFrom ? [edgeFrom] : []} onOptionSelect={(_, d) => setEdgeFrom(d.optionValue || '')} placeholder="from">
+              {environments.map((e) => <Option key={e.id} value={e.name}>{e.name}</Option>)}
+            </Dropdown></Field>
+            <Field label="To" className={s.fieldNarrow}><Dropdown value={edgeTo} selectedOptions={edgeTo ? [edgeTo] : []} onOptionSelect={(_, d) => setEdgeTo(d.optionValue || '')} placeholder="to">
+              {environments.map((e) => <Option key={e.id} value={e.name}>{e.name}</Option>)}
+            </Dropdown></Field>
+            <Field label="Mode" className={s.fieldNarrow}><Dropdown value={edgeMode} selectedOptions={[edgeMode]} onOptionSelect={(_, d) => setEdgeMode((d.optionValue as 'manual' | 'auto') || 'manual')}>
+              <Option value="manual">manual</Option><Option value="auto">auto</Option>
+            </Dropdown></Field>
+            <Field label="Approvals required" className={s.fieldNarrow}><Input type="number" value={edgeApprovals} onChange={(_, d) => setEdgeApprovals(d.value)} /></Field>
+            <Field label="Approvers (optional)"><Input value={edgeApprovers} onChange={(_, d) => setEdgeApprovers(d.value)} placeholder="alice@contoso.com, bob@contoso.com" /></Field>
+            <Button appearance="primary" icon={<Add20Regular />} disabled={!edgeFrom || !edgeTo || edgeFrom === edgeTo} onClick={addEdge}>Add edge</Button>
+          </div>
+          {pipeline.length === 0 ? <div className={s.empty}><Caption1>No promotion edges yet.</Caption1></div> : (
+            <div className={s.tableWrap}>
+            <Table size="small" aria-label="Pipeline edges">
+              <TableHeader><TableRow><TableHeaderCell>From</TableHeaderCell><TableHeaderCell>To</TableHeaderCell><TableHeaderCell>Mode</TableHeaderCell><TableHeaderCell>Gate</TableHeaderCell><TableHeaderCell>Approvers</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
+              <TableBody>
+                {pipeline.map((ed) => (
+                  <TableRow key={ed.id}>
+                    <TableCell>{ed.from}</TableCell><TableCell>{ed.to}</TableCell>
+                    <TableCell><Badge appearance="tint" color={ed.mode === 'auto' ? 'success' : 'informative'}>{ed.mode}</Badge></TableCell>
+                    <TableCell>{ed.approvalsRequired > 0 ? <Badge appearance="tint" color="warning">{ed.approvalsRequired} approver(s)</Badge> : <Caption1 className={s.hint}>none</Caption1>}</TableCell>
+                    <TableCell>{ed.approvers || '—'}</TableCell>
+                    <TableCell><Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove edge" onClick={() => removeEdge(ed.id)} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            </div>
+          )}
+          <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+        </div>
+        )}
+
+        {/* ───────── Promote / Swap ───────── */}
+        {tab === 'promote' && (<>
+        <div className={s.section}>
+          <SectionHead icon={<Rocket20Regular />} title="Promote" hint="Promote a release version between environments. Gated edges queue for approval; an Azure Deployment Environment is created when a definition is named." />
+          <div className={s.addBar}>
+            <Field label="From" className={s.fieldNarrow}><Dropdown value={fromStage} selectedOptions={fromStage ? [fromStage] : []} onOptionSelect={(_, d) => setFromStage(d.optionValue || '')} placeholder="from">
+              {environments.map((e) => <Option key={e.id} value={e.name}>{e.name}</Option>)}
+            </Dropdown></Field>
+            <Field label="To" className={s.fieldNarrow}><Dropdown value={toStage} selectedOptions={toStage ? [toStage] : []} onOptionSelect={(_, d) => setToStage(d.optionValue || '')} placeholder="to">
+              {environments.map((e) => <Option key={e.id} value={e.name}>{e.name}</Option>)}
+            </Dropdown></Field>
+            <Field label="Version" className={s.fieldNarrow}><Dropdown value={promoVersion} selectedOptions={promoVersion ? [promoVersion] : []} onOptionSelect={(_, d) => setPromoVersion(d.optionValue || '')} placeholder="version">
+              {versions.map((v) => <Option key={v.id} value={v.version}>{v.version}</Option>)}
             </Dropdown></Field>
             {devCenter && <Field label="Environment definition"><Input value={envDef} onChange={(_, d) => setEnvDef(d.value)} placeholder="loom-app-env" /></Field>}
             <Field label="Note"><Input value={promoNote} onChange={(_, d) => setPromoNote(d.value)} placeholder="release notes" /></Field>
-            <Button appearance="primary" icon={<Rocket20Regular />} disabled={!fromStage || !toStage} onClick={promote}>Promote</Button>
+            <Button appearance="primary" icon={<Rocket20Regular />} disabled={promoBusy || !fromStage || !toStage} onClick={promote}>{promoBusy ? 'Promoting…' : 'Promote'}</Button>
           </div>
           {promoMsg && <MessageBar intent={promoMsg.intent}><MessageBarBody>{promoMsg.text}</MessageBarBody></MessageBar>}
-          {promotions.length > 0 && (
+        </div>
+
+        <div className={s.section}>
+          <SectionHead icon={<ArrowSwap20Regular />} title="App Service slot swap" hint="Blue-green promotion + rollback via real Microsoft.Web/sites slot swaps for an App Service-backed environment." />
+          {appserviceEnvs.length === 0 ? (
+            <div className={s.empty}><Caption1>No App Service environments. Add an environment with target “App Service + slot” (resource group + site) to swap slots.</Caption1></div>
+          ) : (<>
+            <div className={s.addBar}>
+              <Field label="Environment" className={s.fieldStep}><Dropdown value={environments.find((e) => e.id === swapEnvId)?.name || ''} selectedOptions={swapEnvId ? [swapEnvId] : []} onOptionSelect={(_, d) => { setSwapEnvId(d.optionValue || ''); setSlots(null); setSwapGate(null); }} placeholder="App Service env">
+                {appserviceEnvs.map((e) => <Option key={e.id} value={e.id}>{e.name} · {e.site}</Option>)}
+              </Dropdown></Field>
+              <Button appearance="outline" disabled={swapBusy || !swapEnvId} onClick={loadSlots}>{swapBusy ? 'Loading…' : 'Load slots'}</Button>
+            </div>
+            {swapGate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>App Service not configured</MessageBarTitle>{swapGate}</MessageBarBody></MessageBar>}
+            {slots && (
+              <div className={s.addBar}>
+                <Field label="Source slot" className={s.fieldNarrow}><Dropdown value={swapSource} selectedOptions={swapSource ? [swapSource] : []} onOptionSelect={(_, d) => setSwapSource(d.optionValue || '')} placeholder="production">
+                  <Option value="production">production</Option>
+                  {slots.map((sl) => <Option key={sl.name} value={sl.name}>{sl.name}</Option>)}
+                </Dropdown></Field>
+                <Field label="Target slot" className={s.fieldNarrow}><Dropdown value={swapTarget} selectedOptions={swapTarget ? [swapTarget] : []} onOptionSelect={(_, d) => setSwapTarget(d.optionValue || '')} placeholder="staging">
+                  {slots.map((sl) => <Option key={sl.name} value={sl.name}>{sl.name}</Option>)}
+                  <Option value="production">production</Option>
+                </Dropdown></Field>
+                <Field label="Action" className={s.fieldNarrow}><Dropdown value={swapAction} selectedOptions={[swapAction]} onOptionSelect={(_, d) => setSwapAction((d.optionValue as 'swap' | 'apply' | 'complete' | 'cancel') || 'swap')}>
+                  <Option value="swap">swap</Option><Option value="apply">apply (preview)</Option><Option value="complete">complete</Option><Option value="cancel">cancel</Option>
+                </Dropdown></Field>
+                <Button appearance="primary" icon={<ArrowSwap20Regular />} disabled={swapBusy || !swapTarget} onClick={runSwap}>{swapBusy ? 'Running…' : 'Run'}</Button>
+              </div>
+            )}
+            {slots && slots.length === 0 && !swapGate && <div className={s.empty}><Caption1>Site has no deployment slots — add a staging slot in the portal to enable swaps.</Caption1></div>}
+            {swapMsg && <MessageBar intent={swapMsg.intent}><MessageBarBody>{swapMsg.text}</MessageBarBody></MessageBar>}
+          </>)}
+        </div>
+        </>)}
+
+        {/* ───────── Approvals ───────── */}
+        {tab === 'approvals' && (
+        <div className={s.section}>
+          <SectionHead icon={<People20Regular />} title="Pending approvals" hint="Promotions held by an approval gate. Approve or reject with a comment; the deploy runs when the gate clears." />
+          {apprMsg && <MessageBar intent={apprMsg.intent}><MessageBarBody>{apprMsg.text}</MessageBarBody></MessageBar>}
+          {pending.length === 0 ? <div className={s.empty}><Caption1>No promotions waiting for approval.</Caption1></div> : (
+            <div className={s.grid2}>
+              {pending.map((p) => {
+                const approved = (p.approvals || []).filter((a) => a.decision === 'approve').length;
+                return (
+                  <div key={p.id} className={s.stageCard}>
+                    <div className={s.cardHead}>
+                      <Badge appearance="tint" color="informative">{p.fromStage}</Badge><ChevronRight20Regular /><Badge appearance="tint" color="brand">{p.toStage}</Badge>
+                      <span className={s.spacer} /><Badge appearance="tint" color="warning">{approved}/{p.approvalsRequired || 1}</Badge>
+                    </div>
+                    {p.version && <div className={s.kv}><Caption1 className={s.hint}>Version</Caption1><Caption1>{p.version}</Caption1></div>}
+                    {p.note && <div className={s.kv}><Caption1 className={s.hint}>Note</Caption1><Caption1>{p.note}</Caption1></div>}
+                    <div className={s.kv}><Caption1 className={s.hint}>Requested by</Caption1><Caption1>{p.promotedBy || '—'}</Caption1></div>
+                    <Field label="Comment"><Input value={apprComment[p.id] || ''} onChange={(_, d) => setApprComment((m) => ({ ...m, [p.id]: d.value }))} placeholder="optional approval comment" /></Field>
+                    <div className={s.cardActions}>
+                      <Button size="small" appearance="primary" icon={<CheckmarkCircle20Regular />} disabled={apprBusy} onClick={() => decide(p.id, 'approve')}>Approve</Button>
+                      <Button size="small" appearance="subtle" icon={<DismissCircle20Regular />} disabled={apprBusy} onClick={() => decide(p.id, 'reject')}>Reject</Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        )}
+
+        {/* ───────── Versions ───────── */}
+        {tab === 'versions' && (
+        <div className={s.section}>
+          <SectionHead icon={<Tag20Regular />} title="Release versions" hint="The artifact versions promoted between environments — build id, git commit, container tag, notes." />
+          <div className={s.addBar}>
+            <Field label="Version" className={s.fieldNarrow}><Input value={verName} onChange={(_, d) => setVerName(d.value)} placeholder="1.4.0" /></Field>
+            <Field label="Build id" className={s.fieldNarrow}><Input value={verBuild} onChange={(_, d) => setVerBuild(d.value)} placeholder="ci-1234" /></Field>
+            <Field label="Commit" className={s.fieldNarrow}><Input value={verCommit} onChange={(_, d) => setVerCommit(d.value)} placeholder="a1b2c3d" /></Field>
+            <Field label="Container tag" className={s.fieldNarrow}><Input value={verImage} onChange={(_, d) => setVerImage(d.value)} placeholder="acr.azurecr.io/app:1.4.0" /></Field>
+            <Field label="Notes"><Input value={verNotes} onChange={(_, d) => setVerNotes(d.value)} placeholder="changelog" /></Field>
+            <Button appearance="primary" icon={<Add20Regular />} disabled={!verName.trim()} onClick={addVersion}>Add version</Button>
+          </div>
+          {versions.length === 0 ? <div className={s.empty}><Caption1>No versions yet.</Caption1></div> : (
+            <div className={s.tableWrap}>
+            <Table size="small" aria-label="Versions">
+              <TableHeader><TableRow><TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>Build</TableHeaderCell><TableHeaderCell>Commit</TableHeaderCell><TableHeaderCell>Container tag</TableHeaderCell><TableHeaderCell>Notes</TableHeaderCell><TableHeaderCell /></TableRow></TableHeader>
+              <TableBody>
+                {versions.map((v) => (
+                  <TableRow key={v.id}>
+                    <TableCell><Badge appearance="tint" color="brand">{v.version}</Badge></TableCell>
+                    <TableCell>{v.buildId || '—'}</TableCell><TableCell>{v.commit || '—'}</TableCell>
+                    <TableCell>{v.image || '—'}</TableCell><TableCell>{v.notes || '—'}</TableCell>
+                    <TableCell><Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove version" onClick={() => removeVersion(v.id)} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            </div>
+          )}
+          <SectionHead icon={<Database20Regular />} title="What's where" hint="The release version currently installed in each environment (updated on promotion)." />
+          {environments.length === 0 ? <div className={s.empty}><Caption1>Add environments to see the matrix.</Caption1></div> : (
+            <div className={s.tableWrap}>
+            <Table size="small" aria-label="Version matrix">
+              <TableHeader><TableRow><TableHeaderCell>Environment</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Installed version</TableHeaderCell></TableRow></TableHeader>
+              <TableBody>
+                {environments.map((e) => (
+                  <TableRow key={e.id}>
+                    <TableCell>{e.name}</TableCell>
+                    <TableCell><Badge appearance="tint" color={envTypeColor(e.type)}>{e.type}</Badge></TableCell>
+                    <TableCell>{e.currentVersion ? <Badge appearance="outline">{e.currentVersion}</Badge> : <Caption1 className={s.hint}>none</Caption1>}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            </div>
+          )}
+          <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+        </div>
+        )}
+
+        {/* ───────── History ───────── */}
+        {tab === 'history' && (<>
+        <div className={s.section}>
+          <SectionHead icon={<History20Regular />} title="Promotion history" hint="Every recorded promotion, its status, version, and any deployed Azure environment." />
+          {promotions.length === 0 ? <div className={s.empty}><Caption1>No promotions yet.</Caption1></div> : (
             <div className={s.tableWrap}>
             <Table size="small" aria-label="Promotions">
-              <TableHeader><TableRow><TableHeaderCell>From</TableHeaderCell><TableHeaderCell>To</TableHeaderCell><TableHeaderCell>When</TableHeaderCell><TableHeaderCell>By</TableHeaderCell><TableHeaderCell>Note</TableHeaderCell></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHeaderCell>From</TableHeaderCell><TableHeaderCell>To</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Version</TableHeaderCell><TableHeaderCell>When</TableHeaderCell><TableHeaderCell>By</TableHeaderCell><TableHeaderCell>Note</TableHeaderCell></TableRow></TableHeader>
               <TableBody>
                 {promotions.map((p) => (
                   <TableRow key={p.id}>
                     <TableCell>{p.fromStage}</TableCell><TableCell>{p.toStage}</TableCell>
+                    <TableCell><Badge appearance="tint" color={p.status === 'completed' ? 'success' : p.status === 'rejected' ? 'danger' : 'warning'}>{p.status || 'completed'}</Badge></TableCell>
+                    <TableCell>{p.version || '—'}</TableCell>
                     <TableCell>{new Date(p.promotedAt).toLocaleString()}</TableCell>
                     <TableCell>{p.promotedBy || '—'}</TableCell><TableCell>{p.note || '—'}</TableCell>
                   </TableRow>
@@ -907,6 +1793,27 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
             </div>
           )}
         </div>
+
+        {swaps.length > 0 && (
+        <div className={s.section}>
+          <SectionHead icon={<ArrowSwap20Regular />} title="Slot swaps" hint="Real App Service slot operations executed from this environment." />
+          <div className={s.tableWrap}>
+          <Table size="small" aria-label="Slot swaps">
+            <TableHeader><TableRow><TableHeaderCell>Site</TableHeaderCell><TableHeaderCell>Action</TableHeaderCell><TableHeaderCell>Slots</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>When</TableHeaderCell><TableHeaderCell>By</TableHeaderCell></TableRow></TableHeader>
+            <TableBody>
+              {swaps.map((sw) => (
+                <TableRow key={sw.id}>
+                  <TableCell>{sw.site}</TableCell><TableCell><Badge appearance="tint" color="informative">{sw.action}</Badge></TableCell>
+                  <TableCell>{sw.sourceSlot || 'production'} ↔ {sw.targetSlot}</TableCell>
+                  <TableCell>{sw.status}</TableCell>
+                  <TableCell>{new Date(sw.at).toLocaleString()}</TableCell><TableCell>{sw.by || '—'}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          </div>
+        </div>
+        )}
 
         <div className={s.section}>
           <SectionHead icon={<Database20Regular />} title="Azure Resource Manager deployments" hint="Real ARM deployment history across the Loom resource groups." />
@@ -930,32 +1837,251 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
             </div>
           )}
         </div>
-
-        <SaveStrip saving={saving} savedAt={savedAt} error={error} dirty={dirty} onSave={() => save()} />
+        </>)}
       </div>
     } />
   );
 }
 
 // ───────────────────────── Health check (Checks) ─────────────────────────
-interface MonitorRule { id: string; name: string; query: string; azureRuleName?: string; evaluationFrequency?: string; windowSize?: string; state?: string; checkType?: string }
+interface MonitorRule { id: string; name: string; query: string; azureRuleName?: string; evaluationFrequency?: string; windowSize?: string; state?: string; checkType?: string; severity?: number; updatedAt?: string; note?: string }
+interface HistoryEvent { id: string; alertRule: string; monitorCondition?: string; alertState?: string; severity?: string; startDateTime?: string; monitorConditionResolvedDateTime?: string; targetResourceName?: string; payload?: { matchingRowsCount?: number; operator?: string; threshold?: string } }
+interface RunResult { ruleId: string; ruleName: string; fired: boolean; count: number; columns: string[]; rows: unknown[][] }
+type RuleStatus = 'Healthy' | 'Firing' | 'Disabled';
+const HC_SEVERITY_OPTS: { v: number; label: string }[] = [
+  { v: 0, label: 'Sev 0 · Critical' },
+  { v: 1, label: 'Sev 1 · Error' },
+  { v: 2, label: 'Sev 2 · Warning' },
+  { v: 3, label: 'Sev 3 · Informational' },
+  { v: 4, label: 'Sev 4 · Verbose' },
+];
+function hcSeverityColor(sev?: number): 'danger' | 'warning' | 'informative' {
+  if (sev == null) return 'informative';
+  if (sev <= 1) return 'danger';
+  if (sev === 2) return 'warning';
+  return 'informative';
+}
+function hcSeverityLabel(sev?: number): string {
+  return (HC_SEVERITY_OPTS.find((o) => o.v === sev) || HC_SEVERITY_OPTS[3]).label;
+}
 interface HealthState { rules?: MonitorRule[]; [k: string]: unknown }
+
+// ── check-type gallery + typed wizard (Palantir Foundry check-type library) ──
+const HC_FAMILY_ICON: Record<CheckFamily, ReactNode> = {
+  time: <Clock20Regular />, size: <DataHistogram20Regular />, content: <TextField20Regular />, schema: <Braces20Regular />, status: <Pulse20Regular />,
+};
+
+/** Build the current KQL for a wizard config, client-side (instant preview). */
+function hcParamsFor(def: CheckTypeDef, params: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const f of def.fields) out[f.id] = params[f.id] ?? f.default ?? '';
+  return out;
+}
+
+function CheckTypeGallery({ onPick }: { onPick: (def: CheckTypeDef) => void }) {
+  const s = useStyles();
+  const families = Object.keys(CHECK_FAMILY_META) as CheckFamily[];
+  return (
+    <div className={s.section}>
+      <SectionHead icon={<Flash20Regular />} title="Check-type library" hint="Pick a check type to open a typed wizard. Every type compiles to a real Azure Monitor scheduled-query condition over Log Analytics." />
+      {families.map((fam) => {
+        const defs = CHECK_TYPE_LIBRARY.filter((d) => d.family === fam);
+        if (defs.length === 0) return null;
+        return (
+          <div key={fam} className={s.galleryFamily}>
+            <div className={s.sectionHead}>
+              <span className={s.sectionIcon}>{HC_FAMILY_ICON[fam]}</span>
+              <div><Subtitle2>{CHECK_FAMILY_META[fam].label}</Subtitle2><Caption1 as="p" block className={s.hint}>{CHECK_FAMILY_META[fam].description}</Caption1></div>
+            </div>
+            <TileGrid minTileWidth={240}>
+              {defs.map((def) => (
+                <div key={def.id} className={s.checkTile} role="button" tabIndex={0}
+                  onClick={() => onPick(def)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onPick(def); } }}
+                  aria-label={`Add ${def.label} check`}>
+                  <div className={s.checkTileHead}>
+                    <span className={s.checkTileIcon}>{HC_FAMILY_ICON[fam]}</span>
+                    <Body1><strong>{def.label}</strong></Body1>
+                  </div>
+                  <Caption1 className={s.hint}>{def.description}</Caption1>
+                </div>
+              ))}
+            </TileGrid>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+interface HcWizardConfig {
+  checkType: string; params: Record<string, string>; name: string;
+  evaluationFrequency: string; windowSize: string; severity: number; email?: string;
+}
+
+function CheckWizardField({ field, value, onChange }: { field: CheckField; value: string; onChange: (v: string) => void }) {
+  if (field.kind === 'operator') {
+    const cur = COMPARISON_OPERATORS.find((o) => o.id === value) || COMPARISON_OPERATORS[0];
+    return (
+      <Field label={field.label} hint={field.hint}>
+        <Dropdown value={cur.label} selectedOptions={[cur.id]} onOptionSelect={(_, d) => onChange(d.optionValue || 'gt')}>
+          {COMPARISON_OPERATORS.map((o) => <Option key={o.id} value={o.id} text={o.label}>{`${o.label} (${o.symbol})`}</Option>)}
+        </Dropdown>
+      </Field>
+    );
+  }
+  if (field.kind === 'aggregation') {
+    const cur = AGGREGATIONS.find((a) => a.id === value) || AGGREGATIONS[0];
+    return (
+      <Field label={field.label} hint={field.hint}>
+        <Dropdown value={cur.label} selectedOptions={[cur.id]} onOptionSelect={(_, d) => onChange(d.optionValue || 'sum')}>
+          {AGGREGATIONS.map((a) => <Option key={a.id} value={a.id} text={a.label}>{a.label}</Option>)}
+        </Dropdown>
+      </Field>
+    );
+  }
+  if (field.kind === 'kql') {
+    return <Field label={field.label} hint={field.hint}><Textarea value={value} onChange={(_, d) => onChange(d.value)} rows={5} resize="vertical" placeholder={field.placeholder} /></Field>;
+  }
+  const inputType = field.kind === 'number' || field.kind === 'minutes' ? 'number' : 'text';
+  return <Field label={field.label} hint={field.hint}><Input type={inputType} value={value} onChange={(_, d) => onChange(d.value)} placeholder={field.placeholder} /></Field>;
+}
+
+function HealthCheckWizard({ id, def, onClose, onCreate }: {
+  id: string; def: CheckTypeDef | null; onClose: () => void; onCreate: (cfg: HcWizardConfig) => Promise<boolean>;
+}) {
+  const s = useStyles();
+  const [params, setParams] = useState<Record<string, string>>({});
+  const [name, setName] = useState('');
+  const [evalFreq, setEvalFreq] = useState('PT5M');
+  const [windowSize, setWindowSize] = useState('PT15M');
+  const [severity, setSeverity] = useState('3');
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sample, setSample] = useState<{ busy?: boolean; fired?: boolean; count?: number; columns?: string[]; rows?: unknown[][]; gate?: { reason: string; remediation: string }; error?: string } | null>(null);
+
+  // Seed field defaults + a friendly default name whenever the type changes.
+  useEffect(() => {
+    if (!def) return;
+    const seed: Record<string, string> = {};
+    for (const f of def.fields) seed[f.id] = f.default ?? '';
+    setParams(seed); setName(`${def.id}-check`); setSample(null);
+  }, [def]);
+
+  const kql = useMemo(() => (def ? buildCheckQuery(def.id, hcParamsFor(def, params)) : null), [def, params]);
+
+  const runSample = useCallback(async () => {
+    if (!def) return;
+    setSample({ busy: true });
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/preview`, {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ checkType: def.id, params: hcParamsFor(def, params) }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) { setSample({ error: j?.error || `HTTP ${r.status}`, gate: j?.gate }); return; }
+      if (j.runGate) { setSample({ gate: j.runGate }); return; }
+      setSample({ fired: j.run?.fired, count: j.run?.count, columns: j.run?.columns || [], rows: j.run?.rows || [] });
+    } catch (e: any) { setSample({ error: e?.message || String(e) }); }
+  }, [id, def, params]);
+
+  const create = useCallback(async () => {
+    if (!def) return;
+    setBusy(true);
+    const ok = await onCreate({
+      checkType: def.id, params: hcParamsFor(def, params), name: name.trim() || `${def.id}-check`,
+      evaluationFrequency: evalFreq, windowSize, severity: Number(severity), email: email.trim() || undefined,
+    });
+    setBusy(false);
+    if (ok) onClose();
+  }, [def, params, name, evalFreq, windowSize, severity, email, onCreate, onClose]);
+
+  return (
+    <Dialog open={!!def} onOpenChange={(_, d) => { if (!d.open) onClose(); }}>
+      <DialogSurface>
+        <DialogBody>
+          <DialogTitle>{def ? `New ${def.label} check` : 'New check'}</DialogTitle>
+          <DialogContent>
+            {def && (
+              <div className={s.dialogForm}>
+                <Caption1 className={s.hint}>{def.description}</Caption1>
+                <div className={s.dialogScroll}>
+                  <div className={s.grid2}>
+                    <Field label="Rule name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder={`${def.id}-check`} /></Field>
+                    {def.fields.map((f) => (
+                      <CheckWizardField key={f.id} field={f} value={params[f.id] ?? f.default ?? ''} onChange={(v) => setParams((p) => ({ ...p, [f.id]: v }))} />
+                    ))}
+                  </div>
+                  <Divider />
+                  <div className={s.grid2}>
+                    <Field label="Evaluate every"><Dropdown value={evalFreq} selectedOptions={[evalFreq]} onOptionSelect={(_, d) => setEvalFreq(d.optionValue || 'PT5M')}>
+                      <Option value="PT5M">5 minutes</Option><Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option>
+                    </Dropdown></Field>
+                    <Field label="Look-back window"><Dropdown value={windowSize} selectedOptions={[windowSize]} onOptionSelect={(_, d) => setWindowSize(d.optionValue || 'PT15M')}>
+                      <Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option><Option value="P1D">1 day</Option>
+                    </Dropdown></Field>
+                    <Field label="Severity"><Dropdown value={hcSeverityLabel(Number(severity))} selectedOptions={[severity]} onOptionSelect={(_, d) => setSeverity(d.optionValue || '3')}>
+                      {HC_SEVERITY_OPTS.map((o) => <Option key={o.v} value={String(o.v)} text={o.label}>{o.label}</Option>)}
+                    </Dropdown></Field>
+                    <Field label="Notify email (optional)"><Input value={email} onChange={(_, d) => setEmail(d.value)} placeholder="oncall@contoso.com" /></Field>
+                  </div>
+
+                  <SectionHead icon={<Code20Regular />} title="KQL preview" hint="The exact condition this check's scheduledQueryRule will evaluate. Fires when the query returns rows." />
+                  {kql ? <CodeBlock ariaLabel="Compiled KQL" content={kql} /> : <MessageBar intent="warning"><MessageBarBody>Fill in the required fields (table / column / KQL) to compile the condition.</MessageBarBody></MessageBar>}
+                  <div className={s.addBar}>
+                    <Button appearance="outline" icon={sample?.busy ? <Spinner size="tiny" /> : <Play20Regular />} disabled={!kql || sample?.busy} onClick={runSample}>
+                      {sample?.busy ? 'Running…' : 'Run live sample'}
+                    </Button>
+                    {sample && !sample.busy && !sample.gate && !sample.error && (
+                      <Badge appearance="tint" color={sample.fired ? 'danger' : 'success'}>{sample.fired ? 'Would fire' : 'Pass'} · {sample.count ?? 0} row(s)</Badge>
+                    )}
+                  </div>
+                  {sample?.gate && <MessageBar intent="warning"><MessageBarBody><MessageBarTitle>Live sample unavailable</MessageBarTitle>{sample.gate.reason} {sample.gate.remediation}</MessageBarBody></MessageBar>}
+                  {sample?.error && !sample.gate && <MessageBar intent="error"><MessageBarBody>{sample.error}</MessageBarBody></MessageBar>}
+                  {sample && !sample.busy && (sample.columns?.length || 0) > 0 && (sample.rows?.length || 0) > 0 && (
+                    <div className={s.tableWrap}>
+                      <Table size="small" aria-label="Sample rows">
+                        <TableHeader><TableRow>{(sample.columns || []).map((c) => <TableHeaderCell key={c}>{c}</TableHeaderCell>)}</TableRow></TableHeader>
+                        <TableBody>
+                          {(sample.rows || []).slice(0, 10).map((row, ri) => (
+                            <TableRow key={ri}>{(sample.columns || []).map((_, ci) => <TableCell key={ci}>{(row as unknown[])[ci] === null || (row as unknown[])[ci] === undefined ? '' : String((row as unknown[])[ci])}</TableCell>)}</TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </DialogContent>
+          <DialogActions>
+            <Button appearance="secondary" onClick={onClose}>Cancel</Button>
+            <Button appearance="primary" icon={busy ? <Spinner size="tiny" /> : <Flash20Regular />} disabled={busy || !kql} onClick={create}>
+              {busy ? 'Creating…' : 'Create rule'}
+            </Button>
+          </DialogActions>
+        </DialogBody>
+      </DialogSurface>
+    </Dialog>
+  );
+}
 
 export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const { loading } = useItemState<HealthState>('health-check', id, { rules: [] });
+  const [tab, setTab] = useState<'checks' | 'status' | 'history' | 'notifications' | 'settings'>('checks');
   const [rules, setRules] = useState<MonitorRule[]>([]);
-  const [checkType, setCheckType] = useState<'freshness' | 'rowcount' | 'custom'>('freshness');
-  const [name, setName] = useState('');
-  const [table, setTable] = useState('');
-  const [thresholdMinutes, setThresholdMinutes] = useState('60');
-  const [minRows, setMinRows] = useState('1');
-  const [customKql, setCustomKql] = useState('');
-  const [evalFreq, setEvalFreq] = useState('PT5M');
-  const [windowSize, setWindowSize] = useState('PT15M');
-  const [email, setEmail] = useState('');
-  const [busy, setBusy] = useState(false);
+  // Check-type wizard: the selected library type (null = closed).
+  const [wizardDef, setWizardDef] = useState<CheckTypeDef | null>(null);
   const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  // Per-rule lifecycle (Run / Enable / Disable / Delete).
+  const [rowBusy, setRowBusy] = useState<string | null>(null);
+  const [run, setRun] = useState<RunResult | null>(null);
+  // Fired-alert history (Azure Monitor AlertsManagement).
+  const [history, setHistory] = useState<HistoryEvent[]>([]);
+  const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyMsg, setHistoryMsg] = useState<{ intent: 'warning' | 'error'; text: string } | null>(null);
 
   const loadRules = useCallback(async () => {
     try {
@@ -966,16 +2092,53 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   }, [id]);
   useEffect(() => { void loadRules(); }, [loadRules]);
 
-  const createRule = useCallback(async () => {
-    setBusy(true); setMsg(null);
+  const loadHistory = useCallback(async () => {
+    setHistoryBusy(true); setHistoryMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/history?days=14`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setHistoryMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setHistory(Array.isArray(j.events) ? j.events : []);
+    } catch (e: any) { setHistoryMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setHistoryBusy(false); setHistoryLoaded(true); }
+  }, [id]);
+  useEffect(() => {
+    if ((tab === 'status' || tab === 'history') && !historyLoaded && rules.length > 0) void loadHistory();
+  }, [tab, historyLoaded, rules.length, loadHistory]);
+
+  const createRule = useCallback(async (cfg: HcWizardConfig): Promise<boolean> => {
+    setMsg(null);
     try {
       const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          checkType, name: name.trim() || undefined, table: table.trim() || undefined,
-          thresholdMinutes: Number(thresholdMinutes) || undefined, minRows: Number(minRows) || undefined,
-          customKql: customKql.trim() || undefined, evaluationFrequency: evalFreq, windowSize, email: email.trim() || undefined,
+          checkType: cfg.checkType, params: cfg.params, name: cfg.name || undefined,
+          evaluationFrequency: cfg.evaluationFrequency, windowSize: cfg.windowSize,
+          severity: cfg.severity, email: cfg.email,
         }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return false;
+      }
+      setMsg({ intent: 'success', text: `Created Azure Monitor rule "${j.rule?.name}" (${j.rule?.azureRuleName}).` });
+      setHistoryLoaded(false);
+      void loadRules();
+      return true;
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); return false; }
+  }, [id, loadRules]);
+
+  const toggleRule = useCallback(async (rl: MonitorRule, enabled: boolean) => {
+    setRowBusy(rl.id); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}`, {
+        method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }),
       });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
@@ -983,99 +2146,834 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
         setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
         return;
       }
-      setMsg({ intent: 'success', text: `Created Azure Monitor rule "${j.rule?.name}" (${j.rule?.azureRuleName}).` });
+      setMsg({ intent: 'success', text: `Check "${rl.name}" ${enabled ? 'enabled' : 'disabled'}.` });
       void loadRules();
     } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
-    finally { setBusy(false); }
-  }, [id, checkType, name, table, thresholdMinutes, minRows, customKql, evalFreq, windowSize, email, loadRules]);
+    finally { setRowBusy(null); }
+  }, [id, loadRules]);
+
+  const deleteRule = useCallback(async (rl: MonitorRule) => {
+    setRowBusy(rl.id); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}`, { method: 'DELETE' });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setMsg({ intent: 'success', text: `Deleted check "${rl.name}".` });
+      setRun((p) => (p?.ruleId === rl.id ? null : p));
+      void loadRules();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRowBusy(null); }
+  }, [id, loadRules]);
+
+  const runRule = useCallback(async (rl: MonitorRule) => {
+    setRowBusy(rl.id); setMsg(null); setRun(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}/run`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setRun({ ruleId: rl.id, ruleName: rl.name, fired: !!j.fired, count: Number(j.count) || 0, columns: Array.isArray(j.columns) ? j.columns : [], rows: Array.isArray(j.rows) ? j.rows : [] });
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setRowBusy(null); }
+  }, [id]);
+
+  // Derived status — a rule is Firing when it has a fired, unresolved Azure
+  // Monitor alert; Disabled when paused; otherwise Healthy.
+  const firingByRule = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const e of history) {
+      if (e.monitorCondition === 'Fired' && e.alertState !== 'Closed') m.set(e.alertRule, (m.get(e.alertRule) || 0) + 1);
+    }
+    return m;
+  }, [history]);
+  const ruleStatus = useCallback((rl: MonitorRule): RuleStatus => {
+    if ((rl.state || 'Active') === 'Disabled') return 'Disabled';
+    return (firingByRule.get(rl.azureRuleName || '') || 0) > 0 ? 'Firing' : 'Healthy';
+  }, [firingByRule]);
+  const counts = useMemo(() => {
+    let healthy = 0, firing = 0, disabled = 0;
+    for (const rl of rules) { const st = ruleStatus(rl); if (st === 'Disabled') disabled++; else if (st === 'Firing') firing++; else healthy++; }
+    return { total: rules.length, healthy, firing, disabled };
+  }, [rules, ruleStatus]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Check', actions: [
-        { label: busy ? 'Creating…' : 'Create rule', onClick: createRule, disabled: busy },
+        { label: 'Custom KQL check', onClick: () => { setTab('checks'); setWizardDef(CHECK_TYPE_LIBRARY.find((d) => d.id === 'custom') || null); }, disabled: false },
+      ]},
+      { label: 'View', actions: [
+        { label: historyBusy ? 'Refreshing…' : 'Refresh', onClick: () => { void loadRules(); setHistoryLoaded(false); void loadHistory(); }, disabled: historyBusy },
       ]},
     ]},
-  ], [createRule, busy]);
+  ], [loadRules, loadHistory, historyBusy]);
 
   if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create health check" intro="Data-freshness / SLA monitoring backed by real Azure Monitor scheduled-query alert rules. Azure-native default — no Fabric required." />;
+
+  const statusBadge = (st: RuleStatus) => <Badge appearance="tint" color={st === 'Firing' ? 'danger' : st === 'Disabled' ? 'warning' : 'success'}>{st}</Badge>;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
       <div className={s.pad}>
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
-          <MessageBarTitle>Health check (Palantir Foundry Health Checks)</MessageBarTitle>
-          Create real Azure Monitor scheduled-query alert rules for data freshness, row-count, or a custom KQL condition over Log Analytics. Azure-native default (Fabric Reflex is opt-in via LOOM_ACTIVATOR_BACKEND=fabric).
+          <MessageBarTitle>Health check (Palantir Foundry Health Checks · Azure Monitor)</MessageBarTitle>
+          Define checks (data freshness, row-count, or a custom KQL condition) over Log Analytics, run them on demand or on a schedule, watch status &amp; fired-alert history, and alert via action groups. Every check is a real Azure Monitor scheduledQueryRule — Azure-native default (Fabric Reflex is opt-in via LOOM_ACTIVATOR_BACKEND=fabric).
         </MessageBarBody></MessageBar>
 
-        <div className={s.section}>
-          <SectionHead icon={<Flash20Regular />} title="New check rule" hint="Pick a check type; Loom creates a real scheduledQueryRule." />
-          <div className={s.addBar}>
-            <Field label="Check type"><Dropdown value={checkType} selectedOptions={[checkType]} onOptionSelect={(_, d) => setCheckType((d.optionValue as 'freshness' | 'rowcount' | 'custom') || 'freshness')}>
-              <Option value="freshness">freshness</Option><Option value="rowcount">row count</Option><Option value="custom">custom KQL</Option>
-            </Dropdown></Field>
-            <Field label="Rule name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="orders-freshness" /></Field>
-            {checkType !== 'custom' && <Field label="Table (Log Analytics)"><Input value={table} onChange={(_, d) => setTable(d.value)} placeholder="AppEvents" /></Field>}
-            {checkType === 'freshness' && <Field label="Stale after (minutes)"><Input type="number" value={thresholdMinutes} onChange={(_, d) => setThresholdMinutes(d.value)} /></Field>}
-            {checkType === 'rowcount' && <Field label="Min rows in window"><Input type="number" value={minRows} onChange={(_, d) => setMinRows(d.value)} /></Field>}
-          </div>
-          {checkType === 'custom' && <Field label="KQL condition (fires when it returns rows)"><Textarea value={customKql} onChange={(_, d) => setCustomKql(d.value)} placeholder={'MyTable\n| where TimeGenerated > ago(1h)\n| summarize n=count()\n| where n == 0'} rows={4} /></Field>}
-          <div className={s.addBar}>
-            <Field label="Evaluate every"><Dropdown value={evalFreq} selectedOptions={[evalFreq]} onOptionSelect={(_, d) => setEvalFreq(d.optionValue || 'PT5M')}>
-              <Option value="PT5M">5 minutes</Option><Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option>
-            </Dropdown></Field>
-            <Field label="Look-back window"><Dropdown value={windowSize} selectedOptions={[windowSize]} onOptionSelect={(_, d) => setWindowSize(d.optionValue || 'PT15M')}>
-              <Option value="PT15M">15 minutes</Option><Option value="PT1H">1 hour</Option><Option value="P1D">1 day</Option>
-            </Dropdown></Field>
-            <Field label="Notify email (optional)"><Input value={email} onChange={(_, d) => setEmail(d.value)} placeholder="oncall@contoso.com" /></Field>
-            <Button appearance="primary" icon={<Flash20Regular />} disabled={busy} onClick={createRule}>{busy ? 'Creating…' : 'Create rule'}</Button>
-          </div>
-          {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
-        </div>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as typeof tab)} className={s.tabStrip}>
+          <Tab value="checks" icon={<Flash20Regular />}>Checks{rules.length ? ` (${rules.length})` : ''}</Tab>
+          <Tab value="status" icon={<Pulse20Regular />}>Status</Tab>
+          <Tab value="history" icon={<History20Regular />}>History</Tab>
+          <Tab value="notifications" icon={<Alert20Regular />}>Notifications</Tab>
+          <Tab value="settings" icon={<Settings20Regular />}>Settings</Tab>
+        </TabList>
 
-        <div className={s.section}>
-          <SectionHead icon={<Database20Regular />} title="Active rules" hint="Scheduled-query alert rules backing this health check." />
-          {rules.length === 0 ? <div className={s.empty}><Caption1>No rules yet.</Caption1></div> : (
-            <div className={s.tableWrap}>
-            <Table size="small" aria-label="Rules">
-              <TableHeader><TableRow><TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell><TableHeaderCell>Azure rule</TableHeaderCell><TableHeaderCell>Frequency</TableHeaderCell><TableHeaderCell>State</TableHeaderCell></TableRow></TableHeader>
-              <TableBody>
-                {rules.map((rl) => (
-                  <TableRow key={rl.id}>
-                    <TableCell>{rl.name}</TableCell><TableCell>{rl.checkType || '—'}</TableCell>
-                    <TableCell>{rl.azureRuleName || '—'}</TableCell><TableCell>{rl.evaluationFrequency || '—'}</TableCell>
-                    <TableCell><Badge appearance="tint" color={rl.state === 'Active' ? 'success' : 'warning'}>{rl.state || 'Active'}</Badge></TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            </div>
-          )}
-        </div>
+        {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+
+        {/* ───────── Checks ───────── */}
+        {tab === 'checks' && <>
+          <CheckTypeGallery onPick={(def) => setWizardDef(def)} />
+
+          <div className={s.section}>
+            <SectionHead icon={<Database20Regular />} title="Active checks" hint="Each row is a real scheduledQueryRule. Run now, enable/disable, or delete — all hit Azure Monitor." />
+            {rules.length === 0 ? <div className={s.empty}><Caption1>No checks yet — pick a check type above to open the wizard.</Caption1></div> : (
+              <div className={s.tableWrap}>
+              <Table size="small" aria-label="Checks">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Name</TableHeaderCell><TableHeaderCell>Type</TableHeaderCell>
+                  <TableHeaderCell>Severity</TableHeaderCell><TableHeaderCell>Frequency</TableHeaderCell>
+                  <TableHeaderCell>Status</TableHeaderCell><TableHeaderCell>Actions</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {rules.map((rl) => { const st = ruleStatus(rl); const isDisabled = (rl.state || 'Active') === 'Disabled'; const rb = rowBusy === rl.id; return (
+                    <TableRow key={rl.id}>
+                      <TableCell>{rl.name}</TableCell>
+                      <TableCell>{rl.checkType || '—'}</TableCell>
+                      <TableCell><Badge appearance="tint" color={hcSeverityColor(rl.severity)}>{hcSeverityLabel(rl.severity)}</Badge></TableCell>
+                      <TableCell>{rl.evaluationFrequency || '—'}</TableCell>
+                      <TableCell>{statusBadge(st)}</TableCell>
+                      <TableCell>
+                        <div className={s.rowActions}>
+                          <Button size="small" appearance="subtle" icon={<Play20Regular />} disabled={rb} onClick={() => runRule(rl)}>Run</Button>
+                          {isDisabled
+                            ? <Button size="small" appearance="subtle" icon={<CheckmarkCircle20Regular />} disabled={rb} onClick={() => toggleRule(rl, true)}>Enable</Button>
+                            : <Button size="small" appearance="subtle" icon={<Warning20Regular />} disabled={rb} onClick={() => toggleRule(rl, false)}>Disable</Button>}
+                          <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} disabled={rb} onClick={() => deleteRule(rl)}>Delete</Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ); })}
+                </TableBody>
+              </Table>
+              </div>
+            )}
+            {run && (
+              <div className={s.runPanel}>
+                <div className={s.cardHead}>
+                  {run.fired ? <DismissCircle20Regular className={s.cFiring} /> : <CheckmarkCircle20Regular className={s.cHealthy} />}
+                  <Subtitle2>Run “{run.ruleName}”</Subtitle2>
+                  <Badge appearance="tint" color={run.fired ? 'danger' : 'success'}>{run.fired ? 'Would fire' : 'Pass'}</Badge>
+                  <span className={s.spacer} />
+                  <Caption1 className={s.hint}>{run.count} matching row{run.count === 1 ? '' : 's'} in the last hour</Caption1>
+                </div>
+                {run.columns.length > 0 && <CodeBlock ariaLabel="Run result" content={JSON.stringify({ columns: run.columns, rows: run.rows }, null, 2)} />}
+              </div>
+            )}
+          </div>
+        </>}
+
+        {/* ───────── Status ───────── */}
+        {tab === 'status' && (
+          <div className={s.section}>
+            <SectionHead icon={<Pulse20Regular />} title="Status dashboard" hint="Live health of every check — derived from rule state and fired/unresolved Azure Monitor alerts." />
+            {historyBusy && <Spinner size="tiny" label="Loading status…" labelPosition="after" />}
+            {historyMsg && <MessageBar intent={historyMsg.intent}><MessageBarBody>{historyMsg.text}</MessageBarBody></MessageBar>}
+            {rules.length === 0 ? <div className={s.empty}><Caption1>No checks to report on yet.</Caption1></div> : <>
+              <div className={s.statGrid}>
+                <div className={s.statTile}><div className={s.statHead}><Database20Regular /><Caption1>Total checks</Caption1></div><Title2 className={s.cTotal}>{counts.total}</Title2></div>
+                <div className={s.statTile}><div className={s.statHead}><CheckmarkCircle20Regular /><Caption1>Healthy</Caption1></div><Title2 className={s.cHealthy}>{counts.healthy}</Title2></div>
+                <div className={s.statTile}><div className={s.statHead}><DismissCircle20Regular /><Caption1>Firing</Caption1></div><Title2 className={s.cFiring}>{counts.firing}</Title2></div>
+                <div className={s.statTile}><div className={s.statHead}><Warning20Regular /><Caption1>Disabled</Caption1></div><Title2 className={s.cDisabled}>{counts.disabled}</Title2></div>
+              </div>
+              <div className={s.tableWrap}>
+              <Table size="small" aria-label="Status">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Check</TableHeaderCell><TableHeaderCell>Severity</TableHeaderCell>
+                  <TableHeaderCell>Open alerts</TableHeaderCell><TableHeaderCell>Status</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {rules.map((rl) => (
+                    <TableRow key={rl.id}>
+                      <TableCell>{rl.name}</TableCell>
+                      <TableCell><Badge appearance="tint" color={hcSeverityColor(rl.severity)}>{hcSeverityLabel(rl.severity)}</Badge></TableCell>
+                      <TableCell>{firingByRule.get(rl.azureRuleName || '') || 0}</TableCell>
+                      <TableCell>{statusBadge(ruleStatus(rl))}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              </div>
+            </>}
+          </div>
+        )}
+
+        {/* ───────── History ───────── */}
+        {tab === 'history' && (
+          <div className={s.section}>
+            <SectionHead icon={<History20Regular />} title="Fired-alert history" hint="Fired / resolved alert instances from Azure Monitor (Microsoft.AlertsManagement) for this check's rules — last 14 days." />
+            {historyBusy && <Spinner size="tiny" label="Loading history…" labelPosition="after" />}
+            {historyMsg && <MessageBar intent={historyMsg.intent}><MessageBarBody>{historyMsg.text}</MessageBarBody></MessageBar>}
+            {!historyBusy && history.length === 0 ? <div className={s.empty}><Caption1>{rules.length ? 'No alerts fired in the window.' : 'Add a check to start collecting history.'}</Caption1></div> : (
+              <div className={s.tableWrap}>
+              <Table size="small" aria-label="History">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>Fired</TableHeaderCell><TableHeaderCell>Rule</TableHeaderCell>
+                  <TableHeaderCell>Condition</TableHeaderCell><TableHeaderCell>Severity</TableHeaderCell>
+                  <TableHeaderCell>Matched rows</TableHeaderCell><TableHeaderCell>Resolved</TableHeaderCell>
+                </TableRow></TableHeader>
+                <TableBody>
+                  {history.map((e) => (
+                    <TableRow key={e.id}>
+                      <TableCell>{e.startDateTime ? new Date(e.startDateTime).toLocaleString() : '—'}</TableCell>
+                      <TableCell>{e.alertRule || '—'}</TableCell>
+                      <TableCell><Badge appearance="tint" color={e.monitorCondition === 'Resolved' ? 'success' : 'danger'}>{e.monitorCondition || '—'}</Badge></TableCell>
+                      <TableCell>{e.severity || '—'}</TableCell>
+                      <TableCell>{e.payload?.matchingRowsCount ?? '—'}</TableCell>
+                      <TableCell>{e.monitorConditionResolvedDateTime ? new Date(e.monitorConditionResolvedDateTime).toLocaleString() : '—'}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ───────── Notifications ───────── */}
+        {tab === 'notifications' && <HealthCheckNotifications id={id} itemName={item.displayName || id} />}
+
+        {/* ───────── Settings ───────── */}
+        {tab === 'settings' && (
+          <div className={s.section}>
+            <SectionHead icon={<Settings20Regular />} title="Backend & infrastructure" hint="What this health check runs on, and the Azure prerequisites." />
+            <MessageBar intent="info"><MessageBarBody>
+              <MessageBarTitle>Azure-native default — no Microsoft Fabric</MessageBarTitle>
+              Checks are real Azure Monitor scheduled-query alert rules over Log Analytics. Creating / running / scheduling requires <b>LOOM_LOG_ANALYTICS_WORKSPACE_ID</b> (run KQL), <b>LOOM_LOG_ANALYTICS_RESOURCE_ID</b> + <b>LOOM_ALERT_RG</b> (create rules), and the Console UAMI granted <b>Monitoring Contributor</b> on the alert resource group (plus <b>Monitoring Reader</b> at subscription scope for fired-alert history). A Fabric Reflex backend is opt-in only via LOOM_ACTIVATOR_BACKEND=fabric.
+            </MessageBarBody></MessageBar>
+            <MessageBar intent="success"><MessageBarBody>
+              <MessageBarTitle>Check-type library available</MessageBarTitle>
+              The full check-type library is built: {CHECK_TYPE_LIBRARY.length} check types across Time / Size / Content / Schema / Status families, each a typed wizard with operator + threshold controls and a live KQL preview + sample run. Also available: on-demand run, enable / disable / delete, a status dashboard, fired-alert history, and action-group channel management with test-fire (see the <b>Notifications</b> tab). Still planned: Monitoring Views and incident/issue management (tracked in docs/fiab/parity/health-check.md).
+            </MessageBarBody></MessageBar>
+          </div>
+        )}
+
+        <HealthCheckWizard id={id} def={wizardDef} onClose={() => setWizardDef(null)} onCreate={createRule} />
       </div>
     } />
   );
 }
 
+// ─────────── HealthCheck → Notifications (Azure Monitor action groups) ───────────
+// Real channel management for the check's alerts. Every channel is a live
+// action-group receiver (email / SMS / webhook / Azure Function / Logic App)
+// upserted via Microsoft.Insights/actionGroups; "Send test" fires a real
+// createNotifications through every receiver. Azure-native default — no Fabric.
+// Backed by /api/items/health-check/[id]/action-group (GET list + PUT upsert +
+// POST test). New check rules created afterward bind to this action group.
+type AgSms = { countryCode: string; phoneNumber: string };
+type AgWebhook = { name?: string; serviceUri: string; useCommonAlertSchema?: boolean };
+type AgFunction = { name?: string; functionUrl: string; useCommonAlertSchema?: boolean };
+type AgLogicApp = { name?: string; resourceId: string; useCommonAlertSchema?: boolean };
+interface HcActionGroup {
+  name: string; id?: string; shortName: string;
+  emails: string[]; sms: AgSms[]; webhooks: AgWebhook[]; functions: AgFunction[]; logicApps: AgLogicApp[];
+}
+interface AgSummaryRow {
+  name: string; id: string; shortName?: string;
+  emailCount: number; smsCount: number; webhookCount: number; logicAppCount: number;
+}
+
+function HealthCheckNotifications({ id, itemName }: { id: string; itemName: string }) {
+  const s = useStyles();
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [msg, setMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
+  const [groups, setGroups] = useState<AgSummaryRow[]>([]);
+  const [savedId, setSavedId] = useState<string | undefined>(undefined);
+
+  const [name, setName] = useState('');
+  const [shortName, setShortName] = useState('');
+  const [emails, setEmails] = useState<string[]>([]);
+  const [sms, setSms] = useState<AgSms[]>([]);
+  const [webhooks, setWebhooks] = useState<AgWebhook[]>([]);
+  const [functions, setFunctions] = useState<AgFunction[]>([]);
+  const [logicApps, setLogicApps] = useState<AgLogicApp[]>([]);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`);
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+      } else {
+        setGroups(Array.isArray(j.groups) ? j.groups : []);
+        setMsg(null);
+      }
+      const cur = (j?.current || null) as HcActionGroup | null;
+      if (cur && cur.name) {
+        setName(cur.name); setShortName(cur.shortName || ''); setSavedId(cur.id);
+        setEmails(Array.isArray(cur.emails) ? cur.emails : []);
+        setSms(Array.isArray(cur.sms) ? cur.sms : []);
+        setWebhooks(Array.isArray(cur.webhooks) ? cur.webhooks : []);
+        setFunctions(Array.isArray(cur.functions) ? cur.functions : []);
+        setLogicApps(Array.isArray(cur.logicApps) ? cur.logicApps : []);
+      } else {
+        const base = (itemName || 'health-check').replace(/[^A-Za-z0-9-]/g, '-').slice(0, 40) || 'health-check';
+        setName((n) => n || `${base}-ag`);
+        setShortName((n) => n || ((itemName || 'loom').replace(/[^A-Za-z0-9]/g, '').slice(0, 12) || 'loom'));
+      }
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setLoading(false); }
+  }, [id, itemName]);
+  useEffect(() => { void load(); }, [load]);
+
+  const save = useCallback(async () => {
+    setSaving(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`, {
+        method: 'PUT', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: name.trim(), shortName: shortName.trim() || undefined, emails, sms, webhooks, functions, logicApps }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      setSavedId(j.id);
+      setMsg({ intent: 'success', text: `Saved action group “${j.current?.name || name}”. New checks created from here on notify these channels.` });
+      void load();
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setSaving(false); }
+  }, [id, name, shortName, emails, sms, webhooks, functions, logicApps, load]);
+
+  const test = useCallback(async () => {
+    setTesting(true); setMsg(null);
+    try {
+      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ actionGroupId: savedId }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!j?.ok) {
+        const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
+        setMsg({ intent: j?.gate ? 'warning' : 'error', text: `${j?.error || `HTTP ${r.status}`}${gate}` });
+        return;
+      }
+      const rc = j.result?.receivers || {};
+      setMsg({ intent: 'success', text: `Test notification sent (HTTP ${j.result?.status ?? '—'}) to ${rc.emails || 0} email · ${rc.sms || 0} SMS · ${rc.webhooks || 0} webhook/function · ${rc.logicApps || 0} Logic App receiver(s).` });
+    } catch (e: any) { setMsg({ intent: 'error', text: e?.message || String(e) }); }
+    finally { setTesting(false); }
+  }, [id, savedId]);
+
+  const channelCount = emails.length + sms.length + webhooks.length + functions.length + logicApps.length;
+  const rowStyle: CSSProperties = { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' };
+  const chanHead = (icon: ReactNode, title: string) => (
+    <div className={s.sectionHead}><span className={s.sectionIcon}>{icon}</span><Subtitle2>{title}</Subtitle2></div>
+  );
+
+  return (
+    <div className={s.section}>
+      <SectionHead icon={<Alert20Regular />} title="Notification channels" hint="The Azure Monitor action group this check's alerts fire. Every row is a real action-group receiver — Azure-native, no Fabric." />
+      <MessageBar intent="info"><MessageBarBody>
+        Saving upserts a real <b>Microsoft.Insights/actionGroups</b> and binds new check rules to it; <b>Send test</b> delivers a Common Alert Schema payload through every receiver. Requires <b>LOOM_SUBSCRIPTION_ID</b> + <b>LOOM_ALERT_RG</b> and the Console UAMI as <b>Monitoring Contributor</b>.
+      </MessageBarBody></MessageBar>
+      {msg && <MessageBar intent={msg.intent}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+      {loading && <Spinner size="tiny" label="Loading channels…" labelPosition="after" />}
+
+      <div className={s.addBar}>
+        <Field label="Action group name"><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="orders-health-ag" /></Field>
+        <Field label="Short name (≤12, shown in alerts)"><Input value={shortName} maxLength={12} onChange={(_, d) => setShortName(d.value)} placeholder="loom" /></Field>
+        <span className={s.spacer} />
+        <Badge appearance="tint" color={channelCount ? 'brand' : 'warning'}>{channelCount} receiver{channelCount === 1 ? '' : 's'}</Badge>
+        {savedId && <Badge appearance="tint" color="success">saved</Badge>}
+      </div>
+
+      {/* Email */}
+      <div>
+        {chanHead(<People20Regular />, 'Email')}
+        {emails.map((e, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'Email address' : ''} style={{ flex: 1, minWidth: 240 }}>
+              <Input type="email" value={e} onChange={(_, d) => setEmails((arr) => arr.map((x, j) => (j === i ? d.value : x)))} placeholder="oncall@contoso.com" />
+            </Field>
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setEmails((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setEmails((arr) => [...arr, ''])} style={{ marginTop: tokens.spacingVerticalXS }}>Add email</Button>
+      </div>
+
+      {/* SMS */}
+      <div>
+        {chanHead(<Pulse20Regular />, 'SMS')}
+        {sms.map((r, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'Country code' : ''} style={{ width: 120 }}>
+              <Input value={r.countryCode} onChange={(_, d) => setSms((arr) => arr.map((x, j) => (j === i ? { ...x, countryCode: d.value } : x)))} placeholder="1" />
+            </Field>
+            <Field label={i === 0 ? 'Phone number' : ''} style={{ flex: 1, minWidth: 200 }}>
+              <Input value={r.phoneNumber} onChange={(_, d) => setSms((arr) => arr.map((x, j) => (j === i ? { ...x, phoneNumber: d.value } : x)))} placeholder="5555550123" />
+            </Field>
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setSms((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setSms((arr) => [...arr, { countryCode: '1', phoneNumber: '' }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add SMS</Button>
+      </div>
+
+      {/* Webhook */}
+      <div>
+        {chanHead(<Link20Regular />, 'Webhook')}
+        {webhooks.map((r, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'HTTPS endpoint' : ''} style={{ flex: 1, minWidth: 280 }}>
+              <Input value={r.serviceUri} onChange={(_, d) => setWebhooks((arr) => arr.map((x, j) => (j === i ? { ...x, serviceUri: d.value } : x)))} placeholder="https://hooks.example.com/alert" />
+            </Field>
+            <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setWebhooks((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setWebhooks((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setWebhooks((arr) => [...arr, { serviceUri: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add webhook</Button>
+      </div>
+
+      {/* Azure Function */}
+      <div>
+        {chanHead(<Code20Regular />, 'Azure Function')}
+        <Caption1 className={s.hint}>Delivered as a webhook to the function's HTTPS trigger URL (include the function key).</Caption1>
+        {functions.map((r, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'Function HTTPS trigger URL' : ''} style={{ flex: 1, minWidth: 280 }}>
+              <Input value={r.functionUrl} onChange={(_, d) => setFunctions((arr) => arr.map((x, j) => (j === i ? { ...x, functionUrl: d.value } : x)))} placeholder="https://myfunc.azurewebsites.net/api/alert?code=..." />
+            </Field>
+            <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setFunctions((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setFunctions((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setFunctions((arr) => [...arr, { functionUrl: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add function</Button>
+      </div>
+
+      {/* Logic App */}
+      <div>
+        {chanHead(<Cloud20Regular />, 'Logic App')}
+        <Caption1 className={s.hint}>The workflow's callback URL is resolved from its resource id via ARM listCallbackUrl on save.</Caption1>
+        {logicApps.map((r, i) => (
+          <div key={i} style={rowStyle}>
+            <Field label={i === 0 ? 'Logic App resource id' : ''} style={{ flex: 1, minWidth: 320 }}>
+              <Input value={r.resourceId} onChange={(_, d) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, resourceId: d.value } : x)))} placeholder="/subscriptions/…/providers/Microsoft.Logic/workflows/notify" />
+            </Field>
+            <Switch checked={r.useCommonAlertSchema !== false} label="Common Alert Schema" onChange={(_, d) => setLogicApps((arr) => arr.map((x, j) => (j === i ? { ...x, useCommonAlertSchema: d.checked } : x)))} />
+            <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} onClick={() => setLogicApps((arr) => arr.filter((_, j) => j !== i))}>Remove</Button>
+          </div>
+        ))}
+        <Button size="small" appearance="outline" icon={<Add20Regular />} onClick={() => setLogicApps((arr) => [...arr, { resourceId: '', useCommonAlertSchema: true }])} style={{ marginTop: tokens.spacingVerticalXS }}>Add Logic App</Button>
+      </div>
+
+      <div style={rowStyle}>
+        <Button appearance="primary" icon={<Alert20Regular />} disabled={saving || !name.trim()} onClick={save}>{saving ? 'Saving…' : 'Save channels'}</Button>
+        <Button appearance="secondary" icon={<Play20Regular />} disabled={testing || !savedId} onClick={test} title={savedId ? undefined : 'Save the action group first.'}>{testing ? 'Sending…' : 'Send test'}</Button>
+        <span className={s.spacer} />
+        {groups.length > 0 && <Caption1 className={s.hint}>{groups.length} action group{groups.length === 1 ? '' : 's'} in {`LOOM_ALERT_RG`}</Caption1>}
+      </div>
+    </div>
+  );
+}
+
 // ───────────────────────── AIP Logic function (Spindle Studio) ─────────────────────────
-interface AipInputDef { id: string; name: string; type: 'string' | 'number' | 'boolean' }
-interface AipStepDef { id: string; kind: 'llm-prompt' | 'extract' | 'branch'; name: string; prompt: string }
+// AIP Logic typed-input system (Palantir parity): full type set, with object*
+// types bound to a Weave ontology entity type. Values are coerced client-side
+// before they hit the real Azure OpenAI invoke route.
+const AIP_INPUT_TYPES = [
+  'string', 'integer', 'long', 'double', 'float', 'boolean', 'date', 'timestamp',
+  'array', 'struct', 'object', 'object list', 'object set', 'model', 'media reference',
+] as const;
+const AIP_NUMERIC = new Set(['integer', 'long', 'double', 'float', 'number']);
+const AIP_OBJECT = new Set(['object', 'object list', 'object set']);
+const AIP_JSON = new Set(['array', 'struct']);
+function coerceAipValue(type: string, raw: string): unknown {
+  if (AIP_NUMERIC.has(type)) return raw.trim() === '' ? null : Number(raw);
+  if (type === 'boolean') return /^(true|1|yes|on)$/i.test(raw.trim());
+  if (AIP_JSON.has(type)) { try { return raw.trim() ? JSON.parse(raw) : (type === 'array' ? [] : {}); } catch { return raw; } }
+  return raw;
+}
+interface RunStepLite {
+  kind?: string; type?: string; name?: string; callId?: string; content?: string; error?: string;
+  result?: unknown; status?: string; elapsedMs?: number; prompt?: string; model?: string;
+  // typed-block-graph debugger fields
+  output?: string; outputType?: string; gate?: { reason?: string; remediation?: string }; tools?: unknown[];
+}
+function trimStep(st: RunStepLite): RunStepLite {
+  const { kind, type, name, callId, content, error, status, elapsedMs, output, outputType, gate, prompt } = st;
+  return {
+    kind, type, name, callId, error, status, elapsedMs, output, outputType, gate,
+    content: typeof content === 'string' ? content.slice(0, 600) : content,
+    prompt: typeof prompt === 'string' ? prompt.slice(0, 600) : prompt,
+  };
+}
+interface AipInputDef { id: string; name: string; type: string; objectType?: string; description?: string; required?: boolean }
+
+// ── Typed BLOCK GRAPH model (Palantir AIP Logic parity) ──
+// Each block is configured by dropdowns / typed inputs (no freeform JSON) and
+// emits a NAMED, typed output variable that later blocks reference by name.
+type AipBlockKind =
+  | 'create-variable' | 'get-object-property' | 'use-llm'
+  | 'execute-function' | 'transform' | 'branch';
+type AipBlockType = 'string' | 'number' | 'boolean' | 'object' | 'array';
+type AipToolKind = 'apply-action' | 'ontology-function' | 'execute-function';
+
+interface AipToolBinding {
+  id: string;
+  kind: AipToolKind;
+  // apply-action
+  actionName?: string;
+  actionKind?: 'create' | 'update' | 'delete';
+  objectType?: string;
+  keyColumn?: string;
+  keyRef?: string;
+  valueRefs?: Record<string, string>;
+  commit?: boolean;
+  // ontology-function
+  property?: string;
+  // execute-function (tool)
+  functionItemId?: string;
+  functionName?: string;
+  argRefs?: Record<string, string>;
+}
+
+interface AipBlockDef {
+  id: string;
+  kind: AipBlockKind;
+  name: string;
+  output: string;          // NAMED typed output variable (identifier)
+  outputType: AipBlockType;
+  valueExpr?: string;                              // create-variable
+  objectType?: string; property?: string;          // get-object-property
+  keyColumn?: string; keyRef?: string;
+  prompt?: string; tools?: AipToolBinding[];        // use-llm
+  functionItemId?: string; functionName?: string;   // execute-function
+  argRefs?: Record<string, string>;
+  sourceRef?: string; transformOp?: string; transformExpr?: string; // transform
+  conditionRef?: string; operator?: string; compareValue?: string;  // branch
+  thenRef?: string; elseRef?: string;
+}
+
+const AIP_BLOCK_TYPES: AipBlockType[] = ['string', 'number', 'boolean', 'object', 'array'];
+const AIP_TRANSFORM_OPS = ['template', 'uppercase', 'lowercase', 'trim', 'length', 'to-number', 'to-string', 'json-parse', 'json-stringify'] as const;
+const AIP_BRANCH_OPS = ['truthy', 'empty', 'eq', 'ne', 'gt', 'lt', 'contains'] as const;
+
+interface BlockKindMeta { label: string; icon: ReactNode; hint: string }
+const AIP_BLOCK_META: Record<AipBlockKind, BlockKindMeta> = {
+  'create-variable': { label: 'Create variable', icon: <Braces20Regular />, hint: 'A typed local variable from a literal or a {ref} template.' },
+  'get-object-property': { label: 'Get object property', icon: <Database20Regular />, hint: 'Read one property off an ontology object (real Synapse read).' },
+  'use-llm': { label: 'Use LLM', icon: <BrainCircuit20Regular />, hint: 'One grounded Azure OpenAI turn; can call Apply-action / Ontology-function / Execute-function tools.' },
+  'execute-function': { label: 'Execute function', icon: <Code20Regular />, hint: 'Invoke a sibling Spindle function with resolved args.' },
+  'transform': { label: 'Transform', icon: <ArrowSwap20Regular />, hint: 'Map / derive a value from a prior output.' },
+  'branch': { label: 'Branch', icon: <Branch20Regular />, hint: 'Conditional (ternary) over a prior output.' },
+};
+
+/** Default output identifier for a new block of a kind (out1, out2, …). */
+function nextOutputName(kind: AipBlockKind, blocks: AipBlockDef[]): string {
+  const stems: Record<AipBlockKind, string> = {
+    'create-variable': 'var', 'get-object-property': 'prop', 'use-llm': 'answer',
+    'execute-function': 'result', 'transform': 'value', 'branch': 'choice',
+  };
+  const stem = stems[kind];
+  let n = 1;
+  const taken = new Set(blocks.map((b) => b.output));
+  while (taken.has(`${stem}${n}`)) n += 1;
+  return `${stem}${n}`;
+}
+
+interface AipUsageLite { promptTokens?: number; completionTokens?: number; totalTokens?: number; [k: string]: unknown }
+interface AipRunRecord {
+  id: string; ts: string; mode: 'logic' | 'agent'; model?: string;
+  inputs?: Record<string, unknown>; output?: string; sources?: string[];
+  steps?: RunStepLite[]; usage?: AipUsageLite; ok: boolean;
+}
 interface AipState {
-  inputs?: AipInputDef[]; steps?: AipStepDef[]; outputType?: string; outputDescription?: string;
+  inputs?: AipInputDef[]; blocks?: AipBlockDef[]; steps?: unknown[]; outputType?: string; outputDescription?: string;
   boundOntologyId?: string; boundOntologyName?: string; ontologyEntityTypes?: string[];
   foundryAgentId?: string; foundryModel?: string; lastDeployedAt?: string;
+  runs?: AipRunRecord[];
   [k: string]: unknown;
 }
-interface RunStepLite { kind?: string; type?: string; name?: string; callId?: string; content?: string; error?: string; result?: unknown; status?: string }
+
+const AIP_TOOL_LABEL: Record<AipToolKind, string> = {
+  'apply-action': 'Apply action', 'ontology-function': 'Ontology function', 'execute-function': 'Execute function',
+};
+type PropLite = { name: string; isKey?: boolean };
+
+/** Pick a reference to a prior output (typed input or an earlier block's output). */
+function RefPicker({ label, value, refs, onSet, className, allowEmpty = true, placeholder }: {
+  label: string; value?: string; refs: string[]; onSet: (v: string) => void; className?: string; allowEmpty?: boolean; placeholder?: string;
+}) {
+  return (
+    <Field label={label} className={className}>
+      <Dropdown value={value || ''} selectedOptions={value ? [value] : []} placeholder={placeholder || 'Pick a variable'} onOptionSelect={(_, d) => onSet(String(d.optionValue || ''))}>
+        {allowEmpty && <Option value="">(none)</Option>}
+        {refs.map((r) => <Option key={r} value={r}>{r}</Option>)}
+      </Dropdown>
+    </Field>
+  );
+}
+
+/** Edit a map of key → variable-ref (apply-action column values, execute-function args). */
+function KeyRefEditor({ title, map, refs, onChange, keyPlaceholder, suggestions }: {
+  title: string; map: Record<string, string> | undefined; refs: string[];
+  onChange: (next: Record<string, string>) => void; keyPlaceholder: string; suggestions?: string[];
+}) {
+  const s = useStyles();
+  const [newKey, setNewKey] = useState('');
+  const entries = Object.entries(map || {});
+  const setRef = (k: string, v: string) => onChange({ ...(map || {}), [k]: v });
+  const removeKey = (k: string) => { const nx = { ...(map || {}) }; delete nx[k]; onChange(nx); };
+  const addKey = (k: string) => { const key = k.trim(); if (!key || (map || {})[key] !== undefined) return; onChange({ ...(map || {}), [key]: '' }); setNewKey(''); };
+  return (
+    <div className={s.blockBody}>
+      <Caption1 className={s.hint}>{title}</Caption1>
+      {entries.map(([k, v]) => (
+        <div key={k} className={s.row}>
+          <Badge appearance="tint" color="brand">{k}</Badge>
+          <span className={s.spacer} />
+          <RefPicker label="from" value={v} refs={refs} onSet={(nv) => setRef(k, nv)} className={s.fieldNarrow} />
+          <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${k}`} onClick={() => removeKey(k)} />
+        </div>
+      ))}
+      <div className={s.addBar}>
+        {suggestions && suggestions.length ? (
+          <Field label="Column" className={s.fieldMed}>
+            <Dropdown value={newKey} selectedOptions={newKey ? [newKey] : []} placeholder="Pick a column" onOptionSelect={(_, d) => setNewKey(String(d.optionValue || ''))}>
+              {suggestions.map((c) => <Option key={c} value={c}>{c}</Option>)}
+            </Dropdown>
+          </Field>
+        ) : (
+          <Field label="Name" className={s.fieldMed}><Input value={newKey} onChange={(_, d) => setNewKey(d.value)} placeholder={keyPlaceholder} /></Field>
+        )}
+        <Button size="small" appearance="secondary" icon={<Add20Regular />} disabled={!newKey.trim()} onClick={() => addKey(newKey)}>Add</Button>
+      </div>
+    </div>
+  );
+}
+
+/** Configure one Use-LLM tool binding (all three wire to real Azure-native backends). */
+function AipToolEditor({ tool, refs, entityTypes, propsByType, actionTypes, siblingFns, onChange, onRemove }: {
+  tool: AipToolBinding; refs: string[]; entityTypes: string[]; propsByType: Record<string, PropLite[]>;
+  actionTypes: OntologyActionLite[]; siblingFns: { id: string; displayName: string }[];
+  onChange: (next: AipToolBinding) => void; onRemove: () => void;
+}) {
+  const s = useStyles();
+  const setT = (patch: Partial<AipToolBinding>) => onChange({ ...tool, ...patch });
+  const props = tool.objectType ? (propsByType[tool.objectType] || []) : [];
+  return (
+    <div className={s.toolCard}>
+      <div className={s.blockCardHead}>
+        <Wrench20Regular />
+        <Field label="Tool" className={s.fieldMed}>
+          <Dropdown value={AIP_TOOL_LABEL[tool.kind]} selectedOptions={[tool.kind]} onOptionSelect={(_, d) => setT({ kind: (d.optionValue as AipToolKind) || 'apply-action' })}>
+            <Option value="apply-action">Apply action</Option>
+            <Option value="ontology-function">Ontology function</Option>
+            <Option value="execute-function">Execute function</Option>
+          </Dropdown>
+        </Field>
+        <span className={s.spacer} />
+        <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove tool" onClick={onRemove} />
+      </div>
+      {tool.kind === 'apply-action' && (
+        <div className={s.blockBody}>
+          <div className={s.blockGrid}>
+            <Field label="Action">
+              <Dropdown value={tool.actionName || ''} selectedOptions={tool.actionName ? [tool.actionName] : []} placeholder={actionTypes.length ? 'Pick an Action' : 'No Actions on the ontology'} disabled={!actionTypes.length}
+                onOptionSelect={(_, d) => { const a = actionTypes.find((x) => x.name === String(d.optionValue)); setT({ actionName: a?.name, objectType: a?.objectType, actionKind: a?.kind, valueRefs: a?.params ? Object.fromEntries((a.params || []).map((p) => [p, (tool.valueRefs || {})[p] || ''])) : tool.valueRefs }); }}>
+                {actionTypes.map((a) => <Option key={a.name} value={a.name} text={`${a.name} (${a.kind} ${a.objectType})`}>{a.name} ({a.kind} {a.objectType})</Option>)}
+              </Dropdown>
+            </Field>
+            {(tool.actionKind === 'update' || tool.actionKind === 'delete') && (
+              <RefPicker label="Key from" value={tool.keyRef} refs={refs} onSet={(v) => setT({ keyRef: v })} />
+            )}
+            {(tool.actionKind === 'update' || tool.actionKind === 'delete') && (
+              <Field label="Key column (optional)"><Input value={tool.keyColumn || ''} onChange={(_, d) => setT({ keyColumn: d.value })} placeholder="from ontology binding" /></Field>
+            )}
+          </div>
+          {(tool.actionKind === 'create' || tool.actionKind === 'update') && (
+            <KeyRefEditor title="Column values (from prior outputs)" map={tool.valueRefs} refs={refs} onChange={(m) => setT({ valueRefs: m })} keyPlaceholder="column" suggestions={props.map((p) => p.name)} />
+          )}
+          <Switch checked={!!tool.commit} onChange={(_, d) => setT({ commit: !!d.checked })} label={tool.commit ? 'Commit writes to Synapse (real CRUD)' : 'Propose only (show the real SQL, do not write)'} />
+        </div>
+      )}
+      {tool.kind === 'ontology-function' && (
+        <div className={s.blockGrid}>
+          <Field label="Object type">
+            <Dropdown value={tool.objectType || ''} selectedOptions={tool.objectType ? [tool.objectType] : []} placeholder={entityTypes.length ? 'Pick a type' : 'Bind an ontology'} disabled={!entityTypes.length} onOptionSelect={(_, d) => setT({ objectType: String(d.optionValue || ''), property: '' })}>
+              {entityTypes.map((t) => <Option key={t} value={t}>{t}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Property">
+            <Dropdown value={tool.property || ''} selectedOptions={tool.property ? [tool.property] : []} placeholder="Pick a property" disabled={!tool.objectType} onOptionSelect={(_, d) => setT({ property: String(d.optionValue || '') })}>
+              {props.map((p) => <Option key={p.name} value={p.name} text={p.isKey ? `${p.name} (key)` : p.name}>{p.name}{p.isKey ? ' (key)' : ''}</Option>)}
+            </Dropdown>
+          </Field>
+          <RefPicker label="Key from" value={tool.keyRef} refs={refs} onSet={(v) => setT({ keyRef: v })} />
+        </div>
+      )}
+      {tool.kind === 'execute-function' && (
+        <div className={s.blockBody}>
+          <Field label="Function">
+            <Dropdown value={tool.functionName || ''} selectedOptions={tool.functionItemId ? [tool.functionItemId] : []} placeholder={siblingFns.length ? 'Pick a function' : 'No sibling functions'} disabled={!siblingFns.length}
+              onOptionSelect={(_, d) => { const f = siblingFns.find((x) => x.id === String(d.optionValue)); setT({ functionItemId: f?.id, functionName: f?.displayName }); }}>
+              {siblingFns.map((f) => <Option key={f.id} value={f.id}>{f.displayName}</Option>)}
+            </Dropdown>
+          </Field>
+          <KeyRefEditor title="Arguments (sibling input → prior output)" map={tool.argRefs} refs={refs} onChange={(m) => setT({ argRefs: m })} keyPlaceholder="input name" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One typed block in the graph — kind-specific dropdown config + named typed output. */
+function AipBlockCard({ block, index, total, priorRefs, entityTypes, propsByType, actionTypes, siblingFns, onChange, onRemove, onMove }: {
+  block: AipBlockDef; index: number; total: number; priorRefs: string[];
+  entityTypes: string[]; propsByType: Record<string, PropLite[]>; actionTypes: OntologyActionLite[];
+  siblingFns: { id: string; displayName: string }[];
+  onChange: (patch: Partial<AipBlockDef>) => void; onRemove: () => void; onMove: (dir: -1 | 1) => void;
+}) {
+  const s = useStyles();
+  const meta = AIP_BLOCK_META[block.kind];
+  const setB = (patch: Partial<AipBlockDef>) => onChange(patch);
+  const tools = Array.isArray(block.tools) ? block.tools : [];
+  const props = block.objectType ? (propsByType[block.objectType] || []) : [];
+  return (
+    <div className={s.blockCard}>
+      <div className={s.blockCardHead}>
+        <Badge appearance="filled" color="brand">{index + 1}</Badge>
+        <span className={s.blockIcon}>{meta.icon}</span>
+        <Field label="Block name" className={s.fieldMed}><Input value={block.name} onChange={(_, d) => setB({ name: d.value })} /></Field>
+        <span className={s.spacer} />
+        <Field label="Output var" className={s.fieldNarrow}><Input value={block.output} onChange={(_, d) => setB({ output: d.value.replace(/[^A-Za-z0-9_]/g, '') })} /></Field>
+        <Field label="Type" className={s.fieldNarrow}>
+          <Dropdown value={block.outputType} selectedOptions={[block.outputType]} onOptionSelect={(_, d) => setB({ outputType: (d.optionValue as AipBlockType) || 'string' })}>
+            {AIP_BLOCK_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
+          </Dropdown>
+        </Field>
+        <Button size="small" appearance="subtle" icon={<ArrowUp16Regular />} aria-label="Move up" disabled={index === 0} onClick={() => onMove(-1)} />
+        <Button size="small" appearance="subtle" icon={<ArrowDown16Regular />} aria-label="Move down" disabled={index === total - 1} onClick={() => onMove(1)} />
+        <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label="Remove block" onClick={onRemove} />
+      </div>
+      <Caption1 className={s.hint}>{meta.hint}</Caption1>
+
+      {block.kind === 'create-variable' && (
+        <Field label="Value / template" hint="A literal, or use {ref} to interpolate a prior output.">
+          <Input value={block.valueExpr || ''} onChange={(_, d) => setB({ valueExpr: d.value })} placeholder="e.g. High, or {answer1}" />
+        </Field>
+      )}
+
+      {block.kind === 'get-object-property' && (
+        <div className={s.blockGrid}>
+          <Field label="Object type">
+            <Dropdown value={block.objectType || ''} selectedOptions={block.objectType ? [block.objectType] : []} placeholder={entityTypes.length ? 'Pick a type' : 'Bind an ontology'} disabled={!entityTypes.length} onOptionSelect={(_, d) => setB({ objectType: String(d.optionValue || ''), property: '' })}>
+              {entityTypes.map((t) => <Option key={t} value={t}>{t}</Option>)}
+            </Dropdown>
+          </Field>
+          <Field label="Property">
+            <Dropdown value={block.property || ''} selectedOptions={block.property ? [block.property] : []} placeholder="Pick a property" disabled={!block.objectType} onOptionSelect={(_, d) => setB({ property: String(d.optionValue || '') })}>
+              {props.map((p) => <Option key={p.name} value={p.name} text={p.isKey ? `${p.name} (key)` : p.name}>{p.name}{p.isKey ? ' (key)' : ''}</Option>)}
+            </Dropdown>
+          </Field>
+          <RefPicker label="Key from" value={block.keyRef} refs={priorRefs} onSet={(v) => setB({ keyRef: v })} />
+          <Field label="Key column (optional)"><Input value={block.keyColumn || ''} onChange={(_, d) => setB({ keyColumn: d.value })} placeholder="from ontology binding" /></Field>
+        </div>
+      )}
+
+      {block.kind === 'use-llm' && (
+        <div className={s.blockBody}>
+          <Field label="Prompt" hint="{ref} interpolates a prior output.">
+            <Textarea value={block.prompt || ''} onChange={(_, d) => setB({ prompt: d.value })} resize="vertical" placeholder="Assess {customer} risk using the tool results." />
+          </Field>
+          <div className={s.blockCardHead}>
+            <Wrench20Regular />
+            <Subtitle2>Tools</Subtitle2>
+            <span className={s.spacer} />
+            <Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={() => onChange({ tools: [...tools, { id: `tool_${Date.now()}`, kind: 'apply-action' }] })}>Add tool</Button>
+          </div>
+          <Caption1 className={s.hint}>Apply-action (real Synapse CRUD) · Ontology-function (real Synapse read) · Execute-function (sibling invoke) — each runs and is fed into this turn.</Caption1>
+          {tools.map((t) => (
+            <AipToolEditor key={t.id} tool={t} refs={priorRefs} entityTypes={entityTypes} propsByType={propsByType} actionTypes={actionTypes} siblingFns={siblingFns}
+              onChange={(nx) => onChange({ tools: tools.map((x) => x.id === t.id ? nx : x) })} onRemove={() => onChange({ tools: tools.filter((x) => x.id !== t.id) })} />
+          ))}
+        </div>
+      )}
+
+      {block.kind === 'execute-function' && (
+        <div className={s.blockBody}>
+          <Field label="Function">
+            <Dropdown value={block.functionName || ''} selectedOptions={block.functionItemId ? [block.functionItemId] : []} placeholder={siblingFns.length ? 'Pick a function' : 'No sibling functions'} disabled={!siblingFns.length}
+              onOptionSelect={(_, d) => { const f = siblingFns.find((x) => x.id === String(d.optionValue)); setB({ functionItemId: f?.id, functionName: f?.displayName }); }}>
+              {siblingFns.map((f) => <Option key={f.id} value={f.id}>{f.displayName}</Option>)}
+            </Dropdown>
+          </Field>
+          <KeyRefEditor title="Arguments (sibling input → prior output)" map={block.argRefs} refs={priorRefs} onChange={(m) => setB({ argRefs: m })} keyPlaceholder="input name" />
+        </div>
+      )}
+
+      {block.kind === 'transform' && (
+        <div className={s.blockGrid}>
+          <RefPicker label="Source" value={block.sourceRef} refs={priorRefs} onSet={(v) => setB({ sourceRef: v })} allowEmpty={false} />
+          <Field label="Operation">
+            <Dropdown value={block.transformOp || 'template'} selectedOptions={[block.transformOp || 'template']} onOptionSelect={(_, d) => setB({ transformOp: String(d.optionValue || 'template') })}>
+              {AIP_TRANSFORM_OPS.map((o) => <Option key={o} value={o}>{o}</Option>)}
+            </Dropdown>
+          </Field>
+          {(block.transformOp === 'template' || !block.transformOp) && (
+            <Field label="Template" hint="{ref} interpolation"><Input value={block.transformExpr || ''} onChange={(_, d) => setB({ transformExpr: d.value })} placeholder="Risk for {customer}: {score}" /></Field>
+          )}
+        </div>
+      )}
+
+      {block.kind === 'branch' && (
+        <div className={s.blockGrid}>
+          <RefPicker label="Condition from" value={block.conditionRef} refs={priorRefs} onSet={(v) => setB({ conditionRef: v })} allowEmpty={false} />
+          <Field label="Operator">
+            <Dropdown value={block.operator || 'truthy'} selectedOptions={[block.operator || 'truthy']} onOptionSelect={(_, d) => setB({ operator: String(d.optionValue || 'truthy') })}>
+              {AIP_BRANCH_OPS.map((o) => <Option key={o} value={o}>{o}</Option>)}
+            </Dropdown>
+          </Field>
+          {['eq', 'ne', 'gt', 'lt', 'contains'].includes(block.operator || '') && (
+            <Field label="Compare value"><Input value={block.compareValue || ''} onChange={(_, d) => setB({ compareValue: d.value })} /></Field>
+          )}
+          <RefPicker label="Then (optional)" value={block.thenRef} refs={priorRefs} onSet={(v) => setB({ thenRef: v })} />
+          <RefPicker label="Else (optional)" value={block.elseRef} refs={priorRefs} onSet={(v) => setB({ elseRef: v })} />
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<AipState>('aip-logic', id, { inputs: [], steps: [], outputType: 'string' });
+  const { state, setState, loading, saving, error, savedAt, save, dirty } = useItemState<AipState>('aip-logic', id, { inputs: [], blocks: [], outputType: 'string' });
   const [inName, setInName] = useState('');
-  const [inType, setInType] = useState<'string' | 'number' | 'boolean'>('string');
-  const [stepKind, setStepKind] = useState<'llm-prompt' | 'extract' | 'branch'>('llm-prompt');
-  const [stepName, setStepName] = useState('');
-  const [stepPrompt, setStepPrompt] = useState('');
+  const [inType, setInType] = useState<string>('string');
+  const [inObjType, setInObjType] = useState('');
+  const [inDesc, setInDesc] = useState('');
+  const [inReq, setInReq] = useState(false);
+  const [addBlockKind, setAddBlockKind] = useState<AipBlockKind>('use-llm');
   const [invokeVals, setInvokeVals] = useState<Record<string, string>>({});
   const [invokeBusy, setInvokeBusy] = useState(false);
   const [invokeOut, setInvokeOut] = useState<string | null>(null);
@@ -1083,6 +2981,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
   const [agentMode, setAgentMode] = useState(false);
   const [runSteps, setRunSteps] = useState<RunStepLite[]>([]);
   const [sourcesUsed, setSourcesUsed] = useState<string[]>([]);
+  const [siblingFns, setSiblingFns] = useState<{ id: string; displayName: string }[]>([]);
 
   // Ontology binding (Spindle grounds on the Weave) — shared hook for parity with
   // Workshop / SDK editors. Avoids divergent local grounding logic.
@@ -1093,45 +2992,123 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
   const [deployMsg, setDeployMsg] = useState<{ intent: 'success' | 'error' | 'warning'; text: string } | null>(null);
 
   const inputs = Array.isArray(state.inputs) ? state.inputs : [];
-  const steps = Array.isArray(state.steps) ? state.steps : [];
+  const blocks = Array.isArray(state.blocks) ? state.blocks : [];
+  const runs = Array.isArray(state.runs) ? state.runs : [];
+
+  // Ontology surface → the dropdowns that make block config typed (no freeform):
+  // entity types (get-object-property / apply-action), per-type properties, and
+  // declared write-back Action types (apply-action tool).
+  const surfaceClasses = onto.surface?.classes || [];
+  const surfaceBindings = onto.surface?.bindings || [];
+  const actionTypes: OntologyActionLite[] = onto.surface?.actionTypes || [];
+  const propsByType = useMemo(
+    () => deriveObjectProperties(surfaceClasses, surfaceBindings, actionTypes.map((a) => ({ name: a.name, objectType: a.objectType, kind: a.kind, params: a.params }))),
+    [surfaceClasses, surfaceBindings, actionTypes],
+  );
+  const entityTypes = useMemo(() => (
+    surfaceClasses.length ? surfaceClasses.map((c) => c.name) : (Array.isArray(state.ontologyEntityTypes) ? state.ontologyEntityTypes : [])
+  ), [surfaceClasses, state.ontologyEntityTypes]);
+
+  // Sibling Spindle functions (for Execute-function blocks / tools).
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/items/aip-logic');
+        const j = await r.json().catch(() => ({}));
+        if (alive && j?.ok && Array.isArray(j.items)) {
+          setSiblingFns(j.items.filter((it: any) => it?.id && it.id !== id).map((it: any) => ({ id: it.id, displayName: it.displayName || it.id })));
+        }
+      } catch { /* surfaced when picking a function */ }
+    })();
+    return () => { alive = false; };
+  }, [id]);
 
   // Mirror the hook's bound surface into persisted item state so Invoke / Deploy
   // can read boundOntologyId + ontologyEntityTypes from the saved doc.
   useEffect(() => {
     if (!onto.surface) return;
     setState((p) => {
-      const entityTypes = onto.surface!.classes.map((c) => c.name);
+      const et = onto.surface!.classes.map((c) => c.name);
       if (p.boundOntologyId === onto.surface!.id
         && p.boundOntologyName === onto.surface!.displayName
         && Array.isArray(p.ontologyEntityTypes)
-        && p.ontologyEntityTypes.length === entityTypes.length
-        && p.ontologyEntityTypes.every((t, i) => t === entityTypes[i])) return p;
-      return { ...p, boundOntologyId: onto.surface!.id, boundOntologyName: onto.surface!.displayName, ontologyEntityTypes: entityTypes };
+        && p.ontologyEntityTypes.length === et.length
+        && p.ontologyEntityTypes.every((t, i) => t === et[i])) return p;
+      return { ...p, boundOntologyId: onto.surface!.id, boundOntologyName: onto.surface!.displayName, ontologyEntityTypes: et };
     });
   }, [onto.surface, setState]);
 
   const addInput = useCallback(() => {
     const nm = inName.trim(); if (!/^[A-Za-z_][\w]*$/.test(nm)) return;
-    setState((p) => ({ ...p, inputs: [...(Array.isArray(p.inputs) ? p.inputs : []), { id: `in_${Date.now()}`, name: nm, type: inType }] }));
-    setInName('');
-  }, [inName, inType, setState]);
+    const def: AipInputDef = { id: `in_${Date.now()}`, name: nm, type: inType };
+    if (AIP_OBJECT.has(inType) && inObjType) def.objectType = inObjType;
+    if (inDesc.trim()) def.description = inDesc.trim();
+    if (inReq) def.required = true;
+    setState((p) => ({ ...p, inputs: [...(Array.isArray(p.inputs) ? p.inputs : []), def] }));
+    setInName(''); setInDesc(''); setInReq(false);
+  }, [inName, inType, inObjType, inDesc, inReq, setState]);
   const removeInput = useCallback((iid: string) => setState((p) => ({ ...p, inputs: (Array.isArray(p.inputs) ? p.inputs : []).filter((x) => x.id !== iid) })), [setState]);
 
-  const addStep = useCallback(() => {
-    const nm = stepName.trim() || stepKind;
-    setState((p) => ({ ...p, steps: [...(Array.isArray(p.steps) ? p.steps : []), { id: `step_${Date.now()}`, kind: stepKind, name: nm, prompt: stepPrompt.trim() }] }));
-    setStepName(''); setStepPrompt('');
-  }, [stepKind, stepName, stepPrompt, setState]);
-  const removeStep = useCallback((sid: string) => setState((p) => ({ ...p, steps: (Array.isArray(p.steps) ? p.steps : []).filter((x) => x.id !== sid) })), [setState]);
+  // Coerce the raw invoke-form strings into typed values per the input schema.
+  const buildTyped = useCallback(() => {
+    const typed: Record<string, unknown> = {};
+    for (const i of inputs) typed[i.name] = coerceAipValue(i.type, invokeVals[i.name] ?? '');
+    return typed;
+  }, [inputs, invokeVals]);
+
+  // Run history — persisted to Cosmos through the existing item PATCH (state.runs).
+  const persistRun = useCallback((rec: AipRunRecord) => {
+    const prev = Array.isArray(state.runs) ? state.runs : [];
+    const ns: AipState = { ...state, runs: [rec, ...prev].slice(0, 12) };
+    setState(() => ns);
+    void save(ns);
+  }, [state, setState, save]);
+  const loadRun = useCallback((rec: AipRunRecord) => {
+    setInvokeOut(rec.output ?? '');
+    setRunSteps(Array.isArray(rec.steps) ? rec.steps : []);
+    setSourcesUsed(Array.isArray(rec.sources) ? rec.sources : []);
+    setAgentMode(rec.mode === 'agent');
+    setInvokeMsg(null);
+  }, []);
+
+  // ── Typed BLOCK GRAPH mutators ──
+  const addBlock = useCallback((kind: AipBlockKind) => {
+    setState((p) => {
+      const bl = Array.isArray(p.blocks) ? p.blocks : [];
+      const b: AipBlockDef = {
+        id: `blk_${Date.now()}`, kind, name: AIP_BLOCK_META[kind].label,
+        output: nextOutputName(kind, bl), outputType: kind === 'branch' ? 'boolean' : 'string',
+        ...(kind === 'use-llm' ? { tools: [] } : {}),
+      };
+      return { ...p, blocks: [...bl, b] };
+    });
+  }, [setState]);
+  const updateBlock = useCallback((bid: string, patch: Partial<AipBlockDef>) => {
+    setState((p) => ({ ...p, blocks: (Array.isArray(p.blocks) ? p.blocks : []).map((b) => b.id === bid ? { ...b, ...patch } : b) }));
+  }, [setState]);
+  const removeBlock = useCallback((bid: string) => {
+    setState((p) => ({ ...p, blocks: (Array.isArray(p.blocks) ? p.blocks : []).filter((b) => b.id !== bid) }));
+  }, [setState]);
+  const moveBlock = useCallback((bid: string, dir: -1 | 1) => {
+    setState((p) => {
+      const bl = [...(Array.isArray(p.blocks) ? p.blocks : [])];
+      const i = bl.findIndex((b) => b.id === bid); const j = i + dir;
+      if (i < 0 || j < 0 || j >= bl.length) return p;
+      [bl[i], bl[j]] = [bl[j], bl[i]];
+      return { ...p, blocks: bl };
+    });
+  }, [setState]);
 
   const invoke = useCallback(async () => {
     setInvokeBusy(true); setInvokeMsg(null); setInvokeOut(null); setRunSteps([]); setSourcesUsed([]);
-    const typed: Record<string, unknown> = {};
-    for (const i of inputs) {
-      const raw = invokeVals[i.name] ?? '';
-      typed[i.name] = i.type === 'number' ? Number(raw) : i.type === 'boolean' ? /^(true|1|yes)$/i.test(raw) : raw;
-    }
+    const typed = buildTyped();
     try {
+      // The invoke route reads the block graph from Cosmos — persist edits first.
+      if (dirty) {
+        const ok = await save();
+        if (!ok) { setInvokeMsg({ intent: 'error', text: 'Could not save the block graph before running.' }); return; }
+      }
       const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/invoke`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ inputs: typed, mode: agentMode ? 'agent' : 'logic' }),
@@ -1146,9 +3123,16 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
       setInvokeOut(String(j.output ?? ''));
       if (Array.isArray(j?.steps)) setRunSteps(j.steps);
       if (Array.isArray(j?.sourcesUsed)) setSourcesUsed(j.sourcesUsed);
+      persistRun({
+        id: `run_${Date.now()}`, ts: new Date().toISOString(), mode: agentMode ? 'agent' : 'logic',
+        model: j.model, inputs: typed, output: String(j.output ?? '').slice(0, 4000),
+        sources: Array.isArray(j.sourcesUsed) ? j.sourcesUsed : undefined,
+        steps: Array.isArray(j.steps) ? (j.steps as RunStepLite[]).slice(0, 30).map(trimStep) : undefined,
+        usage: (j.usage && typeof j.usage === 'object') ? j.usage : undefined, ok: true,
+      });
     } catch (e: any) { setInvokeMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setInvokeBusy(false); }
-  }, [id, inputs, invokeVals, agentMode]);
+  }, [id, buildTyped, agentMode, persistRun, dirty, save]);
 
   const deploy = useCallback(async () => {
     setDeployBusy(true); setDeployMsg(null);
@@ -1168,11 +3152,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
   const runDeployedAgent = useCallback(async () => {
     setInvokeBusy(true); setInvokeMsg(null); setInvokeOut(null); setRunSteps([]);
-    const typed: Record<string, unknown> = {};
-    for (const i of inputs) {
-      const raw = invokeVals[i.name] ?? '';
-      typed[i.name] = i.type === 'number' ? Number(raw) : i.type === 'boolean' ? /^(true|1|yes)$/i.test(raw) : raw;
-    }
+    const typed = buildTyped();
     try {
       const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/run-agent`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inputs: typed }),
@@ -1185,23 +3165,29 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
         return;
       }
       setInvokeOut(String(j.answer ?? ''));
+      persistRun({
+        id: `run_${Date.now()}`, ts: new Date().toISOString(), mode: 'agent',
+        model: j.model || state.foundryModel, inputs: typed, output: String(j.answer ?? '').slice(0, 4000),
+        steps: Array.isArray(j.steps) ? (j.steps as RunStepLite[]).slice(0, 30).map(trimStep) : undefined,
+        usage: (j.usage && typeof j.usage === 'object') ? j.usage : undefined, ok: true,
+      });
     } catch (e: any) { setInvokeMsg({ intent: 'error', text: e?.message || String(e) }); }
     finally { setInvokeBusy(false); }
-  }, [id, inputs, invokeVals]);
+  }, [id, buildTyped, persistRun, state.foundryModel]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
       { label: 'Function', actions: [
         { label: saving ? 'Saving…' : 'Save', onClick: () => save(), disabled: saving || !dirty },
-        { label: invokeBusy ? 'Running…' : 'Invoke', onClick: invoke, disabled: invokeBusy || steps.length === 0 },
+        { label: invokeBusy ? 'Running…' : 'Invoke', onClick: invoke, disabled: invokeBusy || blocks.length === 0 },
       ]},
       { label: 'Publish', actions: [
-        { label: deployBusy ? 'Deploying…' : 'Deploy as agent', onClick: deploy, disabled: deployBusy || steps.length === 0 },
+        { label: deployBusy ? 'Deploying…' : 'Deploy as agent', onClick: deploy, disabled: deployBusy || blocks.length === 0 },
       ]},
     ]},
-  ], [save, saving, dirty, invoke, invokeBusy, steps.length, deploy, deployBusy]);
+  ], [save, saving, dirty, invoke, invokeBusy, blocks.length, deploy, deployBusy]);
 
-  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Spindle logic / agent" intro="Spindle Studio — author a no-code typed AI function or agent: typed inputs → ordered steps → typed output, grounded on the Weave ontology and runnable against Azure OpenAI / Foundry. No Fabric required." />;
+  if (id === 'new') return <NewItemCreateGate item={item} createLabel="Create Spindle logic / agent" intro="Spindle Studio — author a no-code typed AI function or agent: typed inputs → a TYPED BLOCK GRAPH (create-variable, get-object-property, use-LLM with tools, execute-function, transform, branch) → typed output, grounded on the Weave ontology and runnable against Azure OpenAI / Synapse. No Fabric required." />;
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
@@ -1209,7 +3195,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
         {loading && <Spinner size="small" label="Loading…" labelPosition="after" />}
         <MessageBar intent="info"><MessageBarBody>
           <MessageBarTitle>Spindle Studio (Palantir AIP Logic / AIP equivalent)</MessageBarTitle>
-          Author typed inputs and ordered steps (dropdowns, no freeform JSON), ground on a Weave ontology, then invoke as logic or as a tool-calling agent against the live Azure OpenAI deployment. Optionally publish as an Azure AI Foundry agent. No Microsoft Fabric required.
+          Author typed inputs and a TYPED BLOCK GRAPH (dropdowns, no freeform JSON) — each block emits a named, typed output that later blocks reference. Ground on a Weave ontology, then invoke as logic (the deterministic block engine) or as a tool-calling agent against the live Azure OpenAI deployment. Optionally publish as an Azure AI Foundry agent. No Microsoft Fabric required.
         </MessageBarBody></MessageBar>
 
         <div className={s.section}>
@@ -1218,14 +3204,14 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
             <MessageBar intent="warning"><MessageBarBody>No ontologies found. Create an Ontology item first, then bind it here to ground this function on the Weave.</MessageBarBody></MessageBar>
           ) : (
             <div className={s.addBar}>
-              <Field label="Bound ontology" style={{ minWidth: 280 }}>
+              <Field label="Bound ontology" className={s.fieldWide}>
                 <Dropdown
                   value={state.boundOntologyName || (onto.boundOntologyId ? '(bound)' : 'None — runs ungrounded')}
                   selectedOptions={[String(onto.boundOntologyId || state.boundOntologyId || '')]}
                   disabled={onto.busy}
                   onOptionSelect={(_, d) => onto.bind(String(d.optionValue || ''))}>
                   <Option value="">None — runs ungrounded</Option>
-                  {onto.ontologies.map((o) => <Option key={o.id} value={o.id}>{o.displayName}{typeof o.classCount === 'number' ? ` (${o.classCount} types)` : ''}</Option>)}
+                  {onto.ontologies.map((o) => <Option key={o.id} value={o.id} text={o.displayName}>{o.displayName}{typeof o.classCount === 'number' ? ` (${o.classCount} types)` : ''}</Option>)}
                 </Dropdown>
               </Field>
               {onto.busy && <Spinner size="tiny" />}
@@ -1239,16 +3225,36 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
 
         <div className={s.grid2}>
           <div className={s.section}>
-            <SectionHead icon={<Add20Regular />} title="Typed inputs" hint="Named parameters with a type." />
+            <SectionHead icon={<Add20Regular />} title="Typed inputs" hint="Named parameters with an AIP Logic type — object types bind to the Weave ontology." />
             <div className={s.addBar}>
               <Field label="Name"><Input value={inName} onChange={(_, d) => setInName(d.value)} placeholder="customerId" /></Field>
-              <Field label="Type"><Dropdown value={inType} selectedOptions={[inType]} onOptionSelect={(_, d) => setInType((d.optionValue as 'string' | 'number' | 'boolean') || 'string')}>
-                <Option value="string">string</Option><Option value="number">number</Option><Option value="boolean">boolean</Option>
+              <Field label="Type" className={s.fieldMed}><Dropdown value={inType} selectedOptions={[inType]} onOptionSelect={(_, d) => { const v = String(d.optionValue || 'string'); setInType(v); if (!AIP_OBJECT.has(v)) setInObjType(''); }}>
+                {AIP_INPUT_TYPES.map((t) => <Option key={t} value={t}>{t}</Option>)}
               </Dropdown></Field>
-              <Button appearance="primary" icon={<Add20Regular />} disabled={!/^[A-Za-z_][\w]*$/.test(inName.trim())} onClick={addInput}>Add</Button>
+              {AIP_OBJECT.has(inType) && (
+                <Field label="Object type" className={s.fieldMed}>
+                  <Dropdown
+                    value={inObjType || (state.ontologyEntityTypes && state.ontologyEntityTypes.length ? 'Pick entity type' : 'Bind an ontology first')}
+                    selectedOptions={[inObjType]}
+                    disabled={!(state.ontologyEntityTypes && state.ontologyEntityTypes.length)}
+                    onOptionSelect={(_, d) => setInObjType(String(d.optionValue || ''))}>
+                    {(state.ontologyEntityTypes || []).map((t) => <Option key={t} value={t}>{t}</Option>)}
+                  </Dropdown>
+                </Field>
+              )}
+              <Field label="Description" className={s.fieldStep}><Input value={inDesc} onChange={(_, d) => setInDesc(d.value)} placeholder="The customer to assess" /></Field>
+              <Checkbox label="Required" checked={inReq} onChange={(_, d) => setInReq(!!d.checked)} />
+              <Button appearance="primary" icon={<Add20Regular />} disabled={!/^[A-Za-z_][\w]*$/.test(inName.trim()) || (AIP_OBJECT.has(inType) && !inObjType)} onClick={addInput}>Add</Button>
             </div>
             {inputs.length === 0 ? <div className={s.empty}><Caption1>No inputs yet.</Caption1></div> : inputs.map((i) => (
-              <div key={i.id} className={s.row}><Body1><strong>{i.name}</strong></Body1><Badge appearance="tint">{i.type}</Badge><span className={s.spacer} /><Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${i.name}`} onClick={() => removeInput(i.id)}>Remove</Button></div>
+              <div key={i.id} className={s.row}>
+                <Body1><strong>{i.name}</strong></Body1>
+                <Badge appearance="tint">{i.type}{i.objectType ? `: ${i.objectType}` : ''}</Badge>
+                {i.required && <Badge appearance="outline" color="danger">required</Badge>}
+                {i.description && <Caption1 className={s.hint}>{i.description}</Caption1>}
+                <span className={s.spacer} />
+                <Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${i.name}`} onClick={() => removeInput(i.id)}>Remove</Button>
+              </div>
             ))}
           </div>
 
@@ -1262,17 +3268,31 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
         </div>
 
         <div className={s.section}>
-          <SectionHead icon={<Flash20Regular />} title="Ordered steps" hint="Each step is an LLM prompt, an extraction, or a branch — no freeform JSON." />
+          <SectionHead icon={<Flash20Regular />} title="Typed block graph" hint="Ordered typed blocks — each emits a named, typed output later blocks reference. Configured with dropdowns; every block runs a real Azure-native backend." />
           <div className={s.addBar}>
-            <Field label="Step kind"><Dropdown value={stepKind} selectedOptions={[stepKind]} onOptionSelect={(_, d) => setStepKind((d.optionValue as 'llm-prompt' | 'extract' | 'branch') || 'llm-prompt')}>
-              <Option value="llm-prompt">LLM prompt</Option><Option value="extract">extract</Option><Option value="branch">branch</Option>
-            </Dropdown></Field>
-            <Field label="Step name"><Input value={stepName} onChange={(_, d) => setStepName(d.value)} placeholder="Summarize" /></Field>
-            <Field label="Instruction" style={{ minWidth: 260 }}><Input value={stepPrompt} onChange={(_, d) => setStepPrompt(d.value)} placeholder="Summarize {customerId} risk" /></Field>
-            <Button appearance="primary" icon={<Add20Regular />} onClick={addStep}>Add step</Button>
+            <Field label="Add block" className={s.fieldMed}>
+              <Dropdown
+                value={AIP_BLOCK_META[addBlockKind].label}
+                selectedOptions={[addBlockKind]}
+                onOptionSelect={(_, d) => setAddBlockKind((d.optionValue as AipBlockKind) || 'use-llm')}>
+                {(Object.keys(AIP_BLOCK_META) as AipBlockKind[]).map((k) => <Option key={k} value={k} text={AIP_BLOCK_META[k].label}>{AIP_BLOCK_META[k].label}</Option>)}
+              </Dropdown>
+            </Field>
+            <Caption1 className={s.hint}>{AIP_BLOCK_META[addBlockKind].hint}</Caption1>
+            <span className={s.spacer} />
+            <Button appearance="primary" icon={<Add20Regular />} onClick={() => addBlock(addBlockKind)}>Add block</Button>
           </div>
-          {steps.length === 0 ? <div className={s.empty}><Caption1>No steps yet — add at least one to invoke.</Caption1></div> : steps.map((st, n) => (
-            <div key={st.id} className={s.row}><Badge appearance="filled" color="brand">{n + 1}</Badge><Badge appearance="tint">{st.kind}</Badge><Body1><strong>{st.name}</strong></Body1>{st.prompt && <Caption1 className={s.hint}>{st.prompt}</Caption1>}<span className={s.spacer} /><Button size="small" appearance="subtle" icon={<Dismiss16Regular />} aria-label={`Remove ${st.name}`} onClick={() => removeStep(st.id)}>Remove</Button></div>
+          {blocks.length === 0 ? (
+            <div className={s.empty}><Caption1>No blocks yet — add at least one (e.g. a Use-LLM block) to invoke.</Caption1></div>
+          ) : blocks.map((b, n) => (
+            <div key={b.id}>
+              {n > 0 && <div className={s.blockConnector}><ChevronRight20Regular style={{ transform: 'rotate(90deg)' }} /></div>}
+              <AipBlockCard
+                block={b} index={n} total={blocks.length}
+                priorRefs={[...inputs.map((i) => i.name), ...blocks.slice(0, n).map((x) => x.output)]}
+                entityTypes={entityTypes} propsByType={propsByType} actionTypes={actionTypes} siblingFns={siblingFns}
+                onChange={(patch) => updateBlock(b.id, patch)} onRemove={() => removeBlock(b.id)} onMove={(dir) => moveBlock(b.id, dir)} />
+            </div>
           ))}
         </div>
 
@@ -1284,41 +3304,113 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
             <Badge appearance="tint" color={agentMode ? 'brand' : 'informative'} icon={agentMode ? <BrainCircuit20Regular /> : <Flash20Regular />}>{agentMode ? 'Agent' : 'Logic'}</Badge>
           </div>
           {inputs.length === 0 ? <Caption1 className={s.hint}>Add typed inputs to provide values.</Caption1> : inputs.map((i) => (
-            <Field key={i.id} label={`${i.name} (${i.type})`}><Input value={invokeVals[i.name] || ''} onChange={(_, d) => setInvokeVals((p) => ({ ...p, [i.name]: d.value }))} /></Field>
+            <Field key={i.id} label={`${i.name} (${i.type}${i.objectType ? `: ${i.objectType}` : ''})${i.required ? ' *' : ''}`} hint={i.description || undefined}>
+              <Input
+                value={invokeVals[i.name] || ''}
+                onChange={(_, d) => setInvokeVals((p) => ({ ...p, [i.name]: d.value }))}
+                placeholder={AIP_JSON.has(i.type) ? (i.type === 'array' ? '["a","b"]' : '{"k":"v"}') : AIP_OBJECT.has(i.type) ? 'object id / primary key' : i.type === 'boolean' ? 'true / false' : ''} />
+            </Field>
           ))}
-          <Button appearance="primary" icon={<Play20Regular />} disabled={invokeBusy || steps.length === 0} onClick={invoke}>{invokeBusy ? 'Running…' : agentMode ? 'Run agent' : 'Invoke function'}</Button>
+          <Button appearance="primary" icon={<Play20Regular />} disabled={invokeBusy || blocks.length === 0} onClick={invoke}>{invokeBusy ? 'Running…' : agentMode ? 'Run agent' : 'Invoke function'}</Button>
           {invokeMsg && <MessageBar intent={invokeMsg.intent}><MessageBarBody>{invokeMsg.text}</MessageBarBody></MessageBar>}
           {sourcesUsed.length > 0 && <div className={s.row}><Caption1 className={s.hint}>Grounded sources:</Caption1>{sourcesUsed.map((src) => <Badge key={src} appearance="tint" color="brand">{src}</Badge>)}</div>}
           {invokeOut !== null && <CodeBlock ariaLabel="Function output" content={invokeOut} />}
           {runSteps.length > 0 && (
             <>
               <Divider />
-              <Caption1 className={s.hint}>Run trace ({runSteps.length} step{runSteps.length === 1 ? '' : 's'})</Caption1>
-              <div className={s.trace} role="list" aria-label="Agent run trace">
+              <div className={s.sectionHead}>
+                <span className={s.sectionIcon}><Bug20Regular /></span>
+                <div>
+                  <Subtitle2>Debugger</Subtitle2>
+                  <Caption1 as="p" block className={s.hint}>{runSteps.length} step{runSteps.length === 1 ? '' : 's'} — expand a card to inspect the prompt, tool calls, output, and timing.</Caption1>
+                </div>
+              </div>
+              <Accordion multiple collapsible>
                 {runSteps.map((st, n) => {
                   const label = st.kind || st.type || st.name || 'step';
-                  const detail = st.kind === 'tool_call' ? st.name
-                    : st.kind === 'tool_result' ? `${st.name}${st.error ? ` — error: ${st.error}` : ''}`
-                    : st.kind === 'final' ? 'final answer'
-                    : st.kind === 'error' ? (st.error || 'error')
-                    : st.content || st.name || JSON.stringify(st.result ?? '').slice(0, 120);
+                  const isErr = st.kind === 'error' || st.status === 'error' || !!st.error;
+                  const isGate = st.status === 'gate' || !!st.gate;
+                  const isFinal = st.kind === 'final';
+                  const isBlock = !!st.output && (st.kind ? st.kind in AIP_BLOCK_META : false);
+                  const head = isBlock ? (AIP_BLOCK_META[st.kind as AipBlockKind]?.label || label)
+                    : st.kind === 'tool_call' ? `tool · ${st.name || ''}`
+                    : st.kind === 'tool_result' ? `result · ${st.name || ''}`
+                    : label;
+                  const detail = st.error || st.gate?.remediation || st.content || st.prompt
+                    || (st.result !== undefined ? JSON.stringify(st.result, null, 2) : '')
+                    || st.name || '';
+                  const key = st.callId || `${label}-${n}`;
+                  const tone = isErr ? 'danger' : isGate ? 'warning' : isFinal ? 'success' : 'brand';
                   return (
-                    <div key={st.callId || `${label}-${n}`} className={s.row} role="listitem">
-                      <Badge appearance="filled" color={st.kind === 'error' || st.error ? 'danger' : st.kind === 'final' ? 'success' : 'brand'}>{n + 1}</Badge>
-                      <Badge appearance="tint">{label}</Badge>
-                      <Caption1 className={s.hint}>{String(detail || '').slice(0, 160)}</Caption1>
-                    </div>
+                    <AccordionItem key={key} value={key}>
+                      <AccordionHeader>
+                        <div className={s.traceHead}>
+                          <Badge appearance="filled" color={tone as any}>{n + 1}</Badge>
+                          {isBlock && AIP_BLOCK_META[st.kind as AipBlockKind]?.icon}
+                          <Badge appearance="tint" color={isErr ? 'danger' : isGate ? 'warning' : isFinal ? 'success' : 'informative'}>{head}</Badge>
+                          {st.output && <span className={s.outPill}><Badge appearance="outline" color="brand">{st.output}: {st.outputType || 'string'}</Badge></span>}
+                          {typeof st.elapsedMs === 'number' && <Caption1 className={s.hint}>{st.elapsedMs} ms</Caption1>}
+                          {st.model && <Badge appearance="outline">{st.model}</Badge>}
+                          {st.status && <Badge appearance="outline" color={isErr ? 'danger' : isGate ? 'warning' : undefined}>{st.status}</Badge>}
+                        </div>
+                      </AccordionHeader>
+                      <AccordionPanel>
+                        {isGate && st.gate && (
+                          <MessageBar intent="warning"><MessageBarBody>
+                            <MessageBarTitle>{st.gate.reason || 'Infrastructure required'}</MessageBarTitle>
+                            {st.gate.remediation}
+                          </MessageBarBody></MessageBar>
+                        )}
+                        {st.output && st.content !== undefined && st.content !== '' && (
+                          <Caption1 className={s.hint}>Resolved output <strong>{st.output}</strong> = {String(st.content).slice(0, 200)}</Caption1>
+                        )}
+                        {Array.isArray(st.tools) && st.tools.length > 0 && (
+                          <CodeBlock ariaLabel={`Step ${n + 1} tool calls`} content={JSON.stringify(st.tools, null, 2).slice(0, 4000)} />
+                        )}
+                        {detail ? <CodeBlock ariaLabel={`Step ${n + 1} detail`} content={String(detail).slice(0, 4000)} /> : <Caption1 className={s.hint}>No additional detail for this step.</Caption1>}
+                      </AccordionPanel>
+                    </AccordionItem>
                   );
                 })}
-              </div>
+              </Accordion>
             </>
+          )}
+        </div>
+
+        <div className={s.section}>
+          <SectionHead icon={<History20Regular />} title="Run history" hint="Recent invocations persisted to Cosmos with this function — open a run to rehydrate its output and debugger trace." />
+          {runs.length === 0 ? <div className={s.empty}><Caption1>No runs yet — Invoke the function to record a run.</Caption1></div> : (
+            <div className={s.tableWrap}>
+              <Table aria-label="Run history" size="small">
+                <TableHeader><TableRow>
+                  <TableHeaderCell>When</TableHeaderCell>
+                  <TableHeaderCell>Mode</TableHeaderCell>
+                  <TableHeaderCell>Model</TableHeaderCell>
+                  <TableHeaderCell>Tokens</TableHeaderCell>
+                  <TableHeaderCell>Output</TableHeaderCell>
+                  <TableHeaderCell aria-label="actions" />
+                </TableRow></TableHeader>
+                <TableBody>
+                  {runs.map((rec) => (
+                    <TableRow key={rec.id}>
+                      <TableCell><Caption1>{new Date(rec.ts).toLocaleString()}</Caption1></TableCell>
+                      <TableCell><Badge appearance="tint" color={rec.mode === 'agent' ? 'brand' : 'informative'}>{rec.mode}</Badge></TableCell>
+                      <TableCell><Caption1 className={s.hint}>{rec.model || '—'}</Caption1></TableCell>
+                      <TableCell><Caption1 className={s.hint}>{rec.usage?.totalTokens ?? '—'}</Caption1></TableCell>
+                      <TableCell><Caption1 className={s.hint}>{String(rec.output || '').slice(0, 60) || '—'}</Caption1></TableCell>
+                      <TableCell><Button size="small" appearance="subtle" icon={<Play20Regular />} onClick={() => loadRun(rec)}>Open</Button></TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
           )}
         </div>
 
         <div className={s.section}>
           <SectionHead icon={<Rocket20Regular />} title="Publish as Azure AI Foundry agent" hint="Deploy this Spindle logic as a real Foundry Agent Service agent, then run + inspect its steps. Unsupported in Azure Government — use Invoke (Azure-native) there." />
           <div className={s.addBar}>
-            <Button appearance="primary" icon={<Rocket20Regular />} disabled={deployBusy || steps.length === 0} onClick={deploy}>{deployBusy ? 'Deploying…' : state.foundryAgentId ? 'Re-deploy agent' : 'Deploy as agent'}</Button>
+            <Button appearance="primary" icon={<Rocket20Regular />} disabled={deployBusy || blocks.length === 0} onClick={deploy}>{deployBusy ? 'Deploying…' : state.foundryAgentId ? 'Re-deploy agent' : 'Deploy as agent'}</Button>
             <Button appearance="secondary" icon={<Play20Regular />} disabled={invokeBusy || !state.foundryAgentId} onClick={runDeployedAgent}>Run deployed agent + inspect</Button>
             {state.foundryAgentId && <Badge appearance="tint" color="success">{state.foundryAgentId}</Badge>}
             {state.foundryModel && <Badge appearance="tint">model: {state.foundryModel}</Badge>}

@@ -54,7 +54,7 @@ const useStyles = makeStyles({
   root: {
     display: 'flex', flexDirection: 'column',
     gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalS,
-    height: '100%', minWidth: 264,
+    height: '100%', minWidth: '264px',
   },
   header: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, justifyContent: 'space-between' },
   title: { fontWeight: tokens.fontWeightSemibold, fontSize: tokens.fontSizeBase300 },

@@ -9,6 +9,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { listDlpAlerts } from '@/lib/azure/dlp-graph-client';
 import { handleSecurityError } from '../../_lib/error-handling';
 
@@ -18,6 +19,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const top = Number(req.nextUrl.searchParams.get('top') || 25);
   const since = req.nextUrl.searchParams.get('since') || undefined;
   try {

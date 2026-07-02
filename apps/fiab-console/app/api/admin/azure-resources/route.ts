@@ -20,6 +20,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 
@@ -41,6 +42,10 @@ interface ArmResource {
 export async function GET(_req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  // Deployment-wide ARM inventory (admin + DLZ RGs across subs via the Console
+  // UAMI) is estate-scoped, not per-user — restrict to tenant admins.
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
 
   const sub = process.env.LOOM_SUBSCRIPTION_ID;
   if (!sub) {

@@ -97,9 +97,9 @@ batch_id = _get_arg("batch_id", datetime.now().strftime("%Y%m%d_%H%M%S"))
 random.seed(42)  # deterministic synthetic data
 
 # Tables (three-part names for schema-enabled Lakehouses)
-DIM_TABLE = "lh_gold.dbo.dim_player"
-AUDIT_TABLE = "lh_gold.dbo.dim_player_audit"
-FACT_TABLE = "lh_gold.dbo.fact_session_demo"
+DIM_TABLE = "lh_gold.dim_player"
+AUDIT_TABLE = "lh_gold.dim_player_audit"
+FACT_TABLE = "lh_gold.fact_session_demo"
 
 # Sentinel for "current" rows (NEVER use NULL — see scd-patterns.md sec. 2)
 EFFECTIVE_TO_SENTINEL = "9999-12-31 23:59:59"
@@ -402,7 +402,7 @@ def merge_close_current(target_table: str, ids_to_close, close_ts, reason: str):
     Pass A: close current rows for the given player_ids by setting is_current=false
     and effective_to=close_ts. Atomic single-statement MERGE.
     Equivalent SQL:
-        MERGE INTO lh_gold.dbo.dim_player t
+        MERGE INTO lh_gold.dim_player t
         USING (SELECT explode(:ids) AS player_id) s
         ON t.player_id = s.player_id AND t.is_current = true
         WHEN MATCHED THEN UPDATE SET is_current=false, effective_to=:close_ts
@@ -508,7 +508,7 @@ print("Pass B complete")
 # MAGIC
 # MAGIC ```sql
 # MAGIC -- Pass A: close current rows
-# MAGIC MERGE INTO lh_gold.dbo.dim_player t
+# MAGIC MERGE INTO lh_gold.dim_player t
 # MAGIC USING incoming_changes s
 # MAGIC ON  t.player_id  = s.player_id
 # MAGIC AND t.is_current = true
@@ -518,7 +518,7 @@ print("Pass B complete")
 # MAGIC         effective_to = current_timestamp();
 # MAGIC
 # MAGIC -- Pass B: insert new versions (in a separate statement, same transaction window)
-# MAGIC INSERT INTO lh_gold.dbo.dim_player
+# MAGIC INSERT INTO lh_gold.dim_player
 # MAGIC SELECT
 # MAGIC     <next_player_sk>,
 # MAGIC     s.player_id,
@@ -594,7 +594,7 @@ print("Retry wrapper validated.")
 # Operational note: when multiple writers MUST coexist on a single dim, acquire a named-lock
 # row in a coordination table BEFORE calling MERGE. Release in a finally block.
 # Example coordination pattern (pseudo):
-#     INSERT INTO lh_gold.dbo.dim_locks VALUES ('dim_player', current_timestamp(), :pipeline_id)
+#     INSERT INTO lh_gold.dim_locks VALUES ('dim_player', current_timestamp(), :pipeline_id)
 #         WHERE NOT EXISTS (SELECT 1 FROM dim_locks WHERE dim_name = 'dim_player' AND released = false)
 
 # COMMAND ----------

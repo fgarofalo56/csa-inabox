@@ -57,18 +57,21 @@ const useStyles = makeStyles({
   // small form-specific helpers — no primitive covers these.
   muted: { color: tokens.colorNeutralForeground3 },
   mutedBlock: { color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalM },
-  cellStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, minWidth: 0 },
+  cellStack: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
   formHead: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     marginBottom: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalL,
   },
   formHeadIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
   registerGrid: {
-    display: 'grid', gridTemplateColumns: '1fr auto',
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto',
     gap: tokens.spacingHorizontalM, alignItems: 'end',
   },
   scanGrid: {
-    display: 'grid', gridTemplateColumns: '1fr 1fr',
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
     gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS,
   },
   receipt: {
@@ -94,14 +97,17 @@ const useStyles = makeStyles({
   formHeadTight: { marginTop: 0 },
   dividerTop: { marginTop: tokens.spacingVerticalL },
   dividerMid: { marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM },
-  // honest-gate remediation block
+  // honest-gate remediation block — identity values can be long resource IDs,
+  // so wrap them rather than overflow the MessageBar.
   remediation: {
     marginTop: tokens.spacingVerticalS,
     fontSize: tokens.fontSizeBase200,
     lineHeight: tokens.lineHeightBase300,
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
   },
-  // pre blocks for diagnostic JSON hints
+  // pre blocks for diagnostic JSON hints — wrap + bound + scroll so a large
+  // hint blob never overflows horizontally or leaves dead vertical space.
   hintPre: {
     marginTop: tokens.spacingVerticalS,
     marginBottom: 0,
@@ -110,19 +116,36 @@ const useStyles = makeStyles({
     fontFamily: tokens.fontFamilyMonospace,
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-word',
+    overflowWrap: 'anywhere',
+    maxWidth: '100%',
+    maxHeight: '320px',
+    overflowY: 'auto',
+    overflowX: 'auto',
     backgroundColor: tokens.colorNeutralBackground3,
     borderRadius: tokens.borderRadiusMedium,
   },
-  envLine: { marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 },
-  errorList: { margin: 0, marginTop: tokens.spacingVerticalXS, paddingLeft: tokens.spacingHorizontalXL },
-  captionBlock: { display: 'block', marginTop: tokens.spacingVerticalXS },
+  envLine: {
+    marginTop: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
+  errorList: {
+    margin: 0, marginTop: tokens.spacingVerticalXS, paddingLeft: tokens.spacingHorizontalXL,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
+  captionBlock: {
+    display: 'block', marginTop: tokens.spacingVerticalXS,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
   receiptIcon: { color: tokens.colorPaletteGreenForeground1, flexShrink: 0 },
   endorseMb: { marginBottom: tokens.spacingVerticalS },
   emptyCentered: {
     alignItems: 'center', textAlign: 'center',
     paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
   },
-  purviewEndpoint: { display: 'block', marginTop: tokens.spacingVerticalXXS },
+  purviewEndpoint: {
+    display: 'block', marginTop: tokens.spacingVerticalXXS,
+    overflowWrap: 'anywhere', wordBreak: 'break-word',
+  },
 });
 
 export default function MetastoresPage() {

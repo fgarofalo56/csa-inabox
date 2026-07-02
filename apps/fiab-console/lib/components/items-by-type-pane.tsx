@@ -7,16 +7,23 @@
  *
  * Real BFF (/api/items/by-type) — no hardcoded arrays. Empty state is
  * honest: prompts the user to create the first item via +New.
+ *
+ * Web 3.0: Loom design tokens only (no px/hex literals), the shared TileGrid +
+ * ItemTile primitives for the card grid, and EmptyState for the empty / no-match
+ * panes (never a bare styled <div>).
  */
 
 import { useEffect, useState, useMemo } from 'react';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Spinner, Input, Badge, Caption1, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Search20Regular } from '@fluentui/react-icons';
+import { Search20Regular, Box24Regular, SearchInfo24Regular } from '@fluentui/react-icons';
 import { NewItemDialog } from '@/lib/components/new-item-dialog';
 import { SignInRequired } from '@/lib/components/sign-in-required';
+import { EmptyState } from '@/lib/components/empty-state';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { ItemTile } from '@/lib/components/ui/item-tile';
 import { findItemType, type WorkloadCategory } from '@/lib/catalog/fabric-item-types';
 
 interface OwnedItem {
@@ -32,49 +39,24 @@ interface Props {
 }
 
 const useStyles = makeStyles({
-  toolbar: { display: 'flex', gap: '16px', alignItems: 'center', marginBottom: '20px', flexWrap: 'wrap' },
-  search: { flex: 1, maxWidth: '380px' },
-  grid: {
-    display: 'grid',
-    gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))',
-    gap: '16px',
+  toolbar: {
+    display: 'flex',
+    gap: tokens.spacingHorizontalL,
+    alignItems: 'center',
+    marginBottom: tokens.spacingVerticalXL,
+    flexWrap: 'wrap',
   },
-  card: {
-    paddingTop: '18px', paddingRight: '18px', paddingBottom: '18px', paddingLeft: '18px',
-    borderRadius: '10px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground1,
-    textDecoration: 'none', color: tokens.colorNeutralForeground1,
-    display: 'flex', flexDirection: 'column',
-    transition: 'border-color 0.15s, box-shadow 0.15s, transform 0.15s',
-    ':hover': {
-      borderColor: tokens.colorBrandStroke1,
-      boxShadow: tokens.shadow8,
-      transform: 'translateY(-2px)',
-    },
-  },
-  type: {
-    fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
-    color: tokens.colorNeutralForeground3, fontWeight: 600, marginBottom: '4px',
-  },
-  name: { fontSize: '15px', fontWeight: 600, lineHeight: 1.3, marginBottom: '4px' },
-  desc: { fontSize: '13px', color: tokens.colorNeutralForeground2, lineHeight: 1.45 },
-  meta: { fontSize: '11px', color: tokens.colorNeutralForeground3, marginTop: '8px' },
-  empty: {
-    paddingTop: '32px', paddingRight: '32px', paddingBottom: '32px', paddingLeft: '32px',
-    borderRadius: '12px',
-    border: `1px dashed ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-    color: tokens.colorNeutralForeground2,
-    fontSize: '14px', textAlign: 'center', lineHeight: 1.6,
-  },
+  search: { flex: 1, maxWidth: '380px', minWidth: 0 },
+  count: { color: tokens.colorNeutralForeground3 },
 });
 
 export function ItemsByTypePane({ types, emptyHint, defaultCategoryForNew }: Props) {
   const styles = useStyles();
+  const router = useRouter();
   const [items, setItems] = useState<OwnedItem[] | null>(null);
   const [unauth, setUnauth] = useState(false);
   const [q, setQ] = useState('');
+  const [newOpen, setNewOpen] = useState(false);
 
   useEffect(() => {
     // v3.4: switch from repeated ?type=A&type=B&... to a single
@@ -108,44 +90,54 @@ export function ItemsByTypePane({ types, emptyHint, defaultCategoryForNew }: Pro
           placeholder="Filter items by name or description…"
           value={q} onChange={(_, d) => setQ(d.value)} />
         {items !== null && items.length > 0 && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+          <Caption1 className={styles.count}>
             {filter ? `${visible.length} of ${items.length} items` : `${items.length} item${items.length === 1 ? '' : 's'}`}
           </Caption1>
         )}
-        <NewItemDialog defaultCategory={defaultCategoryForNew as WorkloadCategory | undefined} />
+        <NewItemDialog
+          open={newOpen}
+          onOpenChange={setNewOpen}
+          defaultCategory={defaultCategoryForNew as WorkloadCategory | undefined}
+        />
       </div>
+
       {items === null && <Spinner label="Loading items…" />}
+
       {items !== null && items.length === 0 && (
-        <div className={styles.empty}>
-          {emptyHint || 'No items of these types yet.'}<br />
-          Click <b>+ New item</b> above to create your first one — it persists to
-          Cosmos and (when the underlying Azure resource is configured) executes against the real service.
-        </div>
+        <EmptyState
+          icon={<Box24Regular />}
+          title="No items yet"
+          body={`${emptyHint || 'No items of these types yet.'} Create your first one with + New item — it persists to Cosmos and (when the underlying Azure resource is configured) executes against the real service.`}
+          primaryAction={{ label: '+ New item', onClick: () => setNewOpen(true) }}
+        />
       )}
+
       {items !== null && items.length > 0 && visible.length > 0 && (
-        <div className={styles.grid}>
+        <TileGrid>
           {visible.map(it => {
             const meta = findItemType(it.itemType);
             return (
-              <Link key={`${it.itemType}-${it.id}`}
-                href={`/items/${it.itemType}/${it.id}`}
-                className={styles.card}>
-                <div className={styles.type}>
-                  {meta?.displayName ?? it.itemType.replace(/-/g, ' ')}
-                </div>
-                <div className={styles.name}>{it.displayName}</div>
-                {it.description && <div className={styles.desc}>{it.description}</div>}
-                <div className={styles.meta}>
-                  Updated {new Date(it.updatedAt || it.createdAt).toLocaleDateString()}
-                  {meta?.category && <> · <Badge appearance="outline" size="small">{meta.category}</Badge></>}
-                </div>
-              </Link>
+              <ItemTile
+                key={`${it.itemType}-${it.id}`}
+                type={it.itemType}
+                title={it.displayName}
+                subtitle={it.description || (meta?.displayName ?? it.itemType.replace(/-/g, ' '))}
+                meta={`Updated ${new Date(it.updatedAt || it.createdAt).toLocaleDateString()}`}
+                footer={meta?.category ? <Badge appearance="outline" size="small">{meta.category}</Badge> : undefined}
+                onClick={() => router.push(`/items/${it.itemType}/${it.id}`)}
+              />
             );
           })}
-        </div>
+        </TileGrid>
       )}
+
       {items !== null && items.length > 0 && visible.length === 0 && filter && (
-        <div className={styles.empty}>No items match &ldquo;{q}&rdquo;.</div>
+        <EmptyState
+          icon={<SearchInfo24Regular />}
+          title="No matching items"
+          body={`Nothing matches “${q}”. Try a different name or description, or clear the filter.`}
+          primaryAction={{ label: 'Clear filter', appearance: 'secondary', onClick: () => setQ('') }}
+        />
       )}
     </>
   );

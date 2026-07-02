@@ -33,11 +33,11 @@ import { validateImportCsv, type CsvValidation } from '@/lib/util/csv-parse';
 import type { DataProductImportJob } from '@/lib/azure/cosmos-client';
 
 const useStyles = makeStyles({
-  body: { display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 8 },
-  row: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalS },
+  row: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   fileInput: {
-    padding: 8,
+    padding: tokens.spacingVerticalS,
     border: `1px dashed ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground1,
@@ -45,12 +45,12 @@ const useStyles = makeStyles({
     width: '100%',
   },
   tableWrap: {
-    overflow: 'auto', maxHeight: 240,
+    overflow: 'auto', maxHeight: '240px',
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
   },
-  kpis: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12, color: tokens.colorNeutralForeground3 },
+  kpis: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 },
 });
 
 interface WorkspaceLite { id: string; name: string }

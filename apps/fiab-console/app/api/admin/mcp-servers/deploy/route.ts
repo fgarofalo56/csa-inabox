@@ -30,6 +30,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
+import { pdpCheck } from '@/lib/auth/pdp/enforce';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { saveMcpServer } from '@/lib/azure/mcp-config-store';
 import {
@@ -142,6 +143,10 @@ async function deployCatalogServer(
   if (denied) return denied;
 
   const tenantId = session.claims.oid;
+  // PDP gate (default-off / shadow-ready). Admin write — deploy a catalog MCP server.
+  const blocked = await pdpCheck(session, { level: 'domain', id: tenantId }, 'admin');
+  if (blocked) return blocked;
+
   const who = session.claims.upn || session.claims.email || tenantId;
 
   const entry = getCatalogEntry(String(body.catalogId || ''));

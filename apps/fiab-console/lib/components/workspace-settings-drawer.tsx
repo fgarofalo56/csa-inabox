@@ -3,13 +3,17 @@
 /**
  * WorkspaceSettingsDrawer — Fabric workspace Settings affordance.
  *
- * Ships only the sections backed by real REST today (per no-vaporware):
- *   - General → PATCH /api/workspaces/[id] (name, description, capacity, domain)
- *   - Danger  → DELETE /api/workspaces/[id]
- *
- * Other Fabric sections (Git integration, OneLake, sensitivity, members)
- * are surfaced with honest MessageBars pointing at the work item that
- * will deliver them — never auto-generated form stubs.
+ * Ships all sections backed by real REST (per no-vaporware):
+ *   - General     → PATCH /api/workspaces/[id] (name, description, capacity, domain)
+ *   - Permissions → ManageAccessPane (workspace RBAC via Cosmos + real Azure RBAC)
+ *   - Networking  → NetworkingPane (private endpoint management)
+ *   - Git         → GitIntegrationPane (ADO / GitHub source control)
+ *   - OneLake     → ADLS Gen2 binding + lifecycle rules
+ *   - Encryption  → CmkPane (customer-managed key)
+ *   - Spark       → SparkComputePane (attached Spark pools)
+ *   - Sensitivity → WorkspaceSensitivitySection (MIP label taxonomy from Graph;
+ *                   labels are applied per-item, not per workspace)
+ *   - Danger zone → DELETE /api/workspaces/[id]
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -51,9 +55,9 @@ interface Props {
 
 const useStyles = makeStyles({
   trigger: { flexShrink: 0 },
-  body: { display: 'flex', flexDirection: 'column', gap: 12 },
-  section: { display: 'flex', flexDirection: 'column', gap: 12 },
-  row: { display: 'flex', gap: 8, alignItems: 'center' },
+  body: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
+  section: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM },
+  row: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
 });
 
 type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'sensitivity' | 'danger';
@@ -105,10 +109,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             {tab === 'onelake' && <OneLakeSection workspace={workspace} />}
             {tab === 'encryption' && <CmkPane workspaceId={workspace.id} />}
             {tab === 'spark' && <SparkComputePane workspaceId={workspace.id} />}
-            {tab === 'sensitivity' && <DeferredSection
-              title="Sensitivity label"
-              body="Sensitivity labels require Microsoft Purview Information Protection. Workspace-level enforcement lands when the Purview governance pillar wires up (see docs/fiab/v118-handoff.md governance backlog)."
-            />}
+            {tab === 'sensitivity' && <WorkspaceSensitivitySection workspaceId={workspace.id} />}
             {tab === 'danger' && <DangerSection workspace={workspace} onDeleted={() => { setOpen(false); router.push('/workspaces'); }} />}
           </div>
         </DrawerBody>
@@ -208,6 +209,124 @@ function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDelet
           </DialogBody>
         </DialogSurface>
       </Dialog>
+    </div>
+  );
+}
+
+/**
+ * WorkspaceSensitivitySection — MIP sensitivity-label guidance for a workspace.
+ *
+ * Sensitivity labels are applied per-item (lakehouse, warehouse, report, etc.)
+ * via the item editor's Sensitivity flyout, which calls the real
+ * GET/PUT /api/items/[type]/[id]/sensitivity-label endpoints backed by
+ * Microsoft Graph Information Protection. There is no workspace-level label
+ * endpoint — the workspace object does not carry a sensitivity label in either
+ * the Cosmos schema or the Purview Data Map.
+ *
+ * This section shows the current label counts from the MIP taxonomy
+ * (GET /api/admin/security/mip/labels) and directs users to the surfaces
+ * where labels are actually managed. No fake controls.
+ */
+function WorkspaceSensitivitySection({ workspaceId }: { workspaceId: string }) {
+  const styles = useStyles();
+  const [labels, setLabels] = useState<{ id: string; displayName?: string; name?: string; color?: string; sensitivity?: number; isActive?: boolean; tooltip?: string }[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [mipConfigured, setMipConfigured] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    fetch('/api/admin/security/mip/labels')
+      .then((r) => r.json())
+      .then((d: any) => {
+        if (d?.ok && Array.isArray(d.labels)) {
+          setLabels(d.labels.filter((l: any) => l.isActive !== false));
+          setMipConfigured(true);
+        } else if (d?.code === 'mip_not_configured' || d?.code === 'mip_admin_not_configured') {
+          setMipConfigured(false);
+          setLabels([]);
+        } else {
+          setError(d?.error || `HTTP error loading labels`);
+          setMipConfigured(true);
+          setLabels([]);
+        }
+      })
+      .catch((e: any) => { setError(e?.message || String(e)); setLabels([]); })
+      .finally(() => setLoading(false));
+  }, [workspaceId]);
+
+  return (
+    <div className={styles.section}>
+      {loading && <Spinner size="tiny" label="Loading sensitivity labels…" />}
+
+      {!loading && mipConfigured === false && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <strong>Microsoft Purview Information Protection is not configured</strong> for this
+            deployment. Set <code>LOOM_MIP_ENABLED=true</code> and grant the Console UAMI the{' '}
+            <code>InformationProtectionPolicy.Read.All</code> Graph application permission to enable
+            the MIP sensitivity label taxonomy. Labels can then be applied per-item in each item's
+            editor.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!loading && mipConfigured === true && !error && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <strong>Sensitivity labels are applied per item, not per workspace.</strong> Open any
+            item (lakehouse, warehouse, report, etc.) and use the{' '}
+            <strong>Sensitivity</strong> action in the item editor to apply a Microsoft Purview
+            Information Protection label. The label is recorded in the Loom catalog and, when
+            Purview is configured, tagged on the Purview Data Map asset.
+            {Array.isArray(labels) && labels.length > 0 && (
+              <> {labels.length} label{labels.length !== 1 ? 's' : ''} are active in this tenant.</>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!loading && error && (
+        <MessageBar intent="error">
+          <MessageBarBody>Could not load sensitivity labels: {error}</MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!loading && Array.isArray(labels) && labels.length > 0 && (
+        <>
+          <Subtitle2>Active sensitivity labels ({labels.length})</Subtitle2>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+            {labels
+              .sort((a, b) => (a.sensitivity ?? 0) - (b.sensitivity ?? 0))
+              .map((l) => (
+                <div key={l.id} className={styles.row}>
+                  {l.color && (
+                    <span style={{
+                      display: 'inline-block',
+                      width: 10,
+                      height: 10,
+                      borderRadius: tokens.borderRadiusCircular,
+                      background: l.color,
+                      flexShrink: 0,
+                    }} />
+                  )}
+                  <span style={{ fontWeight: 600 }}>{l.displayName || l.name || l.id}</span>
+                  {l.tooltip && (
+                    <span style={{ color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 }}>
+                      — {l.tooltip}
+                    </span>
+                  )}
+                </div>
+              ))}
+          </div>
+          <MessageBar intent="info">
+            <MessageBarBody>
+              To manage the label taxonomy (create, edit, publish labels), go to{' '}
+              <strong>Admin → Security → Sensitivity labels</strong>.
+            </MessageBarBody>
+          </MessageBar>
+        </>
+      )}
     </div>
   );
 }

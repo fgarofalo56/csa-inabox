@@ -47,6 +47,7 @@ import {
   type AiFn,
   type AiFnOptions,
 } from '@/lib/azure/ai-functions-client';
+import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -214,6 +215,11 @@ export async function POST(
   }
 
   try {
+    // Honor the admin-picked tenant Copilot deployment (Admin → Tenant
+    // settings → Copilot & Agents) so a configured Foundry chat model is used
+    // even when the LOOM_AOAI_* env vars are unset. Forwarded to
+    // resolveAoaiTarget by callAiFn via opts.tenantConfig.
+    opts.tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
     const { result, model, usage } = await callAiFn(fn, input, opts);
     return NextResponse.json({ ok: true, engine: 'aoai', fn, column, input, result, model, usage });
   } catch (e: any) {

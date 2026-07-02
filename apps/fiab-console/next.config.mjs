@@ -59,13 +59,17 @@ const nextConfig = {
               // bundles them via base64 data: URIs in some paths — both
               // need to be explicitly allowed since they fall under
               // script-src in CSP3.
-              "script-src 'self' 'unsafe-inline' blob: data:",
+              // Azure Maps Web SDK (Fabric IQ map + report map visual) loads
+              // atlas.min.js / atlas.min.css and fetches tiles/styles/glyph
+              // fonts from the Atlas CDN — allow that host (Azure-native, no
+              // Fabric/Power BI host is ever contacted).
+              "script-src 'self' 'unsafe-inline' blob: data: https://atlas.microsoft.com",
               "worker-src 'self' blob: data:",
               "child-src 'self' blob: data:",
-              "style-src 'self' 'unsafe-inline'",
+              "style-src 'self' 'unsafe-inline' https://atlas.microsoft.com",
               "img-src 'self' data: https:",
-              "font-src 'self' data:",
-              "connect-src 'self' https://login.microsoftonline.com https://login.microsoftonline.us https://*.azure.com https://*.azure.us",
+              "font-src 'self' data: https://atlas.microsoft.com",
+              "connect-src 'self' https://login.microsoftonline.com https://login.microsoftonline.us https://*.azure.com https://*.azure.us https://atlas.microsoft.com",
               "frame-ancestors 'none'",
             ].join('; '),
           },

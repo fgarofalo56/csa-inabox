@@ -84,7 +84,7 @@ const useStyles = makeStyles({
     ':focus-visible': { outline: '2px solid white', outlineOffset: '2px' },
   },
   wordmark: {
-    fontSize: 16, fontWeight: 700, letterSpacing: '-0.01em',
+    fontSize: tokens.fontSizeBase400, fontWeight: 700, letterSpacing: '-0.01em',
     whiteSpace: 'nowrap',
   },
   iconBtn: {

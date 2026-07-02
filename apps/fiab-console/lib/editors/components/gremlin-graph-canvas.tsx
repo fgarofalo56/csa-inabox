@@ -29,9 +29,11 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens, shorthands, mergeClasses,
 } from '@fluentui/react-components';
+import { ResizableCanvasRegion } from '@/lib/components/canvas/resizable-canvas';
 import {
   Play20Regular, AddCircle20Regular, BranchCompare20Regular,
   ZoomIn20Regular, ZoomOut20Regular, ArrowReset20Regular, Delete16Regular,
+  CircleSmall20Filled,
 } from '@fluentui/react-icons';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { extractGraph, type GraphNode, type GraphEdge } from '@/lib/components/graph/force-directed-graph';
@@ -44,10 +46,12 @@ const useStyles = makeStyles({
   toolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
   spacer: { flex: 1 },
   canvasWrap: {
-    display: 'grid', gridTemplateColumns: '1fr 260px', gap: tokens.spacingHorizontalM, minHeight: 0,
+    display: 'grid', gridTemplateColumns: '1fr 260px', gap: tokens.spacingHorizontalM,
+    // Fill the resizable region body; the inner svg/side then take height:100%.
+    flexGrow: 1, minHeight: 0, height: '100%',
   },
   svg: {
-    width: '100%', height: '460px',
+    width: '100%', height: '100%', minHeight: 0,
     backgroundColor: tokens.colorNeutralBackground2,
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
@@ -59,10 +63,10 @@ const useStyles = makeStyles({
     ...shorthands.border('1px', 'solid', tokens.colorNeutralStroke2),
     ...shorthands.borderRadius(tokens.borderRadiusMedium),
     ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
-    overflow: 'auto', maxHeight: '460px',
+    overflow: 'auto', maxHeight: '100%',
   },
   json: {
-    margin: 0, fontSize: '11px', fontFamily: 'Consolas, monospace',
+    margin: 0, fontSize: tokens.fontSizeBase100, fontFamily: tokens.fontFamilyMonospace,
     whiteSpace: 'pre-wrap', wordBreak: 'break-all',
     backgroundColor: tokens.colorNeutralBackground3,
     ...shorthands.padding(tokens.spacingVerticalM, tokens.spacingHorizontalM),
@@ -90,11 +94,26 @@ function hash(s: string): number {
   return h;
 }
 
+/**
+ * Theme-aware accent ramp from the `--loom-accent-*` CSS vars (light + dark
+ * defined in app/globals.css). SVG presentation attrs accept `var(...)`, so the
+ * returned string resolves correctly as a `fill`. Replaces the old hardcoded
+ * hex palette — every vertex colour now flows through the Loom accent tokens.
+ */
+const ACCENT_RAMP = [
+  'var(--loom-accent-blue)',
+  'var(--loom-accent-emerald)',
+  'var(--loom-accent-orange)',
+  'var(--loom-accent-violet)',
+  'var(--loom-accent-teal)',
+  'var(--loom-accent-amber)',
+  'var(--loom-accent-magenta)',
+];
+
 function colorFor(group?: string | number): string {
-  if (group == null) return '#0078d4';
-  const palette = ['#0078d4', '#107c10', '#d83b01', '#5c2d91', '#008272', '#bf6900', '#a30075'];
-  const idx = typeof group === 'number' ? group : Math.abs(hash(String(group))) % palette.length;
-  return palette[idx % palette.length];
+  if (group == null) return ACCENT_RAMP[0];
+  const idx = typeof group === 'number' ? group : Math.abs(hash(String(group))) % ACCENT_RAMP.length;
+  return ACCENT_RAMP[idx % ACCENT_RAMP.length];
 }
 
 /** Fruchterman-Reingold force layout — bounded iterations, deterministic seed. */
@@ -373,7 +392,13 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
           </Caption1>
         </div>
       ) : graph.nodes.length === 0 ? null : (
-        <div className={s.canvasWrap}>
+        <ResizableCanvasRegion
+          storageKey="gremlin-graph"
+          defaultPx={460}
+          minPx={300}
+          ariaLabel="Resize graph canvas height"
+        >
+          <div className={s.canvasWrap}>
           <svg
             className={mergeClasses(s.svg, drag.current.active && s.svgDragging)}
             viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -390,6 +415,10 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
               <marker id="gremlin-arrow" markerWidth="10" markerHeight="10" refX="22" refY="3" orient="auto">
                 <path d="M0,0 L0,6 L9,3 z" fill={tokens.colorNeutralForeground3} />
               </marker>
+              {/* Soft elevation under each vertex so nodes read as raised cards. */}
+              <filter id="gremlin-node-shadow" x="-50%" y="-50%" width="200%" height="200%">
+                <feDropShadow dx="0" dy="1" stdDeviation="1.5" floodColor={tokens.colorNeutralShadowAmbient} floodOpacity="0.45" />
+              </filter>
             </defs>
             <g transform={`translate(${view.tx},${view.ty}) scale(${view.scale})`}>
               {graph.edges.map((e, i) => {
@@ -429,7 +458,26 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
                     tabIndex={0}
                     aria-label={`Vertex ${n.label || n.id}`}
                   >
-                    <circle cx={n.x} cy={n.y} r={active ? 13 : 9} fill={colorFor(n.group ?? n.label)} stroke="#fff" strokeWidth={1.5} />
+                    <circle
+                      cx={n.x} cy={n.y} r={active ? 13 : 9}
+                      fill={colorFor(n.group ?? n.label)}
+                      stroke={tokens.colorNeutralForegroundOnBrand}
+                      strokeWidth={1.5}
+                      filter="url(#gremlin-node-shadow)"
+                    />
+                    {/* Icon-forward glyph centered in the vertex circle. */}
+                    <foreignObject
+                      x={n.x - (active ? 9 : 7)} y={n.y - (active ? 9 : 7)}
+                      width={active ? 18 : 14} height={active ? 18 : 14}
+                      pointerEvents="none" aria-hidden="true"
+                    >
+                      <div style={{
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        width: '100%', height: '100%', color: tokens.colorNeutralForegroundOnBrand,
+                      }}>
+                        <CircleSmall20Filled style={{ width: '100%', height: '100%' }} />
+                      </div>
+                    </foreignObject>
                     <text x={n.x} y={n.y - 15} textAnchor="middle" fontSize="11" fill={tokens.colorNeutralForeground1}>
                       {String(n.label || n.id).slice(0, 24)}
                     </text>
@@ -448,28 +496,29 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
             )}
             {selectedNode && (
               <>
-                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{selectedNode.label || selectedNode.id}</div>
+                <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase300, marginBottom: tokens.spacingVerticalXS }}>{selectedNode.label || selectedNode.id}</div>
                 <Caption1>id: {selectedNode.id}</Caption1>
-                <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                   <Button size="small" appearance="secondary" icon={<BranchCompare20Regular />}
                     onClick={() => { setEFrom(selectedNode.id); setMutError(null); setAddEdgeOpen(true); }}>
                     Add edge from here
                   </Button>
                 </div>
-                <pre style={{ marginTop: 8, fontSize: 11, fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+                <pre style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase100, fontFamily: tokens.fontFamilyMonospace, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
                   {JSON.stringify(flattenProps(selectedNode.properties), null, 2)}
                 </pre>
               </>
             )}
             {selectedEdge && (
               <>
-                <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>Edge: {selectedEdge.label || '(unlabeled)'}</div>
+                <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase300, marginBottom: tokens.spacingVerticalXS }}>Edge: {selectedEdge.label || '(unlabeled)'}</div>
                 <Caption1>from: {selectedEdge.source}</Caption1>
                 <Caption1>to: {selectedEdge.target}</Caption1>
               </>
             )}
           </div>
-        </div>
+          </div>
+        </ResizableCanvasRegion>
       )}
 
       {/* Add-vertex dialog */}
@@ -478,7 +527,7 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
           <DialogBody>
             <DialogTitle>Add vertex (g.addV)</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 <Field label="Vertex label" required>
                   <Input value={vLabel} onChange={(_, d) => setVLabel(d.value)} placeholder="person" />
                 </Field>
@@ -525,7 +574,7 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
           <DialogBody>
             <DialogTitle>Add edge (g.addE)</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
                 <Field label="From vertex id" required>
                   <Input value={eFrom} onChange={(_, d) => setEFrom(d.value)} placeholder="source vertex id" />
                 </Field>

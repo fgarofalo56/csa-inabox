@@ -40,9 +40,9 @@ import {
   NoAoaiDeploymentError,
   persistStep,
 } from '@/lib/azure/copilot-orchestrator';
+import { aoaiChatStream } from '@/lib/azure/aoai-chat-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
-import { uamiArmCredential } from '@/lib/azure/arm-credential';
-import { cogScope, detectLoomCloud } from '@/lib/azure/cloud-endpoints';
+import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
 import { buildDatastoreSchema } from '@/lib/azure/delta-schema';
 import { NOTEBOOK_PERSONA, type PersonaSystemCtx } from '@/lib/azure/copilot-personas-notebook';
 import {
@@ -67,15 +67,6 @@ type Command = (typeof COMMANDS)[number];
 
 /** A minimal ToolContext for the read-only notebook tools (no item mutation). */
 const TOOL_CTX = { userOid: 'system', session: { claims: { oid: 'system' } } } as const;
-
-// ---------- Credential (ACA-first UAMI chain — shared helper) ----------
-const credential = uamiArmCredential();
-
-async function aoaiToken(): Promise<string> {
-  const t = await credential.getToken(cogScope());
-  if (!t?.token) throw new Error('Failed to acquire AOAI token');
-  return t.token;
-}
 
 // ---------- Prompt construction ----------
 const LANG_LABEL: Record<string, string> = {
@@ -279,9 +270,11 @@ export async function POST(req: NextRequest) {
 
   // Resolve AOAI — tenant admin pick → env → Foundry discovery.
   const tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
-  let target;
+  // Honest 503 gate: pre-resolve the AOAI target so a missing chat deployment
+  // fails fast with code:'no_aoai'. aoaiChatStream re-resolves (harmlessly,
+  // with the same tenantConfig) when it actually streams below.
   try {
-    target = await resolveAoaiTarget(tenantConfig);
+    await resolveAoaiTarget(tenantConfig);
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -381,48 +374,21 @@ export async function POST(req: NextRequest) {
 
       let full = '';
       try {
-        const token = await aoaiToken();
-        const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(
-          target.deployment,
-        )}/chat/completions?api-version=${target.apiVersion}`;
-
-        const callWithTemperature = (temp?: number) =>
-          fetch(url, {
-            method: 'POST',
-            headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-            body: JSON.stringify({
-              messages,
-              stream: true,
-              ...(temp !== undefined ? { temperature: temp } : {}),
-              max_tokens: 4096,
-            }),
-          });
-
-        let res = await callWithTemperature(0.2);
-        if (res.status === 400) {
-          const txt = await res.text();
-          // Reasoning models (o1/o3/gpt-5/MAI-*) reject non-default temperature — retry once.
-          if (/unsupported_value|does not support|Only the default \(1\) value is supported/i.test(txt) &&
-              /temperature|top_p/i.test(txt)) {
-            res = await callWithTemperature(undefined);
-          } else {
-            send('error', { error: `AOAI 400: ${txt.slice(0, 300)}` });
-            send('done', { sessionId, content: '' });
-            controller.close();
-            return;
-          }
-        }
-        if (!res.ok || !res.body) {
-          const txt = res.ok ? 'no response body' : await res.text();
-          send('error', { error: `AOAI ${res.status}: ${txt.slice(0, 300)}` });
-          send('done', { sessionId, content: '' });
-          controller.close();
-          return;
-        }
+        // Unified AOAI client owns target resolution, the cogScope bearer token,
+        // the stream:true request body (max_completion_tokens contract), and the
+        // unsupported-temperature retry-without-temperature. A non-OK status now
+        // THROWS, caught by the catch below which sends the same error/done SSE
+        // envelope. Re-resolves the same tenantConfig — identical target.
+        const res = await aoaiChatStream({
+          messages,
+          maxCompletionTokens: 4096,
+          temperature: 0.2,
+          cfg: tenantConfig,
+        });
 
         // Forward the AOAI SSE stream: parse `data: {...}` lines, pull
         // choices[0].delta.content, re-emit as our `chunk` events.
-        const reader = res.body.getReader();
+        const reader = res.body!.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
         while (true) {

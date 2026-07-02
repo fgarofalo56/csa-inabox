@@ -49,7 +49,7 @@ describe('EventstreamEditor — Add alert (embedded Activator)', () => {
   it('renders the Add alert ribbon action', async () => {
     render(<EventstreamEditor item={makeItem('eventstream', 'Eventstream')} id="es-fixture" />);
     await waitFor(() => {
-      expect(screen.getAllByText('Design here, publish to Fabric').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Design here, provision to Azure (Fabric optional)').length).toBeGreaterThan(0);
     });
     expect(screen.getAllByRole('button', { name: /^add alert$/i }).length).toBeGreaterThan(0);
   });

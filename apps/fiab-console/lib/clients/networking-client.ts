@@ -40,6 +40,8 @@ import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { randomUUID } from 'node:crypto';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
 import { networkingConfigContainer } from '@/lib/azure/cosmos-client';
+import { normalizePrivateLinkTargetId, privateDnsZoneNameForGroupId } from '@/lib/azure/pe-subresource-groups';
+import { listPrivateDnsZones } from '@/lib/azure/network-discovery';
 
 const ARM = armBase();
 const ARM_SCOPE = armScope();
@@ -47,6 +49,10 @@ const ARM_SCOPE = armScope();
 const NSG_API = '2024-05-01';
 // Private endpoints + DNS zone groups — same version network-discovery.ts uses.
 const PE_API = '2024-03-01';
+// Virtual networks — used to resolve the managed-VNet region for a managed PE.
+const VNET_API = '2024-05-01';
+/** Tag stamped on private endpoints Loom creates via the self-service surface. */
+const LOOM_MANAGED_TAG = 'loom-managed';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
@@ -154,6 +160,7 @@ async function armReq<T>(method: string, path: string, body?: unknown): Promise<
 
 const armGet = <T>(p: string) => armReq<T>('GET', p);
 const armPut = <T>(p: string, b: unknown) => armReq<T>('PUT', p, b);
+const armPatch = <T>(p: string, b: unknown) => armReq<T>('PATCH', p, b);
 const armDelete = (p: string) => armReq<void>('DELETE', p);
 
 function nsgBase(cfg: NetworkingConfig): string {
@@ -578,4 +585,470 @@ export async function removeOutboundRule(workspaceId: string, ruleId: string): P
   }
   doc.outboundRules = doc.outboundRules.filter((r) => r.id !== ruleId);
   await writeDoc(doc);
+}
+
+// ---------------------------------------------------------------------------
+// Self-service MANAGED private endpoints (admin Network page — Phase 4 G5)
+// ---------------------------------------------------------------------------
+//
+// The workspace-scoped outbound rules above register a PE against a Cosmos doc
+// for a single workspace. This section powers the tenant-admin "Managed private
+// endpoints" surface on the shared admin Network page: create a REAL
+// Microsoft.Network/privateEndpoints into the DLZ managed-VNet PE subnet
+// (LOOM_PE_SUBNET_ID) against ANY connectable Azure resource, then track the
+// approval lifecycle. A managed PE is created with a MANUAL private-link service
+// connection so it lands **Pending** until the OWNER of the target resource
+// approves the connection — the honest governance approval step this surface
+// tracks (it never auto-approves on the requestor's behalf).
+//
+// Real ARM (2024-03-01), no mocks. Honest gates flow through the shared
+// networkingErrorResponse mapper via NetworkingNotConfiguredError (503, exact
+// env var) / NetworkingArmError 401|403 (403, Network Contributor role).
+//
+// Learn: https://learn.microsoft.com/rest/api/virtualnetwork/private-endpoints/create-or-update
+//        https://learn.microsoft.com/azure/private-link/manage-private-endpoint
+
+export interface ManagedPrivateEndpoint {
+  id: string;
+  name: string;
+  location?: string;
+  resourceGroup?: string;
+  provisioningState?: string;
+  /** Approval status of the private-link connection: Pending | Approved | Rejected | Disconnected. */
+  connectionState?: string;
+  /** Approver's description returned by ARM (why approved / rejected). */
+  connectionDescription?: string;
+  /** ARM `actionsRequired` hint (e.g. "None" once approved). */
+  actionsRequired?: string;
+  /** ARM id of the target (backing) resource the PE fronts. */
+  privateLinkServiceId?: string;
+  /** Friendly name of the target resource (last id segment). */
+  targetResourceName?: string;
+  /** Sub-resource group id(s) the PE connects to (e.g. ['blob'] / ['sqlServer']). */
+  groupIds?: string[];
+  /** ARM id of the subnet the PE's NIC lives in. */
+  subnetId?: string;
+  /** The approval request message sent to the target owner (Loom stores the justification here). */
+  requestMessage?: string;
+  /** True when Loom created this PE via the self-service surface (loom-managed tag). */
+  loomManaged?: boolean;
+  /** OID of the admin who created it (loom-created-by tag). */
+  createdBy?: string;
+  /** ISO timestamp the PE was created (loom-created-at tag). */
+  createdAt?: string;
+  /** True once a privateDnsZoneGroups config points the matching privatelink.*
+   * zone at this PE (so its FQDN actually resolves after approval). Populated
+   * by the create / poll paths — undefined when not yet checked. */
+  dnsRegistered?: boolean;
+  /** The privatelink.* zone the PE registers (or should register) into. */
+  dnsZoneName?: string;
+  /** Honest note when DNS registration could not be completed (e.g. the
+   * matching privatelink zone does not exist in the networking RG). */
+  dnsNote?: string;
+}
+
+/** Shape one ARM privateEndpoint resource into a {@link ManagedPrivateEndpoint}. */
+function shapeManagedPe(raw: any): ManagedPrivateEndpoint {
+  const p = raw?.properties || {};
+  const conns: any[] = p.privateLinkServiceConnections?.length
+    ? p.privateLinkServiceConnections
+    : (p.manualPrivateLinkServiceConnections || []);
+  const conn = conns[0]?.properties || {};
+  const st = conn?.privateLinkServiceConnectionState || {};
+  const svcId: string | undefined = conn?.privateLinkServiceId;
+  const id: string = raw?.id || '';
+  const rg = /\/resourceGroups\/([^/]+)\//i.exec(id)?.[1];
+  const tags: Record<string, string> =
+    raw?.tags && typeof raw.tags === 'object' ? raw.tags : {};
+  return {
+    id,
+    name: raw?.name || id.split('/').pop() || '',
+    location: raw?.location,
+    resourceGroup: rg,
+    provisioningState: p.provisioningState,
+    connectionState: st?.status,
+    connectionDescription: st?.description,
+    actionsRequired: st?.actionsRequired,
+    privateLinkServiceId: svcId,
+    targetResourceName: svcId ? svcId.split('/').pop() : undefined,
+    groupIds: conn?.groupIds || [],
+    subnetId: p?.subnet?.id,
+    requestMessage: conn?.requestMessage,
+    loomManaged: String(tags[LOOM_MANAGED_TAG] || '').toLowerCase() === 'true',
+    createdBy: tags['loom-created-by'],
+    createdAt: tags['loom-created-at'],
+  };
+}
+
+/**
+ * List every private endpoint in the networking RG (the DLZ managed network),
+ * shaped with its connection-approval state. Loom-managed endpoints (created via
+ * this surface) sort first. Needs only Reader on the networking RG for the list;
+ * a missing sub/RG throws NetworkingNotConfiguredError → honest 503 at the BFF.
+ */
+export async function listManagedPrivateEndpoints(): Promise<ManagedPrivateEndpoint[]> {
+  const cfg = readNetworkingConfig();
+  const path =
+    `/subscriptions/${cfg.subscriptionId}/resourceGroups/${encodeURIComponent(cfg.networkingRg)}` +
+    `/providers/Microsoft.Network/privateEndpoints?api-version=${PE_API}`;
+  const j = await armGet<{ value?: any[] }>(path);
+  const out = (j?.value || []).map(shapeManagedPe);
+  out.sort((a, b) =>
+    (Number(!!b.loomManaged) - Number(!!a.loomManaged)) || a.name.localeCompare(b.name));
+  return out;
+}
+
+/** Read a single managed PE's live connection-approval state (poll after approve). */
+export async function getPrivateEndpointConnectionState(
+  name: string,
+): Promise<ManagedPrivateEndpoint | null> {
+  const cfg = readNetworkingConfig();
+  try {
+    const raw = await armGet<any>(`${peBase(cfg, name)}?api-version=${PE_API}`);
+    return shapeManagedPe(raw);
+  } catch (e) {
+    if (e instanceof NetworkingArmError && e.status === 404) return null;
+    throw e;
+  }
+}
+
+/**
+ * Resolve the Azure region for a managed PE. A private endpoint must be in the
+ * same region as the subnet it deploys into, so we prefer the explicit body /
+ * LOOM_LOCATION / LOOM_REGION value, then fall back to reading the managed-VNet's
+ * own region from ARM (derived from the PE subnet id). Throws an honest 400 when
+ * neither is resolvable.
+ */
+async function resolveManagedPeLocation(cfg: NetworkingConfig, explicit?: string): Promise<string> {
+  const env = (explicit || process.env.LOOM_LOCATION || process.env.LOOM_REGION || '').trim();
+  if (env) return env;
+  const vnetId = cfg.peSubnetId ? cfg.peSubnetId.split('/subnets/')[0] : '';
+  if (vnetId) {
+    try {
+      const vnet = await armGet<{ location?: string }>(`${vnetId}?api-version=${VNET_API}`);
+      if (vnet?.location) return String(vnet.location);
+    } catch { /* fall through to the honest error below */ }
+  }
+  throw new NetworkingArmError(
+    'Could not resolve an Azure region for the managed private endpoint — set LOOM_LOCATION.',
+    400,
+  );
+}
+
+export interface ManagedPeCreateInput {
+  /** ARM-safe PE name (validated by the BFF route). */
+  name: string;
+  /** Full ARM id of the target resource (SQL databases are normalized to the server). */
+  targetResourceId: string;
+  /** ARM resource type of the picked resource (drives SQL server normalization). */
+  armType?: string;
+  /** Sub-resource group id (e.g. blob/dfs/sqlServer/vault/namespace). */
+  groupId: string;
+  /** Justification — sent to the target owner as the approval request message. */
+  justification: string;
+  /** Region override; defaults to LOOM_LOCATION → managed-VNet region. */
+  location?: string;
+  /** OID of the creating admin (stamped as the loom-created-by tag). */
+  createdBy?: string;
+}
+
+/**
+ * Create a REAL Microsoft.Network/privateEndpoints into the DLZ managed-VNet PE
+ * subnet (LOOM_PE_SUBNET_ID), against the target resource, with a MANUAL
+ * private-link connection so it lands Pending until the target owner approves.
+ * The justification rides along as the connection `requestMessage` (shown to the
+ * approver). Throws NetworkingNotConfiguredError when the PE subnet isn't wired.
+ */
+export async function createManagedPrivateEndpoint(
+  input: ManagedPeCreateInput,
+): Promise<ManagedPrivateEndpoint> {
+  const cfg = readNetworkingConfig();
+  if (!cfg.peSubnetId) {
+    // Honest structured 503 — the managed-VNet PE subnet isn't wired yet.
+    throw new NetworkingNotConfiguredError(['LOOM_PE_SUBNET_ID']);
+  }
+  const target = normalizePrivateLinkTargetId(input.targetResourceId, input.armType);
+  if (!target.startsWith('/subscriptions/')) {
+    throw new NetworkingArmError(
+      'targetResourceId must be the full ARM id of the target resource (/subscriptions/…)',
+      400,
+    );
+  }
+  if (!input.groupId) throw new NetworkingArmError('groupId (sub-resource) is required', 400);
+  const location = await resolveManagedPeLocation(cfg, input.location);
+  // requestMessage is capped at 140 chars by ARM.
+  const requestMessage = (input.justification || 'CSA Loom managed private endpoint').slice(0, 140);
+  const body = {
+    location,
+    tags: {
+      [LOOM_MANAGED_TAG]: 'true',
+      'loom-created-at': new Date().toISOString(),
+      ...(input.createdBy ? { 'loom-created-by': input.createdBy } : {}),
+    },
+    properties: {
+      subnet: { id: cfg.peSubnetId },
+      // MANUAL connection ⇒ always lands Pending until the target owner approves
+      // — the honest governance approval step (never auto-approved here).
+      manualPrivateLinkServiceConnections: [
+        {
+          name: `${input.name}-conn`,
+          properties: {
+            privateLinkServiceId: target,
+            groupIds: [input.groupId],
+            requestMessage,
+          },
+        },
+      ],
+    },
+  };
+  const raw = await armPut<any>(`${peBase(cfg, input.name)}?api-version=${PE_API}`, body);
+  return shapeManagedPe(raw);
+}
+
+/** Delete a managed private endpoint by name via ARM. */
+export async function deleteManagedPrivateEndpoint(name: string): Promise<void> {
+  const cfg = readNetworkingConfig();
+  await armDelete(`${peBase(cfg, name)}?api-version=${PE_API}`);
+}
+
+export interface ManagedPeDnsResult {
+  registered: boolean;
+  zoneName?: string;
+  zoneId?: string;
+  note?: string;
+}
+
+/**
+ * Ensure the managed PE carries a `privateDnsZoneGroups` config referencing the
+ * matching `privatelink.*` zone — WITHOUT it the endpoint never resolves, even
+ * after the target owner approves the connection (adversarial-audit finding:
+ * createManagedPrivateEndpoint created the PE but never registered DNS).
+ *
+ * Idempotent: an already-attached matching zone config is reported without a
+ * re-PUT (the PUT itself is also a safe upsert on .../privateDnsZoneGroups/default).
+ * Honest when the zone is missing: returns registered:false + a note naming the
+ * exact privatelink zone to deploy in the networking RG — never a silent no-op.
+ */
+export async function ensureManagedPeDnsZoneGroup(
+  peName: string,
+  groupId: string,
+  targetResourceId?: string,
+): Promise<ManagedPeDnsResult> {
+  const cfg = readNetworkingConfig();
+  const expected = privateDnsZoneNameForGroupId(groupId, targetResourceId);
+  if (!expected) {
+    return {
+      registered: false,
+      note: `No documented privatelink DNS zone for sub-resource "${groupId}" — register the endpoint's FQDN in your hub private DNS manually.`,
+    };
+  }
+  // Already attached? Report it without another PUT.
+  try {
+    const j = await armGet<{ value?: any[] }>(`${peBase(cfg, peName)}/privateDnsZoneGroups?api-version=${PE_API}`);
+    for (const g of j?.value || []) {
+      for (const c of g?.properties?.privateDnsZoneConfigs || []) {
+        const zoneId = String(c?.properties?.privateDnsZoneId || '');
+        if (zoneId.toLowerCase().endsWith(`/privatednszones/${expected.toLowerCase()}`)) {
+          return { registered: true, zoneName: expected, zoneId };
+        }
+      }
+    }
+  } catch { /* zone-group list failed — fall through to the attach attempt */ }
+  // Resolve the zone's ARM id from the live private DNS zones the Console
+  // identity can read (hub networking RG preferred when the zone exists twice).
+  const zones = await listPrivateDnsZones();
+  const matches = zones.filter((z) => z.name.toLowerCase() === expected.toLowerCase());
+  const zone =
+    matches.find((z) => (z.resourceGroup || '').toLowerCase() === cfg.networkingRg.toLowerCase()) || matches[0];
+  if (!zone?.resourceGroup) {
+    return {
+      registered: false,
+      zoneName: expected,
+      note: `Private DNS zone "${expected}" does not exist in the networking resource group "${cfg.networkingRg}" (or anywhere the Console identity can read) — the endpoint will NOT resolve privately. Deploy the zone (platform/fiab/bicep/modules/admin-plane/network.bicep private DNS zones) and link it to the hub VNet, then refresh this endpoint.`,
+    };
+  }
+  const zoneId =
+    `/subscriptions/${zone.subscriptionId}/resourceGroups/${encodeURIComponent(zone.resourceGroup)}` +
+    `/providers/Microsoft.Network/privateDnsZones/${zone.name}`;
+  await createPrivateDnsZoneGroup(peName, zoneId);
+  return { registered: true, zoneName: expected, zoneId };
+}
+
+// ---------------------------------------------------------------------------
+// Storage RESOURCE-INSTANCE rules — trusted workspace access (Phase 4 G6)
+// ---------------------------------------------------------------------------
+//
+// The Azure-native equivalent of Fabric's "trusted workspace access": authorize
+// a specific Azure resource INSTANCE (by ARM id + tenant) to reach a firewalled
+// ADLS Gen2 / Blob storage account whose networkAcls.defaultAction is Deny.
+// ARM models these as `properties.networkAcls.resourceAccessRules[]` entries of
+// `{ tenantId, resourceId }` on Microsoft.Storage/storageAccounts (the portal
+// calls them "resource instances"). Enforcement matches the managed-identity
+// token's `xms_mirid` claim against the rule's resourceId — so a user-assigned
+// managed identity (Console UAMI / per-workspace uami-ws-<id>) is authorized by
+// adding ITS OWN ARM resource id as a rule.
+//
+// Real ARM (GET + PATCH, api-version 2023-05-01), no mocks. The PATCH always
+// carries the COMPLETE networkAcls object read back from the live account
+// (bypass / defaultAction / ipRules / virtualNetworkRules preserved verbatim)
+// so a rules-only update can never clobber the rest of the firewall.
+//
+// The Console UAMI needs **Storage Account Contributor**
+// (17d1049b-9a84-46fb-8f53-869881c3d3ab) — or Owner — on the target storage
+// account to PATCH networkAcls; a 403 surfaces as an honest MessageBar via
+// storageTrustedAccessErrorResponse in _gate.ts.
+//
+// Learn:
+//   https://learn.microsoft.com/azure/storage/common/storage-network-security-resource-instances
+//   https://learn.microsoft.com/rest/api/storagerp/storage-accounts/update
+
+/** Storage-account ARM api-version (matches storage-discovery.ts). */
+const STORAGE_ACCOUNTS_API = '2023-05-01';
+
+const STORAGE_ACCOUNT_ID_RE =
+  /^\/subscriptions\/[^/]+\/resourceGroups\/[^/]+\/providers\/Microsoft\.Storage\/storageAccounts\/[^/]+$/i;
+const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** One `networkAcls.resourceAccessRules[]` entry ("resource instance" in the portal). */
+export interface StorageResourceInstanceRule {
+  tenantId: string;
+  resourceId: string;
+}
+
+/** Live trusted-access posture of a storage account (shaped from ARM GET/PATCH). */
+export interface StorageTrustedAccessState {
+  accountId: string;
+  accountName: string;
+  location?: string;
+  /** Enabled | Disabled | SecuredByPerimeter — rules only take effect when Enabled. */
+  publicNetworkAccess?: string;
+  /** networkAcls.defaultAction: Allow | Deny — rules only matter under Deny. */
+  defaultAction?: string;
+  /** networkAcls.bypass, e.g. 'AzureServices'. */
+  bypass?: string;
+  resourceInstances: StorageResourceInstanceRule[];
+}
+
+/** Validate + normalize a full storage-account ARM id; honest 400 otherwise. */
+export function assertStorageAccountArmId(id: string): string {
+  const trimmed = (id || '').trim().replace(/\/+$/, '');
+  if (!STORAGE_ACCOUNT_ID_RE.test(trimmed)) {
+    throw new NetworkingArmError(
+      'storageAccountId must be a full ARM id: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.Storage/storageAccounts/{name}',
+      400,
+    );
+  }
+  return trimmed;
+}
+
+function shapeTrustedAccess(raw: any): StorageTrustedAccessState {
+  const props = raw?.properties || {};
+  const acls = props.networkAcls || {};
+  const id: string = raw?.id || '';
+  return {
+    accountId: id,
+    accountName: raw?.name || id.split('/').pop() || '',
+    location: raw?.location,
+    publicNetworkAccess: props.publicNetworkAccess,
+    defaultAction: acls.defaultAction,
+    bypass: acls.bypass,
+    resourceInstances: (acls.resourceAccessRules || []).map((r: any) => ({
+      tenantId: r?.tenantId || '',
+      resourceId: r?.resourceId || '',
+    })),
+  };
+}
+
+/** The complete networkAcls object to PATCH back — every sibling field the live
+ * account carries is preserved verbatim so a rules-only edit never widens or
+ * narrows the rest of the firewall. */
+function aclsForPatch(acls: any, resourceAccessRules: StorageResourceInstanceRule[]): any {
+  return {
+    bypass: acls?.bypass ?? 'AzureServices',
+    defaultAction: acls?.defaultAction ?? 'Allow',
+    ipRules: acls?.ipRules ?? [],
+    virtualNetworkRules: acls?.virtualNetworkRules ?? [],
+    resourceAccessRules,
+  };
+}
+
+/** Read the live resource-instance rules (+ firewall posture) of a storage account. */
+export async function getStorageTrustedAccess(storageAccountId: string): Promise<StorageTrustedAccessState> {
+  const id = assertStorageAccountArmId(storageAccountId);
+  const raw = await armGet<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`);
+  return shapeTrustedAccess(raw);
+}
+
+/**
+ * Authorize a resource instance (identity) on the storage account: GET the live
+ * networkAcls, append `{ tenantId, resourceId }` to resourceAccessRules, then
+ * PATCH the account with the complete acls object. Idempotent — an entry that
+ * already exists (case-insensitive) returns the current state without a PATCH.
+ */
+export async function addStorageResourceInstance(
+  storageAccountId: string,
+  rule: StorageResourceInstanceRule,
+): Promise<StorageTrustedAccessState> {
+  const id = assertStorageAccountArmId(storageAccountId);
+  const resourceId = (rule.resourceId || '').trim().replace(/\/+$/, '');
+  if (!resourceId.startsWith('/subscriptions/')) {
+    throw new NetworkingArmError('resourceId must be a full ARM id (/subscriptions/…)', 400);
+  }
+  if (!GUID_RE.test((rule.tenantId || '').trim())) {
+    throw new NetworkingArmError('tenantId must be an Entra tenant GUID', 400);
+  }
+  const tenantId = rule.tenantId.trim();
+  const raw = await armGet<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`);
+  const acls = raw?.properties?.networkAcls || {};
+  const existing: any[] = acls.resourceAccessRules || [];
+  const dup = existing.some((r) =>
+    String(r?.resourceId || '').toLowerCase() === resourceId.toLowerCase() &&
+    String(r?.tenantId || '').toLowerCase() === tenantId.toLowerCase());
+  if (dup) return shapeTrustedAccess(raw);
+  const next = [
+    ...existing.map((r) => ({ tenantId: r?.tenantId, resourceId: r?.resourceId })),
+    { tenantId, resourceId },
+  ];
+  const patched = await armPatch<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`, {
+    properties: { networkAcls: aclsForPatch(acls, next) },
+  });
+  return shapeTrustedAccess(patched);
+}
+
+/**
+ * Revoke a resource-instance rule: GET the live networkAcls, drop the matching
+ * `{ resourceId (, tenantId) }` entry, PATCH the complete acls back. Honest 404
+ * when no rule matches (nothing is PATCHed).
+ */
+export async function removeStorageResourceInstance(
+  storageAccountId: string,
+  resourceId: string,
+  tenantId?: string,
+): Promise<StorageTrustedAccessState> {
+  const id = assertStorageAccountArmId(storageAccountId);
+  const target = (resourceId || '').trim().replace(/\/+$/, '').toLowerCase();
+  if (!target.startsWith('/subscriptions/')) {
+    throw new NetworkingArmError('resourceId must be a full ARM id (/subscriptions/…)', 400);
+  }
+  const raw = await armGet<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`);
+  const acls = raw?.properties?.networkAcls || {};
+  const existing: any[] = acls.resourceAccessRules || [];
+  const remaining = existing.filter((r) => {
+    const ridMatch = String(r?.resourceId || '').replace(/\/+$/, '').toLowerCase() === target;
+    const tidMatch = !tenantId ||
+      String(r?.tenantId || '').toLowerCase() === tenantId.trim().toLowerCase();
+    return !(ridMatch && tidMatch);
+  });
+  if (remaining.length === existing.length) {
+    throw new NetworkingArmError('Resource-instance rule not found on the storage account', 404);
+  }
+  const patched = await armPatch<any>(`${id}?api-version=${STORAGE_ACCOUNTS_API}`, {
+    properties: {
+      networkAcls: aclsForPatch(
+        acls,
+        remaining.map((r) => ({ tenantId: r?.tenantId, resourceId: r?.resourceId })),
+      ),
+    },
+  });
+  return shapeTrustedAccess(patched);
 }

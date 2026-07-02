@@ -11,6 +11,19 @@
  * sync with buildDefaultRegistry(); /api/copilot/status reports the live
  * number.)
  *
+ * Power BI agentic (opt-in remote MCP): the Power BI remote MCP server
+ * (api.fabric.microsoft.com/v1/mcp/powerbi) is NOT a new default-path Fabric
+ * host. Its schema-aware semantic-model query + Copilot-DAX tools auto-register
+ * through buildMcpShim as `mcp_powerbiremote_*` ONLY when opted into
+ * (LOOM_POWERBI_MCP_CLIENT_ID + the PBI-admin tenant setting), and run under a
+ * per-USER Entra OBO bearer (pbi-user-token-store) — never the Console UAMI,
+ * never on the default path. The lightweight `powerbi_mcp_status` meta-tool
+ * reports that opt-in/connection state honestly (config + cached-token) so the
+ * Copilot can answer "connect Power BI" conversationally without contacting any
+ * Fabric host. Loom's Azure-native semantic-model/report authoring (dax_* /
+ * tabular_* / report_*) stays the day-one DEFAULT — see
+ * .claude/rules/no-fabric-dependency.md.
+ *
  * Sovereign clouds: the Fabric / Power BI / Activator tools hit
  * api.fabric.microsoft.com / api.powerbi.com, which have NO GCC-High / IL5 /
  * DoD endpoint (Fabric) or a separate sovereign host (Power BI →
@@ -79,6 +92,26 @@ import { asTable, asSummary } from '@/lib/components/copilot-result-tagger';
 import { buildActivatorTools } from '@/lib/copilot/activator-tools';
 import { resolvePersona, type CopilotPersonaDef } from './copilot-personas';
 import { registerDaxTools } from '@/lib/copilot/dax-tools';
+// Opt-in Power BI remote MCP (no-fabric-dependency): config state + per-user
+// delegated token. Used ONLY by the powerbi_mcp_status meta-tool below — never
+// to reach a Fabric/Power BI host on a default path. The remote MCP's tools
+// auto-register through buildMcpShim (entra-obo) when opted into.
+import {
+  isPbiMcpConfigured,
+  REMOTE_BUILTIN_MCP,
+  REMOTE_BUILTIN_MCP_CATALOG,
+  msRemoteMcpConfigured,
+} from '@/lib/mcp/catalog';
+import { getPbiUserToken } from './pbi-user-token-store';
+import { POWERBI_REMOTE_MCP_GATE_TEXT } from '@/lib/copilot/powerbi-skills';
+// Microsoft agent-skill descriptors (github.com/microsoft/skills). They REUSE the
+// Power BI skill plumbing (the same LoomCopilotSkill contract + selector shape),
+// extended additively for the curated Microsoft MCP servers (github.com/microsoft/mcp).
+// Injected below as connection-aware, per-pane guidance — NO new tool loop, no
+// parallel system. Microsoft Learn is the sole default-on MCP; every other server
+// is opt-in and emits an honest catalog gate until connected (no-fabric-dependency,
+// no-vaporware).
+import { msSkillSystemBlocksForPane, msMcpPrefix } from '@/lib/copilot/ms-skills';
 
 // ---------- item-type slug normalization (build-assist robustness) ----------
 // The model often guesses item-type slugs with underscores or marketing names
@@ -280,7 +313,9 @@ export async function resolveAoaiTarget(
   return discovered;
 }
 
-async function aoaiToken(): Promise<string> {
+// Exported so the unified aoai-chat-client (LOOM_AOAI_CLIENT_V2) can reuse the
+// EXACT same credential + cogScope() token acquisition — no new credential code.
+export async function aoaiToken(): Promise<string> {
   const t = await credential.getToken(cogScope());
   if (!t?.token) throw new Error('Failed to acquire AOAI token');
   return t.token;
@@ -616,6 +651,56 @@ export function buildDefaultRegistry(): LoomToolRegistry {
     handler: async ({ workspaceId, datasetId, notifyOption }) => {
       assertFabricFamilyAvailable('powerbi');
       return powerbi.refreshDataset(workspaceId, datasetId, { notifyOption: notifyOption || 'NoNotification' });
+    },
+  });
+  // powerbi_mcp_status — connection-state reporter for the OPT-IN Power BI remote
+  // MCP server (api.fabric.microsoft.com/v1/mcp/powerbi). Unlike the powerbi_*
+  // tools above it does NOT call assertFabricFamilyAvailable and never contacts a
+  // Fabric host: it only reads config (LOOM_POWERBI_MCP_CLIENT_ID via
+  // isPbiMcpConfigured) and whether THIS user has a still-valid cached delegated
+  // Power BI token (pbi-user-token-store). So it answers "connect Power BI / why
+  // isn't the Power BI MCP available" honestly on any cloud — surfacing the exact
+  // remediation (env var + Entra app reg + tenant setting) when not ready, with
+  // the Azure-native authoring tools still the default (no-fabric-dependency,
+  // no-vaporware).
+  r.register({
+    name: 'powerbi_mcp_status',
+    service: 'Power BI',
+    description:
+      'Report whether the OPT-IN Power BI remote MCP server is connectable for the current user. ' +
+      'Returns { configured, endpoint, tenantSetting, hasUserToken, ready, remediation } — `configured` ' +
+      'reflects whether the Entra app reg env var LOOM_POWERBI_MCP_CLIENT_ID is set, `hasUserToken` ' +
+      'whether the signed-in user has a still-valid cached delegated Power BI token, and `ready` when ' +
+      'both hold (its mcp_powerbiremote_* query + Copilot-DAX tools are then live). Use this to answer ' +
+      '"can I connect Power BI" / "why is the Power BI MCP unavailable"; when not ready, relay the ' +
+      'returned remediation. The Azure-native semantic-model/report authoring tools (dax_* / tabular_* / ' +
+      'report_*) work WITHOUT this — never claim a Power BI capability unless ready is true.',
+    whenToUse: 'Check if the opt-in Power BI remote MCP is connected for this user ("connect Power BI").',
+    parameters: obj({}),
+    handler: async (_args, ctx) => {
+      const configured = isPbiMcpConfigured();
+      // Real Cosmos read — null when the user never consented the PBI scopes or
+      // the cached token expired. No Fabric host is contacted here.
+      const hasUserToken = configured && !!(await getPbiUserToken(ctx.userOid));
+      const ready = configured && hasUserToken;
+      let remediation: string | undefined;
+      if (!configured) {
+        remediation = POWERBI_REMOTE_MCP_GATE_TEXT;
+      } else if (!hasUserToken) {
+        remediation =
+          'The Power BI remote MCP is configured, but you have no valid cached Power BI token. ' +
+          'Sign out and sign back in so Loom can mint a delegated token on your behalf (consent the ' +
+          'Power BI scopes Dataset.Read.All, MLModel.Execute.All, Workspace.Read.All). A Power BI admin ' +
+          `must also have enabled the tenant setting "${REMOTE_BUILTIN_MCP.tenantSetting}".`;
+      }
+      return {
+        configured,
+        endpoint: REMOTE_BUILTIN_MCP.endpoint,
+        tenantSetting: REMOTE_BUILTIN_MCP.tenantSetting,
+        hasUserToken,
+        ready,
+        ...(remediation ? { remediation } : {}),
+      };
     },
   });
 
@@ -1093,9 +1178,38 @@ export const SYSTEM_PROMPT = getPanePersona('default').systemPrompt({});
  * Those deployments reject any non-default temperature (and top_p); the right
  * move is to retry without the sampling params, not to fail the chat.
  */
-function isUnsupportedSamplingParam(body: string): boolean {
+export function isUnsupportedSamplingParam(body: string): boolean {
   return /unsupported_value|does not support|Only the default \(1\) value is supported/i.test(body)
     && /temperature|top_p/i.test(body);
+}
+
+/**
+ * Unwrap a thrown fetch/network error into a human-readable cause chain. Node's
+ * `fetch` surfaces only `"fetch failed"` as the message and hides the real
+ * reason (ENOTFOUND / ECONNREFUSED / ETIMEDOUT / cert errors) in `.cause`. This
+ * walks the chain so server logs name the actual failure instead of the opaque
+ * wrapper that was being streamed to the chat widget.
+ */
+export function describeFetchError(e: any): string {
+  const parts: string[] = [];
+  let cur: any = e;
+  let depth = 0;
+  while (cur && depth < 5) {
+    const code = cur.code ? `[${cur.code}]` : '';
+    const m = cur.message || String(cur);
+    parts.push(`${cur.name || 'Error'}${code}: ${m}`);
+    if (cur.errno !== undefined || cur.syscall || cur.hostname) {
+      parts.push(`(syscall=${cur.syscall || '?'} errno=${cur.errno ?? '?'} host=${cur.hostname || '?'})`);
+    }
+    cur = cur.cause;
+    depth++;
+  }
+  return parts.join(' ← ');
+}
+
+/** AOAI host for logging without leaking the full URL/keys. */
+function aoaiHost(endpoint: string): string {
+  try { return new URL(endpoint).host; } catch { return endpoint; }
 }
 
 async function callAoai(
@@ -1103,8 +1217,26 @@ async function callAoai(
   messages: ChatMessage[],
   tools: unknown[],
 ): Promise<any> {
+  // LOOM_AOAI_CLIENT_V2 cut-over: delegate to the unified aoai-chat-client. Its
+  // aoaiChatRaw reproduces this body/retry/error path byte-for-byte (same
+  // pre-resolved target, same { messages, tools, tool_choice } body with NO cap,
+  // same sampling-param retry, same error text). Flag OFF → the inline path below
+  // runs unchanged (migration-safe / reversible). Dynamic import keeps the static
+  // dependency edge one-way (client → orchestrator), avoiding a load-time cycle.
+  if (process.env.LOOM_AOAI_CLIENT_V2 === 'true') {
+    const { aoaiChatRaw } = await import('./aoai-chat-client');
+    return aoaiChatRaw({ target, messages, tools, toolChoice: 'auto', temperature: 0.2 });
+  }
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
-  const token = await aoaiToken();
+  let token: string;
+  try {
+    token = await aoaiToken();
+  } catch (e: any) {
+    console.error(
+      `[copilot] AOAI token acquisition FAILED for host=${aoaiHost(target.endpoint)}: ${describeFetchError(e)}`,
+    );
+    throw new Error(`AOAI auth failed (could not acquire a managed-identity token): ${e?.message || e}`);
+  }
   const base: Record<string, unknown> = { messages, tools, tool_choice: 'auto' };
 
   // First attempt sends temperature for determinism; if the model rejects it,
@@ -1117,7 +1249,17 @@ async function callAoai(
       body: JSON.stringify(withTemperature ? { ...base, temperature: 0.2 } : base),
     }, LLM_FETCH_TIMEOUT_MS);
 
-  let res = await send(true);
+  let res: Response;
+  try {
+    res = await send(true);
+  } catch (e: any) {
+    console.error(
+      `[copilot] AOAI chat-completions fetch THREW for host=${aoaiHost(target.endpoint)} deployment=${target.deployment}: ${describeFetchError(e)}`,
+    );
+    throw new Error(
+      `AOAI chat endpoint unreachable (${aoaiHost(target.endpoint)}): ${describeFetchError(e)}`,
+    );
+  }
   if (res.status === 400) {
     const t = await res.text();
     if (isUnsupportedSamplingParam(t)) {
@@ -1143,6 +1285,12 @@ async function callAoai(
 async function aoaiCompleteText(
   messages: { role: 'system' | 'user'; content: string }[],
 ): Promise<string> {
+  // LOOM_AOAI_CLIENT_V2 cut-over → unified client (byte-for-byte: no-cfg target
+  // resolution, temperature 0.2, max_completion_tokens 2048, same retry/parse).
+  if (process.env.LOOM_AOAI_CLIENT_V2 === 'true') {
+    const { aoaiChat } = await import('./aoai-chat-client');
+    return aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2 });
+  }
   const target = await resolveAoaiTarget();
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
@@ -1151,7 +1299,10 @@ async function aoaiCompleteText(
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(
-        withTemperature ? { messages, temperature: 0.2, max_tokens: 2048 } : { messages, max_tokens: 2048 },
+        // Newer AOAI models (o-series / gpt-5 / reasoning) reject `max_tokens` and
+        // require `max_completion_tokens`; it is also accepted by gpt-4o/4o-mini on
+        // current api-versions, so it is the forward-compatible cap for all deployments.
+        withTemperature ? { messages, temperature: 0.2, max_completion_tokens: 2048 } : { messages, max_completion_tokens: 2048 },
       ),
     }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
@@ -1188,6 +1339,19 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
   cfg?: TenantCopilotConfig | null,
   maxTokens = 2048,
 ): Promise<T> {
+  // LOOM_AOAI_CLIENT_V2 cut-over → unified client (byte-for-byte: cfg-honoring
+  // target resolution, temperature 0.1, max_completion_tokens=maxTokens,
+  // response_format json_object, same retry + parseJsonObject fallback).
+  if (process.env.LOOM_AOAI_CLIENT_V2 === 'true') {
+    const { aoaiChatJson } = await import('./aoai-chat-client');
+    return aoaiChatJson<T>({
+      messages,
+      cfg: cfg ?? null,
+      maxCompletionTokens: maxTokens,
+      temperature: 0.1,
+      responseFormat: 'json_object',
+    });
+  }
   const target = await resolveAoaiTarget(cfg ?? null);
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
   const token = await aoaiToken();
@@ -1196,9 +1360,11 @@ export async function aoaiCompleteJson<T = Record<string, unknown>>(
       method: 'POST',
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: JSON.stringify(
+        // max_completion_tokens (not max_tokens) — required by newer AOAI models,
+        // accepted by gpt-4o/4o-mini on current api-versions (forward-compatible).
         withTemperature
-          ? { messages, temperature: 0.1, max_tokens: maxTokens, response_format: { type: 'json_object' } }
-          : { messages, max_tokens: maxTokens, response_format: { type: 'json_object' } },
+          ? { messages, temperature: 0.1, max_completion_tokens: maxTokens, response_format: { type: 'json_object' } }
+          : { messages, max_completion_tokens: maxTokens, response_format: { type: 'json_object' } },
       ),
     }, LLM_FETCH_TIMEOUT_MS);
   let res = await send(true);
@@ -1526,6 +1692,36 @@ async function* orchestrateViaMaf(
   }
 }
 
+/**
+ * The set of Microsoft MCP `mcp_<slug>_` tool prefixes CONNECTED for this turn —
+ * the authoritative input to {@link msSkillSystemBlocksForPane} so an MS skill
+ * advertises its remote-MCP tools ONLY when they are genuinely live
+ * (no-vaporware). A prefix counts as connected when EITHER:
+ *   (a) buildMcpShim actually registered tools under it in `reg` (the strongest
+ *       signal — and, for an entra-obo server, the only proof the signed-in user
+ *       truly holds a delegated token for THIS turn); OR
+ *   (b) its backing remote-builtin server is enabled/configured per the catalog
+ *       (msRemoteMcpConfigured) — this is what surfaces the DEFAULT-ON, no-auth
+ *       Microsoft Learn MCP as live day-one with zero config.
+ * Anything not connected falls through to the honest, single-sourced catalog gate
+ * inside the skill block. Mirrors how `pbiMcpToolPrefix` gates the Power BI
+ * remote MCP — same plumbing, generalized.
+ */
+function msConnectedMcpPrefixes(reg: LoomToolRegistry): string[] {
+  const prefixes = REMOTE_BUILTIN_MCP_CATALOG.map((e) => msMcpPrefix(e.id));
+  const connected = new Set<string>();
+  // (b) enabled/configured servers (covers the default-on Microsoft Learn MCP).
+  REMOTE_BUILTIN_MCP_CATALOG.forEach((e, i) => {
+    if (msRemoteMcpConfigured(e.id)) connected.add(prefixes[i]);
+  });
+  // (a) prefixes the per-user MCP shim actually registered tools under.
+  const names = reg.list().map((t) => t.name);
+  for (const p of prefixes) {
+    if (names.some((n) => n.startsWith(p))) connected.add(p);
+  }
+  return [...connected];
+}
+
 export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<OrchestratorStep> {
   const { prompt, sessionId, userOid } = opts;
   // Copilot surface tag for per-persona usage metering (string, defaults to
@@ -1578,6 +1774,16 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
   // Best-effort: a missing/unreachable MCP server never breaks the chat. Skip
   // entirely for a scoped persona registry (registryOverride / registry) —
   // those expose a deliberately tight tool set.
+  //
+  // buildMcpShim is passed `userOid`: for the opt-in Power BI remote MCP (an
+  // `entra-obo` server) it resolves getPbiUserToken(userOid) and threads that
+  // per-USER delegated Power BI token through tools/list + tools/call, so its
+  // mcp_powerbiremote_* tools auto-register and run under the signed-in user's
+  // own Power BI RBAC — not the Console UAMI. When the user has no cached token
+  // (never consented / expired) that server is silently skipped here; the
+  // powerbi_mcp_status tool reports the honest remediation on demand. No Fabric
+  // host is contacted unless this opt-in server is configured + consented
+  // (no-fabric-dependency).
   if (!opts.registryOverride && !opts.registry) {
     try {
       const { buildMcpShim } = await import('./mcp-shim');
@@ -1632,6 +1838,22 @@ export async function* orchestrate(opts: OrchestrateOptions): AsyncIterable<Orch
       role: 'system',
       content: `Current editor context (JSON): ${JSON.stringify(opts.personaContext).slice(0, 4000)}`,
     });
+  }
+  // Microsoft agent-skill guidance (github.com/microsoft/skills) for the active
+  // pane, injected as an ADDITIONAL system message alongside the persona/context
+  // above — additive, never replacing the pane system prompt. Each block frames
+  // the Azure-native DEFAULT tools and, only when the backing Microsoft MCP
+  // server is genuinely connected for this turn (msConnectedMcpPrefixes), also
+  // advertises its mcp_<slug>_* tools; otherwise it emits the honest catalog gate
+  // (naming the exact env/secret/scope/consent) and never claims an unconnected
+  // capability. Pure guidance — the tool loop below is unchanged. Reuses the same
+  // skill plumbing as the Power BI skills (no parallel system); empty string when
+  // no MS skill applies to this pane, so nothing extra is injected.
+  const msSkillBlocks = msSkillSystemBlocksForPane(opts.contextSlug, {
+    connectedPrefixes: msConnectedMcpPrefixes(reg),
+  });
+  if (msSkillBlocks) {
+    messages.push({ role: 'system', content: msSkillBlocks });
   }
   messages.push({ role: 'user', content: prompt });
 

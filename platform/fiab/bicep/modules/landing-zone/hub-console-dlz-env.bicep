@@ -52,6 +52,12 @@ param dlzDatabricksWorkspaceUrl string = ''
 @description('DLZ Azure Data Factory name → LOOM_ADF_NAME / LOOM_ADF_FACTORY. Empty when ADF is disabled (the var is then skipped and the mirror/CDC editors honest-gate).')
 param dlzAdfFactoryName string = ''
 
+@description('DLZ Service Bus namespace NAME (short) → LOOM_SERVICEBUS_NAMESPACE (+ LOOM_SERVICEBUS_RG / LOOM_SERVICEBUS_SUB re-pointed at the attached DLZ). Empty when Service Bus is disabled (the var is then skipped and the service-bus-namespace editor honest-gates, which is correct).')
+param dlzServiceBusNamespace string = ''
+
+@description('DLZ dedicated Event Grid custom-topic NAME → presence flag for re-pointing LOOM_EVENTGRID_RG / LOOM_EVENTGRID_SUB at the attached DLZ (the event-grid-topic navigator is RG-scoped). Empty when no dedicated topic is provisioned (the var set is skipped; LOOM_DLZ_RG re-point still covers the business topic).')
+param dlzEventGridTopic string = ''
+
 @description('Compliance tags.')
 param complianceTags object
 
@@ -164,6 +170,8 @@ resource wireDlzEnv 'Microsoft.Resources/deploymentScripts@2023-08-01' = {
       { name: 'DLZ_SUB', value: dlzSubscriptionId }
       { name: 'DATABRICKS_URL', value: dlzDatabricksWorkspaceUrl }
       { name: 'ADF_NAME', value: dlzAdfFactoryName }
+      { name: 'SERVICEBUS_NS', value: dlzServiceBusNamespace }
+      { name: 'EVENTGRID_TOPIC', value: dlzEventGridTopic }
     ]
     scriptContent: '''
 set -euo pipefail
@@ -238,6 +246,36 @@ if [ -n "$EVENTHUB_NS" ]; then
   fi
 fi
 
+# Service Bus — the service-bus-namespace navigator binds to this namespace.
+# LOOM_SERVICEBUS_RG / LOOM_SERVICEBUS_SUB are set explicitly (rather than relying
+# on the app's LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID fallbacks) because the console's
+# LOOM_SUBSCRIPTION_ID is the HUB sub, not the DLZ sub. Only set when a namespace
+# exists (empty => editor honest-gates, the correct behavior — skip the var).
+if [ -n "$SERVICEBUS_NS" ]; then
+  SET_ARGS+=( "LOOM_SERVICEBUS_NAMESPACE=$SERVICEBUS_NS" )
+  if [ -n "$DLZ_RG" ]; then
+    SET_ARGS+=( "LOOM_SERVICEBUS_RG=$DLZ_RG" )
+  fi
+  if [ -n "$DLZ_SUB" ]; then
+    SET_ARGS+=( "LOOM_SERVICEBUS_SUB=$DLZ_SUB" )
+  fi
+fi
+
+# Event Grid — the event-grid-topic navigator is RG-scoped (lists all topics in
+# LOOM_EVENTGRID_RG). LOOM_EVENTGRID_RG falls back to LOOM_DLZ_RG (re-pointed
+# above), but LOOM_EVENTGRID_SUB falls back to LOOM_SUBSCRIPTION_ID (the HUB sub),
+# so when a dedicated topic was provisioned in the attached DLZ we set both
+# explicitly to target the DLZ. Empty topic => skip (LOOM_DLZ_RG re-point still
+# covers the always-on business-events topic).
+if [ -n "$EVENTGRID_TOPIC" ]; then
+  if [ -n "$DLZ_RG" ]; then
+    SET_ARGS+=( "LOOM_EVENTGRID_RG=$DLZ_RG" )
+  fi
+  if [ -n "$DLZ_SUB" ]; then
+    SET_ARGS+=( "LOOM_EVENTGRID_SUB=$DLZ_SUB" )
+  fi
+fi
+
 echo "  set-env-vars: ${SET_ARGS[*]}"
 # --set-env-vars MERGES (adds/updates the named vars, leaves the rest intact).
 az containerapp update \
@@ -265,3 +303,5 @@ output loomDlzRg string = dlzResourceGroup
 output loomDlzSubscriptionId string = dlzSubscriptionId
 output loomDatabricksHostname string = dlzDatabricksWorkspaceUrl
 output loomAdfFactoryName string = dlzAdfFactoryName
+output loomServiceBusNamespace string = dlzServiceBusNamespace
+output loomEventGridTopic string = dlzEventGridTopic

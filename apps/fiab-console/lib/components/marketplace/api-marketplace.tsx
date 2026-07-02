@@ -42,6 +42,7 @@ import {
 } from '@fluentui/react-icons';
 import { Section, Toolbar } from '@/lib/components/ui/section';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { ResponseBodyViewer } from '@/lib/components/marketplace/response-body';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
@@ -978,15 +979,8 @@ export function ApiMarketplace() {
                   <div className={s.codeMeta} role="region" aria-label="Response headers">
                     {Object.entries(tResp.headers).map(([k, v]) => `${k}: ${v}`).join('\n') || '(none)'}
                   </div>
-                  <div className={s.respLabelRow}>
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
-                    {tResp.body && (
-                      <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(tResp.body)}>
-                        Copy
-                      </Button>
-                    )}
-                  </div>
-                  <div className={s.code} role="region" aria-label="Response body">{tResp.body || '(empty)'}</div>
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Response body</Caption1>
+                  <ResponseBodyViewer body={tResp.body || ''} contentType={tResp.headers['content-type']} />
                 </div>
               )}
             </div>

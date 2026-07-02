@@ -40,19 +40,19 @@ import {
 } from '@fluentui/react-icons';
 
 const useStyles = makeStyles({
-  root: { display: 'flex', flexDirection: 'column', gap: '12px', padding: '4px', minHeight: 0 },
-  toolbar: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
+  root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, padding: tokens.spacingVerticalXS, minHeight: 0, minWidth: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   card: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '8px', padding: '16px',
-    display: 'flex', flexDirection: 'column', gap: '12px', backgroundColor: tokens.colorNeutralBackground1,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingVerticalL,
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground1, minWidth: 0,
   },
-  row: { display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end' },
-  grid2: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' },
-  actions: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' },
-  sectionTitle: { display: 'flex', gap: '8px', alignItems: 'center' },
+  row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', alignItems: 'flex-end', minWidth: 0 },
+  grid2: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: tokens.spacingHorizontalM, minWidth: 0 },
+  actions: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  sectionTitle: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   tableWrap: {
-    overflow: 'auto', maxHeight: '280px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: '6px',
+    overflow: 'auto', maxHeight: '280px', maxWidth: '100%',
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
   },
   hint: { color: tokens.colorNeutralForeground3 },
 });

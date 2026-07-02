@@ -14,7 +14,7 @@ export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const accounts = await listStorageAccounts();
+    const accounts = await listStorageAccounts(s);
     return NextResponse.json({ ok: true, accounts });
   } catch (e: any) {
     const status = e instanceof StorageDiscoveryError ? e.status : 502;

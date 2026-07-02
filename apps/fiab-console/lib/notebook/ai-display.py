@@ -23,6 +23,9 @@ if not getattr(sys, "_loom_display_v1", False):
 
     _LOOM_DISPLAY_MIME = "application/vnd.loom.display+json"
     _SAMPLE_ROWS = int(os.environ.get("LOOM_DISPLAY_SAMPLE_ROWS", "5000") or "5000")
+    # Last reason the rich grid couldn't render (surfaced in the cell output so a
+    # silent fall-through to the plain repr is diagnosable instead of mysterious).
+    _loom_display_reason = ""
 
     def _is_nan(v):
         try:
@@ -50,67 +53,106 @@ if not getattr(sys, "_loom_display_v1", False):
                 pass
         return str(v)
 
+    def _num_col_stats(non_null):
+        """min/max/mean/stddev for a pure-Python list of numbers."""
+        mn = min(non_null)
+        mx = max(non_null)
+        mean = sum(non_null) / len(non_null)
+        var = sum((x - mean) ** 2 for x in non_null) / len(non_null)
+        return {
+            "min": str(mn), "max": str(mx),
+            "mean": "{:.4f}".format(float(mean)),
+            "stddev": "{:.4f}".format(float(var ** 0.5)),
+        }
+
+    def _cat_col_stats(non_null):
+        """cardinality + top values for a pure-Python list of categoricals."""
+        counts = {}
+        for v in non_null:
+            k = str(v)
+            counts[k] = counts.get(k, 0) + 1
+        top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        return {
+            "cardinality": int(min(len(counts), 1000)),
+            "topValues": [{"value": k, "count": int(c)} for k, c in top],
+        }
+
     def _serialize_df(df, df_var_name=None):
-        """Serialize a Spark or pandas DataFrame -> LoomDisplayPayload dict, or None."""
+        """Serialize a Spark or pandas DataFrame -> LoomDisplayPayload dict, or None.
+
+        The Spark path uses collect() + pure-Python stats — NOT toPandas()/Arrow,
+        which is fragile across pool configs (Arrow type mismatches, missing
+        pyarrow) and was the silent failure that left display() falling back to
+        the plain DataFrame repr. On any failure we record _loom_display_reason so
+        the caller can surface it instead of failing mysteriously.
+        """
+        global _loom_display_reason
+        is_spark = hasattr(df, "limit") and hasattr(df, "collect") and hasattr(df, "schema")
         try:
-            import pandas as pd
-        except Exception:
-            return None
-        try:
-            if hasattr(df, "toPandas") and hasattr(df, "limit"):
-                # Spark DataFrame: exact count (real job) + bounded sample.
-                total = int(df.count())
-                sample = df.limit(_SAMPLE_ROWS).toPandas()
-            elif isinstance(df, pd.DataFrame):
+            if is_spark:
+                try:
+                    total = int(df.count())
+                except Exception:
+                    total = None
+                rows_raw = df.limit(_SAMPLE_ROWS).collect()
+                fields = list(df.schema.fields)
+                names = [f.name for f in fields]
+                dtypes = {f.name: f.dataType.simpleString() for f in fields}
+                rows = [[_json_safe(r[i]) for i in range(len(names))] for r in rows_raw]
+                columns = []
+                for ci, name in enumerate(names):
+                    vals = [r[ci] for r in rows_raw]
+                    non_null = [v for v in vals if v is not None and not _is_nan(v)]
+                    col = {"name": str(name), "dtype": dtypes.get(name, ""),
+                           "nullCount": int(len(vals) - len(non_null))}
+                    nums = [v for v in non_null if isinstance(v, (int, float)) and not isinstance(v, bool)]
+                    if non_null and len(nums) == len(non_null):
+                        col.update(_num_col_stats(nums))
+                    else:
+                        col.update(_cat_col_stats(non_null))
+                    columns.append(col)
+                payload = {
+                    "version": 1, "columns": columns, "rows": rows,
+                    "totalCount": total if total is not None else len(rows),
+                    "sampleSize": len(rows), "chartRecs": [],
+                }
+                if df_var_name:
+                    payload["dfVarName"] = df_var_name
+                return payload
+
+            # pandas DataFrame path (optional — only needs pandas for pandas DFs).
+            try:
+                import pandas as pd
+            except Exception:
+                _loom_display_reason = "object is not a Spark DataFrame and pandas is unavailable"
+                return None
+            if isinstance(df, pd.DataFrame):
                 total = int(len(df))
                 sample = df.head(_SAMPLE_ROWS)
-            else:
-                return None
-        except Exception:
+                columns = []
+                for name in sample.columns:
+                    s = sample[name]
+                    dtype = str(s.dtype)
+                    null_count = int(s.isna().sum())
+                    col = {"name": str(name), "dtype": dtype, "nullCount": null_count}
+                    if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
+                        nn = s.dropna()
+                        if len(nn):
+                            col.update(_num_col_stats([float(x) for x in nn.tolist()]))
+                    else:
+                        col.update(_cat_col_stats(s.dropna().astype(str).tolist()))
+                    columns.append(col)
+                rows = [[_json_safe(v) for v in row] for row in sample.itertuples(index=False, name=None)]
+                payload = {"version": 1, "columns": columns, "rows": rows,
+                           "totalCount": total, "sampleSize": len(rows), "chartRecs": []}
+                if df_var_name:
+                    payload["dfVarName"] = df_var_name
+                return payload
+
+            _loom_display_reason = "object is not a DataFrame ({})".format(type(df).__name__)
             return None
-
-        try:
-            columns = []
-            for name in sample.columns:
-                s = sample[name]
-                dtype = str(s.dtype)
-                null_count = int(s.isna().sum())
-                col = {"name": str(name), "dtype": dtype, "nullCount": null_count}
-                if pd.api.types.is_numeric_dtype(s) and not pd.api.types.is_bool_dtype(s):
-                    non_null = s.dropna()
-                    if len(non_null):
-                        col["min"] = str(non_null.min())
-                        col["max"] = str(non_null.max())
-                        col["mean"] = "{:.4f}".format(float(non_null.mean()))
-                        std = non_null.std()
-                        col["stddev"] = "{:.4f}".format(float(std if std == std else 0.0))
-                else:
-                    non_null = s.dropna()
-                    col["cardinality"] = int(min(non_null.nunique(), 1000))
-                    vc = non_null.astype(str).value_counts().head(10)
-                    col["topValues"] = [
-                        {"value": str(idx), "count": int(cnt)} for idx, cnt in vc.items()
-                    ]
-                columns.append(col)
-
-            rows = []
-            for row in sample.itertuples(index=False, name=None):
-                rows.append([_json_safe(v) for v in row])
-
-            payload = {
-                "version": 1,
-                "columns": columns,
-                "rows": rows,
-                "totalCount": total,
-                "sampleSize": len(rows),
-                # chartRecs intentionally empty — the Loom BFF computes the
-                # recommendation heuristic server-side (one place: display-stats.ts).
-                "chartRecs": [],
-            }
-            if df_var_name:
-                payload["dfVarName"] = df_var_name
-            return payload
-        except Exception:
+        except Exception as e:
+            _loom_display_reason = "serialize error: {}: {}".format(type(e).__name__, e)
             return None
 
     def _guess_var_name(obj):
@@ -126,15 +168,24 @@ if not getattr(sys, "_loom_display_v1", False):
             pass
         return None
 
+    def _looks_like_df(obj):
+        return hasattr(obj, "limit") or type(obj).__name__ == "DataFrame"
+
     def display(obj, *args, **kwargs):
         """Loom-enhanced display(): rich MIME for DataFrames, built-in otherwise."""
+        global _loom_display_reason
+        _loom_display_reason = ""
         payload = _serialize_df(obj, _guess_var_name(obj))
         if payload is not None:
+            ip = None
             try:
                 from IPython import get_ipython
 
                 ip = get_ipython()
-                if ip is not None:
+            except Exception as e:
+                _loom_display_reason = "IPython import failed: {}".format(e)
+            if ip is not None:
+                try:
                     ip.display_pub.publish(
                         data={
                             _LOOM_DISPLAY_MIME: payload,
@@ -145,6 +196,15 @@ if not getattr(sys, "_loom_display_v1", False):
                         metadata={},
                     )
                     return
+                except Exception as e:
+                    _loom_display_reason = "publish failed: {}: {}".format(type(e).__name__, e)
+            elif not _loom_display_reason:
+                _loom_display_reason = "no IPython shell (get_ipython() is None)"
+        # For a DataFrame-like object, surface WHY the rich grid was skipped (so a
+        # silent fall-through to the plain repr is diagnosable), then fall back.
+        if _loom_display_reason and _looks_like_df(obj):
+            try:
+                print("[Loom display] rich grid unavailable — " + _loom_display_reason)
             except Exception:
                 pass
         # Fall through to the original display() for non-DataFrames or any failure.

@@ -23,6 +23,7 @@ import {
 } from '@fluentui/react-components';
 import { Add20Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { EmptyState } from '@/lib/components/empty-state';
 import { dataProductTypeLabel, DATA_PRODUCT_TYPES } from '@/lib/catalog/data-product-enums';
 import { LoomDataTable, type LoomColumn } from '@/lib/components/ui/loom-data-table';
 import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
@@ -33,14 +34,14 @@ import { itemVisual } from '@/lib/components/ui/item-type-visual';
 const LS_VIEW = 'loom.dataProducts.viewMode.v1';
 
 const useStyles = makeStyles({
-  bar: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalM },
-  actions: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
+  bar: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalM },
+  actions: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalS },
   nameCell: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS, minWidth: 0 },
   nameChip: {
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: '24px', height: '24px', borderRadius: tokens.borderRadiusMedium, flexShrink: 0,
   },
-  link: { fontWeight: tokens.fontWeightSemibold },
+  link: { fontWeight: tokens.fontWeightSemibold, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   tileFooter: { display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap' },
 });
 
@@ -148,10 +149,15 @@ export default function DataProductsPage() {
       </div>
 
       {loading && <Spinner size="small" label="Loading…" />}
-      {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error"><MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>{error}</MessageBarBody></MessageBar>}
 
       {!loading && rows.length === 0 && !error && (
-        <MessageBar intent="info"><MessageBarBody>No data products yet. Select <strong>New data product</strong> to create one.</MessageBarBody></MessageBar>
+        <EmptyState
+          icon={<visual.icon />}
+          title="No data products yet"
+          body="Curated, governed data products bundle datasets, dashboards, and APIs into one shareable asset — Microsoft Purview Unified Catalog parity. Create your first to populate this page."
+          primaryAction={{ label: 'New data product', onClick: () => router.push('/data-products/new') }}
+        />
       )}
 
       {!loading && hasRows && (

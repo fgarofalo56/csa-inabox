@@ -25,6 +25,17 @@ function err(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
+/** Public (no-secret) view of an MCP server doc — mirrors git-binding-store's
+ * toView(): the raw bearer / API secret in `authValue` (authMethod 'header') is
+ * NEVER returned to the browser. Callers get `hasAuthValue: boolean` instead.
+ * `secretRefs` already holds only Key Vault secret NAMES (never values) so it
+ * passes through untouched. Applied to every response body that carries a doc. */
+type McpServerConfigView = Omit<McpServerConfigDoc, 'authValue'> & { hasAuthValue: boolean };
+function toView(doc: McpServerConfigDoc): McpServerConfigView {
+  const { authValue, ...rest } = doc;
+  return { ...rest, hasAuthValue: !!authValue };
+}
+
 /** Whitelist of persistable string/bool keys. */
 const KEYS: (keyof McpServerConfig)[] = ['name', 'endpoint', 'authMethod', 'authValue', 'description', 'enabled', 'catalogId'];
 
@@ -108,7 +119,7 @@ export async function GET() {
       parameters: [{ name: '@t', value: tenantId }],
     };
     const { resources } = await c.items.query<McpServerConfigDoc>(q).fetchAll();
-    return NextResponse.json({ ok: true, servers: resources || [] });
+    return NextResponse.json({ ok: true, servers: (resources || []).map(toView) });
   } catch (e: any) {
     return err(e?.message || String(e), 500);
   }
@@ -137,7 +148,7 @@ export async function POST(req: NextRequest) {
         name: config.name,
       }).catch(() => {});
     } catch { /* audit is best-effort */ }
-    return NextResponse.json({ ok: true, server: doc });
+    return NextResponse.json({ ok: true, server: toView(doc) });
   } catch (e: any) {
     return err(e?.message || String(e), 400);
   }
@@ -180,7 +191,7 @@ export async function PUT(req: NextRequest) {
         }).catch(() => {});
       }
     } catch { /* audit is best-effort */ }
-    return NextResponse.json({ ok: true, server: doc });
+    return NextResponse.json({ ok: true, server: toView(doc) });
   } catch (e: any) {
     return err(e?.message || String(e), 400);
   }

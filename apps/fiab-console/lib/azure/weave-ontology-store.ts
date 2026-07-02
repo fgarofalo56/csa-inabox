@@ -314,6 +314,66 @@ export async function createLink(
   };
 }
 
+/** A listed link instance — the edge plus both endpoints' labels. */
+export interface WeaveLinkRow {
+  id: string;
+  linkType: string;
+  fromId: string;
+  fromType: string;
+  toId: string;
+  toType: string;
+  properties: Record<string, unknown>;
+}
+
+/**
+ * List link instances (AGE edges), optionally filtered to one edge label:
+ * `MATCH (a)-[r(:<type>)]->(b) RETURN r, label(a), label(b) LIMIT <top>`.
+ * The edge agtype carries id / label / start_id / end_id / properties.
+ */
+export async function listLinks(linkType?: string, top = 200): Promise<WeaveLinkRow[]> {
+  let edgePattern = '[r]';
+  if (linkType) {
+    const l = safeLabel(linkType);
+    if (!l) throw new PostgresError(`Link type '${linkType}' is not a valid AGE label`, 400);
+    edgePattern = `[r:${l}]`;
+  }
+  const limit = Math.min(Math.max(Math.trunc(top) || 200, 1), 1000);
+  const stmt = `MATCH (a)-${edgePattern}->(b) RETURN r, label(a), label(b) LIMIT ${limit}`;
+  const res = await runCypher(stmt, [
+    { name: 'r', type: 'agtype' },
+    { name: 'alabel', type: 'agtype' },
+    { name: 'blabel', type: 'agtype' },
+  ]);
+  const out: WeaveLinkRow[] = [];
+  for (const row of res.rows) {
+    const e = parseAgtype(row[0]) as {
+      id?: unknown; label?: string; start_id?: unknown; end_id?: unknown;
+      properties?: Record<string, unknown>;
+    } | null;
+    if (!e || typeof e !== 'object') continue;
+    out.push({
+      id: e.id !== undefined ? String(e.id) : '',
+      linkType: String(e.label || ''),
+      fromId: e.start_id !== undefined ? String(e.start_id) : '',
+      fromType: String(parseAgtype(row[1]) ?? ''),
+      toId: e.end_id !== undefined ? String(e.end_id) : '',
+      toType: String(parseAgtype(row[2]) ?? ''),
+      properties: (e.properties as Record<string, unknown>) || {},
+    });
+  }
+  return out;
+}
+
+/** Delete a link instance (edge) by its AGE id. Returns rows deleted (0 or 1). */
+export async function deleteLink(linkId: string): Promise<number> {
+  const idNum = String(linkId).trim();
+  if (!/^\d+$/.test(idNum)) throw new PostgresError('linkId must be the numeric AGE edge id', 400);
+  const stmt = `MATCH ()-[r]->() WHERE id(r) = ${idNum} DELETE r RETURN count(*) AS deleted`;
+  const res = await runCypher(stmt, [{ name: 'deleted', type: 'agtype' }]);
+  const n = res.rows.length ? Number(parseAgtype(res.rows[0][0])) : 0;
+  return Number.isFinite(n) ? n : 0;
+}
+
 // ============================================================
 // Action types — declared on the ontology state, executed here
 // ============================================================

@@ -53,6 +53,17 @@ function universalTransforms(text) {
   return text
     // OneLake ABFSS host → ADLS Gen2 (host only; container + path preserved).
     .replace(/onelake\.dfs\.fabric\.microsoft\.com/g, '{{ADLS_ACCOUNT}}.dfs.core.windows.net')
+    // Table-name normalization: the upstream medallion notebooks mixed two-part
+    // Spark names on the WRITE side (`lh_bronze.bronze_x` — saveAsTable's Hive
+    // database.table) with three-part `lh_<layer>.dbo.<table>` names on the READ
+    // side (Fabric schema-enabled-lakehouse habit). On Synapse Spark / Databricks
+    // the default `spark_catalog` has no `lh_bronze` CATALOG, so a three-part read
+    // fails ("Catalog 'lh_bronze' not found") and silver never sees bronze's data.
+    // Normalize every `lh_<layer>.dbo.<table>` down to the two-part
+    // `lh_<layer>.<table>` that the WRITE side already uses, so reads and writes
+    // line up across the whole medallion. (Azure SQL `dbo.<table>` refs — no
+    // `lh_` prefix — are untouched.)
+    .replace(/\b(lh_[a-z0-9_]+)\.dbo\./g, '$1.')
     // Fabric Variable Library Spark binding → Synapse Spark conf.
     .replace(/spark\.fabric\.variable\./g, 'spark.loom.variable.')
     // Fabric Variable Library REST doc (bronze/19 markdown) → Synapse Spark conf.

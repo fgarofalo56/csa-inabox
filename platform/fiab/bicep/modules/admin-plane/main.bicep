@@ -223,8 +223,8 @@ param adxAutoscaleMaximum int = 10
 
 // ---------- User access patterns (Bastion is always-on; these add reach) ----------
 
-@description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console without Bastion. Default off — set true when ready.')
-param vpnGatewayEnabled bool = false
+@description('Deploy a P2S VPN Gateway in the hub VNet (AAD auth, OpenVPN). ~30 min provisioning, ~$30/mo. Lets admin laptops reach the internal Console + the private-by-default estate (private endpoints, Internal APIM, firewall services) day-one via the admin Network & DNS page.')
+param vpnGatewayEnabled bool = true
 
 @description('Deploy Application Gateway v2 + WAF v2 in front of the Console (public IP, in-VNet backend). ~15 min provisioning, ~$250/mo. Default off.')
 param appGatewayEnabled bool = false
@@ -234,7 +234,7 @@ param frontDoorEnabled bool = false
 
 // ---------- Container image tags + Loom Console env-var wiring ----------
 
-@description('Container image tag per app (loom-console, loom-mcp, loom-mcp-bridge, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim, loom-copilot-maf). Default v0.1; override per release.')
+@description('Container image tag per app (loom-console, loom-mcp, loom-mcp-bridge, loom-orchestrator, loom-activator, loom-mirroring, loom-direct-lake-shim, loom-copilot-maf, loom-setup-orchestrator, loom-script-runner). Default v0.1; override per release.')
 param appImageTags object = {
   console: 'v0.1'
   mcp: 'v0.1'
@@ -245,6 +245,11 @@ param appImageTags object = {
   directLake: 'v0.1'
   maf: 'v0.1'
   setupOrchestrator: 'v0.1'
+  // loom-script-runner — sandboxed R/Python script-visual executor (wave-4) for
+  // the report-designer. Real ACA app (script-runner-app.bicep) that runs the
+  // user's Power BI-parity R/Python visual code in a resource-limited subprocess
+  // and returns a static PNG. Pinned image version.
+  scriptRunner: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -305,6 +310,24 @@ var copilotMafActive = copilotMafEnabled && (boundary == 'GCC-High' || boundary 
 
 // dbt-runner Container App is only meaningful on Container Apps + when apps deploy.
 var dbtRunnerActive = dbtRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// ── Script-visual executor (wave-4) — deploy toggle ───────────────────────────
+// scriptRunnerEnabled (var, default true): deploys the loom-script-runner ACA app
+// (script-runner-app.bicep) that backs the report-designer's Power BI-parity
+// R/Python script visual. Container Apps only; an honest no-op on AKS boundaries
+// (GCC-High / IL5), where the workload would deploy via the cluster GitOps path
+// instead. Implemented as a `var` rather than a `param` for the SAME reason as
+// loomConsoleTelemetryEnabled above: admin-plane/main.bicep is at the hard ARM
+// 256-parameter cap (a real deploy blocker), so a new top-level toggle param
+// would push the template to 257 params and fail `az bicep build` / deployment.
+// A per-deploy opt-out param returns once the program-level param-object
+// consolidation frees admin-plane budget.
+var scriptRunnerEnabled = true
+
+// The script-runner ACA app only deploys on the Container Apps boundaries
+// (Commercial / GCC) when explicitly enabled + apps deploy (it needs the
+// loom-script-runner image in ACR). On AKS boundaries it is a no-op here.
+var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')
 param loomVersion string = '0.45.0'
@@ -382,6 +405,21 @@ var deSynapseEnabled = byoExisting.?deSynapse ?? true
 var deDatabricksEnabled = byoExisting.?deDatabricks ?? true
 var deAdfEnabled = byoExisting.?deAdf ?? true
 var deShirEnabled = byoExisting.?deShir ?? true
+// Service Bus namespace name (service-bus-namespace navigator). Carried on the
+// byoExisting object — NOT a new scalar param — to stay under admin-plane's
+// 256-param ceiling. main.bicep sets it to the deterministic single-sub name
+// (sbns-loom-default-<region>) when Service Bus is provisioned, else '' so the
+// editor honest-gates. SUB/RG fall back to the deployment sub / LOOM_DLZ_RG.
+var loomServiceBusNamespace = byoExisting.?serviceBusNamespace ?? ''
+
+// Always-on default AML Compute Instance (LOOM_AML_DEFAULT_COMPUTE) + its idle
+// TTL (LOOM_AML_COMPUTE_IDLE_TTL). Carried on byoExisting — NOT new scalar
+// params — to stay under admin-plane's 256-param ceiling. main.bicep sets the
+// name to ml-workspace.bicep's deterministic defaultCiName (ci-loom-<hash>) when
+// the AML workspace is provisioned, else '' so the notebook editor auto-select
+// is a no-op and the AML compute gate honest-gates as before.
+var loomAmlDefaultCompute = byoExisting.?amlDefaultCompute ?? ''
+var loomAmlComputeIdleTtl = byoExisting.?amlComputeIdleTtl ?? 'PT30M'
 
 @description('Deploy the SHARED admin-zone Purview self-hosted IR VMSS (scale-to-zero). A Purview SHIR cannot be the DLZ ADF SHIR (Microsoft constraint — separate machine), so this is its own VMSS. Honest-gated: only deploys when purviewEnabled AND purviewIrAuthKey AND purviewShirAdminPassword are all set.')
 param purviewShirEnabled bool = true
@@ -776,6 +814,25 @@ var byoFoundrySub  = !empty(byoExisting.?foundrySub ?? '') ? byoExisting.foundry
 var byoFoundryEndpoint = !empty(existingFoundryAccountName) ? 'https://${existingFoundryAccountName}.${environment().suffixes.storage != 'core.windows.net' ? 'openai.azure.us' : 'openai.azure.com'}/' : ''
 var byoFoundryChatDeployment = string(byoExisting.?foundryChatDeployment ?? '')
 var byoFoundryEmbedDeployment = string(byoExisting.?foundryEmbedDeployment ?? '')
+// Slate-app / Workshop-app Publish → Azure Static Web Apps target RG. The
+// publish BFF routes (app/api/items/{slate-app,workshop-app}/[id]/publish)
+// PUT Microsoft.Web/staticSites + POST listSecrets here. Threaded via
+// byoExisting.swaResourceGroup (root param loomSwaResourceGroup) — NOT a new
+// scalar param, admin-plane/main.bicep is at the 256-param ceiling. Empty
+// defaults to THIS admin RG; the Console UAMI is granted Website Contributor
+// at that RG scope by swa-publish-rbac.bicep below.
+var loomSwaResourceGroup = string(byoExisting.?swaResourceGroup ?? '')
+var effectiveSwaRg = !empty(loomSwaResourceGroup) ? loomSwaResourceGroup : resourceGroup().name
+// user-data-function invoke base URL (LOOM_UDF_FUNCTION_BASE — an Azure
+// Functions host, e.g. https://my-udf.azurewebsites.net). Threaded via
+// byoExisting.udfFunctionBase (root param loomUdfFunctionBase), same
+// 256-param-ceiling treatment. Empty → the invoke route serves its honest
+// 503 gate naming this var.
+// TODO udf-runtime.bicep: deploy a Loom-managed Azure Functions host for
+// user-data-function items following the dab-runtime.bicep pattern (opt-out
+// enable flag + per-app identity + KV host key + honest editor gate), then
+// default this to its endpoint instead of a BYO URL.
+var loomUdfFunctionBase = string(byoExisting.?udfFunctionBase ?? '')
 // Purview — existingPurviewAccount overrides loomPurviewAccount (reuse > param).
 // The Purview catalog data-plane is reached by account host (`{account}.purview.azure.com`)
 // + a UAMI data-plane role assigned in the Purview portal — it is subscription-
@@ -818,6 +875,12 @@ var byoEventHubSub       = !empty(byoExisting.?eventHubSub ?? '') ? byoExisting.
 // lookup fails even though the topic exists.
 var effEventGridRg       = !empty(loomEventGridRg) ? loomEventGridRg : loomDlzRg
 var effEventGridSub      = !empty(loomEventGridSub) ? loomEventGridSub : subscription().subscriptionId
+// Service Bus navigator — RG/sub default to the DLZ RG / deployment sub (mirrors
+// the Event Hub navigator fallbacks). The servicebus-client reads
+// LOOM_SERVICEBUS_SUB||LOOM_SUBSCRIPTION_ID and LOOM_SERVICEBUS_RG||LOOM_DLZ_RG;
+// these explicit values keep the navigator correct without relying on fallbacks.
+var effServiceBusRg      = loomDlzRg
+var effServiceBusSub     = subscription().subscriptionId
 // Databricks navigator — reuse hostname > provisioned/patched hostname.
 var existingDatabricksHostname = byoExisting.?databricksHostname ?? ''
 var effDatabricksHostname = !empty(existingDatabricksHostname) ? existingDatabricksHostname : (deDatabricksEnabled ? loomDatabricksHostname : '')
@@ -1036,7 +1099,7 @@ var loomPipelineBackend = loomBackends.?pipeline ?? 'synapse'
 @allowed(['adf-cdc', 'synapse-link', 'fabric'])
 param loomMirrorBackend string = 'adf-cdc'
 
-@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule). The orgVisuals key is an opt-out toggle (default "enabled") for the Embed codes (F22) + Organizational visuals (F23) container grant + LOOM_ORG_VISUALS_URL env — set "disabled" to honest-gate those panes while keeping the medallion lake wired.')
+@description('Azure-native backend selectors for Fabric-flavored items, bundled into one object to stay under the ARM 256-parameter template limit. Each key defaults to the Azure-native path; set a value to "fabric"/"powerbi" to opt into the Fabric/Power BI alternative for that item (per no-fabric-dependency rule). The orgVisuals key is an opt-out toggle (default "enabled") for the Embed codes (F22) + Organizational visuals (F23) container grant + LOOM_ORG_VISUALS_URL env — set "disabled" to honest-gate those panes while keeping the medallion lake wired. The powerBiMcpClientId / powerBiMcpEndpoint keys configure the OPT-IN Power BI remote MCP server (Copilot agentic, preview): set powerBiMcpClientId to an Entra app (client) id to enable the per-user On-Behalf-Of Power BI MCP path (LOOM_POWERBI_MCP_CLIENT_ID / LOOM_POWERBI_MCP_ENDPOINT); empty (default) keeps the Azure-native semantic-model/report authoring path and the honest Copilot gate. The mcp key bundles the Microsoft MCP-server config (github.com/microsoft/mcp): Microsoft Learn is the sole default-on entry (no-auth, no Fabric dependency); ARM/Foundry/Graph/M365/Teams/OneDrive/Sentinel/Admin-Center are Entra On-Behalf-Of opt-ins (reusing the existing MSAL confidential client) and GitHub is a Key-Vault-PAT opt-in — each OFF until its toggle + confirmed endpoint are set, so no unconfirmed/Fabric host is ever on a default path.')
 param loomBackends object = {
   event: 'eventhubs'
   activator: 'azure-monitor'
@@ -1054,6 +1117,69 @@ param loomBackends object = {
   // every downstream LOOM_WAREHOUSE_BACKEND / LOOM_PIPELINE_BACKEND env is unchanged.
   warehouse: 'synapse-dedicated'
   pipeline: 'synapse'
+  // Power BI remote MCP server (Copilot agentic / preview) — STRICTLY OPT-IN
+  // (no-fabric-dependency). Folded here (not a standalone param) to stay under
+  // the ARM 256-param ceiling. Empty client id = opt-out (Azure-native authoring
+  // stays default + honest Copilot gate). Set powerBiMcpClientId to opt in; the
+  // endpoint defaults to the Commercial host (override for sovereign clouds).
+  powerBiMcpClientId: ''
+  powerBiMcpEndpoint: 'https://api.fabric.microsoft.com/v1/mcp/powerbi'
+  // Microsoft MCP servers (github.com/microsoft/mcp) + agent skills
+  // (github.com/microsoft/skills) — folded here (not standalone params) to stay
+  // under the ARM 256-param ceiling, the SAME trick as powerBiMcpClientId /
+  // loomWarehouseBackend / loomPipelineBackend. STRICTLY OPT-IN per
+  // no-fabric-dependency.md EXCEPT Microsoft Learn (no-auth, streamable-http),
+  // the ONLY default-on entry (no Fabric/Power BI/Entra dependency, confirmed GA
+  // host). Every other remote is OFF until its *Enabled toggle is set AND its
+  // endpoint is confirmed + set — an empty endpoint keeps an unconfirmed/preview
+  // host OFF a default code path (the "endpoint-env gate" the design requires).
+  // The Entra On-Behalf-Of (OBO) remotes reuse the EXISTING LOOM_MSAL_CLIENT_ID
+  // + loom-msal-client-secret confidential client (no new secret/param); GitHub
+  // uses a GitHub PAT stored in Key Vault (githubPatKvSecret → secretRef), NOT
+  // Entra. Microsoft Fabric / Fabric RTI stay explicit Fabric-family opt-ins
+  // surfaced via lib/mcp/catalog.ts (govSafe:false) — never wired on this path.
+  mcp: {
+    // Microsoft Learn — the ONLY default-on MS MCP server. No auth, streamable
+    // HTTP, no Fabric/Power BI dependency. Endpoint confirmed via Learn docs
+    // (learn.microsoft.com/training/support/mcp). Set learnEnabled '' to opt out.
+    learnEnabled: 'true'
+    learnEndpoint: 'https://learn.microsoft.com/api/mcp'
+    // Entra OBO opt-in remotes. <x>Enabled empty = off (honest gate); <x>Endpoint
+    // empty = unconfirmed-host gate (kept off any default path until the operator
+    // confirms the GA endpoint + OBO scope and sets both). <x>Scope is the OBO
+    // resource/.default the Console exchanges the signed-in user's MSAL token for.
+    armEnabled: ''
+    armEndpoint: ''
+    armScope: ''
+    foundryEnabled: ''
+    foundryEndpoint: ''
+    foundryScope: ''
+    graphEnabled: ''
+    graphEndpoint: ''
+    graphScope: ''
+    m365Enabled: ''
+    m365Endpoint: ''
+    m365Scope: ''
+    teamsEnabled: ''
+    teamsEndpoint: ''
+    teamsScope: ''
+    onedriveEnabled: ''
+    onedriveEndpoint: ''
+    onedriveScope: ''
+    sentinelEnabled: ''
+    sentinelEndpoint: ''
+    sentinelScope: ''
+    adminCenterEnabled: ''
+    adminCenterEndpoint: ''
+    adminCenterScope: ''
+    // GitHub remote MCP (api.githubcopilot.com/mcp) — GitHub OAuth PAT, NOT
+    // Entra. Store the PAT in Key Vault and set githubPatKvSecret to its KV
+    // secret name; empty = honest KV-secret gate (no env, no secret emitted).
+    // githubEndpoint overrides the default GitHub MCP host.
+    githubEnabled: ''
+    githubEndpoint: ''
+    githubPatKvSecret: ''
+  }
 }
 
 
@@ -1081,6 +1207,135 @@ param loomAasServerUrl string = ''
 
 @description('HTTPS XMLA endpoint for semantic-model authoring that requires the XMLA write surface (e.g. Automatic aggregations, RLS/OLS role authoring). Azure-native default: an Azure Analysis Services server (https://<server>.asazure.windows.net/xmla, or .asazure.usgovcloudapi.net in Gov). A Power BI Premium / Fabric capacity XMLA endpoint (https://api.powerbi.com/xmla, https://api.powerbigov.us/xmla) is an opt-in alternative selected purely by URL. Empty = the Aggregations + Security surfaces render but show an honest MessageBar gate (no Fabric dependency).')
 param loomPowerbiXmlaEndpoint string = ''
+
+// ---------------------------------------------------------------------------
+// Power BI remote MCP server (Copilot agentic / preview) — STRICTLY OPT-IN.
+//
+// The Power BI MCP server is an already-hosted REMOTE Streamable-HTTP endpoint
+// (https://api.fabric.microsoft.com/v1/mcp/powerbi) that exposes schema-aware
+// QUERY of semantic models + Copilot-powered DAX generation (read-only, run
+// under the signed-in user's RBAC). It does NOT fit the MCP_DEPLOY_CATALOG
+// (pull-an-OCI-image → Container App) shape; it is surfaced as a new
+// "remote built-in" MCP catalog source (lib/mcp/catalog.ts REMOTE_BUILTIN_MCP)
+// and consumed by the existing copilot/MCP infra (buildMcpShim → mcp-client).
+//
+// AUTH = Microsoft Entra ID OAuth On-Behalf-Of the signed-in user (authMethod
+// 'entra-obo'). There is NO service secret for this endpoint: at login the
+// Console mints a delegated Power BI token (acquireTokenSilent) on resource
+// https://analysis.windows.net/powerbi/api with delegated scopes
+// Dataset.Read.All, MLModel.Execute.All, Workspace.Read.All, caches it
+// per-user (lib/azure/pbi-user-token-store.ts), and mcp-client sends it as the
+// Bearer header. This REUSES the EXISTING confidential client
+// (LOOM_MSAL_CLIENT_ID + the loom-msal-client-secret KV secretRef wired below),
+// so NO new secret literal/param is introduced here.
+//
+// no-fabric-dependency: this is OPT-IN ONLY and never on a default code path —
+// Loom's Azure-native semantic-model + report authoring (Cosmos / AAS / the
+// dax-tools/report-tools/tabular-read-tool) stays the day-one DEFAULT. When
+// loomPowerBiMcpClientId is empty the env vars below are NOT emitted, so the
+// Copilot surface renders an honest MessageBar gate naming the exact env var
+// (LOOM_POWERBI_MCP_CLIENT_ID), the Entra app reg (3 delegated Power BI Service
+// permissions Dataset.Read.All / MLModel.Execute.All / Workspace.Read.All +
+// admin consent), and the Power BI tenant setting a PBI admin must enable
+// ("Users can use the Power BI Model Context Protocol server endpoint (preview)").
+//
+// Folded into the loomBackends object (consumed via the same-named vars below)
+// to stay under the ARM 256-parameter template limit — the identical pattern
+// already used for loomWarehouseBackend / loomPipelineBackend in this file.
+// Adding standalone params here would push the template to 258 params and fail
+// the bicep max-params hard limit (ARM allows at most 256). The opt-in contract
+// is unchanged: the operator opts IN by setting loomBackends.powerBiMcpClientId
+// (the Entra app/client id) and, optionally, loomBackends.powerBiMcpEndpoint
+// for a sovereign-cloud host; the day-one default is empty ⇒ the LOOM_POWERBI_MCP_*
+// env vars are NOT emitted ⇒ the Copilot surface shows the honest MessageBar gate.
+//   loomPowerBiMcpClientId — Entra app (client) id used for the per-user
+//     On-Behalf-Of token that authenticates the Power BI remote MCP server
+//     (Copilot agentic, preview). When set, the Console mints a delegated
+//     Power BI token (acquireTokenSilent on https://analysis.windows.net/powerbi/api,
+//     scopes Dataset.Read.All + MLModel.Execute.All + Workspace.Read.All) per
+//     signed-in user and calls the MCP endpoint. REQUIRES: this Entra app holds
+//     the 3 delegated Power BI Service permissions + tenant admin consent, AND a
+//     Power BI admin has enabled the tenant setting "Users can use the Power BI
+//     Model Context Protocol server endpoint (preview)". No new secret — OBO
+//     reuses the existing LOOM_MSAL_CLIENT_SECRET confidential client.
+//   loomPowerBiMcpEndpoint — HTTPS Streamable-HTTP endpoint of the Power BI
+//     remote MCP server. Defaults to the Commercial host; override only for a
+//     sovereign-cloud Power BI MCP host.
+var loomPowerBiMcpClientId = loomBackends.?powerBiMcpClientId ?? ''
+var loomPowerBiMcpEndpoint = loomBackends.?powerBiMcpEndpoint ?? 'https://api.fabric.microsoft.com/v1/mcp/powerbi'
+
+// ---------------------------------------------------------------------------
+// Microsoft MCP servers + agent skills — EXTENDS the Power BI remote-MCP
+// plumbing above; NO parallel system.
+//
+// These are curated Microsoft-hosted MCP servers (github.com/microsoft/mcp)
+// surfaced as "remote built-in" catalog rows (lib/mcp/catalog.ts
+// REMOTE_BUILTIN_MCP_CATALOG) and consumed by the SAME copilot/MCP infra the
+// Power BI server uses (buildMcpShim → mcp-client → listMcpTools/callMcpTool).
+// The ~30 agent skills (github.com/microsoft/skills, lib/copilot/ms-skills.ts)
+// follow the powerbi-skills.ts descriptor shape and bind to Azure-native Loom
+// tools by default, lighting up the matching MS MCP tool prefix when connected.
+//
+// no-fabric-dependency.md contract (identical intent to the Power BI MCP block
+// above): Microsoft Learn is the SOLE default-on entry — a no-auth,
+// Streamable-HTTP endpoint (https://learn.microsoft.com/api/mcp, confirmed via
+// Learn docs) with ZERO Fabric/Power BI/Entra dependency, so it satisfies the
+// "100% functional without a real Fabric capacity" rule and is injected as a
+// synthetic enabled row day-one (LOOM_MS_LEARN_MCP_ENABLED defaults 'true').
+// EVERY other server is STRICTLY OPT-IN and never on a default code path:
+//   * ARM (mcp.management.azure.com), Foundry (mcp.ai.azure.com),
+//     Graph/M365/Teams/OneDrive-SharePoint/Sentinel/Admin-Center — Entra
+//     On-Behalf-Of (authMethod 'entra-obo'). They REUSE the existing
+//     LOOM_MSAL_CLIENT_ID + the loom-msal-client-secret KV secretRef wired for
+//     Power BI/Dataverse below to exchange the signed-in user's token for the
+//     server's oboResource — NO new secret literal, NO new param.
+//   * GitHub (api.githubcopilot.com/mcp) — GitHub OAuth, NOT Entra. The PAT is
+//     read from Key Vault via a secretRef (LOOM_GITHUB_MCP_PAT_SECRET), never a
+//     literal; absent KV secret name ⇒ honest gate.
+// Per the design caveat, each opt-in server is gated on BOTH its *Enabled toggle
+// AND a confirmed endpoint: an empty endpoint var means an unconfirmed/preview
+// GA host is NEVER reached on a default path (the Console renders the honest
+// MessageBar gate naming the exact env var / OBO scope / KV secret instead).
+// Microsoft Fabric + Fabric RTI are explicit Fabric-family opt-ins surfaced via
+// MCP_CATALOG (govSafe:false, externalHosts:['api.fabric.microsoft.com']) — they
+// are NEVER wired on this path, so no api.fabric/api.powerbi host appears here.
+//
+// Folded into loomBackends.mcp (consumed via the same-named vars below) to stay
+// under the ARM 256-parameter template limit — the identical trick used for
+// loomWarehouseBackend / loomPipelineBackend / loomPowerBiMcpClientId above.
+var loomMcpBackends = loomBackends.?mcp ?? {}
+// Microsoft Learn — the only default-on server (no auth, no Fabric dep).
+var loomMsLearnMcpEnabled = loomMcpBackends.?learnEnabled ?? 'true'
+var loomMsLearnMcpEndpoint = loomMcpBackends.?learnEndpoint ?? 'https://learn.microsoft.com/api/mcp'
+// Entra-OBO opt-ins — toggle '' = off (gate); endpoint '' = unconfirmed-host gate.
+var loomAzureArmMcpEnabled = loomMcpBackends.?armEnabled ?? ''
+var loomAzureArmMcpEndpoint = loomMcpBackends.?armEndpoint ?? ''
+var loomAzureArmMcpScope = loomMcpBackends.?armScope ?? ''
+var loomFoundryMcpEnabled = loomMcpBackends.?foundryEnabled ?? ''
+var loomFoundryMcpEndpoint = loomMcpBackends.?foundryEndpoint ?? ''
+var loomFoundryMcpScope = loomMcpBackends.?foundryScope ?? ''
+var loomGraphMcpEnabled = loomMcpBackends.?graphEnabled ?? ''
+var loomGraphMcpEndpoint = loomMcpBackends.?graphEndpoint ?? ''
+var loomGraphMcpScope = loomMcpBackends.?graphScope ?? ''
+var loomM365McpEnabled = loomMcpBackends.?m365Enabled ?? ''
+var loomM365McpEndpoint = loomMcpBackends.?m365Endpoint ?? ''
+var loomM365McpScope = loomMcpBackends.?m365Scope ?? ''
+var loomTeamsMcpEnabled = loomMcpBackends.?teamsEnabled ?? ''
+var loomTeamsMcpEndpoint = loomMcpBackends.?teamsEndpoint ?? ''
+var loomTeamsMcpScope = loomMcpBackends.?teamsScope ?? ''
+var loomOnedriveMcpEnabled = loomMcpBackends.?onedriveEnabled ?? ''
+var loomOnedriveMcpEndpoint = loomMcpBackends.?onedriveEndpoint ?? ''
+var loomOnedriveMcpScope = loomMcpBackends.?onedriveScope ?? ''
+var loomSentinelMcpEnabled = loomMcpBackends.?sentinelEnabled ?? ''
+var loomSentinelMcpEndpoint = loomMcpBackends.?sentinelEndpoint ?? ''
+var loomSentinelMcpScope = loomMcpBackends.?sentinelScope ?? ''
+var loomAdminCenterMcpEnabled = loomMcpBackends.?adminCenterEnabled ?? ''
+var loomAdminCenterMcpEndpoint = loomMcpBackends.?adminCenterEndpoint ?? ''
+var loomAdminCenterMcpScope = loomMcpBackends.?adminCenterScope ?? ''
+// GitHub — GitHub OAuth PAT in Key Vault (NOT Entra); '' secret name = gate.
+var loomGithubMcpEnabled = loomMcpBackends.?githubEnabled ?? ''
+var loomGithubMcpEndpoint = loomMcpBackends.?githubEndpoint ?? ''
+var loomGithubMcpPatKvSecret = loomMcpBackends.?githubPatKvSecret ?? ''
 
 // NOTE: loomAasDatabase (TMSL Catalog) is declared once earlier in this file
 // (defaulted to 'model'). The column-editor path reuses the same param.
@@ -1781,6 +2036,11 @@ module adxCluster 'adx-cluster.bicep' = if (adxEnabled && empty(existingAdxClust
     skipRoleGrants: skipRoleGrants
     // Console UAMI → Monitoring Contributor on the cluster (alert rules + diagnostics).
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    // Activator UAMI → AllDatabasesViewer (the "alert identity" for continuous
+    // Eventhouse/ADX Activator rule evaluation via LOOM_ADX_ALERT_SCOPE — see
+    // lib/azure/activator-monitor.ts; cluster-level parallel of the per-database
+    // 'activator-viewer' grant in landing-zone/adx-db-inner.bicep).
+    activatorPrincipalId: identity.outputs.uamiActivatorPrincipalId
     // Continuous-export: grant cluster MI Storage Blob Data Contributor on the DLZ ADLS account.
     // Empty when loomStorageAccount is unset → grant is skipped → wizard shows honest gate.
     adlsAccountName: loomStorageAccount
@@ -2000,6 +2260,26 @@ var effectiveMapsAccount = (azureMapsEnabled && (boundary == 'Commercial' || bou
   : loomAzureMapsAccount
 
 // =====================================================================
+// 10c. Slate-app / Workshop-app Publish → Azure Static Web Apps RBAC.
+//
+// The publish BFF routes (app/api/items/{slate-app,workshop-app}/[id]/
+// publish) PUT Microsoft.Web/staticSites (idempotent create) and POST
+// listSecrets (deployment token) in LOOM_SWA_RESOURCE_GROUP, so the
+// Console UAMI needs "Website Contributor" at that RG scope. Cross-RG
+// role assignments cannot be authored inline (BCP139) → RG-scoped module
+// (defaults to THIS admin RG via effectiveSwaRg).
+// =====================================================================
+
+module swaPublishRbac 'swa-publish-rbac.bicep' = if (!skipRoleGrants) {
+  name: 'swa-publish-rbac'
+  scope: resourceGroup(effectiveSwaRg)
+  params: {
+    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
+    skipRoleGrants: skipRoleGrants
+  }
+}
+
+// =====================================================================
 // 11. AI defense (Defender for AI workaround in Gov)
 // =====================================================================
 
@@ -2071,6 +2351,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         env: concat(
           [
             { name: 'LOOM_VERSION', value: loomVersion }
+            // EH Phase-1 multi-domain ACL PDP enforcement mode: off (default, gate
+            // is a no-op) | shadow (run+log to _auditLog, never block) | enforce
+            // (403 on deny). Flip to shadow, review /api/admin/pdp/shadow-report,
+            // then enforce per-domain. _aclGrants/_protectionPolicies are created
+            // on-demand by the PDP context-loader/reconciler (createIfNotExists).
+            { name: 'LOOM_PDP_ENFORCE', value: 'off' }
             { name: 'NEXT_PUBLIC_LOOM_VERSION', value: loomVersion }
             { name: 'LOOM_SUBSCRIPTION_ID', value: subscription().subscriptionId }
             { name: 'LOOM_ADMIN_RG', value: resourceGroup().name }
@@ -2146,6 +2432,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
             // on the sub for metrics/activity/health/alerts.
             { name: 'LOOM_LOG_ANALYTICS_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
+            // Synapse Spark → Loom Log Analytics emission. Every Loom Spark session
+            // ships SparkListenerEvent/SparkMetrics to this workspace (the SAME LAW
+            // as above) via spark.synapse.logAnalytics.* confs — surfaced under
+            // Monitor → Spark. Workspace id = customerId; key = secretRef (below).
+            { name: 'LOOM_SPARK_LA_WORKSPACE_ID', value: monitoring.outputs.lawCustomerId }
+            { name: 'LOOM_SPARK_LA_KEY', secretRef: 'spark-la-key' }
             // Console-runtime OTel gate (deploy-readiness). instrumentation.ts
             // reads this BEFORE importing @azure/monitor-opentelemetry — when
             // empty the SDK is never loaded (no SIGSEGV), when 'true' it inits
@@ -2215,9 +2507,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_SYNAPSE_SQL_SUFFIX', value: loomSynapseSqlSuffix }
             { name: 'LOOM_POSTGRES_AAD_USER', value: loomPostgresAadUser }
             // PostgreSQL Entra-auth cloud portability (read by postgres-flex-client.ts).
-            // Commercial / GCC use the Commercial OSS RDBMS scope + .azure.com host;
+            // Commercial / GCC use the Microsoft-documented OSS RDBMS scope
+            // (ossrdbms-aad.database.windows.net — the .azure.com variant is not a
+            // registered first-party app in some tenants → AADSTS500011 at token time,
+            // breaking Postgres AAD connections incl. mirroring + Weave; verified live).
             // GCC-High / IL5 (Azure US Government) use the US-Gov scope + .usgovcloudapi.net.
-            { name: 'LOOM_POSTGRES_AAD_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://ossrdbms-aad.database.usgovcloudapi.net/.default' : 'https://ossrdbms-aad.database.azure.com/.default' }
+            { name: 'LOOM_POSTGRES_AAD_SCOPE', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://ossrdbms-aad.database.usgovcloudapi.net/.default' : 'https://ossrdbms-aad.database.windows.net/.default' }
             { name: 'LOOM_POSTGRES_HOST_SUFFIX', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'postgres.database.usgovcloudapi.net' : 'postgres.database.azure.com' }
             // Weave (Semantic Ontology) graph store — object/link/action instance
             // write-back over Apache AGE (lib/azure/weave-ontology-store.ts). When
@@ -2395,6 +2690,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_EH_SCHEMA_GROUP', value: loomEhSchemaGroup }
             { name: 'LOOM_EVENTHUB_RG', value: effEventHubRg }
             { name: 'LOOM_EVENTHUB_SUB', value: byoEventHubSub }
+            // Service Bus namespace navigator (service-bus-namespace item: queues
+            // + topics). Empty namespace → the editor honest-gates. RG/SUB default
+            // to the DLZ RG / deployment sub (the servicebus-client also falls back
+            // to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID). Provisioned by
+            // modules/landing-zone/servicebus.bicep.
+            { name: 'LOOM_SERVICEBUS_NAMESPACE', value: loomServiceBusNamespace }
+            { name: 'LOOM_SERVICEBUS_RG', value: effServiceBusRg }
+            { name: 'LOOM_SERVICEBUS_SUB', value: effServiceBusSub }
             // Event Hubs Data Explorer "View / Peek events" (AMQP receive). The
             // @azure/event-hubs SDK is bundled in the Console image (package.json)
             // and loaded lazily only on the receive path; default-on (opt-out) so
@@ -2465,6 +2768,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Container App. Empty → the editor surfaces an honest gate naming
             // this var; the Databricks target still works.
             { name: 'LOOM_DBT_RUNNER_URL', value: dbtRunnerActive ? dbtRunner!.outputs.dbtRunnerInternalEndpoint : '' }
+            // Report-designer R/Python script visual (wave-4) — the sandboxed
+            // executor the /api/report/script-visual BFF route POSTs the user's
+            // R/Python code + dataset.csv to, getting back a static PNG (Power BI
+            // R/Python-visual parity; the executor mirrors PBI's grouped/deduped
+            // `dataset`, active-figure capture, row/script/time caps). Backed by
+            // the internal-ingress loom-script-runner ACA app (script-runner-app
+            // .bicep). Empty → the /script-visual BFF returns an honest 503 naming
+            // THIS var + that bicep module; the rest of the report designer
+            // (free-form canvas, native visuals, /query data E2E, Copilot) is
+            // unaffected. Azure-native (ACA + the existing Synapse /query path);
+            // no Fabric / Power BI service is required.
+            { name: 'LOOM_SCRIPT_RUNNER_URL', value: scriptRunnerActive ? 'https://${scriptRunner!.outputs.fqdn}' : '' }
             // Governance → Data quality (run/results/monitors) and Master data
             // management (match/merge → golden records) REUSE the Databricks /
             // Synapse / Kusto bindings above (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,
@@ -2506,10 +2821,20 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_KUSTO_RG',           value: !empty(existingAdxClusterName) ? byoAdxRg : (adxEnabled ? resourceGroup().name : '') }
             { name: 'LOOM_KUSTO_SUB',          value: !empty(existingAdxClusterName) ? byoAdxSub : ((adxEnabled) ? subscription().subscriptionId : '') }
             { name: 'LOOM_KUSTO_LOCATION',     value: (!empty(existingAdxClusterName) || adxEnabled) ? location : '' }
-            // Per-DLZ ADX database is named loomdb-<domain>; the single-sub DLZ
-            // uses domain "default" → loomdb-default. For a reused cluster the real
-            // default DB is reconciled post-deploy by patch-navigator-env.sh.
-            { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb-default' : '' }
+            // Per-DLZ ADX database is named loomdb_<domain>; the single-sub DLZ
+            // uses domain "default" → loomdb_default. Underscore (not hyphen) so
+            // the name is a valid bare KQL identifier. For a reused cluster the
+            // real default DB is reconciled post-deploy by patch-navigator-env.sh.
+            { name: 'LOOM_KUSTO_DEFAULT_DB',   value: (!empty(existingAdxClusterName) || adxEnabled) ? 'loomdb_default' : '' }
+            // Activator (Reflex) — continuous scheduled evaluation for
+            // Eventhouse/ADX-sourced rules (lib/azure/activator-monitor.ts).
+            // The value is the ADX cluster ARM id: the scope of the
+            // Microsoft.Insights scheduledQueryRule the Console creates
+            // (skipQueryValidation — the KQL targets ADX, not LA). Empty →
+            // ADX rules evaluate on-demand via Trigger/Preview and carry an
+            // honest gate note. The alert identity (Activator UAMI) holds
+            // AllDatabasesViewer on the cluster (adx-cluster.bicep).
+            { name: 'LOOM_ADX_ALERT_SCOPE',    value: !empty(existingAdxClusterName) ? resourceId(byoAdxSub, byoAdxRg, 'Microsoft.Kusto/clusters', existingAdxClusterName) : (adxEnabled ? adxCluster!.outputs.clusterId : '') }
             // ----------------------------------------------------------------
             // Azure Analysis Services (AAS) — Azure-native semantic-model
             // backend (lib/azure/aas-client.ts). When set, the SemanticModel
@@ -2617,6 +2942,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Paginated-report (RDL) export renderer Function — PDF/Excel/Word.
             // Empty → honest export gate in the designer; authoring still works.
             { name: 'LOOM_PAGINATED_RENDER_URL', value: loomPaginatedRenderUrl }
+            // Loom-native report designer export renderer — the SAME headless
+            // Functions host as the paginated (RDL) renderer above (both POST
+            // HTML to ${base}/api/render). app/api/items/report/[id]/export
+            // reads LOOM_REPORT_RENDERER; empty → its honest 412 gate (the
+            // client Print / PNG paths still work). One param, two consumers.
+            { name: 'LOOM_REPORT_RENDERER', value: loomPaginatedRenderUrl }
             // CSA Loom family sweep (Power Platform / ML / Geo / Graph) —
             // see scripts/csa-loom/powerplatform-tenant-bootstrap.sh for
             // the one-time tenant config required to use them.
@@ -2633,6 +2964,28 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // editors prefill + display the deployed account, so the geo
             // surfaces verifiably "use the deployed account".
             { name: 'NEXT_PUBLIC_LOOM_AZURE_MAPS_ACCOUNT', value: effectiveMapsAccount }
+            // Azure Maps backend selector + AAD client id (maps-client.ts and
+            // the /map-token BFF routes). LOOM_MAPS_BACKEND=azure-maps turns
+            // the map visual ON whenever an account is wired (deployed OR BYO
+            // loomAzureMapsAccount); empty → the documented honest gate.
+            // LOOM_AZURE_MAPS_CLIENT_ID is the account's uniqueId — the value
+            // the Web SDK sends as x-ms-client-id on the AAD path (the Console
+            // UAMI holds Azure Maps Data Reader, granted in azure-maps.bicep).
+            // Only derivable for the DEPLOYED account; a BYO account falls back
+            // to the subscription-key path (NEXT_PUBLIC_LOOM_AZURE_MAPS_KEY)
+            // or the operator sets the client id post-deploy.
+            { name: 'LOOM_MAPS_BACKEND',             value: !empty(effectiveMapsAccount) ? 'azure-maps' : '' }
+            { name: 'LOOM_AZURE_MAPS_CLIENT_ID',     value: (azureMapsEnabled && (boundary == 'Commercial' || boundary == 'GCC')) ? azureMaps!.outputs.mapsClientId : '' }
+            // Slate-app / Workshop-app Publish → Azure Static Web Apps (ARM
+            // Microsoft.Web/staticSites + listSecrets; app/api/items/
+            // {slate-app,workshop-app}/[id]/publish). RG defaults to this
+            // admin RG (byoExisting.swaResourceGroup overrides); the Console
+            // UAMI holds Website Contributor there (swa-publish-rbac.bicep).
+            // Location follows the deployment region — NEVER hard-coded
+            // (the route's 'eastus2' fallback is invalid in Azure Government).
+            { name: 'LOOM_SWA_SUBSCRIPTION_ID',      value: subscription().subscriptionId }
+            { name: 'LOOM_SWA_RESOURCE_GROUP',       value: effectiveSwaRg }
+            { name: 'LOOM_SWA_LOCATION',             value: location }
             { name: 'LOOM_KUSTO_CLUSTER',            value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             { name: 'NEXT_PUBLIC_LOOM_KUSTO_CLUSTER', value: !empty(existingAdxClusterName) ? existingAdxClusterName : (adxEnabled ? adxCluster!.outputs.clusterName : '') }
             // Phase 2 — RBAC tenant-admin bootstrap + install-time provisioning targets
@@ -2741,9 +3094,22 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_POSTURE_FUNCTION_KEY', secretRef: 'loom-posture-function-key' }
           ] : [],
           // Paginated-report-renderer Function host key — only when wired.
-          // Surfaced to the export BFF (?code=…), never to the browser.
+          // Surfaced to the export BFF (?code=…), never to the browser. The
+          // report-designer export route reads the SAME host key as
+          // LOOM_REPORT_RENDER_KEY (one Functions host, two consumers — see
+          // LOOM_REPORT_RENDERER above).
           !empty(loomPaginatedRenderUrl) ? [
             { name: 'LOOM_PAGINATED_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
+            { name: 'LOOM_REPORT_RENDER_KEY', secretRef: 'loom-paginated-render-key' }
+          ] : [],
+          // user-data-function invoke base — a BYO Azure Functions host
+          // (byoExisting.udfFunctionBase ← root param loomUdfFunctionBase).
+          // Only emitted when set; absence keeps the invoke route's honest
+          // 503 gate naming this exact var (no-vaporware.md). TODO
+          // udf-runtime.bicep: deploy a Loom-managed Functions host on the
+          // dab-runtime.bicep pattern and default this to its endpoint.
+          !empty(loomUdfFunctionBase) ? [
+            { name: 'LOOM_UDF_FUNCTION_BASE', value: loomUdfFunctionBase }
           ] : [],
           // Analysis Services — RLS/OLS Security tab backend (Azure-native).
           // LOOM_AAS_SERVER is the asazure://… data-plane name emitted by the
@@ -2760,6 +3126,85 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // to AAS / the honest config-gate.
           !empty(loomPowerbiXmlaEndpoint) ? [
             { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
+          ] : [],
+          // Power BI remote MCP server (Copilot agentic / preview) — STRICTLY
+          // OPT-IN per no-fabric-dependency.md. Only emitted when an Entra app
+          // (client) id is supplied; absence keeps the Azure-native
+          // semantic-model/report authoring path as the DEFAULT and lets the
+          // Copilot surface render the honest MessageBar gate (naming this env
+          // var, the Entra app's 3 delegated Power BI Service permissions +
+          // admin consent, and the Power BI tenant setting a PBI admin must
+          // enable). NO secret here: the runtime mints a per-user On-Behalf-Of
+          // delegated Power BI token (lib/azure/pbi-user-token-store.ts) using
+          // the EXISTING LOOM_MSAL_CLIENT_SECRET confidential client and sends
+          // it as the Bearer header (mcp-client authMethod 'entra-obo'). The
+          // remote-builtin catalog entry (lib/mcp/catalog.ts) carries the
+          // resource + delegated scopes; the Console reads only the client id +
+          // endpoint from here. This flows through the existing buildMcpShim →
+          // mcp_powerbiremote_* tool registration — no parallel system.
+          !empty(loomPowerBiMcpClientId) ? [
+            { name: 'LOOM_POWERBI_MCP_CLIENT_ID', value: loomPowerBiMcpClientId }
+            { name: 'LOOM_POWERBI_MCP_ENDPOINT', value: loomPowerBiMcpEndpoint }
+          ] : [],
+          // Microsoft MCP servers (github.com/microsoft/mcp) + agent skills
+          // (github.com/microsoft/skills) — EXTENDS the Power BI remote-MCP
+          // plumbing above (lib/mcp/catalog.ts REMOTE_BUILTIN_MCP_CATALOG →
+          // buildMcpShim → mcp-client). Emitted UNCONDITIONALLY so Microsoft
+          // Learn (no-auth, no Fabric dep) is live day-one with zero config:
+          // LOOM_MS_LEARN_MCP_ENABLED defaults 'true' and listMcpServers /
+          // buildMcpShim inject the synthetic enabled Learn row. Every other
+          // server is OPT-IN and OFF by default — its *_ENABLED toggle is empty
+          // (honest gate) AND its *_ENDPOINT is empty (so an unconfirmed/preview
+          // GA host is NEVER on a default code path; the Console renders the
+          // honest MessageBar gate naming the exact env var / OBO scope until the
+          // operator confirms + sets the endpoint). The ARM/Foundry/Graph/M365/
+          // Teams/OneDrive/Sentinel/Admin-Center remotes use Entra On-Behalf-Of
+          // (mcp-client authMethod 'entra-obo'): they REUSE the existing
+          // LOOM_MSAL_CLIENT_ID + loom-msal-client-secret confidential client
+          // (emitted in the MSAL block below) to exchange the signed-in user's
+          // token for each server's *_SCOPE — NO new secret/param here. GitHub
+          // (LOOM_GITHUB_MCP_*) uses a GitHub-OAuth PAT read from Key Vault via
+          // secretRef (LOOM_GITHUB_MCP_PAT_SECRET), never a literal — emitted in
+          // its own gated array below. Microsoft Fabric / Fabric RTI stay
+          // explicit Fabric-family catalog opt-ins (govSafe:false) — never wired
+          // here, so no api.fabric / api.powerbi host appears on this path.
+          [
+            { name: 'LOOM_MS_LEARN_MCP_ENABLED', value: loomMsLearnMcpEnabled }
+            { name: 'LOOM_MS_LEARN_MCP_ENDPOINT', value: loomMsLearnMcpEndpoint }
+            { name: 'LOOM_AZURE_ARM_MCP_ENABLED', value: loomAzureArmMcpEnabled }
+            { name: 'LOOM_AZURE_ARM_MCP_ENDPOINT', value: loomAzureArmMcpEndpoint }
+            { name: 'LOOM_AZURE_ARM_MCP_SCOPE', value: loomAzureArmMcpScope }
+            { name: 'LOOM_FOUNDRY_MCP_ENABLED', value: loomFoundryMcpEnabled }
+            { name: 'LOOM_FOUNDRY_MCP_ENDPOINT', value: loomFoundryMcpEndpoint }
+            { name: 'LOOM_FOUNDRY_MCP_SCOPE', value: loomFoundryMcpScope }
+            { name: 'LOOM_GRAPH_MCP_ENABLED', value: loomGraphMcpEnabled }
+            { name: 'LOOM_GRAPH_MCP_ENDPOINT', value: loomGraphMcpEndpoint }
+            { name: 'LOOM_GRAPH_MCP_SCOPE', value: loomGraphMcpScope }
+            { name: 'LOOM_M365_MCP_ENABLED', value: loomM365McpEnabled }
+            { name: 'LOOM_M365_MCP_ENDPOINT', value: loomM365McpEndpoint }
+            { name: 'LOOM_M365_MCP_SCOPE', value: loomM365McpScope }
+            { name: 'LOOM_TEAMS_MCP_ENABLED', value: loomTeamsMcpEnabled }
+            { name: 'LOOM_TEAMS_MCP_ENDPOINT', value: loomTeamsMcpEndpoint }
+            { name: 'LOOM_TEAMS_MCP_SCOPE', value: loomTeamsMcpScope }
+            { name: 'LOOM_ONEDRIVE_MCP_ENABLED', value: loomOnedriveMcpEnabled }
+            { name: 'LOOM_ONEDRIVE_MCP_ENDPOINT', value: loomOnedriveMcpEndpoint }
+            { name: 'LOOM_ONEDRIVE_MCP_SCOPE', value: loomOnedriveMcpScope }
+            { name: 'LOOM_SENTINEL_MCP_ENABLED', value: loomSentinelMcpEnabled }
+            { name: 'LOOM_SENTINEL_MCP_ENDPOINT', value: loomSentinelMcpEndpoint }
+            { name: 'LOOM_SENTINEL_MCP_SCOPE', value: loomSentinelMcpScope }
+            { name: 'LOOM_ADMINCENTER_MCP_ENABLED', value: loomAdminCenterMcpEnabled }
+            { name: 'LOOM_ADMINCENTER_MCP_ENDPOINT', value: loomAdminCenterMcpEndpoint }
+            { name: 'LOOM_ADMINCENTER_MCP_SCOPE', value: loomAdminCenterMcpScope }
+            { name: 'LOOM_GITHUB_MCP_ENABLED', value: loomGithubMcpEnabled }
+            { name: 'LOOM_GITHUB_MCP_ENDPOINT', value: loomGithubMcpEndpoint }
+          ],
+          // GitHub remote MCP PAT (GitHub OAuth, NOT Entra) — injected via
+          // secretRef from the KV-backed ACA secret 'loom-github-mcp-pat' (added
+          // to the secrets concat below). Only emitted when the operator stored a
+          // PAT in Key Vault and set loomBackends.mcp.githubPatKvSecret to its
+          // secret name; absence ⇒ honest KV-secret gate. Never a literal.
+          !empty(loomGithubMcpPatKvSecret) ? [
+            { name: 'LOOM_GITHUB_MCP_PAT_SECRET', secretRef: 'loom-github-mcp-pat' }
           ] : [],
           !empty(loomStorageAccount) ? [
             { name: 'LOOM_BRONZE_URL',  value: 'https://${loomStorageAccount}.dfs.${environment().suffixes.storage}/bronze' }
@@ -3187,6 +3632,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Falls back to LOOM_FOUNDRY_NAME/_RG in code when empty. No Fabric dep.
             { name: 'LOOM_AML_WORKSPACE', value: !empty(amlWorkspaceName) ? amlWorkspaceName : (!empty(loomAmlWorkspace) ? loomAmlWorkspace : ((aiFoundryEnabled && empty(existingFoundryAccountName)) ? aiFoundry!.outputs.hubName : '')) }
             { name: 'LOOM_AML_RG', value: !empty(amlWorkspaceRg) ? amlWorkspaceRg : (!empty(loomAmlRg) ? loomAmlRg : byoFoundryRg) }
+            // Always-on default AML Compute Instance the deploy-planner provisions
+            // (ml-workspace.bicep defaultCiName). The notebook editor auto-selects
+            // this CI when workspaceType==='aml' and no compute is chosen, so the
+            // "No Azure ML Compute Instance is available" gate clears with zero
+            // post-deploy steps. Empty when the AML workspace isn't provisioned →
+            // the editor honest-gates as before. IDLE_TTL surfaces the configured
+            // auto-shutdown for the compute UI.
+            { name: 'LOOM_AML_DEFAULT_COMPUTE', value: loomAmlDefaultCompute }
+            { name: 'LOOM_AML_COMPUTE_IDLE_TTL', value: loomAmlComputeIdleTtl }
             { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
@@ -3344,6 +3798,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             sessionSecretKvBacked
               ? { name: 'session-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/session-secret', identity: identity.outputs.uamiConsoleId }
               : { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
+            // Synapse Spark → LA shared key (LOOM_SPARK_LA_KEY secretRef). Always
+            // present — sourced from the always-deployed monitoring LAW's listKeys.
+            { name: 'spark-la-key', value: monitoring.outputs.lawSharedKey }
           ],
           !empty(effectiveMsalClientId) ? [
             // MSAL client secret — KV-backed when the entra-app-registration
@@ -3377,6 +3834,17 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           // get. Set a dedicated LOOM_CI_TOKEN secret to isolate CI if desired.
           (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'loom-internal-token', value: loomInternalToken }
+          ] : [],
+          // GitHub remote MCP PAT (github.com/microsoft/mcp GitHub server) —
+          // GitHub OAuth, NOT Entra. KV-backed secret, NEVER a literal: read at
+          // deploy time from the Loom Key Vault secret the operator created and
+          // named via loomBackends.mcp.githubPatKvSecret. Only present when that
+          // name is set (else no secret + the env's honest gate fires). The
+          // Console UAMI already holds Key Vault Secrets User (keyvault.bicep).
+          // The Entra On-Behalf-Of MS MCP servers need NO secret here — they
+          // reuse the loom-msal-client-secret confidential client above.
+          !empty(loomGithubMcpPatKvSecret) ? [
+            { name: 'loom-github-mcp-pat', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomGithubMcpPatKvSecret}', identity: identity.outputs.uamiConsoleId }
           ] : []
         )
       }
@@ -3556,6 +4024,91 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// Script-visual executor (wave-4) — loom-script-runner Container App.
+// Backs the report-designer's Power BI-parity R/Python script visual.
+// The Console's /api/report/script-visual BFF route POSTs the user's
+// R/Python code + the visual's grouped/deduped dataset (as dataset.csv)
+// here; the runner executes the script in a REAL resource-limited
+// subprocess (PBI parity: `dataset` DataFrame/data.frame, active-figure
+// capture → static PNG, row/script-size/wall-clock caps) and returns the
+// PNG. Internal ingress only (external:false — NEVER public), scales to
+// zero between runs. Azure-native (Container Apps); no Fabric/Power BI.
+//
+// SANDBOX THREAT MODEL (honest, mirrors PBI's locked container): the
+// CONTAINER is the boundary — arbitrary user code DOES run inside it.
+// Isolation is enforced by script-runner-app.bicep + app.py: non-root
+// `runner` user, internal ingress, per-request ephemeral mkdtemp (700,
+// rmtree in finally), a SCRUBBED minimal env (no inherited secrets),
+// POSIX rlimits (CPU/AS/FSIZE/NPROC), start_new_session + wall-clock
+// timeout that SIGKILLs the process group, and script/row/PNG caps.
+//
+// ⚠ IDENTITY HARDENING — RESOLVED (sandbox hole closed). An ACA app exposes
+// its assigned UAMI to in-container code via the IMDS endpoint, so arbitrary
+// user script code can mint that identity's tokens. `scriptRunnerUamiId` MUST
+// therefore be a LEAST-PRIVILEGE identity — AcrPull only, ZERO data-plane roles.
+// We provision a DEDICATED `uami-loom-script-runner` below (NOT the broadly-
+// permissioned Console UAMI): it is created with no role assignments other than
+// a single AcrPull grant on the admin-plane ACR, so the worst a sandbox escape
+// can mint via IMDS is an image-pull token — it can reach neither Storage,
+// Cosmos, nor ARM. This closes the hole called out in script-runner-app.bicep +
+// app.py's threat model. (The container is still the security boundary —
+// arbitrary code runs inside it, exactly like Power BI's locked R/Python
+// container — but the blast radius of its assigned identity is now nil.)
+// =====================================================================
+
+// Dedicated least-privilege identity for the script-visual executor. Kept OUT
+// of identity.bicep (which holds the app UAMIs) precisely so NO data-plane role
+// is ever attached to it. Always created when the runner is active; only the
+// AcrPull grant below is gated on !skipRoleGrants (reconcile-pass convention).
+resource scriptRunnerUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (scriptRunnerActive) {
+  name: 'uami-loom-script-runner-${location}'
+  location: location
+  tags: complianceTags
+}
+
+// AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) on the admin-plane ACR — the
+// runner identity's ONE and ONLY role. The existing-ref recomputes the registry
+// module's deterministic name (take('acrloom${uniqueString(resourceGroup().id)}',
+// 50)) rather than reading registry.outputs.acrName, because a roleAssignment's
+// scope/name must be calculable at deployment START (a module output is a runtime
+// value → BCP120). dependsOn the registry module keeps ordering correct.
+// guid()-named ⇒ idempotent; gated on !skipRoleGrants so reconcile redeploys
+// (or deployers lacking User Access Administrator) are a no-op.
+resource acrForScriptRunner 'Microsoft.ContainerRegistry/registries@2025-04-01' existing = {
+  name: take('acrloom${uniqueString(resourceGroup().id)}', 50)
+}
+
+resource scriptRunnerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (scriptRunnerActive && !skipRoleGrants) {
+  scope: acrForScriptRunner
+  name: guid(acrForScriptRunner.id, scriptRunnerUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: scriptRunnerUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+module scriptRunner 'script-runner-app.bicep' = if (scriptRunnerActive) {
+  name: 'script-runner'
+  params: {
+    name: 'loom-script-runner'
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    // Dedicated AcrPull-only identity (zero data-plane roles) provisioned just
+    // above. This is the UAMI exposed to user script code via IMDS, so the only
+    // token it can ever mint is an ACR image-pull token.
+    scriptRunnerUamiId: scriptRunnerUami.id
+    acrLoginServer: registry.outputs.acrLoginServer
+    image: '${registry.outputs.acrLoginServer}/loom-script-runner:${appImageTags.scriptRunner}'
+    targetPort: 8080
     complianceTags: complianceTags
   }
 }

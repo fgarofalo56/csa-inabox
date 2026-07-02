@@ -16,17 +16,16 @@
  *   - invalid CIDR → 400 (no ARM call made)
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listNsgRules, addIpFirewallRule, deleteNsgRule } from '@/lib/clients/networking-client';
-import { networkingErrorResponse } from '../_gate';
+import { networkingErrorResponse, authorizeNetworking } from '../_gate';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  await ctx.params; // workspace id reserved for future per-workspace scoping
+  const g = await authorizeNetworking(ctx);
+  if (g.resp) return g.resp;
+  // NSG is deployment-level / shared; ownership+admin gate authorizes the read.
   try {
     const rules = await listNsgRules();
     return NextResponse.json({ ok: true, rules });
@@ -36,9 +35,9 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const { id } = await ctx.params;
+  const g = await authorizeNetworking(ctx);
+  if (g.resp) return g.resp;
+  const { id } = g;
   const body = await req.json().catch(() => ({}));
   const cidr = String(body?.cidr || '').trim();
   const direction = body?.direction === 'Outbound' ? 'Outbound' : 'Inbound';
@@ -57,9 +56,8 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 }
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  await ctx.params;
+  const g = await authorizeNetworking(ctx);
+  if (g.resp) return g.resp;
   const ruleName = req.nextUrl.searchParams.get('ruleName')
     || (await req.json().catch(() => ({})))?.ruleName;
   if (!ruleName) return NextResponse.json({ ok: false, error: 'ruleName required' }, { status: 400 });

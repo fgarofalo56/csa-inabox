@@ -35,6 +35,7 @@ import {
 import type { NotebookCell, NotebookCellLang } from '@/lib/types/notebook-cell';
 import { CopilotChips } from '@/lib/components/copilot-chips';
 import type { CopilotContext } from '@/lib/azure/copilot-personas';
+import type { SessionConfig } from '@/lib/components/notebook/session-config';
 import { CopilotDiff, type ProposedChange } from '@/lib/components/copilot-diff';
 import { isSlashMenuOpen } from '@/lib/copilot/slash-commands';
 
@@ -61,7 +62,7 @@ export interface CopilotChatPaneProps {
   /** Livy session-create receipt (id, numExecutors, …) — for /perf telemetry. */
   sessionReceipt?: Record<string, unknown> | null;
   /** User session sizing (numExecutors, executorMemoryGb, timeoutMinutes) — for /perf. */
-  sessionConfig?: Record<string, unknown>;
+  sessionConfig?: SessionConfig | Record<string, unknown>;
   /** Apply parsed code blocks back into the notebook, starting at the active
    *  cell and walking backwards for multi-block answers. */
   onApplyCells?: (updated: { source: string }[]) => void;

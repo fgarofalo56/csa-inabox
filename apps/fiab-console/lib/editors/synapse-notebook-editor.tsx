@@ -45,15 +45,18 @@ import {
   Save20Regular, Code16Regular, TextDescription16Regular,
   Eye16Regular, Edit16Regular, TextBulletListTree20Regular,
   Sparkle16Regular, Sparkle16Filled, Wrench16Regular, Info16Regular,
+  CalendarClock20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea, type MonacoLanguage } from '@/lib/components/editor/monaco-textarea';
+import { renderMarkdown } from '@/lib/notebook/render-markdown';
 import { registerInlineCompletion, type InlineCompletionContext } from '@/lib/components/editor/inline-completion';
 import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-complete-toggle';
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { ScheduleWizard, type ScheduleCreateParams } from '@/lib/components/notebook/schedule-wizard';
+import { EmptyState } from '@/lib/components/empty-state';
 
 /** Shaped AML schedule row returned by /api/notebook/[id]/schedule. */
 interface AmlScheduleRow {
@@ -68,59 +71,89 @@ interface AmlScheduleRow {
 }
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, minHeight: 0, flex: 1 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { flex: 1 },
-  treePad: { padding: 8 },
-  cells: { display: 'flex', flexDirection: 'column', gap: 10, overflow: 'auto', flex: 1, minHeight: 0, paddingRight: 4 },
+  treePad: { padding: tokens.spacingVerticalS },
+  cells: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, overflow: 'auto', flex: 1, minHeight: 0, paddingRight: tokens.spacingHorizontalXS },
   cell: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
     backgroundColor: tokens.colorNeutralBackground1, display: 'flex', flexDirection: 'column',
+    boxShadow: tokens.shadow4, transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
   },
-  cellActive: { border: `1px solid ${tokens.colorBrandStroke1}` },
+  cellActive: { border: `1px solid ${tokens.colorBrandStroke1}`, boxShadow: tokens.shadow16 },
   cellHeader: {
-    display: 'flex', alignItems: 'center', gap: 6, padding: '4px 8px',
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`,
     backgroundColor: tokens.colorNeutralBackground2, borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: '6px 6px 0 0',
+    borderRadius: `${tokens.borderRadiusLarge} ${tokens.borderRadiusLarge} 0 0`,
   },
   output: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12, whiteSpace: 'pre-wrap',
-    padding: 10, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground3, maxHeight: 280, overflow: 'auto',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
+    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', minWidth: 0, boxSizing: 'border-box',
+    padding: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    backgroundColor: tokens.colorNeutralBackground3, maxHeight: '280px', overflow: 'auto',
   },
   outputErr: { color: tokens.colorPaletteRedForeground1, backgroundColor: tokens.colorPaletteRedBackground1 },
-  md: { padding: 12, fontSize: 14, lineHeight: 1.5, color: tokens.colorNeutralForeground1 },
-  tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: 11 },
+  md: {
+    padding: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase300, lineHeight: 1.5,
+    color: tokens.colorNeutralForeground1, overflowWrap: 'anywhere', wordBreak: 'break-word',
+    maxWidth: '100%', minWidth: 0, overflowX: 'auto',
+    '& table.md-table': { borderCollapse: 'collapse', width: 'auto', maxWidth: '100%', margin: `${tokens.spacingVerticalS} 0`, fontSize: tokens.fontSizeBase200 },
+    '& table.md-table th, & table.md-table td': { border: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalM}`, textAlign: 'left', verticalAlign: 'top' },
+    '& table.md-table th': { backgroundColor: tokens.colorNeutralBackground3, fontWeight: tokens.fontWeightSemibold },
+    '& table.md-table tr:nth-child(even) td': { backgroundColor: tokens.colorNeutralBackground2 },
+    '& pre.md-code': { backgroundColor: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, padding: tokens.spacingHorizontalM, overflowX: 'auto', fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200 },
+    '& code': { fontFamily: tokens.fontFamilyMonospace, fontSize: '0.92em' },
+    '& blockquote': { margin: `${tokens.spacingVerticalS} 0`, paddingLeft: tokens.spacingHorizontalM, borderLeft: `3px solid ${tokens.colorNeutralStroke1}`, color: tokens.colorNeutralForeground2 },
+    '& ul, & ol': { paddingLeft: tokens.spacingHorizontalXL, margin: `${tokens.spacingVerticalXS} 0` },
+    '& img': { maxWidth: '100%', borderRadius: tokens.borderRadiusSmall },
+    '& a': { color: tokens.colorBrandForegroundLink },
+  },
+  tag: { fontFamily: 'Consolas, monospace', color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase100 },
   collapsedHint: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
-    color: tokens.colorNeutralForeground3, padding: '8px 12px',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    color: tokens.colorNeutralForeground3, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalM}`,
     borderTop: `1px dashed ${tokens.colorNeutralStroke2}`, cursor: 'pointer',
+    overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%', minWidth: 0,
   },
   outlineHead: {
-    display: 'flex', alignItems: 'center', gap: 6,
-    padding: '8px 4px 4px', color: tokens.colorNeutralForeground3,
+    display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS,
+    padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalXS} ${tokens.spacingVerticalXS}`, color: tokens.colorNeutralForeground3,
   },
   outlineItem: {
     display: 'block', width: '100%', textAlign: 'left', cursor: 'pointer',
-    padding: '2px 4px', borderRadius: 4, border: 'none', background: 'none',
-    color: tokens.colorNeutralForeground2, fontSize: 13,
+    padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`, borderRadius: tokens.borderRadiusMedium, border: 'none', background: 'none',
+    color: tokens.colorNeutralForeground2, fontSize: tokens.fontSizeBase300,
+    overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0, boxSizing: 'border-box',
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Hover },
   },
-  outlineEmpty: { padding: '2px 4px', color: tokens.colorNeutralForeground3, fontSize: 12 },
-  addBar: { display: 'flex', gap: 8, justifyContent: 'center', padding: '4px 0' },
-  richOut: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, padding: 10, maxHeight: 320, overflow: 'auto' },
+  outlineEmpty: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalXS}`, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
+  addBar: { display: 'flex', gap: tokens.spacingHorizontalS, justifyContent: 'center', padding: `${tokens.spacingVerticalXS} 0` },
+  richOut: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, backgroundColor: tokens.colorNeutralBackground1, padding: tokens.spacingVerticalS, maxHeight: '320px', overflow: 'auto' },
   richTable: { width: 'max-content', minWidth: '100%' },
   richImg: { maxWidth: '100%', display: 'block' },
-  richHtml: { overflow: 'auto', fontSize: 13 },
+  richHtml: { overflow: 'auto', fontSize: tokens.fontSizeBase300 },
   assistBar: {
-    display: 'flex', gap: 6, padding: '4px 8px', alignItems: 'center',
+    display: 'flex', gap: tokens.spacingHorizontalXS, padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, alignItems: 'center',
     borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
     backgroundColor: tokens.colorNeutralBackground2,
   },
   assistResult: {
-    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: 12,
-    whiteSpace: 'pre-wrap', margin: 0, overflowX: 'auto',
+    fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200,
+    whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word',
+    margin: 0, maxWidth: '100%', minWidth: 0, boxSizing: 'border-box',
+    maxHeight: '240px', overflow: 'auto',
   },
+  scheduleCard: {
+    display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
+    backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4, transition: 'box-shadow 0.15s ease-in-out',
+    ':hover': { boxShadow: tokens.shadow16 },
+  },
+  scheduleHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
 
 // ── IPYNB ⇄ editor-cell mapping ───────────────────────────────────────────────
@@ -259,19 +292,8 @@ function cellsToIpynb(cells: EditorCell[], pool: string | null, env?: string | n
   };
 }
 
-// Minimal markdown render (headings/bold/italic/code/links/bullets) — matches the
-// existing markdown-cell renderer used elsewhere in the console.
-function renderMarkdown(src: string): string {
-  let html = src.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>').replace(/^## (.+)$/gm, '<h2>$1</h2>').replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/(^|[^*])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  html = html.replace(/`([^`\n]+)`/g, '<code>$1</code>');
-  html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
-  html = html.replace(/^(?:- (.+)(?:\n|$))+/gm, (block) => '<ul>' + block.split('\n').filter(Boolean).map((l) => '<li>' + l.replace(/^- /, '') + '</li>').join('') + '</ul>');
-  html = html.split(/\n\n+/).map((p) => /<\/(h\d|ul|ol|pre)>/.test(p) ? p : '<p>' + p.replace(/\n/g, '<br/>') + '</p>').join('');
-  return html;
-}
+// Markdown rendering uses the shared GFM renderer (tables / fenced code / lists /
+// blockquotes / HR) — lib/notebook/render-markdown, imported at the top of the file.
 
 interface SparkPoolLite { name: string; properties?: { nodeSize?: string; sparkVersion?: string } }
 
@@ -817,7 +839,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             <Caption1>Workspace not configured.</Caption1>
           ) : (
             <>
-              <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS }}>
                 <Input
                   size="small" placeholder="new notebook name" value={newName}
                   onChange={(_, d) => setNewName(d.value)}
@@ -1037,15 +1059,20 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
             </MessageBar>
           )}
           {!gate && schedulesConfigured && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Caption1>Schedules ({schedules.length})</Caption1>
+            <div className={s.scheduleCard}>
+              <div className={s.scheduleHead}>
+                <CalendarClock20Regular />
+                <Subtitle2>Schedules ({schedules.length})</Subtitle2>
+                <div className={s.spacer} />
                 <Button size="small" appearance="subtle" onClick={refreshSchedules}>Refresh</Button>
               </div>
               {schedules.length === 0 ? (
-                <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                  No schedules — click <strong>Schedule</strong> in the ribbon to create one.
-                </Caption1>
+                <EmptyState
+                  icon={<CalendarClock20Regular />}
+                  title="No schedules yet"
+                  body="Run this notebook on a recurrence with an Azure ML job schedule. Click Schedule in the ribbon to create one."
+                  primaryAction={openName ? { label: 'Create schedule', onClick: () => setScheduleWizardOpen(true) } : undefined}
+                />
               ) : (
                 <Table size="extra-small" aria-label="Notebook schedules">
                   <TableHeader>
@@ -1212,7 +1239,7 @@ function NotebookCellView(props: {
             ⋯ markdown collapsed — click to expand
           </div>
         ) : mdEditing ? (
-          <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })} language="plaintext" height={120} minHeight={80} ariaLabel="Markdown source" />
+          <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })} language="markdown" height={120} minHeight={80} autoHeight maxHeight={600} ariaLabel="Markdown source" />
         ) : (
           <div className={s.md} onDoubleClick={() => setMdEditing(true)}
             // eslint-disable-next-line react/no-danger
@@ -1286,7 +1313,7 @@ function NotebookCellView(props: {
         </div>
       ) : (
         <MonacoTextarea value={cell.source} onChange={(v) => props.onChange({ source: v })}
-          language={KIND_TO_MONACO[cell.lang]} height={140} minHeight={80} ariaLabel={`${cell.lang} code cell`}
+          language={KIND_TO_MONACO[cell.lang]} height={140} minHeight={80} autoHeight maxHeight={720} ariaLabel={`${cell.lang} code cell`}
           onReady={handleEditorReady} />
       )}
 
@@ -1301,7 +1328,7 @@ function NotebookCellView(props: {
               if (e.key === 'Enter' && assistPrompt.trim()) callAssist('generate');
               if (e.key === 'Escape') setAssistView('idle');
             }}
-            style={{ flex: 1 }} autoFocus aria-label="AI code generation prompt" />
+            style={{ flex: 1, minWidth: 0 }} autoFocus aria-label="AI code generation prompt" />
           <Button size="small" appearance="primary" disabled={!assistPrompt.trim()}
             onClick={() => callAssist('generate')}>Generate</Button>
           <Button size="small" onClick={() => { setAssistView('idle'); setAssistPrompt(''); }}>Cancel</Button>
@@ -1318,7 +1345,7 @@ function NotebookCellView(props: {
 
       {/* Suggestion / explanation result */}
       {!cell.collapsed && (assistView === 'suggestion' || assistView === 'explain-result') && assistResult && (
-        <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: '4px 0 0' }}>
+        <MessageBar intent={assistView === 'explain-result' ? 'info' : 'success'} style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
           <MessageBarBody>
             <pre className={s.assistResult}>{assistResult}</pre>
           </MessageBarBody>
@@ -1336,7 +1363,7 @@ function NotebookCellView(props: {
 
       {/* Assist error / honest config gate */}
       {!cell.collapsed && assistError && (
-        <MessageBar intent="error" style={{ margin: '4px 0 0' }}>
+        <MessageBar intent="error" style={{ margin: `${tokens.spacingVerticalXS} 0 0` }}>
           <MessageBarBody>{assistError}</MessageBarBody>
           <MessageBarActions>
             <Button size="small" onClick={() => setAssistError(null)}>Dismiss</Button>

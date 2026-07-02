@@ -630,7 +630,13 @@ export async function enableMirroring(
     'Bronze Delta via an ADF CDC pipeline / Synapse Link copy or the Loom mirroring ' +
     'engine — no Microsoft Fabric workspace required.';
   try {
-    await executeQuery(server, database, 'EXEC sys.sp_change_feed_enable_db @max_concurrent_workers = 4;');
+    // sys.sp_change_feed_enable_db takes only @maxtrans / @pollinterval /
+    // @destination_type (Microsoft Learn) — NOT @max_concurrent_workers (that
+    // invalid param made every SQL mirror Start fail at parse with "is not a
+    // parameter for procedure sp_change_feed_enable_db"). The documented enable
+    // is the bare call (destination_type defaults to 0 = Synapse-Link/landing-
+    // zone CDC, the Azure-native path — no Fabric).
+    await executeQuery(server, database, 'EXEC sys.sp_change_feed_enable_db;');
     return { enabled: true, backend: 'azure-native-cdc', state: 'Initializing', note };
   } catch (e: any) {
     const msg = (e?.message || String(e));

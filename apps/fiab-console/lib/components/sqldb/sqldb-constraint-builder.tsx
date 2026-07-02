@@ -31,7 +31,7 @@ const useStyles = makeStyles({
   surface: { maxWidth: '640px', width: '640px' },
   body: {
     display: 'flex', flexDirection: 'column',
-    gap: tokens.spacingVerticalM, minHeight: 320,
+    gap: tokens.spacingVerticalM, minHeight: '320px',
   },
   form: {
     display: 'flex', flexDirection: 'column',
@@ -40,7 +40,7 @@ const useStyles = makeStyles({
   colList: {
     display: 'flex', flexDirection: 'column',
     gap: tokens.spacingVerticalXS,
-    maxHeight: 220, overflowY: 'auto',
+    maxHeight: '220px', overflowY: 'auto',
     paddingRight: tokens.spacingHorizontalXS,
   },
   colRow: {
@@ -54,7 +54,7 @@ const useStyles = makeStyles({
   colType: { color: tokens.colorNeutralForeground3, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
   hint: { color: tokens.colorNeutralForeground3 },
   mono: { fontFamily: 'Consolas, monospace' },
-  dirDropdown: { minWidth: 124 },
+  dirDropdown: { minWidth: '124px' },
   actionsRow: { display: 'flex', gap: tokens.spacingHorizontalM },
   flex1: { flex: 1 },
   matchOk: { color: tokens.colorPaletteGreenForeground1 },

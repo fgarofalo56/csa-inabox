@@ -112,14 +112,14 @@ const useStyles = makeStyles({
   },
   invTable: { display: 'flex', flexDirection: 'column', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium, overflow: 'hidden' },
   invHead: {
-    display: 'grid', gridTemplateColumns: '1.4fr 1.6fr 1.2fr 0.8fr', gap: tokens.spacingHorizontalS,
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 0.8fr)', gap: tokens.spacingHorizontalS,
     padding: '6px 8px', fontWeight: tokens.fontWeightSemibold, backgroundColor: tokens.colorNeutralBackground2,
     fontSize: tokens.fontSizeBase200,
   },
   invRow: {
-    display: 'grid', gridTemplateColumns: '1.4fr 1.6fr 1.2fr 0.8fr', gap: tokens.spacingHorizontalS,
+    display: 'grid', gridTemplateColumns: 'minmax(0, 1.4fr) minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 0.8fr)', gap: tokens.spacingHorizontalS,
     padding: '6px 8px', borderTop: `1px solid ${tokens.colorNeutralStroke3}`, fontSize: tokens.fontSizeBase200,
-    alignItems: 'center', wordBreak: 'break-word',
+    alignItems: 'center', wordBreak: 'break-word', overflowWrap: 'anywhere',
   },
   // Shared layout primitives (tokenized; replaces residual inline styles).
   flexGrow: { flex: 1 },

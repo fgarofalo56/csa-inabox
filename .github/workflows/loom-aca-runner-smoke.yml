@@ -1,0 +1,26 @@
+name: loom-aca runner smoke test
+
+# Proves the scale-to-zero in-VNet self-hosted runner (gh-aca-runner ACA Job)
+# registers + runs a job + reaches Azure as the console UAMI. Manual trigger only
+# (workflow_dispatch) so it never runs on normal pushes. See
+# docs/fiab/github-actions-runner.md.
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: [self-hosted, loom-aca]
+    steps:
+      - name: Runner identity + toolchain
+        run: |
+          echo "Running on self-hosted runner: $(hostname)"
+          echo "--- toolchain ---"
+          az version --output table || true
+          node --version || true
+          pnpm --version || true
+          bicep --version 2>/dev/null || az bicep version || true
+          gh --version || true
+      - name: Azure login as the console UAMI (in-VNet)
+        run: |
+          az login --identity --output none && echo "az login --identity OK (console UAMI)"
+          az account show --query "{sub:name, user:user.name}" -o json || true

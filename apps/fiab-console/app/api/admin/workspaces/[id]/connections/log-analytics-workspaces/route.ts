@@ -9,15 +9,16 @@
  * surfaces as a MessageBar.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
 import { listLogAnalyticsWorkspaces, AzureConnectionError } from '@/lib/clients/azure-connections-client';
+import { requireWorkspace } from '@/lib/auth/workspace-guard';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET(_req: NextRequest, _props: { params: Promise<{ id: string }> }) {
-  const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+  const { id } = await props.params;
+  const guard = await requireWorkspace(id);
+  if (guard.resp) return guard.resp;
   try {
     const workspaces = await listLogAnalyticsWorkspaces();
     return NextResponse.json({ ok: true, workspaces });

@@ -111,13 +111,13 @@ const COST_HINT: Record<string, string> = {
 };
 
 const useStyles = makeStyles({
-  pad: { display: 'flex', flexDirection: 'column', gap: 12 },
-  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, display: 'flex', flexDirection: 'column', gap: 10 },
-  grid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 },
-  sliderRow: { display: 'flex', flexDirection: 'column', gap: 4 },
-  costRow: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  receiptGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: '4px 16px', alignItems: 'center', marginTop: 4 },
-  mono: { fontFamily: 'Consolas, monospace', fontSize: 12 },
+  pad: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  card: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, padding: tokens.spacingVerticalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
+  grid: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM },
+  sliderRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
+  costRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  receiptGrid: { display: 'grid', gridTemplateColumns: 'auto 1fr 1fr', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'center', marginTop: tokens.spacingVerticalXS },
+  mono: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
 });
 
 export interface SqlScalePanelProps {

@@ -30,6 +30,8 @@ import {
   Sparkle20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { useCollapsibleState, CollapsedRail } from '@/lib/components/collapsible-side-panel';
+import { EmptyState } from '@/lib/components/empty-state';
 import { PowerQueryHost } from '@/lib/components/pipeline/dataflow/power-query-host';
 import { DataflowCopilotPane } from '@/lib/components/pipeline/dataflow/dataflow-copilot-pane';
 import { DestinationPicker } from '@/lib/components/pipeline/dataflow/destination-picker';
@@ -39,9 +41,11 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 
 const useStyles = makeStyles({
-  pad: { padding: 16, display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minHeight: 0 },
-  toolbar: { display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: 8 },
+  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
+  toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
+  treePad: { padding: tokens.spacingHorizontalS },
+  // Long dynamic strings (errors, receipts, env-var lists, paths) must wrap, never overflow the surface.
+  breakText: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0, maxWidth: '100%' },
 });
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
@@ -116,7 +120,15 @@ export function DataflowGen2Editor({ item, id }: Props) {
   const [sink, setSink] = useState<DataflowSink | null>(null);
   const [dirty, setDirty] = useState(false);
   const [tab, setTab] = useState<'authoring' | 'output' | 'script'>('authoring');
-  const [copilotOpen, setCopilotOpen] = useState(true);
+  // Copilot pane open/collapsed persists PER SURFACE — collapsed hands the
+  // Power Query canvas its full width back, leaving a thin re-expand rail.
+  // `collapsed` is the inverse of the existing `copilotOpen` flag, so every
+  // call site below keeps working (incl. the `(v) => !v` updater form).
+  const [copilotCollapsed, setCopilotCollapsed] = useCollapsibleState(`dataflow-copilot.${id}`, false);
+  const copilotOpen = !copilotCollapsed;
+  const setCopilotOpen = useCallback((v: boolean | ((prev: boolean) => boolean)) => {
+    setCopilotCollapsed((prev) => !(typeof v === 'function' ? (v as (p: boolean) => boolean)(!prev) : v));
+  }, [setCopilotCollapsed]);
   const [activeQuery, setActiveQuery] = useState('');
   const [listErr, setListErr] = useState<string | null>(null);
   const [listHint, setListHint] = useState<string | null>(null);
@@ -263,7 +275,9 @@ export function DataflowGen2Editor({ item, id }: Props) {
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
-          <Subtitle2 style={{ marginBottom: 8 }}>Dataflows Gen2</Subtitle2>
+          <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS, display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+            <Flow20Regular /> Dataflows Gen2
+          </Subtitle2>
           {!workspaceId && <Caption1>Select a workspace.</Caption1>}
           {workspaceId && dataflows === null && <Spinner size="tiny" label="Loading…" />}
           {dataflows && dataflows.length === 0 && !listErr && <Caption1>No dataflows.</Caption1>}
@@ -285,7 +299,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
             <Badge appearance="outline" color={config?.backend === 'fabric' ? 'warning' : 'success'}>
               {config?.backend === 'fabric' ? 'Fabric (opt-in)' : 'Azure-native (ADF)'}
             </Badge>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 4, minWidth: 280 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>Workspace</Caption1>
               <Select value={workspaceId} onChange={(_, d) => setWorkspaceId(d.value)} disabled={ws.loading || (ws.workspaces?.length ?? 0) === 0}>
                 {!workspaceId && <option value="">{ws.loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
@@ -304,7 +318,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
                   <DialogTitle>Create dataflow Gen2</DialogTitle>
                   <DialogContent>
                     <Input placeholder="displayName" value={createName} onChange={(_, d) => setCreateName(d.value)} style={{ width: '100%' }} />
-                    {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                    {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody className={s.breakText}>{createErr}</MessageBarBody></MessageBar>}
                   </DialogContent>
                   <DialogActions>
                     <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>
@@ -321,7 +335,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
           {config && !config.adfConfigured && config.backend !== 'fabric' && (
             <MessageBar intent="warning">
-              <MessageBarBody>
+              <MessageBarBody className={s.breakText}>
                 <MessageBarTitle>Data Factory not configured</MessageBarTitle>
                 Authoring + Save work, but Run needs ADF. Set <code>{config.adfMissing || 'LOOM_ADF_NAME / LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID'}</code> on
                 the Console app — deployed by <code>platform/fiab/bicep/modules/landing-zone/adf.bicep</code>.
@@ -331,17 +345,17 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
           {(ws.error || listErr) && (
             <MessageBar intent="error">
-              <MessageBarBody>
+              <MessageBarBody className={s.breakText}>
                 <MessageBarTitle>Workspace list unavailable</MessageBarTitle>
                 {ws.error || listErr}
                 {(ws.hint || listHint) && <><br /><Caption1>{ws.hint || listHint}</Caption1></>}
               </MessageBarBody>
             </MessageBar>
           )}
-          {detailErr && <MessageBar intent="error"><MessageBarBody>{detailErr}</MessageBarBody></MessageBar>}
+          {detailErr && <MessageBar intent="error"><MessageBarBody className={s.breakText}>{detailErr}</MessageBarBody></MessageBar>}
           {runMsg && (
             <MessageBar intent={runOk === false ? 'error' : runOk ? 'success' : 'info'}>
-              <MessageBarBody>
+              <MessageBarBody className={s.breakText}>
                 {runMsg}
                 {runHint && <><br /><Caption1>{runHint}</Caption1></>}
               </MessageBarBody>
@@ -349,15 +363,15 @@ export function DataflowGen2Editor({ item, id }: Props) {
           )}
 
           {!dataflowId && (
-            <MessageBar intent="info">
-              <MessageBarBody>
-                Pick a dataflow from the left rail (or click <strong>New</strong>) to author its
-                Power Query, set an output destination, and Run it on ADF — no Fabric required.
-              </MessageBarBody>
-            </MessageBar>
+            <EmptyState
+              icon={<Flow20Regular />}
+              title="No dataflow selected"
+              body="Pick a dataflow from the left rail to author its Power Query, set an output destination, and Run it on ADF — no Fabric required."
+              primaryAction={canCreate ? { label: 'New dataflow', onClick: () => setCreateOpen(true) } : undefined}
+            />
           )}
           {dataflowId && dirty && <Badge appearance="outline" color="warning" style={{ alignSelf: 'flex-start' }}>unsaved</Badge>}
-          {dataflowId && <Caption1>Definition part: <code>{partPath}</code></Caption1>}
+          {dataflowId && <Caption1 className={s.breakText}>Definition part: <code>{partPath}</code></Caption1>}
 
           <div style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'authoring' | 'output' | 'script')}>
@@ -369,18 +383,20 @@ export function DataflowGen2Editor({ item, id }: Props) {
 
           {tab === 'authoring' && (
             isM ? (
-              <div style={{ display: 'flex', gap: 12, flex: 1, minHeight: 0 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flex: 1, minHeight: 0 }}>
                 <PowerQueryHost
                   mScript={defText}
                   onChange={(v) => { setDefText(v); setDirty(true); }}
                   onActiveQueryChange={setActiveQuery}
                 />
-                {copilotOpen && (
+                {copilotOpen ? (
                   <DataflowCopilotPane
                     mScript={defText}
                     activeQuery={activeQuery}
                     onApply={(nextM) => { setDefText(nextM); setDirty(true); }}
                   />
+                ) : (
+                  <CollapsedRail side="right" label="Copilot" onExpand={() => setCopilotOpen(true)} />
                 )}
               </div>
             ) : (

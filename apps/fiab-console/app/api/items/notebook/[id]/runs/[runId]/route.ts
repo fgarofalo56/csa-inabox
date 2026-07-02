@@ -26,6 +26,31 @@ function err(error: string, status: number) {
   return NextResponse.json({ ok: false, error }, { status });
 }
 
+interface RunRecord {
+  id: string; status: string; jobType: string; invokeType: string;
+  startTimeUtc: string; endTimeUtc: string;
+  failureReason?: { errorCode?: string; message?: string } | null;
+}
+
+/**
+ * Append a terminal run to the notebook's Cosmos run history (drained by
+ * /jobs). Idempotent by runId, capped at 50, non-fatal — a write failure must
+ * never break a poll. Azure-native: this is the DEFAULT history backend, no
+ * Fabric required.
+ */
+async function recordRun(items: any, nb: WorkspaceItem, workspaceId: string, runId: string, rec: Omit<RunRecord, 'id' | 'jobType' | 'invokeType' | 'startTimeUtc'>): Promise<void> {
+  try {
+    const state = (nb.state as any) || {};
+    const history: RunRecord[] = Array.isArray(state.runHistory) ? state.runHistory : [];
+    if (history.some((h) => h.id === runId)) return;
+    const startedAt = state.pendingRuns?.[runId]?.startedAt || new Date(Date.now() - 1000).toISOString();
+    history.push({ id: runId, jobType: 'NotebookRun', invokeType: 'Manual', startTimeUtc: startedAt, ...rec });
+    await items.item(nb.id, workspaceId).replace({
+      ...nb, state: { ...state, runHistory: history.slice(-50) }, updatedAt: new Date().toISOString(),
+    } as WorkspaceItem);
+  } catch { /* non-fatal — history is best-effort */ }
+}
+
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string; runId: string }> }) {
   const s = getSession();
   if (!s) return err('unauthenticated', 401);
@@ -63,6 +88,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
       if (!job) return NextResponse.json({ ok: true, status: 'NotStarted', runId, phase: 'job-pending' });
       const terminal = amlJobIsTerminal(job.status);
       const ok = job.status === 'Completed';
+      if (terminal) await recordRun(items, nb, workspaceId, runId, {
+        status: ok ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
+        failureReason: ok ? null : { errorCode: job.status, message: `AML job ${jobName} ended with status '${job.status}'` },
+      });
       return NextResponse.json({
         ok: true,
         status: job.status || 'NotStarted',
@@ -160,6 +189,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
         richDisplay = buildLoomDisplay(sqlJson, sampleRows) || undefined;
       }
 
+      if (out.status === 'ok' || out.status === 'error') await recordRun(items, nb, workspaceId, runId, {
+        status: out.status === 'ok' ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
+        failureReason: out.status === 'error' ? { errorCode: out.ename, message: out.evalue } : null,
+      });
       return NextResponse.json({
         ok: true,
         status: stmt.state,
@@ -192,6 +225,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string;
           const o = await getRunOutput(dbxRunId);
           output = { status: resultState === 'SUCCESS' ? 'ok' : 'error', ...o };
         } catch { /* keep null */ }
+        await recordRun(items, nb, workspaceId, runId, {
+          status: resultState === 'SUCCESS' ? 'Completed' : 'Failed', endTimeUtc: new Date().toISOString(),
+          failureReason: resultState === 'SUCCESS' ? null : { errorCode: resultState, message: (run as any).state?.state_message },
+        });
       }
       return NextResponse.json({
         ok: true,

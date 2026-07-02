@@ -22,18 +22,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Subtitle2, Body1, Caption1, Button, Input, Field, Dropdown, Option, Divider, Checkbox,
+  Subtitle2, Body1, Caption1, Button, Input, Field, Dropdown, Option, OptionGroup, Divider, Checkbox,
   Table, TableBody, TableRow, TableCell, TableHeader, TableHeaderCell, Spinner,
-  MessageBar, MessageBarBody,
+  MessageBar, MessageBarBody, MessageBarTitle,
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   Add20Regular, ArrowSync20Regular, Database20Regular,
   PlugConnected20Regular, Key16Regular, CheckmarkCircle16Filled,
-  Layer20Regular,
+  Layer20Regular, Edit20Regular, Beaker20Regular,
+  CheckmarkCircle20Regular, DismissCircle20Regular, Warning20Regular,
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
+import { TileGrid } from '@/lib/components/ui/tile-grid';
 
 export interface MirrorTableSpec { schema: string; table: string }
 
@@ -41,7 +43,7 @@ export interface MirrorTableSpec { schema: string; table: string }
  * Mirroring source types → display name, an accent color, and the Loom
  * Connection types that can back them. Each gets its own card in the wizard.
  */
-export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTypes: string[] }[] = [
+export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTypes: string[]; external?: string }[] = [
   { id: 'AzureSqlDatabase', name: 'Azure SQL Database', accent: '#0078d4', connTypes: ['azure-sql', 'generic-sql'] },
   { id: 'AzureSqlMI', name: 'Azure SQL Managed Instance', accent: '#0063b1', connTypes: ['azure-sql', 'generic-sql'] },
   { id: 'AzurePostgreSql', name: 'Azure Database for PostgreSQL', accent: '#336791', connTypes: ['postgres'] },
@@ -52,6 +54,11 @@ export const MIRROR_SOURCES: { id: string; name: string; accent: string; connTyp
   { id: 'SqlServer2025', name: 'SQL Server 2025', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'MSSQL', name: 'SQL Server 2016-2022', accent: '#a4262c', connTypes: ['generic-sql'] },
   { id: 'GenericMirror', name: 'Open mirroring', accent: '#5c2d91', connTypes: ['azure-sql', 'postgres', 'cosmos', 'storage-adls', 'generic-sql'] },
+  // Databricks Unity Catalog is a *dedicated* Loom item type (`mirrored-databricks`)
+  // — it mounts a UC catalog read-only into OneLake (metastore + catalog selection,
+  // not server/database/tables), so this card routes to that editor instead of the
+  // generic mirrored-database flow. `external` = the deep link to its New editor.
+  { id: 'DatabricksUC', name: 'Databricks Unity Catalog', accent: '#ff3621', connTypes: [], external: '/items/mirrored-databricks/new' },
 ];
 
 /** Sources whose connection needs a GCP project id + dataset rather than a SQL server FQDN. */
@@ -88,22 +95,23 @@ const SOURCE_SYNC_NOTE: Record<string, string> = {
 };
 
 const useStyles = makeStyles({
-  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 4 },
-  tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: 8 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'nowrap' },
-  grid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: tokens.spacingHorizontalS },
+  tableWrap: { overflow: 'auto', maxHeight: 320, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+  tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS },
+  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
+  sourceGrid: { marginTop: tokens.spacingVerticalS },
   card: {
     position: 'relative',
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS,
     padding: tokens.spacingVerticalM, borderRadius: tokens.borderRadiusLarge, cursor: 'pointer',
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderLeftWidth: '4px',
     backgroundColor: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
     transitionProperty: 'transform, box-shadow', transitionDuration: tokens.durationFaster,
-    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow8, borderColor: tokens.colorNeutralStroke1 },
+    ':hover': { transform: 'translateY(-2px)', boxShadow: tokens.shadow16, borderColor: tokens.colorNeutralStroke1 },
     ':focus-visible': { outline: `2px solid ${tokens.colorStrokeFocus2}`, outlineOffset: '1px' },
   },
   cardActive: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-1px', backgroundColor: tokens.colorBrandBackground2 },
-  cardIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium, color: '#fff' },
+  cardIcon: { display: 'flex', alignItems: 'center', justifyContent: 'center', width: '34px', height: '34px', flexShrink: 0, borderRadius: tokens.borderRadiusMedium, color: tokens.colorNeutralForegroundOnBrand },
   cardLabel: { minWidth: 0, overflow: 'hidden', '& > *': { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } },
   cardCheck: { marginLeft: 'auto', flexShrink: 0, color: tokens.colorBrandForeground1 },
   wizard: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minWidth: '560px', maxWidth: '640px' },
@@ -198,6 +206,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
   const [tablesMsg, setTablesMsg] = useState<string | null>(null);
   const [selTables, setSelTables] = useState<Set<string>>(new Set());
   const [verify, setVerify] = useState<{ status: 'idle' | 'busy' | 'ok' | 'warn' | 'err'; msg?: string }>({ status: 'idle' });
+  const [connTest, setConnTest] = useState<{ status: 'idle' | 'busy' | 'ok' | 'warn' | 'err'; msg?: string }>({ status: 'idle' });
+  const [editConnOpen, setEditConnOpen] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createErr, setCreateErr] = useState<string | null>(null);
 
@@ -254,8 +264,17 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     setAvailTables(null); setTablesMsg(null); setVerify({ status: 'idle' }); setCreateErr(null);
   }, [open, editing, initialSrc, loadConnections]);
 
+  // Connections recommended for this source (type matches the source's backends)
+  // vs everything else the user has created. We NEVER hide a created connection —
+  // an operator who made a connection must always be able to pick it (the strict
+  // type filter used to drop every non-exact-match connection). Recommended ones
+  // surface first; the rest appear under "Other connections".
   const compatibleConns = useMemo(
     () => connections.filter((c) => srcDef.connTypes.includes(c.type)),
+    [connections, srcDef],
+  );
+  const otherConns = useMemo(
+    () => connections.filter((c) => !srcDef.connTypes.includes(c.type)),
     [connections, srcDef],
   );
   const pickedConn = useMemo(() => connections.find((c) => c.id === connId) || null, [connections, connId]);
@@ -312,6 +331,24 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       else setVerify({ status: 'err', msg: j.hint ? `${j.error} — ${j.hint}` : (j.error || 'verification failed') });
     } catch (e: any) { setVerify({ status: 'err', msg: e?.message || String(e) }); }
   }, [createSrc, effServer, effDb, isBigQuery, isOracle, isCosmos]);
+
+  const testConnection = useCallback(async () => {
+    if (!pickedConn) return;
+    setConnTest({ status: 'busy' });
+    try {
+      const r = await fetch(`/api/connections/${encodeURIComponent(pickedConn.id)}/test`, { method: 'POST' });
+      const j = await r.json();
+      if (!r.ok || !j.ok) {
+        setConnTest({ status: 'err', msg: j.hint ? `${j.error} — ${j.hint}` : (j.error || 'test failed') });
+      } else if (j.reachable) {
+        setConnTest({ status: 'ok', msg: j.detail || 'Connection successful.' });
+      } else {
+        setConnTest({ status: 'warn', msg: j.detail || 'Connection validated on first use.' });
+      }
+    } catch (e: any) {
+      setConnTest({ status: 'err', msg: e?.message || String(e) });
+    }
+  }, [pickedConn]);
 
   const submit = useCallback(async () => {
     if (!workspaceId || !createName.trim()) return;
@@ -384,7 +421,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
               <div>
                 <div className={s.stepHead}><span className={s.stepNum}>1</span><Subtitle2>Choose a source</Subtitle2></div>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Each source mirrors into ADLS Bronze Delta — no Fabric capacity required.</Caption1>
-                <div className={s.grid} style={{ marginTop: 8 }}>
+                <TileGrid minTileWidth={200} className={s.sourceGrid}>
                   {MIRROR_SOURCES.map((src) => {
                     const active = createSrc === src.id;
                     return (
@@ -399,9 +436,26 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                       </div>
                     );
                   })}
-                </div>
+                </TileGrid>
               </div>
 
+              {srcDef.external && (
+                <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalM }}>
+                  <MessageBarBody>
+                    <MessageBarTitle>Databricks Unity Catalog mirror</MessageBarTitle>
+                    A Unity Catalog mirror is a dedicated Loom item type — it mounts a Databricks UC
+                    catalog read-only into OneLake (you pick a metastore + catalog; there is no
+                    server/database or per-table picker). Open its editor to create one.
+                    <div style={{ marginTop: tokens.spacingVerticalS }}>
+                      <Button appearance="primary" as="a" href={srcDef.external} icon={<Database20Regular />}>
+                        Create a Databricks Unity Catalog mirror
+                      </Button>
+                    </div>
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
+              {!srcDef.external && (<>
               <Divider />
 
               {/* Step 2 — connection (Key Vault-backed auth) */}
@@ -414,28 +468,70 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     ? 'Oracle reaches its source through an on-prem data gateway (self-hosted integration runtime). Create a connection-string / SQL-password connection (sync user credential → Key Vault), then enter the host, service name, gateway, and sync user below.'
                     : 'Pick a saved connection or create one. Credentials are stored in Key Vault — choose SQL password / connection string / service principal so the source accepts the login (no “token-identified principal” errors).'}
                 </Caption1>
-                <div className={s.connRow} style={{ marginTop: 8 }}>
+                <div className={s.connRow} style={{ marginTop: tokens.spacingVerticalS }}>
                   <Field style={{ flex: 1 }}>
-                    <Dropdown placeholder={compatibleConns.length ? 'Select a connection' : 'No saved connections for this source'}
+                    <Dropdown placeholder={connections.length ? 'Select a connection' : 'No saved connections yet — create one'}
                       value={pickedConn ? pickedConn.name : ''} selectedOptions={connId ? [connId] : []}
-                      onOptionSelect={(_, d) => setConnId(d.optionValue || '')}>
-                      {compatibleConns.map((c) => (
-                        <Option key={c.id} value={c.id} text={c.name}>
-                          {c.name} · {c.authMethod}{c.hasSecret ? ' · Key Vault' : ''}
-                        </Option>
-                      ))}
+                      onOptionSelect={(_, d) => { setConnId(d.optionValue || ''); setConnTest({ status: 'idle' }); }}>
+                      {compatibleConns.length > 0 && (
+                        <OptionGroup label="Recommended for this source">
+                          {compatibleConns.map((c) => (
+                            <Option key={c.id} value={c.id} text={c.name}>
+                              {c.name} · {c.authMethod}{c.hasSecret ? ' · Key Vault' : ''}
+                            </Option>
+                          ))}
+                        </OptionGroup>
+                      )}
+                      {otherConns.length > 0 && (
+                        <OptionGroup label="Other connections">
+                          {otherConns.map((c) => (
+                            <Option key={c.id} value={c.id} text={c.name}>
+                              {c.name} · {c.type} · {c.authMethod}{c.hasSecret ? ' · Key Vault' : ''}
+                            </Option>
+                          ))}
+                        </OptionGroup>
+                      )}
                     </Dropdown>
                   </Field>
-                  <Button appearance="outline" icon={<PlugConnected20Regular />} onClick={() => setConnBuilderOpen(true)}>New connection</Button>
+                  <Button appearance="outline" icon={<PlugConnected20Regular />}
+                    onClick={() => setConnBuilderOpen(true)}>New connection</Button>
+                  {pickedConn && (
+                    <Button appearance="outline" icon={<Edit20Regular />}
+                      onClick={() => { setConnTest({ status: 'idle' }); setEditConnOpen(true); }}>
+                      Edit
+                    </Button>
+                  )}
+                  {pickedConn && (
+                    <Button appearance="outline" icon={<Beaker20Regular />}
+                      disabled={connTest.status === 'busy'}
+                      onClick={() => { setConnTest({ status: 'idle' }); testConnection(); }}>
+                      {connTest.status === 'busy' ? 'Testing…' : 'Test connection'}
+                    </Button>
+                  )}
                 </div>
                 {pickedConn && (
-                  <div className={s.connRow} style={{ marginTop: 6 }}>
+                  <div className={s.connRow} style={{ marginTop: tokens.spacingVerticalS }}>
                     {pickedConn.hasSecret ? <Key16Regular /> : <CheckmarkCircle16Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />}
                     <Caption1>Auth: <strong>{pickedConn.authMethod}</strong>{pickedConn.hasSecret ? ' (secret in Key Vault)' : ''}</Caption1>
                   </div>
                 )}
+                {connTest.status === 'ok' && (
+                  <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody><CheckmarkCircle20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />{connTest.msg}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {connTest.status === 'warn' && (
+                  <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody><Warning20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />{connTest.msg}</MessageBarBody>
+                  </MessageBar>
+                )}
+                {connTest.status === 'err' && (
+                  <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
+                    <MessageBarBody><DismissCircle20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />{connTest.msg}</MessageBarBody>
+                  </MessageBar>
+                )}
                 {isBigQuery ? (
-                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                     <Field label="GCP project id" required hint="The Google Cloud project that owns the dataset." style={{ flex: 1 }}>
                       <Input value={projectId} onChange={(_, d) => { setProjectId(d.value); setVerify({ status: 'idle' }); }} placeholder="my-gcp-project" />
                     </Field>
@@ -445,7 +541,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   </div>
                 ) : isOracle ? (
                   <>
-                    <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                       <Field label="Host" required hint="Oracle listener host (and :port if not 1521)." style={{ flex: 1 }}>
                         <Input value={createServer} onChange={(_, d) => { setCreateServer(d.value); setVerify({ status: 'idle' }); }} placeholder="oracle.contoso.com:1521" disabled={!!pickedConn?.host} />
                       </Field>
@@ -453,7 +549,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                         <Input value={serviceName} onChange={(_, d) => { setServiceName(d.value); setVerify({ status: 'idle' }); }} placeholder="ORCLPDB1" />
                       </Field>
                     </div>
-                    <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                       <Field label="On-prem data gateway (SHIR)" required hint="The self-hosted integration runtime / on-prem data gateway that can reach Oracle." style={{ flex: 1 }}>
                         <Input value={gateway} onChange={(_, d) => setGateway(d.value)} placeholder="loom-onprem-ir" />
                       </Field>
@@ -466,13 +562,13 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   // Cosmos DB: account + database come from the Cosmos connection;
                   // the change-feed engine never uses a SQL server FQDN, so only
                   // the database is collected here (no Server field).
-                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                     <Field label="Database" required hint="The Cosmos database to mirror (account is taken from the connection)." style={{ flex: 1 }}>
                       <Input value={createDb} onChange={(_, d) => { setCreateDb(d.value); setVerify({ status: 'idle' }); }} placeholder="prod" disabled={!!pickedConn?.database} />
                     </Field>
                   </div>
                 ) : (
-                  <div style={{ display: 'flex', gap: 12, marginTop: 10 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalL }}>
                     <Field label="Server / host" style={{ flex: 1 }}>
                       <Input value={createServer} onChange={(_, d) => setCreateServer(d.value)} placeholder="server.database.windows.net" disabled={!!pickedConn?.host} />
                     </Field>
@@ -481,14 +577,14 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </Field>
                   </div>
                 )}
-                <div style={{ marginTop: 10 }}>
+                <div style={{ marginTop: tokens.spacingVerticalL }}>
                   <Button size="small" appearance="outline" icon={<CheckmarkCircle16Filled />} disabled={verify.status === 'busy'} onClick={runVerify}>
                     {verify.status === 'busy' ? 'Verifying…' : 'Verify connection'}
                   </Button>
                 </div>
-                {verify.status === 'ok' && <MessageBar intent="success" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
-                {verify.status === 'warn' && <MessageBar intent="info" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
-                {verify.status === 'err' && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                {verify.status === 'ok' && <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                {verify.status === 'warn' && <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
+                {verify.status === 'err' && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{verify.msg}</MessageBarBody></MessageBar>}
               </div>
 
               <Divider />
@@ -531,7 +627,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                     </div>
                   </div>
                 )}
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', marginTop: tokens.spacingVerticalS }}>
                   <Button size="small" appearance="outline" icon={<ArrowSync20Regular />} disabled={tablesLoading} onClick={loadSourceTables}>
                     {tablesLoading ? 'Loading…' : 'Load tables'}
                   </Button>
@@ -546,9 +642,9 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                 {tablesLoading && (
                   <div className={s.tableLoading}><Spinner size="tiny" label="Discovering tables…" labelPosition="after" /></div>
                 )}
-                {!tablesLoading && tablesMsg && <Caption1 style={{ display: 'block', marginTop: 6, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
+                {!tablesLoading && tablesMsg && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>{tablesMsg}</Caption1>}
                 {!tablesLoading && availTables && availTables.length > 0 && (
-                  <div className={s.tableWrap} style={{ maxHeight: 180, marginTop: 8 }}>
+                  <div className={s.tableWrap} style={{ maxHeight: 180, marginTop: tokens.spacingVerticalS }}>
                     <Table size="small" aria-label="Source tables">
                       <TableHeader>
                         <TableRow>
@@ -583,10 +679,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
               {/* Step 4 — name + review */}
               <div>
                 <div className={s.stepHead}><span className={s.stepNum}>4</span><Subtitle2>Name &amp; create</Subtitle2></div>
-                <Field label="Name" required style={{ marginTop: 8 }}>
+                <Field label="Name" required style={{ marginTop: tokens.spacingVerticalS }}>
                   <Input value={createName} onChange={(_, d) => setCreateName(d.value)} placeholder="prod-sales-mirror" />
                 </Field>
-                <div className={s.summary} style={{ marginTop: 10 }}>
+                <div className={s.summary} style={{ marginTop: tokens.spacingVerticalL }}>
                   <span className={s.sumKey}>Source</span><span>{srcDef.name}</span>
                   <span className={s.sumKey}>Connection</span><span>{pickedConn ? `${pickedConn.name} (${pickedConn.authMethod})` : 'manual / managed identity'}</span>
                   {isBigQuery ? (
@@ -612,20 +708,34 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
                   {createSrc === 'Snowflake' && (<><span className={s.sumKey}>Iceberg</span><span>{includeIceberg ? 'Iceberg tables included' : 'standard tables only'}</span></>)}
                   <span className={s.sumKey}>Target</span><span>ADLS Bronze Delta</span>
                 </div>
-                {createErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
+                {createErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{createErr}</MessageBarBody></MessageBar>}
               </div>
+              </>)}
             </div>
           </DialogContent>
           <DialogActions>
             <Button appearance="secondary" onClick={onClose}>Cancel</Button>
-            <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim()} onClick={submit}>
-              {createBusy ? (editing ? 'Saving…' : 'Creating…') : (editing ? 'Save changes' : 'Create mirror')}
-            </Button>
+            {!srcDef.external && (
+              <Button appearance="primary" icon={<Add20Regular />} disabled={createBusy || !createName.trim()} onClick={submit}>
+                {createBusy ? (editing ? 'Saving…' : 'Creating…') : (editing ? 'Save changes' : 'Create mirror')}
+              </Button>
+            )}
           </DialogActions>
         </DialogBody>
       </DialogSurface>
       <ConnectionBuilder open={connBuilderOpen} onClose={() => setConnBuilderOpen(false)}
         onCreated={(c) => { setConnections((prev) => [...prev.filter((x) => x.id !== c.id), c]); setConnId(c.id); }} />
+      {pickedConn && (
+        <ConnectionBuilder
+          open={editConnOpen}
+          onClose={() => setEditConnOpen(false)}
+          editConnection={pickedConn}
+          onSaved={(updated) => {
+            setConnections((prev) => prev.map((x) => x.id === updated.id ? updated : x));
+            setEditConnOpen(false);
+          }}
+        />
+      )}
     </Dialog>
   );
 }

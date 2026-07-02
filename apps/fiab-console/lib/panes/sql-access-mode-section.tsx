@@ -35,16 +35,16 @@ const useStyles = makeStyles({
   section: {
     display: 'flex',
     flexDirection: 'column',
-    rowGap: '6px',
-    padding: '12px',
+    rowGap: tokens.spacingVerticalXS,
+    padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
     borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground2,
   },
-  radioGroup: { display: 'flex', flexDirection: 'column', rowGap: '2px' },
-  hint: { color: tokens.colorNeutralForeground3, paddingLeft: '28px', marginBottom: '4px' },
+  radioGroup: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalXXS },
+  hint: { color: tokens.colorNeutralForeground3, paddingLeft: '28px', marginBottom: tokens.spacingVerticalXXS },
   desc: { color: tokens.colorNeutralForeground3 },
-  dialogBody: { display: 'flex', flexDirection: 'column', rowGap: '12px' },
+  dialogBody: { display: 'flex', flexDirection: 'column', rowGap: tokens.spacingVerticalM },
 });
 
 export function SqlAccessModeSection({ itemId, itemType }: Props) {

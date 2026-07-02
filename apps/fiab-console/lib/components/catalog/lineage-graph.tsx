@@ -26,7 +26,7 @@ interface Props {
 }
 
 const useStyles = makeStyles({
-  wrap: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 8, padding: 12, position: 'relative' },
+  wrap: { border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusXLarge, padding: tokens.spacingHorizontalM, position: 'relative' },
 });
 
 export function LineageGraph({ source, id, host, workspaceId }: Props) {

@@ -14,17 +14,34 @@
 import * as React from 'react';
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
-import { Badge, Caption1, tokens } from '@fluentui/react-components';
-import { CheckmarkCircle12Filled, Circle12Regular } from '@fluentui/react-icons';
+import { Badge, Caption1, makeStyles, mergeClasses, tokens } from '@fluentui/react-components';
+import {
+  CheckmarkCircle12Filled, Circle12Regular,
+  CloudCube20Regular, ShieldKeyhole20Regular, ShieldLock20Regular,
+  Folder20Regular,
+} from '@fluentui/react-icons';
 import { serviceByKey, serviceVisual, type ConfigStatus } from './service-catalog';
 import { iconUrl } from '../ui/item-type-visual';
+import { accentTint } from '../canvas/canvas-node-kit';
 
-const BOUNDARY_TINT: Record<string, string> = {
-  'Commercial': '#0078d4',
-  'GCC': '#5c2d91',
-  'GCC-High': '#5c2d91',
-  'IL5': '#a4262c',
+/**
+ * Sovereignty boundary → theme-aware Loom accent var + section glyph. NO hex
+ * palette: each accent resolves to a `--loom-accent-*` defined (light + dark)
+ * in app/globals.css, so the subscription chrome tracks the theme. IL5 uses the
+ * Fluent red-palette token (the kit's 5 accents are blue/violet/teal/magenta/
+ * amber — there is no danger-red accent, so we pull the token directly).
+ */
+interface BoundaryVisual {
+  accent: string;
+  icon: React.ReactElement;
+}
+const BOUNDARY_VISUAL: Record<string, BoundaryVisual> = {
+  'Commercial': { accent: 'var(--loom-accent-blue)', icon: <CloudCube20Regular /> },
+  'GCC': { accent: 'var(--loom-accent-violet)', icon: <ShieldKeyhole20Regular /> },
+  'GCC-High': { accent: 'var(--loom-accent-violet)', icon: <ShieldKeyhole20Regular /> },
+  'IL5': { accent: tokens.colorPaletteRedForeground1, icon: <ShieldLock20Regular /> },
 };
+const DEFAULT_BOUNDARY: BoundaryVisual = BOUNDARY_VISUAL['Commercial'];
 
 export interface SubscriptionNodeData {
   name: string;
@@ -44,27 +61,173 @@ export interface ServiceNodeData {
   [key: string]: unknown;
 }
 
+// =============================================================================
+// Shared, token-only node chrome (rich + elevated, theme-aware light + dark).
+// Geometry contracts kept verbatim: subscription default 360x240, domain
+// default 300x150, service fixed 132 wide / 40 tall, and the 8px handle dot.
+// =============================================================================
+
+const useNodeStyles = makeStyles({
+  // ── Subscription container (boundary-tinted, elevated) ──────────────────────
+  subscription: {
+    boxSizing: 'border-box',
+    borderRadius: tokens.borderRadiusXLarge,
+    // Complete `border` shorthand keeps Griffel happy; the boundary accent (or
+    // brand-selected) colour is layered on via an inline `borderColor`.
+    border: `${tokens.strokeWidthThick} solid ${tokens.colorNeutralStroke2}`,
+    boxShadow: tokens.shadow4,
+  },
+  subscriptionHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalM,
+    paddingRight: tokens.spacingHorizontalM,
+    // Accent-tinted divider colour layered on via inline `borderBottomColor`.
+    borderBottom: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    borderTopLeftRadius: tokens.borderRadiusLarge,
+    borderTopRightRadius: tokens.borderRadiusLarge,
+  },
+  boundaryChip: {
+    flexShrink: 0,
+    width: '24px',
+    height: '24px',
+    borderRadius: tokens.borderRadiusMedium,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  subscriptionName: {
+    fontSize: tokens.fontSizeBase300,
+    fontWeight: tokens.fontWeightBold,
+    color: tokens.colorNeutralForeground1,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    minWidth: 0,
+  },
+
+  // ── Domain container (framed, neutral) ──────────────────────────────────────
+  domain: {
+    boxSizing: 'border-box',
+    borderRadius: tokens.borderRadiusLarge,
+    background: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow2,
+  },
+  // Dashed (unselected) vs. solid brand (selected) — each a complete shorthand.
+  domainDashed: { border: `${tokens.strokeWidthThin} dashed ${tokens.colorNeutralStroke2}` },
+  domainSolid: { border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke1}` },
+  domainHeader: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    justifyContent: 'space-between',
+    paddingTop: tokens.spacingVerticalXXS,
+    paddingBottom: tokens.spacingVerticalXXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalS,
+    borderBottom: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+  },
+  domainHeaderLead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    minWidth: 0,
+  },
+  domainIcon: { flexShrink: 0, color: tokens.colorNeutralForeground3 },
+  domainName: {
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightSemibold,
+    color: tokens.colorNeutralForeground1,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    minWidth: 0,
+  },
+  domainCount: { flexShrink: 0, color: tokens.colorNeutralForeground3 },
+
+  // ── Service leaf (icon-forward card, elevation-on-hover) ────────────────────
+  service: {
+    boxSizing: 'border-box',
+    width: '132px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalS,
+    paddingTop: tokens.spacingVerticalXS,
+    paddingBottom: tokens.spacingVerticalXS,
+    paddingLeft: tokens.spacingHorizontalS,
+    paddingRight: tokens.spacingHorizontalS,
+    borderRadius: tokens.borderRadiusMedium,
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorNeutralStroke2}`,
+    background: tokens.colorNeutralBackground1,
+    boxShadow: tokens.shadow4,
+    transitionProperty: 'box-shadow, transform',
+    transitionDuration: tokens.durationNormal,
+    transitionTimingFunction: tokens.curveEasyEase,
+    ':hover': { boxShadow: tokens.shadow8, transform: 'translateY(-1px)' },
+    '@media (prefers-reduced-motion: reduce)': {
+      transitionDuration: '0.01ms',
+      ':hover': { transform: 'none' },
+    },
+  },
+  serviceSelected: {
+    border: `${tokens.strokeWidthThin} solid ${tokens.colorBrandStroke1}`,
+    boxShadow: tokens.shadow8,
+  },
+  serviceLabel: {
+    flex: 1,
+    minWidth: 0,
+    fontSize: tokens.fontSizeBase200,
+    fontWeight: tokens.fontWeightMedium,
+    color: tokens.colorNeutralForeground1,
+    whiteSpace: 'nowrap',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+  },
+  statusIcon: { flexShrink: 0 },
+  statusDot: {
+    flexShrink: 0,
+    width: '8px',
+    height: '8px',
+    borderRadius: tokens.borderRadiusCircular,
+  },
+});
+
 function SubscriptionNodeImpl({ data, width, height, selected }: NodeProps) {
+  const styles = useNodeStyles();
   const d = data as SubscriptionNodeData;
-  const tint = BOUNDARY_TINT[d.boundary || 'Commercial'] || '#0078d4';
+  const boundaryLabel = d.boundary || 'Commercial';
+  const bv = BOUNDARY_VISUAL[boundaryLabel] || DEFAULT_BOUNDARY;
   return (
     <div
       data-plan-subscription={d.name}
+      className={styles.subscription}
       style={{
         width: width ?? 360, height: height ?? 240,
-        borderRadius: 10,
-        border: `2px solid ${selected ? tokens.colorBrandStroke1 : tint}`,
-        background: `${tint}0d`,
-        boxSizing: 'border-box',
+        borderColor: selected ? tokens.colorBrandStroke1 : bv.accent,
+        background: accentTint(bv.accent, 5),
       }}
     >
-      <div style={{
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 10px', borderBottom: `1px solid ${tint}40`,
-        background: `${tint}1a`, borderTopLeftRadius: 8, borderTopRightRadius: 8,
-      }}>
-        <span style={{ fontWeight: 700, fontSize: 13, color: tokens.colorNeutralForeground1 }}>{d.name}</span>
-        <Badge appearance="tint" size="small" style={{ color: tint }}>{d.boundary || 'Commercial'}</Badge>
+      <div
+        className={styles.subscriptionHeader}
+        style={{
+          background: accentTint(bv.accent, 10),
+          borderBottomColor: accentTint(bv.accent, 25),
+        }}
+      >
+        <span className={styles.boundaryChip} style={{ background: accentTint(bv.accent, 16), color: bv.accent }} aria-hidden="true">
+          {bv.icon}
+        </span>
+        <span className={styles.subscriptionName}>{d.name}</span>
+        <Badge
+          appearance="tint"
+          size="small"
+          style={{ backgroundColor: accentTint(bv.accent, 14), color: bv.accent, borderColor: accentTint(bv.accent, 28) }}
+        >
+          {boundaryLabel}
+        </Badge>
         {d.region && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{d.region}</Caption1>}
       </div>
     </div>
@@ -72,30 +235,27 @@ function SubscriptionNodeImpl({ data, width, height, selected }: NodeProps) {
 }
 
 function DomainNodeImpl({ data, width, height, selected }: NodeProps) {
+  const styles = useNodeStyles();
   const d = data as DomainNodeData;
   return (
     <div
       data-plan-domain={d.name}
-      style={{
-        width: width ?? 300, height: height ?? 150,
-        borderRadius: 8,
-        border: `1.5px ${selected ? 'solid' : 'dashed'} ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke1}`,
-        background: tokens.colorNeutralBackground1,
-        boxSizing: 'border-box',
-      }}
+      className={mergeClasses(styles.domain, selected ? styles.domainSolid : styles.domainDashed)}
+      style={{ width: width ?? 300, height: height ?? 150 }}
     >
-      <div style={{
-        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        padding: '4px 8px', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
-      }}>
-        <span style={{ fontWeight: 600, fontSize: 12, color: tokens.colorNeutralForeground1 }}>{d.name}</span>
-        <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{d.serviceCount} svc</Caption1>
+      <div className={styles.domainHeader}>
+        <span className={styles.domainHeaderLead}>
+          <Folder20Regular className={styles.domainIcon} aria-hidden="true" />
+          <span className={styles.domainName}>{d.name}</span>
+        </span>
+        <Caption1 className={styles.domainCount}>{d.serviceCount} svc</Caption1>
       </div>
     </div>
   );
 }
 
 function ServiceNodeImpl({ data, selected }: NodeProps) {
+  const styles = useNodeStyles();
   const d = data as ServiceNodeData;
   const def = serviceByKey(d.serviceKey);
   const vis = serviceVisual(d.serviceKey);
@@ -111,44 +271,28 @@ function ServiceNodeImpl({ data, selected }: NodeProps) {
     <div
       data-plan-service={d.serviceKey}
       title={def?.description}
-      style={{
-        width: 132,
-        display: 'flex', alignItems: 'center', gap: 8,
-        padding: '6px 9px', borderRadius: 8,
-        background: tokens.colorNeutralBackground1,
-        border: `1px solid ${selected ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}`,
-        boxShadow: selected ? `0 0 0 2px ${tokens.colorBrandBackground2}` : '0 1px 2px rgba(0,0,0,0.06)',
-        boxSizing: 'border-box',
-      }}
+      className={mergeClasses(styles.service, selected && styles.serviceSelected)}
     >
       <Handle type="target" position={Position.Left} style={handleStyle} isConnectable />
       <ServiceIconChip def={def} vis={vis} Glyph={Glyph} remote={remote} size={26} iconPx={16} radius={6} />
-      <span style={{
-        flex: 1, minWidth: 0,
-        fontSize: 11, fontWeight: 500, color: tokens.colorNeutralForeground1,
-        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-      }}>{vis.label}</span>
+      <span className={styles.serviceLabel}>{vis.label}</span>
       {def?.config?.length ? (
         d.configStatus === 'configured' ? (
-          <CheckmarkCircle12Filled aria-label="Configured" title="Configured ✓"
-            style={{ flexShrink: 0, color: tokens.colorPaletteGreenForeground1 }} />
+          <CheckmarkCircle12Filled aria-label="Configured" title="Configured"
+            className={styles.statusIcon} style={{ color: tokens.colorPaletteGreenForeground1 }} />
         ) : d.configStatus === 'invalid' ? (
-          <span role="img" aria-label="Invalid configuration" title="Invalid configuration — open to fix" style={{
-            flexShrink: 0, width: 7, height: 7, borderRadius: 4,
-            background: tokens.colorPaletteRedBackground3,
-          }} />
+          <span role="img" aria-label="Invalid configuration" title="Invalid configuration — open to fix"
+            className={styles.statusDot} style={{ background: tokens.colorPaletteRedBackground3 }} />
         ) : (
           <Circle12Regular aria-label="Needs configuration"
             title="Using defaults — select to review its SKU / tier"
-            style={{ flexShrink: 0, color: tokens.colorNeutralForeground3 }} />
+            className={styles.statusIcon} style={{ color: tokens.colorNeutralForeground3 }} />
         )
       ) : null}
       {def?.planOnly && (
         <span role="img" aria-label="Plan-only — no one-button bicep toggle yet"
-          title="Plan-only — no one-button bicep toggle yet" style={{
-          flexShrink: 0, width: 7, height: 7, borderRadius: 4,
-          background: tokens.colorPaletteMarigoldBackground3,
-        }} />
+          title="Plan-only — no one-button bicep toggle yet"
+          className={styles.statusDot} style={{ background: tokens.colorPaletteMarigoldBackground3 }} />
       )}
       <Handle type="source" position={Position.Right} style={handleStyle} isConnectable />
     </div>
@@ -184,13 +328,17 @@ function ServiceIconChip({
       aria-hidden
       style={{
         flexShrink: 0, width: size, height: size, borderRadius: radius,
-        background: `${vis.color}1f`, color: vis.color,
+        // `vis.color` is the OFFICIAL Azure-service brand colour from the
+        // catalog (not authored here). Wash it via color-mix instead of
+        // string-concatenating a hex alpha suffix — works for any CSS colour
+        // and matches the kit's token-only tinting convention.
+        background: `color-mix(in srgb, ${vis.color} 12%, transparent)`, color: vis.color,
         display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
       }}
     >
       {showRemote ? (
         // eslint-disable-next-line @next/next/no-img-element
-        <img src={remote} alt="" width={iconPx} height={iconPx} style={{ borderRadius: 3 }}
+        <img src={remote} alt="" width={iconPx} height={iconPx} style={{ borderRadius: tokens.borderRadiusSmall }}
           onError={() => setRemoteOk(false)} />
       ) : def?.icon ? (
         // eslint-disable-next-line @next/next/no-img-element

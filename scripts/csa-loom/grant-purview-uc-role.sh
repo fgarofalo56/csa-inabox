@@ -56,6 +56,20 @@ Grant them in the Purview portal (one-time, ~1 min):
        - Data Product Owner  (lets Loom create/update/delete data products)
   5. Save. Propagation is near-immediate.
 
+  --- Day-one: let Loom AUTO-PROVISION the governance domain (recommended) ---
+  Loom's data-product provisioner now AUTO-DISCOVERS an existing published
+  governance domain, and AUTO-CREATES a default one ("Loom Governance") when
+  none exists -- so you no longer have to create a domain by hand or set
+  LOOM_PURVIEW_GOVERNANCE_DOMAIN_ID (pinning it is still honored if you do).
+  For auto-create on an empty catalog, also grant the Console UAMI the
+  CATALOG-LEVEL roles (one-time, portal-only -- no ARM/CLI surface exists):
+       Unified Catalog > Catalog management > Roles > add $UAMI_PRINCIPAL to:
+           - Governance Domain Creator   (lets Loom create the default domain)
+           - Catalog Reader (Global)     (lets Loom discover existing domains)
+  With those granted, a fresh deploy provisions data products with NO manual
+  domain step. (If the UAMI lacks these, Loom surfaces an honest gate naming
+  exactly this grant -- never a silent failure.)
+
 Then set (Commercial only) and redeploy admin-plane:
    loomDataproductsBackend  = 'unified-catalog'   (=> LOOM_DATAPRODUCTS_BACKEND)
    loomPurviewUnifiedAccount = '$UC_ACCOUNT'       (=> LOOM_PURVIEW_UNIFIED_ACCOUNT)

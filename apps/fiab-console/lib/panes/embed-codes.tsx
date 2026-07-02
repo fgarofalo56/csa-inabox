@@ -175,7 +175,7 @@ export function EmbedCodesPane() {
             <MessageBarTitle>Embed code created for “{created.report}”</MessageBarTitle>
             <Caption1 block style={{ marginBottom: 6 }}>Copy this signed URL — it is loadable now and expires {fmt(created.expiresAt)}.</Caption1>
             <span className={s.urlRow}>
-              <Input readOnly value={created.signedUrl} style={{ flex: 1, fontFamily: 'monospace', fontSize: 11 }} onFocus={(e) => e.currentTarget.select()} />
+              <Input readOnly value={created.signedUrl} style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 11 }} onFocus={(e) => e.currentTarget.select()} />
               <Button size="small" icon={<Copy20Regular />} onClick={() => copy(created.signedUrl, 'created')}>
                 {copied === 'created' ? 'Copied' : 'Copy'}
               </Button>

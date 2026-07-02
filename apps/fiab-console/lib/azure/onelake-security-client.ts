@@ -40,18 +40,27 @@ import {
   type OneLakeSecurityItemType,
   type OneLakePermission,
   type SecurityRoleMemberType,
+  type RowLevelRule,
+  type ColumnLevelRule,
 } from './onelake-security-rules';
+// Type-only import of the reconciler's receipt shape. Type-only so there is NO
+// runtime cycle (the reconciler imports this module's role type, also type-only).
+import type { ReconcileReceipt } from './onelake-rls-reconciler';
 
 export {
   ROLE_NAME_RE,
   isValidRolePath,
   allowedPermissions,
   roleDocId,
+  isValidRlsPredicate,
+  isValidColumnList,
 } from './onelake-security-rules';
 export type {
   OneLakeSecurityItemType,
   OneLakePermission,
   SecurityRoleMemberType,
+  RowLevelRule,
+  ColumnLevelRule,
 } from './onelake-security-rules';
 
 // ============================================================
@@ -83,6 +92,19 @@ export interface OneLakeSecurityRole {
   members: SecurityRoleMember[];
   /** True for the synthetic DefaultReader / DefaultReadWriter roles. */
   isDefault?: boolean;
+  /**
+   * Row-Level Security predicates this role narrows by (ADDITIVE; the OLS
+   * paths/permissions/members above are unchanged). Persisted by the
+   * onelake-security/[role]/rls route and materialized to the source engine by
+   * `reconcileRoleRlsCls` (Synapse SECURITY POLICY + inline TVF, or ADX
+   * row_level_security policy). The PDP (lib/auth/pdp) also reads these as
+   * obligations — so a Delta-on-ADLS item with no SQL engine is still enforced.
+   */
+  rls?: RowLevelRule[];
+  /** Column-Level Security allow-lists this role narrows by (ADDITIVE). */
+  cls?: ColumnLevelRule[];
+  /** Last reconcile receipt (informational; written by the rls/cls routes). */
+  lastReceipt?: ReconcileReceipt;
   createdBy: string;
   createdAt: string;
   updatedAt?: string;

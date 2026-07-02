@@ -72,15 +72,15 @@ const useStyles = makeStyles({
   },
   kpiHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   kpiIcon: {
-    width: 36, height: 36, borderRadius: tokens.borderRadiusLarge,
+    width: '36px', height: '36px', borderRadius: tokens.borderRadiusLarge,
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
   },
-  kpiVal: { fontSize: 30, fontWeight: 700, lineHeight: '34px' },
-  kpiLabel: { fontSize: 12, color: tokens.colorNeutralForeground3, fontWeight: 600 },
-  kpiSub: { fontSize: 12, color: tokens.colorNeutralForeground4 },
+  kpiVal: { fontSize: '30px', fontWeight: 700, lineHeight: '34px' },
+  kpiLabel: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3, fontWeight: 600 },
+  kpiSub: { fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground4 },
   bar: {
-    height: 6, borderRadius: 3, backgroundColor: tokens.colorNeutralBackground4,
-    overflow: 'hidden', marginTop: 6,
+    height: tokens.spacingVerticalSNudge, borderRadius: '3px', backgroundColor: tokens.colorNeutralBackground4,
+    overflow: 'hidden', marginTop: tokens.spacingVerticalSNudge,
   },
   actionsGrid: {
     display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
@@ -94,9 +94,9 @@ const useStyles = makeStyles({
     minWidth: 0,
   },
   actionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
-  actionList: { display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 },
+  actionList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS, marginTop: tokens.spacingVerticalXS },
   actionLink: {
-    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8,
+    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS,
     padding: '6px 10px', borderRadius: tokens.borderRadiusMedium,
     color: tokens.colorNeutralForeground1, textDecoration: 'none',
     ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover },

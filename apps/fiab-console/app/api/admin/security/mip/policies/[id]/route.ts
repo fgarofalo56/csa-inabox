@@ -13,6 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { updateLabelPolicy, deleteLabelPolicy } from '@/lib/azure/scc-labels-client';
 import { handleSecurityError } from '../../../_lib/error-handling';
 
@@ -22,6 +23,8 @@ export const dynamic = 'force-dynamic';
 export async function PATCH(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const { id } = await props.params;
   if (!id) return NextResponse.json({ ok: false, error: 'policy id is required' }, { status: 400 });
   let body: any;
@@ -48,6 +51,8 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
 export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const gate = requireTenantAdmin(s);
+  if (gate) return gate;
   const { id } = await props.params;
   if (!id) return NextResponse.json({ ok: false, error: 'policy id is required' }, { status: 400 });
   try {

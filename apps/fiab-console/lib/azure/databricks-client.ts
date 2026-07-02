@@ -565,6 +565,78 @@ export async function executeStatement(
   };
 }
 
+/**
+ * Honest config gate for the SQL Statement Execution path. Returns the exact
+ * missing env var when no warehouse is pinned (and none was passed) so a BFF
+ * route can 503 with a precise MessageBar instead of a generic 500. Returns
+ * null when a warehouse id is resolvable.
+ */
+export function warehouseConfigGate(explicit?: string | null): { missing: string } | null {
+  const wid = (explicit || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
+  if (!wid) return { missing: 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID' };
+  return null;
+}
+
+/**
+ * Typed not-configured error for the Databricks SQL warehouse path. Carries the
+ * exact env var to set so the BFF can render an honest gate (no-vaporware.md)
+ * rather than a generic 500.
+ */
+export class WarehouseNotConfiguredError extends Error {
+  missing: string;
+  constructor(missing = 'LOOM_DATABRICKS_SQL_WAREHOUSE_ID') {
+    super(
+      `Databricks SQL warehouse not configured: set ${missing} on the Loom Console ` +
+        `(the SQL warehouse used to query subscribed Delta Share catalogs).`,
+    );
+    this.name = 'WarehouseNotConfiguredError';
+    this.missing = missing;
+  }
+}
+
+/**
+ * Run a SQL statement against the pinned Databricks SQL warehouse and return a
+ * normalized {@link QueryResult}. This is the in-Loom "Explore / Query" path for
+ * a subscribed Delta Share's mounted Unity Catalog catalog (and any other ad-hoc
+ * read against the workspace's warehouse).
+ *
+ * The warehouse is resolved from `opts.warehouseId` → `LOOM_DATABRICKS_SQL_WAREHOUSE_ID`.
+ * When neither is set we throw {@link WarehouseNotConfiguredError} so the caller
+ * can surface the precise remediation (per no-vaporware.md) rather than failing
+ * opaquely.
+ *
+ * Delegates to {@link executeStatement}, which POSTs to
+ * `/api/2.0/sql/statements` with `disposition: INLINE`, `format: JSON_ARRAY`,
+ * `wait_timeout: 30s`, then polls `GET /api/2.0/sql/statements/{id}` until the
+ * statement is terminal (SUCCEEDED / FAILED / CANCELED). A FAILED statement
+ * throws with the Databricks error message + error_code.
+ *
+ * The optional `catalog` / `schema` set the statement's default namespace so a
+ * bare `SELECT * FROM tbl` resolves inside the subscribed catalog without
+ * fully-qualifying every table.
+ */
+export async function runWarehouseStatement(
+  sql: string,
+  opts?: {
+    warehouseId?: string;
+    catalog?: string;
+    schema?: string;
+    parameters?: DbxQueryParam[];
+    onStatementId?: (id: string) => void;
+  },
+): Promise<QueryResult> {
+  const warehouseId = (opts?.warehouseId || process.env.LOOM_DATABRICKS_SQL_WAREHOUSE_ID || '').trim();
+  if (!warehouseId) throw new WarehouseNotConfiguredError();
+  return executeStatement(
+    warehouseId,
+    sql,
+    opts?.catalog,
+    opts?.schema,
+    opts?.parameters,
+    opts?.onStatementId,
+  );
+}
+
 // ============================================================
 // Statement cancellation (SQL Statement Execution API 2.0)
 // ============================================================
@@ -987,6 +1059,24 @@ export interface ClusterSpec {
   spark_conf?: Record<string, string>;
   custom_tags?: Record<string, string>;
   driver_node_type_id?: string;
+  /** Vectorized engine. 'PHOTON' enables Photon; 'STANDARD' (or omit) for OSS Spark. */
+  runtime_engine?: 'PHOTON' | 'STANDARD';
+  /** Azure VM availability — Spot for cost-optimized workers (driver stays on-demand). */
+  azure_attributes?: {
+    availability?: 'ON_DEMAND_AZURE' | 'SPOT_WITH_FALLBACK_AZURE' | 'SPOT_AZURE';
+    first_on_demand?: number;
+    spot_bid_max_price?: number;
+  };
+  /** Driver/worker/event-log delivery target so logs persist + can be ingested. */
+  cluster_log_conf?: { dbfs?: { destination: string }; volumes?: { destination: string } };
+  /** Environment variables injected into every node (e.g. PYSPARK_PYTHON, custom secrets refs). */
+  spark_env_vars?: Record<string, string>;
+  /** Bootstrap scripts run on each node at startup (workspace/volumes/dbfs paths). */
+  init_scripts?: Array<{
+    workspace?: { destination: string };
+    volumes?: { destination: string };
+    dbfs?: { destination: string };
+  }>;
 }
 
 export async function listClusters(): Promise<Cluster[]> {
@@ -1131,6 +1221,34 @@ export async function listClusterLibraries(clusterId: string): Promise<LibrarySt
   );
   const body = await asJsonOrThrow<{ library_statuses?: LibraryStatus[] }>(res, 'listClusterLibraries');
   return body.library_statuses || [];
+}
+
+/** A single library spec accepted by /api/2.0/libraries/install + /uninstall. */
+export type LibrarySpec =
+  | { pypi: { package: string; repo?: string } }
+  | { maven: { coordinates: string; repo?: string } }
+  | { cran: { package: string } }
+  | { jar: string }
+  | { whl: string }
+  | { egg: string }
+  | { requirements: string };
+
+/** Install one or more libraries on a cluster (async — poll cluster-status for state). */
+export async function installClusterLibraries(clusterId: string, libraries: LibrarySpec[]): Promise<void> {
+  const res = await dbxFetch('/api/2.0/libraries/install', {
+    method: 'POST',
+    body: JSON.stringify({ cluster_id: clusterId, libraries }),
+  });
+  await asJsonOrThrow<unknown>(res, 'installClusterLibraries');
+}
+
+/** Queue uninstall of one library; takes effect after the next cluster restart. */
+export async function uninstallClusterLibraries(clusterId: string, libraries: LibrarySpec[]): Promise<void> {
+  const res = await dbxFetch('/api/2.0/libraries/uninstall', {
+    method: 'POST',
+    body: JSON.stringify({ cluster_id: clusterId, libraries }),
+  });
+  await asJsonOrThrow<unknown>(res, 'uninstallClusterLibraries');
 }
 
 // ============================================================
