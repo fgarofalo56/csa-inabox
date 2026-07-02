@@ -45,14 +45,13 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { AsaTransformInspector } from '@/lib/components/eventstream/visual-designer';
 import { compileToSaql, type TransformNode, type SourceNode, type SinkNode } from '@/lib/azure/asa-query-compiler';
 import { MetricChart } from '@/lib/components/monitor/metric-chart';
+import { useSharedEditorStyles } from './shared-styles';
 
 // (Ribbon defined inside StreamAnalyticsJobEditor via useMemo so onClick handlers
 // can reference inline setState / save / loadList / setTab state.)
 
-const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+const useLocalStyles = makeStyles({
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   queryArea: {
     width: '100%', minHeight: '360px',
     fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingVerticalM,
@@ -80,6 +79,12 @@ const useStyles = makeStyles({
     ':hover': { boxShadow: tokens.shadow16 },
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface AsaJob {
   name: string;

@@ -59,12 +59,13 @@ import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 import { registerBridge } from '@/lib/copilot/apply-change';
 import { runtimeFromComputeKind, starterCellFor, RUNTIME_LABEL, type ClusterRuntime } from '@/lib/components/editor/cluster-runtime';
+import { useSharedEditorStyles } from './shared-styles';
 
 // Ribbon is now built dynamically inside the component so each action can
 // hold a real onClick wired to the editor's handlers. See `buildRibbon`
 // below the component declarations.
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0, minWidth: 0, overflowY: 'auto', position: 'relative' },
   // Bottom-align so the label+control groups (Compute backend / Workspace /
   // Compute target / Environment) and the bare action buttons (Refresh / Manage
@@ -87,7 +88,6 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     resize: 'vertical',
   },
-  treePad: { padding: tokens.spacingVerticalS },
   // Notebooks-pane folder tree affordances (reuses the workspace folders engine).
   nbPaneToolbar: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   nbDragOver: { outline: `2px solid ${tokens.colorBrandStroke1}`, outlineOffset: '-2px', borderRadius: tokens.borderRadiusSmall },
@@ -100,7 +100,6 @@ const useStyles = makeStyles({
     border: `1px dashed ${tokens.colorBrandStroke1}`, backgroundColor: tokens.colorBrandBackground2Hover, color: tokens.colorBrandForeground1,
   },
   tableWrap: { overflow: 'auto', maxHeight: '240px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   // Bottom-left session status badge — overlays the editor surface like the
   // Synapse Studio session indicator (Idle / Running / Error).
   statusBadge: { position: 'absolute', bottom: tokens.spacingVerticalM, left: tokens.spacingHorizontalM, zIndex: 5 },
@@ -122,6 +121,12 @@ const useStyles = makeStyles({
     ':hover': { boxShadow: tokens.shadow16, border: `1px solid ${tokens.colorBrandStroke1}` },
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
 interface NotebookLite { id: string; displayName: string; description?: string; folderId?: string | null; updatedAt?: string; }

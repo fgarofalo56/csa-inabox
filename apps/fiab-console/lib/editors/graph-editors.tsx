@@ -45,9 +45,9 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ForceDirectedGraph, extractGraph } from '@/lib/components/graph/force-directed-graph';
 import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+const useLocalStyles = makeStyles({
   editor: {
     width: '100%', minHeight: '160px',
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase300, padding: tokens.spacingHorizontalM,
@@ -57,7 +57,6 @@ const useStyles = makeStyles({
   },
   treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   // Vector store surfaces
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   searchRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-end', flexWrap: 'wrap' },
@@ -87,6 +86,12 @@ const useStyles = makeStyles({
   scoreCell: { fontVariantNumeric: 'tabular-nums', fontFamily: tokens.fontFamilyMonospace },
   monoCell: { fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 const SAMPLE_GREMLIN = `// Find vertices labeled "person", their friends, and the company they work for.
 g.V().hasLabel('person')

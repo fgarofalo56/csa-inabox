@@ -44,8 +44,9 @@ import {
   type ObjectsResponse,
 } from '@/lib/components/synapse-sql-object-explorer';
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap', minWidth: 0 },
   connect: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', minWidth: 0 },
@@ -55,8 +56,6 @@ const useStyles = makeStyles({
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '200px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
-  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   messages: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
     overflowWrap: 'anywhere', wordBreak: 'break-word',
@@ -64,6 +63,12 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground2, maxHeight: '280px', overflow: 'auto', margin: 0,
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface QueryResponse {
   ok: boolean;

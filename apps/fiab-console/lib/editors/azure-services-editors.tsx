@@ -36,9 +36,9 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { ComputePicker } from '@/lib/components/compute-picker';
 import { PipelineEditorCore } from './pipeline-editor-core';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+const useLocalStyles = makeStyles({
   form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '720px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM },
   field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
@@ -55,7 +55,6 @@ const useStyles = makeStyles({
     borderBottom: `1px solid ${tokens.colorNeutralStroke2}`,
   },
   card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
   // Grouped config section — a subtle card so Location / Format / Table
   // reference read as distinct steps rather than one flat run of inputs.
   section: {
@@ -66,6 +65,12 @@ const useStyles = makeStyles({
   hint: { color: tokens.colorNeutralForeground3 },
   switchField: { flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'flex-end', paddingBottom: tokens.spacingVerticalXXS },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ============================================================
 // Synapse — Spark pool

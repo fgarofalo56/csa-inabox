@@ -39,17 +39,22 @@ import { OpenMirrorConfig } from './components/open-mirror-config';
 import { MirrorSourceWizard, type MirrorTableSpec } from './components/mirror-source-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, flex: 1, minHeight: 0 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
-  treePad: { padding: tokens.spacingVerticalS },
   tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge, boxShadow: tokens.shadow4 },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   sectionIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
   wsField: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: '280px', maxWidth: '100%' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
 interface MirroredLite { id: string; displayName: string; description?: string; }

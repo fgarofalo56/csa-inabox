@@ -45,9 +45,9 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { EmptyState } from '@/lib/components/empty-state';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+const useLocalStyles = makeStyles({
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '880px' },
   row: { display: 'flex', gap: tokens.spacingVerticalL, flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '220px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
@@ -56,7 +56,6 @@ const useStyles = makeStyles({
     padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM,
     background: tokens.colorNeutralBackground2,
   },
-  toolbar: { display: 'flex', gap: tokens.spacingVerticalS, alignItems: 'center', flexWrap: 'wrap' },
   mono: { fontFamily: 'Consolas, "Cascadia Code", monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   pre: {
     width: '100%', maxWidth: '100%', maxHeight: '320px', overflow: 'auto', padding: tokens.spacingVerticalS, margin: 0,
@@ -73,6 +72,12 @@ const useStyles = makeStyles({
   },
   poolField: { maxWidth: '320px' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 function SectionHeader({ icon, children }: { icon: ReactNode; children: ReactNode }) {
   const styles = useStyles();

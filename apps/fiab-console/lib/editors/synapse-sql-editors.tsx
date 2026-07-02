@@ -51,8 +51,9 @@ import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-obje
 import { sqlRowCount, loadSqlScript } from './sql-explorer-helpers';
 import type { ScriptObjectType, ScriptMode } from '@/lib/azure/sql-object-scripting';
 import { downloadBlob, resultsToCsv, resultsToJson } from './components/result-export';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
@@ -66,9 +67,13 @@ const useStyles = makeStyles({
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
-  treePad: { padding: tokens.spacingVerticalS },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface QueryResponse {
   ok: boolean;

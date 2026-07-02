@@ -40,6 +40,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { FullTextSearchPanel, VectorIndexPanel } from './components/sql-search-management';
 import { useJobsStore } from '@/lib/state/jobs-store';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useSharedEditorStyles } from './shared-styles';
 
 // ── Azure SQL real option sets (parity with the portal create/scale blades) ──
 const AZURE_REGIONS = [
@@ -91,7 +92,7 @@ function resultsToJson(columns: string[], rows: unknown[][]): string {
   return JSON.stringify(rows.map((r) => Object.fromEntries(columns.map((c, j) => [c, r[j] ?? null]))), null, 2);
 }
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
@@ -120,8 +121,6 @@ const useStyles = makeStyles({
     color: tokens.colorNeutralForeground1,
   },
   sectionHeaderIcon: { color: tokens.colorBrandForeground1, display: 'flex' },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
-  treePad: { padding: tokens.spacingVerticalS },
   formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalM },
   fullWidth: { width: '100%' },
   // SQL database schema-object browser (left pane)
@@ -179,6 +178,12 @@ const useStyles = makeStyles({
     ':hover': { backgroundColor: tokens.colorNeutralBackground1Selected },
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface QueryResponse {
   ok: boolean;
