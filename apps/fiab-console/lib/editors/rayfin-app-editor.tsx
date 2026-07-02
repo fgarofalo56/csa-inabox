@@ -43,6 +43,11 @@
  * Everything renders with an honest Fluent MessageBar when AAS is unset — never
  * an empty picker (no-vaporware.md).
  *
+ * Chrome: wraps the shared ItemEditorChrome like every registered editor, so
+ * the surface carries Share, Endorsement, sensitivity, the lineage drawer, and
+ * the Thread menu (the "Share + endorsement on every editor" invariant). The
+ * three-mode TabList and all surfaces live in the chrome's main panel.
+ *
  * Refs (preview): https://learn.microsoft.com/fabric/apps/overview ·
  *   https://github.com/microsoft/rayfin · npm @microsoft/rayfin-cli
  */
@@ -62,7 +67,10 @@ import {
   Apps20Regular, Table20Regular, Gauge20Regular, DataBarVertical20Regular,
   Form20Regular, TextT20Regular, Wand20Regular, DocumentAdd20Regular,
 } from '@fluentui/react-icons';
+import { ItemEditorChrome } from './item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
+import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
+import type { RibbonTab } from '@/lib/components/ribbon';
 import {
   DEFAULT_SPEC, DEFAULT_BINDING, COMPONENT_KINDS, WIZARD_TEMPLATES,
   gbParse, gbKey, buildBindingDax, buildComponentDax,
@@ -191,7 +199,7 @@ function fmtCell(v: unknown): string {
   return String(v);
 }
 
-export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
+export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
   const toasterId = useId('rayfin-toaster');
   const { dispatchToast } = useToastController(toasterId);
@@ -390,7 +398,33 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
     setWizardOpen(false);
   }, [wizTemplate, binding.model, wizMeasure, wizMeasures, wizGroupBy, wizEntity]);
 
-  if (loading) return <div className={s.root}><Spinner label="Loading Rayfin app…" /></div>;
+  // Shared editor-chrome ribbon (chrome invariant: every registered editor
+  // wraps ItemEditorChrome, which carries Share / Endorse / lineage / Thread).
+  // Mirrors the header actions so they're reachable from the standard ribbon
+  // like sibling editors; the in-canvas header keeps its primary Save button.
+  const ribbon: RibbonTab[] = useMemo(() => [
+    { id: 'home', label: 'Home', groups: [
+      { label: 'App', actions: [
+        { label: saving ? 'Saving…' : 'Save', onClick: () => { void save(); }, disabled: saving || loading },
+      ]},
+      { label: 'View', actions: [
+        { label: 'Backend definition', onClick: () => setTab('backend') },
+        { label: 'Model binding', onClick: () => setTab('binding') },
+        { label: 'App builder', onClick: () => setTab('app') },
+      ]},
+      { label: 'Help', actions: [
+        { label: 'Docs', onClick: () => window.open('https://learn.microsoft.com/fabric/apps/overview', '_blank', 'noopener,noreferrer') },
+        { label: 'Repo', onClick: () => window.open('https://github.com/microsoft/rayfin', '_blank', 'noopener,noreferrer') },
+      ]},
+    ]},
+  ], [saving, loading, save]);
+
+  if (loading) {
+    return (
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+        main={<div className={s.root}><Spinner label="Loading Rayfin app…" /></div>} />
+    );
+  }
 
   const activePage = appPages.find((p) => p.id === activePageId) || null;
 
@@ -403,7 +437,11 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
     : !!wizMeasure;
   const wizardReady = !!binding.model && wizInputValid && (!wizNeedsObjects || !!objects);
 
+  // Everything (mode TabList + tab surfaces + wizard dialog) renders inside the
+  // chrome's main panel — the chrome supplies Share, Endorse, sensitivity,
+  // lineage, and the Thread menu like every other registered editor.
   return (
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={
     <div className={s.root}>
       <Toaster toasterId={toasterId} />
       <div className={s.head}>
@@ -766,6 +804,7 @@ export function RayfinAppEditor({ id }: { item?: unknown; id: string }) {
         </DialogSurface>
       </Dialog>
     </div>
+    } />
   );
 }
 

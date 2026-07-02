@@ -1,17 +1,29 @@
 /**
- * GET / PUT /api/items/report/[id]/endorsement
+ * GET / PUT / PATCH /api/items/report/[id]/endorsement
  *
- * WAVE-9 report ENDORSEMENT (Promote / Certify) — Power BI parity, Azure-native.
+ * WAVE-9 report ENDORSEMENT (Promote / Certify / Master data) — Power BI
+ * parity, Azure-native.
  *
  * Power BI lets a workspace contributor PROMOTE a report (a soft, self-service
  * "this is good to use" signal) and lets a workspace reviewer/admin CERTIFY it
  * (an authoritative org seal of approval). Loom reproduces both as a single
  * persisted endorsement on the report item's Cosmos `state.endorsement`
- * ('Promoted' | 'Certified' | <absent>) — read by the governance catalog
- * (`governance-catalog-shapes.docForGovernanceItem` surfaces `state.endorsement`
- * as the catalog endorsement badge). There is NO Power BI / Fabric endorsement
- * API on this path (no-fabric-dependency.md): the signal is stored + read
- * entirely in the Azure-native Cosmos item, and the catalog renders it.
+ * ('Promoted' | 'Certified' | 'Master data' | <absent>) — read by the
+ * governance catalog (`governance-catalog-shapes.docForGovernanceItem` surfaces
+ * `state.endorsement` as the catalog endorsement badge). There is NO Power BI /
+ * Fabric endorsement API on this path (no-fabric-dependency.md): the signal is
+ * stored + read entirely in the Azure-native Cosmos item, and the catalog
+ * renders it.
+ *
+ * Verbs + wire contract: this STATIC `report` segment shadows the generic
+ * dynamic /api/items/[type]/[id]/endorsement route in the App Router, so it
+ * must serve the SAME wire contract for the same verbs. The shared editor-
+ * chrome EndorsementControl (lib/editors/endorsement-control.tsx) writes with
+ * PATCH and sends 'Promoted' | 'Certified' | 'Master data' | 'None' (clear);
+ * the report EndorsementDialog (lib/editors/report/endorsement.tsx) writes with
+ * PUT and sends 'Promoted' | 'Certified' | null. Both verbs share one handler
+ * that accepts the union of both contracts (a strict superset of the previous
+ * PUT contract — existing callers are unchanged).
  *
  * Authorization (no-vaporware.md — the Certify gate is real, not cosmetic):
  *   • Anyone who owns the report (workspace-ownership verified by
@@ -22,9 +34,9 @@
  *     transitive group assignments) — OR the caller's identity is in the
  *     LOOM_REPORT_CERTIFIERS env allow-list (csv of oid / upn / email) — OR,
  *     for the single-tenant operator who owns every workspace, the caller is an
- *     Azure RBAC admin on the DLZ RG (checkRbacAdminCapability). A PUT to
- *     'Certified' without that capability returns 403, so the editor's Certify
- *     control is never a dead button.
+ *     Azure RBAC admin on the DLZ RG (checkRbacAdminCapability). A PUT/PATCH to
+ *     'Certified' or 'Master data' without that capability returns 403, so the
+ *     editor's Certify / Master-data controls are never dead buttons.
  *
  * Persistence key (catalog reads this): state.endorsement.
  * The value is ADDITIVE + optional, so the read-only viewer and the PBIR
@@ -45,24 +57,30 @@ import { resolveEffectiveRole, checkRbacAdminCapability } from '@/lib/azure/work
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type Endorsement = 'Promoted' | 'Certified';
+/** Canonical endorsement values — identical to the generic
+ *  /api/items/[type]/[id]/endorsement route this static segment shadows. */
+type Endorsement = 'Promoted' | 'Certified' | 'Master data';
+const VALID: readonly Endorsement[] = ['Promoted', 'Certified', 'Master data'];
+/** Endorsements gated on the certifier capability (resolveCanCertify). */
+const ELEVATED: ReadonlySet<Endorsement> = new Set<Endorsement>(['Certified', 'Master data']);
 
 /** Read a persisted endorsement back as the strict union (anything else → null). */
 function normalizeEndorsement(v: unknown): Endorsement | null {
-  return v === 'Promoted' || v === 'Certified' ? v : null;
+  return typeof v === 'string' && (VALID as readonly string[]).includes(v) ? (v as Endorsement) : null;
 }
 
 /**
- * Parse the PUT body's `endorsement`. Distinguishes a valid CLEAR (`null`) from
- * an invalid/absent value so the route can 400 on garbage but accept an explicit
- * null. Returns `{ ok:false }` for anything that is not 'Promoted' | 'Certified'
- * | null.
+ * Parse the PUT/PATCH body's `endorsement`. Distinguishes a valid CLEAR (`null`
+ * or the string 'None' — the shared EndorsementControl sends 'None') from an
+ * invalid/absent value so the route can 400 on garbage but accept an explicit
+ * clear. Returns `{ ok:false }` for anything that is not a valid endorsement,
+ * null, or 'None'.
  */
 function parseEndorsementInput(
   v: unknown,
 ): { ok: true; value: Endorsement | null } | { ok: false } {
-  if (v === null) return { ok: true, value: null };
-  if (v === 'Promoted' || v === 'Certified') return { ok: true, value: v };
+  if (v === null || v === 'None' || v === 'none') return { ok: true, value: null };
+  if (typeof v === 'string' && (VALID as readonly string[]).includes(v)) return { ok: true, value: v as Endorsement };
   return { ok: false };
 }
 
@@ -140,7 +158,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   const parsed = parseEndorsementInput(body.endorsement);
   if (!parsed.ok) {
     return NextResponse.json(
-      { ok: false, error: 'endorsement must be "Promoted", "Certified", or null' },
+      { ok: false, error: `endorsement must be one of ${VALID.map((v) => `"${v}"`).join(', ')}, or null/"None" to clear` },
       { status: 400 },
     );
   }
@@ -151,12 +169,12 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ ok: false, error: 'report item not found or not owned by you' }, { status: 404 });
   }
 
-  // Certify is gated; promote / clear are open to the report owner.
-  if (value === 'Certified') {
+  // Certify / Master data are gated; promote / clear are open to the report owner.
+  if (value && ELEVATED.has(value)) {
     const canCertify = await resolveCanCertify(session, item.workspaceId);
     if (!canCertify) {
       return NextResponse.json(
-        { ok: false, error: 'Certifying a report is restricted to workspace reviewers/admins' },
+        { ok: false, error: `Setting a report's endorsement to "${value}" is restricted to workspace reviewers/admins` },
         { status: 403 },
       );
     }
@@ -174,3 +192,14 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
 
   return NextResponse.json({ ok: true, endorsement: value });
 }
+
+/**
+ * PATCH — the SAME handler as PUT (identical body contract, auth gates, and
+ * response shape). The shared cross-item EndorsementControl in the editor
+ * chrome (lib/editors/endorsement-control.tsx) writes with HTTP PATCH against
+ * the generic /api/items/[type]/[id]/endorsement contract; because this static
+ * `report` segment shadows that dynamic route, the missing PATCH export made
+ * every report endorsement write from the chrome return 405 (a dead
+ * Promote/Certify/Master-data menu on reports).
+ */
+export const PATCH = PUT;
