@@ -369,23 +369,38 @@ resource firewall 'Microsoft.Network/azureFirewalls@2024-05-01' = if (firewallEn
 // Private DNS zones for every PaaS dependency
 // =====================================================================
 
+// B10 — Gov (GCC-High / IL5) private-link DNS suffixes differ from Commercial
+// for every zone below. Applied the same boundary conditional the analytics
+// zones already use, grounded in Microsoft Learn
+// (learn.microsoft.com/azure/private-link/private-endpoint-dns#government) so a
+// PE-locked KV / ACR / AppConfig / Search / Event Grid / ACA / AML resolves on
+// Gov. GCC (moderate) runs in commercial Azure regions, so only GCC-High / IL5
+// switch to the sovereign suffixes.
 var dnsZones = [
-  'privatelink.vaultcore.azure.net'
-  'privatelink.azurecr.io'
+  'privatelink.vaultcore.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'azure.net'}'
+  'privatelink.azurecr.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'io'}'
   'privatelink.blob.${environment().suffixes.storage}'
   'privatelink.dfs.${environment().suffixes.storage}'
-  'privatelink.azconfig.io'
+  'privatelink.azconfig.${boundary == 'GCC-High' || boundary == 'IL5' ? 'azure.us' : 'io'}'
   'privatelink.cognitiveservices.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.openai.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
-  'privatelink.search.windows.net'
+  // Gov Search zone is search.azure.us (NOT search.windows.us) per Learn.
+  'privatelink.search.${boundary == 'GCC-High' || boundary == 'IL5' ? 'azure.us' : 'windows.net'}'
   'privatelink.documents.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'com'}'
   'privatelink.servicebus.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}'
-  'privatelink.eventgrid.azure.net'
+  'privatelink.eventgrid.azure.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}'
   'privatelink.azurewebsites.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'net'}'
-  'privatelink.${location}.azurecontainerapps.io'
+  // Gov ACA is NOT in Learn's private-endpoint-dns Government table; the suffix
+  // is derived from the ACA Government default domain (*.azurecontainerapps.us),
+  // which the PE must resolve. Confirm on the Gov proof deploy.
+  'privatelink.${location}.azurecontainerapps.${boundary == 'GCC-High' || boundary == 'IL5' ? 'us' : 'io'}'
+  // Index 13 — legacy AML workspace zone. Gov has no equivalent (the Gov
+  // amlworkspace PE resolves on api.ml.azure.us + notebooks.usgovcloudapi.net,
+  // indices 14/15), so this stays on the commercial name in all clouds; it is a
+  // harmless unused zone in Gov (no matching FQDN → no records).
   'privatelink.azureml.ms'
-  'privatelink.api.azureml.ms'
-  'privatelink.notebooks.azure.net'
+  'privatelink.api.${boundary == 'GCC-High' || boundary == 'IL5' ? 'ml.azure.us' : 'azureml.ms'}'
+  'privatelink.notebooks.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'azure.net'}'
   'privatelink.${location}.kusto.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'windows.net'}'
   // v2.0 — Synapse SQL + Dev endpoints (Dedicated + Serverless + Studio)
   'privatelink.sql.azuresynapse.${boundary == 'GCC-High' || boundary == 'IL5' ? 'usgovcloudapi.net' : 'net'}'

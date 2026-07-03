@@ -192,14 +192,21 @@ jobs:
           # calls the script makes (loom-msal-client-secret + session-secret) are
           # NOT reachable from this public ubuntu-latest runner and would fail
           # silently, leaving login broken AFTER a "successful" deploy. Mirror the
-          # Purview/Synapse steps: temporarily flip the KV to public for the write
-          # window and RESTORE it to Disabled/Deny via a trap so it runs even on
-          # failure. NOTE: use the CORRECT flag --public-network-access (NOT
-          # --public-network-enabled).
+          # Synapse step: keep default-action Deny and punch a SINGLE-IP firewall
+          # allow scoped to THIS runner's egress IP for the write window (do NOT
+          # open the vault to the whole internet with --default-action Allow), and
+          # RESTORE it to Disabled/Deny via a trap so it runs even on failure. A
+          # workflow-level "Restore Loom Key Vault private (safety net)" step
+          # (if: always()) re-asserts the locked-down posture at job end. NOTE: use
+          # the CORRECT flag --public-network-access (NOT --public-network-enabled).
           KV_ORIG_PNA=""
+          RUNNER_IP=""
           restore_kv_pna() {
             if [ -n "${KV_NAME:-}" ] && [ "${KV_ORIG_PNA:-Enabled}" != "Enabled" ]; then
               echo "-> restoring Key Vault $KV_NAME publicNetworkAccess=Disabled"
+              if [ -n "${RUNNER_IP:-}" ]; then
+                az keyvault network-rule remove -n "$KV_NAME" --ip-address "$RUNNER_IP" -o none 2>/dev/null || true
+              fi
               az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none || true
             fi
           }
@@ -207,9 +214,19 @@ jobs:
           KV_ORIG_PNA="$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)"
           echo "Key Vault $KV_NAME publicNetworkAccess=$KV_ORIG_PNA"
           if [ "$KV_ORIG_PNA" != "Enabled" ]; then
-            echo "-> temporarily enabling Key Vault public access for the secret-write window"
-            az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Allow -o none || \
+            echo "-> temporarily enabling Key Vault public access (scoped to runner IP) for the secret-write window"
+            RUNNER_IP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org 2>/dev/null || true)
+            echo "Runner egress IP: ${RUNNER_IP:-<unresolved>}"
+            # Keep the firewall default at Deny; allow only this runner's IP.
+            az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none || \
               echo "::warning::Could not enable Key Vault public access — secret writes may be unreachable from the runner."
+            if [ -n "${RUNNER_IP:-}" ]; then
+              az keyvault network-rule add -n "$KV_NAME" --ip-address "$RUNNER_IP" -o none || \
+                echo "::warning::Could not add runner-IP firewall rule to Key Vault — secret writes may be unreachable."
+            else
+              echo "::warning::Runner egress IP unresolved — falling back to default-action Allow for the write window."
+              az keyvault update -n "$KV_NAME" --default-action Allow -o none || true
+            fi
             sleep 20
           fi
           # Resolve the Console Container App's runtime FQDN to add to redirect URIs.
@@ -1560,15 +1577,26 @@ jobs:
           KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null)
           [ -z "$KV_NAME" ] && KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].name" -o tsv 2>/dev/null)
           if [ -n "$HOST_KEY" ] && [ -n "$KV_NAME" ]; then
-            # KV is private — flip public for the write window, restore on exit.
+            # KV is private — scope a single-IP firewall allow to this runner for
+            # the write window (default-action stays Deny; do NOT open to the whole
+            # internet), then restore on exit.
             KV_PNA=$(az keyvault show -n "$KV_NAME" --query "properties.publicNetworkAccess" -o tsv 2>/dev/null || echo Enabled)
+            KV_RUNNER_IP=""
             if [ "$KV_PNA" != "Enabled" ]; then
-              az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Allow -o none 2>/dev/null; sleep 15
+              KV_RUNNER_IP=$(curl -sS https://ifconfig.me 2>/dev/null || curl -sS https://api.ipify.org 2>/dev/null || true)
+              az keyvault update -n "$KV_NAME" --public-network-access Enabled --default-action Deny -o none 2>/dev/null
+              if [ -n "${KV_RUNNER_IP:-}" ]; then
+                az keyvault network-rule add -n "$KV_NAME" --ip-address "$KV_RUNNER_IP" -o none 2>/dev/null || true
+              else
+                az keyvault update -n "$KV_NAME" --default-action Allow -o none 2>/dev/null || true
+              fi
+              sleep 15
             fi
             az keyvault secret set --vault-name "$KV_NAME" --name loom-posture-function-key --value "$HOST_KEY" -o none 2>/dev/null \
               && echo "  Stored host key in KV $KV_NAME/loom-posture-function-key." \
               || echo "::warning::Could not write loom-posture-function-key to $KV_NAME — the URL still works without the key if the Function allows anonymous; else set the secret manually."
             if [ "$KV_PNA" != "Enabled" ]; then
+              [ -n "${KV_RUNNER_IP:-}" ] && az keyvault network-rule remove -n "$KV_NAME" --ip-address "$KV_RUNNER_IP" -o none 2>/dev/null || true
               az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none 2>/dev/null
             fi
           fi
@@ -1713,6 +1741,31 @@ jobs:
           ADMIN_RG="$ADMIN_RG" CONSOLE_APP="${CONSOLE_UAMI_NAME:-loom-console}" \
             bash scripts/csa-loom/verify-console-runtime.sh \
             || echo "::warning::console-runtime verification reported drift — see log (probes/resources/telemetry)."
+
+      - name: Restore Loom Key Vault private (safety net)
+        # Runs always(). Several earlier steps flip the Loom Key Vault to
+        # publicNetworkAccess=Enabled (scoped to the runner IP) for a secret-write
+        # window and restore it inline via a trap. This job-level safety net
+        # mirrors the Synapse/Databricks "Restore ... disabled" steps: it
+        # re-asserts the locked-down posture (Disabled + default-action Deny) and
+        # strips any lingering runner-IP allow rules even if a step was cancelled
+        # before its own trap ran — so the vault is never left publicly reachable.
+        if: always()
+        run: |
+          set -uo pipefail
+          KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[?starts_with(name,'kv-loom')].name | [0]" -o tsv 2>/dev/null || true)
+          [ -z "${KV_NAME:-}" ] && KV_NAME=$(az keyvault list -g "$ADMIN_RG" --subscription "$ADMIN_SUB" --query "[0].name" -o tsv 2>/dev/null || true)
+          if [ -z "${KV_NAME:-}" ]; then
+            echo "No Loom Key Vault found in $ADMIN_RG — nothing to lock down."
+            exit 0
+          fi
+          # Drop any residual IP firewall allow rules, then re-assert private.
+          for ip in $(az keyvault network-rule list -n "$KV_NAME" --query "ipRules[].value" -o tsv 2>/dev/null || true); do
+            az keyvault network-rule remove -n "$KV_NAME" --ip-address "$ip" -o none 2>/dev/null || true
+          done
+          az keyvault update -n "$KV_NAME" --public-network-access Disabled --default-action Deny -o none 2>/dev/null \
+            && echo "Loom Key Vault $KV_NAME re-asserted private (publicNetworkAccess=Disabled, default-action=Deny)." \
+            || echo "::warning::Could not re-assert private posture on $KV_NAME — verify manually."
 
       - name: Summary
         if: always()
