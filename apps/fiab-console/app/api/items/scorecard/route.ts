@@ -1,6 +1,11 @@
 /**
- * GET  /api/items/scorecard?workspaceId=...      — list Fabric scorecards
- * POST /api/items/scorecard?workspaceId=...      — (reserved; not yet)
+ * GET  /api/items/scorecard[?workspaceId=...]   — list scorecards
+ *
+ * Azure-native DEFAULT (no-fabric-dependency.md, rel-T03/B11): with NO
+ * workspaceId, the route lists the tenant's Cosmos-backed scorecards
+ * (`loom:` ids — bundle-installed or created in Loom) with zero Power BI
+ * calls. Passing a Power BI groupId additionally lists the live Power BI
+ * scorecards in that group (the opt-in Fabric-family leg).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -15,13 +20,15 @@ export async function GET(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
-  // Bundle-installed scorecards carry their OKRs in state.content but have no
-  // live Fabric scorecard yet. Surface them (`loom:` id) so the editor renders
-  // the OKR goals instead of opening empty; the detail route serves the goals
-  // from state.content.
+  // Cosmos-backed scorecards carry their goals in state.content (bundle
+  // installs) and their check-ins / rollup config in the scorecard containers.
+  // They are the DEFAULT listing — no Power BI workspace required; the detail
+  // route serves the goals from state.content + Cosmos.
   const loomEntries = (await listContentBackedItems('scorecard', 'scorecard', session.claims.oid))
     .map(scorecardListEntry);
+  if (!workspaceId) {
+    return NextResponse.json({ ok: true, scorecards: loomEntries });
+  }
   try {
     const scorecards = await listScorecards(workspaceId);
     return NextResponse.json({ ok: true, workspaceId, scorecards: [...loomEntries, ...scorecards] });

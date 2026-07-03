@@ -1,17 +1,18 @@
 'use client';
 
 /**
- * ScorecardEditor — extracted from phase3-editors.tsx (byte-for-byte).
+ * ScorecardEditor — goals + rollups + check-ins + connected metrics.
  *
- * Power BI / Fabric Scorecard editor: goals + rollups + connected metrics,
- * wired against live Power BI REST via the Console UAMI. Azure-native by
- * default — goal values pull live via Power BI executeQueries (no Fabric
- * capacity required) and rollups/status color entirely in Loom.
+ * Azure-native DEFAULT (no-fabric-dependency.md, rel-T03/B11): scorecards are
+ * a Loom-native goal store — goals live in Cosmos (bundle `state.content` +
+ * the scorecard-goals / scorecard-checkins containers) and the rollup/status
+ * engine runs in the BFF. No Power BI workspace is required and the default
+ * render makes ZERO Power BI network calls.
  *
- * The Power BI WorkspacePicker trio (PbiWorkspaceLite / usePowerBiWorkspaces /
- * WorkspacePicker) is duplicated locally here — matching the existing
- * per-editor `useWorkspaces` pattern across the editors folder — so this
- * module is self-contained and carries no import cycle back to the barrel.
+ * Power BI scorecard sync is the OPT-IN Fabric-family leg, enabled via
+ * NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi: the workspace picker appears, live
+ * Power BI scorecards list alongside the Loom ones, check-ins also push to
+ * the live Fabric goal, and "Open in Power BI" links out.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -35,99 +36,8 @@ import { ItemEditorChrome } from '../item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
 import { useStyles } from './styles';
-
-interface PbiWorkspaceLite { id: string; name: string; description?: string; }
-
-/**
- * usePowerBiWorkspaces — list real Power BI groups (NOT Loom workspaces).
- *
- * Power BI's list/detail/embed-token REST APIs key on a `workspaceId` that
- * is a Power BI groupId. Passing a Loom Cosmos UUID to those endpoints
- * returns 404 PowerBIEntityNotFound. This hook is the dedicated source for
- * the Report / Paginated Report / Dashboard / Semantic Model / Scorecard /
- * Dataflow editors.
- */
-function usePowerBiWorkspaces() {
-  const [workspaces, setWorkspaces] = useState<PbiWorkspaceLite[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [hint, setHint] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true); setError(null); setHint(null);
-    try {
-      const r = await fetch('/api/powerbi/workspaces');
-      const j = await r.json();
-      if (!j.ok) {
-        setError(j.error || 'failed to list Power BI workspaces');
-        setHint(j.hint || null);
-        setWorkspaces([]);
-      } else {
-        // Power BI returns name + capacity SKU; surface the capacity in a
-        // separate description field so the picker can show it as a hint
-        // without polluting the displayed name.
-        setWorkspaces(
-          (j.workspaces || []).map((w: any) => ({
-            id: w.id,
-            name: w.name || w.displayName || w.id,
-            description: w.capacityType ? `${w.capacityType}${w.isOnDedicatedCapacity ? ' · dedicated' : ''}` : undefined,
-          })),
-        );
-      }
-    } catch (e: any) {
-      setError(e?.message || String(e));
-      setWorkspaces([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  return { workspaces, error, hint, loading, reload: load };
-}
-
-function WorkspacePicker({
-  value, onChange, error, hint, loading, workspaces,
-}: {
-  value: string; onChange: (id: string) => void;
-  error: string | null; hint: string | null; loading: boolean;
-  workspaces: PbiWorkspaceLite[] | null;
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 280 }}>
-      <Caption1>Workspace</Caption1>
-      <Select value={value} onChange={(_: unknown, d: any) => onChange(d.value)} disabled={loading || (workspaces?.length ?? 0) === 0}>
-        {!value && <option value="">{loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
-        {(workspaces || []).map((w) => (
-          <option key={w.id} value={w.id}>{w.name}</option>
-        ))}
-      </Select>
-      {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>
-            <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
-            {error}{hint ? <><br /><Caption1>{hint}</Caption1></> : null}
-          </MessageBarBody>
-        </MessageBar>
-      )}
-      {!loading && !error && (workspaces?.length ?? 0) === 0 && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>No Power BI workspaces</MessageBarTitle>
-            The Console service principal can&apos;t see any Power BI workspaces. Create one (or get added to one) in Power BI, then Refresh.
-            <br />
-            <Button appearance="primary" size="small" style={{ marginTop: tokens.spacingVerticalS}}
-              onClick={() => { try { window.open('https://app.powerbi.com/groups/me/list', '_blank', 'noreferrer'); } catch { /* popup blocked */ } }}>
-              Open Power BI
-            </Button>
-          </MessageBarBody>
-        </MessageBar>
-      )}
-    </div>
-  );
-}
 
 interface ScorecardLite { id: string; displayName: string; description?: string; }
 type ScorecardGoalStatusUi = 'notStarted' | 'onTrack' | 'atRisk' | 'behindGoal' | 'aheadOfGoal' | 'completed';
@@ -298,9 +208,12 @@ function ScRollupEditor({ goal, childCount, onChange }: {
 
 export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
-  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
-  const ws = usePowerBiWorkspaces();
+  // Azure-native DEFAULT (rel-T03/B11): the Loom Cosmos goal store needs no
+  // Power BI workspace. The picker + live Power BI scorecard sync are the
+  // opt-in Fabric-family leg (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi). When the
+  // opt-in is off the hook is disabled — zero Power BI network calls.
+  const pbiOptIn = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  const ws = usePowerBiWorkspaces(pbiOptIn);
   const [workspaceId, setWorkspaceId] = useState('');
   const [scorecards, setScorecards] = useState<ScorecardLite[] | null>(null);
   const [scorecardId, setScorecardId] = useState('');
@@ -348,10 +261,14 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
   const [historyRows, setHistoryRows] = useState<CheckInRow[]>([]);
   const [historyBusy, setHistoryBusy] = useState(false);
 
+  // Optional workspace query-string — empty on the Azure-native default path
+  // (the BFF serves Cosmos-backed scorecards with no workspaceId).
+  const wsQs = useCallback((wsId: string) => (wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''), []);
+
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
     try {
-      const r = await fetch(`/api/items/scorecard?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await fetch(`/api/items/scorecard${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
       const j = await r.json();
       if (!j.ok) { setScorecards([]); setErr(j.error); return; }
       setScorecards(j.scorecards || []);
@@ -361,27 +278,31 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
 
   const loadGoals = useCallback(async (wsId: string, scId: string) => {
     try {
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scId)}${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
       const j = await r.json();
       if (j.ok) { setGoals(j.goals || []); setDraft(j.goals || []); } else setErr(j.error);
     } catch (e: any) { setErr(e?.message || String(e)); }
   }, []);
 
-  // Auto-pick the first Power BI workspace so the list loads and the first
-  // scorecard auto-selects — Open in Power BI / Refresh enable on load.
+  // Power BI opt-in: auto-pick the first Power BI workspace so the live list
+  // loads. On the Azure-native default the Loom (Cosmos) scorecards list
+  // immediately — no workspace needed.
   useEffect(() => {
-    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
-  }, [workspaceId, ws.workspaces]);
-  useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
-  useEffect(() => { if (workspaceId && scorecardId) loadGoals(workspaceId, scorecardId); }, [workspaceId, scorecardId, loadGoals]);
+    if (pbiOptIn && !workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [pbiOptIn, workspaceId, ws.workspaces]);
+  useEffect(() => {
+    if (!pbiOptIn) { loadList(''); return; }
+    if (workspaceId) loadList(workspaceId);
+  }, [pbiOptIn, workspaceId, loadList]);
+  useEffect(() => { if (scorecardId) loadGoals(workspaceId, scorecardId); }, [workspaceId, scorecardId, loadGoals]);
 
   const submitValue = useCallback(async () => {
-    if (!entryOpen || !workspaceId || !scorecardId) return;
+    if (!entryOpen || !scorecardId) return;
     const value = Number(entryValue);
     if (!Number.isFinite(value)) { setEntryErr('numeric value required'); return; }
     setEntryBusy(true); setEntryErr(null);
     try {
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}${wsQs(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -398,7 +319,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
       setEntryOpen(null); setEntryValue(''); setEntryTarget(''); setEntryNote(''); setEntryStatus(''); setEntryDate('');
       loadGoals(workspaceId, scorecardId);
     } catch (e: any) { setEntryErr(e?.message || String(e)); } finally { setEntryBusy(false); }
-  }, [entryOpen, entryValue, entryTarget, entryNote, entryStatus, entryDate, workspaceId, scorecardId, loadGoals]);
+  }, [entryOpen, entryValue, entryTarget, entryNote, entryStatus, entryDate, workspaceId, scorecardId, loadGoals, wsQs]);
 
   // Open the connected-metric binder for a goal and load candidate datasets.
   const openBinder = useCallback(async (goalId: string) => {
@@ -467,20 +388,24 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) { setErr(e?.message || String(e)); } finally { setMetricBusy(null); }
   }, [workspaceId, scorecardId]);
 
-  // Open + load the check-in history flyout for a goal.
+  // Open + load the check-in history flyout for a goal (Cosmos-backed — no
+  // Power BI workspace needed).
   const openHistory = useCallback(async (goalId: string) => {
-    if (!workspaceId || !scorecardId) return;
+    if (!scorecardId) return;
     setHistoryOpen({ goalId }); setHistoryRows([]); setHistoryBusy(true);
     try {
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}&history=${encodeURIComponent(goalId)}`);
+      const qs = new URLSearchParams();
+      if (workspaceId) qs.set('workspaceId', workspaceId);
+      qs.set('history', goalId);
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?${qs.toString()}`);
       const j = await r.json();
       if (j.ok) setHistoryRows(j.checkIns || []); else setErr(j.error);
     } catch (e: any) { setErr(e?.message || String(e)); } finally { setHistoryBusy(false); }
   }, [workspaceId, scorecardId]);
 
   const refreshScorecard = useCallback(() => {
-    if (workspaceId) loadList(workspaceId);
-    if (workspaceId && scorecardId) loadGoals(workspaceId, scorecardId);
+    loadList(workspaceId);
+    if (scorecardId) loadGoals(workspaceId, scorecardId);
   }, [workspaceId, scorecardId, loadList, loadGoals]);
   const openScorecardInPbi = useCallback(() => {
     if (workspaceId && scorecardId && pbiPortal) {
@@ -508,9 +433,10 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     return draft.filter((g) => g.parentId === goalId).length;
   }, [draft]);
 
-  // Persist the rollup + status-rule config, then reload to show computed status.
+  // Persist the rollup + status-rule config, then reload to show computed
+  // status (Cosmos-backed — works on the Azure-native default path).
   const saveConfig = useCallback(async () => {
-    if (!workspaceId || !scorecardId) return;
+    if (!scorecardId) return;
     setConfigBusy(true); setConfigErr(null); setConfigNote(null);
     try {
       const payload = draft.map((g) => ({
@@ -520,7 +446,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
         statusRules: g.statusRules,
         otherwiseStatus: g.otherwiseStatus,
       }));
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/config?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/config${wsQs(workspaceId)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ goals: payload }),
@@ -532,34 +458,36 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) {
       setConfigErr(e?.message || String(e));
     } finally { setConfigBusy(false); }
-  }, [draft, workspaceId, scorecardId, loadGoals]);
+  }, [draft, workspaceId, scorecardId, loadGoals, wsQs]);
 
   const scRibbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
-      { label: 'Open', actions: [
+      // "Open in Power BI" belongs to the OPT-IN Fabric-family leg only —
+      // the Azure-native default never leads with a Power BI affordance.
+      ...(pbiOptIn ? [{ label: 'Open', actions: [
         { label: 'Open in Power BI', onClick: scorecardId && pbiPortal ? openScorecardInPbi : undefined, disabled: !scorecardId || !pbiPortal, title: !pbiPortal ? 'Power BI is not reachable in this cloud' : (!scorecardId ? 'select a scorecard first' : 'opens Power BI Web — Fabric scorecard authoring lives there') },
-      ]},
+      ]}] : []),
       { label: 'Goal', actions: [
         { label: 'Check in', icon: <Add20Regular />, onClick: selectedGoalId ? () => openCheckIn(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'record a goal value + status + note' },
-        { label: 'Bind metric', icon: <DatabaseLink20Regular />, onClick: selectedGoalId ? () => openBinder(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'connect a DAX measure as this goal’s live value source' },
+        { label: 'Bind metric', icon: <DatabaseLink20Regular />, onClick: selectedGoalId && workspaceId ? () => openBinder(selectedGoalId) : undefined, disabled: !selectedGoalId || !workspaceId, title: !workspaceId ? 'connected metrics pull live DAX values from a Power BI / AAS semantic model — enable the Power BI backend (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi) and select a workspace' : (!selectedGoalId ? 'select a goal first' : 'connect a DAX measure as this goal’s live value source') },
         { label: 'History', icon: <List20Regular />, onClick: selectedGoalId ? () => openHistory(selectedGoalId) : undefined, disabled: !selectedGoalId, title: !selectedGoalId ? 'select a goal first' : 'view this goal’s check-in history' },
       ]},
       { label: 'Metadata', actions: [
-        { label: 'Refresh', onClick: workspaceId ? refreshScorecard : undefined, disabled: !workspaceId, title: !workspaceId ? 'select a workspace first' : 'reload list + selected scorecard goals' },
+        { label: 'Refresh', onClick: refreshScorecard, title: 'reload list + selected scorecard goals' },
       ]},
       { label: 'Rollup', actions: [
         { label: configOpen ? 'Hide config' : 'Configure rollups', onClick: scorecardId ? () => setConfigOpen((v) => !v) : undefined, disabled: !scorecardId, title: !scorecardId ? 'select a scorecard first' : 'edit rollup aggregation + status rules' },
       ]},
     ]},
-  ], [scorecardId, workspaceId, selectedGoalId, pbiPortal, openScorecardInPbi, refreshScorecard, openCheckIn, openBinder, openHistory, configOpen]);
+  ], [pbiOptIn, scorecardId, workspaceId, selectedGoalId, pbiPortal, openScorecardInPbi, refreshScorecard, openCheckIn, openBinder, openHistory, configOpen]);
 
   return (
     <ItemEditorChrome item={item} id={id} ribbon={scRibbon}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Scorecards</Subtitle2>
-          {!workspaceId && <Caption1>Select a workspace.</Caption1>}
-          {scorecards && scorecards.length === 0 && <Caption1>No scorecards in this workspace.</Caption1>}
+          {pbiOptIn && !workspaceId && <Caption1>Select a Power BI workspace to include live scorecards.</Caption1>}
+          {scorecards && scorecards.length === 0 && <Caption1>No scorecards yet — create one from New item or install a scorecard app.</Caption1>}
           <Tree aria-label="Scorecards">
             {(scorecards || []).map((sc) => (
               <TreeItem key={sc.id} itemType="leaf" value={sc.id} onClick={() => setScorecardId(sc.id)}>
@@ -573,31 +501,36 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
         <div className={s.pad}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Scorecard</Badge>
-            <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-            <Tooltip relationship="label" content="Reload the list of scorecards in the selected Power BI workspace">
-              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => workspaceId && loadList(workspaceId)} disabled={!workspaceId}>Refresh</Button>
+            {pbiOptIn && <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />}
+            <Tooltip relationship="label" content="Reload the scorecard list">
+              <Button appearance="outline" icon={<ArrowSync20Regular />} onClick={() => loadList(workspaceId)}>Refresh</Button>
             </Tooltip>
-            {scorecardId && pbiPortal && <Button appearance="primary" onClick={openScorecardInPbi} style={{ marginLeft: 'auto' }}>Open in Power BI</Button>}
+            {pbiOptIn && scorecardId && pbiPortal && <Button appearance="primary" onClick={openScorecardInPbi} style={{ marginLeft: 'auto' }}>Open in Power BI</Button>}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           <MessageBar intent="info">
             <MessageBarBody>
-              <MessageBarTitle>Scorecard goals + rollups + connected metrics</MessageBarTitle>
-              Track goals with <strong>current / target / status / owner / due</strong>, bind a goal to a live
-              <strong> DAX measure</strong> in a Power BI or Azure Analysis Services model (the goal value is pulled
-              live via <em>executeQueries</em> — no Fabric capacity required), and record <strong>check-ins</strong>
-              (value + status + note) with full history. Goals roll up from their children and color by status
-              entirely in Loom (Azure-native — no Fabric dependency). Use <strong>Configure rollups</strong> to
-              set each goal's rollup aggregation (Sum / Average / Min&nbsp;= worst-child / Max) and ordered status
-              rules (threshold → color). <strong>Open in Power BI</strong> opens the Fabric scorecard canvas
-              when one is bound.
+              <MessageBarTitle>Scorecard goals + rollups + check-ins — Loom-native</MessageBarTitle>
+              Goals live in Loom&apos;s own goal store: track <strong>current / target / status / owner / due</strong>,
+              record <strong>check-ins</strong> (value + status + note) with full history, and let parent goals
+              roll up from their children and color by status — all Azure-native, no Fabric or Power BI required.
+              Use <strong>Configure rollups</strong> to set each goal&apos;s rollup aggregation (Sum / Average /
+              Min&nbsp;= worst-child / Max) and ordered status rules (threshold → color).
+              {pbiOptIn ? (
+                <> The Power BI backend is enabled: live Power BI scorecards list alongside Loom ones, a goal can
+                bind to a live <strong>DAX measure</strong> (pulled via <em>executeQueries</em>), and
+                <strong> Open in Power BI</strong> opens the Fabric scorecard canvas.</>
+              ) : (
+                <> Optional: set <code>NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi</code> to also sync with live Power BI
+                scorecards and bind goals to DAX measures.</>
+              )}
             </MessageBarBody>
           </MessageBar>
           {scorecardId && (
             <>
               <Subtitle2>Goals ({goals.length})</Subtitle2>
               {goals.length === 0 ? (
-                <Caption1>No goals on this scorecard yet. Install a scorecard app bundle or author goals in Power BI, then refresh.</Caption1>
+                <Caption1>No goals on this scorecard yet. Install a scorecard app bundle to seed goals{pbiOptIn ? ', or author them in Power BI,' : ''} then refresh.</Caption1>
               ) : (
                 <div className={s.tableWrap}>
                   <Table aria-label="Goals" size="small">
@@ -662,8 +595,8 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
                                   <Tooltip relationship="label" content="Record a goal value, target, status, and note — updates history">
                                     <Button size="small" appearance="subtle" icon={<Add20Regular />} onClick={(e) => { e.stopPropagation(); openCheckIn(g.id!); }}>Check in</Button>
                                   </Tooltip>
-                                  <Tooltip relationship="label" content="Connect this goal's value to a live DAX measure from a Power BI/AAS semantic model">
-                                    <Button size="small" appearance="subtle" icon={<DatabaseLink20Regular />} onClick={(e) => { e.stopPropagation(); openBinder(g.id!); }}>Bind</Button>
+                                  <Tooltip relationship="label" content={workspaceId ? "Connect this goal's value to a live DAX measure from a Power BI/AAS semantic model" : 'connected metrics need the Power BI backend opt-in (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi) + a workspace'}>
+                                    <Button size="small" appearance="subtle" icon={<DatabaseLink20Regular />} disabled={!workspaceId} onClick={(e) => { e.stopPropagation(); openBinder(g.id!); }}>Bind</Button>
                                   </Tooltip>
                                   <Tooltip relationship="label" content="View all past check-ins for this goal">
                                     <Button size="small" appearance="subtle" icon={<List20Regular />} onClick={(e) => { e.stopPropagation(); openHistory(g.id!); }}>History</Button>
