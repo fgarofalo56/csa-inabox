@@ -202,9 +202,8 @@ export function IqMcpPanel() {
                 To let <strong>external</strong> agents call this endpoint with a Bearer token, set{' '}
                 <code>LOOM_IQ_MCP_ENABLED=true</code> on the Console app — deploy it by setting bicep param{' '}
                 <code>loomIqMcpEnabled = true</code> in{' '}
-                <code>platform/fiab/bicep/modules/admin-plane/main.bicep</code> (which also wires the shared{' '}
-                <code>LOOM_INTERNAL_TOKEN</code> as the default Bearer secret, or set a dedicated{' '}
-                <code>LOOM_IQ_MCP_TOKEN</code>).
+                <code>platform/fiab/bicep/modules/admin-plane/main.bicep</code> (which also wires a dedicated{' '}
+                <code>LOOM_IQ_MCP_TOKEN</code> Bearer secret, isolated from the internal MAF/CI tokens).
               </MessageBarBody>
             </MessageBar>
           )}

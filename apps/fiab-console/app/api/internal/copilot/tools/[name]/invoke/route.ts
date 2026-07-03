@@ -23,6 +23,7 @@ import {
 } from '@/lib/azure/copilot-orchestrator';
 import {
   isValidInternalToken,
+  validateInternalOid,
   INTERNAL_TOKEN_HEADER,
   INTERNAL_USER_OID_HEADER,
 } from '@/lib/auth/internal-token';
@@ -37,10 +38,15 @@ export async function POST(req: NextRequest, ctx: { params: { name: string } }) 
     return NextResponse.json({ ok: false, error: 'forbidden' }, { status: 403 });
   }
 
-  const userOid = (req.headers.get(INTERNAL_USER_OID_HEADER) || '').trim();
+  // Even past the trust-token gate, constrain the acting identity: the oid must
+  // be a well-formed Entra object-id (and, when LOOM_INTERNAL_ALLOWED_OIDS is
+  // configured, a known automation principal). It is the OBO / ownership
+  // identity for every tool this dispatches, so a malformed value is rejected
+  // rather than trusted as a partition key (rel-T10/B3).
+  const userOid = validateInternalOid(req.headers.get(INTERNAL_USER_OID_HEADER));
   if (!userOid) {
     return NextResponse.json(
-      { ok: false, error: `${INTERNAL_USER_OID_HEADER} header required` },
+      { ok: false, error: `${INTERNAL_USER_OID_HEADER} header required (a valid Entra object-id)` },
       { status: 400 },
     );
   }
