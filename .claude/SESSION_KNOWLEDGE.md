@@ -21,7 +21,23 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-07-03 (public-release Wave 0 LANDED + live-verified)
+## Current Session — 2026-07-03 (public-release Wave 1 + 1b LANDED + live-verified)
+
+**Focus:** Close Wave-1 (security + access-control) + Wave-1b (testing/CI) of `PRPs/active/public-release/PRP.md`.
+
+**Merged (17 PRs), rolled to live centralus (revision loom-console--0000192, image 6bef2e21):**
+- **Wave 1:** #1597 OAuth state/PKCE-S256/nonce (T12) · #1598 per-service internal tokens + FD WAF block on `/api/internal/*` (T10) · #1599 SSRF egress guard + fail-closed admin tier (T13/T14) · #1600 default-on two-tier rate limiting + authenticated feedback (T15/T16) · #1601 multi-user ACL model / **B4** (T11) · #1602 route-guard sweep — 54 cross-tenant holes (T17/T20) · #1604 preview + notebook ACL gates (T18/T19) · #1620 detail+items routes ACL-resolve (T11 live-caught).
+- **Wave 1b:** #1603+#1606 vitest 0-fail/5526 + CI vitest/lint gates (T21/24/25/26) · #1618 prod roll gated on vitest + in-VNet UAT (T22/27/29) · #1619 coverage floor + 10-journey UAT slice (T28/T30). #1605 guard allowlist fix. Release 0.51.0 (#1596). Branch protection: `guardrails` + `vitest (node 20)` REQUIRED, ≥1 review (T23).
+
+**Live receipts PASS:** T11 two-user — Member B opens shared workspace+items (200), foreign-tid C denied (404); T15 anon bug→401, auto-error burst→429. T12 code_challenge(S256)+nonce+state confirmed on the wire at the real authorize request (full callback round-trip needs a browser — operator can finish; kill switch `LOOM_AUTH_CSRF_ENABLED=false`).
+
+**STILL OWED (operator):** admin-plane bicep REDEPLOY activates the T10 WAF block + per-service tokens + seed-derived secrets (= B3/B3b deploy-verify; rotates fallback session secret → forced re-auth). `backfill-workspace-tid.mjs` (dry-run→apply). `purge-test-workspaces.sh --apply`.
+
+**KEY LESSONS:** (1) an ACL model must reach EVERY point-read of the resource, not just the shared helper — grep for `c.item(id, oid)` (caught #1620 via live receipt). (2) CI jsdom Fluent-Dialog/Tabster flake class → `retry: process.env.CI ? 1 : 0` + await first portal query. (3) `gh pr merge` after `gh pr checks --watch` does NOT gate on result — check `fail=0` explicitly.
+
+---
+
+## Session — 2026-07-03 (public-release Wave 0 LANDED + live-verified)
 
 **Focus:** Close every Wave-0 release blocker from `PRPs/active/public-release/PRP.md`.
 

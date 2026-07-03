@@ -1347,3 +1347,10 @@ Bicep modules (flagged as "most critical infrastructure gap").
 - Live roll: centralus loom-console rev 0000190 (image 388aacc6); deployed loom-udf-runtime (internal ingress) + LOOM_UDF_FUNCTION_BASE.
 - Live E2E receipts PASS: scorecard Cosmos default (zero PBI), UDF authored-source run.
 - Lessons: admin-plane bicep at 256-param ceiling; CI next-build heap 6144; ACA internal env → sibling apps need .internal. FQDN; invoke self-fetch via public origin fails in-container.
+
+## 2026-07-03 — Public-release Wave 1 + 1b landed + live-verified
+
+- Merged 17 PRs (#1596-#1620): all Wave-1 security (T10-T20) + Wave-1b testing/CI (T21-T30). B4 multi-user ACL live.
+- Rolled centralus loom-console rev 0000192 (image 6bef2e21); live receipts PASS (two-user ACL, feedback throttle, T12 params on wire).
+- Branch protection: guardrails + vitest(node 20) now required checks + 1 review.
+- Owed: admin-plane bicep redeploy (B3 verify + T10 WAF activation), tid backfill, tenant purge --apply.
