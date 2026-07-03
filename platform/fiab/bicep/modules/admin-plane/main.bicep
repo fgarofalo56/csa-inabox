@@ -47,14 +47,12 @@ param seedSampleApi bool = true
 @description('Catalog primary')
 param catalogPrimary string
 
-@description('Agent orchestrator — part of the module param contract (set per boundary in the .bicepparam files: foundry-agent-service vs maf). Retained as a pass-through after the legacy in-array orchestrator stub was removed; the MAF tier is now driven by copilotMafEnabled and the Setup Orchestrator by its dedicated module, so this value is currently informational at this layer.')
-#disable-next-line no-unused-params
-param agentOrchestrator string
-
-// capacitySku (reserved for v3.x) was removed from this module: it was an
-// unused pass-through here (the live consumers are the landing-zone + capacity
-// modules, which still receive it from the parent main.bicep). Removing it from
-// admin-plane keeps the module under the 256-parameter Bicep/ARM limit.
+// capacitySku (reserved for v3.x) and agentOrchestrator were removed from this
+// module: both were unused pass-throughs here (capacitySku's live consumers are
+// the landing-zone + capacity modules; agentOrchestrator's behavior is driven by
+// copilotMafEnabled + the Setup Orchestrator's dedicated module — the parent
+// main.bicep still declares them for the .bicepparam contract). Removing them
+// from admin-plane keeps the module under the 256-parameter Bicep/ARM limit.
 
 @description('Foundry portal enabled')
 param foundryPortalEnabled bool
