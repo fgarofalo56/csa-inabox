@@ -7,7 +7,7 @@
  * 'new'.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react';
 import { KqlDashboardEditor } from '../phase3-editors';
 import { makeItem, installFetchMock } from './test-helpers';
 
@@ -78,13 +78,17 @@ describe('KqlDashboardEditor', () => {
   it('Base queries dialog adds a shared KQL snippet', async () => {
     render(<KqlDashboardEditor item={makeItem('kql-dashboard', 'KQL Dashboard')} id="dash-fixture" />);
     await waitFor(() => expect(screen.getByText('Errors')).toBeInTheDocument());
+    // "Base queries" is exposed twice (the ribbon + the always-mounted inline
+    // toolbar). Click the LAST match: the inline toolbar button is a plain
+    // <Button> that is never overflow-collapsed, whereas a ribbon copy can drop
+    // out of the a11y tree under jsdom's zero-dimension layout in CI. Then scope
+    // every subsequent query to the opened <div role="dialog"> and use async
+    // findBy* so a slower CI render isn't mistaken for a missing control.
     const openBtns = screen.getAllByRole('button', { name: /Base queries/i });
-    fireEvent.click(openBtns[0]);
-    await waitFor(() => expect(screen.getByRole('button', { name: /Add base query/i })).toBeInTheDocument());
-    fireEvent.click(screen.getByRole('button', { name: /Add base query/i }));
-    await waitFor(() => {
-      expect(screen.getByRole('textbox', { name: /Base query name/i })).toBeInTheDocument();
-    });
+    fireEvent.click(openBtns[openBtns.length - 1]);
+    const dialog = await screen.findByRole('dialog', {}, { timeout: 5000 });
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Add base query/i }, { timeout: 5000 }));
+    await within(dialog).findByRole('textbox', { name: /Base query name/i }, { timeout: 5000 });
   });
 
   it('changing a parameter re-runs the dependent tile with the new value', async () => {

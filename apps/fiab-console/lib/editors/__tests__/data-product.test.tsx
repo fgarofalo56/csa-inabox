@@ -9,7 +9,7 @@
  * from B-grade (functional, untested) to A-grade (functional + Vitest).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, cleanup, within } from '@testing-library/react';
 import { DataProductEditor } from '../apim-editors';
 import { DeleteDataProductDialog } from '../components/delete-data-product-dialog';
 import { makeItem, installFetchMock } from './test-helpers';
@@ -49,14 +49,20 @@ describe('DeleteDataProductDialog', () => {
     render(
       <DeleteDataProductDialog open={true} onOpenChange={() => {}} id="dp1" displayName="Revenue 360" onDeleted={onDeleted} />,
     );
-    // Wait for the preflight to resolve and the confirm field to render.
-    await waitFor(() => expect(screen.getByRole('textbox')).toBeInTheDocument(), { timeout: 4000 });
-    const btn = screen.getByRole('button', { name: /delete data product/i });
+    // Wait for the Fluent Dialog portal to mount, then for the preflight fetch to
+    // resolve the confirm field inside it. First portal query is awaited; the
+    // rest are scoped to the resolved dialog handle so a slow CI portal render
+    // never races a sync query.
+    const dialog = await screen.findByRole('dialog', {}, { timeout: 5000 });
+    const field = await within(dialog).findByRole('textbox', {}, { timeout: 5000 });
+    const btn = within(dialog).getByRole('button', { name: /delete data product/i });
     expect(btn).toBeDisabled();
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Revenue 36' } });
-    expect(btn).toBeDisabled(); // partial — still blocked
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Revenue 360' } });
-    expect(btn).not.toBeDisabled(); // exact match → enabled
+    fireEvent.change(field, { target: { value: 'Revenue 36' } });
+    await waitFor(() => expect(btn).toBeDisabled()); // partial — still blocked
+    fireEvent.change(field, { target: { value: 'Revenue 360' } });
+    // The enable transition is driven by a controlled-input re-render; await it
+    // so a slower CI flush isn't read as a still-disabled button.
+    await waitFor(() => expect(btn).not.toBeDisabled()); // exact match → enabled
   });
 
   it('shows blockers and no confirm field when preconditions are not met', async () => {
@@ -72,9 +78,13 @@ describe('DeleteDataProductDialog', () => {
     render(
       <DeleteDataProductDialog open={true} onOpenChange={() => {}} id="dp1" displayName="Revenue 360" onDeleted={() => {}} />,
     );
-    await waitFor(() => expect(screen.getByText(/Cannot delete/i)).toBeInTheDocument(), { timeout: 4000 });
-    expect(screen.getByText(/Published/)).toBeInTheDocument();
-    expect(screen.getByText(/2 open access request/i)).toBeInTheDocument();
-    expect(screen.queryByRole('textbox')).not.toBeInTheDocument(); // no confirm input when blocked
+    // Await the dialog portal, then the first blocker text (gated on the preflight
+    // fetch); scope the remaining sync assertions to the resolved dialog so they
+    // can't race the portal render on CI.
+    const dialog = await screen.findByRole('dialog', {}, { timeout: 5000 });
+    await within(dialog).findByText(/Cannot delete/i, undefined, { timeout: 5000 });
+    expect(within(dialog).getByText(/Published/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/2 open access request/i)).toBeInTheDocument();
+    expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument(); // no confirm input when blocked
   });
 });

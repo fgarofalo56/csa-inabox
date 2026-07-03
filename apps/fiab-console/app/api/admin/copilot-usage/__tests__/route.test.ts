@@ -34,6 +34,9 @@ const empty = { columns: [], rows: [], rowCount: 0 };
 beforeEach(() => {
   queryLogsMock.mockReset();
   getSessionMock.mockReturnValue({ claims: { oid: 'o' }, exp: Date.now() / 1000 + 3600 } as any);
+  // #1602 gates behind requireTenantAdmin — authorize the test session (oid 'o')
+  // as the bootstrap tenant admin (the 401 spec sets session=null and still 401s).
+  process.env.LOOM_TENANT_ADMIN_OID = 'o';
 });
 
 describe('GET /api/admin/copilot-usage', () => {

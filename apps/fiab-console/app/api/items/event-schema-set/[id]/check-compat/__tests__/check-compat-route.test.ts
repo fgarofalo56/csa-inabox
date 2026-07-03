@@ -23,6 +23,12 @@ let cosmosItem: any = null;
 const readMock = vi.fn(async () => ({ resource: cosmosItem }));
 vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: async () => ({ item: () => ({ read: readMock }) }),
+  // #1602 gates the route with assertOwner(workspaceId, tenantId), which
+  // point-reads the workspace on (id, ownerOid) and checks tenantId. Return an
+  // owned workspace (tenantId === the session oid 'o') so the guard passes.
+  workspacesContainer: async () => ({
+    item: () => ({ read: async () => ({ resource: { id: 'ws-1', tenantId: 'o' } }) }),
+  }),
 }));
 
 // EH SR gate: null = configured (the gate returns null when env is present).
