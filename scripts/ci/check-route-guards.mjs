@@ -101,6 +101,12 @@ const GETSESSION_RE = /getSession\s*\(/;
 // ── Allowlist: routes that legitimately need no per-resource authorization.
 // Repo-relative POSIX paths. Each MUST carry a reason.
 const ALLOWLIST = new Map([
+  // Feedback intake is deliberately session-OPTIONAL (rel-T15/B16): anonymous
+  // auto-error reports are accepted but hard-throttled + deduped server-side;
+  // bug/feature kinds require a session INSIDE the handler. No per-tenant
+  // resource exists to own-scope — the write target is the product's GitHub
+  // repo via a server-held token.
+  ['apps/fiab-console/app/api/feedback/route.ts', 'session-optional by design (rel-T15): anonymous auto-error intake is rate-limited + deduped; bug/feature require session in-handler'],
   // Generic per-item handlers that operate on a SHARED Azure backend resolved
   // by item TYPE (warehouse/AOAI/etc.) — no per-tenant Cosmos ownership to
   // scope; gated by getSession + a type gate.
