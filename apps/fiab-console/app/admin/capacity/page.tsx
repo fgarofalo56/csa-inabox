@@ -456,6 +456,11 @@ export default function CapacityPage() {
   const [provider, setProvider] = useState('');
   const [selected, setSelected] = useState<AzureRes | null>(null);
   const [viz, setViz] = useState<VizConfig | null>(null);
+  // Honest gate for the tenant-admin/domain-admin-only DLZ panes (cost,
+  // utilization, viz). viz-config is gated identically to the cost/util cells,
+  // so its 403 is the single reliable signal that this whole pane-set is
+  // inaccessible — surfaced as a MessageBar instead of silent "—" cells (T14).
+  const [dlzGate, setDlzGate] = useState<string | null>(null);
 
   // Running cost total across loaded rows (for the footer sum).
   const [costTotals, setCostTotals] = useState<Record<string, number>>({});
@@ -477,10 +482,19 @@ export default function CapacityPage() {
     return () => { clearTimeout(timer); ctrl.abort(); };
   }, []);
 
-  // Load the rich-viz (Grafana / Power BI) deep-link config once.
+  // Load the rich-viz (Grafana / Power BI) deep-link config once. A 403 here
+  // means the caller lacks the DLZ tier (tenant-admin / domain-admin), so the
+  // cost + utilization panes are gated too — capture the honest remediation.
   useEffect(() => {
     clientFetch('/api/admin/capacity/viz-config', { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : null))
+      .then(async (r) => {
+        if (r.status === 403) {
+          const j = await r.json().catch(() => ({}));
+          setDlzGate(j?.remediation || j?.reason || 'Data Landing Zone panes require tenant-admin or domain-admin access.');
+          return null;
+        }
+        return r.ok ? r.json() : null;
+      })
       .then((j) => { if (j?.ok) setViz({ isGov: j.isGov, grafana: j.grafana, powerbi: j.powerbi }); })
       .catch(() => { /* viz links are optional */ });
   }, []);
@@ -590,6 +604,17 @@ export default function CapacityPage() {
           </ul>
         </SectionExplainer>
       </div>
+
+      {dlzGate && (
+        <MessageBar intent="warning" className={a.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Cost &amp; utilization panes need tenant-admin or domain-admin access</MessageBarTitle>
+            The resource inventory below still lists live Azure Resource Manager data, but the
+            per-resource cost ($/mo) and 24h utilization columns are Data Landing Zone panes
+            restricted to tenant admins and domain admins. {dlzGate}
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {unauth && <SignInRequired subject="Azure resource inventory" />}
 

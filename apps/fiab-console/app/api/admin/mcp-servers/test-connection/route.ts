@@ -10,7 +10,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { listMcpTools } from '@/lib/azure/mcp-client';
+import { assertMcpEgressAllowed, McpEgressError } from '@/lib/azure/mcp-egress-guard';
 import { getPbiUserToken } from '@/lib/azure/pbi-user-token-store';
 
 export const runtime = 'nodejs';
@@ -21,10 +23,25 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  // Tenant-admin only: this probe fetches a caller-supplied URL server-side, so
+  // a bare authenticated session must NOT be able to drive it (rel-T13/B17).
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const body = await req.json().catch(() => ({}));
   const config = body.config;
   if (!config || typeof config !== 'object') return apiError('config (object) required', 400);
   if (!config.endpoint || !config.authMethod) return apiError('endpoint and authMethod required', 400);
+
+  // SSRF guard: the endpoint is caller-supplied and fetched from the Console's
+  // network position — require https + reject private/loopback/link-local
+  // targets (169.254.169.254 IMDS etc.), honoring LOOM_MCP_EGRESS_ALLOW and the
+  // configured built-in server host. See lib/azure/mcp-egress-guard.ts.
+  try {
+    await assertMcpEgressAllowed(config.endpoint);
+  } catch (e) {
+    if (e instanceof McpEgressError) return apiError(e.message, 400);
+    throw e;
+  }
 
   // entra-obo (e.g. the opt-in "Power BI (remote)" MCP server): validate the
   // endpoint with the ADMIN's own per-user On-Behalf-Of token rather than a

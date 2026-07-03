@@ -17,7 +17,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getResourceMonthlyCost } from '@/lib/clients/cost-client';
 import { MonitorError } from '@/lib/azure/monitor-client';
-import { canAccessDlzPanes } from '@/lib/auth/domain-role';
+import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
 
 export const runtime = 'nodejs';
@@ -39,6 +39,8 @@ export async function GET(req: NextRequest) {
         error: 'forbidden',
         reason:
           'The Data Landing Zone cost pane is available to tenant admins and domain admins only. A tenant admin can grant you a domain admin Entra group at /admin/permissions (Domain access).',
+        remediation: TENANT_ADMIN_TIER_REMEDIATION,
+        bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV,
       },
       { status: 403 },
     );

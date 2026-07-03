@@ -18,7 +18,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isGovCloud, getPbiGovHost } from '@/lib/azure/cloud-endpoints';
-import { canAccessDlzPanes } from '@/lib/auth/domain-role';
+import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { loadTenantDomains } from '@/lib/auth/load-domains';
 
 export const runtime = 'nodejs';
@@ -32,7 +32,13 @@ export async function GET() {
   const domains = await loadTenantDomains(s.claims.oid);
   if (!(await canAccessDlzPanes(s, domains))) {
     return NextResponse.json(
-      { ok: false, error: 'forbidden', reason: 'The Data Landing Zone panes are available to tenant admins and domain admins only.' },
+      {
+        ok: false,
+        error: 'forbidden',
+        reason: 'The Data Landing Zone panes are available to tenant admins and domain admins only.',
+        remediation: TENANT_ADMIN_TIER_REMEDIATION,
+        bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV,
+      },
       { status: 403 },
     );
   }
