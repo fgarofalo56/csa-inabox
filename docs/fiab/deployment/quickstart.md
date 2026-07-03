@@ -121,6 +121,20 @@ Open the Console URL and sign in with your Entra identity (a member of the Loom
 Admins group). You should see the home hub, an empty Workspaces pane, the
 Catalog, and a green Monitoring hub. First-run setup lives at `/setup`.
 
+## Supported availability model
+
+What you get from this deploy is a **single-region deployment with zone
+redundancy**, not an active/passive multi-region topology. The data lake is
+zone-redundant (`Standard_ZRS`), the Console's metadata store (Cosmos) runs
+continuous backup with **7-day point-in-time restore**, and the apps are
+stateless containers you recover by redeploying from Git. A single **zone**
+outage is survived transparently; recovery from data loss or a bad deploy is a
+Cosmos PITR restore (RTO ~1–2 h) or a bicep redeploy (RTO ~30–60 min). A full
+**region** loss is **not** auto-covered by default — cross-region survivability
+(geo-redundant storage, multi-region Cosmos) is an explicit opt-in. See
+[Disaster recovery](../operations/disaster-recovery.md) for the real RPO/RTO
+table and the [Cosmos PITR restore runbook](../runbooks/cosmos-pitr-restore.md).
+
 ## What's next
 
 1. [Tutorial 01 — First workspace](../tutorials/01-first-workspace.md)

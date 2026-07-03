@@ -104,9 +104,64 @@ the per-app roll/skip/fail reporting).
 | `no-upstream-release` | no stable release found | 409 |
 | `already-up-to-date` | current ≥ target | 409 |
 | `images-not-published` | a target ghcr image is missing | 409 |
+| `requires-infra-redeploy` | the target release newly requires an env var / infra version this deployment doesn't have | 409 |
 
 `images-not-published` lists each missing `ghcr.io/<owner>/<app>:<ver>` ref and
 its HTTP status so the operator sees exactly which images CI hasn't published.
+
+#### Compatibility manifest — infra vs. image (rel-T41)
+
+The image roll changes **only** the container image: it re-sends the app's
+existing env + secrets and does **not** re-run bicep. So an image-only update can
+never add a newly-required `LOOM_*` env var, grant a new RBAC role, or provision
+a new resource — those arrive **only** from a real `az deployment` (bicep
+re-deploy). A new release whose code reads a new required env var would otherwise
+come up on the new image with that var **unset**, silently gating the feature off
+or 500-ing.
+
+`lib/updates/compat-manifest.ts` closes that gap. Each entry declares what a
+release **newly** requires — required `LOOM_*` env vars (with the exact bicep
+remediation) and a minimum infra/bicep version:
+
+```ts
+export interface ReleaseCompat {
+  version: string;                 // bare semver that introduces these requirements
+  requiredEnv?: {                  // env the running deployment MUST already have
+    name: string;                  //   LOOM_* var name
+    reason: string;                //   why the release needs it
+    remediation: string;           //   which bicep module sets it / role to grant
+  }[];
+  minInfraVersion?: string;        // running LOOM_INFRA_VERSION must be >= this
+  note?: string;
+}
+```
+
+Pre-flight aggregates the requirements introduced across `(currentVersion,
+targetVersion]` (a skipped-over release's requirements still apply) and compares
+them against the **running deployment**:
+
+- **env** — `process.env` on the console. This is the same source of truth
+  `scripts/ci/check-env-sync.mjs` guards: every hard-required var is emitted by
+  the platform bicep, so a healthy tenant always has them.
+- **infra version** — `LOOM_INFRA_VERSION`, stamped **only** by the platform
+  bicep and never changed by an image roll (unlike `LOOM_VERSION`, which follows
+  the rolled image). It records the version this deployment's infrastructure was
+  last `az deployment`-ed at, so the check catches an image that has rolled ahead
+  of its bicep. When it's unknown (a deployment predating the stamp), the
+  env-var check carries the decision and the infra check is skipped — no
+  false-block.
+
+If anything is missing, the update returns the `requires-infra-redeploy` gate
+naming the exact remediation ("re-deploy `platform/fiab/bicep`: set `LOOM_X` /
+grant role `Y`") and rolls nothing. The `/admin/updates` page renders it as a
+Fluent `MessageBar` listing each missing var, its reason, and its fix.
+
+The pre-flight comparison logic is unit-tested in
+`lib/updates/__tests__/compat-manifest.test.ts` and
+`lib/updates/__tests__/update-apply.test.ts` (blocked-vs-passes, skipped-release
+aggregation, unknown-infra carry, and the shipped manifest never false-blocking a
+healthy tenant). The live gate is operator-verified against a running
+deployment.
 
 ### 3. Accurate running version
 
@@ -126,6 +181,7 @@ its HTTP status so the operator sees exactly which images CI hasn't published.
 | Env var | Source | Purpose |
 | --- | --- | --- |
 | `LOOM_VERSION` | `loomVersion` param | running version label |
+| `LOOM_INFRA_VERSION` | `loomVersion` param (bicep-only; image roll does NOT touch it) | infra/bicep version the compat gate compares against |
 | `LOOM_GHCR_OWNER` | `loomGhcrOwner` param (default `fgarofalo56`) | public image owner |
 | `LOOM_SUBSCRIPTION_ID` | `subscription().subscriptionId` | ARM target |
 | `LOOM_ADMIN_RG` | `resourceGroup().name` | ARM target RG |

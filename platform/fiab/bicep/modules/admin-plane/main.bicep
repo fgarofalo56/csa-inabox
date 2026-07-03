@@ -2429,6 +2429,14 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
         env: concat(
           [
             { name: 'LOOM_VERSION', value: loomVersion }
+            // Infra (bicep) version — stamped ONLY by this bicep deploy and, unlike
+            // LOOM_VERSION, never changed by the in-product image roller (which
+            // PATCHes just the container image and re-sends existing env). So it
+            // records the version this deployment's infrastructure was last
+            // `az deployment`-ed at. The self-update compat manifest
+            // (lib/updates/compat-manifest.ts) reads it to block an image-only
+            // roll when a newer release needs env/roles this infra predates.
+            { name: 'LOOM_INFRA_VERSION', value: loomVersion }
             // EH Phase-1 multi-domain ACL PDP enforcement mode: off (default, gate
             // is a no-op) | shadow (run+log to _auditLog, never block) | enforce
             // (403 on deny). Flip to shadow, review /api/admin/pdp/shadow-report,

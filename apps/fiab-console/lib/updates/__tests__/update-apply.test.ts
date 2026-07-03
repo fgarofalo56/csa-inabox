@@ -120,6 +120,41 @@ describe('preflight gates', () => {
     // console is rolled last so the operator's session survives the longest.
     expect(pre.plan[pre.plan.length - 1].acaName).toBe('loom-console');
   });
+
+  it('gates requires-infra-redeploy when the running deployment is missing a manifest-required env', async () => {
+    // The real COMPAT_MANIFEST floor requires LOOM_COSMOS_ACCOUNT at 0.45.0.
+    // Update 0.44.0 -> 0.45.0 with that env NOT present must block, not roll.
+    const pre = await preflight(baseDeps({
+      currentVersion: '0.44.0',
+      listReleases: async () => [release('csa-inabox-v0.45.0')],
+      envPresent: (n) => n === 'LOOM_SUBSCRIPTION_ID' || n === 'LOOM_ADMIN_RG', // LOOM_COSMOS_ACCOUNT missing
+      infraVersion: '0.45.0',
+    }));
+    expect(pre.ok).toBe(false);
+    if (pre.ok) throw new Error('expected gate');
+    expect(pre.reason).toBe('requires-infra-redeploy');
+    expect(pre.missingRequiredEnv?.map((e) => e.name)).toContain('LOOM_COSMOS_ACCOUNT');
+    expect(pre.message).toMatch(/re-deploy/i);
+  });
+
+  it('proceeds past the compat gate when all manifest-required env is present', async () => {
+    const pre = await preflight(baseDeps({
+      currentVersion: '0.44.0',
+      listReleases: async () => [release('csa-inabox-v0.45.0')],
+      envPresent: () => true, // every required env present
+      infraVersion: '0.45.0',
+    }));
+    expect(pre.ok).toBe(true);
+  });
+
+  it('skips the compat gate entirely when envPresent is not wired (back-compat)', async () => {
+    // Existing callers that do not inject envPresent keep their old behavior.
+    const pre = await preflight(baseDeps({
+      currentVersion: '0.44.0',
+      listReleases: async () => [release('csa-inabox-v0.45.0')],
+    }));
+    expect(pre.ok).toBe(true);
+  });
 });
 
 describe('applyRoll', () => {
