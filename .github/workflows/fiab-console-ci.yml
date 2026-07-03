@@ -105,7 +105,9 @@ jobs:
         if: steps.changed.outputs.console == 'true'
         env:
           NEXT_TELEMETRY_DISABLED: '1'
-          NODE_OPTIONS: --max-old-space-size=4096
+          # 6144 matches the Dockerfile/ACR build heap — 4096 OOMs since the
+          # console grew past ~117 editors (FATAL: JS heap out of memory).
+          NODE_OPTIONS: --max-old-space-size=6144
         run: pnpm build
 
   tutorial-coverage:

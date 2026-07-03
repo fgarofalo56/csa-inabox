@@ -57,7 +57,7 @@ classifications, glossary, lineage, MDM, sensitivity/protection policies),
 catalog**, **20+ one-click use-case apps**, a **deploy planner**, a
 **Loom-native report designer**, and an **admin portal** of ~27 pages.
 
-- 🚀 **Deploy it**: **[CSA Loom deployment quickstart](docs/fiab/deployment/quickstart.md)** — clone → working Console URL in ~60 minutes (Azure Commercial). Gov: [GCC](docs/fiab/deployment/gcc.md) / [GCC-High](docs/fiab/deployment/gcc-high.md). IaC lives under [`platform/fiab/bicep/`](platform/fiab/bicep/).
+- 🚀 **Deploy it**: [CSA Loom Quick Start](platform/fiab/README.md) → **[deployment quickstart](docs/fiab/deployment/quickstart.md)** (`git clone` → `az deployment sub create` → post-deploy bootstrap → working Console URL in ~60 minutes, Azure Commercial). Gov: [GCC](docs/fiab/deployment/gcc.md) / [GCC-High](docs/fiab/deployment/gcc-high.md). IaC lives under [`platform/fiab/bicep/`](platform/fiab/bicep/).
 - 🖥️ **The app**: [`apps/fiab-console/`](apps/fiab-console/README.md) — Next.js 15 + Fluent UI v9 + MSAL BFF, hosted on Azure Container Apps.
 - 📚 **Full docs**: [CSA Loom documentation](https://fgarofalo56.github.io/csa-inabox/) and the [`docs/fiab/`](docs/fiab/) tree.
 

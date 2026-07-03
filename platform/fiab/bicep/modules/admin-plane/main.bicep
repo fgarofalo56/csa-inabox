@@ -2015,6 +2015,15 @@ module sparkSessionPool 'spark-session-pool.bicep' = {
   }
 }
 
+// Per-user notebook Compute Instance policy (config-only — no Azure resource
+// is deployed; each per-user CI is created on demand by the Console UAMI via
+// /api/aml/compute-instances/mine). Validates the tenant policy knobs and
+// emits the LOOM_AML_PERUSER_ENABLED / LOOM_AML_CI_* env values wired into
+// the console app below.
+module notebookComputePool 'notebook-compute-pool.bicep' = {
+  name: 'notebook-compute-pool'
+}
+
 // =====================================================================
 // 8b. Copy Job watermark control table (F14) — dbo.copy_watermark +
 // dbo.usp_write_watermark in the control SQL DB, plus grants for the ADF
@@ -3704,6 +3713,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // auto-shutdown for the compute UI.
             { name: 'LOOM_AML_DEFAULT_COMPUTE', value: loomAmlDefaultCompute }
             { name: 'LOOM_AML_COMPUTE_IDLE_TTL', value: loomAmlComputeIdleTtl }
+            // Per-user notebook Compute Instance policy (notebook-compute-pool
+            // module above) — multi-user AML: aml-client.ts perUserCiPolicy()
+            // + /api/aml/compute-instances/mine read these four values.
+            { name: 'LOOM_AML_PERUSER_ENABLED', value: notebookComputePool.outputs.perUserEnabledEnv }
+            { name: 'LOOM_AML_CI_SIZE', value: notebookComputePool.outputs.perUserVmSizeEnv }
+            { name: 'LOOM_AML_CI_IDLE_TTL', value: notebookComputePool.outputs.perUserIdleTtlEnv }
+            { name: 'LOOM_AML_CI_MAX', value: notebookComputePool.outputs.maxPerTenantEnv }
             { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
