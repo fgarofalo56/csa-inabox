@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { getApi, testApiCall, ApimError } from '@/lib/azure/apim-client';
 
 export const runtime = 'nodejs';
@@ -18,6 +19,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const limited = await enforceRateLimit(session, 'query');
+  if (limited) return limited;
   const id = (await ctx.params).id;
   const b = await req.json().catch(() => ({}));
   const query = String(b?.query || '').trim();

@@ -33,7 +33,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isValidInternalToken, INTERNAL_USER_OID_HEADER } from '@/lib/auth/internal-token';
+import { isValidInternalToken, validateInternalOid, INTERNAL_USER_OID_HEADER } from '@/lib/auth/internal-token';
 import { IQ_MCP_TOOLS, callIqTool } from '@/lib/azure/iq-mcp-tools';
 
 export const runtime = 'nodejs';
@@ -59,16 +59,14 @@ function rpcResult(id: unknown, result: unknown) {
 }
 
 /**
- * Validate the bearer token against LOOM_IQ_MCP_TOKEN (preferred) or
- * LOOM_INTERNAL_TOKEN (fallback — the shared internal trust secret).
+ * Validate the bearer token against LOOM_IQ_MCP_TOKEN (preferred — the dedicated
+ * per-service secret Bicep wires so a leak of this externally-handed token does
+ * NOT open the internal MAF callback or the CI path) or, when that is unset,
+ * LOOM_INTERNAL_TOKEN (fallback — the shared internal trust secret). Both sides
+ * are compared constant-time and fail closed.
  */
 function isValidIqToken(presented: string | null): boolean {
-  const dedicated = process.env.LOOM_IQ_MCP_TOKEN;
-  if (dedicated) {
-    return !!presented && presented === dedicated;
-  }
-  // Fall back to the shared internal token (constant-time check, fails closed).
-  return isValidInternalToken(presented);
+  return isValidInternalToken(presented, 'LOOM_IQ_MCP_TOKEN');
 }
 
 /** Resolve the acting tenant oid + auth mode, or null when unauthenticated. */
@@ -82,7 +80,10 @@ function resolveTenant(req: NextRequest): { tenantId: string; mode: 'token' | 's
   const authz = req.headers.get('authorization') || '';
   const bearer = authz.toLowerCase().startsWith('bearer ') ? authz.slice(7).trim() : null;
   if (!isValidIqToken(bearer)) return null;
-  const oid = req.headers.get(INTERNAL_USER_OID_HEADER) || '';
+  // The x-user-oid becomes the tenant partition for every IQ tool call, so past
+  // the token gate constrain it to a well-formed Entra object-id (and, when
+  // LOOM_INTERNAL_ALLOWED_OIDS is set, a known automation principal) — rel-T10/B3.
+  const oid = validateInternalOid(req.headers.get(INTERNAL_USER_OID_HEADER));
   if (!oid) return null;
   return { tenantId: oid, mode: 'token' };
 }

@@ -27,6 +27,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { loadKustoItem, saveItemState, KustoError } from '@/lib/azure/kusto-client';
 import { clusterUri, defaultDatabase } from '@/lib/azure/kusto-client';
 import {
@@ -121,6 +122,8 @@ function buildSaql(transforms: TransformNode[], inputAlias: string, outputAlias:
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const limited = await enforceRateLimit(session, 'provision');
+  if (limited) return limited;
 
   const { id } = await ctx.params;
   const steps: string[] = [];

@@ -14,6 +14,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { executeQuery, defaultDatabase, kustoConfigGate, KustoError } from '@/lib/azure/kusto-client';
 import { cypherToKql, TranslationError } from '@/lib/azure/cypher-kql-translator';
 
@@ -37,6 +38,8 @@ function graphSource(nodeTables: string[], edgeTables: string[]): string {
 export async function POST(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const limited = await enforceRateLimit(session, 'query');
+  if (limited) return limited;
 
   const gate = kustoConfigGate();
   if (gate) {

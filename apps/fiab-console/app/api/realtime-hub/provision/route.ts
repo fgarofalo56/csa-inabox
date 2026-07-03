@@ -23,6 +23,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import {
   ensureEventHub,
   ensureConsumerGroup,
@@ -56,6 +57,8 @@ function readScope(body: any): EventHubsConfig | null {
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const limited = await enforceRateLimit(session, 'provision');
+  if (limited) return limited;
 
   const ct = req.headers.get('content-type') || '';
   if (!ct.includes('application/json')) {
