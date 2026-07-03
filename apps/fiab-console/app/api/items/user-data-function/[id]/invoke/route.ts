@@ -26,6 +26,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getKeyVaultSecretValue, vaultUrl } from '@/lib/azure/kv-secrets-client';
+import { loadOwnedItem } from '../../../_lib/item-crud';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -41,14 +42,14 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!functionName) return NextResponse.json({ ok: false, error: 'functionName is required' }, { status: 400 });
   const parameters = b?.parameters || {};
 
-  // Load persisted item state.
+  // Load persisted item state DIRECTLY from Cosmos — not an HTTP self-fetch:
+  // behind Front Door, req.nextUrl.origin is the public hostname and a
+  // container→own-public-URL round-trip fails silently, so the route then ran
+  // the bundled sample instead of the authored source (live-caught, rel-T05).
   let st: any = {};
   try {
-    const origin = req.nextUrl.origin;
-    const r = await fetch(`${origin}/api/items/user-data-function/${encodeURIComponent(id)}`, {
-      headers: { cookie: req.headers.get('cookie') || '' },
-    });
-    st = (await r.json())?.state || {};
+    const item = await loadOwnedItem(id, 'user-data-function', session.claims.oid);
+    st = (item?.state as any) || {};
   } catch { /* fall through to gate */ }
 
   // ── 1) Azure-native default: Azure Functions HTTP endpoint ────────────────
