@@ -4,6 +4,28 @@ name: loom-roll-and-validate
 # URL actually serves it. Per user feedback after the 2026-05-26 incident
 # where the image-build workflow succeeded but stale code shipped: every
 # rollout now has to PROVE the new build is live before declaring success.
+#
+# ROLL-GATE SEQUENCE (rel-T22 / blocker B13):
+#   1. Gate — vitest: confirm the `vitest (node 20)` required check CONCLUDED
+#      success for the commit being rolled (cheap + exact, via the check-runs
+#      API). An untested/failed commit is refused BEFORE anything ships.
+#   2. Roll the image → wait for revision health → purge Front Door.
+#   3. Validate the live URL (unauthenticated /health + /build-marker curls).
+#   4. Gate — in-VNet UAT: start the `loom-uat` Container App Job (a full-visual
+#      Playwright suite that runs INSIDE the console VNet, minting a session — no
+#      MFA) and poll its execution to completion. A real UAT failure fails the
+#      roll, which the Rollback step catches and reverts to the prior revision.
+#   The pre-existing auto-rollback on live-validation failure remains the
+#   BACKSTOP.
+#
+# EMERGENCY VALVE: both test gates (vitest confirmation + UAT) are SKIPPABLE via
+# the `skip_uat` dispatch input OR the repo variable `LOOM_ROLL_SKIP_UAT=true`,
+# so a broken UAT harness (or a missing check-run on a legacy image) can never
+# PERMANENTLY block an emergency roll. When skipped, the roll ships WITHOUT test
+# verification and only the live-URL validation + auto-rollback protect it — a
+# loud warning is emitted. A loom-uat job that is simply not deployed in this
+# estate is treated the same way (loud warning, gate skipped) for the same
+# reason.
 
 on:
   workflow_dispatch:
@@ -21,6 +43,18 @@ on:
         description: 'Public URL to probe'
         type: string
         default: 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net'
+      skip_uat:
+        description: 'EMERGENCY VALVE — skip the test gates (vitest confirmation + in-VNet UAT). The roll ships WITHOUT test verification; live-URL validation + auto-rollback remain.'
+        type: boolean
+        default: false
+      uat_timeout_minutes:
+        description: 'Minutes to wait for the loom-uat job before failing the UAT gate.'
+        type: string
+        default: '20'
+      uat_grep:
+        description: 'Optional Playwright --grep slice for the UAT gate. Default runs the fast functional slice (the slow "tutorial" screenshot suite is always excluded).'
+        type: string
+        default: ''
   workflow_run:
     workflows: ['build-fiab-images-acr-tasks']
     types: [completed]
@@ -29,6 +63,8 @@ on:
 permissions:
   contents: read
   issues: write
+  # Read the `vitest (node 20)` check-run conclusion for the rolled commit.
+  checks: read
 
 env:
   AZURE_LOCATION: eastus2
@@ -76,6 +112,58 @@ jobs:
           echo "image=${{ env.ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:$TAG" >> "$GITHUB_OUTPUT"
           echo "previous_revision=$(az containerapp show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} --query properties.latestRevisionName -o tsv)" >> "$GITHUB_OUTPUT"
 
+          # Full 40-hex commit SHA to check the vitest conclusion against.
+          #  - workflow_run: the upstream image build ran on push-to-main → head_sha.
+          #  - workflow_dispatch: use the rolled tag if it is itself a full SHA,
+          #    else fall back to the checked-out ref (a "latest"/prefix tag can't
+          #    be resolved to a commit — the vitest gate degrades to a warning).
+          if [[ "${{ github.event_name }}" == "workflow_run" ]]; then
+            COMMIT_SHA="${{ github.event.workflow_run.head_sha }}"
+          elif [[ "$TAG" =~ ^[0-9a-f]{40}$ ]]; then
+            COMMIT_SHA="$TAG"
+          else
+            COMMIT_SHA="${{ github.sha }}"
+          fi
+          echo "commit_sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
+
+          # Emergency valve: skip the test gates (vitest + UAT) when the dispatch
+          # input OR the repo variable LOOM_ROLL_SKIP_UAT is set true.
+          SKIP_UAT="false"
+          if [[ "${{ inputs.skip_uat }}" == "true" || "${{ vars.LOOM_ROLL_SKIP_UAT }}" == "true" ]]; then
+            SKIP_UAT="true"
+          fi
+          echo "skip_uat=$SKIP_UAT" >> "$GITHUB_OUTPUT"
+
+      - name: Gate — require vitest (node 20) success for the rolled commit
+        id: vitest_gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          if [[ "${{ steps.vars.outputs.skip_uat }}" == "true" ]]; then
+            echo "::warning::skip_uat/LOOM_ROLL_SKIP_UAT is set — SKIPPING the vitest confirmation gate. This roll is NOT test-verified."
+            exit 0
+          fi
+          SHA="${{ steps.vars.outputs.commit_sha }}"
+          if ! [[ "$SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::warning::No resolvable commit SHA for tag '${{ steps.vars.outputs.tag }}' — cannot confirm vitest. Skipping this gate (dispatch of a non-SHA tag)."
+            exit 0
+          fi
+          echo "Checking 'vitest (node 20)' check-run conclusion for $SHA ..."
+          # Take the most-recent run of the check (a commit may have re-runs).
+          CONCL=$(gh api "repos/${{ github.repository }}/commits/$SHA/check-runs?per_page=100" \
+            --jq '[.check_runs[] | select(.name=="vitest (node 20)")] | sort_by(.started_at) | last | .conclusion' 2>/dev/null || echo "")
+          echo "conclusion=${CONCL:-<none>}"
+          if [[ "$CONCL" == "success" ]]; then
+            echo "::notice::vitest (node 20) succeeded for $SHA — proceeding to roll."
+          elif [[ -z "$CONCL" || "$CONCL" == "null" ]]; then
+            echo "::error::No 'vitest (node 20)' check-run found for $SHA — refusing to roll an unverified commit. Re-run CI on this commit, roll a tested SHA, or (emergency only) dispatch with skip_uat=true."
+            exit 1
+          else
+            echo "::error::'vitest (node 20)' concluded '$CONCL' (not success) for $SHA — refusing to roll a failing commit. Fix CI or (emergency only) dispatch with skip_uat=true."
+            exit 1
+          fi
+
       - name: Roll Container App to new image
         id: roll
         run: |
@@ -113,10 +201,99 @@ jobs:
             "${{ steps.vars.outputs.url }}" \
             "${{ steps.vars.outputs.expected }}"
 
-      - name: Rollback on validation failure
-        if: failure() && steps.validate.outcome == 'failure'
+      - name: Gate — in-VNet UAT (loom-uat Container App Job)
+        id: uat
+        # Runs AFTER the new revision is serving. The loom-uat job runs the
+        # full-visual Playwright suite from INSIDE the console VNet (it mints a
+        # session from the console's SESSION_SECRET — no MFA/user creds) and its
+        # process exits non-zero on a REAL code failure (crash/empty/non-infra
+        # bug) while exiting 0 when the only failures are honest infra-gates.
+        # A real failure fails THIS step → the Rollback step below reverts.
+        #
+        # Skippable (skip_uat / LOOM_ROLL_SKIP_UAT). A MISSING job is a loud
+        # warning, not a hard block — so a not-yet-deployed harness can't
+        # permanently block rolls. The authoritative signal is the job
+        # EXECUTION status (Succeeded/Failed); the Log Analytics UAT_RESULT line
+        # is pulled best-effort for a human-readable summary (LA ingestion lags,
+        # so it is never the gate).
+        env:
+          RG: ${{ env.RG_NAME }}
+          SKIP_UAT: ${{ steps.vars.outputs.skip_uat }}
+          UAT_TIMEOUT_MINUTES: ${{ inputs.uat_timeout_minutes || '20' }}
+          UAT_GREP: ${{ inputs.uat_grep || '' }}
         run: |
-          echo "::error::Live validation failed — rolling back to previous revision ${{ steps.vars.outputs.previous_revision }}"
+          set -e
+          az config set extension.use_dynamic_install=yes_without_prompt -o none 2>/dev/null || true
+
+          if [[ "$SKIP_UAT" == "true" ]]; then
+            echo "::warning::skip_uat/LOOM_ROLL_SKIP_UAT is set — SKIPPING the in-VNet UAT gate. This roll is NOT UAT-verified. Live-URL validation + auto-rollback remain the backstop."
+            exit 0
+          fi
+
+          if ! az containerapp job show -n loom-uat -g "$RG" -o none 2>/dev/null; then
+            echo "::warning::loom-uat Container App Job not found in $RG — the in-VNet UAT harness is not deployed in this estate. SKIPPING the UAT gate (deploy it via scripts/csa-loom/deploy-loom-uat-job.sh to enable). Live-URL validation + auto-rollback remain the backstop."
+            exit 0
+          fi
+
+          # Fast FUNCTIONAL slice: always exclude the slow 'tutorial' screenshot
+          # suite so the gate fits the ~20-min budget; a caller can narrow further
+          # with uat_grep. Non-strict provisioning is the job default (infra-gates
+          # exit 0; only real code bugs exit 1) — exactly the roll-gate semantics.
+          ENVV="UAT_GREP_INVERT=tutorial"
+          [[ -n "$UAT_GREP" ]] && ENVV="$ENVV UAT_GREP=$UAT_GREP"
+          echo "Starting loom-uat execution (env overrides: $ENVV) ..."
+          EXEC=$(az containerapp job start -n loom-uat -g "$RG" \
+            --env-vars $ENVV --query name -o tsv 2>/dev/null | tr -d '\r')
+          if [[ -z "$EXEC" ]]; then
+            echo "::error::Failed to start loom-uat execution."
+            exit 1
+          fi
+          echo "::notice::Started loom-uat execution: $EXEC"
+
+          DEADLINE=$(( $(date +%s) + UAT_TIMEOUT_MINUTES * 60 ))
+          STATUS="Running"
+          while :; do
+            # Use `execution list` + filter (only `list` is documented CLI-stable).
+            STATUS=$(az containerapp job execution list -n loom-uat -g "$RG" \
+              --query "[?name=='$EXEC'].properties.status | [0]" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            [[ -z "$STATUS" ]] && STATUS="Unknown"
+            echo "[uat] $(date -u +%H:%M:%S) status=$STATUS"
+            case "$STATUS" in
+              Succeeded) break ;;
+              Failed|Degraded|Cancelled) break ;;
+            esac
+            if (( $(date +%s) >= DEADLINE )); then STATUS="TimedOut"; break; fi
+            sleep 20
+          done
+
+          # Best-effort: surface the UAT_RESULT line from Log Analytics.
+          WS=$(az monitor log-analytics workspace list -g "$RG" \
+            --query "[?starts_with(name, 'law-csa-loom-')]|[0].customerId" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          [[ -z "$WS" ]] && WS=$(az monitor log-analytics workspace list -g "$RG" --query "[0].customerId" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+          if [[ -n "$WS" ]]; then
+            RESULT=$(az monitor log-analytics query -w "$WS" --analytics-query \
+              "ContainerAppConsoleLogs_CL | where ContainerName_s == 'uat' | where Log_s contains 'UAT_RESULT' | order by TimeGenerated desc | take 1 | project Log_s" \
+              --query "[0].Log_s" -o tsv 2>/dev/null | tr -d '\r' || echo "")
+            if [[ -n "$RESULT" ]]; then
+              echo "::notice::$RESULT"
+              echo "loom-uat: $RESULT" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          if [[ "$STATUS" == "Succeeded" ]]; then
+            echo "::notice::loom-uat PASSED (execution $EXEC) — UAT-verified roll."
+            exit 0
+          fi
+          echo "::error::loom-uat gate FAILED (status=$STATUS, execution $EXEC). Rolling back. Inspect Log Analytics ContainerAppConsoleLogs_CL (ContainerName_s=='uat') for the UAT_REAL_FAILS line."
+          exit 1
+
+      - name: Rollback on validation failure
+        # Roll back whenever we shipped a new revision and EITHER the live-URL
+        # validation OR the in-VNet UAT gate failed. (A pre-roll vitest-gate
+        # failure never reaches here — nothing was rolled.)
+        if: failure() && steps.roll.outcome == 'success' && (steps.validate.outcome == 'failure' || steps.uat.outcome == 'failure')
+        run: |
+          echo "::error::Post-roll gate failed (validate=${{ steps.validate.outcome }}, uat=${{ steps.uat.outcome }}) — rolling back to previous revision ${{ steps.vars.outputs.previous_revision }}"
           PREV_IMAGE=$(az containerapp revision show -n ${{ env.APP_NAME }} -g ${{ env.RG_NAME }} \
             --revision "${{ steps.vars.outputs.previous_revision }}" \
             --query "properties.template.containers[0].image" -o tsv)
@@ -140,7 +317,7 @@ jobs:
                 `New revision (rolled back): \`${{ steps.roll.outputs.new_revision }}\``,
                 `URL probed: ${{ steps.vars.outputs.url }}`,
                 ``,
-                `Check the workflow run for which probe failed (health / version / build-marker / notebook page / data-pipeline page / copilot tools).`,
+                `Check the workflow run for which gate failed (vitest confirmation / health / version / build-marker / notebook page / data-pipeline page / copilot tools / in-VNet UAT).`,
               ].join('\n');
             const existing = await github.rest.issues.listForRepo({
               owner: context.repo.owner, repo: context.repo.repo,

@@ -9,14 +9,24 @@
 #   3. Queries App Insights live metrics to confirm telemetry is flowing
 #   4. Queries LAW to confirm diagnostic settings are emitting
 #
-# Doesn't fail the workflow — informational. Real "is it working?"
-# validation requires a human via Bastion (Console UI is the only way
-# to truly validate the React panes).
+# rel-T29 / B13 — this script is now a REAL gate for the console: the
+# from-inside-cluster loom-console /api/health probe (section 2) is retried
+# for warm-up and the script EXITS NON-ZERO if the console never becomes
+# healthy. This replaces the old "external smoke with continue-on-error"
+# no-op — the console ingress is VNet-internal, so an in-cluster probe is the
+# only honest way to prove it serves. The App Insights / LAW / other-app
+# sections remain informational (telemetry lags; other apps are secondary).
+# Deep React-pane validation still runs via the in-VNet loom-uat Playwright
+# job against a live estate (see loom-roll-and-validate.yml).
 
 set -uo pipefail
 
 RG="${RG_NAME:?RG_NAME must be set}"
 BOUNDARY="${BOUNDARY:-Commercial}"
+# Console-health gate knobs: retry the in-cluster probe to tolerate warm-up.
+CONSOLE_HEALTH_RETRIES="${CONSOLE_HEALTH_RETRIES:-15}"
+CONSOLE_HEALTH_INTERVAL="${CONSOLE_HEALTH_INTERVAL:-20}"
+CONSOLE_OK="skip"   # skip=not deployed, ok=healthy, fail=never healthy
 
 echo "🔬 CSA Loom — post-provision validation"
 echo "   Admin Plane RG: $RG"
@@ -44,6 +54,14 @@ echo
 # 2. Per-app from-inside-cluster health check
 # ---------------------------------------------------------------------
 echo "── Per-app /health from inside cluster ──"
+probe_health() {  # $1=app $2=path $3=port → echoes the HTTP code (or curl noise)
+  # az containerapp exec runs a command inside any running replica.
+  az containerapp exec \
+    --resource-group "$RG" \
+    --name "$1" \
+    --command "curl -fsS -o /dev/null -w '%{http_code}' http://localhost:${3}${2}" 2>&1 | tail -1
+}
+
 for app in $APPS; do
   # health path varies per app — bind by convention
   case "$app" in
@@ -57,16 +75,28 @@ for app in $APPS; do
     *)                       HPATH="/health"; PORT=8080 ;;
   esac
 
-  # az containerapp exec runs a command inside any running replica.
-  RESULT=$(az containerapp exec \
-    --resource-group "$RG" \
-    --name "$app" \
-    --command "curl -fsS -o /dev/null -w '%{http_code}' http://localhost:${PORT}${HPATH}" 2>&1 | tail -1)
-
-  if [[ "$RESULT" == "200" ]]; then
-    echo "  ✓ $app$HPATH → 200"
+  if [[ "$app" == "loom-console" ]]; then
+    # BLOCKING gate: retry to tolerate warm-up, then record ok/fail.
+    CONSOLE_OK="fail"
+    for i in $(seq 1 "$CONSOLE_HEALTH_RETRIES"); do
+      RESULT=$(probe_health "$app" "$HPATH" "$PORT")
+      if [[ "$RESULT" == "200" ]]; then
+        echo "  ✓ $app$HPATH → 200 (attempt $i)"
+        CONSOLE_OK="ok"
+        break
+      fi
+      echo "  … $app$HPATH → $RESULT (attempt $i/$CONSOLE_HEALTH_RETRIES; warming up)"
+      sleep "$CONSOLE_HEALTH_INTERVAL"
+    done
+    [[ "$CONSOLE_OK" != "ok" ]] && echo "  ✗ $app$HPATH never returned 200 after $CONSOLE_HEALTH_RETRIES attempts"
   else
-    echo "  ⚠ $app$HPATH → $RESULT (app may still be starting; check probes)"
+    # Informational for secondary apps.
+    RESULT=$(probe_health "$app" "$HPATH" "$PORT")
+    if [[ "$RESULT" == "200" ]]; then
+      echo "  ✓ $app$HPATH → 200"
+    else
+      echo "  ⚠ $app$HPATH → $RESULT (app may still be starting; check probes)"
+    fi
   fi
 done
 echo
@@ -123,3 +153,20 @@ echo "ℹ️  For interactive UI validation: Bastion into a jumpbox in the hub V
 echo "   browse to the Console URL above. The Console pane catalog is documented at"
 echo "   docs/fiab/console/index.md (panes: Workspaces, Lakehouse, Warehouse,"
 echo "   Notebook, Semantic Model, Activator, Data Agent, Setup Wizard)."
+echo
+
+# ---------------------------------------------------------------------
+# 6. Console-health GATE (rel-T29 / B13) — this is the real pass/fail.
+# ---------------------------------------------------------------------
+case "$CONSOLE_OK" in
+  ok)
+    echo "✅ Console health gate PASSED (in-cluster /api/health → 200)."
+    ;;
+  skip)
+    echo "::warning::loom-console not found in $RG — console health gate SKIPPED (nothing to validate)."
+    ;;
+  fail)
+    echo "::error::Console health gate FAILED — loom-console never served /api/health 200 from inside the cluster. Deploy is NOT validated."
+    exit 1
+    ;;
+esac
