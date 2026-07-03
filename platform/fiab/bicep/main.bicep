@@ -67,8 +67,9 @@ param apimSku string
 @allowed(['unity-catalog-managed', 'purview', 'atlas-aks'])
 param catalogPrimary string
 
-@description('Agent orchestrator — Foundry Agent Service (Commercial/GCC) or MAF + AOAI direct (Gov)')
+@description('Agent orchestrator — Foundry Agent Service (Commercial/GCC) or MAF + AOAI direct (Gov). Declared for the per-boundary .bicepparam contract; the behavior is driven by copilotMafEnabled + the Setup Orchestrator module, so no module consumes this value directly today (admin-plane dropped its pass-through to stay under the 256-param ARM limit).')
 @allowed(['foundry-agent-service', 'maf'])
+#disable-next-line no-unused-params
 param agentOrchestrator string
 
 @description('Capacity SKU equivalence (drives Databricks + ADX + Power BI sizing)')
@@ -949,7 +950,6 @@ module adminPlane 'modules/admin-plane/main.bicep' = if (deployAdminPlane) {
     // are dropped here so admin-plane/main.bicep builds clean.
     apimSku: apimSku
     catalogPrimary: catalogPrimary
-    agentOrchestrator: agentOrchestrator
     foundryPortalEnabled: foundryPortalEnabled
     defenderForAIEnabled: defenderForAIEnabled
     purviewEnabled: purviewEnabled

@@ -47,14 +47,12 @@ param seedSampleApi bool = true
 @description('Catalog primary')
 param catalogPrimary string
 
-@description('Agent orchestrator — part of the module param contract (set per boundary in the .bicepparam files: foundry-agent-service vs maf). Retained as a pass-through after the legacy in-array orchestrator stub was removed; the MAF tier is now driven by copilotMafEnabled and the Setup Orchestrator by its dedicated module, so this value is currently informational at this layer.')
-#disable-next-line no-unused-params
-param agentOrchestrator string
-
-// capacitySku (reserved for v3.x) was removed from this module: it was an
-// unused pass-through here (the live consumers are the landing-zone + capacity
-// modules, which still receive it from the parent main.bicep). Removing it from
-// admin-plane keeps the module under the 256-parameter Bicep/ARM limit.
+// capacitySku (reserved for v3.x) and agentOrchestrator were removed from this
+// module: both were unused pass-throughs here (capacitySku's live consumers are
+// the landing-zone + capacity modules; agentOrchestrator's behavior is driven by
+// copilotMafEnabled + the Setup Orchestrator's dedicated module — the parent
+// main.bicep still declares them for the .bicepparam contract). Removing them
+// from admin-plane keeps the module under the 256-parameter Bicep/ARM limit.
 
 @description('Foundry portal enabled')
 param foundryPortalEnabled bool
@@ -298,7 +296,7 @@ var loomConsoleTelemetryEnabled = true
 // Shared internal trust token for the MAF → Console tool-dispatch callback.
 // Deterministic on the admin RG so the value injected into BOTH the Console and
 // the MAF app matches without a round-trip. Internal-network use only.
-var loomInternalToken = guid(resourceGroup().id, 'loom-maf-internal-token-v1')
+var loomInternalToken = guid(loomGeneratedSecretSeed, 'loom-maf-internal-token-v1')
 
 // Setup Orchestrator deploys on the Container Apps boundaries (Commercial / GCC)
 // when explicitly enabled + app deploy on (it needs the image in ACR). On AKS
@@ -1040,9 +1038,13 @@ param loomMsalClientId string = ''
 @secure()
 param loomMsalClientSecret string = ''
 
-@description('Session cookie secret (HKDF input). When empty, a STABLE per-RG GUID is derived (guid(rg.id, ...)) so sign-ins survive redeploys; pass an explicit value (LOOM_SESSION_SECRET) for a tenant-managed secret. newGuid() cannot be used here because this param is also assignable from a .bicepparam, where newGuid() is invalid (BCP065).')
+@description('Session cookie secret (HKDF input). PREFER the KV-backed path: with the MSAL app-reg provisioned (default push-button + bootstrap), SESSION_SECRET is a random secret persisted in Key Vault (stable AND unpredictable). Only when that path is unavailable (app-reg opted out / bootstrap not yet run) does the fallback below apply. Pass an explicit value (LOOM_SESSION_SECRET) for a tenant-managed stable secret.')
 @secure()
 param loomSessionSecret string = ''
+
+@description('Random per-deployment seed used to derive service-auth secrets (internal token, builtin-MCP key) and the SESSION_SECRET FALLBACK when neither a Key-Vault-backed secret nor an explicit LOOM_SESSION_SECRET is available. Defaults to newGuid() so these are UNPREDICTABLE (never guid(resourceGroup().id, <public-const>), which is offline-derivable from the sub id + RG name — a session/impersonation forgery vector). NOT assignable from a .bicepparam (keeps newGuid() valid; BCP065). Trade-off: on the fallback path secrets rotate per redeploy (users re-auth after a console update) — set LOOM_SESSION_SECRET or run the bootstrap (KV-backed path) for stability. rel-T10/T10b.')
+@secure()
+param loomGeneratedSecretSeed string = newGuid()
 
 @description('Entra app-registration (MSAL) provisioning config — passed as ONE object to stay under the 256-param ARM limit (this module is already near it). Fields: enabled (bool, default true — provision the app reg + client secret + stable SESSION_SECRET in Key Vault by default, opt-out; OFF runs the Console unauth / BYO via loomMsalClientId); scriptIdentityId (UAMI with Graph app-admin + KV Secrets Officer for the in-bicep deploymentScript — empty → the post-deploy bootstrap workflow provisions the app reg, the default push-button path); scriptIdentityClientId; scriptSubnetId (VNet-inject the script to reach the PE-locked KV); consoleHosts (comma-separated redirect-URI hosts, no scheme — localhost is always added; the bootstrap adds the runtime FQDN).')
 param loomMsalAppReg object = {
@@ -1666,7 +1668,7 @@ var loomBuiltinMcpActive = loomBuiltinMcpEnabled && deployAppsEnabled
 // Deterministic key value — stable across redeploys (no churn), matching the
 // loomInternalToken pattern.
 var loomBuiltinMcpApiKeySecretName = 'loom-mcp-api-key'
-var loomBuiltinMcpApiKey = guid(resourceGroup().id, 'loom-builtin-mcp-api-key-v1')
+var loomBuiltinMcpApiKey = guid(loomGeneratedSecretSeed, 'loom-builtin-mcp-api-key-v1')
 // AI Search service name for the catalog tool (BYO or freshly provisioned).
 var effBuiltinMcpAiSearch = !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '')
 
@@ -3876,7 +3878,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // so sign-ins survive redeploys even on a bicep-only day-one deploy.
             sessionSecretKvBacked
               ? { name: 'session-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/session-secret', identity: identity.outputs.uamiConsoleId }
-              : { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
+              : { name: 'session-secret', value: empty(loomSessionSecret) ? guid(loomGeneratedSecretSeed, 'loom-session-secret-v1') : loomSessionSecret }
             // Synapse Spark → LA shared key (LOOM_SPARK_LA_KEY secretRef). Always
             // present — sourced from the always-deployed monitoring LAW's listKeys.
             { name: 'spark-la-key', value: monitoring.outputs.lawSharedKey }
