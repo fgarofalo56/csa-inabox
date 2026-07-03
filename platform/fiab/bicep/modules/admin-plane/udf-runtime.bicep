@@ -79,7 +79,12 @@ resource udf 'Microsoft.App/containerApps@2024-03-01' = if (udfRuntimeEnabled) {
     configuration: {
       activeRevisionsMode: 'Single'
       ingress: {
-        external: true
+        // INTERNAL ingress: (a) the runtime executes author-owned code and must
+        // never be publicly reachable; (b) on an internal ACA environment only
+        // the `<app>.internal.<env-domain>` FQDN resolves from sibling apps —
+        // with external:true the console's server-side fetch to the apex-form
+        // FQDN failed DNS (live-caught, rel-T05). hostUrl output stays correct.
+        external: false
         targetPort: hostPort
         transport: 'auto'
         allowInsecure: false
