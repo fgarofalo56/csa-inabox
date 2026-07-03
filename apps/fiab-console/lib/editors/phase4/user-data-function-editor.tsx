@@ -107,22 +107,36 @@ import {
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
 import { arr, useItemState, SaveBar, useStyles } from './shared';
+import { clientFetch } from '@/lib/client-fetch';
 
 // ----- User Data Function (Fabric UDF — code, test/invoke, connections, libraries) -----
 const UDF_SAMPLE = `import datetime\nimport fabric.functions as fn\nimport logging\n\nudf = fn.UserDataFunctions()\n\n@udf.function()\ndef compute_score(user_id: str, weight: float = 1.0) -> dict:\n    logging.info('Python UDF trigger function processed a request.')\n    return {"user": user_id, "score": weight * 42}`;
 interface UdfLibrary { name: string; version?: string; kind: 'pypi' | 'wheel' }
+/** A reference to a reusable, Key Vault-backed Loom Connection (GET /api/connections). */
+interface UdfConnectionRef { id: string; name: string; type?: string }
 interface UdfState {
   runtime: 'python';
   entrypoint: string;
   source: string;
+  /** @deprecated freeform comma list — superseded by structured `connectionRefs`. */
   connections: string;
+  /** Declared data-source bindings selected from the shared Connections catalog. */
+  connectionRefs?: UdfConnectionRef[];
   libraries: UdfLibrary[];
-  // Set once the item is published to a Fabric workspace.
+  // Azure-native execution endpoint (BYO Azure Functions) — read by the invoke
+  // route (app/api/items/user-data-function/[id]/invoke): azureFunctionUrl
+  // overrides LOOM_UDF_FUNCTION_BASE; functionKeySecret names the KV secret
+  // holding the function key sent as x-functions-key.
+  azureFunctionUrl?: string;
+  functionKeySecret?: string;
+  // Set once the item is published to a Fabric workspace (opt-in only).
   fabricEndpoint?: string;
   fabricWorkspaceId?: string;
   fabricItemId?: string;
   [k: string]: unknown;
 }
+/** Public (no-secret) connection shape returned by GET /api/connections. */
+interface ConnectionView { id: string; name: string; type: string }
 
 export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
@@ -137,13 +151,33 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const [testFn, setTestFn] = useState('');
   const [testParams, setTestParams] = useState<Record<string, string>>({});
   const [testBusy, setTestBusy] = useState(false);
-  const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string } | null>(null);
+  const [testOut, setTestOut] = useState<{ ok: boolean; status?: number; body?: string; note?: string } | null>(null);
   const [testGate, setTestGate] = useState<string | null>(null);
   const selectedFn = functions.find((f) => f.name === testFn) || functions[0];
 
-  // Generate invocation code dialog.
+  // Generate invocation code dialog. Azure Functions (Azure-native) is the
+  // DEFAULT target; the Fabric/mssparkutils variant is offered only when this
+  // item opts into a Fabric backend (per .claude/rules/no-fabric-dependency.md).
   const [genOpen, setGenOpen] = useState(false);
-  const [genTarget, setGenTarget] = useState<'notebook' | 'python' | 'openapi'>('notebook');
+  const fabricOptIn = !!(state.fabricEndpoint || state.fabricWorkspaceId);
+  const [genTarget, setGenTarget] = useState<'functions' | 'notebook' | 'openapi' | 'fabric'>('functions');
+  // If the item is not Fabric-opted-in but the tab somehow lands on 'fabric',
+  // fall back to the Azure-native default so no Fabric-only surface is shown.
+  const effectiveGenTarget = (genTarget === 'fabric' && !fabricOptIn) ? 'functions' : genTarget;
+
+  // Reusable, Key Vault-backed Loom Connections (shared Connections catalog).
+  const connQuery = useQuery({
+    queryKey: ['udf-connections'],
+    queryFn: async (): Promise<ConnectionView[]> => {
+      const r = await clientFetch('/api/connections', { cache: 'no-store' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok || !j?.ok) throw new Error(j?.error || `HTTP ${r.status}`);
+      return (Array.isArray(j.connections) ? j.connections : []) as ConnectionView[];
+    },
+  });
+  const availableConns = connQuery.data || [];
+  const connectionRefs = arr<UdfConnectionRef>(state.connectionRefs);
+  const selectedConnIds = connectionRefs.map((c) => c.id);
 
   // Library form.
   const [libName, setLibName] = useState('');
@@ -175,7 +209,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       });
       const j = await r.json();
       if (r.status === 409 && j.gated) { setTestGate(j.hint || j.error); return; }
-      setTestOut({ ok: j.ok, status: j.status, body: j.body || j.error });
+      setTestOut({ ok: j.ok, status: j.status, body: j.body || j.error, note: j.note });
     } catch (e: any) { setTestOut({ ok: false, body: e?.message || String(e) }); }
     finally { setTestBusy(false); }
   }, [id, selectedFn, testParams]);
@@ -183,17 +217,50 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
   const invocationCode = useMemo(() => {
     const fn = selectedFn;
     if (!fn) return '# Add a function to generate invocation code';
-    const argList = fn.params.map((p) => `${p.name}=${p.type && /int|float|number/i.test(p.type) ? '0' : '"value"'}`).join(', ');
-    if (genTarget === 'notebook') {
-      return `# Fabric Notebook (mssparkutils)\nimport notebookutils\nresult = notebookutils.udf.run("${item.displayName || id}", "${fn.name}", { ${fn.params.map((p) => `"${p.name}": "value"`).join(', ')} })\ndisplay(result)`;
+    const jsonArgs = fn.params.map((p) => `"${p.name}": ${p.type && /int|float|number/i.test(p.type) ? '0' : p.type && /bool/i.test(p.type) ? 'True' : '"value"'}`).join(', ');
+    const fnBase = (state.azureFunctionUrl || '').trim() || 'https://<fnapp>.azurewebsites.net';
+    const keySecret = (state.functionKeySecret || '').trim() || 'udf-fnapp-key';
+
+    if (effectiveGenTarget === 'functions') {
+      // Azure-native DEFAULT: POST {fnBase}/api/<fn> with x-functions-key (or Entra).
+      return `# Azure Functions (HTTP) — Azure-native default\n`
+        + `import requests\n`
+        + `# Function key from your secret store (Key Vault secret: ${keySecret}).\n`
+        + `resp = requests.post(\n`
+        + `    "${fnBase}/api/${fn.name}",\n`
+        + `    headers={"x-functions-key": "<FUNCTION_KEY>"},\n`
+        + `    json={ ${jsonArgs} },\n`
+        + `)\n`
+        + `print(resp.status_code, resp.json())\n\n`
+        + `# Entra-protected function App instead of a key:\n`
+        + `#   from azure.identity import DefaultAzureCredential\n`
+        + `#   token = DefaultAzureCredential().get_token("<APP_ID_URI>/.default").token\n`
+        + `#   headers={"Authorization": f"Bearer {token}"}`;
     }
-    if (genTarget === 'python') {
-      return `# Python client (external app)\nimport requests\nfrom azure.identity import DefaultAzureCredential\n\ntoken = DefaultAzureCredential().get_token("https://api.fabric.microsoft.com/.default").token\nresp = requests.post(\n    "<UDF_ENDPOINT>/functions/${fn.name}/invoke",\n    headers={"Authorization": f"Bearer {token}"},\n    json={ ${fn.params.map((p) => `"${p.name}": "value"`).join(', ')} },\n)\nprint(resp.status_code, resp.json())`;
+    if (effectiveGenTarget === 'notebook') {
+      // Synapse / Databricks notebook — call the same Azure-native HTTP endpoint.
+      return `# Synapse / Databricks notebook (PySpark) — call the Loom UDF over HTTP\n`
+        + `import requests\n`
+        + `# Databricks: key = dbutils.secrets.get(scope="loom", key="${keySecret}")\n`
+        + `# Synapse:    key = mssparkutils.credentials.getSecret("<key-vault>", "${keySecret}")\n`
+        + `resp = requests.post(\n`
+        + `    "${fnBase}/api/${fn.name}",\n`
+        + `    headers={"x-functions-key": key},\n`
+        + `    json={ ${jsonArgs} },\n`
+        + `)\n`
+        + `display(resp.json())`;
     }
-    // OpenAPI fragment for the function.
+    if (effectiveGenTarget === 'fabric') {
+      // OPT-IN ONLY — shown when the item binds a Fabric backend.
+      return `# Fabric Notebook (notebookutils) — Fabric backend (opt-in)\n`
+        + `import notebookutils\n`
+        + `result = notebookutils.udf.run("${item.displayName || id}", "${fn.name}", { ${fn.params.map((p) => `"${p.name}": "value"`).join(', ')} })\n`
+        + `display(result)`;
+    }
+    // OpenAPI fragment for the function (Azure Functions HTTP route).
     const props = fn.params.map((p) => `        "${p.name}": { "type": "${p.type && /int|float|number/i.test(p.type) ? 'number' : p.type && /bool/i.test(p.type) ? 'boolean' : 'string'}" }`).join(',\n');
-    return `{\n  "openapi": "3.0.1",\n  "info": { "title": "${item.displayName || id}", "version": "1.0" },\n  "paths": {\n    "/functions/${fn.name}/invoke": {\n      "post": {\n        "operationId": "${fn.name}",\n        "requestBody": { "content": { "application/json": { "schema": {\n          "type": "object",\n          "properties": {\n${props}\n          }\n        } } } },\n        "responses": { "200": { "description": "OK" } }\n      }\n    }\n  }\n}`;
-  }, [selectedFn, genTarget, id, item.displayName]);
+    return `{\n  "openapi": "3.0.1",\n  "info": { "title": "${item.displayName || id}", "version": "1.0" },\n  "paths": {\n    "/api/${fn.name}": {\n      "post": {\n        "operationId": "${fn.name}",\n        "requestBody": { "content": { "application/json": { "schema": {\n          "type": "object",\n          "properties": {\n${props}\n          }\n        } } } },\n        "responses": { "200": { "description": "OK" } }\n      }\n    }\n  }\n}`;
+  }, [selectedFn, effectiveGenTarget, id, item.displayName, state.azureFunctionUrl, state.functionKeySecret]);
 
   const ribbon: RibbonTab[] = useMemo(() => [
     { id: 'home', label: 'Home', groups: [
@@ -264,16 +331,65 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
               <>
                 <Caption1>Output {testOut.status != null ? `(HTTP ${testOut.status})` : ''}</Caption1>
                 <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 200 }}>{testOut.body || '(empty)'}</div>
+                {testOut.note && (
+                  <MessageBar intent="info"><MessageBarBody>{testOut.note}</MessageBarBody></MessageBar>
+                )}
               </>
             )}
           </div>
 
-          {/* Manage connections */}
-          <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Link20Regular className={s.secHeadIcon} /><Subtitle2>Manage connections (Fabric data sources)</Subtitle2></div>
-          <Input value={state.connections} onChange={(_, d) => setState((p) => ({ ...p, connections: d.value }))} placeholder="fin-warehouse, ldn-gold-lakehouse" />
+          {/* Execution endpoint — Azure-native BYO Azure Functions target */}
+          <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Settings20Regular className={s.secHeadIcon} /><Subtitle2>Execution endpoint</Subtitle2></div>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Azure-native run target. Leave blank to use the shared runtime (<code>LOOM_UDF_FUNCTION_BASE</code>), which executes this item&apos;s authored source. Set a Function App to run your own deployed code.
+          </Caption1>
+          <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalXS }}>
+            <Field label="Function App base URL" hint="e.g. https://my-udf.azurewebsites.net — overrides LOOM_UDF_FUNCTION_BASE for this item.">
+              <Input value={state.azureFunctionUrl || ''} onChange={(_, d) => setState((p) => ({ ...p, azureFunctionUrl: d.value }))} placeholder="https://<fnapp>.azurewebsites.net" />
+            </Field>
+            <Field label="Function key — Key Vault secret name" hint="Optional. KV secret holding the function key (sent as x-functions-key). Blank = anonymous / Entra-protected.">
+              <Input value={state.functionKeySecret || ''} onChange={(_, d) => setState((p) => ({ ...p, functionKeySecret: d.value }))} placeholder="udf-fnapp-key" />
+            </Field>
+          </div>
+
+          {/* Manage connections — reusable, Key Vault-backed Loom Connections */}
+          <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><Link20Regular className={s.secHeadIcon} /><Subtitle2>Manage connections (data-source bindings)</Subtitle2></div>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
+            <Field label="Connections" style={{ minWidth: 320, flex: 1 }} hint={connQuery.isError ? undefined : 'Select reusable Loom Connections to declare as this function’s data sources.'} validationState={connQuery.isError ? 'error' : 'none'} validationMessage={connQuery.isError ? String((connQuery.error as any)?.message || 'Failed to load connections') : undefined}>
+              <Dropdown
+                multiselect
+                placeholder={connQuery.isLoading ? 'Loading connections…' : availableConns.length ? 'Select connections' : 'No connections yet'}
+                disabled={connQuery.isLoading || availableConns.length === 0}
+                selectedOptions={selectedConnIds}
+                value={connectionRefs.map((c) => c.name).join(', ')}
+                onOptionSelect={(_, d) => {
+                  const ids = d.selectedOptions;
+                  const refs: UdfConnectionRef[] = availableConns
+                    .filter((c) => ids.includes(c.id))
+                    .map((c) => ({ id: c.id, name: c.name, type: c.type }));
+                  setState((p) => ({ ...p, connectionRefs: refs }));
+                }}
+              >
+                {availableConns.map((c) => <Option key={c.id} value={c.id} text={c.name}>{c.name} · {c.type}</Option>)}
+              </Dropdown>
+            </Field>
+            <Button icon={<Add16Regular />} onClick={() => window.open('/connections', '_blank', 'noopener')}>New connection</Button>
+          </div>
+          <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalXS }}>
+            <MessageBarBody>
+              <MessageBarTitle>How bindings resolve</MessageBarTitle>
+              Selected connections are saved as this function&apos;s declared data-source bindings. The shared Loom runtime executes your function&apos;s compute logic; when a function actually calls a data-source binding it returns an honest HTTP 409 until that connection is wired into the runtime. On a BYO Azure Functions endpoint (above), bindings resolve through your Function App&apos;s own configuration.
+            </MessageBarBody>
+          </MessageBar>
 
           {/* Library management */}
           <div className={s.secHead} style={{ marginTop: tokens.spacingVerticalS }}><DataUsage20Regular className={s.secHeadIcon} /><Subtitle2>Library management</Subtitle2></div>
+          <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalXS }}>
+            <MessageBarBody>
+              <MessageBarTitle>Standard library only on the shared runtime</MessageBarTitle>
+              The shared Loom UDF runtime runs the Python standard library only — packages added here are not pip-installed by it, so standard-library imports run today while third-party imports would fail there. Packages are recorded as this function&apos;s requirements and take effect when you deploy to your own Azure Function App (the Execution endpoint above), which installs them from <code>requirements.txt</code>.
+            </MessageBarBody>
+          </MessageBar>
           <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end', flexWrap: 'wrap' }}>
             <Field label="Package"><Input value={libName} onChange={(_, d) => setLibName(d.value)} placeholder="numpy" /></Field>
             <Field label="Version"><Input value={libVer} onChange={(_, d) => setLibVer(d.value)} placeholder="2.0.0" style={{ width: 120 }} /></Field>
@@ -309,10 +425,11 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
                 <DialogTitle>Generate invocation code — {selectedFn?.name}</DialogTitle>
                 <DialogContent>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM }}>
-                    <TabList selectedValue={genTarget} onTabSelect={(_, d) => setGenTarget(d.value as typeof genTarget)}>
+                    <TabList selectedValue={effectiveGenTarget} onTabSelect={(_, d) => setGenTarget(d.value as typeof genTarget)}>
+                      <Tab value="functions">Azure Functions</Tab>
                       <Tab value="notebook">Notebook</Tab>
-                      <Tab value="python">Python client</Tab>
                       <Tab value="openapi">OpenAPI</Tab>
+                      {fabricOptIn && <Tab value="fabric">Fabric</Tab>}
                     </TabList>
                     <div className={s.monaco} style={{ whiteSpace: 'pre-wrap', overflow: 'auto', maxHeight: 320 }}>{invocationCode}</div>
                     <Button onClick={() => navigator.clipboard?.writeText(invocationCode).catch(() => {})}>Copy</Button>

@@ -76,12 +76,30 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       // default runtime silently ran compute_score for every function (rel-T05).
       // A real Azure Functions host ignores the unknown header and runs its
       // deployed code, so it is safe to always send when we have source.
-      if (typeof st.source === 'string' && st.source.trim()) {
-        headers['x-udf-source-b64'] = Buffer.from(st.source, 'utf-8').toString('base64');
+      let ranAuthoredSource = false;
+      const src = typeof st.source === 'string' ? st.source : '';
+      if (src.trim()) {
+        const b64 = Buffer.from(src, 'utf-8').toString('base64');
+        // Guard against unbounded request headers (most gateways cap total header
+        // size at 8–64KB). 256KB of base64 (~192KB of source) is far past any real
+        // UDF; beyond it we let the deployed/bundled code run rather than push source.
+        if (b64.length <= 256 * 1024) {
+          headers['x-udf-source-b64'] = b64;
+          ranAuthoredSource = true;
+        }
       }
       const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(parameters) });
       const text = await res.text();
-      return NextResponse.json({ ok: res.ok, backend: 'azure-functions', status: res.status, body: text });
+      return NextResponse.json({
+        ok: res.ok, backend: 'azure-functions', status: res.status, body: text,
+        // Be explicit when we did NOT run the item's authored source, so the Test
+        // panel result is never silently the bundled sample (no-vaporware.md).
+        ...(ranAuthoredSource ? {} : {
+          note: src.trim()
+            ? 'Authored source exceeded the inline size limit; the deployed Function App code ran instead. Deploy this source to the Function App to run it verbatim.'
+            : 'This item has no authored source; the runtime executed its bundled/deployed function.',
+        }),
+      });
     } catch (e: any) {
       return NextResponse.json({ ok: false, backend: 'azure-functions', error: e?.message || String(e) }, { status: 502 });
     }

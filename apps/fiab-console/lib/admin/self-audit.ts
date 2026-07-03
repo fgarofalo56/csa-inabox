@@ -545,7 +545,7 @@ export const ENV_CHECKS: EnvSpec[] = [
   {
     id: 'svc-udf-function', category: 'builders', title: 'User data functions — Azure Functions run target', severity: 'optional',
     required: ['LOOM_UDF_FUNCTION_BASE'], warnOnMiss: true,
-    remediation: 'Set LOOM_UDF_FUNCTION_BASE to the Azure Function App base URL (e.g. https://my-udf.azurewebsites.net) that hosts published user-data-functions — the Azure-native invoke backend. A per-item state.azureFunctionUrl overrides it; a Fabric backend is opt-in ONLY via LOOM_UDF_BACKEND=fabric. The editor + code authoring work without it — only Invoke is gated.',
+    remediation: 'Set LOOM_UDF_FUNCTION_BASE to the shared Loom UDF runtime (or an Azure Function App) base URL (e.g. https://my-udf.azurewebsites.net) — the Azure-native invoke backend. The invoke route forwards the item\'s authored source (x-udf-source-b64) so the shared runtime executes THIS function, not a bundled sample. A per-item state.azureFunctionUrl overrides the base URL; a Fabric backend is opt-in ONLY via LOOM_UDF_BACKEND=fabric. The editor + code authoring work without it — only Invoke is gated.',
     provisionedBy: 'set via env (not yet bicep-emitted) — deploy an Azure Functions app; POST /api/items/user-data-function/[id]/invoke reads it',
     role: 'none (HTTPS endpoint); if the function requires a key, set state.functionKeySecret to the Key Vault secret name',
   },
