@@ -25,6 +25,38 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.51.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.50.0...csa-inabox-v0.51.0) (2026-07-03)
+
+
+### Features
+
+* **loom,authz:** tid-partitioned multi-user ACL — second user can open shared workspaces (rel-T11/B4) ([#1601](https://github.com/fgarofalo56/csa-inabox/issues/1601)) ([a85fdd3](https://github.com/fgarofalo56/csa-inabox/commit/a85fdd3ed800b804a49fbcae108d1cd2afbd4c8f))
+* **loom,ci:** gate prod roll on vitest + in-VNet UAT, PR-gate CodeQL, wire guard:circular (rel-T22/T27/T29, B13) ([#1618](https://github.com/fgarofalo56/csa-inabox/issues/1618)) ([0ccdd52](https://github.com/fgarofalo56/csa-inabox/commit/0ccdd52f7400e1f818d8b3aa79b2c2f15d8517b9))
+* **loom,security:** default-on durable rate limiting + authenticated feedback (rel-T15/T16, B16) ([#1600](https://github.com/fgarofalo56/csa-inabox/issues/1600)) ([802c26d](https://github.com/fgarofalo56/csa-inabox/commit/802c26d7485cfa1b83fc90504395e6c71342d4ae))
+
+
+### Bug Fixes
+
+* **loom,auth:** OAuth state + PKCE + nonce on the MSAL BFF flow (rel-T12) ([#1597](https://github.com/fgarofalo56/csa-inabox/issues/1597)) ([d1738e4](https://github.com/fgarofalo56/csa-inabox/commit/d1738e4de66e7b9122aa6c2ca4be36464e7a80f4))
+* **loom,authz:** ACL-resolve workspace detail + items routes (rel-T11 live-caught) ([#1620](https://github.com/fgarofalo56/csa-inabox/issues/1620)) ([6bef2e2](https://github.com/fgarofalo56/csa-inabox/commit/6bef2e210650e293dccf7323ff483cb6a4a44151))
+* **loom,ci:** allowlist session-optional feedback route in route-guard sweep ([#1605](https://github.com/fgarofalo56/csa-inabox/issues/1605)) ([278fc6f](https://github.com/fgarofalo56/csa-inabox/commit/278fc6f0515267fceb95e74906c19b050e724572))
+* **loom,security:** ACL-gate data-product preview + per-user notebook contents (rel-T18/T19) ([#1604](https://github.com/fgarofalo56/csa-inabox/issues/1604)) ([d92f930](https://github.com/fgarofalo56/csa-inabox/commit/d92f930b840ac2a2bf8c6bc3c093164d85780265))
+* **loom,security:** per-service internal tokens + Front Door block for /api/internal/* (rel-T10/B3) ([#1598](https://github.com/fgarofalo56/csa-inabox/issues/1598)) ([c31267e](https://github.com/fgarofalo56/csa-inabox/commit/c31267eca201e3aaf1db5cd1e7b53e25d3a1be22))
+* **loom,security:** route-guard sweep across all api groups + consistent admin gate + PDP shadow-on (rel-T17/T20) ([#1602](https://github.com/fgarofalo56/csa-inabox/issues/1602)) ([0e8f4a3](https://github.com/fgarofalo56/csa-inabox/commit/0e8f4a370e5efb45135c28d619c52cfb9c4394ec))
+* **loom,security:** SSRF guard on MCP test-connection + fail-closed admin tier (rel-T13/T14) ([#1599](https://github.com/fgarofalo56/csa-inabox/issues/1599)) ([ea2d29b](https://github.com/fgarofalo56/csa-inabox/commit/ea2d29bd673e2f43a6aa996399a531a6860fac1e))
+
+
+### Documentation
+
+* **session:** Wave-0 landing + live-verification session state (2026-07-03) ([#1595](https://github.com/fgarofalo56/csa-inabox/issues/1595)) ([23454a0](https://github.com/fgarofalo56/csa-inabox/commit/23454a036eaf44faf5726cbe12064b23d87d2575))
+
+
+### Tests
+
+* **loom,ci:** green vitest suite + vitest/lint CI gates + validate exits non-zero (rel-T21/T24/T25/T26, B13) ([#1603](https://github.com/fgarofalo56/csa-inabox/issues/1603)) ([528f31b](https://github.com/fgarofalo56/csa-inabox/commit/528f31b5e6eadecd1f58f8d05f016ff216038b2f))
+* **loom,e2e:** coverage floor + 10-journey UAT slice + parameterized target (rel-T28/T30) ([#1619](https://github.com/fgarofalo56/csa-inabox/issues/1619)) ([b601f66](https://github.com/fgarofalo56/csa-inabox/commit/b601f660af36ba6ced73a49c63d052a8612636f2))
+* **loom:** green vitest against merged Wave-1 security behavior (rate-limit off in harness, tenantScopeId mocks, guard-order assertions) ([#1606](https://github.com/fgarofalo56/csa-inabox/issues/1606)) ([ef22ba1](https://github.com/fgarofalo56/csa-inabox/commit/ef22ba1e1279ed456db14e4ce1d82c4de1e31de2))
+
 ## [0.50.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.49.0...csa-inabox-v0.50.0) (2026-07-03)
 
 
