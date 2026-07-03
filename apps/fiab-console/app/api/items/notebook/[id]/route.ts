@@ -13,6 +13,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import { migrateLegacyState, type NotebookCell, type NotebookCellLang } from '@/lib/types/notebook-cell';
@@ -156,6 +157,7 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('notebook not found', 404);
   try {
     const items = await itemsContainer();
     await items.item((await ctx.params).id, workspaceId).delete();

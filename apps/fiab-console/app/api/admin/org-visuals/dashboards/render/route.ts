@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { getDashboard } from '@/lib/coe-library/builder/dashboard-store';
 import {
   synthReportModel, synthSampleData, type DashboardSpec, type TileVisual,
@@ -114,6 +115,8 @@ function placeholderTable(columns: string[], tile: { category?: string; value: s
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const url = new URL(req.url);
   const id = url.searchParams.get('id')?.trim();
   if (!id) return apiError('id is required', 400);
@@ -136,6 +139,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   let body: any = {};
   try { body = await req.json(); } catch { /* empty */ }
   const spec = coerceSpec(body?.spec);

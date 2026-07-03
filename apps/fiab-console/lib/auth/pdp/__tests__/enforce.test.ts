@@ -12,7 +12,7 @@
  *   - enforce + deny            → returns a 403 NextResponse { ok:false }.
  *   - enforce + allow           → returns null.
  *   - enforce + authorize THROW → fail-closed 403.
- *   - pdpEnforceMode()          → parsing + default-off.
+ *   - pdpEnforceMode()          → parsing + default-shadow (rel-T20).
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Decision } from '../resource-ref';
@@ -58,26 +58,37 @@ afterEach(() => {
 });
 
 describe('pdpEnforceMode()', () => {
-  it('defaults to off when unset', () => {
+  it('defaults to shadow when unset (rel-T20 default-shadow)', () => {
     delete process.env.LOOM_PDP_ENFORCE;
-    expect(pdpEnforceMode()).toBe('off');
-  });
-  it('parses shadow/enforce case-insensitively, unknown → off', () => {
-    process.env.LOOM_PDP_ENFORCE = 'Shadow';
     expect(pdpEnforceMode()).toBe('shadow');
+  });
+  it('parses off/enforce case-insensitively, unknown → shadow', () => {
+    process.env.LOOM_PDP_ENFORCE = 'Off';
+    expect(pdpEnforceMode()).toBe('off');
     process.env.LOOM_PDP_ENFORCE = 'ENFORCE';
     expect(pdpEnforceMode()).toBe('enforce');
     process.env.LOOM_PDP_ENFORCE = 'whatever';
-    expect(pdpEnforceMode()).toBe('off');
+    expect(pdpEnforceMode()).toBe('shadow');
   });
 });
 
-describe('pdpCheck() — off', () => {
-  it('returns null and NEVER calls authorize', async () => {
-    delete process.env.LOOM_PDP_ENFORCE;
+describe('pdpCheck() — off (explicit opt-out)', () => {
+  it('returns null and NEVER calls authorize when LOOM_PDP_ENFORCE=off', async () => {
+    process.env.LOOM_PDP_ENFORCE = 'off';
     const res = await pdpCheck(SESSION, REF, 'read');
     expect(res).toBeNull();
     expect(authorizeMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('pdpCheck() — default (unset → shadow)', () => {
+  it('evaluates + logs but returns null (never blocks) when LOOM_PDP_ENFORCE is unset', async () => {
+    delete process.env.LOOM_PDP_ENFORCE;
+    authorizeMock.mockResolvedValue(deny());
+    const res = await pdpCheck(SESSION, REF, 'read');
+    expect(res).toBeNull(); // default shadow never blocks
+    expect(authorizeMock).toHaveBeenCalledOnce();
+    expect(createMock).toHaveBeenCalledOnce();
   });
 });
 

@@ -18,6 +18,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
@@ -52,6 +53,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('airflow job not found', 404);
   const dagId = req.nextUrl.searchParams.get('dagId');
   if (!dagId) return err('dagId required', 400);
   try {
@@ -100,6 +102,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('airflow job not found', 404);
   const body = await req.json().catch(() => ({} as any));
   const dagId = String(body?.dagId || '').trim();
   if (!dagId) return err('dagId required', 400);

@@ -27,6 +27,7 @@
 import { NextResponse } from 'next/server';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   workspacesContainer,
   itemsContainer,
@@ -214,6 +215,8 @@ async function sensitivityLabelCount(): Promise<number> {
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
 
   const [

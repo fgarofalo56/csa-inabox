@@ -30,6 +30,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { metersForServices, meterSkuFromConfig, configFor, coerceConfigValue } from '@/lib/components/deploy-planner/service-catalog';
 import { BOUNDARY_DEFAULT_REGION } from '@/lib/components/deploy-planner/bicepparam';
 import { normalizeCurrency, normalizeRegion, DEFAULT_CURRENCY } from '@/lib/components/deploy-planner/cost-options';
@@ -136,6 +137,8 @@ function sanitizeSubscription(raw: any): PlanSubscription {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({}));
   const sub = sanitizeSubscription(body?.subscription);

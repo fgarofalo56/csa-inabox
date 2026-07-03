@@ -7,6 +7,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { runMountedFactoryPipeline, type MountedFactoryRef } from '@/lib/azure/adf-client';
@@ -21,6 +22,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('mounted data factory not found', 404);
   const body = await req.json().catch(() => ({}));
   const pipelineName = String(body?.pipelineName || '').trim();
   if (!pipelineName) return apiError('pipelineName required', 400);

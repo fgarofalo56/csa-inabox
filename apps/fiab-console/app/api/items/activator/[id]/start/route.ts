@@ -14,6 +14,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { startReflex, ActivatorError } from '@/lib/azure/activator-client';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { loadContentBackedItem } from '../../../_lib/ai-content-fallback';
@@ -30,6 +31,7 @@ export async function POST(req: NextRequest, ctx: { params: { id: string } }) {
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'activator not found' }, { status: 404 });
 
   // Azure-native default: re-enable each rule's Azure Monitor scheduledQueryRule
   // (PATCH enabled:true) so "start" actually resumes evaluation. UNSCHEDULED

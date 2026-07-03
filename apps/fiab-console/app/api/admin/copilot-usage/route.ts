@@ -18,6 +18,7 @@
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { queryLogs, MonitorNotConfiguredError, type LogQueryResult } from '@/lib/azure/monitor-client';
 
 export const runtime = 'nodejs';
@@ -30,6 +31,8 @@ const strAt = (row: unknown[], i: number) => (i < 0 ? '' : String(row[i] ?? ''))
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
 
   const days = Math.max(1, Math.min(90, Number(req.nextUrl.searchParams.get('days') || '30') || 30));
   const timespan = `P${days}D`;

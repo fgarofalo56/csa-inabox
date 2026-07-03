@@ -49,6 +49,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import {
   AasError,
   buildCompositeTmsl,
@@ -99,7 +100,9 @@ function dqGate(missing: string, detail: string) {
   return NextResponse.json({ ok: false, code: 'not_configured', missing, error: detail }, { status: 503 });
 }
 
-async function dqFindItem(itemId: string): Promise<WorkspaceItem | null> {
+/** Resolve an item by id cross-partition, then verify the caller's tenant owns
+ *  its workspace — never returns another tenant's item. */
+async function dqFindItem(itemId: string, ownerOid: string): Promise<WorkspaceItem | null> {
   try {
     const items = await itemsContainer();
     const { resources } = await items.items
@@ -108,15 +111,18 @@ async function dqFindItem(itemId: string): Promise<WorkspaceItem | null> {
         parameters: [{ name: '@id', value: itemId }],
       })
       .fetchAll();
-    return resources[0] ?? null;
+    const item = resources[0] ?? null;
+    if (!item) return null;
+    if (!(await assertOwner(item.workspaceId, ownerOid))) return null;
+    return item;
   } catch {
     return null;
   }
 }
 
-async function dqSaveConfig(itemId: string | null, config: DqSourceConfig): Promise<boolean> {
+async function dqSaveConfig(itemId: string | null, ownerOid: string, config: DqSourceConfig): Promise<boolean> {
   if (!itemId) return false;
-  const existing = await dqFindItem(itemId);
+  const existing = await dqFindItem(itemId, ownerOid);
   if (!existing) return false;
   const items = await itemsContainer();
   const next: WorkspaceItem = {
@@ -143,7 +149,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!session) return dqErr('unauthenticated', 401);
   await ctx.params;
   const itemId = req.nextUrl.searchParams.get('itemId');
-  const existing = itemId ? await dqFindItem(itemId) : null;
+  const existing = itemId ? await dqFindItem(itemId, session.claims.oid) : null;
   const config = (existing?.state as any)?.dqSource ?? null;
   return NextResponse.json({ ok: true, config });
 }
@@ -251,7 +257,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         appliedAt: new Date().toISOString(),
       };
       await applyDqSource(config);
-      const persisted = await dqSaveConfig(itemId, config);
+      const persisted = await dqSaveConfig(itemId, session.claims.oid, config);
       return NextResponse.json({ ok: true, action: 'applied', config, persisted });
     }
 
@@ -264,7 +270,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         tables,
         appliedAt: new Date().toISOString(),
       };
-      const persisted = await dqSaveConfig(itemId, config);
+      const persisted = await dqSaveConfig(itemId, session.claims.oid, config);
       return NextResponse.json({ ok: true, action: 'saved', config, persisted });
     }
 
@@ -307,6 +313,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  if (!(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
   const id = (await ctx.params).id;
 
   const body = (await req.json().catch(() => ({}))) as DatasourceBody;

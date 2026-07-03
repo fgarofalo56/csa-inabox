@@ -66,15 +66,23 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, '..', '..');
 const CONSOLE_ROOT = path.join(REPO_ROOT, 'apps', 'fiab-console');
 
-const ITEMS_ROOT = path.join(CONSOLE_ROOT, 'app', 'api', 'items');
-const ADMIN_DIR = path.join(CONSOLE_ROOT, 'app', 'api', 'admin');
-const ADX_DIR = path.join(CONSOLE_ROOT, 'app', 'api', 'adx');
+const API_ROOT = path.join(CONSOLE_ROOT, 'app', 'api');
 
 const GUARD_SIGNAL_RE = new RegExp(
   [
     'loadOwnedItem', 'updateOwnedItem', 'deleteOwnedItem', 'assertOwner',
+    // createOwnedItem / the recycle-bin + list helpers all resolve the caller's
+    // workspace ownership (session.claims.oid partition) INSIDE the helper, so a
+    // route that threads one of them is owner-scoped even without a literal
+    // claims.oid in the handler.
+    'createOwnedItem', 'softDeleteOwnedItem', 'restoreOwnedItem',
+    'purgeRecycledItem', 'loadRecycledItem', 'listOwnedItems', 'listAllOwnedItems',
     'authorizeWorkspace', 'requireWorkspace', 'requireTenantAdmin',
     'isTenantAdmin', 'isTenantAdminTier', 'requireDomainRole', 'enforceCapability',
+    // domain-tier / DLZ-pane / ops-admin gates: tenant-admin OR domain-admin
+    // (canAccessDlzPanes / isAtLeastDomainAdmin) or a purpose-built ops-admin
+    // role (callerIsOpsAdmin) — all real admin-tier authz, not a bare session.
+    'canAccessDlzPanes', 'isAtLeastDomainAdmin', 'isAtLeastDomainContributor', 'callerIsOpsAdmin',
     'denyIfNoDlzAccess', 'pdpCheck', 'loadContentBackedItem',
     // ADX/KQL data-plane owner-checks: guardAdxRequest owner-checks the bound
     // kql-database item (session.claims.oid → loadKustoItem) + config gate;
@@ -85,24 +93,6 @@ const GUARD_SIGNAL_RE = new RegExp(
   ].join('|'),
 );
 
-/** The `<type>/[id]` directories under app/api/items (both the generic
- *  `[type]/[id]` and every specific-type `data-agent/[id]`, `activator/[id]`,
- *  …). Skips the `_lib` helper folder (not a route dir). */
-function itemIdDirs() {
-  const out = [];
-  let types;
-  try {
-    types = fs.readdirSync(ITEMS_ROOT, { withFileTypes: true });
-  } catch {
-    return out;
-  }
-  for (const t of types) {
-    if (!t.isDirectory() || t.name === '_lib') continue;
-    const idDir = path.join(ITEMS_ROOT, t.name, '[id]');
-    if (fs.existsSync(idDir)) out.push(idDir);
-  }
-  return out;
-}
 
 const MUTATING_EXPORT_RE = /export\s+async\s+function\s+(POST|PUT|PATCH|DELETE)\b/;
 const GET_EXPORT_RE = /export\s+async\s+function\s+GET\b/;
@@ -367,7 +357,78 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/warehouse/[id]/schema/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/script-out/route.ts',
 ];
+// ── Routes that USED to be allowlisted as "shared backend / no ownership to
+// scope" but actually read/write a per-tenant Cosmos item by a caller-supplied
+// (id, workspaceId) — the exact cross-tenant hole this checker exists for.
+// They were fixed in the rel-T17 sweep to thread `assertOwner(workspaceId,
+// oid)` (or an equivalent owner check), so they now carry a real guard signal
+// and PASS on their own. They are listed here so they are EXCLUDED from every
+// allowlist below — if a future edit drops the guard, the checker re-flags them
+// instead of silently masking the regression.
+const NOW_GUARDED = new Set([
+  // data-pipeline (reads the per-tenant item to resolve its ADF backing)
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/approval-logicapp/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/debug/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/evaluate/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/export/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/integration-runtimes/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/jobs/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/output/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/publish/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/run/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/triggers/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/[id]/validate/route.ts',
+  // mirrored-database / mirrored-databricks
+  'apps/fiab-console/app/api/items/mirrored-database/[id]/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-database/[id]/lifecycle/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-database/[id]/monitor/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-database/[id]/open-mirror/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-database/[id]/sql-endpoint/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-database/[id]/state/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-databricks/[id]/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-databricks/[id]/catalog/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-databricks/[id]/sql-endpoint/route.ts',
+  // logic-app / mounted-adf / notebook family / dataflow / event-schema-set
+  'apps/fiab-console/app/api/items/logic-app/[id]/route.ts',
+  'apps/fiab-console/app/api/items/logic-app/[id]/run/route.ts',
+  'apps/fiab-console/app/api/items/mounted-adf/[id]/route.ts',
+  'apps/fiab-console/app/api/items/mounted-adf/[id]/run/route.ts',
+  'apps/fiab-console/app/api/items/databricks-notebook/[id]/route.ts',
+  'apps/fiab-console/app/api/items/notebook/[id]/execute-spark/route.ts',
+  'apps/fiab-console/app/api/items/notebook/[id]/jobs/route.ts',
+  'apps/fiab-console/app/api/items/notebook/[id]/route.ts',
+  'apps/fiab-console/app/api/items/notebook/[id]/run/route.ts',
+  'apps/fiab-console/app/api/items/notebook/[id]/runs/[runId]/route.ts',
+  'apps/fiab-console/app/api/items/synapse-notebook/[id]/route.ts',
+  'apps/fiab-console/app/api/items/dataflow/[id]/route.ts',
+  'apps/fiab-console/app/api/items/event-schema-set/[id]/route.ts',
+  'apps/fiab-console/app/api/items/event-schema-set/[id]/check-compat/route.ts',
+  'apps/fiab-console/app/api/items/event-schema-set/[id]/versions/route.ts',
+  // semantic-model (per-tenant DQ source read/write), airflow-job, activator
+  'apps/fiab-console/app/api/items/semantic-model/[id]/datasource/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/ingest/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/[id]/model/route.ts',
+  'apps/fiab-console/app/api/items/airflow-job/[id]/route.ts',
+  'apps/fiab-console/app/api/items/airflow-job/[id]/connection/route.ts',
+  'apps/fiab-console/app/api/items/airflow-job/[id]/dag-runs/route.ts',
+  'apps/fiab-console/app/api/items/airflow-job/[id]/dags/route.ts',
+  'apps/fiab-console/app/api/items/airflow-job/[id]/task-logs/route.ts',
+  'apps/fiab-console/app/api/items/activator/[id]/rules/route.ts',
+  'apps/fiab-console/app/api/items/activator/[id]/start/route.ts',
+  'apps/fiab-console/app/api/items/activator/[id]/stop/route.ts',
+  'apps/fiab-console/app/api/items/lakehouse-shortcut/route.ts',
+  'apps/fiab-console/app/api/items/data-pipeline/practice-seed/route.ts',
+  // non-items routes fixed in the same sweep
+  'apps/fiab-console/app/api/aml/environments/route.ts',
+  'apps/fiab-console/app/api/notebook/[id]/assist/route.ts',
+  'apps/fiab-console/app/api/experience/warp/transforms/route.ts',
+  'apps/fiab-console/app/api/governance/scans/route.ts',
+  'apps/fiab-console/app/api/governance/scans/register-existing/route.ts',
+]);
+
 for (const p of SHARED_BACKEND_ITEM_ROUTES) {
+  if (NOW_GUARDED.has(p)) continue; // now carries a real owner-check — not allowlisted
   if (!ALLOWLIST.has(p)) {
     ALLOWLIST.set(
       p,
@@ -375,6 +436,174 @@ for (const p of SHARED_BACKEND_ITEM_ROUTES) {
     );
   }
 }
+
+// ── rel-T17: item-TYPE-level list/create + shared sub-collection routes surfaced
+// by widening the scan to all of app/api. Each of these talks to a SHARED Azure
+// backend (Power BI / AI Foundry / ADF / APIM / Databricks / Stream Analytics /
+// Power Platform / ARM by name) — NOT a per-tenant Cosmos partition — so
+// getSession()+deployment-RBAC is the intended authz (list/create that DO write
+// per-tenant Cosmos go through createOwnedItem/listOwnedItems and pass on their
+// own signal). NB: `?workspaceId=` on the Power BI routes (dashboard,
+// paginated-report, semantic-model/build) is a Power BI workspace id, not a Loom
+// Cosmos partition — an assertOwner check would be wrong there.
+const SHARED_BACKEND_TYPE_ROUTES = [
+  'apps/fiab-console/app/api/items/adf-dataset/route.ts',
+  'apps/fiab-console/app/api/items/adf-pipeline/route.ts',
+  'apps/fiab-console/app/api/items/adf-trigger/route.ts',
+  'apps/fiab-console/app/api/items/ai-builder-model/route.ts',
+  'apps/fiab-console/app/api/items/ai-foundry-project/route.ts',
+  'apps/fiab-console/app/api/items/ai-search-index/route.ts',
+  'apps/fiab-console/app/api/items/apim-api/route.ts',
+  'apps/fiab-console/app/api/items/apim-policy/route.ts',
+  'apps/fiab-console/app/api/items/apim-product/route.ts',
+  'apps/fiab-console/app/api/items/automl/jobs/route.ts',
+  'apps/fiab-console/app/api/items/automl/jobs/[name]/route.ts',
+  'apps/fiab-console/app/api/items/automl/options/route.ts',
+  'apps/fiab-console/app/api/items/automl/submit/route.ts',
+  'apps/fiab-console/app/api/items/compute/route.ts',
+  'apps/fiab-console/app/api/items/content-safety/blocklists/items/route.ts',
+  'apps/fiab-console/app/api/items/content-safety/blocklists/route.ts',
+  'apps/fiab-console/app/api/items/content-safety/rai-policies/route.ts',
+  'apps/fiab-console/app/api/items/content-safety/route.ts',
+  'apps/fiab-console/app/api/items/copilot-studio-action/route.ts',
+  'apps/fiab-console/app/api/items/copilot-studio-agent/route.ts',
+  'apps/fiab-console/app/api/items/copilot-studio-channel/route.ts',
+  'apps/fiab-console/app/api/items/copilot-studio-knowledge/route.ts',
+  'apps/fiab-console/app/api/items/copilot-studio-topic/route.ts',
+  'apps/fiab-console/app/api/items/copilot-template-library/route.ts',
+  'apps/fiab-console/app/api/items/dashboard/route.ts',
+  'apps/fiab-console/app/api/items/databricks-cluster/options/route.ts',
+  'apps/fiab-console/app/api/items/databricks-cluster/route.ts',
+  'apps/fiab-console/app/api/items/databricks-job/route.ts',
+  'apps/fiab-console/app/api/items/databricks-notebook/list/route.ts',
+  'apps/fiab-console/app/api/items/dataflow/config/route.ts',
+  'apps/fiab-console/app/api/items/dataflow/profile/route.ts',
+  'apps/fiab-console/app/api/items/dataset/browse/route.ts',
+  'apps/fiab-console/app/api/items/dataset/route.ts',
+  'apps/fiab-console/app/api/items/dataverse-table/route.ts',
+  'apps/fiab-console/app/api/items/evaluation/route.ts',
+  'apps/fiab-console/app/api/items/event-grid-topic/route.ts',
+  'apps/fiab-console/app/api/items/event-hubs-namespace/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-database/source-tables/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-database/verify/route.ts',
+  'apps/fiab-console/app/api/items/mirrored-databricks/catalogs/route.ts',
+  'apps/fiab-console/app/api/items/ml-experiment/route.ts',
+  'apps/fiab-console/app/api/items/ml-experiment/submit/route.ts',
+  'apps/fiab-console/app/api/items/ml-model/route.ts',
+  'apps/fiab-console/app/api/items/paginated-report/capabilities/route.ts',
+  'apps/fiab-console/app/api/items/paginated-report/route.ts',
+  'apps/fiab-console/app/api/items/postgres-flexible-server/route.ts',
+  'apps/fiab-console/app/api/items/power-app/route.ts',
+  'apps/fiab-console/app/api/items/power-automate-flow/route.ts',
+  'apps/fiab-console/app/api/items/power-page/route.ts',
+  'apps/fiab-console/app/api/items/prompt-flow/route.ts',
+  'apps/fiab-console/app/api/items/rayfin-app/model-objects/route.ts',
+  'apps/fiab-console/app/api/items/rayfin-app/models/route.ts',
+  'apps/fiab-console/app/api/items/rayfin-app/preview/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/aas-databases/route.ts',
+  'apps/fiab-console/app/api/items/semantic-model/build/route.ts',
+  'apps/fiab-console/app/api/items/service-bus-namespace/data-explorer/route.ts',
+  'apps/fiab-console/app/api/items/service-bus-namespace/route.ts',
+  'apps/fiab-console/app/api/items/sql-databases/route.ts',
+  'apps/fiab-console/app/api/items/stream-analytics-job/route.ts',
+  'apps/fiab-console/app/api/items/stream-analytics-job/[name]/inputs/route.ts',
+  'apps/fiab-console/app/api/items/stream-analytics-job/[name]/metrics/route.ts',
+  'apps/fiab-console/app/api/items/stream-analytics-job/[name]/outputs/route.ts',
+  'apps/fiab-console/app/api/items/stream-analytics-job/[name]/query/route.ts',
+  'apps/fiab-console/app/api/items/stream-analytics-job/[name]/route.ts',
+  'apps/fiab-console/app/api/items/stream-analytics-job/[name]/state/route.ts',
+  'apps/fiab-console/app/api/items/stream-analytics-job/[name]/test/route.ts',
+  'apps/fiab-console/app/api/items/synapse-pipeline/list/route.ts',
+  'apps/fiab-console/app/api/items/synapse-spark-pool/list/route.ts',
+  'apps/fiab-console/app/api/items/tracing/route.ts',
+  'apps/fiab-console/app/api/items/tracing/[traceId]/route.ts',
+];
+for (const p of SHARED_BACKEND_TYPE_ROUTES) {
+  if (NOW_GUARDED.has(p)) continue;
+  if (!ALLOWLIST.has(p)) {
+    ALLOWLIST.set(
+      p,
+      'item-TYPE-level list/create or shared sub-collection over a SHARED Azure backend (PBI/Foundry/ADF/APIM/Databricks/ASA/Power Platform/ARM by name); no per-tenant Cosmos partition to scope',
+    );
+  }
+}
+
+// ── rel-T17: remaining non-items session-only-safe routes surfaced by the wider
+// scan (per-route so each carries its own honest reason).
+for (const [p, reason] of [
+  ['apps/fiab-console/app/api/data-products/import/template/route.ts', 'imports a data product from a shared template definition; no per-tenant Cosmos read'],
+  ['apps/fiab-console/app/api/data-products/[id]/policies/route.ts', 'consumer-discovery: returns the owner\'s Access-policy purposes for the Request-access dialog (documented cross-tenant read, read-only, non-sensitive)'],
+  ['apps/fiab-console/app/api/data-products/[id]/preview/route.ts', 'consumer-discovery: read-only 25-row preview of a discoverable data product (documented, mirrors GET /api/data-products/[id])'],
+  ['apps/fiab-console/app/api/governance/classifications/system/route.ts', 'read-only deployment-wide system classification catalog (static)'],
+  ['apps/fiab-console/app/api/governance/dlp/schemas/route.ts', 'read-only DLP schema listing over the shared warehouse'],
+  ['apps/fiab-console/app/api/governance/purview/status/route.ts', 'read-only deployment-wide Purview status'],
+  ['apps/fiab-console/app/api/governance/pdp-mode/route.ts', 'read-only deployment-wide PDP enforcement-mode indicator (non-sensitive LOOM_PDP_ENFORCE value)'],
+  ['apps/fiab-console/app/api/marketplace/catalog/route.ts', 'read-only deployment-wide marketplace catalog listing'],
+  ['apps/fiab-console/app/api/marketplace/gate/route.ts', 'marketplace entitlement gate check; deployment-wide'],
+  ['apps/fiab-console/app/api/marketplace/subscriptions/route.ts', 'APIM subscription list/create over the deployment APIM gateway via Console UAMI (shared backend, same class as /api/apim)'],
+  ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/route.ts', 'APIM subscription detail over the deployment APIM gateway via Console UAMI (shared backend)'],
+  ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/keys/route.ts', 'APIM subscription keys over the deployment APIM gateway via Console UAMI (shared backend)'],
+  ['apps/fiab-console/app/api/marketplace/subscriptions/[sid]/keys/regenerate/route.ts', 'APIM subscription key regenerate over the deployment APIM gateway via Console UAMI (shared backend)'],
+]) {
+  if (!ALLOWLIST.has(p)) ALLOWLIST.set(p, reason);
+}
+
+// ── Group-level allowlist: whole app/api sub-trees whose ENTIRE membership is
+// session-only-safe by construction, so widening the scan to all of app/api
+// doesn't require one line per route. Each prefix carries the CLASS reason it's
+// safe. A route under a prefix is allowed UNLESS it's in NOW_GUARDED (a fixed
+// per-tenant route that must keep passing on its own owner-check). The three
+// safe classes:
+//   (A) Shared Azure-backend "service navigators" — every handler operates on
+//       the deployment's single Azure resource resolved by an ARM/data-plane
+//       name via the Console UAMI's RBAC; there is NO per-tenant Cosmos
+//       partition to cross, so getSession()+deployment-RBAC IS the intended
+//       authz (same class as SHARED_BACKEND_ITEM_ROUTES, one dir up).
+//   (B) Session-scoped Cosmos stores — the handler threads the session object
+//       into a store helper that partitions every read/write by the caller's
+//       oid; no id from the URL can escape the caller's partition.
+//   (C) Global read-only metadata — deployment-wide catalog/config/static data
+//       with no per-tenant rows (or an external catalog like Purview/Unity).
+const ALLOWLIST_PREFIXES = [
+  // (A) shared Azure-backend service navigators
+  ['apps/fiab-console/app/api/adf/', 'A: ADF factory navigator over the deployment ADF via Console UAMI'],
+  ['apps/fiab-console/app/api/ai-search/', 'A: Azure AI Search navigator over the deployment search service'],
+  ['apps/fiab-console/app/api/aml/', 'A: Azure ML navigator over the deployment AML workspace (ARM/data-plane by name)'],
+  ['apps/fiab-console/app/api/apim/', 'A: APIM navigator over the deployment APIM instance'],
+  ['apps/fiab-console/app/api/azure/', 'A: generic Azure resource navigator (ARM by name)'],
+  ['apps/fiab-console/app/api/business-events/', 'A: Event Grid/Event Hubs business-events over the deployment namespace'],
+  ['apps/fiab-console/app/api/databricks/', 'A: Databricks navigator over the deployment workspace (REST by id)'],
+  ['apps/fiab-console/app/api/deployment-pipelines/', 'A: Fabric/ARM deployment-pipelines over the deployment; resolved by pipeline id via Console UAMI'],
+  ['apps/fiab-console/app/api/eventhubs/', 'A: Event Hubs navigator over the deployment namespace'],
+  ['apps/fiab-console/app/api/fabric/', 'A: Fabric REST navigator (opt-in); resolved by workspace/item id via Console UAMI'],
+  ['apps/fiab-console/app/api/foundry/', 'A: AI Foundry navigator over the deployment Foundry hub (ARM/data-plane by name)'],
+  ['apps/fiab-console/app/api/lakehouse/', 'A: ADLS Gen2 lakehouse navigator over the deployment storage (container validated; single shared lake)'],
+  ['apps/fiab-console/app/api/marketplace/sharing/', 'A: Delta Sharing / provider navigator over the deployment sharing backend'],
+  ['apps/fiab-console/app/api/messaging/', 'A: Service Bus/messaging metrics over the deployment namespace'],
+  ['apps/fiab-console/app/api/monitor/', 'A: Azure Monitor navigator over the deployment (Log Analytics/metrics/alerts by resource)'],
+  ['apps/fiab-console/app/api/network/', 'A: networking navigator over the deployment (PE/VNet/VPN by resource)'],
+  ['apps/fiab-console/app/api/onelake/', 'A: OneLake/ADLS navigator over the deployment storage'],
+  ['apps/fiab-console/app/api/powerbi/', 'A: Power BI REST navigator (opt-in) via the Console service principal'],
+  ['apps/fiab-console/app/api/powerplatform/', 'A: Power Platform navigator over the deployment environments via the PP management app'],
+  ['apps/fiab-console/app/api/realtime-hub/', 'A: Real-Time hub navigator over the deployment Event Hubs/ADX'],
+  ['apps/fiab-console/app/api/setup/', 'A: first-run setup/scan over ARM (subscription/topology discovery) via Console UAMI'],
+  ['apps/fiab-console/app/api/storage/', 'A: storage-accounts navigator over the deployment subscription (ARM by name)'],
+  ['apps/fiab-console/app/api/synapse/', 'A: Synapse artifacts navigator over the deployment workspace (data-plane by name)'],
+  ['apps/fiab-console/app/api/warehouse/', 'A: Synapse SQL warehouse query navigator over the deployment pool'],
+  ['apps/fiab-console/app/api/dab/', 'A: Data API Builder — create threads createOwnedItem; [id] routes publish to the shared DAB runtime + APIM by id (no per-tenant Cosmos read)'],
+  ['apps/fiab-console/app/api/data-agent/', 'A: data-agent chat over the deployment AOAI + ADX'],
+  ['apps/fiab-console/app/api/org-reports/', 'A: org-wide report renderer over deployment-scoped aggregates'],
+  ['apps/fiab-console/app/api/loom/', 'A: Loom compute-target/capacity/SHIR navigators resolve a shared Azure resource by ARM name via Console UAMI'],
+  ['apps/fiab-console/app/api/notebook/', 'A: notebook Livy/LSP/session navigator over the shared Synapse/Databricks compute (per-tenant [id]/assist is in NOW_GUARDED)'],
+  // (B) session-scoped Cosmos stores
+  ['apps/fiab-console/app/api/connections/', 'B: connections-store partitions every read/write by session.claims.oid'],
+  ['apps/fiab-console/app/api/thread/', 'B: thread-edges store scoped to the caller session'],
+  // (C) global read-only metadata / external catalog
+  ['apps/fiab-console/app/api/catalog/', 'C: federated catalog metadata over external Purview/Unity/Fabric (no per-tenant Cosmos rows)'],
+  ['apps/fiab-console/app/api/copilot/', 'C: read-only Copilot tool-catalog metadata'],
+  ['apps/fiab-console/app/api/cosmos/', 'C: Cosmos rerank utility over deployment config (no per-tenant item read by id)'],
+  ['apps/fiab-console/app/api/help-copilot/', 'C: help index reindex over deployment-wide help content'],
+];
 
 function walk(dir, out = []) {
   let entries;
@@ -399,17 +628,26 @@ function rel(f) {
   return path.relative(REPO_ROOT, f).split(path.sep).join('/');
 }
 
+/** A flagged route is intentionally session-only when it's on the per-route
+ *  ALLOWLIST, OR under an ALLOWLIST_PREFIXES class — but a NOW_GUARDED route
+ *  (a fixed per-tenant hole) is NEVER allowlisted, so if its owner-check ever
+ *  regresses the checker re-flags it. */
+function isAllowed(r) {
+  if (NOW_GUARDED.has(r)) return false;
+  if (ALLOWLIST.has(r)) return true;
+  for (const [prefix] of ALLOWLIST_PREFIXES) if (r.startsWith(prefix)) return true;
+  return false;
+}
+
 function main() {
-  const files = [
-    ...itemIdDirs().flatMap((d) => walk(d)),
-    ...walk(ADMIN_DIR),
-    ...walk(ADX_DIR),
-  ];
-  // De-dupe (the generic [type]/[id] dir is reached via itemIdDirs too).
+  // Widened (rel-T17): scan EVERY route under app/api, not just items/admin/adx.
+  // The class-based ALLOWLIST_PREFIXES keep the legit session-only groups green.
+  const files = walk(API_ROOT);
   const seen = new Set();
   const uniqueFiles = files.filter((f) => (seen.has(f) ? false : (seen.add(f), true)));
   const violations = [];
   let scanned = 0;
+  let allowlistedHits = 0;
 
   for (const f of uniqueFiles) {
     const src = fs.readFileSync(f, 'utf8');
@@ -418,14 +656,14 @@ function main() {
     if (!hasMutating && !hasGet) continue; // no data surface to guard
     if (!GETSESSION_RE.test(src)) continue; // not session-based; out of this check's remit
     scanned++;
-    if (GUARD_SIGNAL_RE.test(src)) continue; // authorized
+    if (GUARD_SIGNAL_RE.test(src)) continue; // authorized (owner/tenant/admin check present)
     const r = rel(f);
-    if (ALLOWLIST.has(r)) continue; // intentional shared/self route
+    if (isAllowed(r)) { allowlistedHits++; continue; } // intentional shared/session/self route
     violations.push(r);
   }
 
-  console.log(`[route-guards] scanned ${scanned} session-based item/admin routes`);
-  console.log(`[route-guards] allowlisted intentional routes: ${ALLOWLIST.size}`);
+  console.log(`[route-guards] scanned ${scanned} session-based routes across app/api`);
+  console.log(`[route-guards] allowlisted intentional routes hit: ${allowlistedHits} (${ALLOWLIST.size} per-route + ${ALLOWLIST_PREFIXES.length} class prefixes)`);
   console.log(`[route-guards] violations: ${violations.length}`);
   if (violations.length) {
     console.error('\n[route-guards] FAIL — these routes are gated only by getSession() with no');

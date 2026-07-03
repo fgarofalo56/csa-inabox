@@ -14,6 +14,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { appsCatalogContainer, workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
 import { ensureDataProductsIndex } from '@/lib/azure/loom-data-products-search';
 import { listBundleIds, getBundle } from '@/lib/apps/content-bundles';
@@ -106,6 +107,8 @@ const WORKLOADS = [
 export async function POST(_req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
 
   const now = new Date().toISOString();
   const stamp = { tenantId: TENANT, createdBy: 'bootstrap-catalogs', createdAt: now, updatedAt: now };

@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { listMcpServers, getMcpServer, saveMcpServer, deleteMcpServer, updateMcpServerTestResult } from '@/lib/azure/mcp-config-store';
 import { listMcpTools } from '@/lib/azure/mcp-client';
@@ -108,6 +109,8 @@ async function probeAndPersist(tenantId: string, doc: McpServerConfigDoc): Promi
 export async function GET() {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   try {
     const servers = await listMcpServers(tenantId);
@@ -127,6 +130,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const body = await req.json().catch(() => ({}));
@@ -156,6 +161,8 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const url = new URL(req.url);
@@ -199,6 +206,8 @@ export async function PUT(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const url = new URL(req.url);

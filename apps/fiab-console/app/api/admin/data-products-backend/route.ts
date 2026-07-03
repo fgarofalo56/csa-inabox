@@ -10,6 +10,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveDataProductBackend, backendLabel } from '@/lib/dataproducts/store';
 
 export const runtime = 'nodejs';
@@ -18,6 +19,8 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(session);
+  if (denied) return denied;
   const backend = resolveDataProductBackend();
   const boundary = process.env.CSA_LOOM_BOUNDARY || 'Commercial';
   const wantUnified = (process.env.LOOM_DATAPRODUCTS_BACKEND ?? '').trim().toLowerCase() === 'unified-catalog';

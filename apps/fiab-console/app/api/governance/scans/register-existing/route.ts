@@ -30,6 +30,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   registerDataSource, upsertScan,
   PurviewNotConfiguredError, PurviewError,
@@ -60,7 +61,8 @@ const CONN_TYPES: ConnectionType[] = [
 
 export async function POST(req: NextRequest) {
   const session = getSession();
-  if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(session);
+  if (denied) return denied;
 
   const body = await req.json().catch(() => ({} as any));
   const rawName = String(body?.name || '').trim();

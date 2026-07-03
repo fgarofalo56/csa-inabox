@@ -29,6 +29,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { getAccountName, hasConfiguredContainers } from '@/lib/azure/adls-client';
 import { getDfsSuffix } from '@/lib/azure/cloud-endpoints';
@@ -307,6 +308,7 @@ export async function DELETE(req: NextRequest) {
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   const id = req.nextUrl.searchParams.get('id');
   if (!workspaceId || !id) return err('workspaceId and id required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('workspace not found', 404);
   try {
     const items = await itemsContainer();
     // Best-effort: read the row first so we can also delete its KV secret.
