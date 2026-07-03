@@ -24,6 +24,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
 import { armBase, getSqlSuffix } from '@/lib/azure/cloud-endpoints';
+import {
+  authCsrfEnabled,
+  newAuthFlow,
+  encodeAuthFlowCookie,
+  setAuthFlowCookieHeader,
+} from '@/lib/auth/authflow';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -85,11 +91,31 @@ export async function GET(req: NextRequest) {
       { status: 503 },
     );
   }
+  // Login-CSRF hardening (rel-T12): mint {state, PKCE verifier + S256 challenge,
+  // nonce} and persist {state, verifier, nonce} in the short-lived, single-use
+  // `loom_authflow` cookie BEFORE bolting the matching params onto the authorize
+  // URL. This is purely ADDITIVE — the client-id, scopes, redirect-URI, authority
+  // and prompt are untouched; the params below only extend the existing builder.
+  //
+  // Atomic + degradation-safe: only when the cookie value can actually be
+  // encrypted (SESSION_SECRET present) AND the kill switch is on do we add the
+  // params AND set the cookie together. If either is absent the flow falls back
+  // byte-for-byte to the prior behavior (no params, no cookie), and the callback's
+  // own no_session_secret gate still fires downstream unchanged.
+  const flow = authCsrfEnabled() ? newAuthFlow() : null;
+  const authFlowCookie = flow ? encodeAuthFlowCookie(flow) : null;
   const client = getMsalClient();
   const url = await client.getAuthCodeUrl({
     scopes: SCOPES,
     redirectUri: redirectUri(req),
     prompt: 'select_account',
+    ...(flow && authFlowCookie
+      ? { state: flow.state, codeChallenge: flow.challenge, codeChallengeMethod: 'S256' as const, nonce: flow.nonce }
+      : {}),
   });
-  return NextResponse.redirect(url);
+  const res = NextResponse.redirect(url);
+  if (flow && authFlowCookie) {
+    res.headers.set('set-cookie', setAuthFlowCookieHeader(authFlowCookie));
+  }
+  return res;
 }
