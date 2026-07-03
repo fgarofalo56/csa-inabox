@@ -80,6 +80,33 @@ resource wafPolicy 'Microsoft.Network/FrontDoorWebApplicationFirewallPolicies@20
     // still apply to every other path — so this is scoped, not a blanket bypass.
     customRules: {
       rules: [
+        // ── Block the VNet-internal service-to-service surface at the edge ────
+        // (rel-T10/B3) The `/api/internal/**` routes (copilot tool-dispatch,
+        // topology register-domain) are token-gated callbacks the MAF app +
+        // setup-orchestrator invoke over the Container Apps INTERNAL network
+        // (http://loom-console) — they never traverse Front Door in the
+        // legitimate flow. So any request for `/api/internal/` arriving at the
+        // PUBLIC edge is illegitimate: block it (403) before it reaches the
+        // origin, defense-in-depth on top of the app's shared-token gate. Lowest
+        // priority number ⇒ evaluated first. Note this does NOT touch the
+        // INTENTIONALLY external `/api/iq/mcp` or `/api/deployment-pipelines/**`
+        // Bearer paths — only the `/api/internal/` prefix.
+        {
+          name: 'BlockInternalApiAtEdge'
+          priority: 90
+          enabledState: 'Enabled'
+          ruleType: 'MatchRule'
+          action: 'Block'
+          matchConditions: [
+            {
+              matchVariable: 'RequestUri'
+              operator: 'Contains'
+              negateCondition: false
+              transforms: ['Lowercase']
+              matchValue: ['/api/internal/']
+            }
+          ]
+        }
         {
           name: 'AllowAdminWorkspaceGitApi'
           priority: 100

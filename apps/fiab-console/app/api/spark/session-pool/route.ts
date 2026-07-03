@@ -17,8 +17,8 @@
  */
 import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isTenantAdminTier } from '@/lib/auth/domain-role';
-import { apiOk, apiError, apiUnauthorized, apiForbidden, apiServerError } from '@/lib/api/respond';
+import { isTenantAdminTier, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
+import { apiOk, apiError, apiUnauthorized, apiServerError } from '@/lib/api/respond';
 import {
   getPoolStatus,
   warmPool,
@@ -72,7 +72,12 @@ export async function POST(req: NextRequest) {
   }
 
   if (action === 'config') {
-    if (!isTenantAdminTier(s)) return apiForbidden('tenant admin required to change pool config');
+    if (!isTenantAdminTier(s)) {
+      return apiError('tenant admin required to change pool config', 403, {
+        remediation: TENANT_ADMIN_TIER_REMEDIATION,
+        bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV,
+      });
+    }
     try {
       const cfg = setSparkPoolConfig({
         enabled: typeof body?.enabled === 'boolean' ? body.enabled : undefined,

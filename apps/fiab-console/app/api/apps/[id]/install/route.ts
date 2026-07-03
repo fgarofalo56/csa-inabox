@@ -36,6 +36,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import {
   appsCatalogContainer,
   itemsContainer,
@@ -70,6 +71,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   const params = await props.params;
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const limited = await enforceRateLimit(s, 'provision');
+  if (limited) return limited;
   const body = await req.json().catch(() => ({}));
   const workspaceId = (body?.workspaceId || '').toString().trim();
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });

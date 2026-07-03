@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { listAccessibleWorkspaces } from '@/lib/auth/workspace-access';
 import { workspacesContainer, itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
@@ -19,13 +20,9 @@ export async function GET(req: NextRequest) {
   const tenantId = session.claims.oid;
   const withCount = req.nextUrl?.searchParams.get('count') === 'true';
   try {
-    const c = await workspacesContainer();
-    const { resources } = await c.items
-      .query<Workspace>({
-        query: 'SELECT * FROM c WHERE c.tenantId = @t ORDER BY c.createdAt DESC',
-        parameters: [{ name: '@t', value: tenantId }],
-      }, { partitionKey: tenantId })
-      .fetchAll();
+    // Owned workspaces PLUS any shared with the caller via a workspace-roles
+    // grant (rel-T11). Owner-only when LOOM_MULTIUSER_ACL is off.
+    const resources = await listAccessibleWorkspaces(tenantId, { callerTid: session.claims.tid });
     if (!withCount || resources.length === 0) return NextResponse.json(resources);
 
     // ?count=true — aggregate item counts grouped by workspaceId. Cross-
@@ -87,6 +84,11 @@ export async function POST(req: NextRequest) {
   const ws: Workspace = {
     id: crypto.randomUUID(),
     tenantId: session.claims.oid,
+    // rel-T11: record the owner oid + Entra tenant id explicitly so the shared
+    // read path can enforce the tenant boundary and a future migration can move
+    // the partition key off the owner oid without losing owner identity.
+    ownerOid: session.claims.oid,
+    ...(session.claims.tid ? { tid: session.claims.tid } : {}),
     name: name.trim(),
     description: description?.trim() || undefined,
     capacity: capacity?.trim() || undefined,

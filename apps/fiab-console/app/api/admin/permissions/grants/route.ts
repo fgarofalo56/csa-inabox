@@ -11,7 +11,7 @@
  * (mutations) or Reader (list).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
+import { getSession, tenantScopeId } from '@/lib/auth/session';
 import { enforceCapability, type FeatureGrant, type FeatureRole } from '@/lib/auth/feature-gate';
 import { featurePermissionsContainer } from '@/lib/azure/cosmos-client';
 import { getCapability } from '@/lib/auth/feature-catalog';
@@ -27,7 +27,7 @@ export async function GET(req: NextRequest) {
   if (gate) return gate;
   const capabilityId = req.nextUrl.searchParams.get('capabilityId') || undefined;
   const c = await featurePermissionsContainer();
-  const tenantId = s!.claims.oid;
+  const tenantId = tenantScopeId(s!); // Entra tenant id (rel-T11) — grants are tenant-shared
   const q = capabilityId
     ? {
         query: 'SELECT * FROM c WHERE c.tenantId = @t AND c.capabilityId = @cap',
@@ -58,7 +58,7 @@ export async function POST(req: NextRequest) {
   if (capabilityId.startsWith('workspace.') === false && !getCapability(capabilityId)) {
     return NextResponse.json({ ok: false, error: `unknown capability '${capabilityId}'` }, { status: 400 });
   }
-  const tenantId = s!.claims.oid;
+  const tenantId = tenantScopeId(s!); // Entra tenant id (rel-T11) — grants are tenant-shared
   const c = await featurePermissionsContainer();
   // Idempotent — upsert by (tenantId, capabilityId, principalId).
   const stableId = `${capabilityId}::${principalType}::${principalId}`;
@@ -85,7 +85,7 @@ export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id required' }, { status: 400 });
   const c = await featurePermissionsContainer();
-  const tenantId = s!.claims.oid;
+  const tenantId = tenantScopeId(s!); // Entra tenant id (rel-T11) — grants are tenant-shared
   try {
     await c.item(id, tenantId).delete();
   } catch (e: any) {

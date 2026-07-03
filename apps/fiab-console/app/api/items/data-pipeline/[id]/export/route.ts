@@ -16,6 +16,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { getPipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf-client';
 import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
@@ -30,6 +31,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const limited = await enforceRateLimit(s, 'export');
+  if (limited) return limited;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
   if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('pipeline not found', 404);

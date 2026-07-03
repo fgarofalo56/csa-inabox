@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
-import { withRateLimit } from '@/lib/azure/rate-limiter';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { listAllWorkspacesAdmin } from '@/lib/clients/workspaces-client';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   // Per-principal rate limit (default-off: no-op unless LOOM_RATE_LIMIT=on). Workspace create provisions backing resources.
-  const limited = withRateLimit(s, 'provision');
+  const limited = await enforceRateLimit(s, 'provision');
   if (limited) return limited;
   // PDP gate (default-off / shadow-ready). Admin write: create a tenant workspace.
   const blocked = await pdpCheck(s, { level: 'domain', id: s.claims.oid }, 'admin');
@@ -98,6 +98,10 @@ export async function POST(req: NextRequest) {
   const ws: Workspace = {
     id: crypto.randomUUID(),
     tenantId: s.claims.oid,
+    // rel-T11: record owner oid + Entra tenant id (kept in lock-step with
+    // app/api/workspaces/route.ts) for the shared read path's tid boundary.
+    ownerOid: s.claims.oid,
+    ...(s.claims.tid ? { tid: s.claims.tid } : {}),
     name,
     description: typeof body?.description === 'string' && body.description.trim() ? body.description.trim() : undefined,
     capacity: typeof body?.capacity === 'string' && body.capacity.trim() ? body.capacity.trim() : undefined,

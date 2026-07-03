@@ -8,6 +8,7 @@
 
 import { NextResponse } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
+import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, deleteLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import {
@@ -188,11 +189,23 @@ export async function applyLabelInheritance(
   return state;
 }
 
-/** Load an item by id, verifying the caller's tenant owns the parent workspace. */
+/**
+ * Load an item by id, authorizing the caller against its parent workspace.
+ *
+ * `tenantId` is the caller's Entra `oid` (legacy naming). Access is resolved via
+ * {@link resolveWorkspaceAccessByOid}: OWNER (fast-path, unchanged) OR a shared
+ * ACL member (rel-T11). Because this helper backs both read AND mutating item
+ * routes (many of which perform side effects after loading), it gates to
+ * WRITE-capable access by DEFAULT (Owner/Admin/Member) so a shared read-only
+ * Viewer/Contributor can never escalate to a write through a route that only
+ * calls loadOwnedItem. Pass `{ allowReadRoles: true }` from a strictly read-only
+ * GET route to admit read-only members. Returns null when unauthorized.
+ */
 export async function loadOwnedItem(
   itemId: string,
   itemType: string,
   tenantId: string,
+  opts: { allowReadRoles?: boolean } = {},
 ): Promise<WorkspaceItem | null> {
   const items = await itemsContainer();
   const { resources } = await items.items
@@ -206,18 +219,18 @@ export async function loadOwnedItem(
     .fetchAll();
   const item = resources[0];
   if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
+  const access = await resolveWorkspaceAccessByOid(tenantId, item.workspaceId);
+  if (!access) return null;
+  if (!opts.allowReadRoles && !access.canWrite) return null;
   return item;
 }
 
-/** List all items of a type owned by caller's tenant. */
+/**
+ * List all items of a type the caller can see — owned workspaces PLUS any
+ * workspace shared with them via an ACL role (rel-T11). Listing is read-only, so
+ * ANY non-null role makes an item visible (no write gate). The owner fast-path
+ * inside the access resolver keeps this identical for the single-operator case.
+ */
 export async function listOwnedItems(itemType: string, tenantId: string): Promise<WorkspaceItem[]> {
   const items = await itemsContainer();
   const { resources } = await items.items
@@ -227,20 +240,16 @@ export async function listOwnedItems(itemType: string, tenantId: string): Promis
     })
     .fetchAll();
   if (resources.length === 0) return [];
-  const ws = await workspacesContainer();
   const owned: WorkspaceItem[] = [];
-  // Resolve unique workspace ownership in one pass.
+  // Resolve unique workspace visibility in one pass.
   const wsCache = new Map<string, boolean>();
   for (const it of resources) {
-    let isOwned = wsCache.get(it.workspaceId);
-    if (isOwned === undefined) {
-      try {
-        const { resource } = await ws.item(it.workspaceId, tenantId).read<Workspace>();
-        isOwned = !!resource && resource.tenantId === tenantId;
-      } catch { isOwned = false; }
-      wsCache.set(it.workspaceId, isOwned);
+    let visible = wsCache.get(it.workspaceId);
+    if (visible === undefined) {
+      visible = (await resolveWorkspaceAccessByOid(tenantId, it.workspaceId)) !== null;
+      wsCache.set(it.workspaceId, visible);
     }
-    if (isOwned) owned.push(it);
+    if (visible) owned.push(it);
   }
   return owned;
 }
@@ -258,19 +267,15 @@ export async function listAllOwnedItems(tenantId: string, workspaceId?: string):
     : { query: `SELECT * FROM c WHERE ${NOT_RECYCLED}`, parameters: [] as { name: string; value: string }[] };
   const { resources } = await items.items.query<WorkspaceItem>(query).fetchAll();
   if (resources.length === 0) return [];
-  const ws = await workspacesContainer();
   const owned: WorkspaceItem[] = [];
   const wsCache = new Map<string, boolean>();
   for (const it of resources) {
-    let isOwned = wsCache.get(it.workspaceId);
-    if (isOwned === undefined) {
-      try {
-        const { resource } = await ws.item(it.workspaceId, tenantId).read<Workspace>();
-        isOwned = !!resource && resource.tenantId === tenantId;
-      } catch { isOwned = false; }
-      wsCache.set(it.workspaceId, isOwned);
+    let visible = wsCache.get(it.workspaceId);
+    if (visible === undefined) {
+      visible = (await resolveWorkspaceAccessByOid(tenantId, it.workspaceId)) !== null;
+      wsCache.set(it.workspaceId, visible);
     }
-    if (isOwned) owned.push(it);
+    if (visible) owned.push(it);
   }
   return owned;
 }

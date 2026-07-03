@@ -293,10 +293,27 @@ param mcpPersistenceEnabled bool = true
 // SDK) keep working either way.
 var loomConsoleTelemetryEnabled = true
 
-// Shared internal trust token for the MAF → Console tool-dispatch callback.
-// Deterministic on the admin RG so the value injected into BOTH the Console and
-// the MAF app matches without a round-trip. Internal-network use only.
+// Shared internal trust token for the VNet-internal service-to-service
+// callbacks (MAF → Console tool-dispatch, setup-orchestrator → Console,
+// topology register-domain). Deterministic on loomGeneratedSecretSeed so the
+// value injected into every first-party internal app matches without a
+// round-trip. NEVER handed to a third party — internal-network use only.
 var loomInternalToken = guid(loomGeneratedSecretSeed, 'loom-maf-internal-token-v1')
+
+// Per-service Bearer secrets for the EXTERNALLY-handed token paths (rel-T10/B3
+// isolation). Each is a DISTINCT deterministic value derived from the same
+// unpredictable per-deploy seed, so a leak of one does NOT open the others or
+// the internal callback surface. The app routes prefer these dedicated vars
+// EXCLUSIVELY when set (isValidIqToken / isValidCiToken), so once wired the
+// shared LOOM_INTERNAL_TOKEN is no longer accepted on those paths.
+//   - loomIqMcpToken : the Bearer operators give EXTERNAL agents (Microsoft
+//                      Agent 365 / Azure AI Foundry / Copilot Studio) for
+//                      /api/iq/mcp  → Console env LOOM_IQ_MCP_TOKEN.
+//   - loomCiToken    : the Bearer operators give an Azure DevOps / GitHub
+//                      Actions agent for /api/deployment-pipelines/loom/**
+//                      → Console env LOOM_CI_TOKEN.
+var loomIqMcpToken = guid(loomGeneratedSecretSeed, 'loom-iq-mcp-token-v1')
+var loomCiToken = guid(loomGeneratedSecretSeed, 'loom-ci-token-v1')
 
 // Setup Orchestrator deploys on the Container Apps boundaries (Commercial / GCC)
 // when explicitly enabled + app deploy on (it needs the image in ACR). On AKS
@@ -2987,6 +3004,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MSAL_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // Durable rate limiting (rel-T16 / B16) — DEFAULT ON. The BFF engages
+            // the two-tier limiter (in-memory burst + Cosmos fixed-window) unless
+            // this is set to 'off'. Emitted as a literal so a from-scratch deploy
+            // ships it enabled; set to 'off' to disable, or set
+            // LOOM_RATE_LIMIT_BACKEND=memory to keep tier-1 only. No new param
+            // (this module is at the 256-param ARM ceiling) — literal by design.
+            { name: 'LOOM_RATE_LIMIT', value: 'on' }
             // Direct-Lake-shim (Azure-native parity for Fabric Direct Lake).
             // When enabled, the semantic-model "Direct Lake (shim)" tab is active
             // and the BFF can wire the Event Grid → Service Bus subscription at
@@ -3866,10 +3890,24 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           ] : [],
           // Shared internal trust token — wired when ANY token-authenticated path
           // is active: the MAF tier, the IQ MCP external-agent path, OR the
-          // deployment-pipeline CI path. Used as the default Bearer secret for
-          // all three (LOOM_IQ_MCP_TOKEN / LOOM_CI_TOKEN override per-path).
+          // deployment-pipeline CI path. It authenticates the VNet-internal MAF /
+          // setup-orchestrator / topology callbacks; the two external paths below
+          // now get their OWN dedicated secret and no longer fall back to this.
           (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'LOOM_INTERNAL_TOKEN', secretRef: 'loom-internal-token' }
+          ] : [],
+          // Dedicated per-service Bearer for the IQ MCP external-agent path
+          // (rel-T10/B3). Set → isValidIqToken accepts ONLY this token, never the
+          // shared internal one, so a leak of the token handed to Agent 365 /
+          // Foundry cannot reach the MAF callback or the CI path.
+          loomIqMcpEnabled ? [
+            { name: 'LOOM_IQ_MCP_TOKEN', secretRef: 'loom-iq-mcp-token' }
+          ] : [],
+          // Dedicated per-service Bearer for the deployment-pipeline CI path
+          // (rel-T10/B3). Set → isValidCiToken accepts ONLY this token, isolating
+          // the ADO / GitHub Actions credential from the internal + IQ secrets.
+          loomPipelineCiEnabled ? [
+            { name: 'LOOM_CI_TOKEN', secretRef: 'loom-ci-token' }
           ] : [],
           // MCP stdio→HTTP/SSE bridge (apps/fiab-mcp-bridge). Deployed alongside
           // the other Loom apps; the External-MCP panel reads this to offer the
@@ -3918,13 +3956,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(loomPaginatedRenderUrl) ? [
             { name: 'loom-paginated-render-key', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/${loomPaginatedRenderKeySecretName}', identity: identity.outputs.uamiConsoleId }
           ] : [],
-          // Shared internal trust token for the MAF → Console tool-dispatch
-          // callback (GCC-High / IL5), the default Bearer secret for the IQ
-          // MCP external-agent path, AND the default Bearer secret for the
-          // deployment-pipeline CI path. Same deterministic value all consumers
-          // get. Set a dedicated LOOM_CI_TOKEN secret to isolate CI if desired.
+          // Shared internal trust token for the VNet-internal callbacks: the
+          // MAF → Console tool-dispatch (GCC-High / IL5), the setup-orchestrator,
+          // and topology register-domain. Same deterministic value every
+          // first-party internal app gets. NOT the Bearer for the external IQ /
+          // CI paths — those get their own dedicated secrets below (rel-T10/B3).
           (copilotMafActive || loomIqMcpEnabled || loomPipelineCiEnabled) ? [
             { name: 'loom-internal-token', value: loomInternalToken }
+          ] : [],
+          // Dedicated IQ MCP external-agent Bearer secret (distinct value).
+          loomIqMcpEnabled ? [
+            { name: 'loom-iq-mcp-token', value: loomIqMcpToken }
+          ] : [],
+          // Dedicated deployment-pipeline CI Bearer secret (distinct value).
+          loomPipelineCiEnabled ? [
+            { name: 'loom-ci-token', value: loomCiToken }
           ] : [],
           // GitHub remote MCP PAT (github.com/microsoft/mcp GitHub server) —
           // GitHub OAuth, NOT Entra. KV-backed secret, NEVER a literal: read at

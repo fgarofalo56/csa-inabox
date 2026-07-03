@@ -12,7 +12,28 @@ export type WorkspaceLicenseMode =
 
 export interface Workspace {
   id: string;
+  /**
+   * Cosmos partition key. For historical reasons this holds the OWNER's Entra
+   * `oid` (the workspace container is partitioned by `/tenantId`), NOT the Entra
+   * tenant id. Do not "fix" this in place — existing docs are keyed by it and
+   * the partition key is immutable. Multi-user sharing is layered on via the
+   * `workspace-roles` ACL + the `tid`/`ownerOid` fields below (rel-T11).
+   */
   tenantId: string;
+  /**
+   * Entra tenant id (`tid` claim) this workspace belongs to. Recorded on create
+   * going forward (rel-T11) so the access resolver can enforce the tenant
+   * boundary on the shared read path. Absent on docs created before rel-T11
+   * (see scripts/csa-loom/backfill-workspace-tid.mjs).
+   */
+  tid?: string;
+  /**
+   * Owning user's Entra `oid`, recorded explicitly on create going forward
+   * (rel-T11). Equals `tenantId` today but is a distinct, honest field so a
+   * future migration can move the partition key to `tid` without losing the
+   * owner identity.
+   */
+  ownerOid?: string;
   name: string;
   description?: string;
   /** Lifecycle state. Absent on older docs (treated as 'Active' by readers). */

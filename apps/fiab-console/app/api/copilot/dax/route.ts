@@ -12,6 +12,7 @@
  */
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import {
   orchestrate,
   resolveAoaiTarget,
@@ -28,6 +29,8 @@ export async function POST(req: NextRequest) {
   if (!session) {
     return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   }
+  const limited = await enforceRateLimit(session, 'aoai');
+  if (limited) return limited;
 
   let body: { prompt?: string; sessionId?: string; itemId?: string; itemType?: string } = {};
   try { body = await req.json(); } catch { /* empty body → validated below */ }

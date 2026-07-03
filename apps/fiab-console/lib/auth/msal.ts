@@ -2,9 +2,13 @@
  * MSAL BFF (Backend-for-Frontend) configuration.
  *
  * Pattern: confidential client running server-side. Cookies stay
- * httpOnly + Secure + SameSite=Strict; access tokens never reach
- * the browser. Mirrors the ADR-0014 pattern from the parent csa-inabox
- * repo.
+ * httpOnly + Secure + SameSite=Lax; access tokens never reach the
+ * browser. (SameSite must be Lax, NOT Strict: the OAuth redirect
+ * callback is a top-level cross-site GET navigation back from AAD, and
+ * Strict would withhold the cookie on that hop and break login — this
+ * applies to both the `loom_session` cookie and the rel-T12 login-CSRF
+ * `loom_authflow` cookie.) Mirrors the ADR-0014 pattern from the parent
+ * csa-inabox repo.
  *
  * Cloud detection: AAD authority differs per boundary.
  *   Commercial / GCC: login.microsoftonline.com
@@ -375,6 +379,13 @@ export function graphBase(): string {
 
 export interface UserClaims {
   oid: string;
+  /**
+   * Entra TENANT id (`tid` claim). Used to partition tenant-shared state
+   * (feature grants) and to enforce the tenant boundary on shared workspace
+   * reads (rel-T11). Optional so sessions minted before rel-T11 (which lacked
+   * it) still decode; the tenant-scope helper falls back to `oid` when absent.
+   */
+  tid?: string;
   name: string;
   email?: string;
   upn: string;
