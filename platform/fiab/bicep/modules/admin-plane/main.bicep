@@ -1097,6 +1097,16 @@ param loomBronzeContainer string = 'bronze'
 // (kept as a var to stay under the ARM 256-param ceiling — data-eng sweep).
 var loomPipelineBackend = loomBackends.?pipeline ?? 'synapse'
 
+// BI backend (semantic-model / report / dashboard / scorecard editors + refresh
+// routes). ONE expression owns the value, emitted exactly once below:
+//   AAS present  -> 'aas'  (Azure-native tabular default)
+//   else         -> loomBackends.bi (default '' = Loom-native renderer over
+//                    the bound model with DAX; NEVER 'powerbi' by default).
+// 'powerbi' is the opt-in Fabric-family path (set loomBackends.bi='powerbi').
+// Fixes the prior duplicate/conflicting LOOM_BI_BACKEND env pair that defaulted
+// to 'powerbi' when no AAS — a no-fabric-dependency.md violation (B12/rel-T04).
+var effectiveBiBackend = (!empty(existingAasServerName) || aasEnabled) ? 'aas' : (loomBackends.?bi ?? '')
+
 
 
 
@@ -2885,13 +2895,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // ----------------------------------------------------------------
             { name: 'LOOM_AAS_SERVER_NAME', value: !empty(existingAasServerName) ? existingAasServerName : (aasEnabled ? aasServer!.outputs.serverName : '') }
             { name: 'LOOM_AAS_REGION', value: !empty(existingAasServerName) ? (!empty(existingAasServerRegion) ? existingAasServerRegion : location) : (aasEnabled ? aasServer!.outputs.serverRegion : '') }
-            // Default BI backend for the SemanticModelEditor + refresh routes.
-            // 'aas' when an AAS server is present (Azure-native default, per
-            // no-fabric-dependency.md); 'powerbi' is the opt-in Fabric-family
-            // path. Read client-side as NEXT_PUBLIC_*; server routes also honor
-            // LOOM_BI_BACKEND (mirrored below).
-            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: (!empty(existingAasServerName) || aasEnabled) ? 'aas' : 'powerbi' }
-            { name: 'LOOM_BI_BACKEND', value: (!empty(existingAasServerName) || aasEnabled) ? 'aas' : 'powerbi' }
+            // (LOOM_BI_BACKEND / NEXT_PUBLIC_LOOM_BI_BACKEND are emitted ONCE
+            // below from effectiveBiBackend — the prior duplicate pair here
+            // defaulted to 'powerbi' when no AAS, a no-fabric-dependency
+            // violation. See effectiveBiBackend. B12/rel-T04.)
             // Workspace-monitoring read-only ADX DB (Azure Monitor diag-export
             // parity for Fabric workspace monitoring). Set only when deployed so
             // the provisioner + dashboard target the real DB; '' → honest gate.
@@ -3068,12 +3075,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // honest infra-gate and DAX validation still works on every backend.
             { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomBackends.dataflow }
-            // Report editor BI backend. Empty (default) → Loom-native renderer
-            // that queries the bound AAS model with DAX (no Power BI / Fabric).
-            // 'powerbi' opts into the Power BI embed. NEXT_PUBLIC_ mirror lets
-            // the client editor branch without a round-trip. (no-fabric-dependency.md)
-            { name: 'LOOM_BI_BACKEND', value: loomBackends.bi }
-            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: loomBackends.bi }
+            // BI backend for the semantic-model / report / dashboard / scorecard
+            // editors + refresh routes. effectiveBiBackend = 'aas' when an AAS
+            // server is present (Azure-native tabular default), else '' →
+            // Loom-native renderer that queries the bound model with DAX (no
+            // Power BI / Fabric). 'powerbi' is opt-in only (loomBackends.bi).
+            // NEXT_PUBLIC_ mirror lets the client editor branch without a
+            // round-trip. Emitted ONCE. (no-fabric-dependency.md, B12/rel-T04)
+            { name: 'LOOM_BI_BACKEND', value: effectiveBiBackend }
+            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: effectiveBiBackend }
             { name: 'LOOM_AAS_SERVER', value: loomAasServer }
             { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
