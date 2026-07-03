@@ -21,7 +21,38 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-05-23 (UAT iteration 1)
+## Current Session — 2026-07-03 (public-release Wave 0 LANDED + live-verified)
+
+**Focus:** Close every Wave-0 release blocker from `PRPs/active/public-release/PRP.md`.
+
+**Merged (11 PRs):** #1585 B3 secrets (+ freed the 257th param: dropped the dead
+`agentOrchestrator` pass-through — admin-plane/main.bicep sits AT the 256-param
+ARM ceiling), #1586 B1 install docs, #1587 B11/B12 (bicep `effectiveBiBackend`
++ scorecard Cosmos-native default + `usePowerBiWorkspaces(enabled)` gating +
+rel-T07 Azure-native-first copy), #1588 B6 bicep-sync orphan (guard now strips
+`//` comments), #1589 rel-T09 READMEs, #1590 B5 UDF authored-source, #1591
+rel-T09c tenant purge script + UAT teardown, #1592 B2 docs PII purge +
+`check-docs-hygiene.mjs` gate, #1593 CI next-build heap 4096→6144 (was OOMing
+every console PR), #1594 UDF invoke direct-state-load + internal ingress
+(live-caught), #1558 release 0.50.0. Dependabot #1580/#1584 merged.
+
+**Live (centralus, revision loom-console--0000190, image 388aacc6):**
+- Scorecard E2E receipt PASS: list/detail/check-in via Cosmos with NO
+  workspaceId — zero api.powerbi.com traffic on the default path.
+- UDF E2E receipt PASS: authored source executed via `x-udf-source-b64`
+  (`{"receipt":"wave0-9fddd553","authored":true}`). Required deploying
+  `loom-udf-runtime` in-place (internal ingress — apex-form env FQDNs do NOT
+  resolve from sibling apps on the internal CAE) + `LOOM_UDF_FUNCTION_BASE`
+  on the console.
+
+**Open next:** Wave 1 (B4 tenantId==oid, T10–T20), Wave 1b (B13 CI test gate),
+Wave 2 deployment-truth. Operator actions: `purge-test-workspaces.sh --apply`,
+B3 deploy-verify on the next full bicep deploy. Task #30 (a11y focus-trap)
+pending.
+
+---
+
+## Session — 2026-05-23 (UAT iteration 1)
 
 **Focus:** End-to-end UAT against the live deploy. Provisioned + deployed
 the UAT jumpbox, set up DNS/peering plumbing for the internal ACA env,
