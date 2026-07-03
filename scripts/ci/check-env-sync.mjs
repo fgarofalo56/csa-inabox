@@ -89,6 +89,7 @@ const ALLOWLIST = new Set([
   'LOOM_PYLSP_DEBUG',               // dev-only language-server debug flag
   'LOOM_PYLSP_PYTHON',              // dev-only python path override
   'LOOM_POWERPLATFORM_ASSUME_CRED', // opt-in Power Platform cred mode
+  'LOOM_MCP_EGRESS_ALLOW',          // opt-in SSRF egress allow-list for admin MCP test-connection (rel-T13)
 
   // ---- Derived from an emitted var at runtime (KV name<->url, cosmos endpoint<->id, etc.) ----
   'LOOM_KEY_VAULT_NAME',            // derived from LOOM_KEY_VAULT_URL
