@@ -5,9 +5,12 @@
  * coordinates (database + table) and runs a bracketed `take 25` KQL query,
  * returning columns + rows so the consumer view can show real sample data.
  *
- * Item load: cross-partition Cosmos query (NOT ownership-gated) — data
- * products are discoverable by any authenticated catalog reader, matching
- * the GET /api/data-products/[id] pattern.
+ * Item load: cross-partition Cosmos query so product METADATA is discoverable by
+ * any authenticated catalog reader (matching GET /api/data-products/[id]). But
+ * the ACTUAL DATA is gated (rel-T18): only the product OWNER / shared-workspace
+ * ACL member, or a consumer with an APPROVED access request, gets real rows.
+ * Everyone else is discoverable-but-not-readable → 403 pointing at the
+ * request-access flow. See `_lib/access-gate.ts`.
  *
  * ADX coordinate resolution (mirrors observability route):
  *   database  = state.databaseName  || defaultDatabase()
@@ -19,6 +22,7 @@
  * Honest gates (no fake data, no Fabric dependency):
  *   - No session               → 401
  *   - Item not found           → 404
+ *   - No approved data access  → 403  { ok:false, code:'access_required', error }
  *   - No backing table         → 400  { ok:false, error }
  *   - LOOM_KUSTO_CLUSTER_URI unset → 501  { ok:false, gate, error }
  *   - ADX executeQuery throws  → 502  { ok:false, error }
@@ -31,6 +35,7 @@ import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { executeQuery, defaultDatabase } from '@/lib/azure/kusto-client';
 import { adxConfigGate } from '@/lib/azure/data-quality-client';
+import { resolveDataProductDataAccess } from '../../_lib/access-gate';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -62,6 +67,23 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     .fetchAll();
   const item = resources[0] ?? null;
   if (!item) return NextResponse.json({ ok: false, error: 'data-product item not found' }, { status: 404 });
+
+  // rel-T18 — returning REAL rows requires DATA access (owner / shared ACL member,
+  // or an approved access request). Metadata stays discoverable via the GET route;
+  // only the actual data is gated here.
+  const access = await resolveDataProductDataAccess(session, id);
+  if (!access.allowed) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: 'access_required',
+        error:
+          "You do not have approved access to this data product's data. Request access from the " +
+          'product page (Request access) — once an owner approves, the preview and full data become available.',
+      },
+      { status: 403 },
+    );
+  }
 
   const state = (item.state || {}) as Record<string, unknown>;
   const datasets = (Array.isArray(state.datasets) ? state.datasets : []) as Dataset[];
