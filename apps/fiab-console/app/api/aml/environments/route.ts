@@ -27,6 +27,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
@@ -99,6 +100,9 @@ export async function PATCH(req: NextRequest) {
   const workspaceId = String(body?.workspaceId || '').trim();
   if (!notebookId || !workspaceId) {
     return NextResponse.json({ ok: false, error: 'notebookId + workspaceId required' }, { status: 400 });
+  }
+  if (!(await assertOwner(workspaceId, s.claims.oid))) {
+    return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
   }
   try {
     const nb = await loadNotebook(notebookId, workspaceId);

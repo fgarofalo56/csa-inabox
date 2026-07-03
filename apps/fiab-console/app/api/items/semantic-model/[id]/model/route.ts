@@ -43,6 +43,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { withQueryCache } from '@/lib/azure/query-cache';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -892,6 +893,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     });
   }
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
   const tenantId = session.claims.oid;
 
   // Expensive Fields-pane read (Cosmos/PBI tables + relationships + calc objects)
@@ -1064,6 +1066,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
   const tenantId = session.claims.oid;
   const body = await req.json().catch(() => ({}));
 
@@ -1218,6 +1221,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
   const tenantId = session.claims.oid;
   const body = await req.json().catch(() => ({}));
 
@@ -1251,6 +1255,7 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
   const tenantId = session.claims.oid;
   const relId = req.nextUrl.searchParams.get('relId');
   const hierarchyId = req.nextUrl.searchParams.get('hierarchyId');

@@ -3,14 +3,17 @@
  *
  * `pdpCheck()` is the single call a BFF route adds at the top of a handler
  * (AFTER its own session check) to consult the Policy Decision Point. It is
- * **default-OFF and purely additive**: with `LOOM_PDP_ENFORCE` unset the gate
- * returns `null` BEFORE any PDP evaluation, Cosmos read, or audit write, so a
- * wired route behaves EXACTLY as it did before the gate was added (zero perf
- * cost, zero behavior change).
+ * **default-SHADOW and never-blocking** (rel-T20): with `LOOM_PDP_ENFORCE`
+ * unset the gate evaluates the policy and writes ONE audit row, but ALWAYS
+ * returns `null` — so a wired route's behavior is unchanged (nothing is ever
+ * blocked) while the deployment gains full policy-decision observability. Only
+ * an explicit `LOOM_PDP_ENFORCE=enforce` can block; `LOOM_PDP_ENFORCE=off`
+ * restores the pre-shadow zero-cost bail.
  *
  * Three modes (read once per call from `LOOM_PDP_ENFORCE`, lower-cased):
  *
  *   off      → return null immediately. No authorize(), no Cosmos, no log.
+ *              (Explicit opt-out only — no longer the default.)
  *   shadow   → authorize() + write ONE row to the existing `_auditLog`
  *              container (reusing `auditLogContainer()` — NOT a new container)
  *              capturing the decision (and, when the caller passes its legacy
@@ -35,11 +38,23 @@ import { auditLogContainer } from '@/lib/azure/cosmos-client';
 
 export type PdpEnforceMode = 'off' | 'shadow' | 'enforce';
 
-/** Current PDP gate mode from `LOOM_PDP_ENFORCE` (default 'off'). Exported for
- *  tests + callers that want to branch on the active mode. */
+/**
+ * Current PDP gate mode from `LOOM_PDP_ENFORCE`.
+ *
+ * DEFAULT = 'shadow' (rel-T20): with the env var UNSET the PDP evaluates every
+ * wired route and logs its decision to the audit log but NEVER blocks — so a
+ * fresh deployment gets full policy-decision observability out of the box and
+ * an operator can vet divergence before flipping enforcement on. Enforcement
+ * stays strictly behind an explicit `LOOM_PDP_ENFORCE=enforce`. Set
+ * `LOOM_PDP_ENFORCE=off` to fully disable (no evaluate, no Cosmos, no log) —
+ * the only value that restores the pre-shadow zero-cost behavior.
+ *
+ * Exported for tests + callers that want to branch on the active mode.
+ */
 export function pdpEnforceMode(): PdpEnforceMode {
-  const raw = (process.env.LOOM_PDP_ENFORCE || 'off').toLowerCase();
-  return raw === 'shadow' || raw === 'enforce' ? raw : 'off';
+  const raw = (process.env.LOOM_PDP_ENFORCE || 'shadow').toLowerCase();
+  // Unset / unrecognized → shadow (the safe, non-blocking default).
+  return raw === 'off' || raw === 'enforce' ? raw : 'shadow';
 }
 
 /** Build the PDP Principal from the BFF session claims.

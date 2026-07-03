@@ -13,6 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
@@ -29,6 +30,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   const sp = req.nextUrl.searchParams;
   const workspaceId = sp.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('airflow job not found', 404);
   const dagId = sp.get('dagId');
   const runId = sp.get('runId');
   if (!dagId || !runId) return err('dagId and runId required', 400);

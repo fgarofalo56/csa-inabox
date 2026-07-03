@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { listPipelineRuns, listActivityRuns, adfConfigGate } from '@/lib/azure/adf-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
@@ -32,6 +33,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const { id } = await ctx.params;
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('pipeline not found', 404);
 
   try {
     const items = await itemsContainer();

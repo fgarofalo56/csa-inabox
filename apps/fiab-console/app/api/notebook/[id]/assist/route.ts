@@ -28,6 +28,7 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import {
   resolveAoaiTarget,
   NoAoaiDeploymentError,
@@ -115,6 +116,9 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const prompt = String(body?.prompt || '');
   let errorText = String(body?.errorText || '');
   const workspaceId = String(body?.workspaceId || '');
+  if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) {
+    return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+  }
   const runtime = String(body?.runtime || '');
 
   if (mode === 'generate' && !prompt.trim() && !source.trim()) {

@@ -42,6 +42,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import {
   adfConfigGate,
   upsertLinkedService as adfUpsertLinkedService,
@@ -298,6 +299,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     // ----- Best-effort: persist run state to the Cosmos item -----
     const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+    if (workspaceId && !(await assertOwner(workspaceId, session.claims.oid))) return NextResponse.json({ ok: false, error: 'semantic model not found' }, { status: 404 });
     if (workspaceId) {
       try {
         const items = await itemsContainer();

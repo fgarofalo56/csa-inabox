@@ -21,6 +21,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { getTemplate, getTemplateFiles, getClone } from '@/lib/coe-library/coe-library-client';
 import { parseReportModel } from '@/lib/coe-library/report-render/pbir-parse';
 import { parseSampleData } from '@/lib/coe-library/report-render/tmdl-sample';
@@ -115,6 +116,8 @@ async function buildPayload(
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const url = new URL(req.url);
   const live = url.searchParams.get('mode') === 'live';
   const overrides: ReportParamOverrides = {
@@ -129,6 +132,8 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   let body: any = {};
   try { body = await req.json(); } catch { /* empty body → env defaults */ }
   const p = body?.params || {};

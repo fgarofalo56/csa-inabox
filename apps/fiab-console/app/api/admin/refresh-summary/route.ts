@@ -36,6 +36,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   queryLogs,
   type LogQueryResult,
@@ -281,6 +282,8 @@ async function enrich(rows: RefreshSummaryRow[], tenantId: string): Promise<void
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
 
   const sp = req.nextUrl.searchParams;
   const days = Math.min(30, Math.max(1, Number(sp.get('days')) || 7));

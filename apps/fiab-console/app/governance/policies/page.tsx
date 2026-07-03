@@ -63,6 +63,9 @@ export default function PoliciesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [cosmosGate, setCosmosGate] = useState<string | null>(null);
+  // Active PDP enforcement mode — so authors know whether Access policies are
+  // enforced, shadow-evaluated (default), or off. Null until the mode loads.
+  const [pdpMode, setPdpMode] = useState<'shadow' | 'enforce' | 'off' | null>(null);
   const [actionErr, setActionErr] = useState<string | null>(null);
 
   // ── DLP (F22) — violations, last-scan, trigger-scan, restrict-access ────────
@@ -139,6 +142,9 @@ export default function PoliciesPage() {
   }, [accQuery, accKind]);
 
   useEffect(() => {
+    clientFetch('/api/governance/pdp-mode').then((r) => r.json()).then((d) => {
+      if (d?.ok && (d.mode === 'shadow' || d.mode === 'enforce' || d.mode === 'off')) setPdpMode(d.mode);
+    }).catch(() => {});
     clientFetch('/api/workspaces').then((r) => r.json()).then((d) => {
       const list = Array.isArray(d) ? d : (d?.workspaces || []);
       setWorkspaces(list.map((x: any) => ({ id: x.id, name: x.name || x.displayName || x.id })));
@@ -461,6 +467,28 @@ export default function PoliciesPage() {
           <Button appearance="primary" icon={<Add24Regular />} onClick={() => setOpen(true)}>New policy</Button>
         </>
       } />
+
+      {pdpMode && (
+        <MessageBar
+          intent={pdpMode === 'enforce' ? 'success' : pdpMode === 'off' ? 'warning' : 'info'}
+          style={{ marginBottom: tokens.spacingVerticalM }}
+        >
+          <MessageBarBody>
+            <MessageBarTitle>
+              Policy Decision Point: {pdpMode === 'enforce' ? 'ENFORCE' : pdpMode === 'off' ? 'OFF' : 'SHADOW (default)'}
+            </MessageBarTitle>
+            {pdpMode === 'enforce' && (
+              <>Access policies are actively enforced — a denied request receives a 403. Change with <code>LOOM_PDP_ENFORCE</code>.</>
+            )}
+            {pdpMode === 'shadow' && (
+              <>Access policies are evaluated and logged for review but are <strong>not enforced</strong> yet — no request is blocked. Review would-be decisions in Admin - PDP shadow report, then set <code>LOOM_PDP_ENFORCE=enforce</code> to turn enforcement on.</>
+            )}
+            {pdpMode === 'off' && (
+              <>The PDP is disabled — Access policies are authored but <strong>not evaluated</strong>. Set <code>LOOM_PDP_ENFORCE=shadow</code> (the default: evaluate + log, never block) or <code>=enforce</code>.</>
+            )}
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {cosmosGate && (
         <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>

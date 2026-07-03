@@ -19,6 +19,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
   loadTenantCopilotConfig,
@@ -57,6 +58,8 @@ function sanitize(input: any): TenantCopilotConfig {
 export async function GET() {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   try {
     const config = (await loadTenantCopilotConfig(tenantId)) || {};
@@ -94,6 +97,8 @@ export async function GET() {
 export async function PUT(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const body = await req.json().catch(() => ({}));
   const incoming = body?.config;

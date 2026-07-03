@@ -17,6 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   getGroupsByIds,
   GraphIdentityNotConfiguredError,
@@ -29,6 +30,8 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const adminDenied = requireTenantAdmin(s);
+  if (adminDenied) return adminDenied;
 
   const raw = (req.nextUrl.searchParams.get('ids') || '').trim();
   const ids = raw ? raw.split(',').map((x) => x.trim()).filter(Boolean) : [];

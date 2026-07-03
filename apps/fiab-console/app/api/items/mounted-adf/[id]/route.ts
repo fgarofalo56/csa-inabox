@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import {
@@ -29,6 +30,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('mounted data factory not found', 404);
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
@@ -72,6 +74,7 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
   if (!s) return err('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return err('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return err('mounted data factory not found', 404);
   try {
     const items = await itemsContainer();
     await items.item((await ctx.params).id, workspaceId).delete();

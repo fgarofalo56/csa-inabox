@@ -17,6 +17,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import {
   getNotebook,
   importNotebook,
@@ -39,6 +40,9 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!path) {
     const workspaceId = req.nextUrl.searchParams.get('workspaceId');
     if (!workspaceId) return NextResponse.json({ ok: false, error: 'path or workspaceId is required' }, { status: 400 });
+    if (!(await assertOwner(workspaceId, session.claims.oid))) {
+      return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+    }
     try {
       const items = await itemsContainer();
       const { resource } = await items.item((await ctx.params).id, workspaceId).read<any>();

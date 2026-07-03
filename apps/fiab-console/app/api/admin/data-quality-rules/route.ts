@@ -25,6 +25,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 
 export const runtime = 'nodejs';
@@ -88,6 +89,8 @@ function validateRule(body: any): { valid: boolean; errors: string[] } {
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   try {
     const doc = await loadOrSeed(tenantId);
@@ -100,6 +103,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const body = await req.json().catch(() => ({}));
 
@@ -139,6 +144,8 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const body = await req.json().catch(() => ({}));
   const id = body?.id;
@@ -177,6 +184,8 @@ export async function PUT(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const id = req.nextUrl.searchParams.get('id');
   if (!id) return NextResponse.json({ ok: false, error: 'id query param required' }, { status: 400 });

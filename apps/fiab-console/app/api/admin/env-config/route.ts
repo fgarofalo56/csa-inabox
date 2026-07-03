@@ -199,8 +199,9 @@ export async function PUT(req: NextRequest) {
   const gate = await enforceCapability(session, CAP, 'Admin');
   if (gate) return gate;
   const tenantId = session!.claims.oid;
-  // PDP gate (default-off no-op): tenant-admin env-config write is a domain-level
-  // admin action. Additive — with LOOM_PDP_ENFORCE unset this returns null.
+  // PDP gate (default-shadow): tenant-admin env-config write is a domain-level
+  // admin action. Additive — unset LOOM_PDP_ENFORCE evaluates + logs but returns
+  // null (never blocks); only LOOM_PDP_ENFORCE=enforce can block.
   const blocked = await pdpCheck(session!, { level: 'domain', id: tenantId }, 'admin');
   if (blocked) return blocked;
   const who = session!.claims.upn || session!.claims.email || tenantId;

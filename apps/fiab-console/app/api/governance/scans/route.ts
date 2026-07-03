@@ -20,6 +20,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   listDataSources, registerDataSource, deleteDataSource,
   listScansForSource, listScanRuns, triggerScanRun, upsertScan,
@@ -32,7 +33,8 @@ export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
 
   const source = req.nextUrl.searchParams.get('source');
   const scan = req.nextUrl.searchParams.get('scan');
@@ -55,7 +57,8 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   let body: any;
   try { body = await req.json(); } catch { return NextResponse.json({ ok: false, error: 'invalid JSON' }, { status: 400 }); }
 
@@ -101,7 +104,8 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const name = req.nextUrl.searchParams.get('name');
   if (!name) return NextResponse.json({ ok: false, error: 'name query param required' }, { status: 400 });
   try {

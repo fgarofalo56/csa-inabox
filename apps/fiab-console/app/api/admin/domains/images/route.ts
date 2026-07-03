@@ -18,6 +18,7 @@
  */
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { getServiceClientFor, pathToHttpsUrlFor } from '@/lib/azure/adls-client';
 
 export const runtime = 'nodejs';
@@ -43,6 +44,8 @@ function parseStorage(raw: string): { account: string; container: string; prefix
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
 
   const configured = process.env.LOOM_DOMAIN_IMAGE_STORAGE;
   if (!configured) {

@@ -17,6 +17,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import {
   getCatalog,
@@ -58,6 +59,8 @@ async function audit(tenantId: string, who: string, kind: string, fields: Record
 export async function GET() {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   try {
     const clones = await listClones(tenantId);
@@ -82,6 +85,8 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
 
@@ -124,6 +129,8 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const id = new URL(req.url).searchParams.get('id');

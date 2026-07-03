@@ -20,6 +20,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 
 export const runtime = 'nodejs';
@@ -47,6 +48,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   if (!s) return apiError('unauthenticated', 401);
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return apiError('workspaceId required', 400);
+  if (!(await assertOwner(workspaceId, s.claims.oid))) return apiError('notebook not found', 404);
   try {
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<any>();

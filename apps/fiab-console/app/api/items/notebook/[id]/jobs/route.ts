@@ -15,6 +15,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 
@@ -35,9 +36,13 @@ interface JobLite {
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
-  if (!getSession()) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const s = getSession();
+  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   const workspaceId = req.nextUrl.searchParams.get('workspaceId');
   if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  if (!(await assertOwner(workspaceId, s.claims.oid))) {
+    return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+  }
   const id = (await ctx.params).id;
 
   // --- DEFAULT: Cosmos-backed run history (Azure-native, no Fabric) ---

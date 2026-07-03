@@ -23,6 +23,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { createTable, ingestInline, dropTable, KustoError, defaultDatabase } from '@/lib/azure/kusto-client';
 
 export const runtime = 'nodejs';
@@ -210,6 +211,8 @@ async function loadTable(db: string, create: string, ingest: string): Promise<st
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
 
   const kind = req.nextUrl.searchParams.get('kind') || 'geo';
   if (!['geo', 'graph', 'investigation'].includes(kind)) {

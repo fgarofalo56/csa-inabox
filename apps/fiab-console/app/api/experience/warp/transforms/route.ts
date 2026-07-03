@@ -27,6 +27,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
@@ -188,6 +189,7 @@ export async function POST(req: NextRequest) {
   if (!displayName) return err('displayName is required', 400, 'missing_displayName');
   if (!workspaceId) return err('workspaceId is required', 400, 'missing_workspaceId');
   if (!graph || !Array.isArray(graph.nodes)) return err('graph is required', 400, 'missing_graph');
+  if (!(await assertOwner(workspaceId, session.claims.oid))) return err('Workspace not found', 404, 'not_found');
 
   try {
     // Authorize: the workspace must belong to the caller's tenant.
