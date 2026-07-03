@@ -138,7 +138,9 @@ describe('/api/admin/domains — Cosmos persistence + Purview collection mirror 
     settingsDocs.clear();
     purviewCalls.length = 0;
     unityCalls.length = 0;
-    delete process.env.LOOM_TENANT_ADMIN_OID;
+    // #1602/D2 gate domain create/edit + topology fields behind tenant-admin
+    // (isTenantAdminTier). Authorize the shared test session (oid 'tenant-1').
+    process.env.LOOM_TENANT_ADMIN_OID = 'tenant-1';
     delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
     delete process.env.LOOM_DATABRICKS_HOSTNAME;
     process.env.LOOM_PURVIEW_ACCOUNT = 'purview-test';
@@ -329,7 +331,9 @@ describe('/api/admin/domains — DLZ binding / topology fields (t158)', () => {
     settingsDocs.clear();
     purviewCalls.length = 0;
     unityCalls.length = 0;
-    delete process.env.LOOM_TENANT_ADMIN_OID;
+    // #1602/D2 gate domain create/edit + topology fields behind tenant-admin
+    // (isTenantAdminTier). Authorize the shared test session (oid 'tenant-1').
+    process.env.LOOM_TENANT_ADMIN_OID = 'tenant-1';
     delete process.env.LOOM_TENANT_ADMIN_GROUP_ID;
     delete process.env.LOOM_DATABRICKS_HOSTNAME;
     delete process.env.LOOM_PURVIEW_ACCOUNT;

@@ -62,6 +62,9 @@ beforeAll(async () => {
 
 beforeEach(() => {
   getSessionMock.mockReturnValue({ claims: { oid: 'tenant-oid', upn: 'a@b.com' }, exp: Date.now() / 1000 + 3600 } as any);
+  // #1602 gates behind requireTenantAdmin — authorize the test session as the
+  // bootstrap tenant admin (the 401 spec sets session=null and still 401s).
+  process.env.LOOM_TENANT_ADMIN_OID = 'tenant-oid';
   adfConfigGateMock.mockReturnValue(null);
   listTriggersMock.mockResolvedValue([]);
   itemsQuery.mockResolvedValue({ resources: [] });

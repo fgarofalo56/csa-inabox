@@ -17,6 +17,15 @@ import { vi, afterEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
 import React from 'react';
 
+// Rate limiting is DEFAULT-ON in production (rel-T16 / B16), and the limiter
+// reads LOOM_RATE_LIMIT at call time. Under the test hammer many route specs
+// fire the same (oid, class) far faster than a real client would and trip the
+// token bucket (429), which is not the behavior those specs are asserting.
+// Default it OFF for the whole suite; the rate-limiter's OWN tests
+// (lib/azure/__tests__/rate-limiter*.test.ts) set LOOM_RATE_LIMIT='on'/'off'
+// explicitly in their own beforeEach, so they are unaffected.
+process.env.LOOM_RATE_LIMIT = process.env.LOOM_RATE_LIMIT ?? 'off';
+
 // With `globals: false`, @testing-library/react does NOT auto-register its
 // afterEach cleanup, so rendered trees accumulate across tests in the same file
 // (a second render() then makes getByTestId('chrome') throw "Found multiple

@@ -64,6 +64,12 @@ const TENANT = 'tenant-1';
 beforeEach(() => {
   Object.values(h).forEach((fn) => fn.mockReset());
   process.env.LOOM_RECYCLE_RETENTION_DAYS = '14';
+  // These are owner-path CRUD unit tests. The #1601 multi-user ACL read path is
+  // default-ON and, on an owner-miss, does a cross-partition workspace query +
+  // workspace-roles lookup this suite doesn't mock (ACL is covered by
+  // workspace-access.test.ts). Flip the kill switch off so loadOwnedItem uses
+  // the legacy owner-only check the "not owned → null" case asserts.
+  process.env.LOOM_MULTIUSER_ACL = 'off';
   h.wsRead.mockResolvedValue({ resource: { tenantId: TENANT } });
   h.itemReplace.mockImplementation((_id: string, _pk: string, doc: any) => ({ resource: doc }));
 });

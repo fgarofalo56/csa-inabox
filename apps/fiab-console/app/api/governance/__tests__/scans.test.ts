@@ -42,7 +42,13 @@ function bodyReq(body: any) {
   return { json: async () => body } as any;
 }
 
-beforeEach(() => { vi.resetAllMocks(); });
+beforeEach(() => {
+  vi.resetAllMocks();
+  // #1602 gates every scans handler behind requireTenantAdmin — authorize the
+  // test session (oid 'u') as the bootstrap tenant admin so the honest 503 /
+  // 201 / 202 backend paths are reached. The 401 specs set session=null.
+  process.env.LOOM_TENANT_ADMIN_OID = 'u';
+});
 
 describe('GET /api/governance/scans', () => {
   it('401 unauthenticated', async () => {
