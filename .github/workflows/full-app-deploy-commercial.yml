@@ -52,6 +52,8 @@ jobs:
       acr_name: ${{ steps.acr.outputs.acr_name }}
       acr_login_server: ${{ steps.acr.outputs.acr_login_server }}
       rg: ${{ steps.acr.outputs.rg }}
+      admin_sub: ${{ steps.acr.outputs.admin_sub }}
+      region: ${{ steps.acr.outputs.region }}
     steps:
       - uses: actions/checkout@v4
       - name: Azure login
@@ -76,6 +78,9 @@ jobs:
           echo "acr_name=$ACR" >> "$GITHUB_OUTPUT"
           echo "acr_login_server=$SERVER" >> "$GITHUB_OUTPUT"
           echo "rg=$RG" >> "$GITHUB_OUTPUT"
+          # Coordinates for the chained post-deploy bootstrap (rel-T34).
+          echo "admin_sub=$(az account show --query id -o tsv)" >> "$GITHUB_OUTPUT"
+          echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
           echo "::notice::ACR=$ACR login=$SERVER rg=$RG"
 
   open-acr:
@@ -314,6 +319,22 @@ jobs:
         env:
           RG_NAME: ${{ needs.resolve.outputs.rg }}
           BOUNDARY: Commercial
+
+  # rel-T34: chain the post-deploy bootstrap after the apps are LIVE. This is the
+  # true Commercial from-scratch completion — infra deploy (apps off) → this
+  # workflow builds images + brings the Container Apps up → bootstrap wires
+  # sign-in (MSAL) + data-plane grants. Runs the ONE reusable bootstrap
+  # (secrets: inherit) so the logic isn't copy-pasted per cloud.
+  post-deploy-bootstrap:
+    name: Post-deploy bootstrap (Commercial)
+    needs: [resolve, redeploy-with-apps]
+    if: ${{ inputs.enable_apps_after && needs.redeploy-with-apps.result == 'success' }}
+    uses: ./.github/workflows/csa-loom-post-deploy-bootstrap.yml
+    secrets: inherit
+    with:
+      boundary: Commercial
+      region: ${{ needs.resolve.outputs.region }}
+      admin_subscription: ${{ needs.resolve.outputs.admin_sub }}
 
   notify:
     name: Notify final state

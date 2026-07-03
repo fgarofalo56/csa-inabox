@@ -73,6 +73,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 150
     environment: il5-deploy   # requires manual approval
+    # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).
+    outputs:
+      admin_sub: ${{ steps.bootstrap_coords.outputs.admin_sub }}
+      dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
+      region: ${{ steps.bootstrap_coords.outputs.region }}
 
     steps:
       - uses: actions/checkout@v4
@@ -184,6 +189,17 @@ jobs:
             bash scripts/csa-loom/redeploy-gov.sh --boundary il5 --yes
           fi
 
+      - name: Export bootstrap coordinates (for the chained Gov bootstrap)
+        id: bootstrap_coords
+        # IL5 `full` runs teardown->redeploy and LEAVES the stack up, so the
+        # bootstrap chains after it on the tenant (console-bearing) path.
+        if: inputs.run_mode == 'full' && inputs.topology != 'dlz-attach'
+        run: |
+          ADMIN_SUB=$(az account show --query id -o tsv)
+          echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
+          echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-$ADMIN_SUB}" >> "$GITHUB_OUTPUT"
+          echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
+
       - name: Note dry-run completion
         if: success() && inputs.run_mode == 'whatif-only'
         run: echo "✅ whatif-only run complete. IL5 Bicep + auth validated; no resources provisioned."
@@ -212,3 +228,20 @@ jobs:
             } else {
               core.warning('FIAB_GOV_DEPLOY_TRACKING_ISSUE repo variable not set — skipping issue comment. ' + body);
             }
+
+  # rel-T32 (B8): IL5 post-deploy bootstrap — the SAME reusable bootstrap the
+  # Commercial + GCC-High workflows call, boundary=IL5 (az cloud set
+  # AzureUSGovernment + AZURE_GOV_* login + Gov BYO-MSAL secret). IL5 `full`
+  # leaves the redeployed stack up, so the bootstrap chains after a tenant
+  # (console-bearing) full run. dlz-attach adds no console → no bootstrap.
+  post-deploy-bootstrap:
+    name: Post-deploy bootstrap (IL5)
+    needs: deploy-validate
+    if: ${{ inputs.run_mode == 'full' && inputs.topology != 'dlz-attach' && needs.deploy-validate.result == 'success' }}
+    uses: ./.github/workflows/csa-loom-post-deploy-bootstrap.yml
+    secrets: inherit
+    with:
+      boundary: IL5
+      region: ${{ needs.deploy-validate.outputs.region }}
+      admin_subscription: ${{ needs.deploy-validate.outputs.admin_sub }}
+      dlz_subscription: ${{ needs.deploy-validate.outputs.dlz_sub }}
