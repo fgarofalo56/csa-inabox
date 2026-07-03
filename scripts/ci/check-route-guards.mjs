@@ -123,7 +123,8 @@ const ALLOWLIST = new Map([
   ['apps/fiab-console/app/api/admin/load-sample-data/route.ts', 'loads sample data into the deployment ADX; admin surface'],
   ['apps/fiab-console/app/api/admin/mcp-servers/bridge/route.ts', 'deployment-wide MCP bridge config'],
   ['apps/fiab-console/app/api/admin/mcp-servers/builtin/route.ts', 'static built-in MCP catalog read'],
-  ['apps/fiab-console/app/api/admin/mcp-servers/test-connection/route.ts', 'stateless connectivity probe; no per-tenant data'],
+  ['apps/fiab-console/app/api/admin/mcp-servers/route.ts', 'admin gate + SSRF egress guard owned by sibling PR #1599 (requireTenantAdmin on POST/PUT); excluded here to avoid a merge conflict — remove this entry once #1599 lands'],
+  ['apps/fiab-console/app/api/admin/mcp-servers/test-connection/route.ts', 'stateless connectivity probe; admin gate + egress guard owned by sibling PR #1599; no per-tenant data'],
   ['apps/fiab-console/app/api/admin/tenant-settings/groups/route.ts', 'ambient-tenant group read (Graph); tenant is from the token'],
 ]);
 
