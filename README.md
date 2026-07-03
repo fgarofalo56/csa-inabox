@@ -35,6 +35,29 @@
 
 ---
 
+## 🧵 CSA Loom — the deployable product
+
+Most people arriving here want **CSA Loom**: a single-tenant, **push-button
+deployable** platform that delivers the **Microsoft Fabric experience inside any
+Azure tenant** — a web Console (`apps/fiab-console`) over Azure-native backends
+(Databricks + Synapse + ADX + ADLS + AI Foundry), with lakehouses, warehouses,
+pipelines, real-time intelligence, notebooks, reports, a data + API marketplace,
+governance, and Copilot throughout. **Azure-native by default, no hard Microsoft
+Fabric dependency**, across Azure **Commercial and Government**.
+
+- **Deploy it:** [CSA Loom Quick Start](platform/fiab/README.md) →
+  [`docs/fiab/deployment/quickstart.md`](docs/fiab/deployment/quickstart.md)
+  (`git clone` → `az deployment sub create` → post-deploy bootstrap → Console).
+- **Gov (GCC-High / IL5):** [`docs/fiab/deployment/gcc-high.md`](docs/fiab/deployment/gcc-high.md).
+- **Full docs:** the [published docs site](https://fgarofalo56.github.io/csa-inabox/)
+  (see the *CSA Loom* section).
+
+The rest of this README documents the **CSA-in-a-Box reference stack** — the
+composable Bicep/data-platform layer CSA Loom builds on. If you want the product,
+start with the Quick Start above.
+
+---
+
 ## 📑 Table of Contents
 
 - [📋 What Is This?](#-what-is-this)
