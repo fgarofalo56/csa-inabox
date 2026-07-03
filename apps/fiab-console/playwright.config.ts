@@ -24,7 +24,7 @@ export default defineConfig({
   reporter: [['list'], ['json', { outputFile: 'test-results/uat/report.json' }]],
   outputDir: 'test-results/uat/artifacts',
   use: {
-    baseURL: process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+    baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
     actionTimeout: 15_000,
@@ -73,7 +73,7 @@ export default defineConfig({
       dependencies: ['mint'],
       use: {
         storageState: 'e2e/.auth/loom-state.json',
-        baseURL: process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
+        baseURL: process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net',
       },
     },
   ],

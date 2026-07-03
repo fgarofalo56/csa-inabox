@@ -6,6 +6,24 @@ on:
     paths:
       - '**.py'
       - 'portal/**'
+  # rel-T27 / B13: also analyze on PRs so security findings surface BEFORE merge,
+  # not only after landing on main / on the weekly cron. Path-filtered to source
+  # for both analyzed languages (python + javascript-typescript) so doc/bicep-only
+  # PRs don't pay the ~build+analyze cost. Not wired as a required check here —
+  # the orchestrator owns branch protection.
+  pull_request:
+    branches: [main]
+    paths:
+      - '**.py'
+      - '**.ts'
+      - '**.tsx'
+      - '**.js'
+      - '**.jsx'
+      - '**.mjs'
+      - '**.cjs'
+      - 'portal/**'
+      - 'apps/**'
+      - '.github/workflows/codeql.yml'
   schedule:
     - cron: '37 3 * * 1'
 

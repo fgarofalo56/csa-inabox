@@ -347,16 +347,24 @@ jobs:
       - name: Post-provision validation (from inside cluster)
         id: validate
         if: steps.provision.outcome == 'success'
-        continue-on-error: true
+        # rel-T29 / B13: NO continue-on-error. This in-cluster probe is now the
+        # REAL deploy gate — it retries loom-console /api/health from inside the
+        # VNet and exits non-zero if the console never serves, failing the deploy.
+        # (It replaces the old external-curl smoke that could never reach the
+        # VNet-internal ingress and so was pinned continue-on-error = a no-op.)
         run: bash .github/scripts/fiab-post-provision-validate.sh
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
           BOUNDARY: ${{ env.CSA_LOOM_BOUNDARY }}
 
-      - name: External smoke test
+      - name: External smoke test (best-effort)
         id: smoke
-        if: steps.provision.outcome == 'success'
-        continue-on-error: true   # Console ingress is VNet-internal; external smoke is best-effort
+        # Best-effort ONLY: this from-scratch estate's console ingress is
+        # VNet-internal, so an external runner genuinely cannot reach it. The
+        # authoritative gate is the in-cluster validation above; this stays
+        # continue-on-error and just records whatever it can see from outside.
+        if: always() && steps.provision.outcome == 'success'
+        continue-on-error: true
         run: bash .github/scripts/fiab-smoke-test.sh
         env:
           CONSOLE_URL: ${{ steps.provision.outputs.console_url }}

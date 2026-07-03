@@ -7,5 +7,7 @@ public/monaco/
 test-results/
 playwright-report/
 tsconfig.tsbuildinfo
+# Vitest v8 coverage output (rel-T28) — measured in CI, never committed.
+coverage/
 # Playwright auth state — contains minted session cookies; never commit.
 e2e/.auth/
