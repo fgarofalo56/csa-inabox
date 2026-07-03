@@ -44,6 +44,8 @@ const ORPHAN_ALLOWLIST = new Map([
   ['platform/fiab/bicep/modules/admin-plane/cosmos-navigator-keys-rbac.bicep', 'opt-in Cosmos navigator-keys RBAC; deployed on demand'],
   ['platform/fiab/bicep/modules/admin-plane/cost-management-rbac.bicep', 'opt-in cost-management chargeback RBAC; deployed on demand'],
   ['platform/fiab/bicep/modules/admin-plane/devcenter.bicep', 'opt-in Deployment Environments DevCenter; TODO wire into orchestrator (release-environment honest-gate documents it)'],
+  ['platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep', 'standalone entrypoint: scale-to-zero self-hosted GitHub runner ACA Job, deployed out-of-band (az deployment -f gh-runner-job.bicep; its doc block shows the optional in-orchestrator wiring)'],
+  ['platform/fiab/bicep/modules/shared/diagnostic-settings.bicep', 'shared scope:<resource> diagnostic-settings helper template (loom-law-monitoring runbook documents it); TODO wire callers per-resource'],
   ['platform/fiab/bicep/modules/admin-plane/mcp-catalog-app.bicep', 'opt-in MCP-catalog ACA app; deployed when the MCP catalog is enabled'],
   ['platform/fiab/bicep/modules/admin-plane/spark-session-pool.bicep', 'opt-in Synapse spark session pool; deployed when Spark is enabled'],
   ['platform/fiab/bicep/modules/admin-plane/udf-runtime.bicep', 'TODO wire: Loom-managed Functions UDF host (main.bicep documents the pending default)'],
@@ -58,12 +60,21 @@ function rel(f) {
   return path.relative(REPO_ROOT, f).split(path.sep).join('/');
 }
 
+/**
+ * Strip `//` line comments so a `module x '<path>'` snippet quoted in a
+ * comment (e.g. gh-runner-job.bicep's own "how to wire me" doc block) does
+ * not count as a real reference. `https://` survives (preceded by `:`).
+ */
+function stripLineComments(src) {
+  return src.replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
 /** Set of absolute module paths referenced by any `module '<path>'` decl. */
 function collectReferenced() {
   const referenced = new Set();
   const files = walk(BICEP_ROOT, ['.bicep']);
   for (const f of files) {
-    const src = fs.readFileSync(f, 'utf8');
+    const src = stripLineComments(fs.readFileSync(f, 'utf8'));
     let m;
     MODULE_DECL_RE.lastIndex = 0;
     while ((m = MODULE_DECL_RE.exec(src)) !== null) {
