@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Azure Synapse Studio → SQL serverless → OPENROWSET query editor.
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/synapse-serverless-sql-pool/new`.
+> Loom route: `https://<your-console-hostname>/items/synapse-serverless-sql-pool/new`.
 > Editor source: `apps/fiab-console/lib/editors/synapse-sql-editors.tsx` (lines 148-253).
 
 ## Live-browser validation status

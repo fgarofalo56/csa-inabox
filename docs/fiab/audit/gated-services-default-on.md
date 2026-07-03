@@ -7,11 +7,11 @@ work day-one — deploy their runtime backends **by default** (opt-out, not opt-
 wire the console env, and keep bicep in sync so a clean deploy reproduces the
 live state. Source: `docs/fiab/audit/live-e2e-feature-surfaces-v2.md` §3.
 
-Live target: rg `rg-csa-loom-admin-centralus`, sub `e093f4fd-5047-4ee4-968d-a56942c665f3`,
+Live target: rg `rg-csa-loom-admin-centralus`, sub `<subscription-id>`,
 console `loom-console`, ACA env `cae-csa-loom-centralus` (VNet-**internal**),
-ACR `acrloomk6mvh5sm6z7do.azurecr.io` (public network **Disabled**),
-console UAMI principalId `41d32562-f864-4450-8b84-cd3d59f58bf4`,
-clientId `a654ed98-e060-490f-af5b-734dc17c5693`.
+ACR `acrloom<hash>.azurecr.io` (public network **Disabled**),
+console UAMI principalId `<uami-principal-id>`,
+clientId `<uami-client-id>`.
 
 ---
 
@@ -25,7 +25,7 @@ clientId `a654ed98-e060-490f-af5b-734dc17c5693`.
   `loom-dab-preview-live`, provisioningState Succeeded, revision Running, 1 replica,
   port 5000, external ingress on the internal CAE → reachable by the console over
   the VNet). SQL target = Synapse serverless endpoint
-  `syn-loom-k6mvh5sm6z7do-ondemand.sql.azuresynapse.net` / db `master`. The DAB
+  `syn-loom-<hash>-ondemand.sql.azuresynapse.net` / db `master`. The DAB
   engine boots healthy on an empty-entities config, so REST/GraphQL/publish
   **preview** work day-one.
 - **Console env set live:** `LOOM_DAB_PREVIEW_URL=https://loom-dab-preview.redplant-71d4694f.centralus.azurecontainerapps.io`
@@ -55,12 +55,12 @@ clientId `a654ed98-e060-490f-af5b-734dc17c5693`.
 ### 3. Weave Postgres (Apache AGE) — **PROVISIONED LIVE (data-plane bootstrap prereq)**
 - **Module:** `platform/fiab/bicep/modules/landing-zone/postgres-weave.bicep`
   (already `weaveOntologyEnabled = true`, fully wired into the orchestrator).
-- **Live:** deployed PG flexible server `psql-loom-weave-default-k6mvh5sm6z7do`
+- **Live:** deployed PG flexible server `psql-loom-weave-default-<hash>`
   (state Ready), database `loom-weave`, AGE prerequisites set
   (`shared_preload_libraries=AGE`, `azure.extensions=AGE` — the latter re-applied
   after a `ServerIsBusy` restart race during the ARM run). Entra-only auth, Console
   UAMI is the Entra administrator.
-- **Console env set live:** `LOOM_WEAVE_PG_FQDN=psql-loom-weave-default-k6mvh5sm6z7do.postgres.database.azure.com`,
+- **Console env set live:** `LOOM_WEAVE_PG_FQDN=psql-loom-weave-default-<hash>.postgres.database.azure.com`,
   `LOOM_WEAVE_PG_DATABASE=loom-weave`, `LOOM_WEAVE_GRAPH=loom_ontology`. The
   deterministic name matches the bicep-computed `loomWeavePgFqdn`.
 - **One prerequisite to go fully live:** the AGE **data-plane** bootstrap
@@ -150,7 +150,7 @@ documented in the audit §3 honest-gate table:
 | Env var | Value |
 |---|---|
 | `LOOM_DAB_PREVIEW_URL` | `https://loom-dab-preview.redplant-71d4694f.centralus.azurecontainerapps.io` |
-| `LOOM_WEAVE_PG_FQDN` | `psql-loom-weave-default-k6mvh5sm6z7do.postgres.database.azure.com` |
+| `LOOM_WEAVE_PG_FQDN` | `psql-loom-weave-default-<hash>.postgres.database.azure.com` |
 | `LOOM_WEAVE_PG_DATABASE` | `loom-weave` |
 | `LOOM_WEAVE_GRAPH` | `loom_ontology` |
 | `LOOM_ACTIVATOR_DEFAULT_TABLE` | `AppEvents` |

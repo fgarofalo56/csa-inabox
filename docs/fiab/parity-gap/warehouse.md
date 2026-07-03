@@ -1,7 +1,7 @@
 # Loom warehouse editor — Fabric parity gap (v2 validator, 2026-05-26)
 
 > Validator agent: independent fabric-parity-loop v2 validator
-> Loom build under test: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net` (Azure Front Door)
+> Loom build under test: `https://<your-console-hostname>` (Azure Front Door)
 > Loom routes tested: `/items/warehouse/new` (WarehouseEditor) AND `/items/synapse-dedicated-sql-pool/new` (SynapseDedicatedSqlPoolEditor)
 > Fabric reference: see `docs/fiab/warehouse-parity-spec.md` (Phase-1 catalog spec) — live Fabric capture was BLOCKED on MSAL re-auth, see Phase 1 note below.
 

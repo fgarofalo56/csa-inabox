@@ -2,7 +2,7 @@
 
 **Generated:** 2026-05-26  
 **Validator:** fabric-parity-loop v2 (Phase 3 — API surface)  
-**Live base URL:** `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net`  
+**Live base URL:** `https://<your-console-hostname>`  
 **Loom version:** `v3.28-fix-44f3b00b`  
 
 ## Methodology

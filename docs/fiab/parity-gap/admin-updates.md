@@ -3,7 +3,7 @@
 > Validator: v2 fabric-parity-loop · 4-phase check  
 > Run date: 2026-05-26  
 > Fabric reference: **None** — Updates is a Loom-native admin surface; Fabric ships continuously and does not surface a version-sync page in its admin portal.  
-> Loom URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/admin/updates>
+> Loom URL: <https://<your-console-hostname>/admin/updates>
 
 ## Captures
 

@@ -27,7 +27,7 @@
 
 ### 7a. `/governance` (main)
 
-**Real.** Renders `<ActivityFeedPane>` which fetches from `/api/activity` (joins audit-log + comments + shares from Cosmos). Verified live: shows 3 real events (uat-sqldb activity by fgarofalo@limitlessdata.ai on 5/25/2026 14:54). Stats are computed client-side from the live feed. Empty state is honest.
+**Real.** Renders `<ActivityFeedPane>` which fetches from `/api/activity` (joins audit-log + comments + shares from Cosmos). Verified live: shows 3 real events (uat-sqldb activity by admin@contoso.gov on 5/25/2026 14:54). Stats are computed client-side from the live feed. Empty state is honest.
 
 ### 7b. `/governance/catalog`
 

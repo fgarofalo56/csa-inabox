@@ -3,7 +3,7 @@
 > Validator: v2 fabric-parity-loop · 4-phase check  
 > Run date: 2026-05-26  
 > Fabric reference: Fabric admin portal → **Audit logs** (links out to Microsoft Purview compliance portal)  
-> Loom URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/admin/audit-logs>
+> Loom URL: <https://<your-console-hostname>/admin/audit-logs>
 
 ## Captures
 

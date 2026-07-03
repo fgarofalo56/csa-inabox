@@ -1,7 +1,7 @@
 # CSA Loom — UAT Coverage Matrix
 
 > Auto-generated from `apps/fiab-console/test-results/uat/verdicts.ndjson` on 2026-05-26T13:58:20Z.
-> Last run: v3.18 against https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+> Last run: v3.18 against https://<your-console-hostname>
 
 ## Grading rubric
 

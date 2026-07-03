@@ -1,7 +1,7 @@
 # Loom Power BI Report — Fabric parity gap
 
 > **Validator: v2 4-phase (live browser) — 2026-05-26**
-> Loom URL: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/report/new
+> Loom URL: https://<your-console-hostname>/items/report/new
 > Fabric reference: app.powerbi.com / app.fabric.microsoft.com (login-gated; spec-derived from docs/fiab/report-parity-spec.md)
 > Screenshot: temp/parity/report-loom.png
 > Source under review: apps/fiab-console/lib/editors/phase3-editors.tsx lines 1540-1641

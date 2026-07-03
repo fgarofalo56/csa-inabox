@@ -33,7 +33,7 @@ Against the live console (minted-session cookie; `SESSION_SECRET` from Key Vault
 
 ```bash
 cd apps/fiab-console
-SESSION_SECRET=<kv-secret> LOOM_URL=https://<front-door>.azurefd.net \
+SESSION_SECRET=<kv-secret> LOOM_URL=https://<front-door><your-console-hostname> \
   pnpm exec playwright test --project=uat e2e/tutorial-capture.uat.ts
 # scope by dimension: LOOM_TUTORIAL_DIMENSIONS="items,features" …
 # scope items:        LOOM_TUTORIAL_TYPES="lakehouse,notebook,rayfin-app" …

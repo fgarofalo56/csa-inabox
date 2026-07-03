@@ -11,7 +11,7 @@
 
 **Grade: F (Vaporware) — SUPERSEDED, see note above.** See `apps-catalog-rollup.md` for shared root cause.
 
-Surface: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/apps/app-data-steward`
+Surface: `https://<your-console-hostname>/apps/app-data-steward`
 Validated: 2026-05-26
 
 ## What the card claims

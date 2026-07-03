@@ -20,6 +20,10 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Block the publish if any live estate identifier / operator PII slipped
+      # back into the docs site (rel-T02/B2). Node is preinstalled on the runner.
+      - name: docs-hygiene (live estate identifiers + operator PII)
+        run: node scripts/ci/check-docs-hygiene.mjs
       - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"

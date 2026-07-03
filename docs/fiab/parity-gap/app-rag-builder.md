@@ -2,7 +2,7 @@
 
 **Grade: F (Vaporware)** — See `apps-catalog-rollup.md` for shared root cause.
 
-Surface: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/apps/app-rag-builder`
+Surface: `https://<your-console-hostname>/apps/app-rag-builder`
 Validated: 2026-05-26
 Screenshot: `temp/parity/apps/app-rag-builder.png`
 

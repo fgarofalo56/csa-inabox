@@ -6,7 +6,7 @@ description: "Six PRs landed on 2026-05-27: 10 CSA apps install with rich starte
 # Release 2026-05-27 — App content bundles + console wiring sweep
 
 Six PRs landed on `main` on 2026-05-27, all live on the FedCiv DLZ
-deployment at `loom-console-fvbbctd4eehqbkcs.b02.azurefd.net` (container
+deployment at `<your-console-hostname>` (container
 revision `loom-console--0000082`, image SHA `146d2158`). This page is
 the operator-readable release log for that work.
 
@@ -208,7 +208,7 @@ expired. The new secret was pushed to the GitHub secret
 
 ## Reference
 
-- **Live URL:** [https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net](https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net)
+- **Live URL:** [https://<your-console-hostname>](https://<your-console-hostname>)
 - **Test script:** [TEST_SCRIPT_2026_05_27.md](../TEST_SCRIPT_2026_05_27.md)
 - **Editor audit (input to the ribbon-wiring sweep):** `temp/editor-audit-2026-05-27.md`
 - **/onelake WAF investigation:** `temp/onelake-403-investigation.md`

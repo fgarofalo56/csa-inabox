@@ -25,7 +25,7 @@
 | 13 | Notifications panel | "Notifications" button in header — `/api/notifications` returns 200 OK; functional verification: see below | present | — |
 | 14 | Search box with Azure AI Search backing | Search box in header (`Ctrl+K` palette) — placeholder "Search items, settings, item types…" | present | — |
 | 15 | Light/dark theme toggle | "Switch to dark theme" button in header toolbar | present | — |
-| 16 | Account / user avatar | "Account · Frank Garofalo" button with FG initials avatar | present | — |
+| 16 | Account / user avatar | "Account · Platform Admin" button with FG initials avatar | present | — |
 | 17 | Fabric/Power BI experience switcher | No experience switcher (Loom is single experience by design — n/a) | n/a | n/a |
 | 18 | "Workloads" hub link | "Workload hub" link in left nav | present | — |
 | 19 | Focus mode toggle (hides nav + object explorer for editor focus) | Not present on Home (may exist in item editors) | missing on Home | MINOR |

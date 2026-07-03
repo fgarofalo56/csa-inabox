@@ -1,7 +1,7 @@
 # Loom Semantic Model — Fabric parity gap
 
 > **Validator: v2 4-phase (live browser) — 2026-05-26**
-> Loom URL: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/semantic-model/new`
+> Loom URL: `https://<your-console-hostname>/items/semantic-model/new`
 > Fabric reference: `https://app.fabric.microsoft.com` (casino-fabric-poc workspace) — login-gated; spec-derived from `docs/fiab/semantic-model-parity-spec.md` and Microsoft Learn Power BI desktop docs.
 > Screenshots: `temp/parity/semantic-model-loom.png` (full page) · `temp/parity/fabric-login-gate.png` (Fabric requires interactive MFA)
 > Source under review: `apps/fiab-console/lib/editors/phase3-editors.tsx` lines 1325-1538
