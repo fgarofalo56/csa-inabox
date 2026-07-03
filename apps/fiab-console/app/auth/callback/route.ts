@@ -320,6 +320,15 @@ export async function GET(req: NextRequest) {
     const account = result.account;
     const claims: UserClaims = {
       oid: account.homeAccountId.split('.')[0],
+      // Entra TENANT id (rel-T11) — partitions tenant-shared state (feature
+      // grants) + enforces the tenant boundary on shared workspace reads.
+      // homeAccountId is `${oid}.${utid}`; prefer the authoritative id-token
+      // `tid` claim, then the account realm, then the home-tenant segment.
+      tid:
+        ((account.idTokenClaims as Record<string, unknown> | undefined)?.tid as string) ||
+        account.tenantId ||
+        account.homeAccountId.split('.')[1] ||
+        undefined,
       name: account.name ?? account.username,
       email: account.username,
       upn: account.username,

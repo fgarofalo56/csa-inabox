@@ -25,7 +25,7 @@
  */
 import { NextResponse } from 'next/server';
 import { featurePermissionsContainer } from '@/lib/azure/cosmos-client';
-import type { SessionPayload } from './session';
+import { type SessionPayload, tenantScopeId } from './session';
 import { ancestorIds, getCapability } from './feature-catalog';
 
 export type FeatureRole = 'Reader' | 'Contributor' | 'Admin';
@@ -88,7 +88,11 @@ export async function checkCapability(
   // ancestors, fall back to a single-id lookup.
   const effectiveChain = capabilityChain.length > 0 ? capabilityChain : [capabilityId];
 
-  const tenantId = session.claims.oid; // tenantId == owning user oid in this codebase
+  // Feature grants are TENANT-shared (rel-T11): partition by the Entra tenant id
+  // (`tid`) so a grant an admin writes for a user resolves for that grantee (both
+  // share the tenant). Falls back to `oid` when `tid` is absent (pre-rel-T11
+  // sessions / single-operator bootstrap) — identical to the legacy behavior.
+  const tenantId = tenantScopeId(session);
   try {
     const c = await featurePermissionsContainer();
     const { resources } = await c.items
