@@ -35,8 +35,42 @@
 
 ---
 
+## 🧵 CSA Loom — a Fabric-class analytics experience on Azure-native backends
+
+**CSA Loom is the flagship, push-button product built on this repo.** It
+delivers a Microsoft Fabric-class SaaS analytics experience — a unified web
+console with lakehouses, warehouses, real-time intelligence, notebooks,
+pipelines, semantic models, reports, governance, and AI copilots — running on
+**pure Azure-native backends**. There is **no hard dependency on a real
+Microsoft Fabric capacity, workspace, or Power BI tenant**: every item type is
+100% functional on its Azure-native default (ADLS Gen2 + Delta, Synapse SQL,
+Azure Data Explorer, Event Hubs, Azure Monitor, Azure Analysis Services), with
+Fabric/Power BI available strictly as an opt-in alternative. Loom runs in both
+**Azure Commercial and Azure Government**.
+
+The console ships a rich, working surface — not a scaffold: **~117 item-type
+editors across 22 categories**, a unified **marketplace** (API + data products
+with bidirectional Delta Sharing), **copilots** (chat, per-editor build-assist,
+and a report/Power BI copilot), full **governance** (Purview classic Data Map,
+classifications, glossary, lineage, MDM, sensitivity/protection policies),
+**workspaces with OBO access control**, a **Learning Hub**, an **MCP server
+catalog**, **20+ one-click use-case apps**, a **deploy planner**, a
+**Loom-native report designer**, and an **admin portal** of ~27 pages.
+
+- 🚀 **Deploy it**: **[CSA Loom deployment quickstart](docs/fiab/deployment/quickstart.md)** — clone → working Console URL in ~60 minutes (Azure Commercial). Gov: [GCC](docs/fiab/deployment/gcc.md) / [GCC-High](docs/fiab/deployment/gcc-high.md). IaC lives under [`platform/fiab/bicep/`](platform/fiab/bicep/).
+- 🖥️ **The app**: [`apps/fiab-console/`](apps/fiab-console/README.md) — Next.js 15 + Fluent UI v9 + MSAL BFF, hosted on Azure Container Apps.
+- 📚 **Full docs**: [CSA Loom documentation](https://fgarofalo56.github.io/csa-inabox/) and the [`docs/fiab/`](docs/fiab/) tree.
+
+> The remainder of this README covers the underlying **CSA-in-a-Box** reference
+> stack (Bicep modules, domain examples, and the Python platform) that Loom is
+> assembled from — useful if you want the composable primitives rather than the
+> packaged console experience.
+
+---
+
 ## 📑 Table of Contents
 
+- [🧵 CSA Loom — a Fabric-class analytics experience](#-csa-loom--a-fabric-class-analytics-experience-on-azure-native-backends)
 - [📋 What Is This?](#-what-is-this)
 - [🧭 Use Fabric if… Use this if…](#-use-fabric-if-use-this-if)
 - [🏗️ Architecture](#️-architecture)
