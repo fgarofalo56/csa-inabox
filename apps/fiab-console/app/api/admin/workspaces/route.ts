@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
-import { withRateLimit } from '@/lib/azure/rate-limiter';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { listAllWorkspacesAdmin } from '@/lib/clients/workspaces-client';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
@@ -59,7 +59,7 @@ export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   // Per-principal rate limit (default-off: no-op unless LOOM_RATE_LIMIT=on). Workspace create provisions backing resources.
-  const limited = withRateLimit(s, 'provision');
+  const limited = await enforceRateLimit(s, 'provision');
   if (limited) return limited;
   // PDP gate (default-off / shadow-ready). Admin write: create a tenant workspace.
   const blocked = await pdpCheck(s, { level: 'domain', id: s.claims.oid }, 'admin');

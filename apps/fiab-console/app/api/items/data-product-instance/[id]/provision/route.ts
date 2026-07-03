@@ -10,6 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { loadOwnedItem, updateOwnedItem, jerr } from '../../../_lib/item-crud';
 import { runProvisioning } from '@/lib/install/provisioning-engine';
 
@@ -19,6 +20,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return jerr('unauthenticated', 401);
+  const limited = await enforceRateLimit(session, 'provision');
+  if (limited) return limited;
   const id = (await ctx.params).id;
   const item = await loadOwnedItem(id, 'data-product-instance', session.claims.oid);
   if (!item) return jerr('not found', 404);

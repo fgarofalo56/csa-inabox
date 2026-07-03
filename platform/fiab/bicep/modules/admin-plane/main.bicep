@@ -3004,6 +3004,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MSAL_TENANT_ID', value: loomMsalTenantId }
             { name: 'LOOM_COSMOS_ENDPOINT', value: !empty(loomCosmosAccount) ? 'https://${loomCosmosAccount}.documents.${environment().suffixes.storage == 'core.usgovcloudapi.net' ? 'azure.us' : 'azure.com'}:443/' : '' }
             { name: 'LOOM_COSMOS_DATABASE', value: 'loom' }
+            // Durable rate limiting (rel-T16 / B16) — DEFAULT ON. The BFF engages
+            // the two-tier limiter (in-memory burst + Cosmos fixed-window) unless
+            // this is set to 'off'. Emitted as a literal so a from-scratch deploy
+            // ships it enabled; set to 'off' to disable, or set
+            // LOOM_RATE_LIMIT_BACKEND=memory to keep tier-1 only. No new param
+            // (this module is at the 256-param ARM ceiling) — literal by design.
+            { name: 'LOOM_RATE_LIMIT', value: 'on' }
             // Direct-Lake-shim (Azure-native parity for Fabric Direct Lake).
             // When enabled, the semantic-model "Direct Lake (shim)" tab is active
             // and the BFF can wire the Event Grid → Service Bus subscription at

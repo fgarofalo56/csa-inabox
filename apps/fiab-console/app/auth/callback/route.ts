@@ -7,6 +7,7 @@
 import { createHash } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
+import { enforceRateLimitForKey, clientIp } from '@/lib/azure/rate-limiter';
 import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS, sessionSlidingEnabled } from '@/lib/auth/session';
 import {
   authCsrfEnabled,
@@ -246,6 +247,12 @@ function htmlRedirect(url: string, cookieValue?: string, extraCookies: string[] 
 }
 
 export async function GET(req: NextRequest) {
+  // Per-IP anonymous rate limit (rel-T16) — bound the code-exchange endpoint.
+  // On limit, redirect back with an honest error rather than a raw 429 JSON
+  // (this is a browser redirect target). Default ON; two-tier.
+  const limited = await enforceRateLimitForKey(clientIp(req.headers), 'auth');
+  if (limited) return htmlRedirect('/?auth_error=rate_limited');
+
   const url = new URL(req.url);
   const code = url.searchParams.get('code');
   const aadError = url.searchParams.get('error');

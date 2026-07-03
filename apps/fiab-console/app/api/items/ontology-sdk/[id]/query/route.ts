@@ -16,6 +16,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 
 export const runtime = 'nodejs';
@@ -46,6 +47,8 @@ function shapeRows(arr: unknown): { columns: string[]; rows: unknown[][] } {
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return err('unauthenticated', 401, 'unauthenticated');
+  const limited = await enforceRateLimit(session, 'query');
+  if (limited) return limited;
   const { id } = await ctx.params;
   if (!id || id === 'new') return err('save the Ontology SDK item first (no id yet)', 400, 'no_id');
 

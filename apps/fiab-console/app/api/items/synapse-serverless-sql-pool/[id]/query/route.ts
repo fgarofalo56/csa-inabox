@@ -11,6 +11,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { serverlessTarget, serverlessEndpoint, executeQuery, executeQueryAsUser, type SynapseQueryParam } from '@/lib/azure/synapse-sql-client';
 import { resolveAccessMode } from '@/lib/azure/sql-access-mode';
 import { getUserSqlToken } from '@/lib/azure/sql-user-token-store';
@@ -21,6 +22,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  const limited = await enforceRateLimit(session, 'query');
+  if (limited) return limited;
 
   const { id } = await ctx.params;
   const body = await req.json().catch(() => ({}));

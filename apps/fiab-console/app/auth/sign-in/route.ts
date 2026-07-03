@@ -23,6 +23,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
+import { enforceRateLimitForKey, clientIp } from '@/lib/azure/rate-limiter';
 import { armBase, getSqlSuffix } from '@/lib/azure/cloud-endpoints';
 import {
   authCsrfEnabled,
@@ -65,6 +66,11 @@ function redirectUri(req: NextRequest): string {
 }
 
 export async function GET(req: NextRequest) {
+  // Per-IP anonymous rate limit (rel-T16) — a sign-in initiator is cheap to spam
+  // (302 to AAD). Default ON; two-tier (in-memory burst + durable window).
+  const limited = await enforceRateLimitForKey(clientIp(req.headers), 'auth');
+  if (limited) return limited;
+
   // Honest gate (PRP deploy-readiness gap #2): require the MSAL app-registration
   // credential the confidential client actually uses for user login. Do NOT key
   // on AZURE_CLIENT_ID — that is the Console UAMI (a managed identity) which
