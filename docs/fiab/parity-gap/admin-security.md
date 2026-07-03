@@ -3,7 +3,7 @@
 > Validator: v2 fabric-parity-loop · 4-phase check  
 > Run date: 2026-05-26  
 > Fabric reference: Fabric admin portal → multiple tabs (Information protection, Fabric identities, Disaster recovery, Protected workspaces, Purview hub)  
-> Loom URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/admin/security>
+> Loom URL: <https://<your-console-hostname>/admin/security>
 
 ## Captures
 

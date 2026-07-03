@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Databricks Workspace → Workspace → Users → ... → Notebook editor (cell-based with PySpark / SQL / Scala / R magics).
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/databricks-notebook/new`.
+> Loom route: `https://<your-console-hostname>/items/databricks-notebook/new`.
 > Editor source: `apps/fiab-console/lib/editors/databricks-editors.tsx` (lines 592-928).
 
 ## Phase 3 — gap matrix vs Databricks notebook UI

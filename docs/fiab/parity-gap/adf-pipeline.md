@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Azure Data Factory Studio → Author → Pipelines.
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/adf-pipeline/new`.
+> Loom route: `https://<your-console-hostname>/items/adf-pipeline/new`.
 > Editor source: `apps/fiab-console/lib/editors/azure-services-editors.tsx` (lines 739-943); shared canvas at `apps/fiab-console/lib/components/pipeline/pipeline-dag-view.tsx`.
 
 ## Phase 3 — gap matrix vs ADF Studio Author

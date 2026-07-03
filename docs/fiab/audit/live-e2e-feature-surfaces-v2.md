@@ -1,7 +1,7 @@
 # FEATURE-SURFACE Live E2E Report (v2)
 
-**Deployment:** CSA Loom Console `v0.42.0` (https://csa-loom.limitlessdata.ai) — Azure-native backend
-**Session:** minted AES-256-GCM admin session (`e2e@limitlessdata.ai`, oid `866a2e12-…`), tenant `866a2e12-…`
+**Deployment:** CSA Loom Console `v0.42.0` (https://<your-console-hostname>) — Azure-native backend
+**Session:** minted AES-256-GCM admin session (`admin@contoso.gov`, oid `866a2e12-…`), tenant `866a2e12-…`
 **Scope:** 243 live feature-surface results across 12 areas, exercised against real Azure (ARM / Cosmos / Key Vault / ADX / Event Hubs / Log Analytics / APIM / Storage / AOAI).
 
 ---
@@ -182,7 +182,7 @@ No vaporware was found (no fabricated success). The "broken" verdicts cluster in
 - **works** — `POST /api/realtime-hub/connect-source` (200): creates a REAL Loom eventstream; secret hardening verified (Kafka saslPassword → Key Vault + `saslPasswordSecretRef`); bad sourceType → 400 (22 allowed). Created 3 streams that could not be deleted (see B1).
 - **works** — `POST /api/realtime-hub/provision` (200): real ARM PUTs against existing `evhns-csa-loom-centralus` (consumerGroup + eventhub created + cleaned up).
 - **works** — `GET /api/realtime-hub/endpoints` (200): projects real eventstream topology; 400/404 guards.
-- **works** — `GET /api/realtime-hub/keyvault-certificates` (200): vault `kv-loom-k6mvh5sm6z7do` configured, 0 certs (honest). UI: add upload affordance.
+- **works** — `GET /api/realtime-hub/keyvault-certificates` (200): vault `kv-loom-<hash>` configured, 0 certs (honest). UI: add upload affordance.
 - **works** — `POST /api/realtime-hub/preview` (200): real ADX round-trip; nonexistent table → verbatim SEM0100. UI: add DB/table picker.
 - **broken (B1)** — `DELETE /api/items/eventstream/[id]` (405): static route shadows generic DELETE; no API path deletes an eventstream.
 - **works** — `/realtime-hub` page + RealTimeHubView (200): all 22 RTH_SOURCE_TYPES, honest infra-gate MessageBars, real drawers.

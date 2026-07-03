@@ -1,98 +1,112 @@
-# Loom Console
+# CSA Loom Console
 
-The CSA Loom Console — Next.js 14 + Fluent UI v9 + MSAL BFF
-application that gives federal customers the Microsoft Fabric
-workspace experience.
+The CSA Loom Console is the web application that delivers a Microsoft
+Fabric-class analytics experience on **pure Azure-native backends** — no real
+Microsoft Fabric capacity, workspace, or Power BI tenant required. It is a
+Next.js 15 (App Router) + Fluent UI v9 app with an MSAL BFF auth layer, and it
+is the primary UI for the CSA Loom platform (Commercial and Azure Government).
 
-**Public brand**: Loom Console (this directory uses `fiab-console`
-as the repo-internal nickname per AMENDMENTS A1).
+> **Naming**: `fiab-console` is the repo-internal package name
+> (`@csa-loom/fiab-console`). The public product name is **CSA Loom** / **Loom
+> Console**.
 
-## Status
+## What the console is today
 
-**SCAFFOLDED.** Real implementation per [PRP-03](../../PRPs/active/csa-loom/PRP-03-loom-console.md).
-v1 ships 12 panes; v1.1 adds 4 more.
+The console is a working, feature-rich analytics workbench — not a scaffold.
+It exposes:
+
+- **~117 item-type editors across 22 categories** (lakehouse, warehouse,
+  notebook, KQL database/queryset, eventhouse, eventstream, activator, data
+  pipeline, dataflow, mirrored database, semantic model, report, ML model,
+  data agent, ontology/graph model, APIs & functions, and more). Every editor
+  is mapped from an item-type slug in `lib/catalog/` to a rich editor in
+  `lib/editors/` (see `lib/editors/registry.ts` for the full slug→editor map).
+  Each item type ships an Azure-native default backend; Fabric/Power BI is
+  opt-in only.
+- **Unified marketplace** (`/marketplace`) — publish and subscribe to both API
+  products and data products, with bidirectional Delta Sharing.
+- **Copilots** — a general chat copilot (`/copilot`), per-editor build-assist,
+  data-agent config copilot, and a Power BI / report copilot in the report
+  designer.
+- **Governance** (`/governance`) — Microsoft Purview classic Data Map
+  integration, classifications, glossary, lineage, MDM, sensitivity/protection
+  policies, scans, and access requests (17 governance surfaces).
+- **Report designer** — a Loom-native report authoring surface (pages,
+  visuals, DAX, filters, bookmarks, themes, get-data connectors) backed by an
+  Azure Analysis Services tabular layer — no Power BI workspace needed.
+- **Workspaces + OBO ACL**, a **Learning Hub** (`/learn`), an **MCP server
+  catalog** (`/admin/mcp-servers`), **20+ one-click use-case apps** that
+  install → provision → seed real Azure backing, a **deploy planner**
+  (`/admin/deploy-planner`), and an **admin portal** of ~27 pages
+  (`/admin/*`: users, permissions, capacity, scaling, network, tenant
+  settings, classifications, usage/chargeback, health, and more).
 
 ## Tech stack
 
-- Next.js 14 (App Router) — server components + client components
-- Fluent UI v9 — same library Microsoft Fabric uses
-- MSAL BFF auth (cookies + refresh server-side; OBO for downstream)
-- React Query for server state; Zustand for ephemeral UI
-- pnpm workspace
-- Multi-stage Dockerfile; ACR-hosted
-- Container Apps (Commercial / GCC) or AKS Helm chart (GCC-High / IL5)
-- Playwright E2E + Vitest unit + axe-core accessibility
+| Layer | Choice |
+|---|---|
+| Framework | Next.js 15 (App Router) — server + client components |
+| UI | Fluent UI v9 (`@fluentui/react-components`) + Loom design tokens |
+| Language | TypeScript 5.6, React 19 |
+| Auth | MSAL BFF — session cookies, server-side token refresh, OBO for downstream Azure calls |
+| Server state | React Query; ephemeral UI state via lightweight stores |
+| Data | Azure Cosmos DB (catalog, apps, config), plus per-item Azure data planes (ADLS Gen2 / Synapse SQL / ADX / Event Hubs / Azure Monitor …) |
+| Packaging | pnpm workspace; multi-stage Dockerfile; image hosted in ACR |
+| Hosting | Azure Container Apps (bicep under `platform/fiab/bicep/`) |
+| Testing | Vitest (unit) + Playwright (E2E / UAT) |
 
-## Scaffolded structure
+## Dev workflow
 
-```
-apps/fiab-console/
-├── README.md
-├── package.json
-├── next.config.js
-├── Dockerfile
-├── tsconfig.json
-├── app/                    # App Router pages
-│   ├── layout.tsx          # Fluent UI shell
-│   ├── (auth)/
-│   ├── workspaces/
-│   ├── catalog/
-│   ├── notebooks/
-│   ├── warehouse/
-│   ├── kql/
-│   ├── activator/
-│   ├── agents/
-│   ├── monitoring/
-│   ├── admin/
-│   ├── setup/              # Setup Wizard route
-│   └── copilot/
-├── lib/
-│   ├── auth/               # MSAL BFF
-│   ├── clients/            # Azure REST clients
-│   └── components/         # Shared Fluent UI components
-├── tests/
-│   ├── e2e/                # Playwright
-│   └── unit/               # Vitest
-└── helm/                   # AKS Helm chart (Gov)
+From the repo root (pnpm workspace):
+
+```bash
+pnpm install                      # install workspace deps
+pnpm --filter @csa-loom/fiab-console dev     # http://localhost:3000
 ```
 
-## v1 panes
-
-| # | Pane | Path |
-|---|---|---|
-| 1 | Workspaces browser | `/workspaces` |
-| 2 | Workspace home | `/workspaces/[id]` |
-| 3 | Lakehouse | `/workspaces/[id]/lakehouse/[name]` |
-| 4 | Warehouse | `/workspaces/[id]/warehouse` |
-| 5 | Notebook | `/workspaces/[id]/notebook/[id]` (Databricks iframe) |
-| 6 | KQL | `/workspaces/[id]/kql/[db]` |
-| 7 | Catalog | `/catalog` |
-| 8 | Activator | `/workspaces/[id]/activator/[id]` |
-| 9 | Data Agents | `/workspaces/[id]/agent/[id]` |
-| 10 | Monitoring | `/monitoring` |
-| 11 | Admin | `/admin` |
-| 12 | Setup Wizard | `/setup` |
-
-## Build + run
-
-Once implemented:
+Or from this directory:
 
 ```bash
 cd apps/fiab-console
-pnpm install
-pnpm dev   # http://localhost:3000
+pnpm dev        # next dev — http://localhost:3000
+pnpm build      # next build (production bundle)
+pnpm start      # next start (serve the production build)
+pnpm lint       # next lint
+pnpm test       # vitest run
 ```
 
 Container image:
+
 ```bash
 docker build -t fiab-console .
 docker run -p 3000:3000 fiab-console
 ```
 
-Deploy via `azd up` from `platform/fiab/azd/`.
+Running the console locally still needs Azure configuration (Entra app
+registration + the `LOOM_*` environment variables) to reach live backends;
+surfaces that require infrastructure that isn't wired show an honest Fluent
+MessageBar naming the exact env var / role / resource to provision, per the
+project's no-vaporware rule.
 
-## Related
+## Deploying the platform
 
-- [Loom Console docs](../../docs/fiab/console/index.md)
-- [PRP-03](../../PRPs/active/csa-loom/PRP-03-loom-console.md)
-- ADR: [fiab-0007 Console framework](../../docs/fiab/adr/0007-console-framework.md)
+The console is deployed as part of the full CSA Loom platform. The canonical,
+end-to-end install path (clone → working Console URL in ~60 minutes) is
+documented in the deployment quickstart — follow it rather than deploying the
+console image in isolation:
+
+- **[Deployment quickstart](../../docs/fiab/deployment/quickstart.md)** — the
+  supported happy path (Commercial). Gov boundaries: see
+  [GCC](../../docs/fiab/deployment/gcc.md) /
+  [GCC-High](../../docs/fiab/deployment/gcc-high.md).
+- IaC lives under [`platform/fiab/bicep/`](../../platform/fiab/bicep/); the
+  full topology deploys from `platform/fiab/bicep/main.bicep` with the
+  `params/commercial-full.bicepparam` parameter set.
+
+## Related docs
+
+- [Loom Console docs](../../docs/fiab/console/index.md) — setup wizard,
+  copilot runtime, connections, MCP tool server
+- [Deployment guides](../../docs/fiab/deployment/index.md)
+- [Architecture](../../docs/fiab/architecture.md)
+- Published docs site: <https://fgarofalo56.github.io/csa-inabox/>

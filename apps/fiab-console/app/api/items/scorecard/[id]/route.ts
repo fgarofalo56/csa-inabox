@@ -101,8 +101,10 @@ async function goalHistory(scorecardId: string, goalId: string) {
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  // Azure-native DEFAULT (rel-T03/B11): workspaceId is OPTIONAL — Cosmos-backed
+  // (`loom:`) scorecards + check-in history need no Power BI workspace. Only
+  // the live Power BI branch below requires one.
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '';
   const id = (await ctx.params).id;
 
   // Check-in history for a single goal.
@@ -121,6 +123,15 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const resp = await loomScorecard(cosmosIdFromLoomId(id), session.claims.oid, workspaceId, id);
     if (resp) return resp;
     return NextResponse.json({ ok: false, error: 'scorecard template not found' }, { status: 404 });
+  }
+
+  // No workspace bound (default Azure-native deploy): the only live source is
+  // Cosmos — try the raw id as a Cosmos-backed scorecard before failing with a
+  // precise error (never "bind a Power BI workspace" as a default gate).
+  if (!workspaceId) {
+    const resp = await loomScorecard(id, session.claims.oid, '', id);
+    if (resp) return resp;
+    return NextResponse.json({ ok: false, error: 'scorecard not found in Loom (workspaceId is required only for live Power BI scorecards)' }, { status: 404 });
   }
 
   try {
@@ -151,8 +162,10 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  const workspaceId = req.nextUrl.searchParams.get('workspaceId');
-  if (!workspaceId) return NextResponse.json({ ok: false, error: 'workspaceId required' }, { status: 400 });
+  // workspaceId is OPTIONAL (rel-T03/B11): the Cosmos check-in write below is
+  // the source of truth and needs no Power BI workspace; the live Power BI
+  // goal push only runs when a workspace is bound.
+  const workspaceId = req.nextUrl.searchParams.get('workspaceId') || '';
   const body = await req.json().catch(() => ({}));
   const id = (await ctx.params).id;
   const goalId = String(body?.goalId || '');
@@ -213,6 +226,16 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       ok: true,
       checkIn,
       fabric: { recorded: false, reason: 'scorecard_template_not_live' },
+    });
+  }
+
+  // Default Azure-native deploy (no Power BI workspace bound): the Cosmos
+  // check-in above IS the record — nothing further to push.
+  if (!workspaceId) {
+    return NextResponse.json({
+      ok: true,
+      checkIn,
+      fabric: { recorded: false, reason: 'no_powerbi_workspace_bound' },
     });
   }
 

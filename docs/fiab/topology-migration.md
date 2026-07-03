@@ -176,7 +176,7 @@ Resolve the new Front Door host from the tenant deploy output, then run both
 validators against it.
 
 ```bash
-NEW_FD=$(jq -r '.frontDoorPublicUrl.value' <<<"$OUT")   # e.g. https://loom-console-XXXX.b02.azurefd.net
+NEW_FD=$(jq -r '.frontDoorPublicUrl.value' <<<"$OUT")   # e.g. https://<your-console-hostname>
 echo "New console: $NEW_FD"
 ```
 
@@ -266,7 +266,7 @@ profile while the old profile still owns it. Plan accordingly:
 
 Do **not** tear down immediately. Keep the old single-sub deployment (the
 `363ef5d1` `rg-csa-loom-admin-eastus2` admin plane + its
-`loom-console-fvbbctd4eehqbkcs` Front Door) live for ~2 weeks as a **UAT /
+`loom-console-<hash>` Front Door) live for ~2 weeks as a **UAT /
 staging ring**:
 
 - Its generated Front Door host stays reachable (it no longer owns the vanity

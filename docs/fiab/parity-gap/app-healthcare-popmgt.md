@@ -2,7 +2,7 @@
 
 **Grade: F (Vaporware)** — See `apps-catalog-rollup.md` for shared root cause.
 
-Surface: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/apps/app-healthcare-popmgt`
+Surface: `https://<your-console-hostname>/apps/app-healthcare-popmgt`
 Validated: 2026-05-26
 
 ## What the card claims

@@ -4,9 +4,9 @@
 >
 > Reference screenshots:
 > - `temp/parity/notebook-fabric.png` — `01_bronze_slot_telemetry` in `casino-fabric-poc` (F64). Captured prior session.
-> - `temp/parity/notebook-loom.png` — Loom notebook `150585cd-0124-4f1e-b1b1-12339cab45b2` against `loom-console-fvbbctd4eehqbkcs.b02.azurefd.net` (2026-05-26).
+> - `temp/parity/notebook-loom.png` — Loom notebook `150585cd-0124-4f1e-b1b1-12339cab45b2` against `<your-console-hostname>` (2026-05-26).
 >
-> Loom revision under test: deployed Front Door endpoint as of 2026-05-26. Session was authed as `FG` (Frank Garofalo) and the page hydrated fully.
+> Loom revision under test: deployed Front Door endpoint as of 2026-05-26. Session was authed as `FG` (Platform Admin) and the page hydrated fully.
 
 ## Phase 1 — Fabric reference (verified)
 

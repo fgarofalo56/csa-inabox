@@ -281,7 +281,7 @@ manually.
 ### Required policies (apply via Graph in reporting mode first)
 
 1. **`CSA Loom Console — require MFA for sign-in`**
-   - Targets app `9844c28c-3b3a-4949-8d63-9eefa3b50a9d` (LOOM_MSAL_CLIENT_ID)
+   - Targets app `<app-client-id>` (LOOM_MSAL_CLIENT_ID)
    - All users, all client app types, all locations
    - Grant: `mfa`
 
@@ -294,7 +294,7 @@ manually.
 
 ```bash
 # Authenticate as a user (NOT the deploy SP) with CA Administrator
-az login --tenant d1fc0498-f208-4b49-8376-beb9293acdf6 --allow-no-subscriptions
+az login --tenant <tenant-id> --allow-no-subscriptions
 
 # Create in reporting-only state first
 az rest --method POST \
@@ -311,7 +311,7 @@ az rest --method PATCH \
 
 ```bash
 az rest --method GET \
-  --url "https://graph.microsoft.com/v1.0/auditLogs/signIns?\$filter=appId eq '9844c28c-3b3a-4949-8d63-9eefa3b50a9d'&\$top=50"
+  --url "https://graph.microsoft.com/v1.0/auditLogs/signIns?\$filter=appId eq '<app-client-id>'&\$top=50"
 ```
 
 Look at `conditionalAccessPolicies[].result` per sign-in event.
@@ -399,7 +399,7 @@ is detectable in CI.
 
 All BFF smoke-tests use the local cookie-minter at
 `temp/uat-pw/mint-session.mjs` with the KV-stored session secret, hitting
-`https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net`.
+`https://<your-console-hostname>`.
 
 | Phase | Endpoint | Pre-change | Post-change |
 |---|---|---|---|

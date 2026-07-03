@@ -65,14 +65,20 @@ export function useWorkspaces() {
  * returns 404 PowerBIEntityNotFound. This hook is the dedicated source for
  * the Report / Paginated Report / Dashboard / Semantic Model / Scorecard /
  * Dataflow editors.
+ *
+ * `enabled` gates the fetch on the Power BI OPT-IN (no-fabric-dependency.md):
+ * pass `biBackend === 'powerbi'` so the DEFAULT (Loom-native / AAS) render
+ * makes ZERO Power BI network calls (rel-T04/B12). When disabled the hook
+ * resolves immediately to an empty, non-loading, non-error state.
  */
-export function usePowerBiWorkspaces() {
+export function usePowerBiWorkspaces(enabled: boolean = true) {
   const [workspaces, setWorkspaces] = useState<PbiWorkspaceLite[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(enabled);
 
   const load = useCallback(async () => {
+    if (!enabled) { setWorkspaces([]); setLoading(false); setError(null); setHint(null); return; }
     setLoading(true); setError(null); setHint(null);
     try {
       const r = await fetch('/api/powerbi/workspaces');
@@ -99,7 +105,7 @@ export function usePowerBiWorkspaces() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [enabled]);
 
   useEffect(() => { load(); }, [load]);
 

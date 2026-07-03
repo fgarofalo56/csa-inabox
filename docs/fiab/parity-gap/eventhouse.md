@@ -5,7 +5,7 @@
 Validator: v2 4-phase live-browser + source-code review.
 
 Loom URL:
-`https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/eventhouse/79e38fe3-7cd2-47ee-b0ea-7a80bc999891`
+`https://<your-console-hostname>/items/eventhouse/79e38fe3-7cd2-47ee-b0ea-7a80bc999891`
 
 Loom screenshot: `temp/parity/eventhouse-loom.png` (full-page; captured during a
 brief render window — note the Loom tab-strip carousel rapidly cycles back to

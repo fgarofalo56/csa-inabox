@@ -5,7 +5,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { BrowserContext, Page, expect } from '@playwright/test';
+import { BrowserContext, Page, expect, request as playwrightRequest } from '@playwright/test';
 
 const SECRET = process.env.SESSION_SECRET!;
 if (!SECRET) throw new Error('SESSION_SECRET env required — pull from kv-loom-m56yejezt7bjo/loom-session-secret');
@@ -194,6 +194,52 @@ export async function createWorkspace(page: Page, name?: string, domain = 'defau
 
 export async function deleteWorkspace(page: Page, wsId: string) {
   try { await page.request.delete(`${BASE}/api/workspaces/${wsId}`); } catch { /* best-effort */ }
+}
+
+/**
+ * Suite-end teardown for specs that mint throwaway workspaces (uat-*/tut-*).
+ *
+ * Some suites create a fresh workspace per app/item and cannot use a per-test
+ * `finally { deleteWorkspace }` because their assertions throw before cleanup
+ * runs — leaving hundreds of `uat-app-*` / `tut-*` workspaces behind that
+ * pollute the tenant (see scripts/csa-loom/purge-test-workspaces.sh, rel-T09c).
+ * Collect created ids into a module-level array and call this from a
+ * `test.afterAll` so the namespace is disposable: whatever the suite created,
+ * it removes. Best-effort — a failed delete is logged, never thrown, so
+ * cleanup can't fail an otherwise-green run.
+ *
+ * Uses a standalone APIRequestContext with the same minted session cookie the
+ * suite ran under, so the owner-scoped bulk-delete (`/api/workspaces/bulk-delete`)
+ * resolves the caller's own partition. Ids are chunked to the route's 500 max.
+ */
+export async function cleanupWorkspaces(ids: string[]): Promise<void> {
+  const unique = Array.from(new Set(ids.filter(Boolean)));
+  if (unique.length === 0) return;
+  let ctx: Awaited<ReturnType<typeof playwrightRequest.newContext>> | undefined;
+  try {
+    ctx = await playwrightRequest.newContext({
+      extraHTTPHeaders: { cookie: `loom_session=${mintSession()}` },
+    });
+    let deleted = 0;
+    let failed = 0;
+    for (let i = 0; i < unique.length; i += 500) {
+      const chunk = unique.slice(i, i + 500);
+      try {
+        const r = await ctx.post(`${BASE}/api/workspaces/bulk-delete`, { data: { ids: chunk } });
+        const body = await r.json().catch(() => ({}));
+        deleted += Array.isArray(body?.deleted) ? body.deleted.length : 0;
+        failed += Array.isArray(body?.failed) ? body.failed.length : chunk.length;
+      } catch {
+        failed += chunk.length;
+      }
+    }
+    console.log(`[uat-cleanup] removed ${deleted}/${unique.length} throwaway workspace(s)` +
+      (failed ? ` (${failed} not deleted — safe to sweep with scripts/csa-loom/purge-test-workspaces.sh)` : ''));
+  } catch (e: any) {
+    console.warn(`[uat-cleanup] teardown skipped: ${e?.message || e}`);
+  } finally {
+    await ctx?.dispose().catch(() => {});
+  }
 }
 
 export async function createItem(page: Page, wsId: string, type: string, displayName?: string): Promise<string> {

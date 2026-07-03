@@ -2,7 +2,7 @@
 
 **Grade: F (Vaporware) — applies uniformly to all 10 apps in the live catalog**
 
-Surface: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/apps`
+Surface: `https://<your-console-hostname>/apps`
 Validated: 2026-05-26
 Reference: `temp/parity/apps/app-casino-analytics.png` (representative — every other
 app's detail page renders identically with "Bundled items (0)").

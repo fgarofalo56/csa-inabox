@@ -47,14 +47,12 @@ param seedSampleApi bool = true
 @description('Catalog primary')
 param catalogPrimary string
 
-@description('Agent orchestrator — part of the module param contract (set per boundary in the .bicepparam files: foundry-agent-service vs maf). Retained as a pass-through after the legacy in-array orchestrator stub was removed; the MAF tier is now driven by copilotMafEnabled and the Setup Orchestrator by its dedicated module, so this value is currently informational at this layer.')
-#disable-next-line no-unused-params
-param agentOrchestrator string
-
-// capacitySku (reserved for v3.x) was removed from this module: it was an
-// unused pass-through here (the live consumers are the landing-zone + capacity
-// modules, which still receive it from the parent main.bicep). Removing it from
-// admin-plane keeps the module under the 256-parameter Bicep/ARM limit.
+// capacitySku (reserved for v3.x) and agentOrchestrator were removed from this
+// module: both were unused pass-throughs here (capacitySku's live consumers are
+// the landing-zone + capacity modules; agentOrchestrator's behavior is driven by
+// copilotMafEnabled + the Setup Orchestrator's dedicated module — the parent
+// main.bicep still declares them for the .bicepparam contract). Removing them
+// from admin-plane keeps the module under the 256-parameter Bicep/ARM limit.
 
 @description('Foundry portal enabled')
 param foundryPortalEnabled bool
@@ -298,7 +296,7 @@ var loomConsoleTelemetryEnabled = true
 // Shared internal trust token for the MAF → Console tool-dispatch callback.
 // Deterministic on the admin RG so the value injected into BOTH the Console and
 // the MAF app matches without a round-trip. Internal-network use only.
-var loomInternalToken = guid(resourceGroup().id, 'loom-maf-internal-token-v1')
+var loomInternalToken = guid(loomGeneratedSecretSeed, 'loom-maf-internal-token-v1')
 
 // Setup Orchestrator deploys on the Container Apps boundaries (Commercial / GCC)
 // when explicitly enabled + app deploy on (it needs the image in ACR). On AKS
@@ -1040,9 +1038,13 @@ param loomMsalClientId string = ''
 @secure()
 param loomMsalClientSecret string = ''
 
-@description('Session cookie secret (HKDF input). When empty, a STABLE per-RG GUID is derived (guid(rg.id, ...)) so sign-ins survive redeploys; pass an explicit value (LOOM_SESSION_SECRET) for a tenant-managed secret. newGuid() cannot be used here because this param is also assignable from a .bicepparam, where newGuid() is invalid (BCP065).')
+@description('Session cookie secret (HKDF input). PREFER the KV-backed path: with the MSAL app-reg provisioned (default push-button + bootstrap), SESSION_SECRET is a random secret persisted in Key Vault (stable AND unpredictable). Only when that path is unavailable (app-reg opted out / bootstrap not yet run) does the fallback below apply. Pass an explicit value (LOOM_SESSION_SECRET) for a tenant-managed stable secret.')
 @secure()
 param loomSessionSecret string = ''
+
+@description('Random per-deployment seed used to derive service-auth secrets (internal token, builtin-MCP key) and the SESSION_SECRET FALLBACK when neither a Key-Vault-backed secret nor an explicit LOOM_SESSION_SECRET is available. Defaults to newGuid() so these are UNPREDICTABLE (never guid(resourceGroup().id, <public-const>), which is offline-derivable from the sub id + RG name — a session/impersonation forgery vector). NOT assignable from a .bicepparam (keeps newGuid() valid; BCP065). Trade-off: on the fallback path secrets rotate per redeploy (users re-auth after a console update) — set LOOM_SESSION_SECRET or run the bootstrap (KV-backed path) for stability. rel-T10/T10b.')
+@secure()
+param loomGeneratedSecretSeed string = newGuid()
 
 @description('Entra app-registration (MSAL) provisioning config — passed as ONE object to stay under the 256-param ARM limit (this module is already near it). Fields: enabled (bool, default true — provision the app reg + client secret + stable SESSION_SECRET in Key Vault by default, opt-out; OFF runs the Console unauth / BYO via loomMsalClientId); scriptIdentityId (UAMI with Graph app-admin + KV Secrets Officer for the in-bicep deploymentScript — empty → the post-deploy bootstrap workflow provisions the app reg, the default push-button path); scriptIdentityClientId; scriptSubnetId (VNet-inject the script to reach the PE-locked KV); consoleHosts (comma-separated redirect-URI hosts, no scheme — localhost is always added; the bootstrap adds the runtime FQDN).')
 param loomMsalAppReg object = {
@@ -1096,6 +1098,16 @@ param loomBronzeContainer string = 'bronze'
 // Pipeline orchestrator backend selector folded into loomBackends.pipeline
 // (kept as a var to stay under the ARM 256-param ceiling — data-eng sweep).
 var loomPipelineBackend = loomBackends.?pipeline ?? 'synapse'
+
+// BI backend (semantic-model / report / dashboard / scorecard editors + refresh
+// routes). ONE expression owns the value, emitted exactly once below:
+//   AAS present  -> 'aas'  (Azure-native tabular default)
+//   else         -> loomBackends.bi (default '' = Loom-native renderer over
+//                    the bound model with DAX; NEVER 'powerbi' by default).
+// 'powerbi' is the opt-in Fabric-family path (set loomBackends.bi='powerbi').
+// Fixes the prior duplicate/conflicting LOOM_BI_BACKEND env pair that defaulted
+// to 'powerbi' when no AAS — a no-fabric-dependency.md violation (B12/rel-T04).
+var effectiveBiBackend = (!empty(existingAasServerName) || aasEnabled) ? 'aas' : (loomBackends.?bi ?? '')
 
 
 
@@ -1666,7 +1678,7 @@ var loomBuiltinMcpActive = loomBuiltinMcpEnabled && deployAppsEnabled
 // Deterministic key value — stable across redeploys (no churn), matching the
 // loomInternalToken pattern.
 var loomBuiltinMcpApiKeySecretName = 'loom-mcp-api-key'
-var loomBuiltinMcpApiKey = guid(resourceGroup().id, 'loom-builtin-mcp-api-key-v1')
+var loomBuiltinMcpApiKey = guid(loomGeneratedSecretSeed, 'loom-builtin-mcp-api-key-v1')
 // AI Search service name for the catalog tool (BYO or freshly provisioned).
 var effBuiltinMcpAiSearch = !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '')
 
@@ -2013,6 +2025,15 @@ module sparkSessionPool 'spark-session-pool.bicep' = {
     sparkPoolEnabled: sparkPoolEnabled
     complianceTags: complianceTags
   }
+}
+
+// Per-user notebook Compute Instance policy (config-only — no Azure resource
+// is deployed; each per-user CI is created on demand by the Console UAMI via
+// /api/aml/compute-instances/mine). Validates the tenant policy knobs and
+// emits the LOOM_AML_PERUSER_ENABLED / LOOM_AML_CI_* env values wired into
+// the console app below.
+module notebookComputePool 'notebook-compute-pool.bicep' = {
+  name: 'notebook-compute-pool'
 }
 
 // =====================================================================
@@ -2885,13 +2906,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // ----------------------------------------------------------------
             { name: 'LOOM_AAS_SERVER_NAME', value: !empty(existingAasServerName) ? existingAasServerName : (aasEnabled ? aasServer!.outputs.serverName : '') }
             { name: 'LOOM_AAS_REGION', value: !empty(existingAasServerName) ? (!empty(existingAasServerRegion) ? existingAasServerRegion : location) : (aasEnabled ? aasServer!.outputs.serverRegion : '') }
-            // Default BI backend for the SemanticModelEditor + refresh routes.
-            // 'aas' when an AAS server is present (Azure-native default, per
-            // no-fabric-dependency.md); 'powerbi' is the opt-in Fabric-family
-            // path. Read client-side as NEXT_PUBLIC_*; server routes also honor
-            // LOOM_BI_BACKEND (mirrored below).
-            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: (!empty(existingAasServerName) || aasEnabled) ? 'aas' : 'powerbi' }
-            { name: 'LOOM_BI_BACKEND', value: (!empty(existingAasServerName) || aasEnabled) ? 'aas' : 'powerbi' }
+            // (LOOM_BI_BACKEND / NEXT_PUBLIC_LOOM_BI_BACKEND are emitted ONCE
+            // below from effectiveBiBackend — the prior duplicate pair here
+            // defaulted to 'powerbi' when no AAS, a no-fabric-dependency
+            // violation. See effectiveBiBackend. B12/rel-T04.)
             // Workspace-monitoring read-only ADX DB (Azure Monitor diag-export
             // parity for Fabric workspace monitoring). Set only when deployed so
             // the provisioner + dashboard target the real DB; '' → honest gate.
@@ -3068,12 +3086,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // honest infra-gate and DAX validation still works on every backend.
             { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomBackends.dataflow }
-            // Report editor BI backend. Empty (default) → Loom-native renderer
-            // that queries the bound AAS model with DAX (no Power BI / Fabric).
-            // 'powerbi' opts into the Power BI embed. NEXT_PUBLIC_ mirror lets
-            // the client editor branch without a round-trip. (no-fabric-dependency.md)
-            { name: 'LOOM_BI_BACKEND', value: loomBackends.bi }
-            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: loomBackends.bi }
+            // BI backend for the semantic-model / report / dashboard / scorecard
+            // editors + refresh routes. effectiveBiBackend = 'aas' when an AAS
+            // server is present (Azure-native tabular default), else '' →
+            // Loom-native renderer that queries the bound model with DAX (no
+            // Power BI / Fabric). 'powerbi' is opt-in only (loomBackends.bi).
+            // NEXT_PUBLIC_ mirror lets the client editor branch without a
+            // round-trip. Emitted ONCE. (no-fabric-dependency.md, B12/rel-T04)
+            { name: 'LOOM_BI_BACKEND', value: effectiveBiBackend }
+            { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: effectiveBiBackend }
             { name: 'LOOM_AAS_SERVER', value: loomAasServer }
             { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
@@ -3704,6 +3725,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // auto-shutdown for the compute UI.
             { name: 'LOOM_AML_DEFAULT_COMPUTE', value: loomAmlDefaultCompute }
             { name: 'LOOM_AML_COMPUTE_IDLE_TTL', value: loomAmlComputeIdleTtl }
+            // Per-user notebook Compute Instance policy (notebook-compute-pool
+            // module above) — multi-user AML: aml-client.ts perUserCiPolicy()
+            // + /api/aml/compute-instances/mine read these four values.
+            { name: 'LOOM_AML_PERUSER_ENABLED', value: notebookComputePool.outputs.perUserEnabledEnv }
+            { name: 'LOOM_AML_CI_SIZE', value: notebookComputePool.outputs.perUserVmSizeEnv }
+            { name: 'LOOM_AML_CI_IDLE_TTL', value: notebookComputePool.outputs.perUserIdleTtlEnv }
+            { name: 'LOOM_AML_CI_MAX', value: notebookComputePool.outputs.maxPerTenantEnv }
             { name: 'LOOM_AOAI_ACCOUNT', value: !empty(existingFoundryAccountName) ? existingFoundryAccountName : (aiFoundryEnabled ? aiFoundry!.outputs.aiServicesAccountName : '') }
             // The model-hosting account lives in this admin-plane RG. foundry-cs-client.ts
             // reads LOOM_AOAI_RG (falls back to LOOM_FOUNDRY_RG, but pin it explicitly).
@@ -3860,7 +3888,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // so sign-ins survive redeploys even on a bicep-only day-one deploy.
             sessionSecretKvBacked
               ? { name: 'session-secret', keyVaultUrl: '${keyvault.outputs.keyVaultUri}secrets/session-secret', identity: identity.outputs.uamiConsoleId }
-              : { name: 'session-secret', value: empty(loomSessionSecret) ? guid(resourceGroup().id, 'loom-session-secret-v1') : loomSessionSecret }
+              : { name: 'session-secret', value: empty(loomSessionSecret) ? guid(loomGeneratedSecretSeed, 'loom-session-secret-v1') : loomSessionSecret }
             // Synapse Spark → LA shared key (LOOM_SPARK_LA_KEY secretRef). Always
             // present — sourced from the always-deployed monitoring LAW's listKeys.
             { name: 'spark-la-key', value: monitoring.outputs.lawSharedKey }

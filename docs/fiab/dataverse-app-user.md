@@ -12,7 +12,7 @@ So for any `*.crm.dynamics.com` scope, Loom routes the token request through a *
 
 | Env var | Source |
 |---|---|
-| `LOOM_DATAVERSE_CLIENT_ID` | Same value as `LOOM_MSAL_CLIENT_ID` (e.g. `9844c28c-3b3a-4949-8d63-9eefa3b50a9d`) |
+| `LOOM_DATAVERSE_CLIENT_ID` | Same value as `LOOM_MSAL_CLIENT_ID` (e.g. `<app-client-id>`) |
 | `LOOM_DATAVERSE_CLIENT_SECRET` | KV secret `loom-msal-client-secret` (same as `LOOM_MSAL_CLIENT_SECRET`) |
 | `LOOM_DATAVERSE_TENANT_ID` | `tenant().tenantId` from bicep |
 | `LOOM_COPILOT_STUDIO_ENVIRONMENT_ID` | Power Platform environment GUID for the data-agent **Publish to Microsoft 365 Copilot** action (bicep param `loomCopilotStudioEnvironmentId`; empty = the editor lists discoverable envs + honest-gates) |
@@ -75,7 +75,7 @@ Bypasses PPAC entirely. Pure REST:
 ```bash
 DV_URL="https://<org>.crm.dynamics.com"
 TOKEN=$(az account get-access-token --resource "$DV_URL" --query accessToken -o tsv)
-APP_CLIENT_ID="<LOOM_MSAL_CLIENT_ID>"   # e.g. 9844c28c-3b3a-4949-8d63-9eefa3b50a9d
+APP_CLIENT_ID="<LOOM_MSAL_CLIENT_ID>"   # e.g. <app-client-id>
 BU_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
   "$DV_URL/api/data/v9.2/businessunits?\$select=businessunitid&\$filter=parentbusinessunitid%20eq%20null" \
   | python3 -c "import json,sys; print(json.load(sys.stdin)['value'][0]['businessunitid'])")

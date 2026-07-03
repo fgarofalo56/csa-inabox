@@ -2,7 +2,7 @@
 
 **Grade: F (Vaporware)**
 
-Surface: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/apps/app-casino-analytics`
+Surface: `https://<your-console-hostname>/apps/app-casino-analytics`
 Validated: 2026-05-26
 Screenshot: `temp/parity/apps/app-casino-analytics.png`
 

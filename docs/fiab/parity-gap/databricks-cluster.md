@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Databricks Workspace → Compute → Clusters → cluster config.
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/databricks-cluster/new`.
+> Loom route: `https://<your-console-hostname>/items/databricks-cluster/new`.
 > Editor source: `apps/fiab-console/lib/editors/databricks-editors.tsx` (lines 1288-end of file).
 
 ## Phase 3 — gap matrix vs Databricks Compute UI

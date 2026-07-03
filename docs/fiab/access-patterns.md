@@ -87,7 +87,7 @@ and click **Approve**. After that, traffic flows from any FD edge POP
 through the private link into the env's internal LB — no public ACA
 exposure.
 
-Public URL surfaces as `https://loom-console-<hash>.z01.azurefd.net`
+Public URL surfaces as `https://loom-console-<hash><your-console-hostname>`
 (or whatever custom domain you bind). Managed cert is free.
 
 ## #5 Custom domains

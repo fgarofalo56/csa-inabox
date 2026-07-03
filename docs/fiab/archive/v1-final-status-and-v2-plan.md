@@ -26,7 +26,7 @@ date: 2026-05-24
 |---|---|---|
 | Bastion -> jumpbox -> Console (internal FQDN) | `https://loom-console.internal.delightfulmoss-96202bfd.eastus2.azurecontainerapps.io` | works (UAT iter 1) |
 | Bastion -> jumpbox -> Console (external FQDN) | `https://loom-console.delightfulmoss-96202bfd.eastus2.azurecontainerapps.io` | works (UAT iter 2 GREEN, 8/8) |
-| **Front Door Premium public URL** | `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/` | **HTTP 200, Playwright 8/8 from laptop** |
+| **Front Door Premium public URL** | `https://<your-console-hostname>/` | **HTTP 200, Playwright 8/8 from laptop** |
 | **App Gateway public URL** | `http://loom-m56yejezt7bjo.eastus2.cloudapp.azure.com/` | **HTTP 200, Playwright 8/8 from laptop** |
 | VPN Gateway (P2S OpenVPN + AAD auth) | provisioning (~30-45 min) | will be ready by ~T+45min |
 

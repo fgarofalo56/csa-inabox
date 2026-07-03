@@ -43,15 +43,15 @@ The docs site auto-publishes to GitHub Pages on every main push (`.github/workfl
 `pages: write`). The published corpus includes the operator's **live deployment coordinates**:
 
 - Live subscription IDs: `docs/fiab/audit/gated-services-default-on.md:10-13` ("sub
-  `e093f4fd-5047-4ee4-968d-a56942c665f3` … console UAMI principalId `41d32562-f864-…`");
+  `<subscription-id>` … console UAMI principalId `41d32562-f864-…`");
   `docs/fiab/design/full-deployment-and-byo.md:121-122` (DLZ `363ef5d1-…` + DMLZ sub IDs);
   `docs/fiab/design/data-api-builder-ui.md:279`.
 - Live workspace GUID under test: `docs/fiab/audit/live-e2e-every-item-and-app-202606160304.md:4`.
-- **98 occurrences** of live Front Door hostnames (`fvbbctd4eehqbkcs` / `k6mvh5sm6z7do` …azurefd.net)
+- **98 occurrences** of live Front Door hostnames (`<hash>` / `<hash>` …azurefd.net)
   across `docs/fiab` (e.g. `docs/fiab/agent-unattended-access.md:104,271`,
   `docs/fiab/audit/live-ui-sweep-2026-06-21.md:10`).
 - Operator personal email in a nav-listed page: `docs/fiab/parity-gap/_top-level-nav-validation-2026-05-26.md:20`
-  ("Authed as: Frank Garofalo (UAT) (fgarofalo@housegarofalo.com)") — and that page IS in nav
+  ("Authed as: Platform Admin (UAT) (admin@contoso.gov)") — and that page IS in nav
   (`mkdocs.yml:1704`).
 - The audit pages also narrate **live security posture and RBAC gaps** ("granted the console UAMI
   *Azure Event Hubs Data Owner* + Contributor…", `docs/fiab/audit/day-one-validation-matrix.md:36`).

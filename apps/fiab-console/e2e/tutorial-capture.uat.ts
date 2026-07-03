@@ -32,7 +32,12 @@ import { test } from '@playwright/test';
 import type { Page } from '@playwright/test';
 import path from 'node:path';
 import fs from 'node:fs';
-import { BASE, signIn, createWorkspace, createItem, loadEditorTypes, NAV_PAGES, pageSlug } from './_lib/uat';
+import { BASE, signIn, createWorkspace, createItem, loadEditorTypes, NAV_PAGES, pageSlug, cleanupWorkspaces } from './_lib/uat';
+
+// Disposable namespace (rel-T09c): the tutorial capture mints one `tut-*`
+// workspace per item and per app and never opened them for reuse, so they must
+// be swept at suite end rather than left as tenant debris. Track + afterAll.
+const CREATED_WS: string[] = [];
 
 const STAGE = path.resolve(process.cwd(), '..', '..', 'temp', 'azure-screenshots', 'redacted', 'loom-tutorials');
 fs.mkdirSync(STAGE, { recursive: true });
@@ -115,6 +120,7 @@ if (DIMENSIONS.has('items')) {
 
       try {
         const ws = await createWorkspace(page, `tut-${type}-${Date.now()}`);
+        CREATED_WS.push(ws);
         const id = await createItem(page, ws, type, `Demo ${type}`);
         await page.goto(`${BASE}/items/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
         await page.waitForTimeout(3500);
@@ -174,6 +180,7 @@ if (DIMENSIONS.has('apps')) {
         const shot = makeShooter(page, slug, steps);
         try {
           const ws = await createWorkspace(page, `tut-${app.id}-${Date.now()}`);
+          CREATED_WS.push(ws);
           // Install the app (compound provisioner) into the demo workspace.
           const inst = await page.request.post(`${BASE}/api/apps/${encodeURIComponent(app.id)}/install`, {
             data: { workspaceId: ws },
@@ -227,3 +234,10 @@ if (DIMENSIONS.has('features')) {
     });
   }
 }
+
+// Suite teardown: sweep every `tut-*` workspace this capture created so the
+// tenant isn't left with tutorial debris (rel-T09c). Best-effort; never fails
+// the run.
+test.afterAll(async () => {
+  await cleanupWorkspaces(CREATED_WS);
+});

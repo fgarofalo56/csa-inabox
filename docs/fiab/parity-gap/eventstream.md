@@ -3,7 +3,7 @@
 **Grade: D (multiple BLOCKERs)**
 
 Validator: v2 4-phase live-browser + source-code review. Loom URL:
-`https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/eventstream/6ac04218-5bfc-47dd-b58b-df11e2bf4e80`
+`https://<your-console-hostname>/items/eventstream/6ac04218-5bfc-47dd-b58b-df11e2bf4e80`
 
 Loom screenshot: `temp/parity/eventstream-loom.png` (full-page, 19150 bytes, captured live).
 Fabric reference screenshot: not capturable from this validator session (corporate

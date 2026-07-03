@@ -22,10 +22,10 @@ wrong-defaults, not a key-rotation emergency.
 
 ### 1. Real operator subscription GUIDs hardcoded (46 files, 4 distinct real subs)
 
-Real subs: `e093f4fd-5047-4ee4-968d-a56942c665f3` (DMLZ/console),
-`363ef5d1-0e77-4594-a530-f51af23dbf8c` (bureau DLZ),
-`ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea` (2nd demo),
-`a60a2fdd-c133-4845-9beb-31f470bf3ef5` (ALZ/connectivity hub).
+Real subs: `<subscription-id>` (DMLZ/console),
+`<subscription-id>` (bureau DLZ),
+`<subscription-id>` (2nd demo),
+`<subscription-id>` (ALZ/connectivity hub).
 
 Worst offenders are shipped/deployable artifacts:
 
@@ -56,17 +56,17 @@ Worst offenders are shipped/deployable artifacts:
 
 - `.harness/config.json:15` — densest leak: real sub + RG names
   (`rg-csa-loom-admin-eastus2`, `rg-csa-loom-dlz-single-eastus2`), LAW name,
-  Console UAMI principal `e61f3eb3-c646-4183-8198-4c4a34cd9a01` / client
-  `c6272de5-3c4e-4b72-8b57-71b2e950209b`, deploy SP `limitlessdata_deploy`
-  appId `95ca491e-f841-43ba-93f2-3315804f55e7`. Remove `.harness/` from the
+  Console UAMI principal `<uami-principal-id>` / client
+  `<uami-client-id>`, deploy SP `limitlessdata_deploy`
+  appId `<sp-client-id>`. Remove `.harness/` from the
   public repo.
 - Same UAMI principal/client as workflow defaults in
   `csa-loom-post-deploy-bootstrap.yml:67-68`,
   `csa-loom-attempt-interactive-grants.yml:16-18`.
 - Operator OIDs hardcoded: Synapse initial admin
-  `b9c3cc65-522e-49c9-ad02-914676aa5a6b`
+  `<operator-object-id>`
   (`csa-loom-post-deploy-bootstrap.yml:111`); `UAT_OID` default
-  `866a2e12-0fee-4c99-923c-7cdfd61e08cd` (`apps/fiab-console/e2e/_lib/uat.ts:22`);
+  `<operator-object-id>` (`apps/fiab-console/e2e/_lib/uat.ts:22`);
   grant-rbac defaults `85e5d083-...`, `f4f25dd9-...`.
 
 Blank to empty/parameterized inputs (mirror the existing
@@ -94,7 +94,7 @@ Blank to empty/parameterized inputs (mirror the existing
 - **Dependency license scan not performed** — run `license-checker` /
   `pnpm licenses` for GPL/AGPL transitives before public (no obvious copyleft
   by name in 32 deps / 17 devDeps).
-- **LICENSE** = MIT, `Copyright (c) 2023 Frank Garofalo` (personal) — valid;
+- **LICENSE** = MIT, `Copyright (c) 2023 Platform Admin` (personal) — valid;
   consider org attribution if org-owned.
 - **CODEOWNERS** routes everything to `@fgarofalo56`; personal GitHub org refs
   in `apps/*/Dockerfile` LABELs and

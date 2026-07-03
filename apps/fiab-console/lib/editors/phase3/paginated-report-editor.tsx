@@ -4,12 +4,11 @@
  * Paginated report (RDL) editor — extracted from phase3-editors.tsx.
  *
  * Loom-native parity with a Power BI Paginated Report (.rdl), Azure-native by
- * DEFAULT (no Fabric / Power BI required). Moved BYTE-FOR-BYTE out of
- * phase3-editors.tsx; behavior is identical. The Power BI WorkspacePicker trio
- * (`PbiWorkspaceLite` / `usePowerBiWorkspaces` / `WorkspacePicker`) is duplicated
- * locally here — matching the sibling scorecard/activator editors — so this
- * module carries no import cycle back to the barrel; the `ReportLite` type is
- * imported directly from its defining sibling (`./report-editor`), not the barrel.
+ * DEFAULT (no Fabric / Power BI required). The Power BI workspace picker is the
+ * shared ./workspace-picker module (deduped, rel-T04c), gated on the Power BI
+ * opt-in (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi) so the default render makes zero
+ * Power BI network calls; the `ReportLite` type is imported directly from its
+ * defining sibling (`./report-editor`), not the barrel.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -41,99 +40,8 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import { type ReportLite } from './report-editor';
+import { usePowerBiWorkspaces, WorkspacePicker } from './workspace-picker';
 import { useStyles } from './styles';
-
-interface PbiWorkspaceLite { id: string; name: string; description?: string; }
-
-/**
- * usePowerBiWorkspaces — list real Power BI groups (NOT Loom workspaces).
- *
- * Power BI's list/detail/embed-token REST APIs key on a `workspaceId` that
- * is a Power BI groupId. Passing a Loom Cosmos UUID to those endpoints
- * returns 404 PowerBIEntityNotFound. This hook is the dedicated source for
- * the Report / Paginated Report / Dashboard / Semantic Model / Scorecard /
- * Dataflow editors.
- */
-function usePowerBiWorkspaces() {
-  const [workspaces, setWorkspaces] = useState<PbiWorkspaceLite[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [hint, setHint] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  const load = useCallback(async () => {
-    setLoading(true); setError(null); setHint(null);
-    try {
-      const r = await fetch('/api/powerbi/workspaces');
-      const j = await r.json();
-      if (!j.ok) {
-        setError(j.error || 'failed to list Power BI workspaces');
-        setHint(j.hint || null);
-        setWorkspaces([]);
-      } else {
-        // Power BI returns name + capacity SKU; surface the capacity in a
-        // separate description field so the picker can show it as a hint
-        // without polluting the displayed name.
-        setWorkspaces(
-          (j.workspaces || []).map((w: any) => ({
-            id: w.id,
-            name: w.name || w.displayName || w.id,
-            description: w.capacityType ? `${w.capacityType}${w.isOnDedicatedCapacity ? ' · dedicated' : ''}` : undefined,
-          })),
-        );
-      }
-    } catch (e: any) {
-      setError(e?.message || String(e));
-      setWorkspaces([]);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => { load(); }, [load]);
-
-  return { workspaces, error, hint, loading, reload: load };
-}
-
-function WorkspacePicker({
-  value, onChange, error, hint, loading, workspaces,
-}: {
-  value: string; onChange: (id: string) => void;
-  error: string | null; hint: string | null; loading: boolean;
-  workspaces: PbiWorkspaceLite[] | null;
-}) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 280 }}>
-      <Caption1>Workspace</Caption1>
-      <Select value={value} onChange={(_: unknown, d: any) => onChange(d.value)} disabled={loading || (workspaces?.length ?? 0) === 0}>
-        {!value && <option value="">{loading ? 'Loading workspaces…' : 'Select a workspace'}</option>}
-        {(workspaces || []).map((w) => (
-          <option key={w.id} value={w.id}>{w.name}</option>
-        ))}
-      </Select>
-      {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>
-            <MessageBarTitle>Workspaces not reachable</MessageBarTitle>
-            {error}{hint ? <><br /><Caption1>{hint}</Caption1></> : null}
-          </MessageBarBody>
-        </MessageBar>
-      )}
-      {!loading && !error && (workspaces?.length ?? 0) === 0 && (
-        <MessageBar intent="warning">
-          <MessageBarBody>
-            <MessageBarTitle>No Power BI workspaces</MessageBarTitle>
-            The Console service principal can&apos;t see any Power BI workspaces. Create one (or get added to one) in Power BI, then Refresh.
-            <br />
-            <Button appearance="primary" size="small" style={{ marginTop: tokens.spacingVerticalS}}
-              onClick={() => { try { window.open('https://app.powerbi.com/groups/me/list', '_blank', 'noreferrer'); } catch { /* popup blocked */ } }}>
-              Open Power BI
-            </Button>
-          </MessageBarBody>
-        </MessageBar>
-      )}
-    </div>
-  );
-}
 
 export function PaginatedReportEditor({ item, id }: { item: FabricItemType; id: string }) {
   return <PaginatedReportDesigner item={item} id={id} />;
@@ -188,15 +96,15 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
 
   // ── Power BI in-place embed (OPT-IN) ─────────────────────────────────────
   // The Azure-native designer + export above are the DEFAULT and work with no
-  // Power BI / Fabric (no-fabric-dependency.md). When the Console identity is
-  // registered in Power BI and added to a workspace, an additional "Live
-  // preview (Power BI)" tab embeds a published paginated (RDL) report in place
-  // via IPaginatedReportLoadConfiguration — the same renderer + multi-resource
-  // embed-token route the report editor uses. The operator picks the Power BI
-  // workspace + published paginated report to view; the RDL parameter form
-  // seeds the report parameters (rp:) the viewer exposes.
-  const pbiWs = usePowerBiWorkspaces();
-  const powerBiConfigured = !!(pbiWs.workspaces && pbiWs.workspaces.length > 0 && !pbiWs.error);
+  // Power BI / Fabric (no-fabric-dependency.md). The "Live preview (Power BI)"
+  // tab — embedding a published paginated (RDL) report in place via
+  // IPaginatedReportLoadConfiguration — is the OPT-IN leg, enabled with
+  // NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi + a registered Console identity. With
+  // the opt-in off the hook is disabled so the default render makes ZERO
+  // Power BI network calls (rel-T04/B12).
+  const pbiOptIn = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  const pbiWs = usePowerBiWorkspaces(pbiOptIn);
+  const powerBiConfigured = pbiOptIn && !!(pbiWs.workspaces && pbiWs.workspaces.length > 0 && !pbiWs.error);
   const [designView, setDesignView] = useState<'designer' | 'preview'>('designer');
   const [pbiWorkspaceId, setPbiWorkspaceId] = useState('');
   const [pbiReports, setPbiReports] = useState<ReportLite[] | null>(null);
@@ -513,7 +421,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
       <TabList selectedValue={designView} onTabSelect={(_, d) => setDesignView(d.value as 'designer' | 'preview')} style={{ marginBottom: tokens.spacingVerticalS}}>
         <Tab value="designer" icon={<Table20Regular />}>Designer</Tab>
         <Tab value="preview" icon={<Eye20Regular />} disabled={!powerBiConfigured}
-          title={powerBiConfigured ? 'Embed a published Power BI paginated report in place' : 'Power BI embed is opt-in; the Console identity is not registered in any Power BI workspace'}>
+          title={powerBiConfigured ? 'Embed a published Power BI paginated report in place' : (pbiOptIn ? 'Power BI embed is opt-in; the Console identity is not registered in any Power BI workspace' : 'Power BI embed is opt-in — set NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi to enable; the Loom-native Designer + Export need no Power BI')}>
           Live preview (Power BI)
         </Tab>
       </TabList>

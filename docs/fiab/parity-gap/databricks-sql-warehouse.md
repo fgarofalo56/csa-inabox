@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Databricks Workspace → SQL → SQL Editor (Unity Catalog-aware T-SQL/Spark-SQL editor).
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/databricks-sql-warehouse/new`.
+> Loom route: `https://<your-console-hostname>/items/databricks-sql-warehouse/new`.
 > Editor source: `apps/fiab-console/lib/editors/databricks-editors.tsx` (lines 174-519).
 
 ## Phase 3 — gap matrix vs Databricks SQL editor

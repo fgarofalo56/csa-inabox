@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Azure portal → API Management service → Products → Product → Settings.
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/apim-product/new`.
+> Loom route: `https://<your-console-hostname>/items/apim-product/new`.
 > Editor source: `apps/fiab-console/lib/editors/apim-editors.tsx` (lines 316-416).
 
 ## Phase 3 — gap matrix vs Azure portal APIM Product blade

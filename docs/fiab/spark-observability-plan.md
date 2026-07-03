@@ -54,7 +54,7 @@ Grounded in MS Learn: Synapse [create-spark-configuration], Synapse Spark→LA
 ### 1. Wire the Synapse→LA env + pool default (infra)
 > Live env is SET (see SHIPPED above); the remaining work here is the DURABLE bicep
 > (apps[].env + KV secret) + the Synapse pool default + the DCR migration.
-- Set `LOOM_SPARK_LA_WORKSPACE_ID` (the Loom LA workspace GUID — live = `01273839-800f-4fef-86bf-85e94cdf3a65`)
+- Set `LOOM_SPARK_LA_WORKSPACE_ID` (the Loom LA workspace GUID — live = `<log-analytics-workspace-id>`)
   + `LOOM_SPARK_LA_KEYVAULT_NAME`/`_SECRET` (a KV secret holding the LA shared key) on the
   console app via `main.bicep` apps[].env + the post-deploy bootstrap. Prefer KV over the
   inline `LOOM_SPARK_LA_KEY`.

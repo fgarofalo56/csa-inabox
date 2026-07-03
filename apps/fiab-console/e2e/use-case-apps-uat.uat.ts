@@ -38,7 +38,13 @@
 import { test, expect } from '@playwright/test';
 import path from 'node:path';
 import fs from 'node:fs';
-import { BASE, signIn, captureFailures, recordVerdict, createWorkspace, pollInstallJob } from './_lib/uat';
+import { BASE, signIn, captureFailures, recordVerdict, createWorkspace, pollInstallJob, cleanupWorkspaces } from './_lib/uat';
+
+// Disposable namespace (rel-T09c): every workspace this suite mints is tracked
+// and deleted at suite end so the tenant isn't left with `uat-app-*` debris.
+// Assertions in each test throw before any per-test cleanup could run, so the
+// teardown MUST be a suite-level afterAll over a tracked id list.
+const CREATED_WS: string[] = [];
 
 const SHOT_DIR = path.join(process.cwd(), 'test-results', 'uat', 'use-case-apps');
 fs.mkdirSync(SHOT_DIR, { recursive: true });
@@ -134,6 +140,7 @@ for (const appId of APP_IDS) {
     // A fresh workspace per app keeps installs isolated + idempotent.
     const wsName = `uat-${appId}-${Date.now()}`;
     const wsId = await createWorkspace(page, wsName);
+    CREATED_WS.push(wsId);
 
     const { result, consoleErrors, networkErrors } = await captureFailures(page, async () => {
       // 1) open the app detail page (real render). Use 'domcontentloaded', NOT
@@ -317,3 +324,9 @@ for (const appId of APP_IDS) {
     await ctx.close();
   });
 }
+
+// Suite teardown: delete every throwaway workspace this run created so the
+// tenant stays clean (rel-T09c). Runs even when tests above failed.
+test.afterAll(async () => {
+  await cleanupWorkspaces(CREATED_WS);
+});
