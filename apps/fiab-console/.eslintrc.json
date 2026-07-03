@@ -1,0 +1,12 @@
+{
+  "extends": "next/core-web-vitals",
+  "plugins": ["@typescript-eslint"],
+  "ignorePatterns": ["**/*.d.ts", "**/*.d.mts", ".next/**", "node_modules/**"],
+  "rules": {
+    "react-hooks/rules-of-hooks": "warn",
+    "react/no-unescaped-entities": "warn",
+    "react/display-name": "warn",
+    "@next/next/no-img-element": "warn",
+    "@next/next/no-html-link-for-pages": "warn"
+  }
+}

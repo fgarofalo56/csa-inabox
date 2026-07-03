@@ -158,11 +158,13 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   // Copilot & Agents) so the in-cell Copilot works in tenant-config-only
   // deployments where LOOM_AOAI_ENDPOINT is unset.
   let tenantConfig: TenantCopilotConfig | null = null;
+  let aoaiTarget;
   try {
     tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
     // Pre-resolve to surface the honest 503 no_aoai gate before we build the
-    // request; aoaiChat re-resolves with the same cfg harmlessly below.
-    await resolveAoaiTarget(tenantConfig);
+    // request; the resolved target is passed to aoaiChat below so it does NOT
+    // re-resolve (one Foundry lookup per call).
+    aoaiTarget = await resolveAoaiTarget(tenantConfig);
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -194,6 +196,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       maxCompletionTokens: 2048,
       temperature: 0.2,
       cfg: tenantConfig,
+      target: aoaiTarget,
     });
     // Strip any stray ```lang fences the model may add despite instructions.
     const result = raw

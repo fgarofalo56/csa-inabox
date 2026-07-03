@@ -12,16 +12,19 @@ const getSessionMock = vi.fn(
 );
 vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
 
-class FakeNoAoai extends Error {}
 let resolveShouldThrow = false;
-vi.mock('@/lib/azure/copilot-orchestrator', () => ({
+// Spread the real orchestrator so the unified aoai-chat-client keeps its
+// aoaiToken / isUnsupportedSamplingParam / describeFetchError helpers (the
+// route now delegates to aoaiChat, which imports them from here). Only
+// resolveAoaiTarget is overridden to avoid real Foundry discovery.
+vi.mock('@/lib/azure/copilot-orchestrator', async (importOriginal) => ({
+  ...(await importOriginal() as any),
   resolveAoaiTarget: async () => {
     // Throw a generic Error (not NoAoaiDeploymentError) so the route emits its
     // env-var fallback hint — the branch the editor surfaces most often.
     if (resolveShouldThrow) throw new Error('aoai endpoint unset');
     return { endpoint: 'https://aoai.example.com', deployment: 'chat', apiVersion: '2024-10-21' };
   },
-  NoAoaiDeploymentError: FakeNoAoai,
 }));
 
 vi.mock('@/lib/azure/cloud-endpoints', async (importOriginal) => ({

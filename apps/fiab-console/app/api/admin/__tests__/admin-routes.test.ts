@@ -152,10 +152,24 @@ vi.mock('@/lib/azure/monitor-client', () => ({
 // feature-gate — let tests flip the gate result
 const enforceCapabilityMock = vi.fn(async () => null as any);
 const isTenantAdminMock = vi.fn(() => true);
-vi.mock('@/lib/auth/feature-gate', () => ({
-  enforceCapability: (...args: any[]) => enforceCapabilityMock(...args),
-  isTenantAdmin: (...args: any[]) => isTenantAdminMock(...args),
-}));
+vi.mock('@/lib/auth/feature-gate', async () => {
+  const { NextResponse } = await import('next/server');
+  return {
+    enforceCapability: (...args: any[]) => enforceCapabilityMock(...args),
+    isTenantAdmin: (...args: any[]) => isTenantAdminMock(...args),
+    // Mirror the real requireTenantAdmin gate (401 unauth / 403 non-admin /
+    // null when authorized) but driven by isTenantAdminMock so tests can flip it.
+    requireTenantAdmin: (session: any) =>
+      !session
+        ? NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 })
+        : isTenantAdminMock(session)
+          ? null
+          : NextResponse.json(
+              { ok: false, error: 'forbidden', code: 'admin_only' },
+              { status: 403 },
+            ),
+  };
+});
 vi.mock('@/lib/auth/feature-catalog', () => ({
   getCapability: (id: string) => (id === 'editor.notebook' ? { id, name: 'Notebook' } : null),
 }));

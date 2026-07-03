@@ -111,12 +111,14 @@ export async function POST(req: NextRequest) {
     .join('\n');
 
   // Resolve the AOAI target — tenant admin config first, then env/discovery.
-  // Pre-resolve here purely to surface the honest 503 `no_aoai` gate; the unified
-  // aoai-chat-client re-resolves (harmlessly) from the same tenant config below.
+  // Pre-resolve here to surface the honest 503 `no_aoai` gate and pass the
+  // resolved target to the unified aoai-chat-client below so it does NOT
+  // re-resolve (one Foundry lookup per call).
   let tenantConfig: Awaited<ReturnType<typeof loadTenantCopilotConfig>> | null = null;
+  let aoaiTarget;
   try {
     tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
-    await resolveAoaiTarget(tenantConfig);
+    aoaiTarget = await resolveAoaiTarget(tenantConfig);
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -155,6 +157,7 @@ export async function POST(req: NextRequest) {
       maxCompletionTokens: 2048,
       temperature: 0.2,
       cfg: tenantConfig,
+      target: aoaiTarget,
     });
     // Parse the structured { summary, rootCause, proposedCode } reply (with an
     // honest fence-stripping fallback when the model doesn't emit clean JSON).

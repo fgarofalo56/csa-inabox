@@ -56,8 +56,11 @@ describe('ConnectionsPage view toggle', () => {
     installFetchMock({ '/api/connections': () => ({ ok: true, connections: [] }) });
     mount();
     await waitFor(() => expect(screen.getByText(/No connections yet/i)).toBeInTheDocument());
-    expect(screen.getByRole('button', { name: /New connection/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Add existing/i })).toBeInTheDocument();
+    // The empty state offers the entry points in more than one place (the page
+    // header action + the EmptyState call-to-action), so assert at least one of
+    // each rather than a single unique button.
+    expect(screen.getAllByRole('button', { name: /New connection/i }).length).toBeGreaterThan(0);
+    expect(screen.getAllByRole('button', { name: /Add existing/i }).length).toBeGreaterThan(0);
   });
 
   it('swaps tiles for the LoomDataTable and persists the choice on toggle', async () => {

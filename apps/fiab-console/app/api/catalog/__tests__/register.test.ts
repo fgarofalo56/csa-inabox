@@ -70,17 +70,27 @@ describe('POST /api/catalog/register', () => {
     }));
   });
 
-  it('registers a OneLake Lakehouse with fabric_lakehouse typeName', async () => {
-    (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    (getFabricItem as any).mockResolvedValue({ id: 'item-1', displayName: 'Bronze LH', type: 'Lakehouse' });
-    (registerAtlasEntity as any).mockResolvedValue({ primaryGuid: 'guid-xyz' });
+  it('registers a OneLake Lakehouse with fabric_lakehouse typeName (Fabric opt-in)', async () => {
+    // fabric_lakehouse + the onelake.dfs.fabric qualifiedName are the OPT-IN
+    // Fabric path (LOOM_LAKEHOUSE_BACKEND=fabric). The default onelake path is
+    // Azure-native (typeName DataSet, no Fabric host) per no-fabric-dependency.
+    const prev = process.env.LOOM_LAKEHOUSE_BACKEND;
+    process.env.LOOM_LAKEHOUSE_BACKEND = 'fabric';
+    try {
+      (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
+      (getFabricItem as any).mockResolvedValue({ id: 'item-1', displayName: 'Bronze LH', type: 'Lakehouse' });
+      (registerAtlasEntity as any).mockResolvedValue({ primaryGuid: 'guid-xyz' });
 
-    const res = await POST(req({ source: 'onelake', workspaceId: 'ws-1', itemId: 'item-1' }));
-    const j = await res.json();
-    expect(j.ok).toBe(true);
-    expect(j.typeName).toBe('fabric_lakehouse');
-    expect(j.qualifiedName).toContain('onelake.dfs.fabric.microsoft.com/ws-1/item-1');
-    expect(j.guid).toBe('guid-xyz');
+      const res = await POST(req({ source: 'onelake', workspaceId: 'ws-1', itemId: 'item-1' }));
+      const j = await res.json();
+      expect(j.ok).toBe(true);
+      expect(j.typeName).toBe('fabric_lakehouse');
+      expect(j.qualifiedName).toContain('onelake.dfs.fabric.microsoft.com/ws-1/item-1');
+      expect(j.guid).toBe('guid-xyz');
+    } finally {
+      if (prev === undefined) delete process.env.LOOM_LAKEHOUSE_BACKEND;
+      else process.env.LOOM_LAKEHOUSE_BACKEND = prev;
+    }
   });
 
   it('returns 501 + hint if Purview is not configured', async () => {

@@ -53,6 +53,7 @@ import type { TenantCopilotConfig } from '../types/copilot-config';
 // Re-export so unified-client callers can `instanceof`-check the 503 gate
 // without also importing the orchestrator.
 export { NoAoaiDeploymentError } from './copilot-orchestrator';
+export type { AoaiTarget } from './copilot-orchestrator';
 export type { AoaiChatMessage, AoaiResponseFormat } from './aoai-model-contract';
 
 /** AOAI host for logging without leaking the full URL/keys. Mirrors the private
@@ -98,6 +99,11 @@ export interface AoaiChatOptions {
   responseFormat?: AoaiResponseFormat;
   /** Tenant Copilot config — takes priority in target resolution when supplied. */
   cfg?: TenantCopilotConfig | null;
+  /** Pre-resolved target. When supplied (e.g. a route that already called
+   *  {@link resolveAoaiTarget} to surface its honest 503 gate), the client
+   *  reuses it instead of re-resolving — avoiding a redundant second Foundry
+   *  lookup per call. When omitted the client resolves via resolveAoaiTarget(cfg). */
+  target?: AoaiTarget;
 }
 
 /** Options for {@link aoaiChatJson}. */
@@ -136,7 +142,7 @@ export interface AoaiChatRawOptions {
 export async function aoaiChat(opts: AoaiChatOptions): Promise<string> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? 2048;
-  const target = await resolveAoaiTarget(opts.cfg ?? null);
+  const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
   const url = chatUrl(target);
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>
@@ -180,7 +186,7 @@ export async function aoaiChatJson<T = Record<string, unknown>>(opts: AoaiChatJs
   const { messages, temperature } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? 2048;
   const responseFormat: AoaiResponseFormat = opts.responseFormat ?? 'json_object';
-  const target = await resolveAoaiTarget(opts.cfg ?? null);
+  const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
   const url = chatUrl(target);
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>
@@ -292,7 +298,7 @@ export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
 export async function aoaiChatStream(opts: AoaiChatOptions): Promise<Response> {
   const { messages, temperature, responseFormat } = opts;
   const maxCompletionTokens = opts.maxCompletionTokens ?? 2048;
-  const target = await resolveAoaiTarget(opts.cfg ?? null);
+  const target = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
   const url = chatUrl(target);
   const token = await aoaiToken();
   const send = (withTemperature: boolean) =>

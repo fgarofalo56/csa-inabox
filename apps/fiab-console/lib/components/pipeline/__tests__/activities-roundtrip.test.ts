@@ -91,8 +91,10 @@ describe('activity palette catalog', () => {
   });
 
   it('covers the four ADF dependency-condition colours used by the canvas edges', () => {
+    // Per web3-ui.md these are Loom/Fluent design tokens (theme-tracking), not
+    // hard-coded hex — assert each condition has a color, not a hex format.
     const required: ConnectorCondition[] = ['Succeeded', 'Failed', 'Completed', 'Skipped'];
-    for (const c of required) expect(CONNECTOR_COLORS[c]).toMatch(/^#[0-9a-f]{6}$/i);
+    for (const c of required) expect(CONNECTOR_COLORS[c]).toBeTruthy();
   });
 
   it('every catalog build() yields a valid ADF activity with default typeProperties', () => {

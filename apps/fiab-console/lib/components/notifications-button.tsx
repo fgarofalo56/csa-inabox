@@ -140,9 +140,10 @@ export function NotificationsButton() {
             // Don't render a dead `<a href="#">` — page-jumps to top and
             // looks like a broken link. Notifications without a link are
             // informational only; clicking just marks read and closes.
+            // NB: `key` is passed explicitly on each returned element below —
+            // React 19 does not accept a `key` spread from a props object.
             const common = {
               className: `${styles.item} ${!n.read ? styles.unread : ''}`,
-              key: n.id,
             };
             const body = (
               <>
@@ -154,6 +155,7 @@ export function NotificationsButton() {
             if (n.link) {
               return (
                 <a
+                  key={n.id}
                   {...common}
                   href={n.link}
                   onClick={() => {
@@ -167,6 +169,7 @@ export function NotificationsButton() {
             }
             return (
               <div
+                key={n.id}
                 {...common}
                 role="button"
                 tabIndex={0}

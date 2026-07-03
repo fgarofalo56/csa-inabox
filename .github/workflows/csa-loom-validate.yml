@@ -97,3 +97,11 @@ jobs:
           # Fail the job only on hard FAILs (not honest not-configured NOTEs)
           FAILS=$(grep -oE '[0-9]+ fail' /tmp/health.txt | head -1 | grep -oE '[0-9]+' || echo 0)
           echo "Hard failures: $FAILS"
+          # rel-T24: actually FAIL the job on hard failures. Previously this step
+          # computed FAILS but always exited 0, so a broken live console reported
+          # green. A hard FAIL (real backend error, not an honest not-configured
+          # NOTE) now fails the workflow.
+          if [ "${FAILS:-0}" -gt 0 ]; then
+            echo "::error::CSA Loom live validation found $FAILS hard failure(s) — see the job summary."
+            exit 1
+          fi

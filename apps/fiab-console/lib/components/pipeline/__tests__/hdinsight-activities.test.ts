@@ -58,7 +58,11 @@ describe('HDInsight activities (F17)', () => {
 
   it('does not introduce any non-runnable HDInsight entry (no placeholder catalog rows)', () => {
     const hdi = ACTIVITY_CATALOG.filter((d) => d.key.startsWith('HDInsight'));
-    expect(hdi).toHaveLength(4);
+    // At least the four core HDInsight activity types (Pig is an additional
+    // native ADF type). The invariant is that EVERY HDInsight entry is a real,
+    // runnable activity with no remediation stub — not a fixed catalog count.
+    expect(hdi.length).toBeGreaterThanOrEqual(HDI_KEYS.length);
+    for (const key of HDI_KEYS) expect(hdi.some((d) => d.key === key)).toBe(true);
     for (const d of hdi) {
       expect(d.runnable).toBe(true);
       expect(d.remediation).toBeUndefined();

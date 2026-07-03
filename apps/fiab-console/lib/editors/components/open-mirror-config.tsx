@@ -219,7 +219,7 @@ export function OpenMirrorConfig({ mirrorId, workspaceId, tableName = 'default' 
           <Button size="small" appearance="outline" icon={<Copy16Regular />} onClick={() => copy(cfg?.landingPath)}>Copy</Button>
         </div>
         <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalS }}>
-          Target table: <code>{cfg?.tableName || tableName}</code> → drop files at <code>{(cfg?.landingPath || '')}/{cfg?.tableName || tableName}/*.parquet</code>
+          Target table: <code>{cfg?.tableName || tableName}</code> → drop files at <code>{(cfg?.landingPath || '')}/{cfg?.tableName || tableName}{'/*.parquet'}</code>
         </Caption1>
       </Card>
 

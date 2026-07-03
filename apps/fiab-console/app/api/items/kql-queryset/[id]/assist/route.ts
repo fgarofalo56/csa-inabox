@@ -158,10 +158,11 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   const database = (body?.database && String(body.database).trim()) || resolveDatabase(item);
 
   // Resolve AOAI target — same resolution order as the cross-item Copilot.
-  // Pre-resolve here purely for the honest 503 gate; the unified client
-  // re-resolves (harmlessly) when the call is made.
+  // Pre-resolve here for the honest 503 gate and pass the resolved target to
+  // the unified client below so it does NOT re-resolve (one Foundry lookup).
+  let aoaiTarget;
   try {
-    await resolveAoaiTarget();
+    aoaiTarget = await resolveAoaiTarget();
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -182,7 +183,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     // Unified AOAI chat client (cogScope token + buildAoaiBody contract +
     // unsupported-temperature retry, Commercial- and Gov-correct).
-    const raw = await aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2 });
+    const raw = await aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2, target: aoaiTarget });
     // Strip any stray ```kql / ```kusto fences the model may add despite instructions.
     const result =
       mode === 'explain'

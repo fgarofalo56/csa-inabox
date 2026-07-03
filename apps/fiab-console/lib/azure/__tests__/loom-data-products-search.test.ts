@@ -42,7 +42,9 @@ describe('docForDataProduct', () => {
   it('defaults publishStatus to Draft so a new product is not consumer-visible', () => {
     const doc = docForDataProduct(item({ state: {} }), 'tenant-1');
     expect(doc.publishStatus).toBe('Draft');
-    expect(doc.id).toBe('dp:abc-123');
+    // AI Search doc keys can't contain a colon, so the id uses the `dp_` prefix
+    // (the legacy `dp:` form 400'd every upsert).
+    expect(doc.id).toBe('dp_abc-123');
     expect(doc.tenantId).toBe('tenant-1');
     expect(doc.url).toBe('/items/data-product/abc-123');
   });
