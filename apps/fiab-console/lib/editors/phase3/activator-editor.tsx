@@ -103,12 +103,13 @@ function WorkspacePicker({
       {!loading && !error && (workspaces?.length ?? 0) === 0 && (
         <MessageBar intent="warning">
           <MessageBarBody>
-            <MessageBarTitle>No Power BI workspaces</MessageBarTitle>
-            The Console service principal can&apos;t see any Power BI workspaces. Create one (or get added to one) in Power BI, then Refresh.
+            <MessageBarTitle>No workspaces</MessageBarTitle>
+            You don&apos;t have any Loom workspaces yet. Create one, then Refresh — activators live in a
+            Loom workspace and run on Azure Monitor (no Fabric or Power BI required).
             <br />
             <Button appearance="primary" size="small" style={{ marginTop: tokens.spacingVerticalS}}
-              onClick={() => { try { window.open('https://app.powerbi.com/groups/me/list', '_blank', 'noreferrer'); } catch { /* popup blocked */ } }}>
-              Open Power BI
+              onClick={() => { window.location.href = '/workspaces'; }}>
+              Create a workspace
             </Button>
           </MessageBarBody>
         </MessageBar>

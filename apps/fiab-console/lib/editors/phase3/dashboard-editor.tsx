@@ -51,9 +51,13 @@ interface TileLite { id: string; title?: string; subTitle?: string; reportId?: s
 
 export function DashboardEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
-  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
-  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
-  const ws = usePowerBiWorkspaces();
+  // The Loom canvas (Cosmos overlay + ADX/DAX tiles) is the Azure-native
+  // DEFAULT. Linking/embedding live Power BI dashboards is the OPT-IN leg
+  // (NEXT_PUBLIC_LOOM_BI_BACKEND=powerbi) — with it off the workspace hook is
+  // disabled so the default render makes ZERO Power BI network calls
+  // (rel-T04/B12).
+  const pbiOptIn = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  const ws = usePowerBiWorkspaces(pbiOptIn);
   const [workspaceId, setWorkspaceId] = useState('');
   const [dashboards, setDashboards] = useState<DashboardLite[] | null>(null);
   const [dashId, setDashId] = useState('');
@@ -110,11 +114,12 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
     } catch (e: any) { setErr(e?.message || String(e)); }
   }, [id]);
 
-  // Auto-pick the first Power BI workspace so the PBI list loads. The Loom
-  // canvas does NOT depend on this — it loads its overlay by the Loom item id.
+  // Auto-pick the first Power BI workspace so the PBI list loads (opt-in leg
+  // only). The Loom canvas does NOT depend on this — it loads its overlay by
+  // the Loom item id.
   useEffect(() => {
-    if (!workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
-  }, [workspaceId, ws.workspaces]);
+    if (pbiOptIn && !workspaceId && ws.workspaces && ws.workspaces.length > 0) setWorkspaceId(ws.workspaces[0].id);
+  }, [pbiOptIn, workspaceId, ws.workspaces]);
   useEffect(() => { if (workspaceId) loadList(workspaceId); }, [workspaceId, loadList]);
   // Overlay loads against the Loom item id regardless of PBI selection.
   useEffect(() => { loadOverlay(workspaceId, dashId); }, [workspaceId, dashId, loadOverlay]);
@@ -277,13 +282,15 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
             <Badge appearance="filled" color="brand">Dashboard</Badge>
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'canvas' | 'pbi')}>
               <Tab value="canvas">Tiles ({tiles.length + loomTiles.length})</Tab>
-              <Tab value="pbi">Power BI view</Tab>
+              {pbiOptIn && <Tab value="pbi">Power BI view</Tab>}
             </TabList>
-            <Tooltip content="Pick the Power BI workspace whose dashboards you want to link and embed. The Loom canvas (streaming/Q&A tiles) works without one." relationship="description">
-              <div style={{ display: 'flex' }}>
-                <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
-              </div>
-            </Tooltip>
+            {pbiOptIn && (
+              <Tooltip content="Pick the Power BI workspace whose dashboards you want to link and embed. The Loom canvas (streaming/Q&A tiles) works without one." relationship="description">
+                <div style={{ display: 'flex' }}>
+                  <WorkspacePicker value={workspaceId} onChange={setWorkspaceId} {...ws} />
+                </div>
+              </Tooltip>
+            )}
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}

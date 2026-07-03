@@ -1052,9 +1052,12 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   if (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND === 'aas') {
     return <AasSemanticModelPanel item={item} id={id} />;
   }
-  // PBI editor — picker MUST surface Power BI groupIds (not Loom UUIDs)
-  // or the embed-token / list calls return 404 PowerBIEntityNotFound.
-  const ws = usePowerBiWorkspaces();
+  // Power BI group listing is the OPT-IN leg (rel-T04/B12): with the default
+  // ('' — Loom-native tabular metadata) the hook is disabled so the default
+  // render makes ZERO Power BI network calls; powerBiConfigured stays false
+  // and the editor keeps its Loom-native surface.
+  const pbiOptIn = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || '').toLowerCase() === 'powerbi';
+  const ws = usePowerBiWorkspaces(pbiOptIn);
   const [workspaceId, setWorkspaceId] = useState('');
   const [datasets, setDatasets] = useState<DatasetLite[] | null>(null);
   const [datasetId, setDatasetId] = useState('');
