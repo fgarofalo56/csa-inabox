@@ -49,7 +49,9 @@ describe('getDataPlaneCredential', () => {
   it('shadow → shared UAMI, logs without an assertion', async () => {
     process.env.LOOM_OBO_DATA_PLANE = 'shadow';
     const m = await load();
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // shadow mode is informational (creds never switch), so it logs via
+    // console.warn — not console.error.
+    const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const c: any = await m.getDataPlaneCredential({}, 'scope');
     expect(c.__shared).toBe(true);
     expect(spy).toHaveBeenCalled();

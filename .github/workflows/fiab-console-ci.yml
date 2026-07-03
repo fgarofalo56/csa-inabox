@@ -110,6 +110,75 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=6144
         run: pnpm build
 
+      - name: Lint (next lint)
+        if: steps.changed.outputs.console == 'true'
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+        # next.config sets eslint.ignoreDuringBuilds so `pnpm build` above does
+        # NOT lint. This runs the ESLint gate explicitly (rel-T26 / B13): the
+        # console's .eslintrc.json extends next/core-web-vitals with a few noisy
+        # rules downgraded to warnings, so this FAILS only on genuine lint
+        # errors (missing keys, comment-in-JSX, parse errors), not on the ~600
+        # existing style warnings.
+        run: pnpm lint
+
+  vitest:
+    name: vitest (node 20)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/fiab-console
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect console changes
+        id: changed
+        working-directory: ${{ github.workspace }}
+        # Same change-detection as the build job: this job always starts (so it
+        # can safely be wired as a required check without deadlocking bicep- or
+        # workflow-only PRs) but skips the heavy install/test — reporting green —
+        # when apps/fiab-console is untouched.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="origin/${{ github.base_ref }}"
+            git fetch --no-tags --depth=1 origin "${{ github.base_ref }}" >/dev/null 2>&1 || true
+            range="$base...HEAD"
+          else
+            range="HEAD~1...HEAD"
+          fi
+          if git diff --name-only "$range" 2>/dev/null | grep -qE '^apps/fiab-console/|^\.github/workflows/fiab-console-ci\.yml'; then
+            echo "console=true" >> "$GITHUB_OUTPUT"
+            echo "Console changed — running vitest."
+          else
+            echo "console=false" >> "$GITHUB_OUTPUT"
+            echo "No apps/fiab-console changes — skipping vitest, reporting this check green."
+          fi
+
+      - name: Use Node.js 20
+        if: steps.changed.outputs.console == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        if: steps.changed.outputs.console == 'true'
+        run: npm install -g pnpm@9
+
+      - name: Install dependencies
+        if: steps.changed.outputs.console == 'true'
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Run vitest
+        if: steps.changed.outputs.console == 'true'
+        env:
+          # The console's specs cold-transform a large TS dependency graph; the
+          # 6144 heap matches the build job and prevents OOM under parallel forks.
+          NODE_OPTIONS: --max-old-space-size=6144
+        run: pnpm vitest run
+
   tutorial-coverage:
     # Audits visual-tutorial coverage across ALL THREE dimensions (B-9):
     #   items + features are parsed from source; apps are audited against the

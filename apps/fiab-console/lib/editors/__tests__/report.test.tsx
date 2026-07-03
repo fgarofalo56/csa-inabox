@@ -34,16 +34,17 @@ describe('ReportEditor', () => {
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
   });
 
-  it('surfaces Theme ribbon controls (Apply theme / Reset theme)', async () => {
+  it('surfaces designer ribbon controls (Themes / Data source)', async () => {
     let err: unknown = null;
     try {
       render(<ReportEditor item={makeItem('report', 'Report')} id="new" />);
       await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
       const ribbon = screen.getByTestId('ribbon');
       const txt = ribbon.textContent || '';
-      // Theme + View parity actions are always present in the ribbon (disabled
-      // until a report is selected, but rendered — no decorative-removed gaps).
-      expect(txt).toMatch(/Apply theme|Reset theme|Capture bookmark|Play bookmarks/);
+      // A new report opens the Loom-native ReportDesigner (AAS-native, no Power
+      // BI required). Its ribbon exposes the real authoring controls — the
+      // Themes restyle surface and the Data source binding — always rendered.
+      expect(txt).toMatch(/Themes|Data source|Create report|Undo/);
     } catch (e) { err = e; }
     if (err) expect(String((err as any)?.message || err)).toMatch(/unauth|fetch|cannot read|undefined|null|require|import/i);
   });

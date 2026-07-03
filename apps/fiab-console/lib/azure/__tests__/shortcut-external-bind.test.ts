@@ -158,7 +158,11 @@ describe('bindExternalSource — S3 via Synapse (access keys)', () => {
       targetUri: 's3://acme/sales', credentialRef: { kind: 'awsKeys', keyVaultSecret: 's3-keys' },
     });
     expect((res as any).synapse?.dataSource).toContain('loom_s3_sales');
-    const ddl = (executeQuery as any).mock.calls[0][1] as string;
+    // The S3 binding first ensures a user database exists (the scoped-credential
+    // DDL is forbidden in `master`), so the binding DDL is the LAST executeQuery
+    // call, not the first.
+    const calls = (executeQuery as any).mock.calls as any[][];
+    const ddl = calls.map((c) => c[1] as string).find((s) => s.includes('CREATE DATABASE SCOPED CREDENTIAL'))!;
     expect(ddl).toContain("CREATE DATABASE SCOPED CREDENTIAL");
     expect(ddl).toContain("IDENTITY = 'S3 Access Key'");
     expect(ddl).toContain("SECRET = 'AKIAEXAMPLE:supersecretkey'");

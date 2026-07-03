@@ -13,8 +13,18 @@
  * - Adds ResizeObserver + matchMedia stubs FluentUI needs.
  */
 import '@testing-library/jest-dom/vitest';
-import { vi } from 'vitest';
+import { vi, afterEach } from 'vitest';
+import { cleanup } from '@testing-library/react';
 import React from 'react';
+
+// With `globals: false`, @testing-library/react does NOT auto-register its
+// afterEach cleanup, so rendered trees accumulate across tests in the same file
+// (a second render() then makes getByTestId('chrome') throw "Found multiple
+// elements"). Register cleanup once, globally, so every render test starts from
+// a clean DOM.
+afterEach(() => {
+  cleanup();
+});
 
 vi.mock('next/navigation', () => ({
   useRouter: () => ({

@@ -35,8 +35,12 @@ class NoAoaiDeploymentError extends Error {
   constructor(m: string) { super(m); this.name = 'NoAoaiDeploymentError'; }
 }
 const resolveAoaiTargetMock = vi.fn(async () => ({ endpoint: 'https://aoai.example.com', deployment: 'chat', apiVersion: '2024-10-21' }));
-vi.mock('@/lib/azure/copilot-orchestrator', () => ({
-  resolveAoaiTarget: () => resolveAoaiTargetMock(),
+// Spread the real orchestrator so the unified aoai-chat-client keeps its
+// aoaiToken / isUnsupportedSamplingParam / describeFetchError helpers; only
+// resolveAoaiTarget + NoAoaiDeploymentError are overridden for the test.
+vi.mock('@/lib/azure/copilot-orchestrator', async (importOriginal) => ({
+  ...(await importOriginal() as any),
+  resolveAoaiTarget: (...a: any[]) => resolveAoaiTargetMock(...(a as [])),
   NoAoaiDeploymentError,
 }));
 

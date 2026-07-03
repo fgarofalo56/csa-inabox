@@ -375,11 +375,13 @@ export async function POST(
     );
   }
 
-  // Pre-resolve the AOAI target up-front purely to surface the honest 503
-  // no_aoai gate — same resolution order as the cross-item Copilot. aoaiChat()
-  // re-resolves internally (cfg=null → identical env/discovery path).
+  // Pre-resolve the AOAI target up-front to surface the honest 503 no_aoai gate
+  // — same resolution order as the cross-item Copilot. The resolved target is
+  // passed to aoaiChat() below so it does NOT re-resolve (one Foundry lookup
+  // per call, not two).
+  let aoaiTarget;
   try {
-    await resolveAoaiTarget();
+    aoaiTarget = await resolveAoaiTarget();
   } catch (e: any) {
     const hint =
       e instanceof NoAoaiDeploymentError
@@ -432,7 +434,7 @@ export async function POST(
     // Unified AOAI client: same target resolution (cfg=null → env/discovery),
     // same cogScope token, same max_completion_tokens cap (2048), same
     // temperature (0.2) + reasoning-model temperature-only retry.
-    const raw = await aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2 });
+    const raw = await aoaiChat({ messages, maxCompletionTokens: 2048, temperature: 0.2, target: aoaiTarget });
     // Strip any stray ```sql / ```tsql fences the model may add despite instructions.
     const result =
       mode === 'explain'

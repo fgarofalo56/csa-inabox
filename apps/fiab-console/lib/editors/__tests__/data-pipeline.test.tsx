@@ -40,14 +40,20 @@ describe('DataPipelineEditor', () => {
   // nodes and getByTestId throws "Found multiple elements". Unmount here.
   afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
-  it('renders, loads workspaces, and shows the editor chrome', async () => {
+  it('renders the runtime selector with the Azure-native (ADF) default', async () => {
     render(<DataPipelineEditor item={makeItem('data-pipeline', 'Data pipeline')} id="new" />);
     await waitFor(() => {
       expect(screen.getByTestId('chrome')).toBeInTheDocument();
     });
+    // Per no-fabric-dependency, the unified editor defaults to the Azure-native
+    // ADF runtime (delegating to AdfPipelineEditor) — the Fabric workspace
+    // picker is opt-in, not the default surface. Assert the runtime selector
+    // (the always-present chooser) renders with the ADF option.
     await waitFor(() => {
-      expect(screen.getAllByText(/workspace-fixture/i).length).toBeGreaterThan(0);
+      expect(screen.getByText('Azure Data Factory (standalone)')).toBeInTheDocument();
     });
+    // Fabric stays opt-in: its radio is present but is not the default runtime.
+    expect(screen.getByText('Microsoft Fabric (opt-in)')).toBeInTheDocument();
   });
 
   it('exposes a ribbon with at least one action button', async () => {

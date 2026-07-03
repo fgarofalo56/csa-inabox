@@ -16,7 +16,7 @@ vi.mock('@/lib/auth/session', () => ({
 
 vi.mock('@/lib/azure/purview-client', async () => {
   const actual: any = await vi.importActual('@/lib/azure/purview-client');
-  return { ...actual, searchPurview: vi.fn() };
+  return { ...actual, searchDataMapWithFacets: vi.fn() };
 });
 vi.mock('@/lib/azure/unity-catalog-client', async () => {
   const actual: any = await vi.importActual('@/lib/azure/unity-catalog-client');
@@ -40,7 +40,11 @@ vi.mock('../../items/_lib/item-crud', () => ({
 
 import { GET } from '../search/route';
 import { getSession } from '@/lib/auth/session';
-import { searchPurview, PurviewNotConfiguredError } from '@/lib/azure/purview-client';
+import { searchDataMapWithFacets, PurviewNotConfiguredError } from '@/lib/azure/purview-client';
+
+// Empty facet rail returned by the mocked faceted search (the route reads
+// `.facets` off the result; these tests assert hits/sources, not the rail).
+const EMPTY_FACETS = { classifications: [], terms: [] };
 import { searchUnity } from '@/lib/azure/unity-catalog-client';
 import { searchOneLake } from '@/lib/azure/onelake-catalog-client';
 
@@ -64,7 +68,7 @@ describe('GET /api/catalog/search', () => {
 
   it('calls all three back-ends by default', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    (searchPurview as any).mockResolvedValue([{ id: 'p1', name: 'p', entityType: 'Table' }]);
+    (searchDataMapWithFacets as any).mockResolvedValue({ hits: [{ id: 'p1', name: 'p', entityType: 'Table' }], facets: EMPTY_FACETS });
     (searchUnity as any).mockResolvedValue([{ source: 'unity-catalog', workspace_hostname: 'h.x', type: 'table', full_name: 'c.s.t', name: 't' }]);
     // Default "onelake" source = the caller's own Loom items from Cosmos.
     listAllOwnedItemsMock.mockResolvedValue([
@@ -83,20 +87,20 @@ describe('GET /api/catalog/search', () => {
 
   it('respects ?source filter', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    (searchPurview as any).mockResolvedValue([]);
+    (searchDataMapWithFacets as any).mockResolvedValue({ hits: [], facets: EMPTY_FACETS });
     (searchUnity as any).mockResolvedValue([{ source: 'unity-catalog', workspace_hostname: 'h.x', type: 'table', full_name: 'c.s.t', name: 't' }]);
     (searchOneLake as any).mockResolvedValue([]);
 
     const res = await GET(req('http://x/api/catalog/search?q=foo&source=unity-catalog') as any);
     const j = await res.json();
     expect(j.hits).toHaveLength(1);
-    expect(searchPurview).not.toHaveBeenCalled();
+    expect(searchDataMapWithFacets).not.toHaveBeenCalled();
     expect(searchOneLake).not.toHaveBeenCalled();
   });
 
   it('surfaces NotConfigured hint without failing the overall response', async () => {
     (getSession as any).mockReturnValue({ claims: { oid: 'u' } });
-    (searchPurview as any).mockRejectedValue(new PurviewNotConfiguredError({
+    (searchDataMapWithFacets as any).mockRejectedValue(new PurviewNotConfiguredError({
       missingEnvVar: 'LOOM_PURVIEW_ACCOUNT',
       bicepModule: 'platform/...', bicepStatus: 's', rolesRequired: [], followUp: 'set env',
     }));

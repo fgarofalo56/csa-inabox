@@ -9,9 +9,9 @@
  * from B-grade (functional, untested) to A-grade (functional + Vitest).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { UserDataFunctionEditor } from '../phase4-editors';
-import { makeItem, installFetchMock } from './test-helpers';
+import { makeItem, installFetchMock, renderWithProviders } from './test-helpers';
 
 describe('UserDataFunctionEditor', () => {
   beforeEach(() => { installFetchMock({}); });
@@ -20,7 +20,7 @@ describe('UserDataFunctionEditor', () => {
   it('mounts and surfaces at least one ribbon button', async () => {
     let err: unknown = null;
     try {
-      render(<UserDataFunctionEditor item={makeItem('user-data-function', 'User data function')} id="new" />);
+      renderWithProviders(<UserDataFunctionEditor item={makeItem('user-data-function', 'User data function')} id="new" />);
       await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
       const ribbon = screen.getByTestId('ribbon');
       expect(ribbon.querySelectorAll('button').length).toBeGreaterThan(0);

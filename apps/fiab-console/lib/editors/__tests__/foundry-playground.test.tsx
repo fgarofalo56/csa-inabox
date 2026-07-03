@@ -101,7 +101,10 @@ describe('chatCompletion (data-plane chat/completions)', () => {
     expect(String(chatCall[0])).toContain('https://aoai-test.openai.azure.com/openai/deployments/gpt-4o-mini/chat/completions');
     const sent = JSON.parse(String((chatCall[1] as any).body));
     expect(sent.temperature).toBe(0.5);
-    expect(sent.max_tokens).toBe(100);
+    // The shared AOAI body contract emits `max_completion_tokens` (never the
+    // deprecated `max_tokens`), so reasoning-class models are supported too.
+    expect(sent.max_completion_tokens).toBe(100);
+    expect(sent.max_tokens).toBeUndefined();
     expect(sent.top_p).toBe(0.9);
     expect(sent.stop).toEqual(['###']);
     expect(sent.messages[0].role).toBe('system');

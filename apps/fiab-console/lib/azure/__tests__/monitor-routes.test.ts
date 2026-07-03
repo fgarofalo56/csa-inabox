@@ -405,7 +405,7 @@ describe('GET /api/items/activator/[id]/history', () => {
     const j = await r.json();
     expect(j.ok).toBe(true);
     expect(j.events).toEqual([]);
-    expect(j.note).toContain('No Azure Monitor rules');
+    expect(j.note).toContain('No rules provisioned for this activator');
   });
 
   it('requires workspaceId', async () => {

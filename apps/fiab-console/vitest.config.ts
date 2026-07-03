@@ -43,9 +43,22 @@ export default defineConfig({
     setupFiles: ['./vitest.setup.ts'],
     globals: false,
     pool: 'forks',
+    // The first `await import('../route')` in a heavy BFF spec triggers an
+    // on-demand TS transform of the route AND its whole dependency graph. Under
+    // full-suite parallel forks that cold transform can exceed the default 5s
+    // per-test budget (the tests themselves are fast — they pass in isolation),
+    // producing flaky "Test timed out in 5000ms" failures on otherwise-passing
+    // specs. Give tests + hooks a generous ceiling so a slow cold transform is
+    // never mistaken for a hang.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
     include: [
       'lib/**/__tests__/**/*.test.{ts,tsx}',
       'app/**/__tests__/**/*.test.{ts,tsx}',
+      // Console-root suites (registry coverage, APIM policy/XML scope,
+      // Copilot Studio ↔ Dataverse scope) — these were previously dark because
+      // the globs only matched lib/** and app/**.
+      '__tests__/**/*.test.{ts,tsx}',
     ],
     exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
   },
