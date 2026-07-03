@@ -13,7 +13,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isTenantAdminTier } from '@/lib/auth/domain-role';
+import { isTenantAdminTier, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { getPolicy, deletePolicy } from '@/lib/azure/protection-policy-client';
 import { computeReconcile } from '@/lib/azure/protection-policy-reconciler';
 
@@ -23,7 +23,7 @@ export const dynamic = 'force-dynamic';
 export async function GET(req: NextRequest, { params }: { params: { id: string } }) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!isTenantAdminTier(s)) return NextResponse.json({ ok: false, error: 'tenant admin required' }, { status: 403 });
+  if (!isTenantAdminTier(s)) return NextResponse.json({ ok: false, error: 'tenant admin required', remediation: TENANT_ADMIN_TIER_REMEDIATION, bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV }, { status: 403 });
   const resourceId = req.nextUrl.searchParams.get('resourceId');
   if (!resourceId) return NextResponse.json({ ok: false, error: 'resourceId query param required' }, { status: 400 });
   try {
@@ -40,7 +40,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
 export async function DELETE(req: NextRequest, { params }: { params: { id: string } }) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!isTenantAdminTier(s)) return NextResponse.json({ ok: false, error: 'tenant admin required' }, { status: 403 });
+  if (!isTenantAdminTier(s)) return NextResponse.json({ ok: false, error: 'tenant admin required', remediation: TENANT_ADMIN_TIER_REMEDIATION, bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV }, { status: 403 });
   const resourceId = req.nextUrl.searchParams.get('resourceId');
   if (!resourceId) return NextResponse.json({ ok: false, error: 'resourceId query param required' }, { status: 400 });
   try {

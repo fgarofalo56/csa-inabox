@@ -14,9 +14,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { apiError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
+import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { listMcpServers, getMcpServer, saveMcpServer, deleteMcpServer, updateMcpServerTestResult } from '@/lib/azure/mcp-config-store';
 import { listMcpTools } from '@/lib/azure/mcp-client';
+import { assertMcpEgressAllowed, McpEgressError } from '@/lib/azure/mcp-egress-guard';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
 
 export const runtime = 'nodejs';
@@ -127,11 +129,18 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  // Tenant-admin only: register/probe fetches the caller-supplied endpoint
+  // server-side (rel-T13/B17). Gate the mutation + SSRF-check the URL.
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const body = await req.json().catch(() => ({}));
   try {
     const config = sanitize(body.config);
+    // Validate the endpoint BEFORE persisting so a private-IP/SSRF target never
+    // lands in Cosmos (where the chat-time shim would later fetch it).
+    await assertMcpEgressAllowed(config.endpoint);
     const saved = await saveMcpServer(tenantId, undefined, who, config);
     const doc = await probeAndPersist(tenantId, saved);
     // Audit
@@ -156,6 +165,9 @@ export async function POST(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   const s = getSession();
   if (!s) return apiError('unauthenticated', 401);
+  // Tenant-admin only + SSRF-check the endpoint (rel-T13/B17), same as POST.
+  const denied = requireTenantAdmin(s);
+  if (denied) return denied;
   const tenantId = s.claims.oid;
   const who = s.claims.upn || s.claims.email || tenantId;
   const url = new URL(req.url);
@@ -166,6 +178,7 @@ export async function PUT(req: NextRequest) {
     const existing = await getMcpServer(tenantId, serverId);
     if (!existing) return apiError('not found', 404);
     const config = sanitize(body.config);
+    await assertMcpEgressAllowed(config.endpoint);
     // Carry forward catalog-deploy metadata when the edit (e.g. the manual form)
     // doesn't include it — so editing a deployed server never orphans its KV
     // secret references or catalog linkage.

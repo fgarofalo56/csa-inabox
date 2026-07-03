@@ -25,7 +25,7 @@
  */
 import { NextResponse } from 'next/server';
 import type { SessionPayload } from './session';
-import { canAccessDlzPanes } from './domain-role';
+import { canAccessDlzPanes, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from './domain-role';
 import { loadTenantDomains } from './load-domains';
 
 type DlzPane = 'scaling' | 'cost' | 'monitoring';
@@ -56,6 +56,8 @@ export async function denyIfNoDlzAccess(
       reason:
         `The Data Landing Zone ${PANE_NOUN[pane]} pane is available to tenant admins and domain admins only. ` +
         'A tenant admin can grant you a domain admin Entra group at /admin/permissions (Domain access).',
+      remediation: TENANT_ADMIN_TIER_REMEDIATION,
+      bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV,
     },
     { status: 403 },
   );

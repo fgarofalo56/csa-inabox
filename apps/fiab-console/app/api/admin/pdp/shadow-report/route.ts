@@ -18,7 +18,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isTenantAdminTier } from '@/lib/auth/domain-role';
+import { isTenantAdminTier, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
 import { pdpEnforceMode } from '@/lib/auth/pdp/enforce';
 
@@ -44,7 +44,12 @@ export async function GET(req: NextRequest) {
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   if (!isTenantAdminTier(s)) {
     return NextResponse.json(
-      { ok: false, error: 'forbidden — the PDP shadow report is tenant-administrator only' },
+      {
+        ok: false,
+        error: 'forbidden — the PDP shadow report is tenant-administrator only',
+        remediation: TENANT_ADMIN_TIER_REMEDIATION,
+        bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV,
+      },
       { status: 403 },
     );
   }

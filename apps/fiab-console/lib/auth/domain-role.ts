@@ -55,22 +55,41 @@ export interface DomainTierDomain {
   contributors?: { scope: 'AllTenant' | 'AdminsOnly' | 'SpecificUsersAndGroups'; users?: string[] };
 }
 
+/** The two deploy params that bind the tenant-admin principal. Named in every
+ *  fail-closed honest gate so an unconfigured deploy shows the exact fix. */
+export const TENANT_ADMIN_BOOTSTRAP_ENV = {
+  oid: 'LOOM_TENANT_ADMIN_OID',
+  group: 'LOOM_TENANT_ADMIN_GROUP_ID',
+} as const;
+
+/** Honest remediation for a fail-closed tier denial. Surfaced (with
+ *  {@link TENANT_ADMIN_BOOTSTRAP_ENV}) whenever `isTenantAdminTier` /
+ *  `canAccessDlzPanes` denies, so the org-wide DLZ/capacity/cost/spark-warm
+ *  panes name the exact env var to set instead of rendering empty. */
+export const TENANT_ADMIN_TIER_REMEDIATION =
+  'No tenant admin is configured for this deployment (or your account is not one). ' +
+  'Set LOOM_TENANT_ADMIN_OID to your Entra user object id (oid), or add yourself to the ' +
+  'LOOM_TENANT_ADMIN_GROUP_ID group — both are deploy params wired into the Console app env ' +
+  '(loomTenantAdminOid / loomTenantAdminGroupId). Until one is set, no session is treated as a ' +
+  'tenant admin (fail-closed). A tenant admin can also grant domain-admin access at /admin/permissions.';
+
 /**
  * Tenant-admin determination for the scoped tiers.
  *
  * Covers BOTH group-based and bootstrap-oid tenant admins via feature-gate's
  * `isTenantAdmin` (the existing domains route's `isDomainTenantAdmin` only
- * checked the oid and so MISSED group-based tenant admins). Preserves the
- * long-standing default-allow: when NEITHER LOOM_TENANT_ADMIN_OID nor
- * LOOM_TENANT_ADMIN_GROUP_ID is configured the whole console is already
- * admin-gated, so every authenticated session is a tenant admin (lets the first
- * admin configure access out of an empty state).
+ * checked the oid and so MISSED group-based tenant admins).
+ *
+ * FAILS CLOSED (rel-T14): when NEITHER LOOM_TENANT_ADMIN_OID nor
+ * LOOM_TENANT_ADMIN_GROUP_ID is configured this returns FALSE — matching the
+ * stricter `isTenantAdmin`. The prior default-ALLOW granted every authenticated
+ * session tenant-admin tier on an unconfigured deploy, exposing the org-wide DLZ
+ * capacity / cost / utilization / spark-warm panes to anyone. Binding the admin
+ * principal via the deploy params is the (documented) way in — see
+ * TENANT_ADMIN_TIER_REMEDIATION.
  */
 export function isTenantAdminTier(session: SessionPayload): boolean {
-  if (isTenantAdmin(session)) return true;
-  const oidConfigured = (process.env.LOOM_TENANT_ADMIN_OID || '').trim();
-  const grpConfigured = (process.env.LOOM_TENANT_ADMIN_GROUP_ID || '').trim();
-  return !oidConfigured && !grpConfigured;
+  return isTenantAdmin(session);
 }
 
 /** True when the session cookie's `groups` claim is empty/absent — the Entra
