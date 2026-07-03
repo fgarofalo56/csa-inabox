@@ -66,7 +66,7 @@ describe('gatherReceipts — provisioning', () => {
       state: {
         provisioning: {
           status: 'remediation',
-          gate: { reason: 'Event Hubs namespace not set', remediation: 'Set LOOM_EVENTHUBS_NAMESPACE', link: 'https://x' },
+          gate: { reason: 'Event Hubs namespace not set', remediation: 'Set LOOM_EVENTHUB_NAMESPACE', link: 'https://x' },
           at: '2026-06-10T00:00:00Z',
         },
       },
@@ -76,7 +76,7 @@ describe('gatherReceipts — provisioning', () => {
     expect(r.workspaceId).toBe('ws-1');
     expect(r.provisioning?.found).toBe(true);
     expect(r.provisioning?.status).toBe('remediation');
-    expect(r.provisioning?.gate?.remediation).toContain('LOOM_EVENTHUBS_NAMESPACE');
+    expect(r.provisioning?.gate?.remediation).toContain('LOOM_EVENTHUB_NAMESPACE');
   });
 });
 

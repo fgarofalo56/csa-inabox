@@ -130,7 +130,7 @@ async function provisionEventHubs(input: any, steps: string[]): Promise<Provisio
         steps,
       };
     }
-    return resolveInfraResidual(e, 'Confirm LOOM_EVENTHUBS_NAMESPACE points at a deployed Event Hubs namespace and grant the Console UAMI "Azure Event Hubs Data Owner" + Contributor on it so it can create hubs + consumer groups.', { link: 'https://learn.microsoft.com/azure/event-hubs/authenticate-application', steps });
+    return resolveInfraResidual(e, 'Confirm LOOM_EVENTHUB_NAMESPACE points at a deployed Event Hubs namespace and grant the Console UAMI "Azure Event Hubs Data Owner" + Contributor on it so it can create hubs + consumer groups.', { link: 'https://learn.microsoft.com/azure/event-hubs/authenticate-application', steps });
   }
 }
 

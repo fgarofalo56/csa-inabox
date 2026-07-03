@@ -47,9 +47,6 @@ const ORPHAN_ALLOWLIST = new Map([
   ['platform/fiab/bicep/modules/admin-plane/gh-runner-job.bicep', 'standalone entrypoint: scale-to-zero self-hosted GitHub runner ACA Job, deployed out-of-band (az deployment -f gh-runner-job.bicep; its doc block shows the optional in-orchestrator wiring)'],
   ['platform/fiab/bicep/modules/shared/diagnostic-settings.bicep', 'shared scope:<resource> diagnostic-settings helper template (loom-law-monitoring runbook documents it); TODO wire callers per-resource'],
   ['platform/fiab/bicep/modules/admin-plane/mcp-catalog-app.bicep', 'opt-in MCP-catalog ACA app; deployed when the MCP catalog is enabled'],
-  ['platform/fiab/bicep/modules/admin-plane/spark-session-pool.bicep', 'opt-in Synapse spark session pool; deployed when Spark is enabled'],
-  ['platform/fiab/bicep/modules/admin-plane/udf-runtime.bicep', 'TODO wire: Loom-managed Functions UDF host (main.bicep documents the pending default)'],
-  ['platform/fiab/bicep/modules/landing-zone/azure-maps.bicep', 'legacy landing-zone Azure Maps variant; admin-plane/azure-maps.bicep is the wired one'],
   ['platform/fiab/bicep/modules/landing-zone/databricks-scim-bootstrap.bicep', 'opt-in Databricks SCIM bootstrap; run out-of-band during DLZ setup'],
   ['platform/fiab/bicep/modules/landing-zone/workspace-identity.bicep', 'opt-in per-workspace identity module; deployed on demand by the workspace provisioner'],
 ]);

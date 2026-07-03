@@ -177,10 +177,9 @@ function sinkToOutputSpec(sink: SqlSink, idx: number): { spec: AsaOutputCreateSp
   }
 
   if (kind === 'eventhub' || kind === 'reflex') {
-    // Bicep emits the SINGULAR LOOM_EVENTHUB_NAMESPACE (what eventhubs-client.ts
-    // reads); the plural form is accepted for back-compat with hand-set envs.
+    // Bicep emits the SINGULAR LOOM_EVENTHUB_NAMESPACE (what eventhubs-client.ts reads).
     const namespace = (sink.namespace && sink.namespace.trim())
-      || process.env.LOOM_EVENTHUBS_NAMESPACE || process.env.LOOM_EVENTHUB_NAMESPACE || '';
+      || process.env.LOOM_EVENTHUB_NAMESPACE || '';
     if (!namespace) return { error: `Sink "${name}" (${kind === 'reflex' ? 'Activator' : 'Event Hub'}) needs an Event Hubs namespace (set it here or LOOM_EVENTHUB_NAMESPACE).` };
     if (!sink.eventHubName || !sink.eventHubName.trim()) return { error: `Sink "${name}" needs an Event Hub name.` };
     return {

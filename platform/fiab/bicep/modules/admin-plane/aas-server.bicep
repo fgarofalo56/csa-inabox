@@ -47,6 +47,9 @@ param workspaceId string
 @description('Console UAMI client id — added as AAS server admin via app:{clientId}@{tenantId}.')
 param consolePrincipalClientId string
 
+@description('Optional dedicated service-principal (app) client id added as an ADDITIONAL AAS server administrator for RLS/OLS authoring over XMLA (LOOM_AAS_CLIENT_ID). Empty = the Console UAMI is the sole admin (composite-model path). Preserves the former analysis-services.bicep composite-server SPN-admin option now that this module is the single owner of the shared AAS server.')
+param spnAdminClientId string = ''
+
 @description('Console UAMI principal (object) id — granted Reader on the AAS server for ARM list/get. Empty skips the grant.')
 param consolePrincipalId string = ''
 
@@ -71,9 +74,13 @@ resource aasServer 'Microsoft.AnalysisServices/servers@2017-08-01' = {
     asAdministrators: {
       // Service-principal / managed-identity server administrators use the
       // app:{clientId}@{tenantId} format. Server-admin is required for the
-      // async-refresh REST API (the data plane the Console calls).
-      members: [
+      // async-refresh REST API (the data plane the Console calls). An optional
+      // dedicated SPN (spnAdminClientId) is added for RLS/OLS XMLA authoring.
+      members: empty(spnAdminClientId) ? [
         'app:${consolePrincipalClientId}@${tenantId}'
+      ] : [
+        'app:${consolePrincipalClientId}@${tenantId}'
+        'app:${spnAdminClientId}@${tenantId}'
       ]
     }
     // Standalone AAS server (managedMode left default = not managed). Power BI /
@@ -113,6 +120,12 @@ resource consoleAasReader 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 
 output serverId string = aasServer.id
 output serverName string = aasServer.name
+// serverFullName is the AAS data-plane connection name (region-qualified) wired
+// to LOOM_AAS_SERVER / LOOM_AAS_ENDPOINT. This module is the SINGLE owner of the
+// shared AAS server (the former analysis-services.bicep composite `aas` module
+// was consolidated here for deterministic redeploy — rel-T31/B7), so the Console
+// env derives the server name from this output.
+output serverFullName string = aasServer.properties.serverFullName
 // serverRegion is wired to LOOM_AAS_REGION in main.bicep (the AAS data-plane
 // REST host is https://{serverRegion}.{aasSuffix}/servers/{serverName}/...).
 output serverRegion string = location

@@ -89,7 +89,7 @@ const EVENTSTREAM_DEST_EVENTHUB = {
   id: 'dst-eventhub-order-events',
   type: 'event-hub',
   config: {
-    namespaceSecretRef: 'LOOM_EVENTHUBS_NAMESPACE',
+    namespaceSecretRef: 'LOOM_EVENTHUB_NAMESPACE',
     eventHubName: 'order-events',
     connectionSecretRef: 'EventHubConnection',
     partitionKeyField: 'customer_id',
