@@ -137,7 +137,9 @@ jobs:
   vitest:
     name: vitest (node 20)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 25m (was 20m): v8 coverage instrumentation with all:true adds a few minutes
+    # over the ~3m bare suite; keep generous headroom on the slower CI box.
+    timeout-minutes: 25
     defaults:
       run:
         working-directory: apps/fiab-console
@@ -183,13 +185,18 @@ jobs:
         if: steps.changed.outputs.console == 'true'
         run: pnpm install --no-frozen-lockfile
 
-      - name: Run vitest
+      - name: Run vitest (with v8 coverage floor)
         if: steps.changed.outputs.console == 'true'
         env:
           # The console's specs cold-transform a large TS dependency graph; the
           # 6144 heap matches the build job and prevents OOM under parallel forks.
           NODE_OPTIONS: --max-old-space-size=6144
-        run: pnpm vitest run
+        # --coverage runs the suite ONCE with v8 instrumentation and enforces the
+        # ratcheting floor in vitest.config.ts (rel-T28) — the job fails if
+        # coverage drops below the floor. This step only runs when the console
+        # actually changed (the change-detection above), so bicep-/workflow-only
+        # PRs never pay the instrumentation cost.
+        run: pnpm vitest run --coverage
 
   tutorial-coverage:
     # Audits visual-tutorial coverage across ALL THREE dimensions (B-9):
