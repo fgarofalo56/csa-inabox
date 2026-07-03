@@ -49,14 +49,16 @@ describe('DeleteDataProductDialog', () => {
     render(
       <DeleteDataProductDialog open={true} onOpenChange={() => {}} id="dp1" displayName="Revenue 360" onDeleted={onDeleted} />,
     );
-    // Wait for the preflight to resolve and the confirm field to render.
-    await waitFor(() => expect(screen.getByRole('textbox')).toBeInTheDocument(), { timeout: 4000 });
+    // Wait for the preflight fetch to resolve and the confirm field to render.
+    const field = await screen.findByRole('textbox', {}, { timeout: 5000 });
     const btn = screen.getByRole('button', { name: /delete data product/i });
     expect(btn).toBeDisabled();
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Revenue 36' } });
-    expect(btn).toBeDisabled(); // partial — still blocked
-    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Revenue 360' } });
-    expect(btn).not.toBeDisabled(); // exact match → enabled
+    fireEvent.change(field, { target: { value: 'Revenue 36' } });
+    await waitFor(() => expect(btn).toBeDisabled()); // partial — still blocked
+    fireEvent.change(field, { target: { value: 'Revenue 360' } });
+    // The enable transition is driven by a controlled-input re-render; await it
+    // so a slower CI flush isn't read as a still-disabled button.
+    await waitFor(() => expect(btn).not.toBeDisabled()); // exact match → enabled
   });
 
   it('shows blockers and no confirm field when preconditions are not met', async () => {
