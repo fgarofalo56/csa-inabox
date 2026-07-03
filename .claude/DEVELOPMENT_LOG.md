@@ -1340,3 +1340,10 @@ environment protection rules, Bronze/Silver surrogate-key refactor,
 Silver flag-vs-filter semantics, Customer-Managed Keys, secret
 rotation automation, extended audit log retention, and VNet/subnet
 Bicep modules (flagged as "most critical infrastructure gap").
+
+## 2026-07-03 — Public-release Wave 0 landed + live-verified
+
+- Merged #1585–#1594 + #1558 (v0.50.0): all Wave-0 blockers (B1,B2,B3,B5,B6,B11,B12) + rel-T02/T05/T06/T07/T08/T09/T09c + CI heap fix.
+- Live roll: centralus loom-console rev 0000190 (image 388aacc6); deployed loom-udf-runtime (internal ingress) + LOOM_UDF_FUNCTION_BASE.
+- Live E2E receipts PASS: scorecard Cosmos default (zero PBI), UDF authored-source run.
+- Lessons: admin-plane bicep at 256-param ceiling; CI next-build heap 6144; ACA internal env → sibling apps need .internal. FQDN; invoke self-fetch via public origin fails in-container.
