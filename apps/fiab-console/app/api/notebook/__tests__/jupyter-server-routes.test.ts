@@ -42,10 +42,15 @@ vi.mock('@/lib/clients/jupyter-server-client', async () => {
     executeViaKernelWs: vi.fn(),
   };
 });
+// rel-T19 — the contents route authorizes `[id]` against the notebook item via
+// loadOwnedItem (item-crud). Stub it so the unit test stays hermetic; scopeNotebookPath
+// still runs for real to exercise the path-binding.
+vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: vi.fn() }));
 
 import { POST as executePost, GET as executeGet } from '../[id]/execute/route';
 import { GET as contentsGet, PUT as contentsPut } from '../[id]/contents/route';
 import { getSession } from '@/lib/auth/session';
+import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   isJupyterCiConfigured, getNotebookToken, sessionsCreate, sessionsGet,
   executeViaKernelWs, contentsGet as contentsGetFn, contentsPut as contentsPutFn,
@@ -53,12 +58,16 @@ import {
 
 function postReq(body: any) { return { json: async () => body } as any; }
 function getReq(path: string, qs: string) { return { nextUrl: new URL(`http://x/api/notebook/nb1/${path}?${qs}`) } as any; }
+// The contents route reads `[id]` from ctx.params (caller oid resolves to 'u').
+const ctx = { params: Promise.resolve({ id: 'nb1' }) };
+const NB_ITEM = { id: 'nb1', workspaceId: 'w1', itemType: 'notebook', state: {} } as any;
 
 const TOKEN = { accessToken: 't', hostName: 'h.notebooks.azure.net', expiresIn: 28800 };
 
 beforeEach(() => {
   vi.resetAllMocks();
-  (getSession as any).mockReturnValue({ userId: 'u1' });
+  (getSession as any).mockReturnValue({ claims: { oid: 'u' }, exp: 9e9 });
+  (loadOwnedItem as any).mockResolvedValue(NB_ITEM);
   (isJupyterCiConfigured as any).mockReturnValue(true);
   (getNotebookToken as any).mockResolvedValue(TOKEN);
   process.env.LOOM_NOTEBOOK_BACKEND = 'aml-ci';
@@ -148,47 +157,92 @@ describe('GET /api/notebook/[id]/execute (aml-ci state poll)', () => {
 describe('GET /api/notebook/[id]/contents', () => {
   it('401 when unauthenticated', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await contentsGet(getReq('contents', 'path=n.ipynb'));
+    const res = await contentsGet(getReq('contents', 'path=n.ipynb'), ctx);
     expect(res.status).toBe(401);
   });
 
   it('503 when not configured', async () => {
     (isJupyterCiConfigured as any).mockReturnValue(false);
-    const res = await contentsGet(getReq('contents', 'path=n.ipynb'));
+    const res = await contentsGet(getReq('contents', 'path=n.ipynb'), ctx);
     expect(res.status).toBe(503);
   });
 
   it('400 when path missing', async () => {
-    const res = await contentsGet(getReq('contents', ''));
+    const res = await contentsGet(getReq('contents', ''), ctx);
     expect(res.status).toBe(400);
+  });
+
+  it('404 when the caller cannot access the notebook item (rel-T19)', async () => {
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await contentsGet(getReq('contents', 'path=Users/u/nb.ipynb'), ctx);
+    expect(res.status).toBe(404);
+    // never touches the file share for an unauthorized notebook
+    expect(contentsGetFn).not.toHaveBeenCalled();
+  });
+
+  it("403 when the path escapes the notebook's scope (another user's file) (rel-T19)", async () => {
+    const res = await contentsGet(getReq('contents', 'path=Users/other/secret.ipynb'), ctx);
+    expect(res.status).toBe(403);
+    expect(contentsGetFn).not.toHaveBeenCalled();
+  });
+
+  it('400 when the path attempts traversal (rel-T19)', async () => {
+    const res = await contentsGet(getReq('contents', 'path=Users/u/../other/x.ipynb'), ctx);
+    expect(res.status).toBe(400);
+    expect(contentsGetFn).not.toHaveBeenCalled();
   });
 
   it('reads the notebook model', async () => {
     (contentsGetFn as any).mockResolvedValue({ name: 'nb.ipynb', path: 'Users/u/nb.ipynb', type: 'notebook', content: { cells: [] } });
-    const res = await contentsGet(getReq('contents', 'path=Users/u/nb.ipynb'));
+    const res = await contentsGet(getReq('contents', 'path=Users/u/nb.ipynb'), ctx);
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.model.type).toBe('notebook');
     expect(contentsGetFn).toHaveBeenCalledWith(TOKEN, 'Users/u/nb.ipynb', { content: true });
+  });
+
+  it("reads a shared notebook via its declared file scope (rel-T11/T19)", async () => {
+    // A shared-workspace member (oid 'u') opens the owner's declared notebook file.
+    (loadOwnedItem as any).mockResolvedValue({ ...NB_ITEM, state: { notebookPath: 'Users/owner/shared.ipynb' } });
+    (contentsGetFn as any).mockResolvedValue({ name: 'shared.ipynb', path: 'Users/owner/shared.ipynb', type: 'notebook' });
+    const res = await contentsGet(getReq('contents', 'path=Users/owner/shared.ipynb'), ctx);
+    const j = await res.json();
+    expect(j.ok).toBe(true);
+    expect(contentsGetFn).toHaveBeenCalledWith(TOKEN, 'Users/owner/shared.ipynb', { content: true });
   });
 });
 
 describe('PUT /api/notebook/[id]/contents', () => {
   it('401 when unauthenticated', async () => {
     (getSession as any).mockReturnValue(null);
-    const res = await contentsPut(postReq({ path: 'n.ipynb', content: {} }));
+    const res = await contentsPut(postReq({ path: 'n.ipynb', content: {} }), ctx);
     expect(res.status).toBe(401);
   });
 
   it('400 when content missing', async () => {
-    const res = await contentsPut(postReq({ path: 'n.ipynb' }));
+    const res = await contentsPut(postReq({ path: 'n.ipynb' }), ctx);
     expect(res.status).toBe(400);
+  });
+
+  it('404 when the caller cannot write the notebook item (rel-T19)', async () => {
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await contentsPut(postReq({ path: 'Users/u/nb.ipynb', content: {} }), ctx);
+    expect(res.status).toBe(404);
+    expect(contentsPutFn).not.toHaveBeenCalled();
+    // write path must request write-capable access
+    expect(loadOwnedItem).toHaveBeenCalledWith('nb1', 'notebook', 'u', { allowReadRoles: false });
+  });
+
+  it("403 when writing outside the notebook's scope (rel-T19)", async () => {
+    const res = await contentsPut(postReq({ path: 'Users/other/steal.ipynb', content: {} }), ctx);
+    expect(res.status).toBe(403);
+    expect(contentsPutFn).not.toHaveBeenCalled();
   });
 
   it('writes the notebook and returns the saved model', async () => {
     (contentsPutFn as any).mockResolvedValue({ name: 'nb.ipynb', path: 'Users/u/nb.ipynb', type: 'notebook' });
     const ipynb = { cells: [{ cell_type: 'code', source: 'print(1+1)' }], nbformat: 4 };
-    const res = await contentsPut(postReq({ path: 'Users/u/nb.ipynb', content: ipynb }));
+    const res = await contentsPut(postReq({ path: 'Users/u/nb.ipynb', content: ipynb }), ctx);
     const j = await res.json();
     expect(j.ok).toBe(true);
     expect(j.model.path).toBe('Users/u/nb.ipynb');

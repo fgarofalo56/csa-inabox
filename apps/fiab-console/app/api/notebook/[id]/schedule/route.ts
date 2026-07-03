@@ -37,6 +37,7 @@ import {
   FoundryError,
   type AmlFrequency,
 } from '@/lib/azure/foundry-client';
+import { loadAccessibleNotebook } from '../../_lib/notebook-access';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -70,6 +71,10 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
   if (gate) return NextResponse.json(gate);
 
   const { id } = await ctx.params;
+  // rel-T19 — only the notebook's owner / shared ACL members may list its
+  // schedules; otherwise a stranger could enumerate them by guessing the id.
+  const nb = await loadAccessibleNotebook(id, session.claims.oid, { write: false });
+  if (!nb) return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
   try {
     const schedules = await listNotebookSchedules(notebookSchedulePrefix(id));
     return NextResponse.json({ ok: true, configured: true, schedules });
@@ -88,6 +93,10 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 
   const { id } = await ctx.params;
+  // rel-T19 — creating a schedule mutates a per-notebook AML resource; require
+  // write-capable access to the notebook item.
+  const nb = await loadAccessibleNotebook(id, session.claims.oid, { write: true });
+  if (!nb) return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
   const body = await req.json().catch(() => ({}));
 
   const displayName: string = typeof body?.displayName === 'string' ? body.displayName.trim() : '';
@@ -120,7 +129,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   }
 }
 
-export async function PATCH(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
+export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
 
@@ -129,11 +138,22 @@ export async function PATCH(req: NextRequest, _ctx: { params: Promise<{ id: stri
     return NextResponse.json(gate ?? { ok: false, error: 'not configured' });
   }
 
+  const { id } = await ctx.params;
+  // rel-T19 — toggling a schedule mutates a per-notebook AML resource; require
+  // write-capable access to the notebook item.
+  const nb = await loadAccessibleNotebook(id, session.claims.oid, { write: true });
+  if (!nb) return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
+
   const body = await req.json().catch(() => ({}));
   const scheduleName: string = typeof body?.scheduleName === 'string' ? body.scheduleName.trim() : '';
   if (!scheduleName) return NextResponse.json({ ok: false, error: 'scheduleName is required' }, { status: 400 });
   if (typeof body?.isEnabled !== 'boolean') {
     return NextResponse.json({ ok: false, error: 'isEnabled (boolean) is required' }, { status: 400 });
+  }
+  // The schedule must belong to THIS notebook (its name carries the id prefix),
+  // so an owner of notebook A cannot toggle notebook B's schedule.
+  if (!scheduleName.startsWith(notebookSchedulePrefix(id))) {
+    return NextResponse.json({ ok: false, error: "scheduleName does not belong to this notebook" }, { status: 403 });
   }
 
   try {

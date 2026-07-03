@@ -43,8 +43,13 @@ vi.mock('@/lib/azure/foundry-client', () => {
   };
 });
 
+// rel-T19 — the schedule route now authorizes `[id]` against the notebook item
+// via loadOwnedItem (item-crud). Stub it hermetically.
+vi.mock('@/app/api/items/_lib/item-crud', () => ({ loadOwnedItem: vi.fn() }));
+
 import { GET, POST, PATCH } from '../[id]/schedule/route';
 import { getSession } from '@/lib/auth/session';
+import { loadOwnedItem } from '@/app/api/items/_lib/item-crud';
 import {
   amlScheduleConfig, isAmlScheduleConfigured, listNotebookSchedules,
   createNotebookSchedule, setScheduleEnabled, AmlScheduleNotConfiguredError,
@@ -52,10 +57,12 @@ import {
 
 const ctx = { params: Promise.resolve({ id: 'nb1' }) };
 function jsonReq(body: any) { return { json: async () => body } as any; }
+const NB_ITEM = { id: 'nb1', workspaceId: 'w1', itemType: 'notebook', state: {} } as any;
 
 beforeEach(() => {
   vi.resetAllMocks();
   (getSession as any).mockReturnValue({ claims: { oid: 'u1' }, exp: 9e9 });
+  (loadOwnedItem as any).mockResolvedValue(NB_ITEM);
 });
 
 describe('GET /api/notebook/[id]/schedule', () => {
@@ -86,6 +93,14 @@ describe('GET /api/notebook/[id]/schedule', () => {
     // filtered by the per-notebook prefix
     expect((listNotebookSchedules as any).mock.calls[0][0]).toBe('loom-nb-nb1-');
   });
+
+  it('404 when the caller cannot access the notebook (rel-T19)', async () => {
+    (amlScheduleConfig as any).mockReturnValue({ subscriptionId: 's', resourceGroup: 'rg', workspace: 'ws' });
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await GET({} as any, ctx);
+    expect(res.status).toBe(404);
+    expect(listNotebookSchedules).not.toHaveBeenCalled();
+  });
 });
 
 describe('POST /api/notebook/[id]/schedule', () => {
@@ -109,6 +124,15 @@ describe('POST /api/notebook/[id]/schedule', () => {
     const j = await res.json();
     expect(j.configured).toBe(false);
     expect(createNotebookSchedule).not.toHaveBeenCalled();
+  });
+
+  it('404 when the caller cannot write the notebook (rel-T19)', async () => {
+    (isAmlScheduleConfigured as any).mockReturnValue(true);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await POST(jsonReq({ displayName: 'x', frequency: 'Day', interval: 1 }), ctx);
+    expect(res.status).toBe(404);
+    expect(createNotebookSchedule).not.toHaveBeenCalled();
+    expect(loadOwnedItem).toHaveBeenCalledWith('nb1', 'notebook', 'u1', { allowReadRoles: false });
   });
 
   it('400 when displayName missing', async () => {
@@ -151,5 +175,20 @@ describe('PATCH /api/notebook/[id]/schedule', () => {
     (isAmlScheduleConfigured as any).mockReturnValue(true);
     const res = await PATCH(jsonReq({ scheduleName: 'loom-nb-nb1-xyz' }), ctx);
     expect(res.status).toBe(400);
+  });
+
+  it('403 when the scheduleName belongs to another notebook (rel-T19)', async () => {
+    (isAmlScheduleConfigured as any).mockReturnValue(true);
+    const res = await PATCH(jsonReq({ scheduleName: 'loom-nb-nb2-xyz', isEnabled: false }), ctx);
+    expect(res.status).toBe(403);
+    expect(setScheduleEnabled).not.toHaveBeenCalled();
+  });
+
+  it('404 when the caller cannot write the notebook (rel-T19)', async () => {
+    (isAmlScheduleConfigured as any).mockReturnValue(true);
+    (loadOwnedItem as any).mockResolvedValue(null);
+    const res = await PATCH(jsonReq({ scheduleName: 'loom-nb-nb1-xyz', isEnabled: false }), ctx);
+    expect(res.status).toBe(404);
+    expect(setScheduleEnabled).not.toHaveBeenCalled();
   });
 });
