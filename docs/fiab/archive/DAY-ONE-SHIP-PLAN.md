@@ -13,7 +13,7 @@
 Validate + test **every item, every function, every capability, every app, every control-plane surface — anything a user could ever do — to work 100% end-to-end (backend + FRONTEND + Azure services + APIs)** before day-one ship. **No claims without frontend proof. No vaporware. No fake/missing datasets — every dataset an app bundle references must be hosted IN THE REPO and actually loaded/installed by the flow.** The operator has repeatedly caught "said fixed, isn't" — the root cause is validating via API/health instead of the real UI. **Rule: nothing is "done" until driven + observed in the browser.**
 
 ## 1. CURRENT STATE (as of context reset)
-- **Live console:** `loom-console:v0.10` (single revision, 100% traffic, build-marker confirms live code; HTML served no-cache). Sub `<YOUR_SUBSCRIPTION_ID>`, rg `rg-csa-loom-admin-centralus`, host `csa-loom.limitlessdata.ai`.
+- **Live console:** `loom-console:v0.10` (single revision, 100% traffic, build-marker confirms live code; HTML served no-cache). Sub `<YOUR_SUBSCRIPTION_ID>`, rg `rg-csa-loom-admin-centralus`, host `<your-console-hostname>`.
 - **main HEAD:** `e1ddbda6` — **AHEAD of live**: gated-services (#1424) + others are merged on main but NOT yet built/rolled → **v0.11 build owes**.
 - **Releases:** 0.42.0, 0.43.0, 0.43.1, 0.44.0 cut.
 - **FRONTEND-VERIFIED working** (trustworthy): AutoML (after AmlCompute+concurrency fix), Notebook (real Spark Livy session), App-install FinOps (real provisioning), CoE report viewer render, hub detection, /monitor.

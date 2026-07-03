@@ -276,7 +276,7 @@ Register data product · Learn (popup grounded in DAB Learn docs).
 ## 4. Hosting design
 
 ### 4.1 Reuse the live `rg-dlz-dab-dev-eastus2` reference (verified via `az`)
-Live inventory (DLZ sub `363ef5d1-0e77-4594-a530-f51af23dbf8c`):
+Live inventory (DLZ sub `<subscription-id>`):
 | Resource | Name | Reuse |
 | --- | --- | --- |
 | Container Registry | `acrdabdemodev` (repos `dab`, `dab-frontend`, `frontend`) | **`dab:latest` image already built** — re-tag into Loom ACR, or pull through. Saves building/curating the DAB image. |

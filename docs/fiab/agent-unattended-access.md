@@ -101,7 +101,7 @@ Navigate to **GitHub → repo → Settings → Secrets and variables → Actions
 | Secret | `AZURE_CLIENT_ID` | SP `appId` from Step 1 |
 | Secret | `AZURE_TENANT_ID` | Azure tenant ID |
 | Secret | `AZURE_SUBSCRIPTION_ID` | Subscription holding the loom KV |
-| Variable | `LOOM_VERIFY_URL` | Console Front Door URL (e.g. `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net`) |
+| Variable | `LOOM_VERIFY_URL` | Console Front Door URL (e.g. `https://<your-console-hostname>`) |
 | Variable | `LOOM_KV_NAME` | Key Vault name (e.g. `kv-loom-m56yejezt7bjo`) — optional; the workflow auto-discovers if absent |
 | Variable | `LOOM_ADMIN_RG` | Admin-plane resource group — used for KV auto-discovery |
 | Variable | `LOOM_AUTOMATION_OID` | Object ID of the SP (or any stable UUID for audit logs) |
@@ -267,8 +267,8 @@ export SUB=<admin-plane-subscription-id>
 export CAE=cae-csa-loom-centralus
 export CONSOLE_APP=loom-console
 export CONSOLE_UAMI_ID=/subscriptions/<sub>/resourcegroups/rg-csa-loom-admin-centralus/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<uami-name>
-export ACR=acrloomk6mvh5sm6z7do.azurecr.io
-export LOOM_URL=https://loom-console.b02.azurefd.net
+export ACR=acrloom<hash>.azurecr.io
+export LOOM_URL=https://<your-console-hostname>
 export LOOM_AUTOMATION_OID=<tenant-admin-object-id>
 
 ./scripts/csa-loom/deploy-loom-uat-job.sh

@@ -16,7 +16,7 @@
 
 
 > Validator agent: independent fabric-parity-loop v2 validator
-> Loom build under test: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net` (Azure Front Door)
+> Loom build under test: `https://<your-console-hostname>` (Azure Front Door)
 > Loom routes tested: `/items/data-pipeline/new` (DataPipelineEditor) AND `/items/adf-pipeline/new` (AdfPipelineEditor)
 > Fabric reference: see `docs/fiab/data-pipeline-parity-spec.md` (Phase-1 catalog spec) — live Fabric capture was BLOCKED on MSAL re-auth, see Phase 1 note below.
 

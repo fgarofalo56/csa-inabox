@@ -1,7 +1,7 @@
 # Loom Power BI Dashboard — Fabric parity gap
 
 > **Validator: v2 4-phase (live browser) — 2026-05-26**
-> Loom URL: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/dashboard/new
+> Loom URL: https://<your-console-hostname>/items/dashboard/new
 > Fabric reference: app.powerbi.com (login-gated; spec-derived from docs/fiab/dashboard-parity-spec.md + Microsoft Learn /power-bi/create-reports/service-dashboards)
 > Screenshot: temp/parity/dashboard-loom.png
 > Source under review: apps/fiab-console/lib/editors/phase3-editors.tsx lines 1643-1730

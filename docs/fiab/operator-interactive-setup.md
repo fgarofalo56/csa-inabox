@@ -173,7 +173,7 @@ When Dataverse is added to a brand-new env it auto-promotes the env creator to D
 Re-run the post-deploy bootstrap workflow (or call the script directly). It's idempotent — safe to re-run:
 
 ```bash
-LOOM_MSAL_CLIENT_ID=9844c28c-3b3a-4949-8d63-9eefa3b50a9d \
+LOOM_MSAL_CLIENT_ID=<app-client-id> \
   bash scripts/csa-loom/dataverse-add-appuser.sh
 ```
 
@@ -192,7 +192,7 @@ To enable: PPAC → env → **Settings** → **Product** → **Features** → to
 After Steps 4a–4c, all four Dataverse-backed editors should return HTTP 200 with real data:
 
 ```bash
-ENVID="Default-d1fc0498-f208-4b49-8376-beb9293acdf6"
+ENVID="Default-<tenant-id>"
 for ep in dataverse-table power-app power-page copilot-studio-agent; do
   curl -s -o /dev/null -w "  /api/items/$ep: HTTP %{http_code}\n" \
     -H "cookie: loom_session=<minted>" \

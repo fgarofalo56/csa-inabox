@@ -2,7 +2,7 @@
 
 **Grade: F (Vaporware)**
 
-Surface: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/setup`
+Surface: `https://<your-console-hostname>/setup`
 Validated: 2026-05-26
 Source: `apps/fiab-console/lib/panes/setup-wizard.tsx` + `apps/fiab-console/app/api/setup/deploy/route.ts`
 

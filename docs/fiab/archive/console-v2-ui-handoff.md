@@ -5,7 +5,7 @@ Status: in-flight, next session takes over UI expansion
 
 ## Live URLs (validated GREEN end-to-end this session)
 
-- **Front Door Premium (public)**: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/`
+- **Front Door Premium (public)**: `https://<your-console-hostname>/`
 - **App Gateway v2 + WAF (public)**: `http://loom-m56yejezt7bjo.eastus2.cloudapp.azure.com/`
 - **Internal env FQDN**: `https://loom-console.delightfulmoss-96202bfd.eastus2.azurecontainerapps.io/` (via jumpbox or peered VNet)
 - **VPN Gateway**: provisioned in `rg-csa-loom-admin-eastus2`
@@ -110,7 +110,7 @@ az containerapp ingress update -g rg-csa-loom-admin-eastus2 -n loom-console --ty
 
 # 7. Run Playwright e2e from laptop
 cd temp/uat-pw
-node e2e.mjs https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
+node e2e.mjs https://<your-console-hostname>
 ```
 
 E2E script lives at `apps/fiab-console/tests/uat-fd.mjs` (also at `temp/uat-pw/e2e.mjs` with the more thorough version that captures API calls + clicks first button per pane).

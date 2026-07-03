@@ -1,6 +1,6 @@
 # AI/ML editors — parity sweep summary (validator v2, 2026-05-26)
 
-Validation run against deployed CSA Loom **v3.28-fix-44f3b00b** at `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net`, using a minted `loom_session` cookie (KV opened temporarily and re-locked).
+Validation run against deployed CSA Loom **v3.28-fix-44f3b00b** at `https://<your-console-hostname>`, using a minted `loom_session` cookie (KV opened temporarily and re-locked).
 
 ## Grade matrix
 

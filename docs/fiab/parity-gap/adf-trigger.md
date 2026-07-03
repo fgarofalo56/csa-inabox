@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Azure Data Factory Studio → Manage → Triggers.
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/adf-trigger/new`.
+> Loom route: `https://<your-console-hostname>/items/adf-trigger/new`.
 > Editor source: `apps/fiab-console/lib/editors/azure-services-editors.tsx` (lines 1183-1404).
 
 ## Phase 3 — gap matrix vs ADF Trigger UI

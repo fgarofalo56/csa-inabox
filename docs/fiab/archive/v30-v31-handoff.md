@@ -3,7 +3,7 @@
 **Status:** v3.0 shipped to prod 2026-05-25 (Chunks 0 + 1). v3.1 building now
 with Chunks 2, 3, 6, 7. v3.2+ remaining = Chunks 4, 5, 8 of the parity plan.
 
-Live URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net>
+Live URL: <https://<your-console-hostname>>
 
 ## What shipped in v3.0 (live now)
 
@@ -85,7 +85,7 @@ A push-button teardown + redeploy still reproduces full running state:
 ## Post-deploy operator checklist
 
 After v3.1 image goes live:
-1. `curl -s https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/api/version`
+1. `curl -s https://<your-console-hostname>/api/version`
    → should report `v3.1`.
 2. Sign in (MSAL flow), then `curl` `/api/admin/bootstrap-catalogs` from
    the signed-in browser (or with a minted cookie). Expect:

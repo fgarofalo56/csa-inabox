@@ -1,7 +1,7 @@
 # Global non-editor chrome parity — validation summary
 
-**Validated**: 2026-05-26 (Frank Garofalo, fabric-parity-loop validator pass)  
-**Live URL**: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/`  
+**Validated**: 2026-05-26 (Platform Admin, fabric-parity-loop validator pass)  
+**Live URL**: `https://<your-console-hostname>/`  
 **Method**: Playwright MCP live-browser probes — DOM inspection + network observation + click handlers + functional tests on signed-in session
 **Rule reference**: `.claude/rules/no-vaporware.md` + `.claude/workflows/fabric-parity-loop.md`
 

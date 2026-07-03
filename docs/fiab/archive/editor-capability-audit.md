@@ -1,6 +1,6 @@
 # CSA Loom — Editor Capability Audit (v3.17 / 2026-06)
 
-Live URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net>
+Live URL: <https://<your-console-hostname>>
 
 This is the **honest, per-editor inventory** of what each item-type editor
 actually does today, what Azure backing it uses, and what's still gated by

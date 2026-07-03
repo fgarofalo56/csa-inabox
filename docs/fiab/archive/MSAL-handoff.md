@@ -69,7 +69,7 @@ unblock you (Frank) need to do from your own account.
 
 ```bash
 # Sign in as yourself (not the SP) and pick the right tenant
-az login --tenant d1fc0498-f208-4b49-8376-beb9293acdf6
+az login --tenant <tenant-id>
 az account set --subscription <YOUR_DLZ_SUBSCRIPTION_ID>   # DLZ
 
 # Create the app reg with all three redirect URIs
@@ -77,7 +77,7 @@ APP=$(az ad app create \
   --display-name "Loom Console (UAT)" \
   --sign-in-audience AzureADMyOrg \
   --web-redirect-uris \
-    "https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/auth/callback" \
+    "https://<your-console-hostname>/auth/callback" \
     "http://loom-m56yejezt7bjo.eastus2.cloudapp.azure.com/auth/callback" \
     "http://localhost:3000/auth/callback" \
   --query '{appId:appId, objectId:id}' -o json)
@@ -101,7 +101,7 @@ az containerapp secret set -g rg-csa-loom-admin-eastus2 -n loom-console \
 
 az containerapp update -g rg-csa-loom-admin-eastus2 -n loom-console \
   --set-env-vars \
-    AZURE_TENANT_ID=d1fc0498-f208-4b49-8376-beb9293acdf6 \
+    AZURE_TENANT_ID=<tenant-id> \
     AZURE_CLIENT_ID=$APP_ID \
     AZURE_CLIENT_SECRET=secretref:azure-client-secret \
     SESSION_SECRET=secretref:session-secret \
@@ -111,7 +111,7 @@ az containerapp update -g rg-csa-loom-admin-eastus2 -n loom-console \
 Then verify in a private browser tab:
 
 ```
-https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/auth/sign-in
+https://<your-console-hostname>/auth/sign-in
 ```
 
 You should be redirected to `login.microsoftonline.com`, complete the

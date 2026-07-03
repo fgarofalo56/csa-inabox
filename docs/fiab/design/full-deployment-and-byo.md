@@ -1,7 +1,7 @@
 # CSA Loom — Full deployment completeness + Bring-Your-Own services design
 
 **Date:** 2026-06-01
-**Author:** investigation for `fgarofalo@limitlessdata.ai`
+**Author:** investigation for `admin@contoso.gov`
 **Scope:** the live `limitlessdata` deployment (DLZ sub `363ef5d1-…`) +
 a one-button "complete Loom" deploy that reuses existing services (especially
 the tenant Purview) with **no Microsoft Fabric dependency**.
@@ -114,20 +114,20 @@ maps to a **handful** of surfaces, dominated by the Purview tab.
 
 ## 2. Existing reusable-services inventory (all 4 subs)
 
-Login `fgarofalo@limitlessdata.ai`. Console UAMI principal to grant on reused
-resources: **`e61f3eb3-c646-4183-8198-4c4a34cd9a01`** (`uami-loom-console-eastus2`,
-clientId `c6272de5-3c4e-4b72-8b57-71b2e950209b`).
+Login `admin@contoso.gov`. Console UAMI principal to grant on reused
+resources: **`<uami-principal-id>`** (`uami-loom-console-eastus2`,
+clientId `<uami-client-id>`).
 
-Subs: **DLZ** `363ef5d1-0e77-4594-a530-f51af23dbf8c` ·
-**DMLZ** `e093f4fd-5047-4ee4-968d-a56942c665f3` ·
-**ALZ** `a60a2fdd-c133-4845-9beb-31f470bf3ef5` ·
-**Main** `ca2b3e6b-f892-4c57-b9d8-b64e5799f9ea`.
+Subs: **DLZ** `<subscription-id>` ·
+**DMLZ** `<subscription-id>` ·
+**ALZ** `<subscription-id>` ·
+**Main** `<subscription-id>`.
 
 ### Microsoft Purview (the one the operator wants wired)
 
 | Name | Sub | RG | Resource ID |
 |---|---|---|---|
-| **`dmlz-dev-purview-eastus`** | DMLZ | `rg-dmlz-dev-governance-eastus` | `/subscriptions/e093f4fd-5047-4ee4-968d-a56942c665f3/resourceGroups/rg-dmlz-dev-governance-eastus/providers/Microsoft.Purview/accounts/dmlz-dev-purview-eastus` |
+| **`dmlz-dev-purview-eastus`** | DMLZ | `rg-dmlz-dev-governance-eastus` | `/subscriptions/<subscription-id>/resourceGroups/rg-dmlz-dev-governance-eastus/providers/Microsoft.Purview/accounts/dmlz-dev-purview-eastus` |
 
 Only one Purview exists across all 4 subs — and one Enterprise Purview is the
 tenant max, so this is the canonical reuse target.
@@ -220,7 +220,7 @@ API `2026-03-20-preview`). Two steps:
 
 ```bash
 az containerapp update -n loom-console -g rg-csa-loom-admin-eastus2 \
-  --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+  --subscription <subscription-id> \
   --set-env-vars LOOM_PURVIEW_ACCOUNT=dmlz-dev-purview-eastus
 ```
 
@@ -230,7 +230,7 @@ az containerapp update -n loom-console -g rg-csa-loom-admin-eastus2 \
 ### 3b. Grant the Console UAMI Purview data-plane roles (NOT ARM RBAC)
 
 Per `purview-client.ts`, the UAMI principal
-`e61f3eb3-c646-4183-8198-4c4a34cd9a01` needs **Data Curator** + **Data Product
+`<uami-principal-id>` needs **Data Curator** + **Data Product
 Owner** at the governance-domain level, assigned in the **Purview portal**
 (`https://dmlz-dev-purview-eastus.purview.azure.com` → Data Map / Unified
 Catalog → Roles), because Purview data-plane roles are not Azure RBAC. For
@@ -377,11 +377,11 @@ env patches + portal role grants.
 
 1. **Grant UAMI Purview roles** in the `dmlz-dev-purview-eastus` portal:
    Data Curator + Data Product Owner (+ Data Reader on root collection) to
-   principal `e61f3eb3-c646-4183-8198-4c4a34cd9a01`.
+   principal `<uami-principal-id>`.
 2. **Set the env var** on the live console:
    ```bash
    az containerapp update -n loom-console -g rg-csa-loom-admin-eastus2 \
-     --subscription 363ef5d1-0e77-4594-a530-f51af23dbf8c \
+     --subscription <subscription-id> \
      --set-env-vars LOOM_PURVIEW_ACCOUNT=dmlz-dev-purview-eastus
    ```
    Result: `/admin/security` Purview tab + `/catalog` Purview federation +
@@ -433,8 +433,8 @@ deliberate honest gate, never a fake (`no-vaporware.md`).
 
 ### Appendix — key live identifiers
 
-- DLZ sub `363ef5d1-0e77-4594-a530-f51af23dbf8c`, tenant `d1fc0498-f208-4b49-8376-beb9293acdf6`
-- Console UAMI principal `e61f3eb3-c646-4183-8198-4c4a34cd9a01`, clientId `c6272de5-3c4e-4b72-8b57-71b2e950209b`
+- DLZ sub `<subscription-id>`, tenant `<tenant-id>`
+- Console UAMI principal `<uami-principal-id>`, clientId `<uami-client-id>`
 - Existing Purview `dmlz-dev-purview-eastus` (DMLZ `e093f4fd-…`, RG `rg-dmlz-dev-governance-eastus`)
 - Reused APIM `dml-ai-east-aigateway` (DLZ `rg-dlz-aiml-stack-dev`)
 - Reused AI Search `search-loom-westus3` + `dlz-aisearch-dev-eastus2`

@@ -1,7 +1,7 @@
 # CSA Loom — LIVE E2E Audit: Every Item Type & App
 
-**Run:** 2026-06-16 03:04 UTC · **Target:** https://csa-loom.limitlessdata.ai (image `v0.6`)
-**Subscription:** `e093f4fd-5047-4ee4-968d-a56942c665f3` · **RG:** `rg-csa-loom-admin-centralus` · **Workspace under test:** `0e377570-846d-4cf3-a3cf-15cf5dbae5be`
+**Run:** 2026-06-16 03:04 UTC · **Target:** https://<your-console-hostname> (image `v0.6`)
+**Subscription:** `<subscription-id>` · **RG:** `rg-csa-loom-admin-centralus` · **Workspace under test:** `<workspace-id>`
 **Method:** Minted admin session cookie → real create + real primary action against live Azure/Cosmos/ADX/ADF/APIM/Databricks/Synapse backends, with independent ARM / Resource Graph / `az` verification where a green receipt was claimed. No-vaporware and no-fabric-dependency rules applied as the grading bar.
 
 ---

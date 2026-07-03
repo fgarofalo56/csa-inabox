@@ -1,9 +1,9 @@
 # CSA Loom — End-to-End Test Script (2026-05-27)
 
-This is the complete manual test script for the work landed today on `loom-console-fvbbctd4eehqbkcs.b02.azurefd.net` (Front Door fronting the Container App). Walk through each section in order — every check has a clear pass/fail with what to do on failure.
+This is the complete manual test script for the work landed today on `<your-console-hostname>` (Front Door fronting the Container App). Walk through each section in order — every check has a clear pass/fail with what to do on failure.
 
-**Live URL:** https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net
-**Sign in:** your Entra ID account in the FedCiv DLZ tenant (`d1fc0498-f208-4b49-8376-beb9293acdf6`)
+**Live URL:** https://<your-console-hostname>
+**Sign in:** your Entra ID account in the FedCiv DLZ tenant (`<tenant-id>`)
 
 **Expected revision after final deploy:** `loom-console--0000082` (or later) — the deploy chain is described in §10 below. **Current live SHA: `146d2158`** (confirmed via `/build-marker.txt`).
 
@@ -21,7 +21,7 @@ This is the complete manual test script for the work landed today on `loom-conso
 - [ ] Open the live URL. Confirm sign-in completes and Home renders without errors.
 - [ ] Open the browser DevTools console. **There should be NO red errors on load.**
 - [ ] In DevTools → Network, sign out + sign back in; confirm `/api/me` returns 200 with your `oid` + `name`.
-- [ ] Click the build marker URL: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/build-marker.txt — should return a single line `loom-build-marker sha=… stamp=… token=LOOM_LIVE_BUILD`.
+- [ ] Click the build marker URL: https://<your-console-hostname>/build-marker.txt — should return a single line `loom-build-marker sha=… stamp=… token=LOOM_LIVE_BUILD`.
 
 **If pre-flight fails:** stop here, capture the network error, and report back.
 
@@ -33,7 +33,7 @@ This is the complete manual test script for the work landed today on `loom-conso
 
 If this tenant has never seen Loom before, you'll see an empty Apps page.
 
-- [ ] Visit https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/apps
+- [ ] Visit https://<your-console-hostname>/apps
 - [ ] If the page says "No apps in this tenant yet", open DevTools console and run:
   ```js
   fetch('/api/admin/bootstrap-catalogs', { method: 'POST' }).then(r => r.json()).then(console.log)

@@ -1,7 +1,7 @@
 # CSA Loom — mirror E2E + follow-ups continuation plan
 
 **Created 2026-06-23. Branch `feat/loom-marketplace`. LIVE = centralus rev 63 (Healthy).**
-Console URL: `https://loom-console-k6mvh5sm6z7do-e9cmggbahge3hwf7.b02.azurefd.net`
+Console URL: `https://<your-console-hostname>`
 
 This is the actionable remaining-work list after a long session. Full context +
 recipes are in memory: `csa_loom_ui_aplus_sweep_2026_06_23.md` (read it first).
@@ -93,7 +93,7 @@ lakehouse shortcuts + Spark-read (managed PE) + **incremental CDC** all proven. 
 fallback preserved for no-PK tables / failures.
 
 ### §3 Front Door client-JS caching — RESOLVED (no change needed)
-Checked the live AFD profile `fd-loom-k6mvh5sm6z7do` route `console-route`: `cacheConfiguration`
+Checked the live AFD profile `fd-loom-<hash>` route `console-route`: `cacheConfiguration`
 is **null** — Front Door caching is already OFF, so FD does NOT cache the HTML/RSC document.
 The post-roll "stale client JS until hard-refresh" is therefore **browser-side** HTTP caching,
 not Front Door. The §3 premise (add an FD rule to not cache the document) doesn't apply. If we
@@ -203,4 +203,4 @@ Delete the ~9 test mirrors created this session: `adventureworks-mirror-e2e`, `e
 - **No creds:** never enter source secrets/passwords. SQL/Cosmos/Postgres AAD sources where the UAMI can be granted
   (operator is AAD admin via `az`) are doable; external SaaS need a KV secret.
 - UAT harness: `az containerapp job start -n loom-uat -g rg-csa-loom-admin-centralus --subscription <YOUR_SUBSCRIPTION_ID>`;
-  results in LA workspace 01273839-800f-4fef-86bf-85e94cdf3a65, `ContainerAppConsoleLogs_CL | where ContainerName_s=='uat' | where Log_s has 'UAT_RESULT'`.
+  results in LA workspace <log-analytics-workspace-id>, `ContainerAppConsoleLogs_CL | where ContainerName_s=='uat' | where Log_s has 'UAT_RESULT'`.

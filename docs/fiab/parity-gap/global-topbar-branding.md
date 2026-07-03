@@ -3,7 +3,7 @@
 **Validated**: 2026-05-26  
 **Surface**: Top-left logo + wordmark on every page (`<Link href="/">CSA Loom</Link>`)  
 **Fabric reference**: Microsoft Fabric top-bar — Fabric icon + "Microsoft Fabric" wordmark, dark `#0A2540`-ish background  
-**Loom URL**: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/` (all routes)
+**Loom URL**: `https://<your-console-hostname>/` (all routes)
 
 ## What renders
 

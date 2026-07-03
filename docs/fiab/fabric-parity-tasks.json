@@ -5,10 +5,10 @@
   "fabricRefWorkspace": {
     "name": "casino-fabric-poc",
     "id": "7899f58d-d19f-4e9d-8370-b88621aad31e",
-    "tenant": "limitlessdata.ai",
+    "tenant": "contoso.gov",
     "capacity": "F64"
   },
-  "loomBaseUrl": "https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net",
+  "loomBaseUrl": "https://<your-console-hostname>",
   "uis": [
     {
       "name": "notebook",

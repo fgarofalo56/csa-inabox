@@ -3,7 +3,7 @@
 > Validator: v2 fabric-parity-loop · 4-phase check  
 > Run date: 2026-05-26  
 > Fabric reference: Fabric admin portal → **Users** (which deep-links to Microsoft 365 admin center and Microsoft Entra) + **Premium Per User** tab  
-> Loom URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/admin/users</br>
+> Loom URL: <https://<your-console-hostname>/admin/users</br>
 
 ## Captures
 

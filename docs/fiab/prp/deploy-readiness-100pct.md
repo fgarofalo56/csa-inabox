@@ -10,7 +10,7 @@ A **single push-button deploy** produces a CSA Loom where **everything works on 
 2. **Default = everything on (opt-out)**: provision the FULL stack new by default, including the expensive infra (Azure Firewall, Purview, dedicated Synapse/Databricks pools, AOAI + GPT model). Each is a disable flag.
 3. **Execution = multi-agent workflow** (audit → build → integrate).
 
-## Ground truth — gaps found in the live E2E of the centralus clean deploy (csa-loom.limitlessdata.ai)
+## Ground truth — gaps found in the live E2E of the centralus clean deploy (<your-console-hostname>)
 The console code is sound (honest gates everywhere, no-vaporware). Every gap is **deploy-time wiring/provisioning** that bicep/bootstrap doesn't set, so a fresh deploy is broken/degraded until manually patched.
 
 ### Fixed live this session (MUST be codified so the next deploy is correct)

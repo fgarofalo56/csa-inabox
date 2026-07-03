@@ -3,7 +3,7 @@
 > Validator: v2 fabric-parity-loop · 4-phase check  
 > Run date: 2026-05-26  
 > Fabric reference: Fabric admin portal → **Tenant settings** (the single largest admin surface in Fabric)  
-> Loom URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/admin/tenant-settings>
+> Loom URL: <https://<your-console-hostname>/admin/tenant-settings>
 
 ## Captures
 

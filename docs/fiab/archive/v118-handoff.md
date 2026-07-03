@@ -7,7 +7,7 @@
 ## Where things stand
 
 ### LIVE deploy
-- URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net>
+- URL: <https://<your-console-hostname>>
 - Revision: `loom-console--0000025` on tag `v1.18`, 100% traffic, Healthy
 - Container: `acrloomm56yejezt7bjo.azurecr.io/loom-console:v1.18`
 - MSAL works (verified end-to-end this session — user signed in successfully and saw avatar)
@@ -20,7 +20,7 @@
 - Full report + per-route screenshots: `temp/loom-uat-v1.18/summary.json` + 60 PNGs
 
 ### MSAL plumbing (working)
-- Entra app: `CSA Loom Console (UAT)` · client `9844c28c-3b3a-4949-8d63-9eefa3b50a9d` · tenant `d1fc0498-f208-4b49-8376-beb9293acdf6`
+- Entra app: `CSA Loom Console (UAT)` · client `<app-client-id>` · tenant `<tenant-id>`
 - Container env: `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET=secretref:azure-client-secret`, `SESSION_SECRET=secretref:session-secret`, `AZURE_CLOUD=AzureCloud`, `LOOM_VERSION=v1.18`
 - Bug history (all fixed): v1.13 redirect-cookie quirk → v1.15 raw header → v1.16 200 HTML → v1.17 raw Web Response → v1.18 **dropped MSAL access token from cookie** (root cause: ~4KB cookie was over Front Door's per-header limit, FD silently dropped it)
 - Cookie payload now: `{claims, exp}` only — ~100 bytes. Access tokens re-acquired silently via MSAL confidential-client cache when needed.

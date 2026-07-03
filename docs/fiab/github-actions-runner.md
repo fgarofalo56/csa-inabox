@@ -135,7 +135,7 @@ The script (idempotent — create-or-update):
 
 1. Toggles ACR public access on (the Loom ACR is PE-only), `az acr build`s
    `platform/runners/github-actions/Dockerfile` to
-   `acrloomk6mvh5sm6z7do.azurecr.io/gh-aca-runner:latest`, then restores ACR
+   `acrloom<hash>.azurecr.io/gh-aca-runner:latest`, then restores ACR
    public access = Disabled (always, even on build failure).
 2. `az containerapp job create`/`update` an **Event**-triggered job:
    `--min-executions 0 --max-executions 5 --polling-interval 30`,
@@ -207,9 +207,9 @@ jobs:
         run: az login --identity
       - name: Build + roll
         run: |
-          az acr build --registry acrloomk6mvh5sm6z7do --image loom-console:ci .
+          az acr build --registry acrloom<hash> --image loom-console:ci .
           az containerapp update -n loom-console -g rg-csa-loom-admin-centralus \
-            --image acrloomk6mvh5sm6z7do.azurecr.io/loom-console:ci
+            --image acrloom<hash>.azurecr.io/loom-console:ci
 ```
 
 Only jobs whose `runs-on` requests `loom-aca` are counted by the scaler and

@@ -1,6 +1,6 @@
 # CSA Loom — UI Audit v1.10
 
-**Scope:** Live deployment at `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net` (Next.js 14 + Fluent UI v9, theme-aware light/dark).
+**Scope:** Live deployment at `https://<your-console-hostname>` (Next.js 14 + Fluent UI v9, theme-aware light/dark).
 **Method:** WebFetch of 12 routes + static read of shell / layout / theme / editor source.
 **Date:** 2026-05-24
 

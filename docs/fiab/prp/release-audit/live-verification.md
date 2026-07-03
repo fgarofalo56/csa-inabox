@@ -1,7 +1,7 @@
 # Dimension: live verification (loom-uat + browser walk)
 
 > Live signal to complement the code-level audit, 2026-07-02. Console under
-> test: rev serving `https://loom-console-...b02.azurefd.net` (Front Door),
+> test: rev serving `https://<your-console-hostname>` (Front Door),
 > centralus DMLZ sub e093f4fd. Auth = minted session cookie.
 
 ## loom-uat — use-case apps sweep (execution `loom-uat-q0yfdio`, Succeeded)

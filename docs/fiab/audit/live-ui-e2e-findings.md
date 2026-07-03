@@ -1,6 +1,6 @@
 # CSA Loom — Live BROWSER-driven UI E2E (clicking the real console)
 
-**Method:** authenticated Chrome (operator session) driving the LIVE console at csa-loom.limitlessdata.ai on image **v0.8**. Unlike the API/code audits, this clicks the actual UI — New→item create flows, app install/setup, and per-page buttons — to catch dead controls, broken dialogs, console errors, and missing UI. Findings logged here incrementally (survives context resets).
+**Method:** authenticated Chrome (operator session) driving the LIVE console at <your-console-hostname> on image **v0.8**. Unlike the API/code audits, this clicks the actual UI — New→item create flows, app install/setup, and per-page buttons — to catch dead controls, broken dialogs, console errors, and missing UI. Findings logged here incrementally (survives context resets).
 
 **Legend:** ✅ works · ⚠️ parity-thin/honest-gate · ❌ broken · 🚫 vaporware · 🎛️ UI-gap
 

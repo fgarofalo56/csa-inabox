@@ -3,7 +3,7 @@
 > Validator: v2 fabric-parity-loop · 4-phase check  
 > Run date: 2026-05-26  
 > Fabric reference: <https://app.fabric.microsoft.com/admin-portal> (the `Admin portal` landing page)  
-> Loom URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/admin>
+> Loom URL: <https://<your-console-hostname>/admin>
 
 ## Captures
 

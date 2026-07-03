@@ -5,7 +5,7 @@
 Validator: v2 4-phase live-browser + source-code review.
 
 Loom URL:
-`https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/kql-database/9f86ed75-8194-43f2-9787-0c843ccaa6b5`
+`https://<your-console-hostname>/items/kql-database/9f86ed75-8194-43f2-9787-0c843ccaa6b5`
 
 Loom screenshot: `temp/parity/kql-database-loom.png`.
 

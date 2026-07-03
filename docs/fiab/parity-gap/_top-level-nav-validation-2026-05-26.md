@@ -16,8 +16,8 @@
 
 
 **Validator:** v2 fabric-parity-loop, 4-phase
-**Live URL:** https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/
-**Authed as:** Frank Garofalo (UAT) (fgarofalo@housegarofalo.com)
+**Live URL:** https://<your-console-hostname>/
+**Authed as:** Platform Admin (UAT) (admin@contoso.gov)
 **Scope:** 15 top-level navigation pages
 **Method:** Playwright shell capture + Loom API probe + source-code parity walk
 

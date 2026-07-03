@@ -25,7 +25,7 @@
 
   // Hardcoded configuration — no runtime override allowed (SEC-COPILOT)
   // Backend lives in:
-  //   tenant : limitlessdata.ai (d1fc0498-f208-4b49-8376-beb9293acdf6)
+  //   tenant : contoso.gov (<tenant-id>)
   //   sub    : FedCiv ATU FFL - DLZ (<YOUR_DLZ_SUBSCRIPTION_ID>)
   //   rg     : rg-dlz-aiml-stack-dev
   //   region : eastus

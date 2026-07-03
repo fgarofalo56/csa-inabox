@@ -9,10 +9,10 @@
 ## What renders
 
 - Navigate to `/auth/sign-in?returnTo=/` → 302 to `login.microsoftonline.com/{tenant}/oauth2/v2.0/authorize`
-- Tenant ID: `d1fc0498-f208-4b49-8376-beb9293acdf6`
-- Client ID: `9844c28c-3b3a-4949-8d63-9eefa3b50a9d`
+- Tenant ID: `<tenant-id>`
+- Client ID: `<app-client-id>`
 - Scopes: `openid profile email offline_access User.Read`
-- redirect_uri: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/auth/callback`
+- redirect_uri: `https://<your-console-hostname>/auth/callback`
 - response_mode: `query`
 - response_type: `code`
 - prompt: `select_account`
@@ -24,7 +24,7 @@
 - Visit `/auth/sign-in` → MSAL handshake URL is correct — PASS
 - Microsoft sign-in page renders normally — PASS
 - (Did NOT submit credentials in this run; that would require user interaction)
-- After successful sign-in earlier in this session, `/api/me` returned `{authenticated:true, user:{name:"Frank Garofalo (UAT)", email:"fgarofalo@limitlessdata.ai", upn:"fgarofalo@limitlessdata.ai", oid:"866a2e12-..."}}` — PASS
+- After successful sign-in earlier in this session, `/api/me` returned `{authenticated:true, user:{name:"Platform Admin (UAT)", email:"admin@contoso.gov", upn:"admin@contoso.gov", oid:"866a2e12-..."}}` — PASS
 
 ## Observations
 

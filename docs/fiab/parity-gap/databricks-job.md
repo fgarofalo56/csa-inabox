@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Databricks Workspace → Workflows → Jobs.
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/databricks-job/new`.
+> Loom route: `https://<your-console-hostname>/items/databricks-job/new`.
 > Editor source: `apps/fiab-console/lib/editors/databricks-editors.tsx` (lines 958-1269).
 
 ## Phase 3 — gap matrix vs Databricks Jobs UI

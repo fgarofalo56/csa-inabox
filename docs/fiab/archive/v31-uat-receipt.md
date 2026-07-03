@@ -2,7 +2,7 @@
 
 Receipt for v3.1 deploy per `.claude/rules/no-vaporware.md` validation gate.
 
-Live URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net>
+Live URL: <https://<your-console-hostname>>
 Image: `acrloomm56yejezt7bjo.azurecr.io/loom-console:v3.1`
 `GET /api/version` → `{"current":"v3.1"}`
 

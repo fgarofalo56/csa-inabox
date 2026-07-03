@@ -7,7 +7,7 @@
 > durable fixes into deploy so they work day-one.
 
 Live target: centralus console `loom-console` (rg-csa-loom-admin-centralus,
-sub e093f4fd…), Front Door `loom-console-k6mvh5sm6z7do-…b02.azurefd.net`.
+sub e093f4fd…), Front Door `loom-console-<hash>-…<your-console-hostname>`.
 Method: drive the operator's Chrome; real backend calls; no scaffold claims.
 
 ## Legend

@@ -2,7 +2,7 @@
 
 > Generated 2026-05-26 in response to user directive: "make sure you do this for everything in csa-loom.. every single page, item, options tools service, function, call, tools, ect".
 >
-> Live URL: https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/
+> Live URL: https://<your-console-hostname>/
 > Live image tag: `loom-console:fix-44f3b00b` (revision `loom-console--0000075`)
 >
 > **Standard**: every row gets validated via the v2 4-phase validator from `.claude/workflows/fabric-parity-loop.md`. Grades: A+ / A / B / C / D / F. No row may be marked SHIPPED without a side-by-side Fabric+Loom screenshot + click-every-button report. See `parity-validation-standard` memory.

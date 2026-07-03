@@ -7,7 +7,7 @@
 > and adds Connection settings (compression / delimiter / encoding / quote / escape /
 > first-row-as-header) + relational schema+table inputs. See rows 2, 4, 8 below.
 > Reference target: Azure Data Factory Studio → Author → Datasets.
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/adf-dataset/new`.
+> Loom route: `https://<your-console-hostname>/items/adf-dataset/new`.
 > Editor source: `apps/fiab-console/lib/editors/azure-services-editors.tsx` (AdfDatasetEditor).
 
 ## Phase 3 — gap matrix vs ADF Dataset editor

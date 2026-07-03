@@ -3,7 +3,7 @@
 > Validator: v2 fabric-parity-loop · 4-phase check  
 > Run date: 2026-05-26  
 > Fabric reference: Fabric admin portal → **Usage metrics** / **Feature usage and adoption report** (in the Admin monitoring workspace)  
-> Loom URL: <https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/admin/usage>
+> Loom URL: <https://<your-console-hostname>/admin/usage>
 
 ## Captures
 

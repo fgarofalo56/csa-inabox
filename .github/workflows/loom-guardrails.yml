@@ -35,3 +35,5 @@ jobs:
         run: node scripts/ci/check-no-freeform.mjs
       - name: bicep-sync (orphan modules + env-sync core)
         run: node scripts/ci/check-bicep-sync.mjs
+      - name: docs-hygiene (live estate identifiers + operator PII)
+        run: node scripts/ci/check-docs-hygiene.mjs

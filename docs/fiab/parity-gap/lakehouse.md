@@ -4,7 +4,7 @@
 >
 > Reference screenshots:
 > - `temp/parity/lakehouse-fabric.png` — `casino-fabric-poc` workspace folder view showing the `lh_bronze` Lakehouse paired with its `lh_bronze` SQL analytics endpoint (the auto-paired sibling pattern). Captured prior session. **Note:** this is the workspace-tree reference for the auto-pairing pattern, not the in-editor reference. The in-editor inventory comes from `docs/fiab/lakehouse-parity-spec.md` which was generated against `lh_bronze` opened live in Fabric.
-> - `temp/parity/lakehouse-loom.png` — attempted full-page screenshot of `/items/lakehouse/new` on `loom-console-fvbbctd4eehqbkcs.b02.azurefd.net`. **Caveat:** the deployed Loom SPA's tab/route restoration logic intermittently drifted the page mid-screenshot. The DOM data captured below was taken from a stable mid-load inspect; the saved PNG may show the page after drift.
+> - `temp/parity/lakehouse-loom.png` — attempted full-page screenshot of `/items/lakehouse/new` on `<your-console-hostname>`. **Caveat:** the deployed Loom SPA's tab/route restoration logic intermittently drifted the page mid-screenshot. The DOM data captured below was taken from a stable mid-load inspect; the saved PNG may show the page after drift.
 >
 > Loom revision under test: deployed Front Door endpoint as of 2026-05-26. Session was authed as `FG`.
 

@@ -2,7 +2,7 @@
 
 > v2 fabric-parity-loop validator, run 2026-05-26.
 > Reference target: Azure Synapse Studio → Manage → Apache Spark pools.
-> Loom route: `https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net/items/synapse-spark-pool/new`.
+> Loom route: `https://<your-console-hostname>/items/synapse-spark-pool/new`.
 > Editor source: `apps/fiab-console/lib/editors/azure-services-editors.tsx` (lines 160-365).
 
 ## Phase 3 — gap matrix vs Synapse Studio Spark pool
