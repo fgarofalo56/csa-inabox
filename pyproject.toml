@@ -79,7 +79,7 @@ functions = [
     "azure-storage-blob>=12.20.0,<13.0.0",
     "azure-mgmt-storage>=21.0.0,<26.0.0",
     "azure-mgmt-cosmosdb>=9.0.0,<10.0.0",
-    "azure-mgmt-sql>=3.0.0,<4.0.0",
+    "azure-mgmt-sql>=3.0.0,<5.0.0",
     "structlog>=24.1.0,<27.0.0",
     # AI Enrichment function deps
     "azure-ai-textanalytics>=5.3.0,<6.0.0",
@@ -137,7 +137,7 @@ portal = [
     "httpx>=0.27.0,<1.0.0",
     # Azure SDKs used by portal backend
     "azure-identity>=1.17.0,<2.0.0",
-    "azure-mgmt-resource>=23.1.0,<26.0.0",
+    "azure-mgmt-resource>=23.1.0,<27.0.0",
     "azure-mgmt-datafactory>=7.0.0,<10.0.0",
     "azure-storage-blob>=12.20.0,<13.0.0",
     # Observability (CSA-0042 / CSA-0061 / CSA-0030) — all optional and
