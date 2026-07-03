@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { getSession, type SessionPayload } from '@/lib/auth/session';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
+import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 
 export const runtime = 'nodejs';
@@ -12,16 +13,19 @@ function err(error: string, status: number, code?: string) {
   return NextResponse.json({ ok: false, error, code }, { status });
 }
 
-async function loadWorkspace(id: string, tenantId: string): Promise<Workspace | null> {
-  const c = await workspacesContainer();
-  try {
-    const { resource } = await c.item(id, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-    return resource;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
+/**
+ * ACL-aware workspace load (rel-T11/B4): owner fast-path, then the
+ * workspace-roles ACL under the tid boundary. `write` additionally requires
+ * a write-capable role (Owner/Admin/Member). Live-caught by the Wave-1
+ * two-user receipt — the old owner-partition point-read 404'd item listing
+ * for a Member of a shared workspace.
+ */
+async function loadWorkspace(id: string, session: SessionPayload, opts: { write?: boolean } = {}): Promise<Workspace | null> {
+  const claims = session.claims as { oid: string; tid?: string; groups?: string[] };
+  const access = await resolveWorkspaceAccessByOid(claims.oid, id, { groups: claims.groups, callerTid: claims.tid });
+  if (!access) return null;
+  if (opts.write && !access.canWrite) return null;
+  return access.workspace;
 }
 
 export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
@@ -29,7 +33,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
-    const ws = await loadWorkspace(params.id, session.claims.oid);
+    const ws = await loadWorkspace(params.id, session);
     if (!ws) return err('Workspace not found', 404, 'not_found');
     const items = await itemsContainer();
     const { resources } = await items.items
@@ -78,7 +82,8 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   }
 
   try {
-    const ws = await loadWorkspace(params.id, session.claims.oid);
+    // Item creation requires a write-capable role (Owner/Admin/Member).
+    const ws = await loadWorkspace(params.id, session, { write: true });
     if (!ws) return err('Workspace not found', 404, 'not_found');
     const now = new Date().toISOString();
     // F17: persist admin-defined custom-attribute values on the item state so
