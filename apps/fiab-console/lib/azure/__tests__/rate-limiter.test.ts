@@ -1,9 +1,10 @@
 /**
- * Per-principal token-bucket rate limiter — Phase-2D.
+ * Per-principal token-bucket rate limiter (tier-1, in-memory).
  *
- * Guards: default OFF is a true no-op (additive), and when LOOM_RATE_LIMIT=on
- * the bucket allows the burst then 429s with the right headers + refills over
- * time. Per (oid, class) isolation. Pure CPU — no network.
+ * Guards: default is now ON (rel-T16) — the token bucket engages unless
+ * LOOM_RATE_LIMIT=off, allows the burst then 429s with the right headers +
+ * refills over time. LOOM_RATE_LIMIT=off is a true no-op. Per (oid, class)
+ * isolation. Pure CPU — no network (the durable tier-2 is tested elsewhere).
  */
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import type { SessionPayload } from '../../auth/session';
@@ -21,15 +22,29 @@ beforeEach(() => {
   __resetRateLimiter();
 });
 
-describe('default OFF — no-op', () => {
-  it('checkRate always ok with LOOM_RATE_LIMIT unset', () => {
-    delete process.env.LOOM_RATE_LIMIT;
+describe('LOOM_RATE_LIMIT=off — no-op', () => {
+  it('checkRate always ok when disabled', () => {
+    process.env.LOOM_RATE_LIMIT = 'off';
     expect(rateLimitEnabled()).toBe(false);
     for (let i = 0; i < 100; i++) expect(checkRate('o1', 'query').ok).toBe(true);
   });
   it('withRateLimit returns null when disabled', () => {
-    delete process.env.LOOM_RATE_LIMIT;
+    process.env.LOOM_RATE_LIMIT = 'off';
     for (let i = 0; i < 100; i++) expect(withRateLimit(session('o1'), 'query')).toBeNull();
+  });
+});
+
+describe('default ON — engaged when unset', () => {
+  it('rateLimitEnabled() is true with LOOM_RATE_LIMIT unset', () => {
+    delete process.env.LOOM_RATE_LIMIT;
+    expect(rateLimitEnabled()).toBe(true);
+  });
+  it('checkRate enforces the burst budget when unset', () => {
+    delete process.env.LOOM_RATE_LIMIT;
+    const limits = { ratePerSec: 1, burst: 2 };
+    expect(checkRate('o1', 'c', limits).ok).toBe(true);
+    expect(checkRate('o1', 'c', limits).ok).toBe(true);
+    expect(checkRate('o1', 'c', limits).ok).toBe(false);
   });
 });
 

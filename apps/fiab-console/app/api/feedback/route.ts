@@ -4,11 +4,22 @@
  * issue tracker so deployed customer tenants funnel into one queue
  * for the maintainers to address.
  *
+ * Abuse control (rel-T15 / blocker B16) — the GitHub token must NEVER be
+ * exercised by unbounded anonymous traffic:
+ *  - `kind=bug|feature` REQUIRE an authenticated session (401 otherwise) and are
+ *    throttled per-user (durable window). Only signed-in users can open issues.
+ *  - `kind=auto-error` stays anonymous (the error boundary fires it before the
+ *    user can act) but is throttled HARD per-IP (5/hour, durable + in-memory) and
+ *    DEDUPED on a payload hash for 24h so a crash loop can't spam the tracker.
+ *  - Over-budget callers get an honest 429 with Retry-After.
+ *
  * Privacy:
  *  - Server-side redaction is re-applied even on already-scrubbed
  *    client payloads (defense in depth).
- *  - The signed-in user's identity is never read from the session,
- *    never included in the upstream issue, and never written to logs.
+ *  - The signed-in user's identity is used ONLY to gate + throttle bug/feature
+ *    reports; it is never included in the upstream issue and never written to
+ *    logs (the throttle keys on the session oid via the rate limiter, which does
+ *    not log it).
  *  - The tenant ID is hashed (SHA-256, first 8 chars) so the maintainer
  *    can de-dup reports across the same deployment without identifying
  *    the customer.
@@ -20,6 +31,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import crypto from 'node:crypto';
 import { redact, redactStack, scrubEnv } from '@/lib/feedback/redaction';
+import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit, enforceRateLimitForKey, clientIp } from '@/lib/azure/rate-limiter';
+import { seenRecently } from '@/lib/azure/rate-limit-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,6 +69,23 @@ export async function POST(req: NextRequest) {
     return new NextResponse('kind required', { status: 400 });
   }
 
+  // ── Abuse control (rel-T15) — gate + throttle BEFORE any GitHub forward ──
+  if (body.kind === 'auto-error') {
+    // Anonymous auto-captured errors: hard per-IP throttle (5/hour). Dedupe of
+    // identical payloads happens after redaction, below.
+    const limited = await enforceRateLimitForKey(clientIp(req.headers), 'feedback-anon');
+    if (limited) return limited;
+  } else {
+    // Human bug / feature reports require a session so the GitHub token is never
+    // exercised by anonymous traffic, plus a generous per-user throttle.
+    const session = getSession();
+    if (!session) {
+      return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+    }
+    const limited = await enforceRateLimit(session, 'feedback');
+    if (limited) return limited;
+  }
+
   // Re-scrub server-side
   const env = scrubEnv({ url: body.url, userAgent: body.userAgent, loomVersion: body.loomVersion });
   const safeTitle = redact(body.title ?? body.errorMessage ?? '(no title)').slice(0, 120);
@@ -72,6 +103,18 @@ export async function POST(req: NextRequest) {
   const fingerprint = body.kind === 'auto-error'
     ? crypto.createHash('sha256').update(safeErrName + safeErrMsg + env.url).digest('hex').slice(0, 12)
     : undefined;
+
+  // Dedupe identical anonymous auto-error payloads for 24h (rel-T15). A single
+  // client-side render loop fires the same error repeatedly; without this, each
+  // would open (or attempt to open) a fresh upstream issue. Best-effort: if the
+  // durable store is unavailable, seenRecently returns null and we fall through
+  // (the per-IP throttle above + the client's 5/session cap still bound it).
+  if (body.kind === 'auto-error' && fingerprint) {
+    const seen = await seenRecently(`fb:${fingerprint}`, 24 * 3600);
+    if (seen === true) {
+      return NextResponse.json({ status: 'accepted-duplicate', forwarded: false });
+    }
+  }
 
   const issueBody = [
     `**Source**: deployed CSA Loom tenant (hash: \`${tenantHash()}\`)`,

@@ -178,6 +178,12 @@ let _metastoreRegistrations: Container | null = null;
 // ARM-provisioned in cosmos.bicep's loomContainers — the createIfNotExists is
 // the idempotent fallback for hotfix deploys that predate the bicep change.
 let _tenantTopology: Container | null = null;
+// Durable rate-limiter store (rel-T16). Fixed-window counter + payload-dedupe
+// docs, PK /key. defaultTtl=-1 so each doc's own `ttl` (window seconds / dedupe
+// hours) is honored and expired windows/markers self-evict — the container never
+// grows unbounded. Created lazily so a fresh environment needs no extra ARM/Bicep
+// step beyond the account+database.
+let _rateLimits: Container | null = null;
 let _ensured = false;
 
 /**
@@ -727,6 +733,15 @@ async function ensure() {
   _metastoreRegistrations = await mk('metastore-registrations', '/tenantId');
   // Tenant topology — hub coordinates for the dlz-attach flow (audit-t157).
   _tenantTopology = await mk('tenant-topology', '/tenantId');
+  // Durable rate-limiter store (rel-T16) — PK /key, TTL-enabled so per-doc `ttl`
+  // (fixed-window seconds / dedupe hours) auto-evicts. Distinct createIfNotExists
+  // (not `mk`) because it must set defaultTtl.
+  const { container: rl } = await database.containers.createIfNotExists({
+    id: 'rate-limits',
+    partitionKey: { paths: ['/key'] },
+    defaultTtl: -1, // TTL enabled; each doc carries its own `ttl` (no default expiry)
+  });
+  _rateLimits = rl;
   _ensured = true;
 }
 
@@ -786,6 +801,8 @@ export async function envConfigContainer(): Promise<Container> { await ensure();
 export async function metastoreRegistrationsContainer(): Promise<Container> { await ensure(); return _metastoreRegistrations!; }
 /** Tenant topology (audit-t157) — hub coordinates doc (id='tenant-topology', PK /tenantId). */
 export async function tenantTopologyContainer(): Promise<Container> { await ensure(); return _tenantTopology!; }
+/** Durable rate-limiter store (rel-T16) — fixed-window counters + dedupe markers, PK /key, TTL-enabled. */
+export async function rateLimitsContainer(): Promise<Container> { await ensure(); return _rateLimits!; }
 
 // Foundation admin containers (shared cloud-endpoints resolver task).
 /** Admin Workspace Catalog — one row per Loom-managed workspace, PK /tenantId. */
@@ -940,6 +957,7 @@ const KNOWN_CONTAINER_IDS = [
   'coe-templates',
   'env-config',
   'metastore-registrations',
+  'rate-limits',
 ];
 
 /** List all Loom containers with their current throughput shape.
