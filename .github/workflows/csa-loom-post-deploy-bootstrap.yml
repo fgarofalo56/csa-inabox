@@ -8,19 +8,57 @@ name: csa-loom-post-deploy-bootstrap
 #   3. Grant Console UAMI APIM Service Contributor (if APIM exists).
 
 on:
+  # Reusable form — the deploy workflows (deploy-fiab-commercial.yml + the Gov
+  # deploy workflows) call this via `uses: ./.github/workflows/csa-loom-post-deploy-bootstrap.yml`
+  # with `secrets: inherit`, so the cloud-agnostic composite steps below are NOT
+  # copy-pasted per cloud — the ONE bootstrap runs against any boundary. The
+  # `boundary` input selects the login secret set + az cloud (see the login steps).
+  workflow_call:
+    inputs:
+      boundary:
+        description: 'Commercial | GCC | GCC-High | IL5. Selects the login secret set + az cloud (GCC-High/IL5 = AzureUSGovernment).'
+        type: string
+        required: true
+      region:
+        description: 'Azure region the deploy landed in. REQUIRED — every RG/workspace/UAMI name derives from it.'
+        type: string
+        required: true
+      admin_subscription:
+        description: 'Subscription id holding the ADMIN plane (Console UAMI, Key Vault, APIM, Purview, Foundry). REQUIRED.'
+        type: string
+        required: true
+      dlz_subscription:
+        description: 'Subscription id holding the Data Landing Zone. Empty → single-sub (equals admin_subscription).'
+        type: string
+        required: false
+        default: ''
+      dlz_domain:
+        description: 'DLZ domain segment for rg-csa-loom-dlz-<dlz_domain>-<region>. Defaults to "single".'
+        type: string
+        required: false
+        default: single
   workflow_dispatch:
     inputs:
+      boundary:
+        description: 'Cloud boundary — selects the login secret set + az cloud. Commercial/GCC use the public AzureCloud; GCC-High/IL5 set AzureUSGovernment (and use the AZURE_GOV_* secret set).'
+        type: choice
+        default: Commercial
+        required: true
+        options:
+          - Commercial
+          - GCC
+          - GCC-High
+          - IL5
       region:
-        description: 'Azure region the deploy landed in (e.g. eastus2, centralus). Every RG / workspace / UAMI name below DERIVES from this — rg-csa-loom-admin-<region>, syn-loom-default-<region>, apim-csa-loom-<region>, uami-loom-console-<region>, etc. Defaults to eastus2 to back-comp the original estate.'
+        description: 'Azure region the deploy landed in (e.g. eastus2, centralus, usgovvirginia). REQUIRED — every RG / workspace / UAMI name below DERIVES from this (rg-csa-loom-admin-<region>, syn-loom-default-<region>, apim-csa-loom-<region>, uami-loom-console-<region>, …). NO default: a public repo must not ship an estate region as a default.'
         type: string
-        default: eastus2
-        required: false
+        required: true
       admin_subscription:
-        description: 'Subscription id holding the ADMIN plane (hub) — Console UAMI, Key Vault, APIM, Purview, Foundry. Empty → falls back to dlz_subscription / the login subscription, which is correct for a single-sub deploy where admin + DLZ share a subscription.'
+        description: 'Subscription id holding the ADMIN plane (hub) — Console UAMI, Key Vault, APIM, Purview, Foundry. REQUIRED — no estate default is shipped.'
         type: string
-        required: false
+        required: true
       dlz_subscription:
-        description: 'Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Empty → must be provided by the dispatcher; set it for any cross-sub / non-eastus2 deploy. In a single-sub deploy set it equal to admin_subscription.'
+        description: 'Subscription id holding the Data Landing Zone (Synapse / Databricks / ADLS). Empty → single-sub: DLZ shares the admin subscription. Set it for any cross-sub deploy.'
         type: string
         required: false
       dlz_domain:
@@ -34,57 +72,57 @@ permissions:
   contents: read
 
 env:
-  # Region drives every region-stamped name below. Overridable via the `region`
-  # input; defaults to eastus2 so the original estate keeps working with no input.
-  REGION: ${{ inputs.region || 'eastus2' }}
+  # Cloud boundary — selects the login secret set + az cloud in the login steps.
+  BOUNDARY: ${{ inputs.boundary }}
+  # Region drives every region-stamped name below. REQUIRED (validated in the
+  # first step) — no estate region default ships in a public repo.
+  REGION: ${{ inputs.region }}
   # ADMIN (hub) sub holds the Console UAMI / KV / APIM / Purview / Foundry.
   # DLZ sub holds Synapse / Databricks / ADLS. They are the SAME in single-sub.
-  # admin_subscription empty → fall back to dlz_subscription, then the legacy sub.
-  # dlz_subscription empty → provided by the dispatcher.
-  ADMIN_SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '' }}
-  DLZ_SUB: ${{ inputs.dlz_subscription || '' }}
+  # dlz_subscription empty → single-sub: DLZ shares the admin subscription.
+  ADMIN_SUB: ${{ inputs.admin_subscription }}
+  DLZ_SUB: ${{ inputs.dlz_subscription || inputs.admin_subscription }}
   # SUB kept as an alias of the ADMIN sub for the many steps that scope grants /
   # role assignments to the admin plane (Cost/Security/Monitor, APIM, Reader, …).
   # The "Resolve deploy coordinates" step re-points SUB to the admin sub at runtime.
-  SUB: ${{ inputs.admin_subscription || inputs.dlz_subscription || '' }}
-  ADMIN_RG: rg-csa-loom-admin-${{ inputs.region || 'eastus2' }}
-  DLZ_RG: rg-csa-loom-dlz-${{ inputs.dlz_domain || 'single' }}-${{ inputs.region || 'eastus2' }}
-  SYNAPSE_WS: syn-loom-default-${{ inputs.region || 'eastus2' }}
-  DBX_WS: adb-loom-default-${{ inputs.region || 'eastus2' }}
+  SUB: ${{ inputs.admin_subscription }}
+  ADMIN_RG: rg-csa-loom-admin-${{ inputs.region }}
+  DLZ_RG: rg-csa-loom-dlz-${{ inputs.dlz_domain || 'single' }}-${{ inputs.region }}
+  SYNAPSE_WS: syn-loom-default-${{ inputs.region }}
+  DBX_WS: adb-loom-default-${{ inputs.region }}
+  APIM_NAME: apim-csa-loom-${{ inputs.region }}
   # DBX_HOST is deploy-specific (per-workspace adb-<id>.<n>.azuredatabricks.net) and
   # CANNOT be derived from region — the "Resolve deploy coordinates" step resolves it
-  # at runtime from the workspace's workspaceUrl. Default tracks the eastus2 estate.
-  DBX_HOST: adb-7405613013893759.19.azuredatabricks.net
-  APIM_NAME: apim-csa-loom-${{ inputs.region || 'eastus2' }}
+  # at runtime from the workspace's workspaceUrl. EMPTY by default (no estate host
+  # shipped in a public repo); the Databricks steps skip cleanly when it stays empty
+  # (no workspace bound in this deploy).
+  DBX_HOST: ''
   # Console UAMI principal (object) id + client (app) id. De-hardcoded so a
   # non-eastus2 / non-Commercial / different-tenant deploy grants the RIGHT
   # identity. Precedence: repo var (explicit BYO) → RUNTIME RESOLUTION (the
   # "Resolve deploy coordinates" step queries `az identity show -n
   # uami-loom-console-<region> -g rg-csa-loom-admin-<region>` and overrides these
-  # in $GITHUB_ENV) → the live eastus2 defaults below (so the original estate
-  # keeps working with no var + no resolution). Every grant step references these,
-  # so the runtime resolution re-targets the whole bootstrap (incl. Purview).
+  # in $GITHUB_ENV). Empty by default (no estate principal). Every grant step
+  # references these, so the runtime resolution re-targets the whole bootstrap.
   CONSOLE_UAMI_PRINCIPAL: ${{ vars.LOOM_CONSOLE_UAMI_PRINCIPAL || '' }}
   CONSOLE_UAMI_CLIENT: ${{ vars.LOOM_CONSOLE_UAMI_CLIENT || '' }}
   # Console UAMI display NAME used for the Synapse SQL CREATE LOGIN/USER FROM
   # EXTERNAL PROVIDER steps. identity.bicep names it uami-loom-console-<region>,
-  # so a non-eastus2 deploy MUST grant the right name or the Console UAMI gets
-  # "Login failed for user" (ELOGIN). Default now DERIVES from the region input;
-  # the "Resolve Console UAMI SQL name" step below still OVERRIDES this with the
-  # actual UAMI discovered in the admin RG so it is correct even for a renamed
-  # identity. Override via repo var LOOM_CONSOLE_UAMI_NAME to pin it explicitly.
-  CONSOLE_SQL_UAMI: ${{ vars.LOOM_CONSOLE_UAMI_NAME || format('uami-loom-console-{0}', inputs.region || 'eastus2') }}
+  # so this DERIVES from the region input; the "Resolve Console UAMI SQL name"
+  # step below OVERRIDES it with the actual UAMI discovered in the admin RG so it
+  # is correct even for a renamed identity. Override via repo var
+  # LOOM_CONSOLE_UAMI_NAME to pin it explicitly.
+  CONSOLE_SQL_UAMI: ${{ vars.LOOM_CONSOLE_UAMI_NAME || format('uami-loom-console-{0}', inputs.region) }}
   # Weave (Semantic Ontology) graph store — the Console UAMI's Entra principal
   # NAME registered in PostgreSQL (must match LOOM_POSTGRES_AAD_USER on the
   # Console, default loom-console). The PG server name is resolved at runtime.
   CONSOLE_UAMI_NAME: loom-console
   # MSAL Web App client (app) id. NO hardcoded shared app reg — the
   # "Provision MSAL app registration" step below creates/reconciles a
-  # per-deployment app registration (redirect URIs reconciled to the console
-  # host, secret + SESSION_SECRET written to Key Vault) and exports
-  # LOOM_MSAL_CLIENT_ID for the Dataverse AppUser step. Set the repo var to BYO
-  # an existing app registration instead.
-  LOOM_MSAL_CLIENT_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || '' }}
+  # per-deployment app registration. For a Gov boundary a pre-created Gov MSAL
+  # app can be supplied via the LOOM_GOV_MSAL_CLIENT_ID secret; else set the repo
+  # var to BYO, or the step self-provisions one.
+  LOOM_MSAL_CLIENT_ID: ${{ vars.LOOM_MSAL_CLIENT_ID || ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && secrets.LOOM_GOV_MSAL_CLIENT_ID) || '' }}
   # Console host(s) (no scheme) whose https://<host>/auth/callback redirect URIs
   # are reconciled onto the app registration. Defaults to the vanity domain.
   CSA_LOOM_CONSOLE_HOSTS: ${{ vars.CSA_LOOM_VANITY_DOMAIN || '' }}
@@ -94,7 +132,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Azure login (limitlessdata_deploy SP)
+
+      - name: Validate required inputs (no estate defaults)
+        # Hard gate — NOT masked. Enforces the rel-T34 required-ness for BOTH the
+        # manual dispatch AND workflow_call callers: region + admin_subscription
+        # MUST be supplied (a public repo ships no estate region/sub as a default).
+        run: |
+          set -e
+          FAIL=0
+          if [ -z "${{ inputs.region }}" ]; then echo "::error::'region' is REQUIRED (no estate default)."; FAIL=1; fi
+          if [ -z "${{ inputs.admin_subscription }}" ]; then echo "::error::'admin_subscription' is REQUIRED (no estate default)."; FAIL=1; fi
+          case "${{ inputs.boundary }}" in
+            Commercial|GCC|GCC-High|IL5) : ;;
+            *) echo "::error::'boundary' must be one of Commercial | GCC | GCC-High | IL5 (got '${{ inputs.boundary }}')."; FAIL=1 ;;
+          esac
+          [ "$FAIL" = "0" ] || exit 1
+          echo "boundary=${{ inputs.boundary }} region=${{ inputs.region }} admin_sub set dlz_sub='${{ inputs.dlz_subscription }}' dlz_domain='${{ inputs.dlz_domain }}'"
+
+      - name: Azure login (Commercial — limitlessdata_deploy SP)
+        if: inputs.boundary == 'Commercial'
         uses: azure/login@v2
         with:
           creds: |
@@ -104,9 +160,45 @@ jobs:
               "subscriptionId": "${{ env.SUB }}",
               "tenantId": "${{ secrets.AZURE_TENANT_ID }}"
             }
+
+      - name: Azure login (GCC — Azure public cloud, GCC identity)
+        if: inputs.boundary == 'GCC'
+        uses: azure/login@v2
+        with:
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GCC_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GCC_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_GCC_TENANT_ID }}"
+            }
+
+      - name: Azure login (Gov — GCC-High / IL5, AzureUSGovernment)
+        if: inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5'
+        uses: azure/login@v2
+        with:
+          environment: AzureUSGovernment
+          creds: |
+            {
+              "clientId": "${{ secrets.AZURE_GOV_CLIENT_ID }}",
+              "clientSecret": "${{ secrets.AZURE_GOV_CLIENT_SECRET }}",
+              "subscriptionId": "${{ env.SUB }}",
+              "tenantId": "${{ secrets.AZURE_GOV_TENANT_ID }}",
+              "activeDirectoryEndpointUrl": "https://login.microsoftonline.us",
+              "resourceManagerEndpointUrl": "https://management.usgovcloudapi.net/",
+              "sqlManagementEndpointUrl": "https://management.core.usgovcloudapi.net:8443/",
+              "galleryEndpointUrl": "https://gallery.usgovcloudapi.net/",
+              "managementEndpointUrl": "https://management.core.usgovcloudapi.net/"
+            }
+
+      - name: Set Azure cloud to Gov (GCC-High / IL5)
+        if: inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5'
+        run: az cloud set --name AzureUSGovernment
+
       - name: Verify SP identity
         run: |
           set -e
+          echo "Boundary: ${{ inputs.boundary }}  cloud: $(az cloud show --query name -o tsv 2>/dev/null || echo AzureCloud)"
           az account show --query "{user:user.name, sub:id}" -o table
           echo "Acting as Synapse initial admin"
 
@@ -257,7 +349,7 @@ jobs:
           # "successful" deploy). PURVIEW_CLOUD drives the Data Map host TLD (.us in
           # US Gov); the token audience stays https://purview.azure.net in all clouds.
           PURVIEW_ACCOUNT: ${{ vars.LOOM_PURVIEW_ACCOUNT || '' }}
-          PURVIEW_CLOUD: ${{ vars.LOOM_CLOUD || vars.AZURE_CLOUD || 'AzureCloud' }}
+          PURVIEW_CLOUD: ${{ vars.LOOM_CLOUD || vars.AZURE_CLOUD || ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'AzureUSGovernment') || 'AzureCloud' }}
         run: |
           set -uo pipefail
           # When LOOM_PURVIEW_ACCOUNT is not pinned, discover the account this deploy
@@ -767,8 +859,14 @@ jobs:
       - name: Bootstrap Databricks SCIM (Console UAMI as SP)
         run: |
           set -e
+          # DBX_HOST is resolved at runtime from the workspace (env default is now
+          # empty — no estate host is shipped). Skip cleanly when no Databricks
+          # workspace was bound in this deploy rather than curling https:///…
+          if [ -z "${DBX_HOST:-}" ]; then
+            echo "::notice::No Databricks workspace resolved (DBX_HOST empty) — skipping SCIM bootstrap."
+            exit 0
+          fi
           TOKEN=$(az account get-access-token --resource 2ff814a6-3304-4ab8-85cb-cd0e6f879c1d --query accessToken -o tsv)
-          # All four entitlements needed for full editor parity:
           # workspace-access + databricks-sql-access = browse, run notebooks, SQL warehouses
           # allow-cluster-create = POST /api/2.1/clusters/create (fixes the 403 in
           #   the Cluster editor reported 2026-05-27; PR #366)
@@ -932,10 +1030,11 @@ jobs:
         # enablement is never a hard deploy blocker.
         env:
           DATABRICKS_ACCOUNT_ID: ${{ vars.DATABRICKS_ACCOUNT_ID || secrets.DATABRICKS_ACCOUNT_ID }}
-          # OPTIONAL sovereign override. Leave unset for Commercial/GCC (defaults to
-          # accounts.azuredatabricks.net); set to accounts.azuredatabricks.us for
-          # Azure US Government. enable-unity-catalog.sh reads this as its host default.
-          DATABRICKS_ACCOUNT_HOST: ${{ vars.DATABRICKS_ACCOUNT_HOST }}
+          # OPTIONAL sovereign override. Commercial/GCC default to
+          # accounts.azuredatabricks.net; GCC-High/IL5 default to
+          # accounts.azuredatabricks.us (Azure US Government). A repo var still
+          # wins. enable-unity-catalog.sh reads this as its host default.
+          DATABRICKS_ACCOUNT_HOST: ${{ vars.DATABRICKS_ACCOUNT_HOST || ((inputs.boundary == 'GCC-High' || inputs.boundary == 'IL5') && 'accounts.azuredatabricks.us') || '' }}
         run: |
           if [ -z "$DATABRICKS_ACCOUNT_ID" ]; then
             echo "::notice::DATABRICKS_ACCOUNT_ID not set — skipping UC auto-enable."

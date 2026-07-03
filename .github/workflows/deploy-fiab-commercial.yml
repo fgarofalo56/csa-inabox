@@ -117,6 +117,11 @@ jobs:
     name: Deploy + validate CSA Loom in Commercial
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    # Coordinates exported for the chained post-deploy bootstrap (rel-T34).
+    outputs:
+      admin_sub: ${{ steps.bootstrap_coords.outputs.admin_sub }}
+      dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
+      region: ${{ steps.bootstrap_coords.outputs.region }}
 
     steps:
       - uses: actions/checkout@v4
@@ -344,6 +349,19 @@ jobs:
           echo "deploy_name=$DEPLOY_NAME" >> "$GITHUB_OUTPUT"
           echo "::notice::Console URL (VNet-internal): $CONSOLE_URL"
 
+      - name: Export bootstrap coordinates (for the chained bootstrap)
+        id: bootstrap_coords
+        if: steps.provision.outcome == 'success'
+        run: |
+          # The active login sub == the admin (hub) sub for the app-bearing
+          # tenant/single-sub path the chained bootstrap targets (dlz-attach does
+          # not stamp a console, so it never chains). Real sub id (not a secret
+          # literal), so it flows safely into the reusable workflow's `with:`.
+          ADMIN_SUB=$(az account show --query id -o tsv)
+          echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
+          echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-$ADMIN_SUB}" >> "$GITHUB_OUTPUT"
+          echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
+
       - name: Post-provision validation (from inside cluster)
         id: validate
         if: steps.provision.outcome == 'success'
@@ -402,3 +420,25 @@ jobs:
               repo: context.repo.repo,
               body: `❌ deploy-fiab-commercial failed in run ${context.runId}. Check workflow logs.`
             })
+
+  # rel-T32/T34: auto-chain the post-deploy bootstrap after a REAL, app-bearing,
+  # KEPT deploy. Runs the ONE reusable bootstrap (secrets: inherit) with computed
+  # coordinates + boundary=Commercial. Guard rationale:
+  #   - run_mode == full         → not a whatif-only preview (nothing to bootstrap)
+  #   - deploy_apps_enabled      → a Console Container App actually exists to wire
+  #   - keep_resources           → the deploy did NOT tear down (teardown skips on
+  #                                keep_resources), so the console is still live
+  # dlz-attach never stamps a console, so it never satisfies deploy_apps_enabled
+  # here — those operators run csa-loom-post-deploy-bootstrap.yml manually with
+  # explicit admin/dlz subs.
+  post-deploy-bootstrap:
+    name: Post-deploy bootstrap (Commercial)
+    needs: deploy-validate
+    if: ${{ inputs.run_mode == 'full' && inputs.deploy_apps_enabled && inputs.keep_resources && needs.deploy-validate.result == 'success' }}
+    uses: ./.github/workflows/csa-loom-post-deploy-bootstrap.yml
+    secrets: inherit
+    with:
+      boundary: Commercial
+      region: ${{ needs.deploy-validate.outputs.region }}
+      admin_subscription: ${{ needs.deploy-validate.outputs.admin_sub }}
+      dlz_subscription: ${{ needs.deploy-validate.outputs.dlz_sub }}
