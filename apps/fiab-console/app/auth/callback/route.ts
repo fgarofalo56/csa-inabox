@@ -7,7 +7,15 @@
 import { createHash } from 'node:crypto';
 import { NextRequest } from 'next/server';
 import { getMsalClient } from '@/lib/auth/msal';
+import { enforceRateLimitForKey, clientIp } from '@/lib/azure/rate-limiter';
 import { encodeSessionCookie, COOKIE_NAME, MAX_AGE_SECS, sessionSlidingEnabled } from '@/lib/auth/session';
+import {
+  authCsrfEnabled,
+  AUTHFLOW_COOKIE_NAME,
+  decodeAuthFlowCookie,
+  clearAuthFlowCookieHeader,
+  safeEqual,
+} from '@/lib/auth/authflow';
 import { saveUserToken } from '@/lib/azure/user-token-store';
 import { saveUserSqlToken } from '@/lib/azure/sql-user-token-store';
 import { savePbiUserToken } from '@/lib/azure/pbi-user-token-store';
@@ -220,36 +228,95 @@ function htmlBody(url: string): string {
 </body></html>`;
 }
 
-function htmlRedirect(url: string, cookieValue?: string): Response {
-  const headers: Record<string, string> = { 'content-type': 'text/html; charset=utf-8' };
+/**
+ * HTML meta+JS redirect. `cookieValue` (when set) issues the encrypted
+ * `loom_session` cookie; `extraCookies` carries any additional Set-Cookie headers
+ * (e.g. clearing the single-use `loom_authflow` cookie). A Headers object is used
+ * so MULTIPLE Set-Cookie headers can coexist — a plain record would collapse them.
+ */
+function htmlRedirect(url: string, cookieValue?: string, extraCookies: string[] = []): Response {
+  const headers = new Headers({ 'content-type': 'text/html; charset=utf-8' });
   if (cookieValue) {
-    headers['set-cookie'] = `${COOKIE_NAME}=${cookieValue}; Path=/; Max-Age=${MAX_AGE_SECS}; HttpOnly; Secure; SameSite=Lax`;
+    headers.append(
+      'set-cookie',
+      `${COOKIE_NAME}=${cookieValue}; Path=/; Max-Age=${MAX_AGE_SECS}; HttpOnly; Secure; SameSite=Lax`,
+    );
   }
+  for (const c of extraCookies) headers.append('set-cookie', c);
   return new Response(htmlBody(url), { status: 200, headers });
 }
 
 export async function GET(req: NextRequest) {
+  // Per-IP anonymous rate limit (rel-T16) — bound the code-exchange endpoint.
+  // On limit, redirect back with an honest error rather than a raw 429 JSON
+  // (this is a browser redirect target). Default ON; two-tier.
+  const limited = await enforceRateLimitForKey(clientIp(req.headers), 'auth');
+  if (limited) return htmlRedirect('/?auth_error=rate_limited');
+
   const url = new URL(req.url);
   const code = url.searchParams.get('code');
   const aadError = url.searchParams.get('error');
+  // The single-use authflow cookie is cleared on EVERY terminal response below
+  // (success or failure) so a consumed / stale login-CSRF token can't be replayed.
+  const clearAuthflow = [clearAuthFlowCookieHeader()];
   if (aadError) {
     console.error('[auth/callback] AAD error', aadError, url.searchParams.get('error_description'));
-    return htmlRedirect(`/?auth_error=aad_${aadError}`);
+    return htmlRedirect(`/?auth_error=aad_${aadError}`, undefined, clearAuthflow);
   }
-  if (!code) return htmlRedirect(`/?auth_error=missing_code`);
+  if (!code) return htmlRedirect(`/?auth_error=missing_code`, undefined, clearAuthflow);
   const msalClientId = process.env.LOOM_MSAL_CLIENT_ID || process.env.AZURE_CLIENT_ID;
   const msalClientSecret = process.env.LOOM_MSAL_CLIENT_SECRET || process.env.AZURE_CLIENT_SECRET;
-  if (!msalClientId || !process.env.AZURE_TENANT_ID) return htmlRedirect(`/?auth_error=not_configured`);
-  if (!msalClientSecret) return htmlRedirect(`/?auth_error=no_client_secret`);
-  if (!process.env.SESSION_SECRET) return htmlRedirect(`/?auth_error=no_session_secret`);
+  if (!msalClientId || !process.env.AZURE_TENANT_ID)
+    return htmlRedirect(`/?auth_error=not_configured`, undefined, clearAuthflow);
+  if (!msalClientSecret) return htmlRedirect(`/?auth_error=no_client_secret`, undefined, clearAuthflow);
+  if (!process.env.SESSION_SECRET) return htmlRedirect(`/?auth_error=no_session_secret`, undefined, clearAuthflow);
+
+  // Login-CSRF validation (rel-T12). SESSION_SECRET is guaranteed present here, so
+  // a hardened sign-in WILL have set the encrypted `loom_authflow` cookie. Require
+  // it and match its `state` against the callback `state` param. A missing cookie
+  // (a stale in-flight login started before this shipped, OR a forged callback with
+  // no matching state) or a mismatch is rejected by bouncing to /auth/sign-in — the
+  // sign-in route re-mints the cookie and restarts a clean flow, so it self-heals in
+  // ONE hop and cannot loop (the cookie is Path=/auth + SameSite=Lax, so it always
+  // rides the top-level GET back to /auth/callback). The PKCE verifier + nonce are
+  // carried forward from the cookie for the exchange + id_token check below. The
+  // whole block is skipped when LOOM_AUTH_CSRF_ENABLED=false (byte-for-byte rollback).
+  const csrfOn = authCsrfEnabled();
+  const flow = csrfOn ? decodeAuthFlowCookie(req.cookies.get(AUTHFLOW_COOKIE_NAME)?.value) : null;
+  if (csrfOn) {
+    const stateParam = url.searchParams.get('state');
+    if (!flow || !safeEqual(stateParam, flow.state)) {
+      console.warn('[auth/callback] state validation failed — restarting login', {
+        haveCookie: !!flow,
+        haveStateParam: !!stateParam,
+      });
+      return htmlRedirect(`/auth/sign-in?auth_error=state_mismatch`, undefined, clearAuthflow);
+    }
+  }
   try {
     const client = getMsalClient();
     const result = await client.acquireTokenByCode({
       code,
       scopes: SCOPES,
       redirectUri: `${origin(req)}/auth/callback`,
+      // PKCE (rel-T12): prove this browser initiated the flow. Omitted when the
+      // hardening is disabled or no cookie was set, preserving the prior exchange.
+      ...(flow ? { codeVerifier: flow.verifier } : {}),
     });
-    if (!result?.account || !result.accessToken) return htmlRedirect(`/?auth_error=no_token`);
+    if (!result?.account || !result.accessToken)
+      return htmlRedirect(`/?auth_error=no_token`, undefined, clearAuthflow);
+
+    // OIDC nonce (rel-T12): the id_token's `nonce` claim MUST echo the nonce we
+    // sent, defeating id_token replay. MSAL already decoded the id_token into
+    // `idTokenClaims`, so no extra signature work is needed. Only enforced when a
+    // hardened flow supplied a nonce (flow present); a mismatch restarts login.
+    if (flow) {
+      const idNonce = (result.idTokenClaims as { nonce?: string } | undefined)?.nonce;
+      if (!safeEqual(idNonce, flow.nonce)) {
+        console.warn('[auth/callback] id_token nonce mismatch — restarting login');
+        return htmlRedirect(`/auth/sign-in?auth_error=nonce_mismatch`, undefined, clearAuthflow);
+      }
+    }
     const account = result.account;
     const claims: UserClaims = {
       oid: account.homeAccountId.split('.')[0],
@@ -311,10 +378,14 @@ export async function GET(req: NextRequest) {
     // consent failure surfaces as that server's honest admin gate, never blocks
     // login, and never reaches a Fabric/Power BI host on the default path.
     await captureUserMsRemoteMcpTokens(client, account, claims.oid);
-    return htmlRedirect('/', cookieValue);
+    // Success: issue the session cookie AND clear the now-consumed authflow cookie.
+    return htmlRedirect('/', cookieValue, clearAuthflow);
   } catch (e) {
+    // Error hygiene (rel-T12): keep the raw AAD/exchange detail on the SERVER only.
+    // Do NOT reflect it into the browser URL — a generic `exchange_failed` code is
+    // enough for the user; the detail lives in console.error for operators.
     const msg = (e as Error).message ?? 'unknown';
     console.error('[auth/callback] exception:', msg);
-    return htmlRedirect(`/?auth_error=exchange_failed&detail=${encodeURIComponent(msg.slice(0, 80))}`);
+    return htmlRedirect(`/?auth_error=exchange_failed`, undefined, clearAuthflow);
   }
 }

@@ -18,6 +18,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { loadKustoItem, resolveDatabase, KustoError } from '@/lib/azure/kusto-client';
 import { sanitizeModel } from '@/lib/azure/kql-dashboard-model';
 import { runTiles } from '../route';
@@ -28,6 +29,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   const session = getSession();
   if (!session) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  const limited = await enforceRateLimit(session, 'query');
+  if (limited) return limited;
 
   const body = await req.json().catch(() => ({}));
   const model = sanitizeModel(body);

@@ -89,6 +89,7 @@ const ALLOWLIST = new Set([
   'LOOM_PYLSP_DEBUG',               // dev-only language-server debug flag
   'LOOM_PYLSP_PYTHON',              // dev-only python path override
   'LOOM_POWERPLATFORM_ASSUME_CRED', // opt-in Power Platform cred mode
+  'LOOM_INTERNAL_ALLOWED_OIDS',     // opt-in allowlist of automation oids for the token-gated internal surface (rel-T10/B3); unset default = any well-formed GUID
   'LOOM_MULTIUSER_ACL',             // opt-out kill switch for the multi-user ACL fallback (default on in code; rel-T11)
 
   // ---- Derived from an emitted var at runtime (KV name<->url, cosmos endpoint<->id, etc.) ----

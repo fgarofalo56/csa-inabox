@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
+import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { executeStatement, getWarehouse, registerPendingStatement, clearPendingStatement, type DbxQueryParam } from '@/lib/azure/databricks-client';
 
 export const runtime = 'nodejs';
@@ -21,6 +22,8 @@ export const dynamic = 'force-dynamic';
 export async function POST(req: NextRequest) {
   const session = getSession();
   if (!session) return NextResponse.json({ error: 'unauthenticated' }, { status: 401 });
+  const limited = await enforceRateLimit(session, 'query');
+  if (limited) return limited;
 
   const body = await req.json().catch(() => ({}));
   const sql = (body?.sql || '').toString().trim();
