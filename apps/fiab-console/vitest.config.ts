@@ -52,6 +52,13 @@ export default defineConfig({
     // never mistaken for a hang.
     testTimeout: 30_000,
     hookTimeout: 30_000,
+    // CI-only single retry: jsdom component tests (Fluent Dialog portals,
+    // Tabster focus management) exhibit rotating timing flakes on slow CI
+    // runners — worse under coverage instrumentation — that never reproduce
+    // locally even under --sequence.shuffle. A deterministic failure still
+    // fails (it fails the retry too); only genuine timing races recover.
+    // Local runs keep retry 0 so flakes stay visible to developers.
+    retry: process.env.CI ? 1 : 0,
     include: [
       'lib/**/__tests__/**/*.test.{ts,tsx}',
       'app/**/__tests__/**/*.test.{ts,tsx}',
