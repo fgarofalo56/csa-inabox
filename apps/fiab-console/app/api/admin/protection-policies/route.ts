@@ -10,7 +10,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { isTenantAdminTier } from '@/lib/auth/domain-role';
+import { isTenantAdminTier, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import {
   listPolicies, upsertPolicy, normalizePolicy, validatePolicy,
 } from '@/lib/azure/protection-policy-client';
@@ -22,7 +22,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!isTenantAdminTier(s)) return NextResponse.json({ ok: false, error: 'tenant admin required' }, { status: 403 });
+  if (!isTenantAdminTier(s)) return NextResponse.json({ ok: false, error: 'tenant admin required', remediation: TENANT_ADMIN_TIER_REMEDIATION, bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV }, { status: 403 });
   // Policies are a TENANT resource: key the partition by the Entra tenant id so
   // every tenant admin shares one set. (oid is per-user → wrong partitioning.)
   const tenantId = process.env.AZURE_TENANT_ID || s.claims.oid;
@@ -37,7 +37,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  if (!isTenantAdminTier(s)) return NextResponse.json({ ok: false, error: 'tenant admin required' }, { status: 403 });
+  if (!isTenantAdminTier(s)) return NextResponse.json({ ok: false, error: 'tenant admin required', remediation: TENANT_ADMIN_TIER_REMEDIATION, bootstrapEnv: TENANT_ADMIN_BOOTSTRAP_ENV }, { status: 403 });
   const body = await req.json().catch(() => ({}));
   const err = validatePolicy(body);
   if (err) return NextResponse.json({ ok: false, error: err }, { status: 400 });

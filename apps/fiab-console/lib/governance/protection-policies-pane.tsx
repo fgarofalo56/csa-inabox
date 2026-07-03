@@ -113,6 +113,7 @@ export function ProtectionPoliciesPane() {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [forbidden, setForbidden] = useState(false);
+  const [forbiddenRemediation, setForbiddenRemediation] = useState<string | null>(null);
   const [receipts, setReceipts] = useState<Record<string, ReconcileReceipt>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -121,10 +122,16 @@ export function ProtectionPoliciesPane() {
   const [lastReceipt, setLastReceipt] = useState<ReconcileReceipt | null>(null);
 
   const load = useCallback(async () => {
-    setLoading(true); setError(null); setForbidden(false);
+    setLoading(true); setError(null); setForbidden(false); setForbiddenRemediation(null);
     try {
       const r = await clientFetch(API);
-      if (r.status === 403) { setForbidden(true); setPolicies([]); return; }
+      if (r.status === 403) {
+        const j = await r.json().catch(() => ({}));
+        setForbidden(true);
+        setForbiddenRemediation(j?.remediation || j?.reason || null);
+        setPolicies([]);
+        return;
+      }
       const j = await r.json();
       if (!r.ok || !j?.ok) { setError(j?.error || `Failed (${r.status})`); return; }
       setPolicies(j.policies || []);
@@ -171,8 +178,11 @@ export function ProtectionPoliciesPane() {
       <MessageBar intent="warning">
         <MessageBarBody>
           <MessageBarTitle>Tenant administrator required</MessageBarTitle>
-          Protection policies are a tenant-wide control. Sign in with a tenant-admin tier
-          account to view and manage them.
+          Protection policies are a tenant-wide control.{' '}
+          {forbiddenRemediation ||
+            'Set LOOM_TENANT_ADMIN_OID (your Entra user object id) or LOOM_TENANT_ADMIN_GROUP_ID ' +
+              'to bind a tenant admin, then sign in with that account. A tenant admin can also grant ' +
+              'access at /admin/permissions.'}
         </MessageBarBody>
       </MessageBar>
     );

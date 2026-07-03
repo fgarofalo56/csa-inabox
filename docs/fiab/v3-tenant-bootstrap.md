@@ -208,6 +208,30 @@ var the page names the exact **bicep module + RBAC role** that provisions it.
 > Fabric-family and strictly opt-in per `.claude/rules/no-fabric-dependency.md`;
 > the native Fluent charts always work without any embed backend).
 
+### Bind the tenant-admin principal (required for admin surfaces) {#bind-tenant-admin}
+
+Set **at least one** of `LOOM_TENANT_ADMIN_OID` (your Entra user object id / oid)
+or `LOOM_TENANT_ADMIN_GROUP_ID` (an Entra security group you belong to) — deploy
+params `loomTenantAdminOid` / `loomTenantAdminGroupId`, wired into the Console app
+env. This binds who Loom treats as a **tenant admin**.
+
+**This is fail-closed (rel-T14).** Until one of these is set, **no** session is a
+tenant admin, and the org-wide admin surfaces gated on the tenant-admin /
+domain-admin tier render an honest "tenant administrator required" gate instead of
+exposing tenant-wide state to every authenticated user:
+
+- **Capacity → cost / utilization / viz** (`/admin/capacity` Data Landing Zone
+  panes) and **usage chargeback**,
+- **Warm Spark session-pool config** (`/api/spark/session-pool` `action:'config'`),
+- **Protection policies** (`/governance/protection-policies`),
+- **PDP shadow report** (`/api/admin/pdp/shadow-report`),
+- **Domain topology / DLZ binding** fields on `/admin/domains`.
+
+After the admin principal is bound, members bypass every feature gate with full
+Admin, and can delegate scoped access to others at **`/admin/permissions`**
+(feature grants) and per-domain admin/contributor Entra groups on
+**`/admin/domains`**.
+
 ---
 
 ## Usage analytics embed (F21) {#usage-analytics-embed}
