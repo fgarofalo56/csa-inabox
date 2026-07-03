@@ -37,6 +37,11 @@ production using this section + the [runbooks](../runbooks/deploy-failure.md).
     The strategic anchor: when Fabric reaches your boundary, migrate
     forward 1:1 via OneLake shortcut + per-artifact mapping.
 
+-   :material-broom: [**Clean tenant — purge test/tutorial debris**](clean-tenant.md)
+
+    Sweep `uat-app-*` / `tut-*` / `supercharge-*` workspace debris left by
+    UAT/tutorial runs. Cross-partition Cosmos purge, dry-run by default.
+
 </div>
 
 ## Day-2 responsibilities (split between Loom + customer)

@@ -1879,6 +1879,7 @@ nav:
               - Upgrade & Migration: fiab/operations/upgrade-migration.md
               - Forward Migration to Microsoft Fabric: fiab/operations/forward-to-fabric.md
               - App Install — Phase 2 live-service provisioning: fiab/operations/app-install-provisioning.md
+              - Clean tenant — purge test/tutorial debris: fiab/operations/clean-tenant.md
           - Runbooks:
               - Deploy Failure: fiab/runbooks/deploy-failure.md
               - First Deploy (operator playbook): fiab/runbooks/first-deploy.md
