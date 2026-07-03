@@ -86,12 +86,15 @@ describe('ActivatorEditor', () => {
     // the first — both open the same wizard.
     fireEvent.click(screen.getAllByRole('button', { name: /New rule/i })[0]);
 
-    // The Monitor-native wizard sections render.
-    await waitFor(() => expect(screen.getByText(/DATA SOURCE/)).toBeInTheDocument());
-    expect(screen.getByText(/EVALUATION/)).toBeInTheDocument();
-    expect(screen.getByLabelText(/Source type/i)).toBeInTheDocument();
-    const evalFreq = screen.getByLabelText(/Evaluation frequency/i);
-    const severity = screen.getByLabelText(/^Severity$/i);
+    // The Monitor-native wizard sections render inside a Fluent modal Dialog
+    // (portal). Acquire every wizard field with retrying findBy* so a slow CI
+    // portal render can't race a sync query (the Dialog surface is out of the
+    // default a11y ROLE tree here, so we match by text/label, not role).
+    await screen.findByText(/DATA SOURCE/, undefined, { timeout: 5000 });
+    expect(await screen.findByText(/EVALUATION/)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Source type/i)).toBeInTheDocument();
+    const evalFreq = await screen.findByLabelText(/Evaluation frequency/i);
+    const severity = await screen.findByLabelText(/^Severity$/i);
 
     // Fill the rule via the condition builder (KQL query left empty).
     fireEvent.change(screen.getByLabelText(/Rule name/i), { target: { value: 'Latency SLA breach' } });
@@ -130,10 +133,10 @@ describe('ActivatorEditor', () => {
 
     // Two "New rule" buttons: ribbon stub + DialogTrigger inline. Use first.
     fireEvent.click(screen.getAllByRole('button', { name: /New rule/i })[0]);
-    await waitFor(() => expect(screen.getByText(/DATA SOURCE/)).toBeInTheDocument());
+    await screen.findByText(/DATA SOURCE/, undefined, { timeout: 5000 });
 
-    // Default KQL source shows the verbatim-query hint.
-    expect(screen.getByText(/Verbatim query/i)).toBeInTheDocument();
+    // Default KQL source shows the verbatim-query hint (portal content — await it).
+    expect(await screen.findByText(/Verbatim query/i)).toBeInTheDocument();
 
     // Switch to Event Hub — the KQL hint disappears (replaced by the hub tree).
     fireEvent.change(screen.getByLabelText(/Source type/i), { target: { value: 'eventhub' } });
