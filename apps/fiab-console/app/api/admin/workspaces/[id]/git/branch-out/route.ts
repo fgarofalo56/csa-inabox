@@ -140,6 +140,9 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     const newWs: Workspace = {
       id: crypto.randomUUID(),
       tenantId,
+      // rel-T11: carry owner oid + Entra tenant id onto the branched workspace.
+      ownerOid: tenantId,
+      ...(s.claims.tid ? { tid: s.claims.tid } : {}),
       name: newWorkspaceName,
       description: source.description
         ? `${source.description} (branched from ${source.name})`

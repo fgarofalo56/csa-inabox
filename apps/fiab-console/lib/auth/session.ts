@@ -47,6 +47,21 @@ export interface SessionPayload {
   exp: number;
 }
 
+/**
+ * The partition key for TENANT-SHARED state (feature-permission grants) —
+ * the Entra tenant id (`tid`) so a grant written by an admin resolves for any
+ * grantee in the SAME tenant (rel-T11 / B4). Falls back to the user's `oid`
+ * when `tid` is absent (sessions minted before rel-T11, or the single-operator
+ * bootstrap) so behavior is byte-identical for the single-user path.
+ *
+ * NOTE: this is deliberately NOT used for the `workspaces` / `items` containers
+ * — those are partitioned by the OWNER's `oid` (immutable partition key) and
+ * sharing is layered on via the `workspace-roles` ACL (see workspace-access.ts).
+ */
+export function tenantScopeId(session: { claims: UserClaims }): string {
+  return session.claims.tid || session.claims.oid;
+}
+
 export function encodeSessionCookie(payload: SessionPayload): string {
   const iv = crypto.randomBytes(IV_LEN);
   const cipher = crypto.createCipheriv(ALG, getKey(), iv);

@@ -98,6 +98,10 @@ export async function POST(req: NextRequest) {
   const ws: Workspace = {
     id: crypto.randomUUID(),
     tenantId: s.claims.oid,
+    // rel-T11: record owner oid + Entra tenant id (kept in lock-step with
+    // app/api/workspaces/route.ts) for the shared read path's tid boundary.
+    ownerOid: s.claims.oid,
+    ...(s.claims.tid ? { tid: s.claims.tid } : {}),
     name,
     description: typeof body?.description === 'string' && body.description.trim() ? body.description.trim() : undefined,
     capacity: typeof body?.capacity === 'string' && body.capacity.trim() ? body.capacity.trim() : undefined,

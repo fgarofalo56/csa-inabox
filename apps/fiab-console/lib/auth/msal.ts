@@ -375,6 +375,13 @@ export function graphBase(): string {
 
 export interface UserClaims {
   oid: string;
+  /**
+   * Entra TENANT id (`tid` claim). Used to partition tenant-shared state
+   * (feature grants) and to enforce the tenant boundary on shared workspace
+   * reads (rel-T11). Optional so sessions minted before rel-T11 (which lacked
+   * it) still decode; the tenant-scope helper falls back to `oid` when absent.
+   */
+  tid?: string;
   name: string;
   email?: string;
   upn: string;

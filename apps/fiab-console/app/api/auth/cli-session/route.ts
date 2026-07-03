@@ -160,6 +160,12 @@ export async function POST(req: NextRequest) {
         const account = result.account;
         const claims: UserClaims = {
           oid: account.homeAccountId.split('.')[0],
+          // Entra TENANT id (rel-T11) — kept in lock-step with app/auth/callback.
+          tid:
+            ((account.idTokenClaims as Record<string, unknown> | undefined)?.tid as string) ||
+            account.tenantId ||
+            account.homeAccountId.split('.')[1] ||
+            undefined,
           name: account.name ?? account.username,
           email: account.username,
           upn: account.username,
