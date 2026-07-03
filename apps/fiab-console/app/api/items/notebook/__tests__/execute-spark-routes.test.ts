@@ -18,6 +18,11 @@ vi.mock('@/lib/azure/cosmos-client', () => ({
   itemsContainer: vi.fn(async () => ({
     item: () => ({ read: readMock, replace: replaceMock }),
   })),
+  // #1602 gates the route with assertOwner(workspaceId, tenantId); return an
+  // owned workspace (tenantId === the session oid 'u1') so the guard passes.
+  workspacesContainer: vi.fn(async () => ({
+    item: () => ({ read: async () => ({ resource: { id: 'ws1', tenantId: 'u1' } }) }),
+  })),
 }));
 
 vi.mock('@/lib/azure/synapse-livy-client', () => {
@@ -81,7 +86,7 @@ beforeEach(() => {
   // clearAllMocks (not resetAllMocks) so the itemsContainer factory keeps its
   // implementation; we only want call history cleared between tests.
   vi.clearAllMocks();
-  (getSession as any).mockReturnValue({ userId: 'u1' });
+  (getSession as any).mockReturnValue({ claims: { oid: 'u1' } });
   readMock.mockResolvedValue({ resource: { ...NB, state: {} } });
   replaceMock.mockResolvedValue({});
   delete process.env.AZURE_CLOUD;

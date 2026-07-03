@@ -110,6 +110,10 @@ function seedHappyCosmos() {
 beforeEach(() => {
   for (const c of Object.values(containers)) c._setQuery(() => []);
   getSessionMock.mockReturnValue({ claims: { oid: 'tenant-oid', upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 } as any);
+  // #1602 gates the overview behind requireTenantAdmin; authorize the test
+  // session (oid 'tenant-oid') as the bootstrap tenant admin so the real gate
+  // passes and the tiles render. The 401 spec sets session=null and still 401s.
+  process.env.LOOM_TENANT_ADMIN_OID = 'tenant-oid';
   listResourcesMock.mockResolvedValue([{ id: 'r1' }, { id: 'r2' }, { id: 'r3' }]);
   listAlertHistoryMock.mockResolvedValue([
     { monitorCondition: 'Fired' }, { monitorCondition: 'Resolved' }, { monitorCondition: 'Fired' },

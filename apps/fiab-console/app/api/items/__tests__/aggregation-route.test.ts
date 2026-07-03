@@ -15,6 +15,11 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 // @azure/identity runtime is never loaded — it isn't needed to exercise the
 // route's orchestration + validation, and pulling it in is unnecessary here.
 vi.mock('@/lib/auth/session', () => ({ getSession: vi.fn() }));
+// #1602 gates the model route with assertOwner(workspaceId, oid), which hits
+// Cosmos (workspacesContainer). These are aggregation validation / XMLA logic
+// tests, not ownership tests — treat the caller as the owner so the guard is a
+// no-op (the 401 spec still short-circuits on a null session before this runs).
+vi.mock('@/lib/auth/workspace-guard', () => ({ assertOwner: vi.fn(async () => true) }));
 vi.mock('@/lib/azure/powerbi-client', () => ({
   getDataset: vi.fn(),
   executeDatasetQueries: vi.fn(),
@@ -34,6 +39,7 @@ vi.mock('@/lib/azure/aas-client', () => ({
 
 import { POST as modelPOST } from '../semantic-model/[id]/model/route';
 import { getSession } from '@/lib/auth/session';
+import { assertOwner } from '@/lib/auth/workspace-guard';
 import { getDataset, executeDatasetQueries } from '@/lib/azure/powerbi-client';
 import { xmlaConfigGate, executeTmsl, executeAggTmsl } from '@/lib/azure/aas-client';
 
@@ -54,6 +60,9 @@ const validBody = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // resetAllMocks wipes the vi.fn impls (incl. assertOwner), so re-arm the
+  // ownership guard to authorize — these are aggregation logic tests.
+  (assertOwner as any).mockResolvedValue(true);
   (xmlaConfigGate as any).mockReturnValue(null);
 });
 

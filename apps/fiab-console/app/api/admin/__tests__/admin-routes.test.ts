@@ -23,7 +23,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 const getSessionMock = vi.fn(
   () => ({ claims: { oid: 'tenant-oid', upn: 'admin@contoso.com' }, exp: Date.now() / 1000 + 3600 }) as any,
 );
-vi.mock('@/lib/auth/session', () => ({ getSession: () => getSessionMock() }));
+vi.mock('@/lib/auth/session', () => ({
+  getSession: () => getSessionMock(),
+  // #1601 added tenantScopeId (claims.tid || claims.oid); routes call it to
+  // partition ACL/Cosmos reads by tenant.
+  tenantScopeId: (s: any) => s?.claims?.tid ?? s?.claims?.oid,
+}));
 
 vi.mock('@azure/identity', () => {
   class Cred {
