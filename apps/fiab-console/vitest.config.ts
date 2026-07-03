@@ -61,5 +61,45 @@ export default defineConfig({
       '__tests__/**/*.test.{ts,tsx}',
     ],
     exclude: ['node_modules', '.next', 'dist', 'e2e', 'tests', 'test-results'],
+    // ── Coverage (rel-T28) ────────────────────────────────────────────────
+    // v8 provider (no Babel instrumentation). `all: true` counts EVERY source
+    // file under include — not just the ones a test imported — so the
+    // denominator is the whole console surface and the floor can only be
+    // ratcheted UP by adding tests, never gamed by narrowing what's measured.
+    //
+    // RATCHET CONVENTION: the thresholds below are the FLOOR, set a couple of
+    // points BELOW the last measured reality. When you add tests and coverage
+    // climbs, RAISE the floor to (new measured − ~2pts) in the same PR. Never
+    // lower it. `pnpm vitest run --coverage` enforces it (fails under the floor).
+    coverage: {
+      provider: 'v8',
+      all: true,
+      reporter: ['text-summary', 'json-summary', 'text'],
+      reportsDirectory: './coverage',
+      include: ['lib/**', 'app/**'],
+      exclude: [
+        '**/__tests__/**',
+        '**/*.test.{ts,tsx}',
+        '**/*.d.ts',
+        // Type-only / declaration barrels and generated assets carry no
+        // executable lines — counting them just dilutes the signal.
+        'lib/**/*.types.ts',
+        'app/**/layout.tsx',
+        'app/**/loading.tsx',
+        'app/**/not-found.tsx',
+      ],
+      // FLOOR — measured reality 2026-07-03 (whole-console, all:true):
+      //   statements 32.52% · branches 56.85% · functions 30.86% · lines 32.52%
+      // Floor set ~2pts below each (ratchet UP only — see convention above).
+      // The gap to 100% is mostly client `app/**/page.tsx` components, which the
+      // vitest slice does not render (routes/editors/lib ARE covered); those are
+      // exercised by the Playwright UAT slice (rel-T30), not here.
+      thresholds: {
+        statements: 30,
+        branches: 54,
+        functions: 28,
+        lines: 30,
+      },
+    },
   },
 });

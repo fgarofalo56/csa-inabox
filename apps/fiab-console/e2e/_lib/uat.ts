@@ -10,7 +10,17 @@ import { BrowserContext, Page, expect, request as playwrightRequest } from '@pla
 const SECRET = process.env.SESSION_SECRET!;
 if (!SECRET) throw new Error('SESSION_SECRET env required — pull from kv-loom-m56yejezt7bjo/loom-session-secret');
 
-export const BASE = process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net';
+/**
+ * UAT target base URL (rel-T30). Resolution order:
+ *   1. LOOM_UAT_BASE_URL — explicit UAT target. Point this at a CANDIDATE
+ *      revision's direct ingress URL to run the journeys PRE-traffic-shift
+ *      (before the roll flips Front Door to the new revision).
+ *   2. LOOM_URL — the existing convention (the live Front Door URL the
+ *      unattended runner + verify project already set).
+ *   3. The live Front Door default.
+ */
+export const BASE =
+  process.env.LOOM_UAT_BASE_URL || process.env.LOOM_URL || 'https://loom-console-fvbbctd4eehqbkcs.b02.azurefd.net';
 export const HOST = new URL(BASE).hostname;
 
 /** Mint a Loom session cookie identical to the one /auth/callback writes. */
@@ -197,7 +207,7 @@ export async function deleteWorkspace(page: Page, wsId: string) {
 }
 
 /**
- * Suite-end teardown for specs that mint throwaway workspaces (uat-*/tut-*).
+ * Suite-end teardown for specs that mint throwaway workspaces (uat-* / tut-*).
  *
  * Some suites create a fresh workspace per app/item and cannot use a per-test
  * `finally { deleteWorkspace }` because their assertions throw before cleanup
