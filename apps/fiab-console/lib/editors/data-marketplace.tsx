@@ -35,8 +35,10 @@ import {
 import {
   Search20Regular, ArrowSync20Regular, Add20Regular, Delete20Regular,
   Open20Regular, Dismiss16Regular, Database20Regular, KeyReset20Regular,
+  Box24Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 
@@ -613,7 +615,12 @@ function PublishTab({
 
       {products === null && <Spinner size="tiny" />}
       {products && products.length === 0 && (
-        <div className={styles.empty}>No data products yet. Create one to publish it to the marketplace.</div>
+        <EmptyState
+          icon={<Box24Regular />}
+          title="No data products yet"
+          body="Publish a data product to make it discoverable to consumers in the marketplace."
+          primaryAction={{ label: 'New data product', onClick: () => setCreateOpen(true) }}
+        />
       )}
       {products && products.length > 0 && (
         <Table>
