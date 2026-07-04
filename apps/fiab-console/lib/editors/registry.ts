@@ -79,38 +79,39 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // serverless SQL editor surface; BFF re-exports the serverless query/schema/objects.
   'sql-analytics-endpoint': reg(() => import('./sql-analytics-endpoint-editor'), 'SqlAnalyticsEndpointEditor'),
 
-  // Phase 3
-  'eventhouse':           reg(() => import('./phase3-editors'),           'EventhouseEditor'),
+  // Phase 3 — per-file dynamic imports (each slug loads only its own editor
+  // chunk; the ./phase3-editors barrel is kept solely for tests). rel-T62.
+  'eventhouse':           reg(() => import('./phase3/eventhouse-editor'),      'EventhouseEditor'),
   // Workspace-monitoring DB — read-only ADX usage/perf store; reuses the
   // Eventhouse cluster/database surface (lists databases incl. the monitor DB).
-  'workspace-monitor':    reg(() => import('./phase3-editors'),           'EventhouseEditor'),
-  'kql-database':         reg(() => import('./phase3-editors'),           'KqlDatabaseEditor'),
-  'kql-queryset':         reg(() => import('./phase3-editors'),           'KqlQuerysetEditor'),
-  'kql-dashboard':        reg(() => import('./phase3-editors'),           'KqlDashboardEditor'),
-  'eventstream':          reg(() => import('./phase3-editors'),           'EventstreamEditor'),
-  'activator':            reg(() => import('./phase3-editors'),           'ActivatorEditor'),
-  'warehouse':            reg(() => import('./phase3-editors'),           'WarehouseEditor'),
+  'workspace-monitor':    reg(() => import('./phase3/eventhouse-editor'),      'EventhouseEditor'),
+  'kql-database':         reg(() => import('./phase3/kql-database-editor'),    'KqlDatabaseEditor'),
+  'kql-queryset':         reg(() => import('./phase3/kql-queryset-editor'),    'KqlQuerysetEditor'),
+  'kql-dashboard':        reg(() => import('./phase3/kql-dashboard-editor'),   'KqlDashboardEditor'),
+  'eventstream':          reg(() => import('./phase3/eventstream-editor'),     'EventstreamEditor'),
+  'activator':            reg(() => import('./phase3/activator-editor'),       'ActivatorEditor'),
+  'warehouse':            reg(() => import('./phase3/warehouse-editor'),       'WarehouseEditor'),
   // Datamart (DEPRECATED) — migration-only surface (Synapse Serverless + AAS). No create path.
-  'datamart':             reg(() => import('./phase3-editors'),           'DatamartEditor'),
-  'semantic-model':       reg(() => import('./phase3-editors'),           'SemanticModelEditor'),
-  'report':               reg(() => import('./phase3-editors'),           'ReportEditor'),
-  'dashboard':            reg(() => import('./phase3-editors'),           'DashboardEditor'),
-  'paginated-report':     reg(() => import('./phase3-editors'),           'PaginatedReportEditor'),
-  'scorecard':            reg(() => import('./phase3-editors'),           'ScorecardEditor'),
+  'datamart':             reg(() => import('./phase3/datamart-editor'),        'DatamartEditor'),
+  'semantic-model':       reg(() => import('./phase3/semantic-model-editor'),  'SemanticModelEditor'),
+  'report':               reg(() => import('./phase3/report-editor'),          'ReportEditor'),
+  'dashboard':            reg(() => import('./phase3/dashboard-editor'),        'DashboardEditor'),
+  'paginated-report':     reg(() => import('./phase3/paginated-report-editor'), 'PaginatedReportEditor'),
+  'scorecard':            reg(() => import('./phase3/scorecard-editor'),        'ScorecardEditor'),
 
-  // Phase 4
-  'ml-model':             reg(() => import('./phase4-editors'),           'MlModelEditor'),
+  // Phase 4 — per-file dynamic imports (barrel kept only for tests). rel-T62.
+  'ml-model':             reg(() => import('./ml-model-editor'),            'MlModelEditor'),
   'ml-experiment':        reg(() => import('./ml-experiment-editor'),     'MlExperimentEditor'),
   'automl':               reg(() => import('./automl-editor'),            'AutoMlEditor'),
-  'graphql-api':          reg(() => import('./phase4-editors'),           'GraphqlApiEditor'),
-  'user-data-function':   reg(() => import('./phase4-editors'),           'UserDataFunctionEditor'),
-  'variable-library':     reg(() => import('./phase4-editors'),           'VariableLibraryEditor'),
-  'ontology':             reg(() => import('./phase4-editors'),           'OntologyEditor'),
-  'graph-model':          reg(() => import('./phase4-editors'),           'GraphModelEditor'),
-  'plan':                 reg(() => import('./phase4-editors'),           'PlanEditor'),
-  'map':                  reg(() => import('./phase4-editors'),           'MapEditor'),
-  'operations-agent':     reg(() => import('./phase4-editors'),           'OperationsAgentEditor'),
-  'data-agent':           reg(() => import('./phase4-editors'),           'DataAgentEditor'),
+  'graphql-api':          reg(() => import('./phase4/graphql-api-editor'),      'GraphqlApiEditor'),
+  'user-data-function':   reg(() => import('./phase4/user-data-function-editor'), 'UserDataFunctionEditor'),
+  'variable-library':     reg(() => import('./phase4/variable-library-editor'), 'VariableLibraryEditor'),
+  'ontology':             reg(() => import('./phase4/ontology-editor'),         'OntologyEditor'),
+  'graph-model':          reg(() => import('./phase4/graph-model-editor'),      'GraphModelEditor'),
+  'plan':                 reg(() => import('./phase4/plan-editor'),             'PlanEditor'),
+  'map':                  reg(() => import('./phase4/map-editor'),              'MapEditor'),
+  'operations-agent':     reg(() => import('./phase4/operations-agent-editor'), 'OperationsAgentEditor'),
+  'data-agent':           reg(() => import('./phase4/data-agent-editor'),       'DataAgentEditor'),
 
   // v1.5 — Native Azure-service editors (Synapse, Databricks, ADF, U-SQL)
   // v2.0 — Synapse Dedicated + Serverless are real-REST wired (TDS over PE + AAD MI)
@@ -120,10 +121,10 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   'synapse-spark-pool':          reg(() => import('./azure-services-editors'), 'SynapseSparkPoolEditor'),
   'synapse-pipeline':            reg(() => import('./azure-services-editors'), 'SynapsePipelineEditor'),
   'synapse-notebook':            reg(() => import('./synapse-notebook-editor'), 'SynapseNotebookEditor'),
-  'databricks-notebook':         reg(() => import('./databricks-editors'),     'DatabricksNotebookEditor'),
-  'databricks-job':              reg(() => import('./databricks-editors'),     'DatabricksJobEditor'),
-  'databricks-cluster':          reg(() => import('./databricks-editors'),     'DatabricksClusterEditor'),
-  'databricks-sql-warehouse':    reg(() => import('./databricks-editors'),     'DatabricksSqlWarehouseEditor'),
+  'databricks-notebook':         reg(() => import('./databricks/databricks-notebook-editor'), 'DatabricksNotebookEditor'),
+  'databricks-job':              reg(() => import('./databricks/job-editor'),          'DatabricksJobEditor'),
+  'databricks-cluster':          reg(() => import('./databricks/cluster-editor'),      'DatabricksClusterEditor'),
+  'databricks-sql-warehouse':    reg(() => import('./databricks/sql-warehouse-editor'), 'DatabricksSqlWarehouseEditor'),
   'adf-pipeline':                reg(() => import('./azure-services-editors'), 'AdfPipelineEditor'),
   'adf-dataset':                 reg(() => import('./azure-services-editors'), 'AdfDatasetEditor'),
   'adf-trigger':                 reg(() => import('./azure-services-editors'), 'AdfTriggerEditor'),
@@ -226,12 +227,12 @@ export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
   // mappings in docs/migrations/palantir-foundry/ are superseded by these built
   // Azure-native editors (Workshop/Slate/OSDK/Apollo/Checks/AIP-Logic). All
   // default Azure-native — no Fabric / Power BI workspace required.
-  'workshop-app':                reg(() => import('./palantir-editors'),       'WorkshopAppEditor'),
-  'slate-app':                   reg(() => import('./palantir-editors'),       'SlateAppEditor'),
-  'ontology-sdk':                reg(() => import('./palantir-editors'),       'OntologySdkEditor'),
-  'release-environment':         reg(() => import('./palantir-editors'),       'ReleaseEnvironmentEditor'),
-  'health-check':                reg(() => import('./palantir-editors'),       'HealthCheckEditor'),
-  'aip-logic':                   reg(() => import('./palantir-editors'),       'AipLogicEditor'),
+  'workshop-app':                reg(() => import('./palantir/workshop-app-editor'),       'WorkshopAppEditor'),
+  'slate-app':                   reg(() => import('./palantir/slate-app-editor'),          'SlateAppEditor'),
+  'ontology-sdk':                reg(() => import('./palantir/ontology-sdk-editor'),       'OntologySdkEditor'),
+  'release-environment':         reg(() => import('./palantir/release-environment-editor'), 'ReleaseEnvironmentEditor'),
+  'health-check':                reg(() => import('./palantir/health-check-editor'),       'HealthCheckEditor'),
+  'aip-logic':                   reg(() => import('./palantir/aip-logic-editor'),          'AipLogicEditor'),
 
   // wave2-a — Azure-native messaging + lakehouse-shortcut items. Each is a
   // navigator over a deployment-pinned Azure resource (real ARM / data-plane via

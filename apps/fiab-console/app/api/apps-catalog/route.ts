@@ -9,7 +9,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { appsCatalogContainer } from '@/lib/azure/cosmos-client';
-import { listBundleIds, getBundle } from '@/lib/apps/content-bundles';
+import { listBundleIds, getBundleItemTypes } from '@/lib/apps/content-bundles';
 import { CATALOG_META } from '@/lib/apps/content-bundles/catalog-meta';
 import crypto from 'node:crypto';
 
@@ -88,8 +88,9 @@ export async function GET() {
   for (const appId of listBundleIds()) {
     const meta = CATALOG_META[appId];
     if (!meta) continue; // bundle without catalog metadata — skip (still installable directly)
-    const bundle = getBundle(appId);
-    const items = (bundle?.items || []).map((i) => ({ type: i.itemType, template: appId }));
+    // Lean {type, template} refs from the lightweight manifest — NOT getBundle
+    // (which would pull the heavy content payload into this list route). rel-T63.
+    const items = getBundleItemTypes(appId).map((t) => ({ type: t, template: appId }));
     const existing = byId.get(appId);
     if (existing && Array.isArray(existing.items) && existing.items.length > 0) continue;
     missing.push({
