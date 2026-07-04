@@ -8,15 +8,19 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ReactNode } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
 import { makeStyles, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-components';
 
-const SECTIONS = [
+// adminOnly sections live in the Admin portal (/admin/*). They are hidden for
+// non-admins (rel-T53) — reusing the single shell admin probe — so a
+// non-admin browsing the catalog is never dumped into a per-page 403.
+const SECTIONS: { href: string; label: string; desc: string; adminOnly?: boolean }[] = [
   { href: '/catalog',             label: 'Search',      desc: 'Federated search across Purview, Unity Catalog, and OneLake.' },
   { href: '/catalog/browse',      label: 'Browse',      desc: 'Tree view: source → workspace → schema/domain → asset.' },
-  { href: '/admin/domains',       label: 'Domains',     desc: 'Business-domain CRUD; assign UC catalogs and OneLake workspaces (Admin portal).' },
+  { href: '/admin/domains',       label: 'Domains',     desc: 'Business-domain CRUD; assign UC catalogs and OneLake workspaces (Admin portal).', adminOnly: true },
   { href: '/catalog/permissions', label: 'Permissions', desc: 'Loom roles that fan out to Purview RBAC, UC GRANTs, and Fabric roles.' },
   { href: '/catalog/metastores',  label: 'Metastores',  desc: 'Registered Databricks metastores, Purview accounts, OneLake regions.' },
-  { href: '/catalog/lineage',     label: 'Federated lineage', desc: 'Federated lineage graph rolling up Purview + UC + Fabric edges.' },
+  { href: '/catalog/lineage',     label: 'Lineage', desc: 'Federated lineage graph rolling up Purview + UC + Fabric edges.' },
 ];
 
 const useStyles = makeStyles({
@@ -73,6 +77,8 @@ const useStyles = makeStyles({
 export function CatalogShell({ sectionTitle, sectionBadge, children }: { sectionTitle?: string; sectionBadge?: string; children: ReactNode }) {
   const s = useStyles();
   const pathname = usePathname();
+  const isTenantAdmin = useIsTenantAdmin();
+  const sections = SECTIONS.filter((sec) => !sec.adminOnly || isTenantAdmin);
   return (
     <PageShell
       title="Unified catalog"
@@ -80,7 +86,7 @@ export function CatalogShell({ sectionTitle, sectionBadge, children }: { section
     >
       <div className={s.layout}>
         <nav className={s.sidebar} aria-label="Catalog sections">
-          {SECTIONS.map((sec) => {
+          {sections.map((sec) => {
             const active = pathname === sec.href || (sec.href !== '/catalog' && pathname?.startsWith(sec.href));
             return (
               <Link key={sec.href} href={sec.href} className={`${s.item} ${active ? s.itemActive : ''}`}>

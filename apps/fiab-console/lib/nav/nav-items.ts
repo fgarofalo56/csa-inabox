@@ -13,6 +13,10 @@
 export interface NavItem {
   href: string;
   label: string;
+  /** Tenant-admin-only destination — hidden from the rail for non-admins
+   * (rel-T53/T54). The Copilot navigate allow-list still includes it; the
+   * page enforces its own server-side gate. */
+  adminOnly?: boolean;
 }
 
 export const NAV_ITEMS: NavItem[] = [
@@ -21,17 +25,13 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/workspaces', label: 'Workspaces' },
   { href: '/browse', label: 'Browse' },
   { href: '/onelake', label: 'OneLake catalog' },
-  { href: '/catalog', label: 'Unified catalog' },
   { href: '/org-reports', label: 'Organization reports' },
   { href: '/semantic-model', label: 'Semantic models' },
-  { href: '/thread', label: 'Mesh lineage' },
+  { href: '/thread', label: 'Lineage' },
   { href: '/marketplace', label: 'Marketplace' },
   { href: '/governance', label: 'Governance' },
   { href: '/monitor', label: 'Monitor' },
-  { href: '/realtime-hub', label: 'Real-Time hub' },
-  { href: '/activator-hub', label: 'Activator' },
-  { href: '/business-events', label: 'Business events' },
-  { href: '/rti-hub', label: 'RTI catalog' },
+  { href: '/realtime-hub', label: 'Real-Time Intelligence' },
   { href: '/data-agent', label: 'Data agents' },
   { href: '/experience/data-science/home', label: 'Data Science' },
   { href: '/experience/warp/home', label: 'Warp' },
@@ -39,6 +39,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/workload-hub', label: 'Workload hub' },
   { href: '/connections', label: 'Connections' },
   { href: '/deployment-pipelines', label: 'Deployment' },
-  { href: '/admin', label: 'Admin portal' },
-  { href: '/setup', label: 'Setup & landing zones' },
+  { href: '/admin', label: 'Admin portal', adminOnly: true },
+  { href: '/setup', label: 'Setup & landing zones', adminOnly: true },
 ];

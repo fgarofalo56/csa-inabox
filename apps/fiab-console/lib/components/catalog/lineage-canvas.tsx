@@ -56,6 +56,7 @@ import {
   Search16Regular, Dismiss16Regular,
 } from '@fluentui/react-icons';
 import { portStyle } from '@/lib/components/canvas/canvas-node-kit';
+import { itemVisual, isKnownItemType } from '@/lib/components/ui/item-type-visual';
 
 // ---------------------------------------------------------------------------
 // Public model — kept in sync with the LineageNode / LineageEdge the BFF
@@ -84,6 +85,13 @@ export interface CanvasLineageNode {
    * read it for layout. See lib/azure/unified-lineage.ts.
    */
   identity?: string;
+  /**
+   * Optional status pip drawn in the node's top-right corner (e.g. the
+   * Governed-scope label-propagation state). `color` is any CSS color; `title`
+   * is the hover tooltip. Purely presentational — the canvas ignores it for
+   * layout. Surfaces that don't track a per-node status omit it.
+   */
+  statusDot?: { color: string; title: string };
 }
 
 export interface CanvasLineageEdge {
@@ -128,6 +136,14 @@ function styleForType(type?: string): TypeStyle {
   if (!type) return FALLBACK_STYLE;
   const t = type.toLowerCase();
   if (TYPE_STYLES[t]) return TYPE_STYLES[t];
+  // Loom item slugs (data-product, mirrored-database, kql-database, eventhouse,
+  // activator, semantic-model, warehouse, …) resolve through the shared
+  // item-type-visual registry so a Governed / Mesh lineage node draws the SAME
+  // brand icon + colour the rest of the console uses for that item type.
+  if (isKnownItemType(t)) {
+    const iv = itemVisual(t);
+    return { color: iv.color, Icon: iv.icon as unknown as TypeStyle['Icon'], kind: iv.label };
+  }
   // Atlas type names like "azure_sql_table", "powerbi_report", "databricks_table".
   if (t.includes('column')) return { color: 'var(--loom-accent-emerald)', Icon: BranchFork16Regular, kind: 'Column' };
   if (t.includes('powerbi') || t.includes('power-bi') || t.includes('semantic')) return TYPE_STYLES['powerbi-model'];
@@ -205,6 +221,23 @@ function LineageNodeImpl({ data, selected }: NodeProps) {
       }}
     >
       <Handle type="target" position={Position.Left} style={portStyle('in', style.color)} />
+      {node.statusDot && (
+        <span
+          aria-hidden
+          title={node.statusDot.title}
+          style={{
+            position: 'absolute',
+            top: tokens.spacingVerticalXS,
+            right: tokens.spacingHorizontalXS,
+            width: '10px',
+            height: '10px',
+            borderRadius: tokens.borderRadiusCircular,
+            background: node.statusDot.color,
+            border: `1px solid ${tokens.colorNeutralBackground1}`,
+            boxShadow: tokens.shadow2,
+          }}
+        />
+      )}
       <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
         <span style={{ color: style.color, display: 'inline-flex' }}><Icon fontSize={tokens.fontSizeBase400} /></span>
         <Text size={200} weight={node.focus ? 'semibold' : 'medium'} truncate wrap={false} style={{ flex: 1 }}>

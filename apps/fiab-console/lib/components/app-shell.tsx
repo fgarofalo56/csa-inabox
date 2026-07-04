@@ -9,7 +9,7 @@
  * don't get "CSA LoomCloud Scale Analytics".
  */
 
-import { ReactNode, useEffect, useState } from 'react';
+import { ReactNode, useEffect, useMemo, useState } from 'react';
 import {
   makeStyles, tokens, Avatar, Button,
   Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
@@ -37,10 +37,12 @@ import { SavedStatus } from './saved-status';
 import { NotificationsButton } from './notifications-button';
 import { GlobalJobToaster } from './global-job-toaster';
 import { OnboardingTour, openTour } from './onboarding/onboarding-tour';
+import { SessionProvider, type ShellSession } from './session-context';
 
 interface MeResponse {
   authenticated: boolean;
   user: null | { name: string; email?: string; upn: string; oid: string };
+  isTenantAdmin?: boolean;
 }
 
 const useStyles = makeStyles({
@@ -151,12 +153,24 @@ export function AppShell({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
+  // Single shell-level admin probe (rel-T54): one /api/me feeds the whole
+  // chrome. Consumers (LeftNav, catalog/governance rails) read the cached
+  // result via useIsTenantAdmin() — never their own fetch.
+  const session = useMemo<ShellSession>(() => ({
+    authenticated: !!me?.authenticated,
+    user: me?.user ?? null,
+    // Fail-closed: admin only when the probe has resolved AND confirmed it.
+    isTenantAdmin: !!me?.authenticated && !!me?.isTenantAdmin,
+    loading: me === null,
+  }), [me]);
+
   // Override the nav-width grid track when collapsed → icon rail.
   const rootStyle = navCollapsed
     ? ({ ['--loom-nav-width' as string]: '52px' } as React.CSSProperties)
     : undefined;
 
   return (
+    <SessionProvider value={session}>
     <div className={styles.root} style={rootStyle}>
       <header className={styles.topbar} role="banner">
         <Tooltip content={navCollapsed ? 'Expand navigation' : 'Collapse navigation'} relationship="label">
@@ -252,5 +266,6 @@ export function AppShell({ children }: { children: ReactNode }) {
       <GlobalJobToaster />
       <OnboardingTour />
     </div>
+    </SessionProvider>
   );
 }
