@@ -25,6 +25,18 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.53.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.52.0...csa-inabox-v0.53.0) (2026-07-04)
+
+
+### Features
+
+* **loom,ia:** consolidate catalog destinations — one rail catalog + governed-inventory rename (rel-T47) ([#1630](https://github.com/fgarofalo56/csa-inabox/issues/1630)) ([e706019](https://github.com/fgarofalo56/csa-inabox/commit/e706019a6dc05ca9247df027bffa2f6b3b652369))
+* **loom,ia:** consolidate RTI into one tabbed hub + fix orphan/404 routes (rel-T46/T51) ([#1629](https://github.com/fgarofalo56/csa-inabox/issues/1629)) ([3027a05](https://github.com/fgarofalo56/csa-inabox/commit/3027a050b21dc2e51562e8666d5e43c5c8a83274))
+* **loom,ia:** group the left rail into labeled sections + plain-language labels (rel-T45/T52) ([#1635](https://github.com/fgarofalo56/csa-inabox/issues/1635)) ([a9a3b3f](https://github.com/fgarofalo56/csa-inabox/commit/a9a3b3f4ffab1c81233f4c4de12b4e56ab011323))
+* **loom,ia:** single shell admin probe + gate Admin/Setup/cross-plane links on tenant-admin (rel-T53/T54) ([#1631](https://github.com/fgarofalo56/csa-inabox/issues/1631)) ([aa42e71](https://github.com/fgarofalo56/csa-inabox/commit/aa42e71b7a40b8d4f6c0b79eaff9c334ba479b8f))
+* **loom,ia:** unify lineage on LineageCanvas + scope switch + fix Purview-lineage label (rel-T48) ([#1632](https://github.com/fgarofalo56/csa-inabox/issues/1632)) ([7a3d986](https://github.com/fgarofalo56/csa-inabox/commit/7a3d986e77e0f202f4d3d72f98c9ede7cb0fec51))
+* **loom,ia:** workspace switcher + editor breadcrumb + Create entry with workspace picker (rel-T49/T50) ([#1633](https://github.com/fgarofalo56/csa-inabox/issues/1633)) ([3e51a09](https://github.com/fgarofalo56/csa-inabox/commit/3e51a0978fc5b41cc66a806f8ee1b06786441385))
+
 ## [0.52.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.51.0...csa-inabox-v0.52.0) (2026-07-04)
 
 
