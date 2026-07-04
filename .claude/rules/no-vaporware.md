@@ -38,7 +38,13 @@ For every new Loom feature:
 4. **New Cosmos container** → add to a Cosmos init step (either bicep deploymentScript or the cosmos-client's `createIfNotExists`)
 5. **New tenant config (Power BI, Fabric, KV firewall, etc.)** → document in `docs/fiab/v3-tenant-bootstrap.md` and (where possible) add to `scripts/csa-loom/*.sh` or `.github/workflows/*-bootstrap.yml`
 
-The acceptance test: **`az deployment sub create -f platform/fiab/bicep/main.bicep -p params/commercial-full.bicepparam` + the post-deploy bootstrap workflow must produce a working Loom with the same feature set as the live deployment.** Drift between what's running and what bicep deploys is itself a vaporware violation.
+The acceptance test (from-scratch): a clean install reaches a working Loom via the **two-phase image path** — a fresh ACR is created EMPTY, so a single `az deployment sub create … -p params/commercial-full.bicepparam` with `deployAppsEnabled=true` CANNOT come up (the Container Apps reference `<newacr>.azurecr.io/loom-console:<tag>` and there is no image to pull yet). That is expected, not a bug; the image build is a required phase. The canonical from-scratch path is:
+
+1. **Provision infra** — `az deployment sub create -f platform/fiab/bicep/main.bicep -p params/commercial-full.bicepparam adminEntraGroupId=<group> deployAppsEnabled=false` (hub VNet + Private DNS + ACR + Container Apps Env + every Azure backend, but NO Container Apps).
+2. **Build + push the app images and bring the apps up** — run `.github/workflows/full-app-deploy-commercial.yml` (opens the ACR, `az acr build`s every app image into it server-side, re-locks it, then rolls the Container Apps onto the new images). This is the actually-working from-scratch app path.
+3. **Post-deploy bootstrap** — `.github/workflows/csa-loom-post-deploy-bootstrap.yml` wires sign-in (MSAL app reg) + the data-plane grants (Synapse SQL, Purview, Databricks SCIM, Spark PE).
+
+Drift between what's running and what this three-step path deploys is itself a vaporware violation.
 
 ## Validation per merge
 

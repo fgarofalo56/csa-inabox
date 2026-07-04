@@ -1558,6 +1558,12 @@ module keyvault 'keyvault.bicep' = {
     mcpPrincipalId: identity.outputs.uamiMcpPrincipalId
     consolePrincipalNeedsCmkRole: consolePrincipalNeedsCmkBind
     skipRoleGrants: skipRoleGrants
+    // B9 — keep purge protection ON for all government boundaries (Gov/prod
+    // compliance posture); OFF for Commercial so a teardown can `az keyvault
+    // purge` and a redeploy reclaims the same vault name in the same RG. Derived
+    // from the existing boundary param (no new param — main.bicep is at the 256
+    // ceiling).
+    enablePurgeProtection: boundary != 'Commercial'
     privateEndpointSubnetId: network.outputs.privateEndpointsSubnetId
     privateDnsZoneVaultId: network.outputs.privateDnsZoneIds.keyvault
     workspaceId: monitoring.outputs.lawId

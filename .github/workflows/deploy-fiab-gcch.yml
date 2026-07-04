@@ -31,6 +31,10 @@ on:
         description: 'dlz-attach: the NEW subscription the DLZ is provisioned into.'
         type: string
         required: false
+      keep_resources:
+        description: 'Keep resources up after provision AND run the post-deploy bootstrap (Gov day-one: MSAL app-reg, Synapse SQL grants, Purview roles, Databricks SCIM, Spark PE). Skips teardown. Use for a real GCC-High install; leave false for the nightly validate-and-teardown ring.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -74,6 +78,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     environment: gcc-high-deploy   # requires manual approval
+    # Coordinates exported for the chained Gov post-deploy bootstrap (rel-T32).
+    outputs:
+      admin_sub: ${{ steps.bootstrap_coords.outputs.admin_sub }}
+      dlz_sub: ${{ steps.bootstrap_coords.outputs.dlz_sub }}
+      region: ${{ steps.bootstrap_coords.outputs.region }}
 
     steps:
       - uses: actions/checkout@v4
@@ -195,6 +204,15 @@ jobs:
           fi
         working-directory: platform/fiab/azd
 
+      - name: Export bootstrap coordinates (for the chained Gov bootstrap)
+        id: bootstrap_coords
+        if: (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        run: |
+          ADMIN_SUB=$(az account show --query id -o tsv)
+          echo "admin_sub=$ADMIN_SUB" >> "$GITHUB_OUTPUT"
+          echo "dlz_sub=${CSA_LOOM_TARGET_SUBSCRIPTION:-$ADMIN_SUB}" >> "$GITHUB_OUTPUT"
+          echo "region=$AZURE_LOCATION" >> "$GITHUB_OUTPUT"
+
       - name: Smoke test (Gov-specific)
         if: github.event_name == 'schedule' || inputs.run_mode == 'full'
         run: bash .github/scripts/fiab-smoke-test.sh
@@ -203,7 +221,7 @@ jobs:
           BOUNDARY: GCC-High
 
       - name: Teardown
-        if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full')
+        if: success() && (github.event_name == 'schedule' || inputs.run_mode == 'full') && !inputs.keep_resources
         run: bash .github/scripts/fiab-teardown.sh
         env:
           RG_NAME: rg-csa-loom-admin-${{ env.AZURE_LOCATION }}
@@ -224,3 +242,20 @@ jobs:
               repo: context.repo.repo,
               body: `❌ Nightly deploy-fiab-gcch failed in run ${context.runId}. Federal CSU should investigate.`
             })
+
+  # rel-T32 (B8): Gov post-deploy bootstrap. The SAME reusable bootstrap the
+  # Commercial workflow calls, but with boundary=GCC-High so it runs
+  # `az cloud set --name AzureUSGovernment` + logs in with the AZURE_GOV_* secret
+  # set. Only when a real, KEPT Gov deploy stands (keep_resources=true skips
+  # teardown). This is the automated all-Gov-day-one path — no copy-pasted logic.
+  post-deploy-bootstrap:
+    name: Post-deploy bootstrap (GCC-High)
+    needs: deploy-validate
+    if: ${{ inputs.keep_resources && (github.event_name == 'schedule' || inputs.run_mode == 'full') && needs.deploy-validate.result == 'success' }}
+    uses: ./.github/workflows/csa-loom-post-deploy-bootstrap.yml
+    secrets: inherit
+    with:
+      boundary: GCC-High
+      region: ${{ needs.deploy-validate.outputs.region }}
+      admin_subscription: ${{ needs.deploy-validate.outputs.admin_sub }}
+      dlz_subscription: ${{ needs.deploy-validate.outputs.dlz_sub }}

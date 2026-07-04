@@ -78,7 +78,9 @@ import type { FluentIcon } from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { CapacityEquivalencePanel } from '@/lib/components/setup/capacity-equivalence-panel';
 import { ServiceScanPanel } from '@/lib/components/setup/service-scan-panel';
+import { QuotaPreflightPanel, type QuotaTarget } from '@/lib/components/setup/quota-preflight-panel';
 import { SetupDeploymentDiagram, type DiagramSpoke } from '@/lib/components/setup/deployment-diagram';
+import { saveDeploy, loadDeploy, clearDeploy } from '@/lib/setup/deploy-persistence';
 import { SetupIdentityCard } from '@/lib/panes/setup-identity-step';
 import { SetupServiceChoices, type ServiceChoiceMap } from '@/lib/panes/setup-service-choices';
 import {
@@ -570,6 +572,38 @@ export function SetupWizardPane() {
     if (config === null && !configError) void loadConfig();
   }, [config, configError, loadConfig]);
 
+  // rel-T43: re-attach to an in-flight deploy after a browser refresh. On first
+  // mount, if a non-terminal deploy handle was persisted (GitHub Actions run or
+  // orchestrator deploymentId), resume the "done" step showing progress against
+  // the SAME run — never a fresh dispatch, so a refresh can't double-deploy. The
+  // persisted record is cleared on terminal state and on "Deploy another".
+  useEffect(() => {
+    const rec = loadDeploy();
+    if (!rec) return;
+    setState((s) => {
+      if (s.step !== 'intro') return s; // never clobber an in-progress wizard
+      const t = rec.topology || {};
+      return {
+        ...s,
+        step: 'done',
+        deploymentId: rec.deploymentId,
+        workflowFile: rec.workflowFile,
+        dispatchedAt: rec.dispatchedAt,
+        runUrl: rec.runUrl,
+        runStatus: 'pending',
+        deployStage: rec.deployStage,
+        deployProgress: 0.3,
+        boundary: t.boundary as Boundary | undefined,
+        mode: t.mode as Mode | undefined,
+        domainName: t.domainName,
+        capacitySku: t.capacitySku,
+        location: t.location,
+      };
+    });
+    // Run once on mount — re-attach is a first-paint concern only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Load the region list for the active boundary + chosen subscription. Prefers
   // the live ARM locations for that sub; falls back to the static per-boundary set.
   const loadRegions = useCallback(async (boundary?: Boundary, subscriptionId?: string) => {
@@ -705,6 +739,8 @@ export function SetupWizardPane() {
         const res = await fetch(`/api/setup/workflow-run-status?${qs.toString()}`);
         const j = await res.json().catch(() => ({}));
         if (cancelled || !j?.ok) return;
+        // Terminal — drop the persisted handle so a later refresh starts fresh.
+        if (j.status === 'completed') clearDeploy();
         setState((s) =>
           s.step === 'done'
             ? {
@@ -814,16 +850,33 @@ export function SetupWizardPane() {
       if (res.status === 202 && j.ok && j.deploymentMode === 'orchestrator') {
         // The Setup Orchestrator accepted the job and is running the real
         // multi-sub `az deployment sub create`. Surface the deploymentId.
+        const stage = `Running on the Setup Orchestrator (deployment ${j.deploymentId})`;
+        saveDeploy({
+          deploymentId: j.deploymentId,
+          deploymentMode: 'orchestrator',
+          dispatchedAt: new Date().toISOString(),
+          deployStage: stage,
+          topology: { boundary: state.boundary, mode: state.mode, domainName: state.domainName, capacitySku: state.capacitySku, location: state.location },
+        });
         setState((s) => ({
           ...s,
           deploymentId: j.deploymentId,
-          deployStage: `Running on the Setup Orchestrator (deployment ${j.deploymentId})`,
+          deployStage: stage,
           deployProgress: 0.5,
           step: 'done',
         }));
         return;
       }
       if (res.status === 202 && j.ok && j.deploymentMode === 'github-workflow-dispatch') {
+        const stage = `Queued on GitHub Actions (${j.workflowFile})`;
+        saveDeploy({
+          deploymentId: j.workflowFile,
+          workflowFile: j.workflowFile,
+          dispatchedAt: j.dispatchedAt,
+          deploymentMode: 'github-workflow-dispatch',
+          deployStage: stage,
+          topology: { boundary: state.boundary, mode: state.mode, domainName: state.domainName, capacitySku: state.capacitySku, location: state.location },
+        });
         setState((s) => ({
           ...s,
           deploymentId: j.workflowFile,
@@ -832,7 +885,7 @@ export function SetupWizardPane() {
           runStatus: 'pending',
           runConclusion: undefined,
           runUrl: undefined,
-          deployStage: `Queued on GitHub Actions (${j.workflowFile})`,
+          deployStage: stage,
           deployProgress: 0.3,
           step: 'done',
         }));
@@ -1553,6 +1606,34 @@ export function SetupWizardPane() {
               </>
             )}
 
+            {/* rel-T42: Azure vCPU quota pre-flight for the selected topology's
+                target subscription(s) + region. An honest GATE (not a blocker):
+                warns per insufficient tier but still lets the operator deploy. */}
+            {(() => {
+              const adminId = config?.adminSubscriptionId || state.subscriptionId;
+              const adminName = config?.adminSubscriptionName || state.subscriptionName;
+              let targets: QuotaTarget[] = [];
+              if (isSingleSub) {
+                if (adminId && state.location) {
+                  targets = [{ subscriptionId: adminId, subscriptionName: adminName, location: state.location, role: 'full' }];
+                }
+              } else if (isWireNew && state.location) {
+                targets = (state.dlzSubscriptionIds || []).map((id) => ({
+                  subscriptionId: id,
+                  subscriptionName: state.dlzSubscriptionNames?.[id],
+                  location: state.location!,
+                  role: 'spoke' as const,
+                }));
+              }
+              // wire-existing → [] (panel shows the "no new compute" note).
+              return (
+                <>
+                  <Divider />
+                  <QuotaPreflightPanel targets={targets} boundary={state.boundary || 'Commercial'} isGov={isGov} />
+                </>
+              );
+            })()}
+
             <Footer
               onBack={() => go(isWireExisting ? 'subscription' : 'services')}
               onNext={deploy}
@@ -1656,7 +1737,7 @@ export function SetupWizardPane() {
                 on this lakehouse. <Link href="/learn?topic=setup-wizard">Learn more</Link>
               </MessageBarBody>
             </MessageBar>
-            <Button appearance="primary" icon={<Rocket24Regular />} onClick={() => { setState({ step: 'intro' }); setSubs([]); setSubsError(undefined); }}>
+            <Button appearance="primary" icon={<Rocket24Regular />} onClick={() => { clearDeploy(); setState({ step: 'intro' }); setSubs([]); setSubsError(undefined); }}>
               Deploy another
             </Button>
           </div>
