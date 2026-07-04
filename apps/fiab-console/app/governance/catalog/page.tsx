@@ -273,7 +273,7 @@ export default function GovernanceCatalogPage() {
   ], [s.classChips, s.classChip, openAsset]);
 
   return (
-    <GovernanceShell sectionTitle="Data catalog">
+    <GovernanceShell sectionTitle="Governed inventory">
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Single inventory across every Lakehouse, Warehouse, Semantic Model, KQL DB, Mirrored DB, Data Product, and Vector Store in your tenant.
         {source && (

@@ -12,7 +12,7 @@ import {
   Button, Tooltip, makeStyles, tokens,
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
 } from '@fluentui/react-components';
-import { Apps24Regular, Dismiss24Regular } from '@fluentui/react-icons';
+import { Apps24Regular, Dismiss24Regular, Open20Regular } from '@fluentui/react-icons';
 
 interface AppDoc {
   id: string;
@@ -55,6 +55,13 @@ const useStyles = makeStyles({
     textTransform: 'uppercase', letterSpacing: '0.04em',
   },
   empty: { color: tokens.colorNeutralForeground2, fontSize: '13px' },
+  footer: {
+    marginTop: 'var(--loom-space-4)',
+    paddingTop: 'var(--loom-space-3)',
+    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
+    display: 'flex',
+    justifyContent: 'flex-end',
+  },
 });
 
 export function AppLauncher() {
@@ -106,6 +113,12 @@ export function AppLauncher() {
               ))}
             </div>
           )}
+          <div className={styles.footer}>
+            <Button as="a" href="/apps" appearance="subtle" size="small"
+              icon={<Open20Regular />} onClick={() => setOpen(false)}>
+              See all apps
+            </Button>
+          </div>
         </DrawerBody>
       </Drawer>
     </>
