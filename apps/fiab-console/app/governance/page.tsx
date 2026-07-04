@@ -213,7 +213,7 @@ const SECTIONS: {
   {
     group: 'Discovery & lineage',
     items: [
-      { href: '/governance/lineage', label: 'Purview lineage', desc: 'End-to-end column & item lineage graph.', icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
+      { href: '/governance/lineage', label: 'Lineage', desc: 'End-to-end item lineage graph — Governed, Mesh, and Federated scopes.', icon: Branch20Regular, color: 'var(--loom-accent-indigo2)' },
       { href: '/catalog', label: 'Search', desc: 'Federated search across Purview, Unity, OneLake.', icon: DatabaseSearch20Regular, color: 'var(--loom-accent-blue)' },
     ],
   },

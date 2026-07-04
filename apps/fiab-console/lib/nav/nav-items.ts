@@ -23,7 +23,7 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/catalog', label: 'Unified catalog' },
   { href: '/org-reports', label: 'Organization reports' },
   { href: '/semantic-model', label: 'Semantic models' },
-  { href: '/thread', label: 'Mesh lineage' },
+  { href: '/thread', label: 'Lineage' },
   { href: '/marketplace', label: 'Marketplace' },
   { href: '/governance', label: 'Governance' },
   { href: '/monitor', label: 'Monitor' },

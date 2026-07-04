@@ -1,48 +1,67 @@
 'use client';
 
 /**
- * /governance/lineage — REAL lineage canvas. Pulls /api/governance/lineage
- * (workspaces + items + edges from item.state references), lays out
- * nodes via a simple barycenter algorithm grouped by workspace, draws
- * SVG arrows between dependencies.
+ * /governance/lineage — the UNIFIED Loom lineage surface.
  *
- * No Purview required — works against the real Cosmos catalog. When
- * tenant-settings purview.bound = true, a future iteration merges in
- * Purview lineage edges.
+ * One page, one shared canvas (@xyflow/react `LineageCanvas`), a SCOPE switch:
+ *
+ *   • Governed  — every item in the caller's tenant, edges derived from typed
+ *     references in each item's state (GET /api/governance/lineage). Overlays
+ *     the label-propagation status as a per-node corner pip. When Microsoft
+ *     Purview is bound, its lineage edges merge in — but Purview is NOT
+ *     required, so the surface is NOT named "Purview lineage".
+ *   • Mesh      — the caller's Weave / Thread integration graph, "what feeds
+ *     what" across editors (GET /api/thread/edges).
+ *   • Federated — cross-source lineage for a single resolved asset (Purview
+ *     entity GUID / Unity Catalog table / OneLake workspace) via the shared
+ *     LineagePanel (GET /api/catalog/lineage/item).
+ *
+ * All three scopes render on the SAME theme-aware LineageCanvas + itemVisual()
+ * registry, so /thread (Mesh) and /catalog/lineage (Federated) — the sibling
+ * lineage entry points — look and behave identically. `?scope=` selects the
+ * scope; `?focusId=` (Governed) focuses one item's chain.
  */
 
 import { clientFetch } from '@/lib/client-fetch';
-import { Suspense, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import {
-  Spinner, Badge, Caption1, Subtitle2, Body1, Button,
+  Spinner, Badge, Body1, Button, Input, Field, Dropdown, Option,
+  TabList, Tab, type SelectTabData, type SelectTabEvent,
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular, Open16Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular } from '@fluentui/react-icons';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { Toolbar } from '@/lib/components/ui/section';
 import {
-  STATUS_LABEL, STATUS_COLOR, type PropagationStatus,
+  LineageCanvas, type CanvasLineageNode, type CanvasLineageEdge,
+} from '@/lib/components/catalog/lineage-canvas';
+import { LineagePanel } from '@/lib/components/catalog/lineage-panel';
+import {
+  STATUS_LABEL, type PropagationStatus,
 } from '@/lib/governance/label-propagation';
 
+// ── Scopes ──────────────────────────────────────────────────────────────────
+
+type Scope = 'governed' | 'mesh' | 'federated';
+const SCOPES: { value: Scope; label: string; hint: string }[] = [
+  { value: 'governed',  label: 'Governed',  hint: 'Every item in your tenant, edges from typed references in item state (Purview edges merged when bound).' },
+  { value: 'mesh',      label: 'Mesh',      hint: 'Your Weave / Thread integration graph — what feeds what across editors.' },
+  { value: 'federated', label: 'Federated', hint: 'Cross-source lineage for one resolved asset — Purview + Unity Catalog + OneLake.' },
+];
+
+// ── Governed-scope wire model (GET /api/governance/lineage) ──────────────────
+
 interface NodePropagation {
-  status: PropagationStatus;
-  currentLabel: string;
-  expectedLabel: string;
-  lastRunAt?: string;
+  status: PropagationStatus; currentLabel: string; expectedLabel: string; lastRunAt?: string;
 }
-interface Node {
-  id: string; label: string; type: string; workspaceId: string;
-  classifications?: string[]; sensitivity?: string;
-  propagation?: NodePropagation;
+interface GovNode {
+  id: string; label: string; type: string; workspaceId: string; propagation?: NodePropagation;
 }
-interface Edge { from: string; to: string; via: string; }
-interface WorkspaceNode { id: string; label: string; }
+interface GovEdge { from: string; to: string; via: string; }
 
-interface LayoutNode extends Node { x: number; y: number; }
-
-/** SVG dot fill per propagation status — mirrors STATUS_COLOR Fluent tokens. */
+/** SVG dot fill per propagation status — mirrors the governance STATUS_COLOR tokens. */
 const PROP_DOT: Record<PropagationStatus, string> = {
   'in-sync': '#0e700e',
   pending: '#bc4b09',
@@ -51,135 +70,56 @@ const PROP_DOT: Record<PropagationStatus, string> = {
   'no-upstream': '#c8c6c4',
 };
 
+// ── Mesh-scope wire model (GET /api/thread/edges) ────────────────────────────
+
+interface ThreadEdge {
+  id: string;
+  fromItemId: string; fromType: string; fromName?: string;
+  toItemId: string; toType: string; toName?: string;
+  toExternal?: boolean; toLink?: string;
+  action: string; createdAt: string;
+}
+const ACTION_LABEL: Record<string, string> = {
+  'analyze-in-notebook': 'Analyze in a Notebook',
+  'add-data-agent-source': 'Data Agent source',
+  'build-powerbi-model': 'Power BI model',
+  'publish-as-api': 'Published as API',
+};
+
 const useStyles = makeStyles({
-  canvas: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusLarge, overflow: 'auto',
-    backgroundColor: tokens.colorNeutralBackground1,
-    minHeight: '480px',
-  },
   legend: {
     display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalL, alignItems: 'center',
-    padding: tokens.spacingVerticalM,
+    paddingTop: tokens.spacingVerticalM, paddingBottom: tokens.spacingVerticalM,
     color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200,
   },
-  detail: {
-    padding: tokens.spacingVerticalL, borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    backgroundColor: tokens.colorNeutralBackground2,
-    borderRadius: `0 0 ${tokens.borderRadiusLarge} ${tokens.borderRadiusLarge}`,
-  },
-  empty: {
-    padding: tokens.spacingVerticalXXL, color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200, textAlign: 'center',
+  hint: { color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM },
+  fedForm: {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 2fr) minmax(0, 1fr) auto',
+    gap: tokens.spacingHorizontalM, alignItems: 'flex-end',
+    maxWidth: '100%', marginBottom: tokens.spacingVerticalL,
+    padding: tokens.spacingVerticalM,
+    border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
   },
 });
 
-const ITEM_COLORS: Record<string, string> = {
-  lakehouse: '#0078d4',
-  warehouse: '#5c2d91',
-  notebook: '#107c10',
-  'data-pipeline': '#dca900',
-  'adf-pipeline': '#dca900',
-  'semantic-model': '#7719aa',
-  report: '#0a4f7a',
-  dashboard: '#3aaaaa',
-  'kql-database': '#bd7800',
-  eventhouse: '#bd7800',
-  eventstream: '#005a9e',
-  activator: '#d13438',
-  'data-product': '#1aaa55',
-  'mirrored-database': '#666',
-};
-function typeColor(type: string): string {
-  return ITEM_COLORS[type] || '#888';
-}
+// ── Governed scope ───────────────────────────────────────────────────────────
 
-const CANVAS_PAD_X = 60;
-const CANVAS_PAD_Y = 40;
-const COL_WIDTH = 200;
-const NODE_HEIGHT = 56;
-const NODE_GAP = 16;
-
-/**
- * Simple layered layout:
- *   - rank 0 = items with no incoming edges (sources)
- *   - rank r = max(rank(parents)) + 1
- *   - place nodes in columns by rank, stack within column.
- * Caps depth at items.length to defend against cycles.
- */
-function layout(nodes: Node[], edges: Edge[]): { laid: LayoutNode[]; w: number; h: number; ranks: Map<string, number> } {
-  const ranks = new Map<string, number>();
-  for (const n of nodes) ranks.set(n.id, 0);
-  const incoming = new Map<string, Edge[]>();
-  for (const e of edges) {
-    if (!incoming.has(e.to)) incoming.set(e.to, []);
-    incoming.get(e.to)!.push(e);
-  }
-  for (let pass = 0; pass < nodes.length; pass++) {
-    let changed = false;
-    for (const n of nodes) {
-      const ins = incoming.get(n.id) || [];
-      let r = 0;
-      for (const e of ins) {
-        const pr = ranks.get(e.from);
-        if (pr !== undefined && pr + 1 > r) r = pr + 1;
-      }
-      if (r !== ranks.get(n.id)) {
-        ranks.set(n.id, r); changed = true;
-      }
-    }
-    if (!changed) break;
-  }
-  // Bucket by rank
-  const cols = new Map<number, Node[]>();
-  for (const n of nodes) {
-    const r = ranks.get(n.id) ?? 0;
-    if (!cols.has(r)) cols.set(r, []);
-    cols.get(r)!.push(n);
-  }
-  const laid: LayoutNode[] = [];
-  let maxX = 0; let maxY = 0;
-  for (const [r, list] of cols.entries()) {
-    list.sort((a, b) => a.workspaceId.localeCompare(b.workspaceId) || a.label.localeCompare(b.label));
-    list.forEach((n, i) => {
-      const x = CANVAS_PAD_X + r * COL_WIDTH;
-      const y = CANVAS_PAD_Y + i * (NODE_HEIGHT + NODE_GAP);
-      laid.push({ ...n, x, y });
-      maxX = Math.max(maxX, x + COL_WIDTH);
-      maxY = Math.max(maxY, y + NODE_HEIGHT);
-    });
-  }
-  return { laid, w: maxX + CANVAS_PAD_X, h: maxY + CANVAS_PAD_Y, ranks };
-}
-
-function LineageInner() {
+function GovernedScope({ focusId }: { focusId: string | null }) {
   const s = useStyles();
-  const [workspaces, setWorkspaces] = useState<WorkspaceNode[]>([]);
-  const [nodes, setNodes] = useState<Node[]>([]);
-  const [edges, setEdges] = useState<Edge[]>([]);
+  const [nodes, setNodes] = useState<GovNode[]>([]);
+  const [edges, setEdges] = useState<GovEdge[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [source, setSource] = useState<string>('');
   const [propMeta, setPropMeta] = useState<{ source: string; lastRunAt: string | null; pending: number } | null>(null);
-  const [q, setQ] = useState('');
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  // Focus: when arriving from an item (e.g. OneLake → "View lineage"), scope the
-  // graph to JUST that object + everything connected to it, instead of the whole
-  // tenant. `?focusId=<itemId>` (matches the lineage node id == Cosmos item id).
-  const searchParams = useSearchParams();
-  const [focusId, setFocusId] = useState<string | null>(null);
-  useEffect(() => {
-    const f = searchParams?.get('focusId') || null;
-    setFocusId(f);
-    if (f) setSelectedId(f);
-  }, [searchParams]);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
       const r = await clientFetch('/api/governance/lineage');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
-      setWorkspaces(j.workspaces || []);
       setNodes(j.nodes || []);
       setEdges(j.edges || []);
       setSource(j.source || 'cosmos');
@@ -187,81 +127,41 @@ function LineageInner() {
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally { setLoading(false); }
-  };
+  }, []);
+  useEffect(() => { load(); }, [load]);
 
-  useEffect(() => { load(); }, []);
-
-  // Focus scope — the connected component (both directions, transitive) of the
-  // focused node, so "View lineage" on an item shows that object + its upstream
-  // and downstream lineage only. Null when no focus → whole tenant.
-  const focusSet = useMemo(() => {
-    if (!focusId || !nodes.some((n) => n.id === focusId)) return null;
-    const adj = new Map<string, Set<string>>();
-    const link = (a: string, b: string) => { if (!adj.has(a)) adj.set(a, new Set()); adj.get(a)!.add(b); };
-    for (const e of edges) { link(e.from, e.to); link(e.to, e.from); }
-    const seen = new Set<string>([focusId]);
-    const queue = [focusId];
-    while (queue.length) {
-      const n = queue.shift()!;
-      for (const m of adj.get(n) || []) if (!seen.has(m)) { seen.add(m); queue.push(m); }
-    }
-    return seen;
-  }, [focusId, nodes, edges]);
-
-  const focusLabel = useMemo(() => (focusId ? nodes.find((n) => n.id === focusId)?.label : null), [focusId, nodes]);
-
-  // Filter — focus scope first, then the text query (name / type / workspace).
-  const filteredNodes = useMemo(() => {
-    const base = focusSet ? nodes.filter((n) => focusSet.has(n.id)) : nodes;
-    const f = q.toLowerCase().trim();
-    if (!f) return base;
-    return base.filter((n) =>
-      n.label.toLowerCase().includes(f) ||
-      n.type.toLowerCase().includes(f) ||
-      n.workspaceId.includes(f)
-    );
-  }, [nodes, q, focusSet]);
-
-  // When filtering, only keep edges where both endpoints are in the filtered set.
-  const filteredEdges = useMemo(() => {
-    const ids = new Set(filteredNodes.map((n) => n.id));
-    return edges.filter((e) => ids.has(e.from) && ids.has(e.to));
-  }, [edges, filteredNodes]);
-
-  const { laid, w, h, ranks } = useMemo(() => layout(filteredNodes, filteredEdges), [filteredNodes, filteredEdges]);
-  const byId = useMemo(() => new Map(laid.map((n) => [n.id, n])), [laid]);
-
-  const selected = selectedId ? byId.get(selectedId) : null;
-  const selectedUpstream = selectedId ? filteredEdges.filter((e) => e.to === selectedId) : [];
-  const selectedDownstream = selectedId ? filteredEdges.filter((e) => e.from === selectedId) : [];
-
-  const wsNameById = useMemo(() => new Map(workspaces.map((w) => [w.id, w.label])), [workspaces]);
+  // Adapt the governance graph onto the shared LineageCanvas model. Types stay
+  // Loom slugs so styleForType()/itemVisual() draw the canonical brand visual;
+  // label-propagation status rides along as a corner pip.
+  const canvasNodes: CanvasLineageNode[] = useMemo(() => nodes.map((n) => ({
+    id: n.id,
+    label: n.label,
+    type: n.type,
+    source: 'loom',
+    openHref: `/items/${n.type}/${n.id}`,
+    statusDot: n.propagation ? {
+      color: PROP_DOT[n.propagation.status],
+      title:
+        `${STATUS_LABEL[n.propagation.status]}` +
+        (n.propagation.expectedLabel ? ` — expected: ${n.propagation.expectedLabel}` : '') +
+        (n.propagation.currentLabel ? ` · current: ${n.propagation.currentLabel}` : ''),
+    } : undefined,
+  })), [nodes]);
+  const canvasEdges: CanvasLineageEdge[] = useMemo(
+    () => edges.map((e) => ({ from: e.from, to: e.to, type: e.via })),
+    [edges],
+  );
 
   return (
-    <GovernanceShell sectionTitle="Lineage">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
-        End-to-end relationships across your tenant's items, derived from typed references in each item's state.
-        {source && (
-          <Badge appearance="outline" color={source === 'purview' ? 'brand' : 'informative'} size="small" style={{ marginLeft: tokens.spacingHorizontalS }}>
-            source: {source}
-          </Badge>
-        )}
-      </Body1>
-
+    <>
       <Toolbar
-        search={q}
-        onSearch={setQ}
-        searchPlaceholder="Filter by name, type, or workspace…"
         actions={
           <>
-            {focusId && focusLabel && (
-              <Badge appearance="tint" color="brand" size="large">
-                Focused: {focusLabel}
-                <Button size="small" appearance="transparent" onClick={() => { setFocusId(null); setSelectedId(null); }} style={{ minWidth: 'auto', marginLeft: tokens.spacingHorizontalXS }}>Show all</Button>
-              </Badge>
-            )}
-            <Badge appearance="tint" color="informative" size="medium">{filteredNodes.length} items</Badge>
-            <Badge appearance="tint" color="informative" size="medium">{filteredEdges.length} edges</Badge>
+            <Badge appearance="tint" color="informative" size="medium">{nodes.length} items</Badge>
+            <Badge appearance="tint" color="informative" size="medium">{edges.length} edges</Badge>
+            <Badge appearance="outline" color={source === 'purview' ? 'brand' : 'informative'} size="small">
+              source: {source || 'catalog'}
+            </Badge>
             {propMeta && (
               <Badge
                 appearance="tint"
@@ -292,95 +192,18 @@ function LineageInner() {
 
       {loading && <Spinner label="Building lineage graph…" />}
 
-      {!loading && !error && filteredNodes.length === 0 && (
-        <div className={s.empty}>
-          {q
-            ? <>No items match &ldquo;{q}&rdquo;.</>
-            : <>No items found in your workspaces yet. Create a notebook, lakehouse, or pipeline and edges will start appearing here.</>}
-        </div>
+      {!loading && !error && canvasNodes.length === 0 && (
+        <MessageBar>
+          <MessageBarBody>
+            No items found in your workspaces yet. Create a notebook, lakehouse, or pipeline and edges will start appearing here.
+          </MessageBarBody>
+        </MessageBar>
       )}
 
-      {!loading && !error && filteredNodes.length > 0 && (
+      {!loading && !error && canvasNodes.length > 0 && (
         <>
-          <div className={s.canvas}>
-            <svg width={w} height={h} role="img" aria-label="Lineage graph">
-              <defs>
-                <marker id="lineage-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill="#666" />
-                </marker>
-              </defs>
-              {/* Edges */}
-              {filteredEdges.map((e, i) => {
-                const a = byId.get(e.from); const b = byId.get(e.to);
-                if (!a || !b) return null;
-                const sx = a.x + 180; const sy = a.y + NODE_HEIGHT / 2;
-                const ex = b.x; const ey = b.y + NODE_HEIGHT / 2;
-                const dx = Math.max(40, (ex - sx) / 2);
-                const isHi = selectedId && (e.from === selectedId || e.to === selectedId);
-                return (
-                  <path
-                    key={`${e.from}->${e.to}:${i}`}
-                    d={`M ${sx} ${sy} C ${sx + dx} ${sy}, ${ex - dx} ${ey}, ${ex} ${ey}`}
-                    stroke={isHi ? '#0078d4' : '#aaa'}
-                    strokeWidth={isHi ? 2 : 1.25}
-                    fill="none"
-                    markerEnd="url(#lineage-arrow)"
-                  >
-                    <title>{e.via}: {a.label} → {b.label}</title>
-                  </path>
-                );
-              })}
-              {/* Nodes */}
-              {laid.map((n) => {
-                const sel = selectedId === n.id;
-                return (
-                  <g key={n.id}
-                     transform={`translate(${n.x},${n.y})`}
-                     style={{ cursor: 'pointer' }}
-                     onClick={() => setSelectedId(n.id === selectedId ? null : n.id)}>
-                    <rect
-                      width={180} height={NODE_HEIGHT}
-                      rx={6}
-                      fill={tokens.colorNeutralBackground1}
-                      stroke={sel ? tokens.colorBrandStroke1 : tokens.colorNeutralStroke2}
-                      strokeWidth={sel ? 2 : 1}
-                    />
-                    <rect width={5} height={NODE_HEIGHT} rx={6} fill={typeColor(n.type)} />
-                    <text x={14} y={20} fontSize={12} fontWeight={600} fill={tokens.colorNeutralForeground1}>
-                      {n.label.length > 24 ? n.label.slice(0, 24) + '…' : n.label}
-                    </text>
-                    <text x={14} y={38} fontSize={10} fill={tokens.colorNeutralForeground3}>{n.type}</text>
-                    <text x={14} y={50} fontSize={10} fill={tokens.colorNeutralForeground3}>
-                      ws: {(wsNameById.get(n.workspaceId) || n.workspaceId).slice(0, 22)}
-                    </text>
-                    {/* F15 — propagation status dot (top-right corner of the node). */}
-                    {n.propagation && (
-                      <circle cx={168} cy={12} r={5} fill={PROP_DOT[n.propagation.status]} stroke={tokens.colorNeutralBackground1} strokeWidth={1}>
-                        <title>
-                          {STATUS_LABEL[n.propagation.status]}
-                          {n.propagation.expectedLabel ? ` — expected: ${n.propagation.expectedLabel}` : ''}
-                          {n.propagation.currentLabel ? ` · current: ${n.propagation.currentLabel}` : ''}
-                        </title>
-                      </circle>
-                    )}
-                  </g>
-                );
-              })}
-            </svg>
-          </div>
-
+          <LineageCanvas nodes={canvasNodes} edges={canvasEdges} focusId={focusId || undefined} />
           <div className={s.legend}>
-            <strong>Legend:</strong>
-            {Object.entries(ITEM_COLORS).slice(0, 8).map(([type, color]) => (
-              <span key={type} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
-                <span style={{ width: 10, height: 10, background: color, borderRadius: tokens.borderRadiusSmall, display: 'inline-block' }} />
-                {type}
-              </span>
-            ))}
-            <span style={{ marginLeft: 'auto' }}>Click a node to focus its lineage</span>
-          </div>
-
-          <div className={s.legend} style={{ paddingTop: 0 }}>
             <strong>Label propagation:</strong>
             {(['in-sync', 'pending', 'overridden', 'unlabeled', 'no-upstream'] as PropagationStatus[]).map((st) => (
               <span key={st} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
@@ -388,77 +211,153 @@ function LineageInner() {
                 {STATUS_LABEL[st]}
               </span>
             ))}
+            <span style={{ marginLeft: 'auto' }}>Click a node to focus its upstream + downstream chain</span>
           </div>
-
-          {selected && (
-            <div className={s.detail}>
-              <Subtitle2 style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{selected.label}</Subtitle2>
-              <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                {selected.type} · workspace {wsNameById.get(selected.workspaceId) || selected.workspaceId} · rank {ranks.get(selected.id) ?? 0}
-              </Caption1>
-              {selected.propagation && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' }}>
-                  <Badge appearance="filled" color={STATUS_COLOR[selected.propagation.status]} size="small">
-                    {STATUS_LABEL[selected.propagation.status]}
-                  </Badge>
-                  <Caption1>
-                    Current label: <strong>{selected.propagation.currentLabel || '—'}</strong>
-                    {selected.propagation.expectedLabel && (
-                      <> · Inherited (expected): <strong>{selected.propagation.expectedLabel}</strong></>
-                    )}
-                  </Caption1>
-                  {selected.propagation.lastRunAt && (
-                    <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                      propagated {new Date(selected.propagation.lastRunAt).toLocaleString()}
-                    </Caption1>
-                  )}
-                </div>
-              )}
-              <a
-                href={`/items/${selected.type}/${selected.id}`}
-                target="_blank"
-                rel="noreferrer"
-                style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, fontSize: tokens.fontSizeBase200 }}
-              >
-                Open editor <Open16Regular />
-              </a>
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingHorizontalL, marginTop: tokens.spacingVerticalM }}>
-                <div>
-                  <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>
-                    <strong>Upstream ({selectedUpstream.length})</strong> — items that feed this one
-                  </Caption1>
-                  {selectedUpstream.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>None</Caption1>}
-                  {selectedUpstream.map((e, i) => {
-                    const src = byId.get(e.from);
-                    return (
-                      <div key={i} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                        ← <a href={`/items/${src?.type}/${src?.id}`}>{src?.label || e.from}</a>
-                        <span style={{ color: tokens.colorNeutralForeground3 }}> · {e.via}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-                <div>
-                  <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>
-                    <strong>Downstream ({selectedDownstream.length})</strong> — items that depend on this one
-                  </Caption1>
-                  {selectedDownstream.length === 0 && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>None</Caption1>}
-                  {selectedDownstream.map((e, i) => {
-                    const dst = byId.get(e.to);
-                    return (
-                      <div key={i} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>
-                        → <a href={`/items/${dst?.type}/${dst?.id}`}>{dst?.label || e.to}</a>
-                        <span style={{ color: tokens.colorNeutralForeground3 }}> · {e.via}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          )}
         </>
       )}
+    </>
+  );
+}
+
+// ── Mesh scope ────────────────────────────────────────────────────────────────
+
+function threadEdgesToGraph(edges: ThreadEdge[]): { nodes: CanvasLineageNode[]; edges: CanvasLineageEdge[] } {
+  const nodes = new Map<string, CanvasLineageNode>();
+  const out: CanvasLineageEdge[] = [];
+  const keyFor = (id: string, external?: boolean, link?: string) => (external ? `ext:${link || id}` : id);
+  for (const e of edges) {
+    const fromKey = keyFor(e.fromItemId);
+    const toKey = keyFor(e.toItemId, e.toExternal, e.toLink);
+    if (!nodes.has(fromKey)) {
+      nodes.set(fromKey, { id: fromKey, label: e.fromName || e.fromItemId, type: e.fromType, source: 'loom', openHref: `/items/${e.fromType}/${e.fromItemId}` });
+    }
+    if (!nodes.has(toKey)) {
+      nodes.set(toKey, { id: toKey, label: e.toName || e.toItemId, type: e.toType, source: 'loom', openHref: e.toExternal ? (e.toLink || undefined) : `/items/${e.toType}/${e.toItemId}` });
+    }
+    out.push({ from: fromKey, to: toKey, type: ACTION_LABEL[e.action] || e.action });
+  }
+  return { nodes: [...nodes.values()], edges: out };
+}
+
+function MeshScope() {
+  const [edges, setEdges] = useState<ThreadEdge[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setError(null);
+    try {
+      const r = await clientFetch('/api/thread/edges');
+      const j = await r.json();
+      if (!r.ok || j?.ok === false) { setError(j?.error || `HTTP ${r.status}`); setEdges([]); return; }
+      setEdges(j.edges || []);
+    } catch (e: any) { setError(e?.message || String(e)); setEdges([]); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const graph = useMemo(() => threadEdgesToGraph(edges || []), [edges]);
+
+  return (
+    <>
+      <Toolbar
+        actions={
+          <>
+            <Badge appearance="tint" color="informative" size="medium">{graph.nodes.length} items</Badge>
+            <Badge appearance="tint" color="informative" size="medium">{graph.edges.length} edges</Badge>
+            <Button icon={<ArrowSync24Regular />} onClick={load} disabled={edges == null}>Refresh</Button>
+          </>
+        }
+      />
+      {error && (
+        <MessageBar intent="error">
+          <MessageBarBody><MessageBarTitle>Could not load the mesh graph</MessageBarTitle>{error}</MessageBarBody>
+        </MessageBar>
+      )}
+      {edges == null && <Spinner label="Loading mesh lineage…" />}
+      {edges != null && !error && graph.edges.length === 0 && (
+        <MessageBar>
+          <MessageBarBody>
+            No Weave edges yet. Open any item&apos;s editor and choose <strong>Weave</strong> to wire it into another Loom service — analyze a dataset in a Notebook, add a Data Agent source, build a Power BI model, or publish it as an API.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {edges != null && !error && graph.edges.length > 0 && (
+        <LineageCanvas nodes={graph.nodes} edges={graph.edges} />
+      )}
+    </>
+  );
+}
+
+// ── Federated scope ──────────────────────────────────────────────────────────
+
+function FederatedScope() {
+  const s = useStyles();
+  const [source, setSource] = useState<'unity-catalog' | 'purview' | 'onelake'>('unity-catalog');
+  const [id, setId] = useState('');
+  const [host, setHost] = useState('');
+  const [committed, setCommitted] = useState<{ source: any; id: string; host?: string } | null>(null);
+  return (
+    <>
+      <div className={s.fedForm}>
+        <Field label="Source">
+          <Dropdown value={source} selectedOptions={[source]} onOptionSelect={(_, d) => setSource(d.optionValue as any)}>
+            <Option value="unity-catalog">Unity Catalog (table)</Option>
+            <Option value="purview">Purview (entity GUID)</Option>
+            <Option value="onelake">OneLake (workspace ID)</Option>
+          </Dropdown>
+        </Field>
+        <Field label="Asset ID">
+          <Input value={id} onChange={(_, d) => setId(d.value)} placeholder="main.bronze.customers / 0e1a-…-9f / 1234-…-abc" />
+        </Field>
+        {source === 'unity-catalog' && (
+          <Field label="Workspace hostname">
+            <Input value={host} onChange={(_, d) => setHost(d.value)} placeholder="adb-…azuredatabricks.net" />
+          </Field>
+        )}
+        <Button appearance="primary" disabled={!id} onClick={() => setCommitted({ source, id, host })}>Resolve</Button>
+      </div>
+      {committed
+        ? <LineagePanel source={committed.source} id={committed.id} host={committed.host} workspaceId={committed.source === 'onelake' ? committed.id : undefined} />
+        : <MessageBar><MessageBarBody>Enter a Unity Catalog table, Purview entity GUID, or OneLake workspace ID and choose <strong>Resolve</strong> to overlay its cross-source lineage.</MessageBarBody></MessageBar>}
+    </>
+  );
+}
+
+// ── Page ──────────────────────────────────────────────────────────────────────
+
+function LineageInner() {
+  const s = useStyles();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const scope: Scope = ((): Scope => {
+    const q = searchParams?.get('scope');
+    return q === 'mesh' || q === 'federated' ? q : 'governed';
+  })();
+  const focusId = searchParams?.get('focusId') || null;
+
+  const setScope = (next: Scope) => {
+    const params = new URLSearchParams(searchParams?.toString() || '');
+    params.set('scope', next);
+    if (next !== 'governed') params.delete('focusId');
+    router.replace(`/governance/lineage?${params.toString()}`);
+  };
+
+  const activeHint = SCOPES.find((x) => x.value === scope)?.hint;
+
+  return (
+    <GovernanceShell sectionTitle="Lineage">
+      <TabList
+        selectedValue={scope}
+        onTabSelect={(_e: SelectTabEvent, d: SelectTabData) => setScope(d.value as Scope)}
+        style={{ marginBottom: tokens.spacingVerticalS }}
+      >
+        {SCOPES.map((sc) => <Tab key={sc.value} value={sc.value}>{sc.label}</Tab>)}
+      </TabList>
+      <Body1 className={s.hint}>{activeHint}</Body1>
+
+      {scope === 'governed' && <GovernedScope focusId={focusId} />}
+      {scope === 'mesh' && <MeshScope />}
+      {scope === 'federated' && <FederatedScope />}
     </GovernanceShell>
   );
 }

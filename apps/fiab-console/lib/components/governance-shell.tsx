@@ -20,7 +20,7 @@ const SECTIONS = [
   { href: '/governance/govern',           label: 'Govern',             desc: 'My-items posture for data owners — label coverage, curation, recommended actions.' },
   { href: '/admin/domains',               label: 'Domains',            desc: 'Business domains and subdomains, workspace assignment, delegated settings (Admin portal).' },
   { href: '/governance/catalog',          label: 'Data catalog',       desc: 'Unified inventory across OneLake, Synapse, Databricks, ADLS, on-prem.' },
-  { href: '/governance/lineage',          label: 'Purview lineage',    desc: 'Column-level lineage across pipelines, notebooks, dataflows, semantic models.' },
+  { href: '/governance/lineage',          label: 'Lineage',            desc: 'End-to-end lineage across items, pipelines, notebooks, dataflows, and models — Governed / Mesh / Federated scopes; Purview edges merge in when bound.' },
   { href: '/admin/classifications',       label: 'Classifications',    desc: 'Sensitive-info types, custom regex classifiers, scan rule sets (Admin portal).' },
   { href: '/admin/sensitivity-labels',    label: 'Sensitivity labels', desc: 'Define and auto-apply labels; enforce encryption and access policies (Admin portal).' },
   { href: '/governance/scans',            label: 'Scans & sources',    desc: 'Register data sources, schedule scans, monitor scan history.' },
