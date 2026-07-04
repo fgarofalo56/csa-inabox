@@ -1,9 +1,11 @@
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { makeStyles, tokens, Tooltip } from '@fluentui/react-components';
 import { PinnedSection } from './pinned-section';
+import { NewItemDialog } from './new-item-dialog';
 import {
   Home24Regular,
   Building24Regular,
@@ -28,6 +30,7 @@ import {
   Alert24Regular,
   DataPie24Regular,
   Table24Regular,
+  AddCircle24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
@@ -41,6 +44,7 @@ import { useIsTenantAdmin } from './session-context';
 // (lib/nav/nav-items.ts) so the Copilot navigate-tool allow-list can't drift
 // from this rail. The icon per destination is presentation-only and mapped here.
 const ICON_BY_HREF: Record<string, FluentIcon | typeof CopilotIcon> = {
+  '/new': AddCircle24Regular,
   '/': Home24Regular,
   '/workspaces': Building24Regular,
   '/browse': Apps24Regular,
@@ -97,11 +101,27 @@ const useStyles = makeStyles({
   },
   // Icon-only rail when the shell nav is collapsed.
   itemCollapsed: { justifyContent: 'center', padding: '10px 0', gap: 0 },
+  // Reset native <button> chrome so the "+ Create" action row matches the link
+  // rows exactly (it opens a dialog rather than navigating).
+  navBtn: {
+    background: 'none',
+    border: 'none',
+    width: '100%',
+    font: 'inherit',
+    textAlign: 'left',
+  },
+  // Give the primary "+ Create" action a brand accent so it reads as the
+  // prominent call-to-action Fabric puts at the top of its nav.
+  createRow: { color: tokens.colorBrandForeground1, fontWeight: '600' },
 });
 
 export function LeftNav({ collapsed = false }: { collapsed?: boolean }) {
   const styles = useStyles();
   const pathname = usePathname();
+  // The "+ Create" rail entry opens the New Item dialog inline (rel-T50) rather
+  // than navigating — hosted here so it's reachable from every page. The dialog
+  // resolves the workspace to create in via its own picker.
+  const [createOpen, setCreateOpen] = useState(false);
   // Single shell admin probe (rel-T54): hide admin-only destinations
   // (Admin portal, Setup & landing zones) for non-admins so they never
   // land in a per-page 403. Fail-closed — hidden until positively confirmed.
@@ -111,6 +131,26 @@ export function LeftNav({ collapsed = false }: { collapsed?: boolean }) {
     <nav className={styles.root} aria-label="Primary">
       {items.map((item) => {
         const Icon = item.icon;
+        // "+ Create" is an action, not a destination: render a button that opens
+        // the New Item dialog instead of a Link.
+        if (item.href === '/new') {
+          const createBtn = (
+            <button
+              key={item.href}
+              type="button"
+              className={`${styles.item} ${styles.navBtn} ${styles.createRow} ${collapsed ? styles.itemCollapsed : ''} ${styles.itemHover}`}
+              onClick={() => setCreateOpen(true)}
+              aria-haspopup="dialog"
+              aria-label={collapsed ? item.label : undefined}
+            >
+              <Icon />
+              {!collapsed && <span>{item.label}</span>}
+            </button>
+          );
+          return collapsed
+            ? <Tooltip key={item.href} content={item.label} relationship="label" positioning="after">{createBtn}</Tooltip>
+            : createBtn;
+        }
         const active = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
         const link = (
           <Link
@@ -129,6 +169,7 @@ export function LeftNav({ collapsed = false }: { collapsed?: boolean }) {
           : link;
       })}
       {!collapsed && <PinnedSection />}
+      <NewItemDialog hideTrigger open={createOpen} onOpenChange={setCreateOpen} />
     </nav>
   );
 }

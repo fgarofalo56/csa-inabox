@@ -31,6 +31,7 @@ import { TopbarSearch } from './topbar-search';
 import { FeedbackWidget, openFeedback } from './feedback-widget';
 import { GlobalErrorBoundary, GlobalErrorListeners } from './error-boundary';
 import { AppLauncher } from './app-launcher';
+import { WorkspaceSwitcher } from './workspace-switcher';
 import { TabStrip } from './tab-strip';
 import { SavedStatus } from './saved-status';
 import { NotificationsButton } from './notifications-button';
@@ -184,6 +185,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           </Link>
         </Tooltip>
         <AppLauncher />
+        <WorkspaceSwitcher />
         <TabStrip />
         <SavedStatus />
         <TopbarSearch />
