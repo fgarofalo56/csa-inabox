@@ -47,9 +47,9 @@ const PLACEHOLDER = /\[placeholder\]|Production deployments wire/;
 const VALID_LANGS = new Set(['pyspark', 'spark', 'sparksql', 'sparkr', 'python', 'tsql']);
 
 describe('Supercharge-Fabric Loom-native bundles', () => {
-  it('every bundle is registered and discoverable in the catalog', () => {
+  it('every bundle is registered and discoverable in the catalog', async () => {
     for (const id of SUPERCHARGE_IDS) {
-      const bundle = getBundle(id);
+      const bundle = await getBundle(id);
       expect(bundle, `${id} registered in index.ts`).toBeDefined();
       expect(bundle!.appId).toBe(id);
       const meta = CATALOG_META[id];
@@ -59,19 +59,19 @@ describe('Supercharge-Fabric Loom-native bundles', () => {
     }
   });
 
-  it('ships exactly the converted notebook corpus (117 notebooks)', () => {
+  it('ships exactly the converted notebook corpus (117 notebooks)', async () => {
     let total = 0;
     for (const id of SUPERCHARGE_IDS) {
-      const bundle = getBundle(id) as AppBundle;
+      const bundle = (await getBundle(id)) as AppBundle;
       expect(bundle.items.length, `${id} item count`).toBe(EXPECTED_COUNT[id]);
       total += bundle.items.length;
     }
     expect(total).toBe(117);
   });
 
-  it('every item is a notebook with non-empty cells and valid languages', () => {
+  it('every item is a notebook with non-empty cells and valid languages', async () => {
     for (const id of SUPERCHARGE_IDS) {
-      const bundle = getBundle(id) as AppBundle;
+      const bundle = (await getBundle(id)) as AppBundle;
       for (const item of bundle.items) {
         expect(item.itemType, `${id}/${item.displayName} itemType`).toBe('notebook');
         const content = item.content as NotebookContent;
@@ -88,9 +88,9 @@ describe('Supercharge-Fabric Loom-native bundles', () => {
     }
   });
 
-  it('carries zero hard Microsoft Fabric dependency (no Fabric/OneLake/Power BI hosts)', () => {
+  it('carries zero hard Microsoft Fabric dependency (no Fabric/OneLake/Power BI hosts)', async () => {
     for (const id of SUPERCHARGE_IDS) {
-      const bundle = getBundle(id) as AppBundle;
+      const bundle = (await getBundle(id)) as AppBundle;
       for (const item of bundle.items) {
         const content = item.content as NotebookContent;
         for (const cell of content.cells) {
@@ -100,9 +100,9 @@ describe('Supercharge-Fabric Loom-native bundles', () => {
     }
   });
 
-  it('ships zero dead Fabric placeholder cells (no-vaporware)', () => {
+  it('ships zero dead Fabric placeholder cells (no-vaporware)', async () => {
     for (const id of SUPERCHARGE_IDS) {
-      const bundle = getBundle(id) as AppBundle;
+      const bundle = (await getBundle(id)) as AppBundle;
       for (const item of bundle.items) {
         const content = item.content as NotebookContent;
         for (const cell of content.cells) {
@@ -112,10 +112,10 @@ describe('Supercharge-Fabric Loom-native bundles', () => {
     }
   });
 
-  it('routes ADLS Gen2 (not OneLake) on the Azure-native default path', () => {
+  it('routes ADLS Gen2 (not OneLake) on the Azure-native default path', async () => {
     // The medallion notebooks that reference object storage must use the ADLS
     // host placeholder, never the OneLake host (converted by the generator).
-    const bronze = getBundle('app-supercharge-bronze') as AppBundle;
+    const bronze = (await getBundle('app-supercharge-bronze')) as AppBundle;
     const allSource = bronze.items
       .flatMap((i) => (i.content as NotebookContent).cells)
       .map((c) => c.source)
@@ -127,10 +127,10 @@ describe('Supercharge-Fabric Loom-native bundles', () => {
     }
   });
 
-  it('install path resolves each bundle item by (type, displayName)', () => {
-    const utils = getBundle('app-supercharge-utils') as AppBundle;
+  it('install path resolves each bundle item by (type, displayName)', async () => {
+    const utils = (await getBundle('app-supercharge-utils')) as AppBundle;
     for (const item of utils.items) {
-      const resolved = resolveBundleItem('app-supercharge-utils', 'notebook', item.displayName);
+      const resolved = await resolveBundleItem('app-supercharge-utils', 'notebook', item.displayName);
       expect(resolved, `resolve ${item.displayName}`).toBeDefined();
       expect(resolved!.displayName).toBe(item.displayName);
       expect((resolved!.content as NotebookContent).kind).toBe('notebook');

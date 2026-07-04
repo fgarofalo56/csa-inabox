@@ -31,6 +31,7 @@ import {
 import {
   Add20Regular, Delete20Regular, ArrowSync20Regular,
   List20Regular, Stop20Regular, Play20Regular, Flash20Regular, Edit20Regular,
+  Mail16Regular, Call16Regular, Link16Regular, Settings16Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
@@ -878,7 +879,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                                 <option value="">— select an action group —</option>
                                 {agList.map((ag) => (
                                   <option key={ag.id} value={ag.id}>
-                                    {ag.name} ({ag.emailCount}✉ {ag.smsCount}☎ {ag.webhookCount}🔗 {ag.logicAppCount}⚙)
+                                    {ag.name} ({ag.emailCount} email · {ag.smsCount} SMS · {ag.webhookCount} webhook · {ag.logicAppCount} logic app)
                                   </option>
                                 ))}
                               </Select>
@@ -1103,7 +1104,14 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
                               <TableCell>{r.name}</TableCell>
                               <TableCell className={s.cell}>{r.actionGroupId}</TableCell>
                               <TableCell className={s.cell}>
-                                {rc ? `${rc.emails}✉ ${rc.sms}☎ ${rc.webhooks}🔗 ${rc.logicApps}⚙` : '—'}
+                                {rc ? (
+                                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS }}><Mail16Regular /> {rc.emails}</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS }}><Call16Regular /> {rc.sms}</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS }}><Link16Regular /> {rc.webhooks}</span>
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS }}><Settings16Regular /> {rc.logicApps}</span>
+                                  </span>
+                                ) : '—'}
                               </TableCell>
                               <TableCell>
                                 <Button size="small" appearance="subtle" disabled={agBusy === r.actionGroupId} onClick={() => testNotification(r.actionGroupId!)}>

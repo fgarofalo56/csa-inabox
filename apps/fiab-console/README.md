@@ -53,7 +53,7 @@ It exposes:
 | Data | Azure Cosmos DB (catalog, apps, config), plus per-item Azure data planes (ADLS Gen2 / Synapse SQL / ADX / Event Hubs / Azure Monitor …) |
 | Packaging | pnpm workspace; multi-stage Dockerfile; image hosted in ACR |
 | Hosting | Azure Container Apps (bicep under `platform/fiab/bicep/`) |
-| Testing | Vitest (unit) + Playwright (E2E / UAT) |
+| Testing | Vitest (unit) + Playwright (E2E / UAT), including axe-core accessibility scans (WCAG 2.1 A/AA + Section 508) over the top ~20 surfaces |
 
 ## Dev workflow
 
@@ -87,6 +87,26 @@ registration + the `LOOM_*` environment variables) to reach live backends;
 surfaces that require infrastructure that isn't wired show an honest Fluent
 MessageBar naming the exact env var / role / resource to provision, per the
 project's no-vaporware rule.
+
+## Accessibility (Section 508 / WCAG 2.1)
+
+The Gov audience requires a Section 508 baseline. `e2e/a11y.uat.ts` runs
+[`@axe-core/playwright`](https://www.npmjs.com/package/@axe-core/playwright)
+scans (`withTags(['wcag2a','wcag2aa','section508'])`) over the top ~20
+load-bearing surfaces — Home, Workspaces, Browse, OneLake, Marketplace,
+Governance, Monitor, Real-Time hub, the create-item flow, Admin overview,
+Setup, Copilot, the lakehouse / report / notebook / KQL-dashboard editors,
+semantic model, data products, connections, and deployment pipelines. The gate
+fails on any `critical`- or `serious`-impact violation (`moderate` / `minor` are
+logged, not blocking); third-party embeds we don't author (`iframe`,
+`.monaco-editor`) are excluded so the scan audits Loom's own markup.
+
+```bash
+SESSION_SECRET=<from-KV> pnpm test:a11y      # playwright test --grep @a11y
+```
+
+The suite is discovered by the in-VNet `loom-uat` runner (it globs `*.uat.ts`),
+so the scans also run on every roll as part of the release-validation gate.
 
 ## Deploying the platform
 

@@ -122,7 +122,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   // When a bundle is registered for this app, its items[] is the source
   // of truth (it may add extra items beyond the Cosmos catalog shape, such
   // as walkthrough notebooks). Otherwise fall back to the Cosmos catalog.
-  const bundleForApp = getBundle(app.id);
+  const bundleForApp = await getBundle(app.id);
   const refs: AppItemRef[] = bundleForApp
     ? bundleForApp.items.map(b => ({ type: b.itemType, displayName: b.displayName }))
     : (app.items || []);
@@ -233,7 +233,7 @@ async function runInstallJob(
       // dashboard tiles, etc.) from the in-process bundle registry. Pass
       // ref.displayName so bundles with multiple items of the same itemType
       // resolve to the RIGHT item instead of collapsing onto the first one.
-      const bundle = resolveBundleItem(app.id, ref.type, ref.displayName);
+      const bundle = await resolveBundleItem(app.id, ref.type, ref.displayName);
       const displayName = bundle?.displayName || ref.displayName || `${app.name} · ${ref.type}`;
       const description = bundle?.description || `Installed from app '${app.name}'${ref.template ? ` · template: ${ref.template}` : ''}`;
       const state: Record<string, unknown> = {

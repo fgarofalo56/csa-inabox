@@ -31,7 +31,8 @@ import {
   MessageBar, MessageBarBody, MessageBarTitle,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync24Regular } from '@fluentui/react-icons';
+import { ArrowSync24Regular, Flowchart24Regular } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 import { GovernanceShell } from '@/lib/components/governance-shell';
 import { Toolbar } from '@/lib/components/ui/section';
 import {
@@ -274,11 +275,11 @@ function MeshScope() {
       )}
       {edges == null && <Spinner label="Loading mesh lineage…" />}
       {edges != null && !error && graph.edges.length === 0 && (
-        <MessageBar>
-          <MessageBarBody>
-            No Weave edges yet. Open any item&apos;s editor and choose <strong>Weave</strong> to wire it into another Loom service — analyze a dataset in a Notebook, add a Data Agent source, build a Power BI model, or publish it as an API.
-          </MessageBarBody>
-        </MessageBar>
+        <EmptyState
+          icon={<Flowchart24Regular />}
+          title="No lineage yet"
+          body="Open any item's editor and choose Weave to wire it into another Loom service — analyze a dataset in a Notebook, add a Data Agent source, build a Power BI model, or publish it as an API."
+        />
       )}
       {edges != null && !error && graph.edges.length > 0 && (
         <LineageCanvas nodes={graph.nodes} edges={graph.edges} />
