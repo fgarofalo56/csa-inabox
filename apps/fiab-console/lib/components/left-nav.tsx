@@ -32,6 +32,7 @@ import {
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
 import { NAV_ITEMS } from '@/lib/nav/nav-items';
+import { useIsTenantAdmin } from './session-context';
 
 // Fabric-parity left nav: top-level surfaces only, like the real Fabric portal.
 // Item types are reached from inside a workspace via the "+ New" item dialog.
@@ -101,9 +102,14 @@ const useStyles = makeStyles({
 export function LeftNav({ collapsed = false }: { collapsed?: boolean }) {
   const styles = useStyles();
   const pathname = usePathname();
+  // Single shell admin probe (rel-T54): hide admin-only destinations
+  // (Admin portal, Setup & landing zones) for non-admins so they never
+  // land in a per-page 403. Fail-closed — hidden until positively confirmed.
+  const isTenantAdmin = useIsTenantAdmin();
+  const items = navItems.filter((item) => !item.adminOnly || isTenantAdmin);
   return (
     <nav className={styles.root} aria-label="Primary">
-      {navItems.map((item) => {
+      {items.map((item) => {
         const Icon = item.icon;
         const active = pathname === item.href || (item.href !== '/' && pathname?.startsWith(item.href));
         const link = (
