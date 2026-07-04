@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { KNOWN_CONTAINERS, pathToHttpsUrl, pathToHttpsUrlFor } from '@/lib/azure/adls-client';
 import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -50,7 +51,7 @@ function normalizeBulkPath(path: string, fmt: Fmt): string {
 }
 
 function escapeSingleQuotes(s: string): string {
-  return s.replace(/'/g, "''");
+  return escapeSqlLiteral(s);
 }
 
 const DEFAULT_TOP = 100;

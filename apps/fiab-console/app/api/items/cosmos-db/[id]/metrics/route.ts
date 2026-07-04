@@ -31,6 +31,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { cosmosConfigGate, cosmosAccountResourceId } from '@/lib/azure/cosmos-account-client';
 import { fetchMetrics, type MetricResult } from '@/lib/azure/monitor-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,7 +54,7 @@ function grainFor(timespan: string): { timespan: string; ru: string; coarse: str
 }
 
 // Escape single quotes in dimension values for the OData $filter literal.
-const odata = (v: string) => v.replace(/'/g, "''");
+const odata = (v: string) => escapeSqlLiteral(v);
 
 export async function GET(req: Request, _ctx: { params: { id: string } }) {
   const s = getSession();

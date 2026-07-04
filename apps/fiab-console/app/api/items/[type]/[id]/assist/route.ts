@@ -60,6 +60,7 @@ import {
   executeQuery,
 } from '@/lib/azure/synapse-sql-client';
 import { executeStatement } from '@/lib/azure/databricks-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 type AssistMode = 'generate' | 'explain' | 'fix' | 'comments' | 'optimize';
 type Engine =
@@ -141,7 +142,7 @@ async function databricksSchemaContext(
       warehouseId,
       `SELECT table_name, column_name, data_type
          FROM \`${catalog}\`.information_schema.columns
-        WHERE table_schema = '${schema.replace(/'/g, "''")}'
+        WHERE table_schema = '${escapeSqlLiteral(schema)}'
         ORDER BY table_name, ordinal_position
         LIMIT 400`,
     );

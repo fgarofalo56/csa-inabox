@@ -30,6 +30,7 @@
  */
 
 import { AzureSqlError, executeParameterized, executeWithCredential, executeQuery, type SqlExplicitAuth, type QueryResult } from './azure-sql-client';
+import { bracket as qbracket } from '@/lib/sql/quoting';
 
 export type SqlObjectGroup = 'table' | 'view' | 'procedure' | 'function' | 'table-type';
 
@@ -303,9 +304,9 @@ export async function listColumns(
 // DROP (catalog-verified — no string injection)
 // ============================================================
 
-/** Bracket-quote an identifier the SQL way (double any `]`). */
+/** Bracket-quote an identifier the SQL way (double any `]`). Centralised in `@/lib/sql/quoting`. */
 function bracket(ident: string): string {
-  return `[${ident.replace(/]/g, ']]')}]`;
+  return qbracket(ident);
 }
 
 const DROP_KEYWORD: Record<SqlObjectGroup, string> = {

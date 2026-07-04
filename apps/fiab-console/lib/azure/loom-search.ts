@@ -23,6 +23,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, ManagedIdentityCredential, DefaultAzureCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { FoundryError, NotDeployedError } from './foundry-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const credential = new ChainedTokenCredential(
   new AcaManagedIdentityCredential(),
@@ -152,7 +153,7 @@ export async function searchLoomItems(opts: {
   const { q, tenantId, top = 25, kind } = opts;
   const svc = searchService();
   const tok = await searchToken();
-  const filters: string[] = [`tenantId eq '${tenantId.replace(/'/g, "''")}'`];
+  const filters: string[] = [`tenantId eq '${escapeSqlLiteral(tenantId)}'`];
   if (kind) filters.push(`kind eq '${kind}'`);
   const body = {
     search: q || '*',

@@ -29,6 +29,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { graphBase, graphScope } from './cloud-endpoints';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -143,7 +144,7 @@ export async function getM365Group(groupId: string): Promise<M365Group> {
 export async function searchM365Groups(q: string): Promise<M365Group[]> {
   const term = (q || '').trim();
   if (!term) return [];
-  const safe = encodeURIComponent(term.replace(/'/g, "''"));
+  const safe = encodeURIComponent(escapeSqlLiteral(term));
   // Restrict to unified (Microsoft 365) groups — those are the SharePoint-backed
   // collaboration groups a Fabric/Loom workspace links to.
   const j = await graphFetch(

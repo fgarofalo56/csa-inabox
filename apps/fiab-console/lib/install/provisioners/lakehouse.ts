@@ -78,6 +78,7 @@ import {
 import { executeQuery as synapseExec, serverlessTarget } from '@/lib/azure/synapse-sql-client';
 import { createShortcut, type ShortcutKind, type ShortcutTargetType } from '@/lib/azure/lakehouse-shortcuts';
 import { readRepoDataset } from '@/lib/apps/repo-datasets';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const FABRIC_SCOPE = 'https://api.fabric.microsoft.com/.default';
@@ -418,7 +419,7 @@ async function provisionShortcuts(
         const httpsUrl = pathToHttpsUrl(ctx.container, relFile);
         const viewLeaf = `shortcut_${safeRelPath(name)}`.replace(/[^A-Za-z0-9_]/g, '_');
         const obj = `lakehouse.${viewLeaf}`;
-        const urlLiteral = httpsUrl.replace(/'/g, "''");
+        const urlLiteral = escapeSqlLiteral(httpsUrl);
         const fmtClause = fmt === 'json'
           ? `FORMAT = ''CSV'', FIELDTERMINATOR = ''0x0b'', FIELDQUOTE = ''0x0b''`
           : `FORMAT = ''CSV'', PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE`;
@@ -778,7 +779,7 @@ async function provisionAzureNative(
       const viewSchema = schemasEnabled ? tSchema : 'lakehouse';
       const obj = `${viewSchema}.${viewLeaf}`;
       // Doubled single-quotes for the inner EXEC string literal.
-      const urlLiteral = httpsUrl.replace(/'/g, "''");
+      const urlLiteral = escapeSqlLiteral(httpsUrl);
       const ddl =
         `IF SCHEMA_ID('${viewSchema}') IS NULL EXEC('CREATE SCHEMA ${viewSchema}');\n` +
         `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +

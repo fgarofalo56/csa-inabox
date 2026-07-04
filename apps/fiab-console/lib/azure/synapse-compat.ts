@@ -22,6 +22,7 @@
  */
 
 import type { DacModel, DacTable, DacColumn } from './dacpac-model';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export type Severity = 'error' | 'warning' | 'info';
 
@@ -274,7 +275,7 @@ export function tableDdl(t: DacTable): string {
 export function schemaDdl(schema: string): string {
   if (schema.toLowerCase() === 'dbo') return ''; // dbo always exists
   return [
-    `IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '${schema.replace(/'/g, "''")}')`,
+    `IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = '${escapeSqlLiteral(schema)}')`,
     `    EXEC('CREATE SCHEMA [${schema}]');`,
   ].join('\n');
 }

@@ -34,6 +34,8 @@
  *     https://learn.microsoft.com/fabric/data-engineering/materialized-lake-views/data-quality
  */
 
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
+
 /** Authoring language for the MLV definition. */
 export type MlvLanguage = 'sql' | 'pyspark';
 
@@ -122,11 +124,11 @@ export function buildCreateMlvSql(spec: MlvSpec): string {
   lines.push(head);
 
   const opts: string[] = [];
-  if (spec.comment?.trim()) opts.push(`COMMENT '${spec.comment.trim().replace(/'/g, "''")}'`);
+  if (spec.comment?.trim()) opts.push(`COMMENT '${escapeSqlLiteral(spec.comment.trim())}'`);
   if (spec.partitionCols?.length) opts.push(`PARTITIONED BY (${spec.partitionCols.join(', ')})`);
   if (spec.tableProperties && Object.keys(spec.tableProperties).length) {
     const tp = Object.entries(spec.tableProperties)
-      .map(([k, v]) => `'${k}' = '${String(v).replace(/'/g, "''")}'`)
+      .map(([k, v]) => `'${k}' = '${escapeSqlLiteral(String(v))}'`)
       .join(', ');
     opts.push(`TBLPROPERTIES (${tp})`);
   }

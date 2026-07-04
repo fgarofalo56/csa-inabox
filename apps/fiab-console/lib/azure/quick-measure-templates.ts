@@ -22,6 +22,8 @@
  *   measure→ [Measure]         (model-global, ']' → ']]')
  */
 
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
+
 /* ────────────────────────────── types ────────────────────────────── */
 
 /** The kind of model object a template field expects the user to pick. */
@@ -89,7 +91,7 @@ export interface QuickMeasureTemplate {
 
 /** Single-quote + escape a table name. */
 function daxTable(t: string): string {
-  return `'${t.replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(t)}'`;
 }
 
 /** Build the DAX reference for a pick: `[Measure]` or `'Table'[Column]`. */

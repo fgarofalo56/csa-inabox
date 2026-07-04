@@ -18,6 +18,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,8 +58,8 @@ export async function GET(req: NextRequest) {
   }
 
   const endpoint = kind === 'group'
-    ? `${GRAPH_BASE}/groups?$filter=startswith(displayName,'${encodeURIComponent(q.replace(/'/g, "''"))}')&$top=20&$select=id,displayName,description,mail`
-    : `${GRAPH_BASE}/users?$filter=startswith(displayName,'${encodeURIComponent(q.replace(/'/g, "''"))}') or startswith(userPrincipalName,'${encodeURIComponent(q.replace(/'/g, "''"))}')&$top=20&$select=id,displayName,userPrincipalName,mail`;
+    ? `${GRAPH_BASE}/groups?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,description,mail`
+    : `${GRAPH_BASE}/users?$filter=startswith(displayName,'${encodeURIComponent(escapeSqlLiteral(q))}') or startswith(userPrincipalName,'${encodeURIComponent(escapeSqlLiteral(q))}')&$top=20&$select=id,displayName,userPrincipalName,mail`;
 
   const res = await fetch(endpoint, {
     headers: { authorization: `Bearer ${token}`, accept: 'application/json' },

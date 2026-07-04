@@ -33,6 +33,7 @@ import {
 import { executeDax, AasError } from './aas-client';
 import type { AasXmlaTabularResult } from './aas-xmla';
 import { aasSuffix } from './cloud-endpoints';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /** Honest infra gate for the model-binding backend (Azure-native AAS default). */
 export interface ModelBindingGate {
@@ -211,7 +212,7 @@ export function buildReadViewDax(opts: {
   topN?: number;
 }): string {
   const groupRefs = (opts.groupBy || [])
-    .map((f) => `'${f.table.replace(/'/g, "''")}'[${f.column.replace(/]/g, '')}]`);
+    .map((f) => `'${escapeSqlLiteral(f.table)}'[${f.column.replace(/]/g, '')}]`);
   const measureProjections = (opts.measures || [])
     .map((m) => {
       const safe = m.replace(/]/g, '');

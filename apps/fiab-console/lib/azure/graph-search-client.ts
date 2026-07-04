@@ -27,6 +27,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { graphBase, graphScope } from './cloud-endpoints';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential: TokenCredential = uamiClientId
@@ -133,7 +134,7 @@ async function graphGet<T>(path: string, scopeKind: GraphGroundingScopeKind): Pr
 
 /** Escape a value for the drive `search(q='…')` function segment. */
 function escapeSearchQ(q: string): string {
-  return (q || '').replace(/'/g, "''").replace(/[\r\n]+/g, ' ').trim();
+  return escapeSqlLiteral((q || '')).replace(/[\r\n]+/g, ' ').trim();
 }
 
 /** Strip quotes/backslashes for the messages `$search="…"` clause. */

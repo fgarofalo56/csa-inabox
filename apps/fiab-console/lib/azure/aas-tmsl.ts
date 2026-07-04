@@ -14,6 +14,8 @@
  *   alter command        — https://learn.microsoft.com/analysis-services/tmsl/alter-command-tmsl
  */
 
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
+
 // ---------------------------------------------------------------------------
 // Shared error class (network-free — aas-client.ts re-exports this so existing
 // importers keep working without any import path change).
@@ -479,7 +481,7 @@ export function buildMeasureUpsertTmsl(opts: {
 
 /** Build EVALUATE ROW("value", 'Table'[Measure]) for a single-measure probe. */
 export function buildMeasureEvalQuery(tableName: string, measureName: string): string {
-  const tbl = "'" + (tableName || '').replace(/'/g, "''") + "'";
+  const tbl = "'" + escapeSqlLiteral((tableName || '')) + "'";
   const meas = '[' + (measureName || '').replace(/]/g, '') + ']';
   return 'EVALUATE ROW("value", ' + tbl + meas + ')';
 }

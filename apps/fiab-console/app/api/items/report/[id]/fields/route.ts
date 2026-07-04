@@ -48,6 +48,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { bracket } from '@/lib/sql/quoting';
 import { getSession } from '@/lib/auth/session';
 import { readModel, resolveAasBinding, AasError } from '@/lib/azure/aas-client';
 import { loadModelItem } from '@/lib/azure/model-binding';
@@ -195,7 +196,7 @@ async function directQueryTables(target: DirectQueryTarget, sql: string): Promis
 
 /** Synapse/T-SQL identifier quote (resolver / objectRef names only — injection-safe). */
 function brkt(ident: string): string {
-  return `[${String(ident).replace(/]/g, ']]')}]`;
+  return bracket(String(ident));
 }
 
 /**

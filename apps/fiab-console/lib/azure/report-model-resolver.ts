@@ -90,6 +90,7 @@ import { pathToHttpsUrl, downloadFile } from '@/lib/azure/adls-client';
 import { parseDeltaSchema } from '@/lib/azure/delta-schema-parse';
 import { resolveMlvDeltaUrl } from '@/lib/azure/materialized-lake-view-engine';
 import { safeSegment, type MlvSpec } from '@/lib/azure/materialized-lake-view-model';
+import { escapeSqlLiteral, quoteIdent, bracket as qbracket } from '@/lib/sql/quoting';
 
 export const SEMANTIC_MODEL_ITEM_TYPE = 'semantic-model';
 
@@ -491,9 +492,9 @@ const SYNAPSE_HINT =
 // Pure helpers.
 // ───────────────────────────────────────────────────────────────────────────
 
-/** Bracket-quote a SQL identifier the T-SQL way (double any `]`). */
+/** Bracket-quote a SQL identifier the T-SQL way (double any `]`). Centralised in `@/lib/sql/quoting`. */
 export function bracket(ident: string): string {
-  return `[${String(ident).replace(/]/g, ']]')}]`;
+  return qbracket(String(ident));
 }
 
 function str(v: unknown): string | undefined {
@@ -714,7 +715,7 @@ function buildTableCacheRelation(
   } catch {
     return null;
   }
-  const url = deltaUrl.replace(/'/g, "''");
+  const url = escapeSqlLiteral(deltaUrl);
   return {
     from: { kind: 'derived', sql: `SELECT * FROM OPENROWSET(BULK '${url}', FORMAT='DELTA') AS r` },
     target,
@@ -1043,21 +1044,15 @@ type SqlRunner = (
   params?: SynapseQueryParam[],
 ) => Promise<{ columns: string[]; rows: Record<string, unknown>[] }>;
 
-/** Quote a SQL identifier per dialect (injection-safe — doubles the closer). */
-function quoteIdent(name: string, dialect: ReportSqlDialect): string {
-  if (dialect === 'postgres') return `"${name.replace(/"/g, '""')}"`;
-  if (dialect === 'databricks-sql' || dialect === 'mysql') return `\`${name.replace(/`/g, '``')}\``;
-  return `[${name.replace(/]/g, ']]')}]`; // tsql | synapse | generic-sql
-}
-
-/** Bracket-quote a `[schema].[table]`-style relation for a dialect. */
+/** Bracket-quote a `[schema].[table]`-style relation for a dialect. Identifier
+ *  quoting is centralised in `@/lib/sql/quoting` (injection-safe). */
 function relationRef(dialect: ReportSqlDialect, schema: string | undefined, table: string): string {
   return (schema ? `${quoteIdent(schema, dialect)}.` : '') + quoteIdent(table, dialect);
 }
 
 /** A single-quoted SQL string literal (doubles embedded quotes). */
 function sqlLiteral(v: string): string {
-  return `'${v.replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(v)}'`;
 }
 
 /** `SELECT TOP n *` (T-SQL family) / `SELECT * … LIMIT n` (Postgres/Databricks/MySQL). */
@@ -1459,7 +1454,7 @@ function resolveFileTarget(
 
 /** OPENROWSET source clause for a serverless read (delta/parquet/csv). */
 function openRowsetClause(url: string, format: string): string {
-  const u = url.replace(/'/g, "''");
+  const u = escapeSqlLiteral(url);
   const f = (format || 'parquet').toLowerCase();
   if (f === 'delta') return `OPENROWSET(BULK '${u}', FORMAT = 'DELTA') AS r`;
   if (f === 'csv') return `OPENROWSET(BULK '${u}', FORMAT = 'CSV', PARSER_VERSION = '2.0', HEADER_ROW = TRUE) AS r`;

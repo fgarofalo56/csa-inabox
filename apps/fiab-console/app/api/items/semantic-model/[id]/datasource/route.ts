@@ -82,6 +82,7 @@ import {
 } from '@/lib/azure/kusto-client';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -400,7 +401,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
   let probe: string | undefined;
   try {
-    const firstTable = tables[0].name.replace(/'/g, "''");
+    const firstTable = escapeSqlLiteral(tables[0].name);
     const dax = `EVALUATE TOPN(1, '${firstTable}')`;
     const qr = await executeDatasetQueries(workspaceId, id, dax);
     const rows = qr?.results?.[0]?.tables?.[0]?.rows || [];

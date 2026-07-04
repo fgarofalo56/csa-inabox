@@ -40,6 +40,7 @@ import { FabricError, fabricHint } from '@/lib/azure/fabric-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
 import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const FABRIC_BASE = process.env.LOOM_FABRIC_BASE || 'https://api.fabric.microsoft.com/v1';
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
@@ -98,7 +99,7 @@ function buildVisualJson(visual: any, position: number): object {
                   properties: {
                     text: {
                       expr: {
-                        Literal: { Value: `'${String(visual.title).replace(/'/g, "''")}'` },
+                        Literal: { Value: `'${escapeSqlLiteral(String(visual.title))}'` },
                       },
                     },
                   },

@@ -59,6 +59,7 @@ import {
   databricksConfigGate,
   type DbxQueryParam,
 } from '@/lib/azure/databricks-client';
+import { quoteIdent as quoteIdentDialect } from '@/lib/sql/quoting';
 import {
   buildQueryCacheKey,
   getCachedResult,
@@ -263,9 +264,10 @@ export function buildAccelQuery(
 
 // ── AccelSemanticQuery → Databricks SQL (Photon over Delta, in-place) ────────
 
-/** Backtick-quote a Databricks identifier / Delta path (double embedded backticks). */
+/** Backtick-quote a Databricks identifier / Delta path (double embedded
+ *  backticks). Delegates to the central injection-safe quoter. */
 function quoteIdent(name: string): string {
-  return '`' + String(name).replace(/`/g, '``') + '`';
+  return quoteIdentDialect(String(name), 'databricks-sql');
 }
 
 /** `delta.`<path>`` — path-based, in-place Delta read (no table registration). */

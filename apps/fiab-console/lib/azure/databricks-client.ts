@@ -17,6 +17,7 @@ import {
   ChainedTokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const DBX_SCOPE = '2ff814a6-3304-4ab8-85cb-cd0e6f879c1d/.default';
 
@@ -1773,7 +1774,7 @@ export async function createUcTableFromFile(
     opts.push(`header => ${spec.header === false ? 'false' : 'true'}`);
     opts.push(`inferSchema => true`);
   }
-  const literalPath = stagedPath.replace(/'/g, "''");
+  const literalPath = escapeSqlLiteral(stagedPath);
   const fqtn = `\`${cat}\`.\`${sch}\`.\`${tbl}\``;
   const createSql =
     `CREATE TABLE ${fqtn} AS SELECT * FROM read_files('${literalPath}', ${opts.join(', ')})`;

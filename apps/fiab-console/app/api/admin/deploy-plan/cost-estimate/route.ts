@@ -40,6 +40,7 @@ import {
   type RetailPriceItem, type PriceResult,
 } from '@/lib/components/deploy-planner/cost-estimate';
 import type { PlanSubscription, ServiceConfig } from '@/lib/components/deploy-planner/types';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,7 @@ const MAX_PAGES = 4; // 100 rows/page — keeps tight serviceName queries bounde
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Escape a single-quote for an OData string literal. */
-const odata = (v: string) => v.replace(/'/g, "''");
+const odata = (v: string) => escapeSqlLiteral(v);
 
 /**
  * Fetch the (paged) retail-price items for one meter's serviceName, scoped to

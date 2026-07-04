@@ -60,6 +60,7 @@ import {
   warehouseConfigGate,
 } from '@/lib/azure/databricks-client';
 import { executePostgresQuery, postgresQueryGate } from '@/lib/azure/postgres-flex-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 // ── Contract ────────────────────────────────────────────────────────────────
 
@@ -254,7 +255,7 @@ function bq(name: string): string {
 
 /** Single-quoted SQL string literal (doubles embedded quotes) — Postgres filter. */
 function pgLiteral(v: string): string {
-  return `'${String(v).replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(String(v))}'`;
 }
 
 /** Pick a column's value from a columns/rows matrix by candidate names, else index. */

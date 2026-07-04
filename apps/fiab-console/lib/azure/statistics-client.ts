@@ -27,6 +27,8 @@
  * (statistics-client.test.ts).
  */
 
+import { bracket as qbracket } from '@/lib/sql/quoting';
+
 /** SQL identifier guard — schema / table / stats / column names must match this
  * exactly. Matches the delta-maintenance IDENT_RE so behavior is consistent. */
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -42,7 +44,7 @@ export const SCAN_MODES: ScanMode[] = ['default', 'fullscan', 'sample-20', 'samp
 /** Bracket-quote a T-SQL identifier, doubling any `]`. Caller MUST have already
  * passed `name` through validateIdent — this is the second layer of defense. */
 function bracket(id: string): string {
-  return `[${id.replace(/]/g, ']]')}]`;
+  return qbracket(id);
 }
 
 /** Backtick-quote a Spark SQL identifier, stripping any backtick (IDENT_RE

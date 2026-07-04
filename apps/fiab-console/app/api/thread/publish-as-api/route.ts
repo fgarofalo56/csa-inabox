@@ -21,6 +21,7 @@
  * Returns: { ok, message, link, linkLabel } | { ok:false, error }
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { bracket } from '@/lib/sql/quoting';
 import { getSession } from '@/lib/auth/session';
 import { createOwnedItem, loadOwnedItem, listOwnedWorkspaces } from '../../items/_lib/item-crud';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
@@ -115,7 +116,7 @@ export async function POST(req: NextRequest) {
     // Azure-native warehouse, the deliberate step that makes the query a stable
     // API-addressable object.
     try {
-      await executeQuery(target, `CREATE OR ALTER VIEW [${schema}].[${name.replace(/]/g, ']]')}] AS\n${guard.sql}`);
+      await executeQuery(target, `CREATE OR ALTER VIEW [${schema}].${bracket(name)} AS\n${guard.sql}`);
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: `Could not create the view from your query: ${e?.message || String(e)}` }, { status: 400 });
     }

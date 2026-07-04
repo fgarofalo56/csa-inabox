@@ -38,6 +38,7 @@ import {
   AasClientError,
 } from '@/lib/azure/aas-client';
 import { sanitizeAasName, sanitizeDbName } from '@/lib/azure/aas-naming';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -99,7 +100,7 @@ export async function POST(req: NextRequest) {
     );
   }
   const createDbSql = `
-IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = N'${synapseDatabase.replace(/'/g, "''")}')
+IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = N'${escapeSqlLiteral(synapseDatabase)}')
   CREATE DATABASE [${synapseDatabase}];
 `.trim();
   try {

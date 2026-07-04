@@ -11,6 +11,7 @@
  */
 
 import type { PushColumn, PushColumnType } from '@/lib/azure/powerbi-client';
+import { bracket as qbracket } from '@/lib/sql/quoting';
 import type { SqlColumnRow } from '@/lib/azure/sql-objects-client';
 
 /**
@@ -63,9 +64,9 @@ export function pushColumnsFromCatalog(cols: SqlColumnRow[]): { pushColumns: Pus
   };
 }
 
-/** Bracket-quote a SQL identifier (double any `]`). */
+/** Bracket-quote a SQL identifier (double any `]`). Centralised in `@/lib/sql/quoting`. */
 export function bracket(ident: string): string {
-  return `[${ident.replace(/]/g, ']]')}]`;
+  return qbracket(ident);
 }
 
 /**

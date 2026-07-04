@@ -44,6 +44,7 @@ import {
   serverlessTarget,
   getSynapseSqlSuffix,
 } from '@/lib/azure/synapse-sql-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /** Content shape the install engine's pairing rule stamps onto the item. */
 interface SynapseServerlessSqlPoolContent {
@@ -235,7 +236,7 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
   // the receipt is actionable instead of a misleading "grant CONTROL" hint (the
   // UAMI is typically already the workspace AAD admin).
   const userTarget = serverlessTarget(DB);
-  const locLiteral = location.replace(/'/g, "''");
+  const locLiteral = escapeSqlLiteral(location);
   const errText = (e: any) => (e?.message || String(e)).replace(/\s+/g, ' ').trim();
   let stage = 'master key';
   try {
@@ -324,7 +325,7 @@ export const synapseSqlPoolProvisioner: Provisioner = async (input): Promise<Pro
     let viewsMade = 0;
     for (const t of tables) {
       const viewName = `${safeIdent(t.schema)}_${safeIdent(t.table)}`;
-      const bulk = `${t.schema}.${t.table}/`.replace(/'/g, "''");
+      const bulk = escapeSqlLiteral(`${t.schema}.${t.table}/`);
       const viewDdl =
         `CREATE OR ALTER VIEW [dbo].[${viewName}] AS\n` +
         `SELECT * FROM OPENROWSET(\n` +
@@ -508,7 +509,7 @@ async function provisionDatabricksMirror(
       ds = dsByRoot.get(split.root);
       if (!ds) {
         ds = `loom_ds_dbx_${dsMade}_${safeIdent(name)}`.slice(0, 120);
-        const locLiteral = split.root.replace(/'/g, "''");
+        const locLiteral = escapeSqlLiteral(split.root);
         const dsDdl =
           `IF EXISTS (SELECT 1 FROM sys.external_data_sources WHERE name = N'${ds}')\n` +
           `  EXEC('DROP EXTERNAL DATA SOURCE [${ds}]');\n` +
@@ -532,11 +533,11 @@ async function provisionDatabricksMirror(
       ds && relative !== null
         ? `CREATE OR ALTER VIEW [dbo].[${viewName}] AS\n` +
           `SELECT * FROM OPENROWSET(\n` +
-          `  BULK '${relative.replace(/'/g, "''")}', DATA_SOURCE = '${ds}', FORMAT = 'delta'\n` +
+          `  BULK '${escapeSqlLiteral(relative)}', DATA_SOURCE = '${ds}', FORMAT = 'delta'\n` +
           `) AS rows;`
         : `CREATE OR ALTER VIEW [dbo].[${viewName}] AS\n` +
           `SELECT * FROM OPENROWSET(\n` +
-          `  BULK '${t.storageLocation.replace(/'/g, "''")}', FORMAT = 'delta'\n` +
+          `  BULK '${escapeSqlLiteral(t.storageLocation)}', FORMAT = 'delta'\n` +
           `) AS rows;`;
     try {
       await synapseExec(userTarget, viewDdl);

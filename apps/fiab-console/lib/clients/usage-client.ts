@@ -22,6 +22,7 @@
  */
 
 import { queryLogs, MonitorNotConfiguredError } from '@/lib/azure/monitor-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export { MonitorNotConfiguredError };
 
@@ -99,7 +100,7 @@ AppRequests
 export async function fetchFeatureAdoption(days = 30, feature?: string): Promise<FeatureRow[]> {
   const d = clampDays(days);
   const filterClause = feature && feature.trim()
-    ? `| where feature == '${feature.trim().replace(/'/g, "''")}'`
+    ? `| where feature == '${escapeSqlLiteral(feature.trim())}'`
     : '';
   const kql = `
 AppRequests

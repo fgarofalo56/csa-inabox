@@ -33,6 +33,8 @@ jobs:
         run: node scripts/ci/check-route-guards.mjs
       - name: no-freeform (raw-JSON config surfaces)
         run: node scripts/ci/check-no-freeform.mjs
+      - name: sql-quoting (inline identifier/literal quoting outside lib/sql/quoting.ts)
+        run: node scripts/ci/check-sql-quoting.mjs
       - name: bicep-sync (orphan modules + env-sync core)
         run: node scripts/ci/check-bicep-sync.mjs
       - name: duplicate-env (env name emitted more than once per app)

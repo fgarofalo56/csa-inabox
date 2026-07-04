@@ -15,6 +15,7 @@
  */
 
 import { executeQuery, type SynapseTarget } from '@/lib/azure/synapse-sql-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export interface SqlObjectRef {
   schema: string;
@@ -118,8 +119,8 @@ export async function scriptOutSqlObject(
     return { ok: true, script: dropScript(type, schema, name) };
   }
 
-  const safeSchema = schema.replace(/'/g, "''");
-  const safeName = name.replace(/'/g, "''");
+  const safeSchema = escapeSqlLiteral(schema);
+  const safeName = escapeSqlLiteral(name);
   const lookup = `
 SELECT m.definition
 FROM sys.sql_modules m

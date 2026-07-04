@@ -12,6 +12,7 @@ import { fetchWithTimeout } from '@/lib/azure/fetch-with-timeout';
 import { ChainedTokenCredential, DefaultAzureCredential, ManagedIdentityCredential } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { graphBase, graphScope } from './cloud-endpoints';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID;
 const credential = uamiClientId
@@ -71,7 +72,7 @@ export async function searchEntraPrincipals(q: string, kind: PrincipalKind): Pro
   const term = (q || '').trim();
   if (!term) return [];
   const token = await graphToken();
-  const safe = encodeURIComponent(term.replace(/'/g, "''"));
+  const safe = encodeURIComponent(escapeSqlLiteral(term));
   const base = graphBase();
   const endpoint = kind === 'group'
     ? `${base}/groups?$filter=startswith(displayName,'${safe}')&$top=20&$select=id,displayName,description,mail`
