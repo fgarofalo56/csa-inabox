@@ -25,6 +25,38 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.54.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.53.0...csa-inabox-v0.54.0) (2026-07-04)
+
+
+### Features
+
+* **loom,editors:** unsaved-changes guard + debounced autosave on notebook/dashboard (rel-T70) ([#1637](https://github.com/fgarofalo56/csa-inabox/issues/1637)) ([0e708e4](https://github.com/fgarofalo56/csa-inabox/commit/0e708e4847f636bfd0ac21180ed9a06ab0909e64))
+
+
+### Bug Fixes
+
+* **loom,api:** preserve honest-gate error messages over-genericized by rel-T66 ([#1647](https://github.com/fgarofalo56/csa-inabox/issues/1647)) ([34a1619](https://github.com/fgarofalo56/csa-inabox/commit/34a161905e57f4c8a4f8814264c9b6ef32c3868f))
+* **loom,api:** tighten err() helper extra type to Record&lt;string,unknown&gt; (T66 build fix) ([#1646](https://github.com/fgarofalo56/csa-inabox/issues/1646)) ([b8e2016](https://github.com/fgarofalo56/csa-inabox/commit/b8e2016863d6784e79f9bc7839022baf0373fb5f))
+* **loom,ui:** color-mix chip tint + emoji→Fluent icons + EmptyState primitive (rel-T55/T58/T59) ([#1638](https://github.com/fgarofalo56/csa-inabox/issues/1638)) ([87afe27](https://github.com/fgarofalo56/csa-inabox/commit/87afe275c61c3daeb589aceca07396947b895285))
+
+
+### Code Refactoring
+
+* **loom,api:** split report + semantic-model god-routes into lib modules (rel-T64) ([#1643](https://github.com/fgarofalo56/csa-inabox/issues/1643)) ([89f161d](https://github.com/fgarofalo56/csa-inabox/commit/89f161db3bf498c17e0540bfbed53f83ba29ad88))
+* **loom,api:** Wave-4 server sweeps — SQL quoting + BFF error envelope (rel-T65/T66) ([#1645](https://github.com/fgarofalo56/csa-inabox/issues/1645)) ([f593d43](https://github.com/fgarofalo56/csa-inabox/commit/f593d4360d668f24b88caadeacea06d22224ce5c))
+* **loom,ui:** Wave-4 client sweeps — px-tokens + clientFetch + ConfirmDialog (rel-T56/T61/T69) ([#1644](https://github.com/fgarofalo56/csa-inabox/issues/1644)) ([82d6fb2](https://github.com/fgarofalo56/csa-inabox/commit/82d6fb22998f1f012df0ac1116435ad9a6d8fa2e))
+* **loom:** delete verified dead code + finish shared-styles adoption (rel-T67) ([#1642](https://github.com/fgarofalo56/csa-inabox/issues/1642)) ([3e93a22](https://github.com/fgarofalo56/csa-inabox/commit/3e93a22a441a0614f14c43327981be24a6f77ff7))
+
+
+### Tests
+
+* **loom,a11y:** axe-core scans over top surfaces + fix critical violations + truth README (rel-T68, B18) ([#1639](https://github.com/fgarofalo56/csa-inabox/issues/1639)) ([859b15b](https://github.com/fgarofalo56/csa-inabox/commit/859b15b9424c6bff07f0e0b7139103cf18845fe7))
+
+
+### Performance Improvements
+
+* **loom:** per-file editor registry imports + lazy content-bundle payloads (rel-T62/T63) ([#1640](https://github.com/fgarofalo56/csa-inabox/issues/1640)) ([5dd74ac](https://github.com/fgarofalo56/csa-inabox/commit/5dd74aca3d2c8747aea81dead733b911187e0c18))
+
 ## [0.53.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.52.0...csa-inabox-v0.53.0) (2026-07-04)
 
 
