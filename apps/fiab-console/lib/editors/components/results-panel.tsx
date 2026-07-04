@@ -29,6 +29,7 @@ import {
   ArrowDownload20Regular, Copy20Regular, Search20Regular,
   DocumentTable20Regular, Info20Regular,
 } from '@fluentui/react-icons';
+import { useSharedEditorStyles } from '../shared-styles';
 
 // ── Public response shape (matches the BFF route) ──
 export interface RecordsetItem {
@@ -62,15 +63,20 @@ export interface BatchQueryResponse {
   gated?: boolean;
 }
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   box: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '160px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
   meta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   actions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
   search: { minWidth: '220px' },
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   selRow: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 export function formatCell(v: unknown): string {
   if (v === null || v === undefined) return 'NULL';

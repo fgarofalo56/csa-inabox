@@ -107,6 +107,7 @@ import {
   type PlanAggKind, type PlanDimensionAxis, type PlanFormulaToken,
   type PlanFormulaFn, type PlanFormulaOp, type ModelIssue,
 } from '../_plan-model';
+import { useSharedEditorStyles } from '../shared-styles';
 
 /**
  * Defensive array coercion for persisted Cosmos state. Legacy / hand-edited /
@@ -121,8 +122,7 @@ function arr<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
 }
 
-const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+const useLocalStyles = makeStyles({
   monaco: {
     width: '100%', minHeight: '180px', maxWidth: '100%',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
@@ -135,9 +135,7 @@ const useStyles = makeStyles({
     overflowWrap: 'anywhere',
     wordBreak: 'break-word',
   },
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
   /* Icon + title section header for icon-less Subtitle2 sections. */
   secHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
   secHeadIcon: { color: tokens.colorBrandForeground1, flexShrink: 0 },
@@ -398,6 +396,12 @@ const useStyles = makeStyles({
   ganttTrack: { position: 'relative', flex: 1, height: '20px', borderRadius: tokens.borderRadiusSmall, backgroundColor: tokens.colorNeutralBackground3 },
   ganttBar: { position: 'absolute', top: '3px', height: '14px', borderRadius: tokens.borderRadiusSmall, minWidth: '4px' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface ItemDoc { id: string; displayName: string; state?: Record<string, unknown>; updatedAt?: string }
 

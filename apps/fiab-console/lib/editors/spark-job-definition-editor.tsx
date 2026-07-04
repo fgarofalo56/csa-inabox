@@ -47,9 +47,9 @@ import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { EmptyState } from '@/lib/components/empty-state';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+const useLocalStyles = makeStyles({
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '900px' },
   sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, color: tokens.colorBrandForeground1 },
   skeletonStack: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalS },
@@ -75,6 +75,12 @@ const useStyles = makeStyles({
     borderRadius: tokens.borderRadiusMedium, whiteSpace: 'pre-wrap', wordBreak: 'break-all',
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ---- types -----------------------------------------------------------------
 

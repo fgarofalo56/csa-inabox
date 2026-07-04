@@ -43,12 +43,12 @@ import { DbtModelGraph } from '@/lib/components/dbt/dbt-model-graph';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { emptyProjectGraph, type DbtProjectGraph } from '@/lib/dbt/dbt-project-model';
 import type { GeneratedFile } from '@/lib/dbt/dbt-codegen';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   form: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '820px' },
   row: { display: 'flex', gap: tokens.spacingHorizontalM },
   field: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   tabBody: { padding: tokens.spacingVerticalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap', marginTop: tokens.spacingVerticalS },
   status: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' },
@@ -88,6 +88,12 @@ const useStyles = makeStyles({
     resize: 'vertical',
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ----- shared helpers -------------------------------------------------------
 

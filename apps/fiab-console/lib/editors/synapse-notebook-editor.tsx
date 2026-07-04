@@ -57,6 +57,7 @@ import { useInlineCompleteToggle } from '@/lib/components/editor/use-inline-comp
 import { CellAdder } from '@/lib/components/notebook/cell-adder';
 import { ScheduleWizard, type ScheduleCreateParams } from '@/lib/components/notebook/schedule-wizard';
 import { EmptyState } from '@/lib/components/empty-state';
+import { useSharedEditorStyles } from './shared-styles';
 
 /** Shaped AML schedule row returned by /api/notebook/[id]/schedule. */
 interface AmlScheduleRow {
@@ -70,11 +71,10 @@ interface AmlScheduleRow {
   timeZone?: string;
 }
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { flex: 1 },
-  treePad: { padding: tokens.spacingVerticalS },
   cells: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, overflow: 'auto', flex: 1, minHeight: 0, paddingRight: tokens.spacingHorizontalXS },
   cell: {
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge,
@@ -155,6 +155,12 @@ const useStyles = makeStyles({
   },
   scheduleHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ── IPYNB ⇄ editor-cell mapping ───────────────────────────────────────────────
 // Synapse Studio notebooks support five interactive languages via %%magic.

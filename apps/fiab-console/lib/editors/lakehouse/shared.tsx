@@ -10,14 +10,14 @@
  */
 
 import { makeStyles, tokens } from '@fluentui/react-components';
+import { useSharedEditorStyles } from '../shared-styles';
+import { useMemo } from 'react';
 
-const useStyles = makeStyles({
-  treePad: { padding: tokens.spacingVerticalS },
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   tabs: { borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalS} 0` },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   tableWrap: { overflow: 'auto', maxHeight: '480px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   rowHover: { ':hover': { backgroundColor: tokens.colorNeutralBackground2Hover, cursor: 'pointer' } },
   rowSelected: { backgroundColor: tokens.colorNeutralBackground1Selected },
   editor: {
@@ -32,6 +32,12 @@ const useStyles = makeStyles({
     border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium,
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1 },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface ContainerInfo { name: string; url: string }
 interface PathEntry { name: string; isDirectory: boolean; size: number; lastModified?: string; etag?: string; tier?: string }

@@ -39,8 +39,9 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { KeyValueGrid } from '@/lib/components/ui/key-value-grid';
 import { CopilotTopicCanvas } from './copilot-topic-canvas';
 import { EmptyState } from '@/lib/components/empty-state';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM, alignItems: 'start' },
@@ -70,7 +71,6 @@ const useStyles = makeStyles({
     ':hover': { boxShadow: tokens.shadow16 },
   },
   kpiValue: { fontSize: tokens.fontSizeHero700, fontWeight: 600 },
-  treePad: { padding: tokens.spacingVerticalS },
   sectionHeader: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground1 },
   sectionIcon: { color: tokens.colorBrandForeground1, display: 'inline-flex', alignItems: 'center' },
   spark: {
@@ -100,6 +100,12 @@ const useStyles = makeStyles({
   },
   chatInputRow: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'flex-end' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ============================================================
 // Shared types

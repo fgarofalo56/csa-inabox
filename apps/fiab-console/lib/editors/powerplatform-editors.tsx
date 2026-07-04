@@ -49,10 +49,10 @@ const DV_REQUIRED_LEVELS = ['None', 'Recommended', 'ApplicationRequired'] as con
 // AI Builder model state/status label mappers extracted for vitest
 // coverage. See `lib/editors/__tests__/family-utils.test.ts`.
 import { aiStateLabel, aiStatusLabel } from './_family-utils';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   metaGrid: { display: 'grid', gridTemplateColumns: 'auto minmax(0, 1fr)', gap: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalL}`, alignItems: 'baseline', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
   metaKey: { color: tokens.colorNeutralForeground3, fontSize: tokens.fontSizeBase200 },
@@ -84,6 +84,12 @@ const useStyles = makeStyles({
   },
   row2: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)', gap: tokens.spacingVerticalM },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // SKU options the BAP create API accepts (Microsoft Learn: New-AdminPowerAppEnvironment
 // -EnvironmentSku — Trial | Sandbox | Production | SubscriptionBasedTrial | Teams | Developer).

@@ -46,9 +46,9 @@ import { NewItemCreateGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+const useLocalStyles = makeStyles({
   monaco: {
     width: '100%', minHeight: '180px', maxWidth: '100%', boxSizing: 'border-box',
     fontFamily: 'Consolas, "Cascadia Code", monospace',
@@ -61,6 +61,12 @@ const useStyles = makeStyles({
   },
   card: { padding: tokens.spacingVerticalM, border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusLarge },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ----- ML Model shapes (mirror lib/azure/foundry-client + mlflow-client) -----
 

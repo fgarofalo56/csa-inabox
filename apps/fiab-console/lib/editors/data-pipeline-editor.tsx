@@ -97,8 +97,9 @@ import { AdfPipelineEditor, SynapsePipelineEditor } from './azure-services-edito
 // backend per no-fabric-dependency.md) and applies the generated spec to THIS
 // file's canvas via onApplySpec.
 import { PipelineCopilotPane } from './pipeline-editor';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   shell: {
     display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, padding: tokens.spacingHorizontalM, flex: 1, minHeight: 0,
   },
@@ -113,7 +114,6 @@ const useStyles = makeStyles({
     display: 'flex',
   },
   centerCol: { flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS, minWidth: 0 },
-  treePad: { padding: tokens.spacingVerticalS },
   tabBody: { padding: tokens.spacingHorizontalM, overflow: 'auto', flex: 1, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
 
   // ── ADF-Studio designer layout: palette | (canvas over a resizable config dock) ──
@@ -201,6 +201,12 @@ const useStyles = makeStyles({
   cardIcon: { color: tokens.colorBrandForeground1, fontSize: '24px' },
   sectionHead: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface WorkspaceLite { id: string; name: string; isOnDedicatedCapacity?: boolean; }
 interface PipelineLite { id: string; displayName: string; description?: string; }

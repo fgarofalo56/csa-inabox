@@ -51,8 +51,9 @@ import type { RibbonTab } from '@/lib/components/ribbon';
 import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import { LinkedResourcesPanel } from './components/linked-resources';
 import { DataProductEditDialog } from './data-product-edit-dialog';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   form: { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingVerticalM, alignItems: 'start' },
@@ -70,7 +71,6 @@ const useStyles = makeStyles({
     backgroundColor: tokens.colorNeutralBackground3, color: tokens.colorNeutralForeground1,
     overflow: 'auto', whiteSpace: 'pre',
   },
-  cardGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: tokens.spacingVerticalM },
   card: {
     padding: tokens.spacingVerticalM,
     border: `1px solid ${tokens.colorNeutralStroke2}`,
@@ -93,6 +93,12 @@ const useStyles = makeStyles({
   },
   protocolRow: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ============================================================
 // Shared helpers

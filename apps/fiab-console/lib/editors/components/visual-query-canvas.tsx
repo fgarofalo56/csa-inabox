@@ -73,6 +73,7 @@ import {
   type VqSortDir,
   type SqlDialect,
 } from '@/lib/editors/visual-query-compiler';
+import { useSharedEditorStyles } from '../shared-styles';
 
 // ============================================================
 // Types
@@ -132,7 +133,7 @@ interface ResultGridRow {
 // Styles
 // ============================================================
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   root: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   body: { display: 'grid', gridTemplateColumns: '1fr 320px', gap: tokens.spacingHorizontalL, minHeight: '420px' },
   canvas: {
@@ -167,11 +168,6 @@ const useStyles = makeStyles({
   resultBar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   resultSpacer: { flex: 1 },
   filterInput: { maxWidth: '240px' },
-  tableWrap: {
-    overflow: 'auto', maxHeight: '320px',
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-  },
   resultLoading: {
     display: 'flex', alignItems: 'center', justifyContent: 'center',
     gap: tokens.spacingHorizontalS, minHeight: '120px',
@@ -188,6 +184,12 @@ const useStyles = makeStyles({
   aggRow: { display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' },
   checkList: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, maxHeight: '180px', overflowY: 'auto', paddingLeft: tokens.spacingHorizontalXXS },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ============================================================
 // React Flow custom node
