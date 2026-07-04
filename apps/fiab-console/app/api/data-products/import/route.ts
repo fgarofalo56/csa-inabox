@@ -40,7 +40,7 @@ export const dynamic = 'force-dynamic';
 
 const MAX_BYTES = 5 * 1024 * 1024; // 5 MB hard cap on the uploaded CSV
 
-function err(error: string, status: number, extra?: object) {
+function err(error: string, status: number, extra?: Record<string, unknown>) {
   return apiError(error, status, extra);
 }
 
