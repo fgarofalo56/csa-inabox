@@ -32,11 +32,13 @@ const FAMILY: Record<string, [string, string]> = {
   // Synapse Spark + Pipeline (real-REST: ARM + dev endpoint)
   'synapse-spark-pool':          ['SynapseSparkPoolEditor',         './azure-services-editors'],
   'synapse-pipeline':            ['SynapsePipelineEditor',          './azure-services-editors'],
-  // Databricks (real-REST: Jobs / SCIM / SQL Warehouses via UAMI)
-  'databricks-notebook':         ['DatabricksNotebookEditor',       './databricks-editors'],
-  'databricks-job':              ['DatabricksJobEditor',            './databricks-editors'],
-  'databricks-cluster':          ['DatabricksClusterEditor',        './databricks-editors'],
-  'databricks-sql-warehouse':    ['DatabricksSqlWarehouseEditor',   './databricks-editors'],
+  // Databricks (real-REST: Jobs / SCIM / SQL Warehouses via UAMI). rel-T62:
+  // registry imports the per-file editor modules directly (the
+  // ./databricks-editors barrel is kept only for the editor unit tests).
+  'databricks-notebook':         ['DatabricksNotebookEditor',       './databricks/databricks-notebook-editor'],
+  'databricks-job':              ['DatabricksJobEditor',            './databricks/job-editor'],
+  'databricks-cluster':          ['DatabricksClusterEditor',        './databricks/cluster-editor'],
+  'databricks-sql-warehouse':    ['DatabricksSqlWarehouseEditor',   './databricks/sql-warehouse-editor'],
   // ADF (real-REST: Author REST API)
   'adf-pipeline':                ['AdfPipelineEditor',              './azure-services-editors'],
   'adf-dataset':                 ['AdfDatasetEditor',               './azure-services-editors'],

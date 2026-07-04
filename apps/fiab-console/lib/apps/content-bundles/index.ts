@@ -10,77 +10,92 @@
  * apps-catalog still stores the lean shape `[{type, template}]` so that
  * doc size stays under the 2 MB Cosmos per-doc limit; the rich content
  * is applied client-side-of-Cosmos by the install route at create time.
+ *
+ * rel-T63 — LAZY PAYLOADS. The per-bundle content payloads total ~3.1 MB
+ * (dominated by the Supercharge medallion notebook cells). They are NO LONGER
+ * statically imported into the server module graph — each bundle is behind a
+ * `() => import()` loader below, so its payload is a separate async chunk
+ * fetched only when that bundle is actually installed / imported. `getBundle`
+ * and the notebook helpers are therefore async. The LEAN catalog-list path
+ * (apps-catalog seed + bootstrap) reads item types from the lightweight
+ * `./bundle-items` manifest and NEVER loads a payload. `listBundleIds` /
+ * `hasBundle` / `getBundleItemTypes` stay synchronous.
  */
 import type { AppBundle, BundleItem, LakehouseContent } from './types';
+import { BUNDLE_ITEM_TYPES } from './bundle-items';
 
-import casinoAnalytics from './app-casino-analytics';
-import iotRealtime from './app-iot-realtime';
-import healthcarePopmgt from './app-healthcare-popmgt';
-import fedrampTracker from './app-fedramp-tracker';
-import ragBuilder from './app-rag-builder';
-import pipelineDesigner from './app-pipeline-designer';
-import lakehouseInspector from './app-lakehouse-inspector';
-import dataSteward from './app-data-steward';
-import finopsCost from './app-finops-cost';
-import fabricMirrorOnboard from './app-fabric-mirror-onboard';
-import changeFeedProcessor from './app-change-feed-processor';
-import directLakeReplacement from './app-direct-lake-replacement';
-import federalDataMesh from './app-federal-data-mesh';
-import mlPipeline from './app-ml-pipeline';
-import multiAgencyOnboarding from './app-multi-agency-onboarding';
-import azureRealtimeAnalytics from './app-azure-realtime-analytics';
-import sovereignAiAgents from './app-sovereign-ai-agents';
-import logicAppsIntegration from './app-logic-apps-integration';
-import dataGovernance from './app-data-governance';
-import realTimeDashboards from './app-real-time-dashboards';
-import hybridTopology from './app-hybrid-topology';
-import workspaceMonitoring from './app-workspace-monitoring';
-import superchargeBronze from './app-supercharge-bronze';
-import superchargeSilver from './app-supercharge-silver';
-import superchargeGold from './app-supercharge-gold';
-import superchargeMl from './app-supercharge-ml';
-import superchargeStreaming from './app-supercharge-streaming';
-import superchargeUtils from './app-supercharge-utils';
-import superchargeGuide from './app-supercharge-guide';
-
-const REGISTRY: Record<string, AppBundle> = {
-  [casinoAnalytics.appId]: casinoAnalytics,
-  [iotRealtime.appId]: iotRealtime,
-  [healthcarePopmgt.appId]: healthcarePopmgt,
-  [fedrampTracker.appId]: fedrampTracker,
-  [ragBuilder.appId]: ragBuilder,
-  [pipelineDesigner.appId]: pipelineDesigner,
-  [lakehouseInspector.appId]: lakehouseInspector,
-  [dataSteward.appId]: dataSteward,
-  [finopsCost.appId]: finopsCost,
-  [fabricMirrorOnboard.appId]: fabricMirrorOnboard,
-  [changeFeedProcessor.appId]: changeFeedProcessor,
-  [directLakeReplacement.appId]: directLakeReplacement,
-  [federalDataMesh.appId]: federalDataMesh,
-  [mlPipeline.appId]: mlPipeline,
-  [multiAgencyOnboarding.appId]: multiAgencyOnboarding,
-  [azureRealtimeAnalytics.appId]: azureRealtimeAnalytics,
-  [sovereignAiAgents.appId]: sovereignAiAgents,
-  [logicAppsIntegration.appId]: logicAppsIntegration,
-  [dataGovernance.appId]: dataGovernance,
-  [realTimeDashboards.appId]: realTimeDashboards,
-  [hybridTopology.appId]: hybridTopology,
-  [workspaceMonitoring.appId]: workspaceMonitoring,
-  [superchargeBronze.appId]: superchargeBronze,
-  [superchargeSilver.appId]: superchargeSilver,
-  [superchargeGold.appId]: superchargeGold,
-  [superchargeMl.appId]: superchargeMl,
-  [superchargeStreaming.appId]: superchargeStreaming,
-  [superchargeUtils.appId]: superchargeUtils,
-  [superchargeGuide.appId]: superchargeGuide,
+// Lazy per-bundle payload loaders — one `() => import()` per bundle so webpack
+// code-splits each payload into its own async chunk (keeps the ~3.1 MB out of
+// the static server graph; loaded on demand). Keys are the bundle appIds (the
+// 'app-<slug>' convention, matching the file name and CATALOG_META id).
+const LOADERS: Record<string, () => Promise<{ default: AppBundle }>> = {
+  'app-casino-analytics': () => import('./app-casino-analytics'),
+  'app-iot-realtime': () => import('./app-iot-realtime'),
+  'app-healthcare-popmgt': () => import('./app-healthcare-popmgt'),
+  'app-fedramp-tracker': () => import('./app-fedramp-tracker'),
+  'app-rag-builder': () => import('./app-rag-builder'),
+  'app-pipeline-designer': () => import('./app-pipeline-designer'),
+  'app-lakehouse-inspector': () => import('./app-lakehouse-inspector'),
+  'app-data-steward': () => import('./app-data-steward'),
+  'app-finops-cost': () => import('./app-finops-cost'),
+  'app-fabric-mirror-onboard': () => import('./app-fabric-mirror-onboard'),
+  'app-change-feed-processor': () => import('./app-change-feed-processor'),
+  'app-direct-lake-replacement': () => import('./app-direct-lake-replacement'),
+  'app-federal-data-mesh': () => import('./app-federal-data-mesh'),
+  'app-ml-pipeline': () => import('./app-ml-pipeline'),
+  'app-multi-agency-onboarding': () => import('./app-multi-agency-onboarding'),
+  'app-azure-realtime-analytics': () => import('./app-azure-realtime-analytics'),
+  'app-sovereign-ai-agents': () => import('./app-sovereign-ai-agents'),
+  'app-logic-apps-integration': () => import('./app-logic-apps-integration'),
+  'app-data-governance': () => import('./app-data-governance'),
+  'app-real-time-dashboards': () => import('./app-real-time-dashboards'),
+  'app-hybrid-topology': () => import('./app-hybrid-topology'),
+  'app-workspace-monitoring': () => import('./app-workspace-monitoring'),
+  'app-supercharge-bronze': () => import('./app-supercharge-bronze'),
+  'app-supercharge-silver': () => import('./app-supercharge-silver'),
+  'app-supercharge-gold': () => import('./app-supercharge-gold'),
+  'app-supercharge-ml': () => import('./app-supercharge-ml'),
+  'app-supercharge-streaming': () => import('./app-supercharge-streaming'),
+  'app-supercharge-utils': () => import('./app-supercharge-utils'),
+  'app-supercharge-guide': () => import('./app-supercharge-guide'),
 };
 
-export function getBundle(appId: string): AppBundle | undefined {
-  return REGISTRY[appId];
+/** All registered bundle appIds. Synchronous — never loads a payload. */
+export function listBundleIds(): string[] {
+  return Object.keys(LOADERS);
 }
 
-export function listBundleIds(): string[] {
-  return Object.keys(REGISTRY);
+/**
+ * Does a bundle with this appId exist? Synchronous existence check that does
+ * NOT load the (heavy) payload — use this where you only need to know whether a
+ * bundle is registered (e.g. the Learn-catalog "installable" gate), never the
+ * `getBundle` promise.
+ */
+export function hasBundle(appId: string): boolean {
+  return Object.prototype.hasOwnProperty.call(LOADERS, appId);
+}
+
+/**
+ * Lean, ordered item-type list for a bundle (with duplicates preserved) drawn
+ * from the lightweight `./bundle-items` manifest. Synchronous — does NOT load
+ * the payload. This is what the apps-catalog seed + bootstrap use to build each
+ * catalog doc's `items:[{type, template}]` array without pulling 3.1 MB of
+ * content into the list route.
+ */
+export function getBundleItemTypes(appId: string): string[] {
+  return BUNDLE_ITEM_TYPES[appId] ?? [];
+}
+
+/**
+ * Resolve a bundle's FULL payload (all item content). Async — dynamically
+ * imports the bundle's chunk on demand. Returns undefined for an unregistered
+ * appId.
+ */
+export async function getBundle(appId: string): Promise<AppBundle | undefined> {
+  const loader = LOADERS[appId];
+  if (!loader) return undefined;
+  const mod = await loader();
+  return mod.default;
 }
 
 /**
@@ -98,12 +113,12 @@ export function listBundleIds(): string[] {
  * name and data-bearing content. Falls back to itemType-only match (legacy
  * behaviour) when no displayName is supplied.
  */
-export function resolveBundleItem(
+export async function resolveBundleItem(
   appId: string,
   itemType: string,
   displayName?: string,
-): { displayName: string; description: string; content: unknown; learnDoc?: string } | undefined {
-  const b = REGISTRY[appId];
+): Promise<{ displayName: string; description: string; content: unknown; learnDoc?: string } | undefined> {
+  const b = await getBundle(appId);
   if (!b) return undefined;
   const ofType = b.items.filter((i) => i.itemType === itemType);
   if (ofType.length === 0) return undefined;
@@ -164,10 +179,15 @@ function humaniseBundleId(appId: string): string {
  * Enumerate every prebuilt notebook across all registered bundles, flagging
  * which bundles can additionally seed real ADLS sample data. Drives the
  * Learning-Hub notebook-import wizard's picker. Real registry data — no mocks.
+ *
+ * Async: loads each bundle's payload (the wizard needs cell counts + sample-data
+ * flags). Only the Learning-Hub wizard GET calls this, not any hot path.
  */
-export function listNotebookImports(): NotebookImportOption[] {
+export async function listNotebookImports(): Promise<NotebookImportOption[]> {
   const out: NotebookImportOption[] = [];
-  for (const b of Object.values(REGISTRY)) {
+  for (const appId of Object.keys(LOADERS)) {
+    const b = await getBundle(appId);
+    if (!b) continue;
     const hasSampleData = b.items.some(lakehouseHasSampleData);
     for (const item of b.items) {
       if (!(NOTEBOOK_ITEM_TYPES as readonly string[]).includes(item.itemType)) continue;
@@ -189,9 +209,10 @@ export function listNotebookImports(): NotebookImportOption[] {
 /**
  * Return a bundle's notebook BundleItems (optionally filtered to one by
  * displayName). Used by the import route to resolve the exact notebook the
- * wizard picked without the resolveBundleItem() first-of-type fallback. */
-export function getBundleNotebooks(appId: string, displayName?: string): BundleItem[] {
-  const b = REGISTRY[appId];
+ * wizard picked without the resolveBundleItem() first-of-type fallback.
+ * Async — loads the bundle payload on demand. */
+export async function getBundleNotebooks(appId: string, displayName?: string): Promise<BundleItem[]> {
+  const b = await getBundle(appId);
   if (!b) return [];
   const nbs = b.items.filter((i) => (NOTEBOOK_ITEM_TYPES as readonly string[]).includes(i.itemType));
   if (displayName) return nbs.filter((i) => i.displayName === displayName);
@@ -201,9 +222,10 @@ export function getBundleNotebooks(appId: string, displayName?: string): BundleI
 /**
  * Return a bundle's lakehouse BundleItems that carry seedable sample rows.
  * The "with sample data" import path provisions these alongside the notebook
- * so the lakehouse provisioner writes the real CSVs into ADLS Delta. */
-export function getSampleDataLakehouses(appId: string): BundleItem[] {
-  const b = REGISTRY[appId];
+ * so the lakehouse provisioner writes the real CSVs into ADLS Delta.
+ * Async — loads the bundle payload on demand. */
+export async function getSampleDataLakehouses(appId: string): Promise<BundleItem[]> {
+  const b = await getBundle(appId);
   if (!b) return [];
   return b.items.filter(lakehouseHasSampleData);
 }

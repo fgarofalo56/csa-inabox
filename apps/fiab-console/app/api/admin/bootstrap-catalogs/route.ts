@@ -17,7 +17,7 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { appsCatalogContainer, workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
 import { ensureDataProductsIndex } from '@/lib/azure/loom-data-products-search';
-import { listBundleIds, getBundle } from '@/lib/apps/content-bundles';
+import { listBundleIds, getBundleItemTypes } from '@/lib/apps/content-bundles';
 import { CATALOG_META } from '@/lib/apps/content-bundles/catalog-meta';
 
 export const runtime = 'nodejs';
@@ -70,7 +70,6 @@ export function buildApps() {
   for (const appId of listBundleIds()) {
     const meta = CATALOG_META[appId];
     if (!meta) continue; // bundle without catalog metadata — skip (still installable directly)
-    const bundle = getBundle(appId);
     apps.push({
       id: appId,
       name: meta.name,
@@ -78,9 +77,11 @@ export function buildApps() {
       icon: meta.icon,
       category: meta.category,
       publisher: meta.publisher,
-      // Lean {type, template} refs — install reads getBundle(appId) for the
-      // rich starter content, so template just points back at the bundle id.
-      items: (bundle?.items || []).map((i) => ({ type: i.itemType, template: appId })),
+      // Lean {type, template} refs from the lightweight manifest (rel-T63) —
+      // install reads getBundle(appId) for the rich starter content, so
+      // template just points back at the bundle id. This module-level
+      // buildApps() stays synchronous and never loads a heavy payload.
+      items: getBundleItemTypes(appId).map((t) => ({ type: t, template: appId })),
     });
   }
   return apps;
