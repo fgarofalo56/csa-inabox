@@ -291,6 +291,10 @@ export function DataProductsMarketplace() {
             <Button appearance="primary" icon={<Search20Regular />} onClick={() => setSubmitted(query)}>Search</Button>
             {loading && <Spinner size="tiny" />}
             <Text size={200}>{count} published</Text>
+            <Button as="a" href="/data-products" appearance="subtle" size="small"
+              icon={<Open20Regular />} style={{ marginLeft: 'auto' }}>
+              Data products catalog
+            </Button>
           </div>
           <Caption1 className={s.hint}>
             Tip: wrap a term in double quotes for an exact phrase match — e.g. <code>&quot;customer 360&quot;</code>.

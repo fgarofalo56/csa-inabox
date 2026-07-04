@@ -1,14 +1,12 @@
-import { PageShell } from '@/lib/components/page-shell';
-import { ItemsByTypePane } from '@/lib/components/items-by-type-pane';
+import { redirect } from 'next/navigation';
 
-export default function ActivatorPage() {
-  return (
-    <PageShell
-      title="Activator"
-      subtitle="No-code event-driven automation. Watches a stream or KQL query and fires Teams/Email/Power Automate actions on conditions."
-    >
-      <ItemsByTypePane types={['activator']}
-        emptyHint="No Activator rules in this tenant yet." />
-    </PageShell>
-  );
+/**
+ * /activator — consolidated into the Real-Time Intelligence hub.
+ *
+ * Activator now lives as the "Activator" tab of /realtime-hub (rendered by
+ * <RealTimeIntelligenceHub>). This page preserves old bookmarks / links by
+ * bouncing to the tab so the full Activator surface always renders.
+ */
+export default function ActivatorRedirect() {
+  redirect('/realtime-hub?tab=activator');
 }
