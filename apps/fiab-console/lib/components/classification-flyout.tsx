@@ -301,7 +301,7 @@ export function ClassificationPane({ type, id }: Props) {
           <div className={styles.chips}>
             {current.map((c) => (
               <Badge key={c} appearance="tint" color="informative">
-                <span className={styles.swatch} style={{ backgroundColor: colorOf(c), marginRight: 6 }} aria-hidden />
+                <span className={styles.swatch} style={{ backgroundColor: colorOf(c), marginRight: tokens.spacingHorizontalSNudge }} aria-hidden />
                 {c}
               </Badge>
             ))}

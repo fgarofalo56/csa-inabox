@@ -306,7 +306,7 @@ export function ApimTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>API Management</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="Add new" relationship="label">
@@ -339,7 +339,7 @@ export function ApimTree({
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading APIM…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading APIM…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>APIM error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
@@ -552,13 +552,13 @@ export function ApimTree({
                   <Field label="Display name" required>
                     <Input value={cDisplay} onChange={(_, d) => setCDisplay(d.value)} placeholder="Orders API" />
                   </Field>
-                  <Field label="Name (id)" hint="Optional — slugged from display name when blank" style={{ marginTop: 8 }}>
+                  <Field label="Name (id)" hint="Optional — slugged from display name when blank" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="orders-api" />
                   </Field>
-                  <Field label="API URL suffix (path)" required hint="After the gateway host, e.g. 'orders'" style={{ marginTop: 8 }}>
+                  <Field label="API URL suffix (path)" required hint="After the gateway host, e.g. 'orders'" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cPath} onChange={(_, d) => setCPath(d.value)} placeholder="orders" />
                   </Field>
-                  <Field label="OpenAPI spec URL" hint="Optional — imports operations from the spec" style={{ marginTop: 8 }}>
+                  <Field label="OpenAPI spec URL" hint="Optional — imports operations from the spec" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cSpecUrl} onChange={(_, d) => setCSpecUrl(d.value)} placeholder="https://example.com/openapi.json" />
                   </Field>
                 </>
@@ -568,10 +568,10 @@ export function ApimTree({
                   <Field label="Display name" required>
                     <Input value={cDisplay} onChange={(_, d) => setCDisplay(d.value)} placeholder="Starter" />
                   </Field>
-                  <Field label="Name (id)" hint="Optional — slugged from display name when blank" style={{ marginTop: 8 }}>
+                  <Field label="Name (id)" hint="Optional — slugged from display name when blank" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="starter" />
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                     Created in <strong>draft (not published)</strong>. Add APIs and publish in the product editor.
                   </Caption1>
                 </>
@@ -581,10 +581,10 @@ export function ApimTree({
                   <Field label="Name" required hint="Letters, digits, dash, dot, underscore">
                     <Input value={cDisplay} onChange={(_, d) => setCDisplay(d.value)} placeholder="backend-url" />
                   </Field>
-                  <Field label="Value" required style={{ marginTop: 8 }}>
+                  <Field label="Value" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input type={cSecret ? 'password' : 'text'} value={cValue} onChange={(_, d) => setCValue(d.value)} placeholder="https://backend.example.com" />
                   </Field>
-                  <Switch checked={cSecret} onChange={(_, d) => setCSecret(d.checked)} label="Secret (encrypt, hide value)" style={{ marginTop: 8 }} />
+                  <Switch checked={cSecret} onChange={(_, d) => setCSecret(d.checked)} label="Secret (encrypt, hide value)" style={{ marginTop: tokens.spacingVerticalS }} />
                 </>
               )}
               {createGroup === 'backend' && (
@@ -592,13 +592,13 @@ export function ApimTree({
                   <Field label="Runtime URL" required>
                     <Input value={cUrl} onChange={(_, d) => setCUrl(d.value)} placeholder="https://backend.example.com" />
                   </Field>
-                  <Field label="Title" hint="Optional friendly name" style={{ marginTop: 8 }}>
+                  <Field label="Title" hint="Optional friendly name" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cDisplay} onChange={(_, d) => setCDisplay(d.value)} placeholder="Orders backend" />
                   </Field>
-                  <Field label="Name (id)" hint="Optional — slugged from title/URL when blank" style={{ marginTop: 8 }}>
+                  <Field label="Name (id)" hint="Optional — slugged from title/URL when blank" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cName} onChange={(_, d) => setCName(d.value)} placeholder="orders-backend" />
                   </Field>
-                  <Field label="Protocol" style={{ marginTop: 8 }}>
+                  <Field label="Protocol" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={cProtocol} selectedOptions={[cProtocol]} onOptionSelect={(_, d) => setCProtocol((d.optionValue as 'http' | 'soap') || 'http')}>
                       <Option value="http">http (REST)</Option>
                       <Option value="soap">soap</Option>
@@ -611,7 +611,7 @@ export function ApimTree({
                   <Field label="Name" required>
                     <Input value={cDisplay} onChange={(_, d) => setCDisplay(d.value)} placeholder="Partner subscription" />
                   </Field>
-                  <Field label="Scope" style={{ marginTop: 8 }}>
+                  <Field label="Scope" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={cScope} selectedOptions={[cScope]} onOptionSelect={(_, d) => { setCScope((d.optionValue as typeof cScope) || 'allApis'); setCTarget(''); }}>
                       <Option value="allApis">All APIs</Option>
                       <Option value="product">Product</Option>
@@ -619,25 +619,25 @@ export function ApimTree({
                     </Dropdown>
                   </Field>
                   {cScope === 'product' && (
-                    <Field label="Product" required style={{ marginTop: 8 }}>
+                    <Field label="Product" required style={{ marginTop: tokens.spacingVerticalS }}>
                       <Dropdown placeholder="Select a product" value={products.find((p) => p.name === cTarget)?.displayName || cTarget} selectedOptions={cTarget ? [cTarget] : []} onOptionSelect={(_, d) => setCTarget(d.optionValue || '')}>
                         {products.map((p) => <Option key={p.name} value={p.name} text={`${p.displayName} (${p.name})`}>{p.displayName} ({p.name})</Option>)}
                       </Dropdown>
                     </Field>
                   )}
                   {cScope === 'api' && (
-                    <Field label="API" required style={{ marginTop: 8 }}>
+                    <Field label="API" required style={{ marginTop: tokens.spacingVerticalS }}>
                       <Dropdown placeholder="Select an API" value={apis.find((a) => a.name === cTarget)?.displayName || cTarget} selectedOptions={cTarget ? [cTarget] : []} onOptionSelect={(_, d) => setCTarget(d.optionValue || '')}>
                         {apis.map((a) => <Option key={a.name} value={a.name} text={`${a.displayName} (${a.name})`}>{a.displayName} ({a.name})</Option>)}
                       </Dropdown>
                     </Field>
                   )}
-                  <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                     Created <strong>active</strong> (admin-minted, no developer-portal approval).
                   </Caption1>
                 </>
               )}
-              {createError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
+              {createError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>

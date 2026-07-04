@@ -788,7 +788,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
               <MessageBarTitle>Destinations pushed to ASA</MessageBarTitle>
               {asaSyncMsg}
               {asaOutputs.length > 0 && (
-                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>
+                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL }}>
                   {asaOutputs.map((o) => (
                     <li key={o.name}><code>{o.name}</code> → {o.type}</li>
                   ))}
@@ -1335,9 +1335,9 @@ function EventstreamSqlOperatorTab({
                 <MessageBarTitle>{compileResult.valid && compileResult.errors.length === 0 ? 'Query compiled' : 'Compile errors'}</MessageBarTitle>
                 {compileResult.errors.length === 0
                   ? <>Outputs: {compileResult.outputs.length ? compileResult.outputs.map((o) => <code key={o} style={{ marginRight: tokens.spacingHorizontalS}}>{o}</code>) : '(none)'}</>
-                  : <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>{compileResult.errors.map((e, i) => <li key={i}>{e.startLine ? `Line ${e.startLine}: ` : ''}{e.message}</li>)}</ul>}
+                  : <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL }}>{compileResult.errors.map((e, i) => <li key={i}>{e.startLine ? `Line ${e.startLine}: ` : ''}{e.message}</li>)}</ul>}
                 {compileResult.warnings.length > 0 && (
-                  <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18, color: tokens.colorPaletteYellowForeground2 }}>
+                  <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL, color: tokens.colorPaletteYellowForeground2 }}>
                     {compileResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
                   </ul>
                 )}
@@ -1688,9 +1688,9 @@ function EventstreamOperatorsTab({
               <MessageBarTitle>{validateResult.valid && validateResult.errors.length === 0 ? 'Query compiled' : 'Compile errors'}</MessageBarTitle>
               {validateResult.errors.length === 0
                 ? <>Outputs: {validateResult.outputs.length ? validateResult.outputs.map((o) => <code key={o} style={{ marginRight: tokens.spacingHorizontalS }}>{o}</code>) : '(none)'}</>
-                : <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>{validateResult.errors.map((e, i) => <li key={i}>{e.startLine ? `Line ${e.startLine}: ` : ''}{e.message}</li>)}</ul>}
+                : <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL }}>{validateResult.errors.map((e, i) => <li key={i}>{e.startLine ? `Line ${e.startLine}: ` : ''}{e.message}</li>)}</ul>}
               {validateResult.warnings.length > 0 && (
-                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18, color: tokens.colorPaletteYellowForeground2 }}>
+                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL, color: tokens.colorPaletteYellowForeground2 }}>
                   {validateResult.warnings.map((w, i) => <li key={i}>{w}</li>)}
                 </ul>
               )}

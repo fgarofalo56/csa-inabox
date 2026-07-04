@@ -2236,7 +2236,7 @@ function PublishAsApiDialog(props: {
                       </div>
                       <Caption1>This subscription key is shown once and is not stored on the item — copy it now. Manage or regenerate it in the APIM navigator (subscription <code>{result.sid}</code>).</Caption1>
                       <div style={{ display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalS }}>
-                        <pre style={{ flex: 1, margin: 0, padding: tokens.spacingVerticalS, background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{curl}</pre>
+                        <pre style={{ flex: 1, margin: tokens.spacingVerticalNone, padding: tokens.spacingVerticalS, background: tokens.colorNeutralBackground3, borderRadius: tokens.borderRadiusMedium, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{curl}</pre>
                         <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={() => copy(curl)}>Copy curl</Button>
                       </div>
                       <Caption1>API <code>{result.apiId}</code> · Product <code>{result.productId}</code> · Gateway <code>{result.gatewayUrl}</code></Caption1>
@@ -2927,7 +2927,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
               Missing env var: <code>{purviewHint.missingEnvVar}</code>.{' '}
               Bicep module: <code>{purviewHint.bicepModule}</code> — {purviewHint.bicepStatus}{' '}
               Required Purview roles (granted via the Purview portal, NOT ARM RBAC):
-              <ul style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalXS, marginLeft: tokens.spacingHorizontalL, marginRight: 0 }}>
+              <ul style={{ marginTop: tokens.spacingVerticalXS, marginBottom: tokens.spacingVerticalXS, marginLeft: tokens.spacingHorizontalL, marginRight: tokens.spacingHorizontalNone }}>
                 {purviewHint.rolesRequired.map((r) => (
                   <li key={r.name}><strong>{r.name}</strong> at {r.scope} — {r.reason}</li>
                 ))}

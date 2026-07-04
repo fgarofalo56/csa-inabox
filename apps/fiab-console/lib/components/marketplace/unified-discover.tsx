@@ -201,7 +201,7 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
         ))}
         {domains.length > 0 && (
           <>
-            <Caption1 className={s.hint} style={{ marginLeft: 8 }}>Domain:</Caption1>
+            <Caption1 className={s.hint} style={{ marginLeft: tokens.spacingHorizontalS }}>Domain:</Caption1>
             <Tag appearance={!domain ? 'filled' : 'outline'} onClick={() => setDomain(null)} style={{ cursor: 'pointer' }}>All</Tag>
             {domains.map((d) => (
               <Tag key={d} appearance={domain === d ? 'filled' : 'outline'} onClick={() => setDomain(d)} style={{ cursor: 'pointer' }}>{d}</Tag>

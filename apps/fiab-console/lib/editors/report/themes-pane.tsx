@@ -613,7 +613,7 @@ export function ThemesPane({ theme, onChange }: ThemesPaneProps): ReactElement {
             {/* font */}
             <div className={styles.fieldRow}>
               <Caption1 className={styles.fieldLabel}>
-                <TextFont20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                <TextFont20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
                 Font
               </Caption1>
               <Dropdown

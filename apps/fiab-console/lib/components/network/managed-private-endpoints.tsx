@@ -34,14 +34,14 @@ import { groupOptionsForArmType, type PeGroupOption } from '@/lib/azure/pe-subre
 const API = '/api/network/managed-private-endpoints';
 
 const card: React.CSSProperties = {
-  padding: 20, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  padding: tokens.spacingVerticalXL, border: `1px solid ${tokens.colorNeutralStroke2}`,
   borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
-  marginBottom: 20, boxShadow: tokens.shadow4,
+  marginBottom: tokens.spacingVerticalXL, boxShadow: tokens.shadow4,
 };
 const head: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap', minWidth: 0,
+  display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalMNudge, marginBottom: tokens.spacingVerticalL, flexWrap: 'wrap', minWidth: 0,
 };
-const formGrid: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 14, minWidth: 380 };
+const formGrid: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalL, minWidth: 380 };
 
 interface ManagedPe {
   id: string; name: string; location?: string; provisioningState?: string;
@@ -356,19 +356,19 @@ export function ManagedPrivateEndpointsCard() {
         <Badge appearance="tint" color="brand" style={{ marginLeft: 'auto' }}>Azure-native · self-service</Badge>
       </div>
 
-      <Body1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+      <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
         Create a private endpoint from the CSA Loom managed network to any Azure resource you can reach, so
         Loom compute connects to it privately. New endpoints land <strong>Pending</strong> until the target
         resource owner approves the connection — poll the state here after they approve.
       </Body1>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14, flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalL, flexWrap: 'wrap' }}>
         {data?.ok && <CreateDialog onCreated={(m) => { setNotice(m); void load(); }} />}
         <Button appearance="subtle" icon={<ArrowClockwise16Regular />} onClick={() => void load()}>Refresh</Button>
       </div>
 
       {notice && (
-        <MessageBar intent="info" style={{ marginBottom: 12 }}>
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>{notice}</MessageBarBody>
         </MessageBar>
       )}
@@ -406,11 +406,11 @@ export function ManagedPrivateEndpointsCard() {
               <TableBody>
                 {endpoints.map((e) => (
                   <TableRow key={e.id || e.name}>
-                    <TableCell><span style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{e.name}</span></TableCell>
+                    <TableCell><span style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}>{e.name}</span></TableCell>
                     <TableCell>{e.targetResourceName || '—'}</TableCell>
                     <TableCell>{(e.groupIds || []).join(', ') || '—'}</TableCell>
                     <TableCell>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, alignItems: 'flex-start' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS, alignItems: 'flex-start' }}>
                         {stateBadge(e.connectionState)}
                         {dnsIndicator(e)}
                       </div>
@@ -426,7 +426,7 @@ export function ManagedPrivateEndpointsCard() {
                         : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>external</Caption1>}
                     </TableCell>
                     <TableCell>
-                      <div style={{ display: 'flex', gap: 4 }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
                         <Button
                           appearance="subtle" size="small" icon={<ArrowClockwise16Regular />}
                           disabled={busy} title="Refresh connection state"

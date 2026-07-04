@@ -1009,7 +1009,7 @@ function ApplyLabelSection({ labelsState }: { labelsState: ApiState<LabelsPayloa
 
   return (
     <div className={s.section}>
-      <Subtitle2 block className={s.applyTitle}><Tag24Regular style={{ verticalAlign: 'middle', marginRight: 6 }} />Apply a sensitivity label to a Loom item</Subtitle2>
+      <Subtitle2 block className={s.applyTitle}><Tag24Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalSNudge }} />Apply a sensitivity label to a Loom item</Subtitle2>
       <Caption1 block className={s.applyIntro}>
         Pick an item, choose a label from the live taxonomy, and apply it. The label is validated against the tenant taxonomy + label policy, written to the item, and (when the item has a Purview asset) stamped on the catalog entry.
       </Caption1>

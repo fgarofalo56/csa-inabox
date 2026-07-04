@@ -166,7 +166,7 @@ export function PurviewGate({
   const crossCloud = status.reason === 'cross_cloud';
 
   return (
-    <MessageBar intent={status.reason === 'upstream_error' ? 'error' : 'warning'} style={{ marginBottom: 16 }}>
+    <MessageBar intent={status.reason === 'upstream_error' ? 'error' : 'warning'} style={{ marginBottom: tokens.spacingVerticalL }}>
       <MessageBarBody>
         <MessageBarTitle>{titleFor(status.reason, surface)}</MessageBarTitle>
 
@@ -202,7 +202,7 @@ export function PurviewGate({
           </li>
           <li>
             Console UAMI granted these governance-domain roles (in the Purview portal, not ARM RBAC):
-            <div className={s.list} style={{ marginTop: 2 }}>
+            <div className={s.list} style={{ marginTop: tokens.spacingVerticalXXS }}>
               {(hint.rolesRequired || DEFAULT_HINT.rolesRequired!).map((r) => (
                 <span key={r.name} className={s.roleRow}>
                   <strong>{r.name}</strong> @ {r.scope} — {r.reason}
@@ -212,7 +212,7 @@ export function PurviewGate({
           </li>
         </ul>
 
-        {hint.followUp && <Caption1 style={{ display: 'block', marginTop: 4 }}>{hint.followUp}</Caption1>}
+        {hint.followUp && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS }}>{hint.followUp}</Caption1>}
       </MessageBarBody>
 
       <MessageBarActions>

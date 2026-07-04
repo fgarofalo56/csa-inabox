@@ -422,7 +422,7 @@ export function RealTimeHubView() {
           </Button>
         }
       >
-        <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+        <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
           Connect Microsoft, Azure, database CDC, and external streaming sources. Each tile creates a real CSA Loom
           Eventstream item carrying the chosen source.
           {' '}Want to discover the raw Azure sources (Event Hubs, IoT Hub, ADX) across every subscription?{' '}
@@ -434,7 +434,7 @@ export function RealTimeHubView() {
       {/* All data streams */}
       <Section
         title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
             All data streams
             {data?.workspaceCount != null && (
               <Badge appearance="tint">{streams.length} across {data.workspaceCount} workspaces</Badge>
@@ -442,7 +442,7 @@ export function RealTimeHubView() {
           </span>
         }
         actions={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
             <ViewToggle value={view} onChange={setView} ariaLabel="Stream view" />
             <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
           </span>

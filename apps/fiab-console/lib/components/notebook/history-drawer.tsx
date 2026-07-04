@@ -231,7 +231,7 @@ export function HistoryDrawer({ open, onOpenChange, notebookId, workspaceId, com
                         {j.failureReason.errorCode}: {j.failureReason.message}
                       </Caption1>
                     )}
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                       <Button
                         size="small"
                         appearance="primary"

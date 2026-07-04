@@ -2464,7 +2464,7 @@ function SmallMultiplesGrid({ facetColumn, columns, sharedY = true, rows, base }
     <div style={{ display: 'grid', gridTemplateColumns: gridCols, gap: tokens.spacingHorizontalM, width: '100%', minWidth: 0 }}>
       {facets.map((fv) => (
         <div key={fv} style={{ minWidth: 0 }}>
-          <Caption1 style={{ display: 'block', marginBottom: 2, color: tokens.colorNeutralForeground2, fontWeight: tokens.fontWeightSemibold }}>{fv}</Caption1>
+          <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXXS, color: tokens.colorNeutralForeground2, fontWeight: tokens.fontWeightSemibold }}>{fv}</Caption1>
           <LoomChart {...base} rows={panelRows(fv)} title={undefined} height={panelH} smallMultiples={undefined} sharedValueMax={gMax} />
         </div>
       ))}
@@ -2488,15 +2488,15 @@ function HoverPopover({ x, y, category, rows, tips }: {
       borderRadius: tokens.borderRadiusMedium, boxShadow: tokens.shadow16,
       padding: `${tokens.spacingVerticalXS} ${tokens.spacingHorizontalS}`, maxWidth: 260,
     }}>
-      <Caption1 style={{ display: 'block', fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, marginBottom: 2 }}>{category}</Caption1>
+      <Caption1 style={{ display: 'block', fontWeight: tokens.fontWeightSemibold, color: tokens.colorNeutralForeground1, marginBottom: tokens.spacingVerticalXXS }}>{category}</Caption1>
       {rows.map((r, i) => (
-        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div key={i} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
           <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: r.color, flexShrink: 0 }} />
           <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{r.label}: {r.value}</Caption1>
         </div>
       ))}
       {tips.map((t, i) => (
-        <div key={`t${i}`} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div key={`t${i}`} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
           <span style={{ width: 8, height: 8, borderRadius: 2, backgroundColor: 'transparent', flexShrink: 0 }} aria-hidden />
           <Caption1 style={{ color: tokens.colorNeutralForeground3, fontStyle: 'italic' }}>{t.label}: {t.value}</Caption1>
         </div>
@@ -2566,7 +2566,7 @@ export function LoomChart(props: LoomChartProps) {
     return (
       <div style={{ width: '100%', minWidth: 0 }}>
         {title && (
-          <Caption1 style={{ display: 'block', marginBottom: 4, fontWeight: tokens.fontWeightSemibold }}>{title}</Caption1>
+          <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS, fontWeight: tokens.fontWeightSemibold }}>{title}</Caption1>
         )}
         <SmallMultiplesGrid facetColumn={smallMultiples.facetColumn} columns={smallMultiples.columns}
           sharedY={smallMultiples.sharedY} rows={rows} base={props} />
@@ -2580,7 +2580,7 @@ export function LoomChart(props: LoomChartProps) {
       <div style={{
         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
         height, border: `1px dashed ${tokens.colorNeutralStroke2}`, borderRadius: 6,
-        color: tokens.colorNeutralForeground3, gap: 6,
+        color: tokens.colorNeutralForeground3, gap: tokens.spacingHorizontalSNudge,
       }}>
         <Caption1>No numeric data to plot.</Caption1>
       </div>

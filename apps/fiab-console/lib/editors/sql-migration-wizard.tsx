@@ -341,7 +341,7 @@ export function SqlMigrationWizard() {
               {idx > 0 && <span className={`${s.stepConnector} ${prevDone ? s.stepConnectorDone : ''}`} aria-hidden />}
               <span className={s.step}>
                 <span className={`${s.stepDot} ${done ? s.stepDotDone : active ? s.stepDotActive : ''}`}>
-                  {done ? <CheckmarkCircle20Filled style={{ fontSize: 16 }} /> : n}
+                  {done ? <CheckmarkCircle20Filled style={{ fontSize: tokens.fontSizeBase400 }} /> : n}
                 </span>
                 <Text size={300} className={active || done ? s.stepLabelActive : s.stepLabelIdle}>{label}</Text>
               </span>

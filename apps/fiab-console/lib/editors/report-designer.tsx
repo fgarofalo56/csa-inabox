@@ -4590,7 +4590,7 @@ function PageFormatPanel({ styles, page, fieldOpts, onChange }: {
     onChange({ drillthrough: { fields: dtFields.filter((f) => optKey(f) !== key) } });
   };
   return (
-    <div className={styles.pane} style={{ padding: 0 }}>
+    <div className={styles.pane} style={{ padding: tokens.spacingVerticalNone }}>
       <Caption1 className={styles.muted}>
         No visual selected — format the report <strong>page</strong> (Power BI parity). Select a visual on the canvas to format it instead.
       </Caption1>

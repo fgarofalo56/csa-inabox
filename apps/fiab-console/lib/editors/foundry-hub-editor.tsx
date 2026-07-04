@@ -1820,7 +1820,7 @@ function AccountPickerBar({ acct, onSelect, onHub }: { acct: FoundryAccount | nu
 
   return (
     <div className={s.bar} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
-      <div className={s.bar} style={{ padding: 0, border: 'none', background: 'transparent' }}>
+      <div className={s.bar} style={{ padding: tokens.spacingVerticalNone, border: 'none', background: 'transparent' }}>
         <Field label="AI Foundry account (this subscription)" orientation="horizontal">
           <Dropdown
             style={{ minWidth: 280 }}
@@ -1853,7 +1853,7 @@ function AccountPickerBar({ acct, onSelect, onHub }: { acct: FoundryAccount | nu
         )}
       </div>
       {/* Cross-subscription pickers — span every sub the user has RBAC for. */}
-      <div className={s.bar} style={{ padding: 0, border: 'none', background: 'transparent', alignItems: 'flex-start' }}>
+      <div className={s.bar} style={{ padding: tokens.spacingVerticalNone, border: 'none', background: 'transparent', alignItems: 'flex-start' }}>
         <AzureResourcePicker
           type="Microsoft.CognitiveServices/accounts"
           label="Azure OpenAI / AI Services (any subscription)"

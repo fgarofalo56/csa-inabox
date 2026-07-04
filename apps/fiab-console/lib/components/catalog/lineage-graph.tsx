@@ -59,7 +59,7 @@ export function LineageGraph({ source, id, host, workspaceId }: Props) {
     <MessageBar intent="warning">
       <MessageBarBody>
         <strong>Lineage unavailable:</strong> {error}
-        {hint && <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}
+        {hint && <pre style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}
       </MessageBarBody>
     </MessageBar>
   );

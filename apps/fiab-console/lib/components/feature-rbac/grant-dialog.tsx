@@ -121,7 +121,7 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
               <Tab value="user">User</Tab>
               <Tab value="group">Group</Tab>
             </TabList>
-            <Field label="Search Entra" style={{ marginTop: 12 }}>
+            <Field label="Search Entra" style={{ marginTop: tokens.spacingVerticalM }}>
               <Input
                 value={q}
                 onChange={(_e, d) => setQ(d.value)}
@@ -131,18 +131,18 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
             </Field>
 
             {error && (
-              <MessageBar intent="warning" style={{ marginTop: 12 }}>
+              <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBarBody>
                   <MessageBarTitle>{error.message}</MessageBarTitle>
-                  {error.remediation && <div style={{ marginTop: 4 }}>{error.remediation}</div>}
+                  {error.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}>{error.remediation}</div>}
                 </MessageBarBody>
               </MessageBar>
             )}
 
-            <div className={styles.results} style={{ marginTop: 12 }}>
+            <div className={styles.results} style={{ marginTop: tokens.spacingVerticalM }}>
               {loading && <Spinner size="tiny" label="Searching Entra…" />}
               {!loading && hits.length === 0 && q.trim() && !error && (
-                <div style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No matches.</div>
+                <div style={{ padding: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>No matches.</div>
               )}
               {hits.map((h) => (
                 <div
@@ -162,7 +162,7 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
               ))}
             </div>
 
-            <Field label="Role" style={{ marginTop: 16 }}>
+            <Field label="Role" style={{ marginTop: tokens.spacingVerticalL }}>
               <Dropdown value={role} selectedOptions={[role]} onOptionSelect={(_e, d) => setRole((d.optionValue || 'Reader') as FeatureRole)}>
                 <Option value="Reader">Reader — can view</Option>
                 <Option value="Contributor">Contributor — can view and edit</Option>

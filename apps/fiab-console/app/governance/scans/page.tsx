@@ -151,7 +151,7 @@ export default function GovernanceScansPage() {
   const sourceColumns: LoomColumn<Source>[] = [
     { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (src) => src.name, render: (src) => <strong>{src.name}</strong> },
     { key: 'kind', label: 'Kind', sortable: true, filterable: true, getValue: (src) => src.kind || '—', render: (src) => <Badge appearance="outline" size="small">{src.kind || '—'}</Badge> },
-    { key: 'endpoint', label: 'Endpoint', sortable: true, filterable: true, getValue: (src) => src.endpoint || '—', render: (src) => <code style={{ fontSize: 11, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{src.endpoint || '—'}</code> },
+    { key: 'endpoint', label: 'Endpoint', sortable: true, filterable: true, getValue: (src) => src.endpoint || '—', render: (src) => <code style={{ fontSize: tokens.fontSizeBase100, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{src.endpoint || '—'}</code> },
     { key: 'collectionId', label: 'Collection', sortable: true, filterable: true, getValue: (src) => src.collectionId || '—', render: (src) => src.collectionId || '—' },
     {
       key: 'actions', label: '', sortable: false, filterable: false, width: 160,
@@ -166,7 +166,7 @@ export default function GovernanceScansPage() {
 
   return (
     <GovernanceShell sectionTitle="Scans & sources" sectionBadge="Data Map">
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Register data sources, schedule scans, and monitor scan history — Azure SQL, ADLS, Synapse,
         Databricks, Power BI, Snowflake, on-prem Oracle/SAP. One-for-one with the Microsoft Purview Data Map.
       </Body1>
@@ -251,8 +251,8 @@ export default function GovernanceScansPage() {
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>No scans defined on this source.</Caption1>
           )}
           {scans?.map((sc) => (
-            <div key={sc.id} style={{ marginBottom: 16, paddingBottom: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
-              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+            <div key={sc.id} style={{ marginBottom: tokens.spacingVerticalL, paddingBottom: tokens.spacingVerticalM, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalSNudge }}>
                 <Subtitle2 style={{ minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{sc.name}</Subtitle2>
                 {sc.kind && <Badge appearance="outline" size="small">{sc.kind}</Badge>}
                 <div style={{ flex: 1 }} />
@@ -260,7 +260,7 @@ export default function GovernanceScansPage() {
                 <Button size="small" appearance="subtle" onClick={() => loadRuns(sc.name)}>History</Button>
               </div>
               {(runsByScan[sc.name] || []).map((run) => (
-                <div key={run.runId} style={{ fontSize: 12, padding: '2px 0', display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                <div key={run.runId} style={{ fontSize: tokens.fontSizeBase200, padding: '2px 0', display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
                   <Badge appearance="tint" color={runColor(run.status)} size="small">{run.status || '—'}</Badge>
                   <span style={{ color: tokens.colorNeutralForeground3 }}>{run.startTime ? new Date(run.startTime).toLocaleString() : run.runId}</span>
                   {run.errorMessage && <span style={{ color: tokens.colorPaletteRedForeground1, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>· {run.errorMessage}</span>}

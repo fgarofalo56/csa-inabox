@@ -1131,7 +1131,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     {/* Drill-through (Fabric: visual Interactions > Drillthrough).
                         Clicking a result value sets a dashboard parameter and
                         re-runs every tile (single-page cross-filter). */}
-                    <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: tokens.spacingVerticalXS}}>
+                    <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS}}>
                       <Caption1 style={{ fontWeight: 600 }}>Drill-through</Caption1>
                       <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalXS}}>
                         Clicking a value in this tile injects it into a dashboard parameter and re-runs all tiles.
@@ -1209,7 +1209,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     {/* Conditional formatting (Fabric RTD: color by condition / by value).
                         Applies to table + stat (card) visuals. */}
                     {(t.viz === 'table' || t.viz === 'stat') && (
-                      <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: tokens.spacingVerticalXS}}>
+                      <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS}}>
                         <ConditionalFormattingEditor
                           viz={t.viz}
                           rules={t.conditionalRules || []}

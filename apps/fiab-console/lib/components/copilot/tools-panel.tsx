@@ -82,7 +82,7 @@ function SchemaArgForm({ schema, value, onChange }: { schema: any; value: Record
   }
   const set = (k: string, v: any) => onChange({ ...value, [k]: v });
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM }}>
       {keys.map((k) => {
         const p = props[k] || {};
         const label = `${k}${required.includes(k) ? ' *' : ''}`;
@@ -195,20 +195,20 @@ function ToolRow({ tool }: { tool: Tool }) {
           <DialogBody>
             <DialogTitle>{tool.name}</DialogTitle>
             <DialogContent>
-              <Caption1 style={{ display: 'block', marginBottom: 6 }}>{tool.description}</Caption1>
-              <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>When to use: {whenToUse}</Caption1>
+              <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalSNudge }}>{tool.description}</Caption1>
+              <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>When to use: {whenToUse}</Caption1>
               <SchemaArgForm schema={tool.parameters} value={argv} onChange={setArgv} />
-              <Button appearance="subtle" size="small" style={{ marginTop: 8 }} onClick={() => setArgv({})}>Reset inputs</Button>
+              <Button appearance="subtle" size="small" style={{ marginTop: tokens.spacingVerticalS }} onClick={() => setArgv({})}>Reset inputs</Button>
               {error && (
-                <MessageBar intent="error" style={{ marginTop: 12 }}>
+                <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
                   <MessageBarBody style={{ whiteSpace: 'pre-wrap' }}>{error}</MessageBarBody>
                 </MessageBar>
               )}
               {result && (
-                <MessageBar intent="success" style={{ marginTop: 12 }}>
+                <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM }}>
                   <MessageBarBody>
                     <MessageBarTitle>OK — {result.durationMs}ms</MessageBarTitle>
-                    <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto', fontSize: 11, margin: 0 }}>
+                    <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 320, overflow: 'auto', fontSize: tokens.fontSizeBase100, margin: tokens.spacingVerticalNone }}>
                       {JSON.stringify(result.result, null, 2)}
                     </pre>
                   </MessageBarBody>

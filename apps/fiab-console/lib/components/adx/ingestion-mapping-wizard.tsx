@@ -218,7 +218,7 @@ export function IngestionMappingWizardDialog({
       <DialogSurface style={{ maxWidth: 720 }}>
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
               <ArrowImport20Regular />
               New ingestion mapping
               <Badge size="small" appearance="tint" color="brand">Step {step} of 2</Badge>
@@ -268,7 +268,7 @@ export function IngestionMappingWizardDialog({
 
                   <div className={s.fileRow}>
                     <Caption1>
-                      <ArrowUpload20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                      <ArrowUpload20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
                       Auto-detect schema from a sample file (optional)
                     </Caption1>
                     <input

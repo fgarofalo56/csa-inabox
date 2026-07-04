@@ -228,10 +228,10 @@ export function ForceDirectedGraph({ nodes, edges, width = 640, height = 420 }: 
         {!selectedNode && <Caption1>Click a node to inspect its properties.</Caption1>}
         {selectedNode && (
           <>
-            <div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>{selectedNode.label || selectedNode.id}</div>
+            <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase300, marginBottom: tokens.spacingVerticalXS }}>{selectedNode.label || selectedNode.id}</div>
             <Caption1>id: {selectedNode.id}</Caption1>
             {selectedNode.group != null && <Caption1>group: {String(selectedNode.group)}</Caption1>}
-            <pre style={{ marginTop: 8, fontSize: 11, fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
+            <pre style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase100, fontFamily: 'Consolas, monospace', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>
               {JSON.stringify(selectedNode.properties || {}, null, 2)}
             </pre>
           </>

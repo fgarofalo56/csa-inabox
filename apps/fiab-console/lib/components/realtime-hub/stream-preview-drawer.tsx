@@ -222,14 +222,14 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
           </Dropdown>
         </Field>
 
-        {pickerErr && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody>{pickerErr}</MessageBarBody></MessageBar>}
+        {pickerErr && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{pickerErr}</MessageBarBody></MessageBar>}
 
         <Button appearance="primary" icon={<Eye20Regular />} disabled={!table.trim() || busy} onClick={run}>
           {busy ? 'Reading…' : 'Preview recent events'}
         </Button>
-        {err && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {err && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
         {result && (
-          <div style={{ marginTop: 16 }}>
+          <div style={{ marginTop: tokens.spacingVerticalL }}>
             <div className={styles.resultMeta}>
               <Caption1>{result.rowCount} {result.rowCount === 1 ? 'row' : 'rows'} · {result.executionMs} ms</Caption1>
             </div>

@@ -226,7 +226,7 @@ function TableView({ payload }: { payload: LoomDisplayPayload }) {
         </div>
         {selectedColInfo && (
           <div className={s.inspect}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
               <Text weight="semibold">{selectedColInfo.name}</Text>
               <div style={{ flex: 1 }} />
               <Button size="small" appearance="subtle" icon={<Dismiss16Regular />}
@@ -270,7 +270,7 @@ function InspectRows({ col, sampleSize }: { col: LoomDisplayColumn; sampleSize: 
       ))}
       {col.topValues && col.topValues.length > 0 && (
         <>
-          <Caption1 style={{ marginTop: 6, color: tokens.colorNeutralForeground3 }}>Top values</Caption1>
+          <Caption1 style={{ marginTop: tokens.spacingVerticalSNudge, color: tokens.colorNeutralForeground3 }}>Top values</Caption1>
           {col.topValues.map((tv) => (
             <div key={tv.value} className={s.inspectRow}>
               <span className={s.inspectVal} style={{ textAlign: 'left', flex: 1 }}>{tv.value || '∅'}</span>
@@ -325,7 +325,7 @@ function ChartsView({ payload, charts, setCharts, notebookId, workspaceId, compu
         <MessageBar intent="info">
           <MessageBarBody>No chart recommendations for this DataFrame shape. Use “Add chart” to build one.</MessageBarBody>
         </MessageBar>
-        <div style={{ marginTop: 8 }}>
+        <div style={{ marginTop: tokens.spacingVerticalS }}>
           <Button size="small" icon={<Add16Regular />} onClick={addChart}>Add chart</Button>
         </div>
       </div>
@@ -475,7 +475,7 @@ function ChartCard({ chart, index, total, payload, full, onPatch, onRemove, onDu
         </label>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <Tooltip
           content={payload.dfVarName ? 'Run a Spark job to aggregate over every row, not just the sample' : 'Assign the DataFrame to a named variable before display() to enable full-dataset aggregation'}
           relationship="label">
@@ -568,7 +568,7 @@ const W = 320, H = 200, PAD_L = 40, PAD_B = 30, PAD_T = 10, PAD_R = 12;
 function ChartSvg({ chart, data }: { chart: LoomDisplayChartRec; data: ChartDatum[] }) {
   const s = useStyles();
   if (!data.length) {
-    return <div className={s.chartMeta} style={{ padding: 16, textAlign: 'center' }}>No chartable data for this field selection.</div>;
+    return <div className={s.chartMeta} style={{ padding: tokens.spacingVerticalL, textAlign: 'center' }}>No chartable data for this field selection.</div>;
   }
   const seriesNames = Array.from(new Set(data.map((d) => d.series)));
   const colorFor = (sName: string) => SERIES_COLORS[Math.max(0, seriesNames.indexOf(sName)) % SERIES_COLORS.length];
@@ -582,9 +582,9 @@ function ChartSvg({ chart, data }: { chart: LoomDisplayChartRec; data: ChartDatu
 function Legend({ names, colorFor }: { names: string[]; colorFor: (n: string) => string }) {
   if (names.length <= 1 && (names[0] === '' || names[0] === undefined)) return null;
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: 10, color: tokens.colorNeutralForeground2 }}>
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS, fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground2 }}>
       {names.map((n) => (
-        <span key={n} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span key={n} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
           <span style={{ width: 9, height: 9, borderRadius: 2, background: colorFor(n) }} />{n || '(all)'}
         </span>
       ))}
@@ -600,7 +600,7 @@ function BarSvg({ chart, data, colorFor, seriesNames }: { chart: LoomDisplayChar
   const barW = Math.max(2, (groupW - 4) / Math.max(1, seriesNames.length));
   const y = (v: number) => H - PAD_B - (Math.abs(v) / max) * (H - PAD_B - PAD_T);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge }}>
       <Legend names={seriesNames} colorFor={colorFor} />
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={`${chart.agg} of ${chart.yField} by ${chart.xField}`}>
         {[0, 0.5, 1].map((t) => { const yy = PAD_T + t * (H - PAD_B - PAD_T); const val = max * (1 - t);
@@ -633,7 +633,7 @@ function LineSvg({ chart, data, colorFor, seriesNames }: { chart: LoomDisplayCha
   });
   const ticks = cats.length <= 1 ? [0] : [0, Math.floor(cats.length / 2), cats.length - 1];
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge }}>
       <Legend names={seriesNames} colorFor={colorFor} />
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none" role="img" aria-label={`${chart.yField} trend over ${chart.xField}`}>
         {[0, 0.5, 1].map((t) => { const val = lo + t * span; const yy = y(val);
@@ -652,7 +652,7 @@ function ScatterSvg({ chart, data, colorFor, seriesNames }: { chart: LoomDisplay
   const px = (v: number) => PAD_L + ((v - xlo) / xspan) * (W - PAD_L - PAD_R);
   const py = (v: number) => H - PAD_B - ((v - ylo) / yspan) * (H - PAD_B - PAD_T);
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge }}>
       <Legend names={seriesNames} colorFor={colorFor} />
       <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} role="img" aria-label={`${chart.yField} vs ${chart.xField}`}>
         {[0, 0.5, 1].map((t) => { const yy = PAD_T + t * (H - PAD_B - PAD_T);

@@ -333,7 +333,7 @@ function BranchOutDialog({ workspaceId, binding, repoLabel }: { workspaceId: str
                   </MessageBar>
                 )}
                 <Link href={`/workspaces/${result.workspaceId}`}>
-                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Open the new workspace
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Open the new workspace
                 </Link>
               </div>
             )}

@@ -705,7 +705,7 @@ print(response.choices[0].message.content)${grounding ? '\n# response.choices[0]
               <div className={s.dsList}>
                 {dataSources.map((d, i) => (
                   <div key={`${d.indexName}-${d.authType}-${i}`} className={s.dsRow}>
-                    <Search24Regular style={{ fontSize: 16, flexShrink: 0 }} />
+                    <Search24Regular style={{ fontSize: tokens.fontSizeBase400, flexShrink: 0 }} />
                     <Caption1 className={s.dsRowName}>{d.indexName}</Caption1>
                     <Badge size="small" appearance="tint" color={d.authType === 'api_key' ? 'warning' : 'brand'}>
                       {d.authType === 'api_key' ? 'API key' : 'Managed identity'}
@@ -778,7 +778,7 @@ print(response.choices[0].message.content)${grounding ? '\n# response.choices[0]
                 {!m.pending && m.role === 'assistant' && m.citations && m.citations.length > 0 && (
                   <div className={s.citations}>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                      <DocumentText16Regular style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+                      <DocumentText16Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />
                       Citations ({m.citations.length})
                     </Caption1>
                     {m.citations.map((c, ci) => (

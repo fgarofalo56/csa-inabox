@@ -275,7 +275,7 @@ export function FoundryAccountTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>AI Foundry account</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="Add new" relationship="label">
@@ -307,7 +307,7 @@ export function FoundryAccountTree({
         <Input size="small" contentBefore={<Search20Regular />} placeholder="Filter by name" value={filter} onChange={(_, d) => setFilter(d.value)} />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading account…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading account…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Account error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
@@ -473,7 +473,7 @@ export function FoundryAccountTree({
           <DialogBody>
             <DialogTitle>Deploy a model</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM }}>
                 <Field label="Model" required>
                   {models.length > 0 ? (
                     <Dropdown

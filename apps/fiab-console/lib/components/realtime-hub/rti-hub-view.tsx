@@ -417,7 +417,7 @@ export function RtiHubView() {
           intent="info" (by-design out-of-scope) is deliberately distinct from
           the intent="warning" config infra-gate below. See
           docs/fiab/parity/rti-hub.md + docs/migrations/palantir-foundry. */}
-      <MessageBar intent="info" style={{ marginBottom: 16 }}>
+      <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalL }}>
         <MessageBarBody>
           <MessageBarTitle>Real-time scope</MessageBarTitle>
           Loom&apos;s real-time path is an Azure-native <b>analytics</b> pipeline —
@@ -473,7 +473,7 @@ export function RtiHubView() {
 
       {/* Honest infra-gate: no subscription configured for Resource Graph */}
       {gate && (
-        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>Cross-subscription discovery is not configured</MessageBarTitle>
             {gate.error}
@@ -484,13 +484,13 @@ export function RtiHubView() {
       )}
 
       {loadErr && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>{loadErr}</MessageBarBody>
         </MessageBar>
       )}
 
       {data?.warnings && data.warnings.length > 0 && (
-        <MessageBar intent="info" style={{ marginBottom: 16 }}>
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             Partial results — some sources could not be enumerated:{' '}
             {data.warnings.map((w) => `${w.source} (${w.error})`).join('; ')}.
@@ -502,7 +502,7 @@ export function RtiHubView() {
         title="Unified stream catalog"
         actions={<Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>}
       >
-        <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+        <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
           Every streaming source across your subscriptions — Event Hubs, IoT Hub, ADX, and Loom eventstreams —
           discovered live via Azure Resource Graph. Click <b>Subscribe</b> on any source to create a real Loom
           eventstream pre-filled with that source. Already-deployed Loom items also offer <b>Preview / test</b>,{' '}
@@ -528,13 +528,13 @@ export function RtiHubView() {
         </div>
 
         {fabricGated && data?.fabricGateReason && tab === 'azureEvents' && (
-          <MessageBar intent="info" style={{ marginBottom: 12 }}>
+          <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}>
             <MessageBarBody>{data.fabricGateReason}</MessageBarBody>
           </MessageBar>
         )}
 
         {tab === 'dataStreams' && !loading && rows.length > 0 && (
-          <MessageBar intent="info" style={{ marginBottom: 12 }}>
+          <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}>
             <MessageBarBody>
               Rows tagged <b>Eventstream</b>, <b>KQL database</b>, or <b>Eventhouse</b> are deployed Loom items you can{' '}
               preview, test, query, and open. Rows tagged <b>Event Hub</b>, <b>EH namespace</b>, <b>IoT Hub</b>, or{' '}
@@ -544,7 +544,7 @@ export function RtiHubView() {
         )}
 
         {tab === 'azureEvents' && !loading && (
-          <MessageBar intent="info" style={{ marginBottom: 12 }}>
+          <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}>
             <MessageBarBody>
               Azure event categories you can <b>Subscribe</b> to — each creates a Loom eventstream whose
               Azure-native ingest endpoint (Event Hub) receives the events. <b>Blob Storage events</b> bind an

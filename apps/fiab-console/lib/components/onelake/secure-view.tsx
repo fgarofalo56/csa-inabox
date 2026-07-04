@@ -376,7 +376,7 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
   const aclColumns: LoomColumn<AclItem>[] = useMemo(
     () => [
       { key: 'type', label: 'Type', width: 100, getValue: (r) => r.type, render: (r) => <Badge size="small" appearance="outline">{r.type}</Badge> },
-      { key: 'entityId', label: 'Principal (OID)', width: 320, getValue: (r) => r.entityId || '', render: (r) => <code style={{ fontSize: 12 }}>{r.entityId || '(implicit)'}</code> },
+      { key: 'entityId', label: 'Principal (OID)', width: 320, getValue: (r) => r.entityId || '', render: (r) => <code style={{ fontSize: tokens.fontSizeBase200 }}>{r.entityId || '(implicit)'}</code> },
       { key: 'perm', label: 'Permissions (rwx)', width: 140, sortable: false, filterable: false, render: (r) => <PermBadges p={r.permissions} /> },
     ],
     [],
@@ -421,7 +421,7 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
               ))}
             </Dropdown>
           </Field>
-          <Caption1 className={styles.muted} style={{ marginTop: 6, display: 'block' }}>
+          <Caption1 className={styles.muted} style={{ marginTop: tokens.spacingVerticalSNudge, display: 'block' }}>
             Roll up Admin/Member/Contributor/Viewer roles for the selected workspace.
           </Caption1>
         </div>
@@ -535,7 +535,7 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
                   />
                 </Section>
                 <Section title="OneLake security roles (POSIX ACLs)">
-                  <Caption1 className={styles.muted} style={{ display: 'block', marginBottom: 8 }}>
+                  <Caption1 className={styles.muted} style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
                     These POSIX ACL entries are the Azure-native equivalent of OneLake security roles on HNS-enabled ADLS Gen2 storage.
                   </Caption1>
                   <LoomDataTable
@@ -650,7 +650,7 @@ function GrantDialog({
       <DialogSurface>
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
               <ShieldKeyhole20Regular /> Grant container access — {container}
             </span>
           </DialogTitle>
@@ -659,13 +659,13 @@ function GrantDialog({
               <Tab value="user">User</Tab>
               <Tab value="group">Group</Tab>
             </TabList>
-            <Field label="Search Entra" style={{ marginTop: 12 }}>
+            <Field label="Search Entra" style={{ marginTop: tokens.spacingVerticalM }}>
               <Input value={q} onChange={(_e, d) => setQ(d.value)} contentBefore={<Search16Regular />}
                 placeholder={kind === 'user' ? 'Display name or UPN' : 'Group display name'} />
             </Field>
 
             {searchGate && (
-              <MessageBar intent="warning" style={{ marginTop: 12 }}>
+              <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBarBody><MessageBarTitle>{searchGate}</MessageBarTitle></MessageBarBody>
               </MessageBar>
             )}
@@ -673,7 +673,7 @@ function GrantDialog({
             <div className={styles.results}>
               {searching && <Spinner size="tiny" label="Searching Entra…" />}
               {!searching && hits.length === 0 && q.trim() && !searchGate && (
-                <div style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No matches.</div>
+                <div style={{ padding: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>No matches.</div>
               )}
               {hits.map((h) => (
                 <div key={h.id}
@@ -686,7 +686,7 @@ function GrantDialog({
               ))}
             </div>
 
-            <Field label="Storage role" style={{ marginTop: 16 }}>
+            <Field label="Storage role" style={{ marginTop: tokens.spacingVerticalL }}>
               <Dropdown value={role} selectedOptions={[role]} onOptionSelect={(_e, d) => setRole(d.optionValue || roleOptions[0])}>
                 {roleOptions.map((r) => (
                   <Option key={r} value={r}>{r}</Option>
@@ -695,7 +695,7 @@ function GrantDialog({
             </Field>
 
             {error && (
-              <MessageBar intent="error" style={{ marginTop: 12 }}>
+              <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBarBody>{error}</MessageBarBody>
               </MessageBar>
             )}

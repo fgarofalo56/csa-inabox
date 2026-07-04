@@ -130,12 +130,12 @@ export function DatastoreExplorer({ onInsertPath }: Props) {
                     <div className={s.row}>
                       <span style={{ flex: 1 }}>
                         {d.isDefault ? <strong>{d.name}</strong> : d.name}
-                        {d.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 6 }}>default</Badge>}
-                        <Badge appearance="tint" color="informative" size="small" style={{ marginLeft: 6 }}>{d.datastoreType}</Badge>
+                        {d.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}>default</Badge>}
+                        <Badge appearance="tint" color="informative" size="small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}>{d.datastoreType}</Badge>
                       </span>
                     </div>
                   </TreeItemLayout>
-                  {d.path && <div className={s.path} style={{ paddingLeft: 28 }}>{d.path}</div>}
+                  {d.path && <div className={s.path} style={{ paddingLeft: tokens.spacingHorizontalXXXL }}>{d.path}</div>}
                 </TreeItem>
               );
             })}

@@ -194,7 +194,7 @@ export function OrgVisualsPane() {
         ? <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>{v.description}</Caption1>
         : <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>—</Caption1>,
     },
-    { key: 'fileName', label: 'File', width: 200, getValue: (v) => v.fileName, render: (v) => <code style={{ fontSize: 11 }}>{v.fileName}</code> },
+    { key: 'fileName', label: 'File', width: 200, getValue: (v) => v.fileName, render: (v) => <code style={{ fontSize: tokens.fontSizeBase100 }}>{v.fileName}</code> },
     { key: 'version', label: 'Version', width: 100, getValue: (v) => v.version, render: (v) => <Badge appearance="outline" size="small">{v.version}</Badge> },
     { key: 'size', label: 'Size', width: 100, getValue: (v) => v.size, render: (v) => <Caption1>{fmtSize(v.size)}</Caption1> },
     {

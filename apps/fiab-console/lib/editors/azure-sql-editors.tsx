@@ -1260,7 +1260,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={toggleMirror} icon={<ShieldKeyhole20Regular />}>Enable / Refresh mirror</Button>
-              {mirrorState && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, maxWidth: '100%', maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box', margin: 0 }}>{JSON.stringify(mirrorState, null, 2)}</pre>}
+              {mirrorState && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, maxWidth: '100%', maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box', margin: tokens.spacingVerticalNone }}>{JSON.stringify(mirrorState, null, 2)}</pre>}
             </>
           )}
           {tab === 'replication' && (
@@ -1288,7 +1288,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
                 </MessageBarBody>
               </MessageBar>
               <Button onClick={probe2025} icon={<Sparkle20Regular />}>Probe engine</Button>
-              {sql2025State && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, maxWidth: '100%', maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box', margin: 0 }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
+              {sql2025State && <pre style={{ fontSize: tokens.fontSizeBase200, background: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, maxWidth: '100%', maxHeight: 360, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word', boxSizing: 'border-box', margin: tokens.spacingVerticalNone }}>{JSON.stringify(sql2025State, null, 2)}</pre>}
             </>
           )}
 

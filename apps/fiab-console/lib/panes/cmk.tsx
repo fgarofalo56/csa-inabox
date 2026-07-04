@@ -141,7 +141,7 @@ export function CmkPane({ workspaceId }: { workspaceId: string }) {
           <MessageBarTitle>Customer-managed keys not wired in this deployment</MessageBarTitle>
           <Caption1 block>Missing: <code>{gate.missing}</code></Caption1>
           {gate.bicepModule && <Caption1 block>Bicep module: <code>{gate.bicepModule}</code></Caption1>}
-          {gate.hint && <Caption1 block style={{ marginTop: 6 }}>{gate.hint}</Caption1>}
+          {gate.hint && <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>{gate.hint}</Caption1>}
         </MessageBarBody>
       </MessageBar>
     );

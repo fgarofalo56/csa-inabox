@@ -537,7 +537,7 @@ function TransformNodeImpl({ data, selected }: NodeProps) {
                 }}
                 style={{
                   position: 'absolute', right: -28, top: `calc(${top} - 9px)`,
-                  width: 18, height: 18, padding: 0, zIndex: 4, cursor: 'pointer',
+                  width: 18, height: 18, padding: tokens.spacingVerticalNone, zIndex: 4, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   borderRadius: '50%', border: `1px solid ${accent}`,
                   background: tokens.colorNeutralBackground1, color: accent,

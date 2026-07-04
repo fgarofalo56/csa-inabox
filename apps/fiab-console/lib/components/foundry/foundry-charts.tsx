@@ -73,7 +73,7 @@ export function LineChart({
   const all = series.flatMap((s) => s.points);
   if (!all.length) {
     return (
-      <div style={{ padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic', fontSize: 12 }}>
+      <div style={{ padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic', fontSize: tokens.fontSizeBase200 }}>
         {emptyText}
       </div>
     );
@@ -150,9 +150,9 @@ export function LineChart({
         })}
       </svg>
       {/* Legend + axis captions */}
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginTop: 6, fontSize: 11, color: tokens.colorNeutralForeground3 }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap', marginTop: tokens.spacingVerticalSNudge, fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>
         {series.map((srs, si) => (
-          <span key={si} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span key={si} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
             <span style={{ width: 12, height: 3, background: srs.color || PALETTE[si % PALETTE.length], display: 'inline-block', borderRadius: 2 }} />
             {srs.label}
           </span>
@@ -193,7 +193,7 @@ export function BarChart({
 }) {
   if (!bars.length) {
     return (
-      <div style={{ padding: 16, color: tokens.colorNeutralForeground3, fontStyle: 'italic', fontSize: 12 }}>
+      <div style={{ padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3, fontStyle: 'italic', fontSize: tokens.fontSizeBase200 }}>
         {emptyText}
       </div>
     );
@@ -257,9 +257,9 @@ export function StatTile({ label, value, sub }: { label: string; value: string; 
         boxShadow: tokens.shadow2,
       }}
     >
-      <div style={{ fontSize: 11, color: tokens.colorNeutralForeground3 }}>{label}</div>
+      <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>{label}</div>
       <div style={{ fontSize: 22, fontWeight: 600, color: tokens.colorNeutralForeground1 }}>{value}</div>
-      {sub && <div style={{ fontSize: 11, color: tokens.colorNeutralForeground3 }}>{sub}</div>}
+      {sub && <div style={{ fontSize: tokens.fontSizeBase100, color: tokens.colorNeutralForeground3 }}>{sub}</div>}
     </div>
   );
 }

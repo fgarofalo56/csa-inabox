@@ -265,7 +265,7 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
           {gate.bicepModule && (
             <Caption1 block>Bicep module: <code>{gate.bicepModule}</code></Caption1>
           )}
-          {gate.hint && <Caption1 block style={{ marginTop: 6 }}>{gate.hint}</Caption1>}
+          {gate.hint && <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>{gate.hint}</Caption1>}
         </MessageBarBody>
       </MessageBar>
     );

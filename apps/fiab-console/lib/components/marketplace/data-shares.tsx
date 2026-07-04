@@ -713,7 +713,7 @@ function NewShareDialog({ open, setOpen, onDone }: { open: boolean; setOpen: (b:
           <DialogTitle>New share</DialogTitle>
           <DialogContent>
             <Field label="Share name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="sales_2026" /></Field>
-            <Field label="Comment" style={{ marginTop: 8 }}><Input value={comment} onChange={(_, d) => setComment(d.value)} /></Field>
+            <Field label="Comment" style={{ marginTop: tokens.spacingVerticalS }}><Input value={comment} onChange={(_, d) => setComment(d.value)} /></Field>
             {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
@@ -749,26 +749,26 @@ function NewRecipientDialog({ open, setOpen, onDone }: { open: boolean; setOpen:
             {activation ? (
               <>
                 <MessageBar intent="success"><MessageBarBody>Recipient created. Send this activation link to the recipient — it is shown once.</MessageBarBody></MessageBar>
-                <div className={s.mono} style={{ marginTop: 8 }}>{activation}</div>
-                <Button size="small" icon={<Copy20Regular />} style={{ marginTop: 8 }}
+                <div className={s.mono} style={{ marginTop: tokens.spacingVerticalS }}>{activation}</div>
+                <Button size="small" icon={<Copy20Regular />} style={{ marginTop: tokens.spacingVerticalS }}
                   onClick={() => navigator.clipboard?.writeText(activation)}>Copy activation link</Button>
               </>
             ) : (
               <>
                 <Field label="Recipient name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="partner-acme" /></Field>
-                <Field label="Authentication" style={{ marginTop: 8 }}>
+                <Field label="Authentication" style={{ marginTop: tokens.spacingVerticalS }}>
                   <Select value={auth} onChange={(_, d) => setAuth(d.value)}>
                     <option value="TOKEN">TOKEN — open Delta Sharing (any client)</option>
                     <option value="DATABRICKS">DATABRICKS — another Unity Catalog metastore</option>
                   </Select>
                 </Field>
                 {auth === 'DATABRICKS' && (
-                  <Field label="Consumer sharing identifier" required style={{ marginTop: 8 }}
+                  <Field label="Consumer sharing identifier" required style={{ marginTop: tokens.spacingVerticalS }}
                     hint="The recipient metastore's global sharing id (cloud:region:uuid).">
                     <Input value={gmid} onChange={(_, d) => setGmid(d.value)} placeholder="azure:eastus2:…" />
                   </Field>
                 )}
-                <Field label="Comment" style={{ marginTop: 8 }}><Input value={comment} onChange={(_, d) => setComment(d.value)} /></Field>
+                <Field label="Comment" style={{ marginTop: tokens.spacingVerticalS }}><Input value={comment} onChange={(_, d) => setComment(d.value)} /></Field>
                 {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
               </>
             )}

@@ -662,7 +662,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
                                 />
                               </TableCell>
                               <TableCell>
-                                <Button appearance="transparent" size="small" onClick={() => openDetail(r.runId)} style={{ padding: 0, minWidth: 0 }}>
+                                <Button appearance="transparent" size="small" onClick={() => openDetail(r.runId)} style={{ padding: tokens.spacingVerticalNone, minWidth: 0 }}>
                                   <strong>{r.runName || r.runId}</strong>
                                 </Button>
                               </TableCell>

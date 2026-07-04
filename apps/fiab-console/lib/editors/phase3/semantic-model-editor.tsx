@@ -993,11 +993,11 @@ function SemanticModelCopilotPane({ id }: { id: string }) {
             <MessageBarTitle>{applyResult.ok ? 'Edits applied' : 'Apply failed'}</MessageBarTitle>
             {applyResult.text}
             {applyResult.applied && applyResult.applied.length > 0 && (
-              <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>{applyResult.applied.map((a, i) => <li key={i}>{a}</li>)}</ul>
+              <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL }}>{applyResult.applied.map((a, i) => <li key={i}>{a}</li>)}</ul>
             )}
             {applyResult.skipped && applyResult.skipped.length > 0 && (
               <div style={{ marginTop: tokens.spacingVerticalS}}><strong>Skipped:</strong>
-                <ul style={{ margin: `${tokens.spacingVerticalXXS} 0 0`, paddingLeft: 18 }}>{applyResult.skipped.map((a, i) => <li key={i}>{a}</li>)}</ul>
+                <ul style={{ margin: `${tokens.spacingVerticalXXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL }}>{applyResult.skipped.map((a, i) => <li key={i}>{a}</li>)}</ul>
               </div>
             )}
           </MessageBarBody>
@@ -2930,7 +2930,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       <div key={`${t.name}-${m.name}`} className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                         <Caption1>{t.name}</Caption1>
                         <div style={{ fontWeight: 600 }}>{m.name}</div>
-                        <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: '100%' }}>{m.expression || '—'}</pre>
+                        <pre style={{ margin: tokens.spacingVerticalNone, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: '100%' }}>{m.expression || '—'}</pre>
                       </div>
                     )))}
                     {((detail?.tables || []).flatMap((t) => t.measures || []).length === 0) && (

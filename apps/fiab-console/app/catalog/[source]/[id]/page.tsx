@@ -159,7 +159,7 @@ export default function AssetDetailPage() {
                       <TableRow key={`${sc.path}/${sc.name}/${i}`}>
                         <TableCell><code>{sc.name}</code></TableCell>
                         <TableCell>{sc.path}</TableCell>
-                        <TableCell><pre style={{ margin: 0, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '160px', overflow: 'auto' }}>{JSON.stringify(sc.target, null, 2)}</pre></TableCell>
+                        <TableCell><pre style={{ margin: tokens.spacingVerticalNone, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxHeight: '160px', overflow: 'auto' }}>{JSON.stringify(sc.target, null, 2)}</pre></TableCell>
                       </TableRow>
                     ))}
                   </TableBody>

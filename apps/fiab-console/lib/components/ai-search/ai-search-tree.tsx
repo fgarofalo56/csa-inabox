@@ -637,7 +637,7 @@ export function AiSearchServiceTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Search service</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="Add new" relationship="label">
@@ -666,7 +666,7 @@ export function AiSearchServiceTree({
         <Input size="small" contentBefore={<Search20Regular />} placeholder="Filter by name" value={filter} onChange={(_, d) => setFilter(d.value)} />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading search service…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading search service…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Service error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
@@ -903,7 +903,7 @@ export function AiSearchServiceTree({
               )}
 
               {createGroup === 'index' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates a minimal starter index (a key <code>id</code> field + a searchable <code>content</code> field)
                   via <code>POST /indexes</code>. Add fields, analyzers, vector profiles and semantic configuration in the
                   index Schema (JSON) editor after it opens.
@@ -912,23 +912,23 @@ export function AiSearchServiceTree({
 
               {createGroup === 'indexer' && (
                 <>
-                  <Field label="Data source" required style={{ marginTop: 8 }}>
+                  <Field label="Data source" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={cDataSource} selectedOptions={cDataSource ? [cDataSource] : []} placeholder={dataSourceNames.length ? 'Select a data source' : 'No data sources — create one first'} onOptionSelect={(_, d) => setCDataSource(d.optionValue || '')}>
                       {dataSourceNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="Target index" required style={{ marginTop: 8 }}>
+                  <Field label="Target index" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={cTargetIndex} selectedOptions={cTargetIndex ? [cTargetIndex] : []} placeholder={indexNames.length ? 'Select an index' : 'No indexes — create one first'} onOptionSelect={(_, d) => setCTargetIndex(d.optionValue || '')}>
                       {indexNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="Skillset (optional, for AI enrichment)" style={{ marginTop: 8 }}>
+                  <Field label="Skillset (optional, for AI enrichment)" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={cSkillset} selectedOptions={cSkillset ? [cSkillset] : []} placeholder="None" onOptionSelect={(_, d) => setCSkillset(d.optionValue || '')}>
                       <Option value="" text="None">None</Option>
                       {skillsetNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Creates the indexer via <code>PUT /indexers/{'{name}'}</code>. Per Azure, creating an indexer also
                     runs it once. Configure field mappings + schedule in the index editor / Schema JSON.
                   </Caption1>
@@ -937,21 +937,21 @@ export function AiSearchServiceTree({
 
               {createGroup === 'datasource' && (
                 <>
-                  <Field label="Type" style={{ marginTop: 8 }}>
+                  <Field label="Type" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={cDsType} selectedOptions={[cDsType]} onOptionSelect={(_, d) => setCDsType(d.optionValue || 'azureblob')}>
                       {['azureblob', 'adlsgen2', 'azuretable', 'azuresql', 'cosmosdb', 'mysql', 'onelake'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="Connection string" required style={{ marginTop: 8 }}>
+                  <Field label="Connection string" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cDsConn} onChange={(_, d) => setCDsConn(d.value)} placeholder="DefaultEndpointsProtocol=… OR ResourceId=… (managed identity)" />
                   </Field>
-                  <Field label="Container / table / collection" required style={{ marginTop: 8 }}>
+                  <Field label="Container / table / collection" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cDsContainer} onChange={(_, d) => setCDsContainer(d.value)} placeholder="my-container" />
                   </Field>
-                  <Field label="Query (optional)" style={{ marginTop: 8 }}>
+                  <Field label="Query (optional)" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={cDsQuery} onChange={(_, d) => setCDsQuery(d.value)} placeholder="blob path prefix / SQL query / Cosmos query" />
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Creates the connection via <code>PUT /datasources/{'{name}'}</code>. For managed-identity auth use a
                     <code>ResourceId=…</code> connection string and grant the search service identity access to the source.
                   </Caption1>
@@ -1052,7 +1052,7 @@ export function AiSearchServiceTree({
                           setCSkillsetAdvancedDirty(!!d.value.trim());
                         }}
                         resize="vertical"
-                        style={{ marginTop: tokens.spacingVerticalXS, minHeight: 180, fontFamily: 'Consolas, monospace', fontSize: 12, width: '100%' }}
+                        style={{ marginTop: tokens.spacingVerticalXS, minHeight: 180, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, width: '100%' }}
                         placeholder={'{\n  "name": "my-skillset",\n  "skills": [...]\n}'}
                       />
                     </>
@@ -1062,16 +1062,16 @@ export function AiSearchServiceTree({
 
               {createGroup === 'synonymmap' && (
                 <>
-                  <Field label="Rules (solr format, one per line)" required style={{ marginTop: 8 }}>
+                  <Field label="Rules (solr format, one per line)" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Textarea
                       value={cSynonyms}
                       onChange={(_, d) => setCSynonyms(d.value)}
                       resize="vertical"
-                      style={{ minHeight: 120, fontFamily: 'Consolas, monospace', fontSize: 12 }}
+                      style={{ minHeight: 120, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}
                       placeholder={'USA, United States, United States of America\nUK => United Kingdom'}
                     />
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Equivalency rules are comma-separated; explicit mappings use <code>=&gt;</code>. Sent via
                     <code> PUT /synonymmaps/{'{name}'}</code>. Attach the map to a field in the index Schema
                     (<code>synonymMaps</code>) to take effect.
@@ -1081,12 +1081,12 @@ export function AiSearchServiceTree({
 
               {createGroup === 'alias' && (
                 <>
-                  <Field label="Target index" required style={{ marginTop: 8 }}>
+                  <Field label="Target index" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={cAliasIndex} selectedOptions={cAliasIndex ? [cAliasIndex] : []} placeholder={indexNames.length ? 'Select an index' : 'No indexes — create one first'} onOptionSelect={(_, d) => setCAliasIndex(d.optionValue || '')}>
                       {indexNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     An alias maps a stable name to exactly one index (<code>PUT /aliases/{'{name}'}</code>), so you can
                     re-point queries to a rebuilt index with zero client changes.
                   </Caption1>
@@ -1095,15 +1095,15 @@ export function AiSearchServiceTree({
 
               {createGroup === 'debugsession' && (
                 <>
-                  <Field label="Indexer to trace" required style={{ marginTop: 8 }}>
+                  <Field label="Indexer to trace" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={cDebugIndexer} selectedOptions={cDebugIndexer ? [cDebugIndexer] : []} placeholder={indexerNames.length ? 'Select an indexer' : 'No indexers — create one first'} onOptionSelect={(_, d) => setCDebugIndexer(d.optionValue || '')}>
                       {indexerNames.map((n) => <Option key={n} value={n} text={n}>{n}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="Storage connection string (session state)" style={{ marginTop: 8 }}>
+                  <Field label="Storage connection string (session state)" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={debugStorageConn} onChange={(_, d) => setDebugStorageConn(d.value)} placeholder="DefaultEndpointsProtocol=… (or leave blank to use LOOM_AI_SEARCH_DEBUG_STORAGE_CONN)" />
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     A debug session captures a single-document enrichment trace for the chosen indexer + skillset, written to
                     the <code>ms-az-cognitive-search-debugsession</code> container on the storage account. The search service&apos;s
                     managed identity needs <strong>Storage Blob Data Contributor</strong> on that account
@@ -1112,14 +1112,14 @@ export function AiSearchServiceTree({
                     on the indexer. The visual skill-graph trace is rendered in the Azure portal — open the session there to inspect it.
                   </Caption1>
                   {debugGate && !debugGate.storageConfigured && !debugStorageConn.trim() && (
-                    <MessageBar intent="warning" style={{ marginTop: 8 }}><MessageBarBody>
+                    <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>
                       No <code>LOOM_AI_SEARCH_DEBUG_STORAGE_CONN</code> is set — supply a storage connection string above, or set the env var on the Console Container App.
                     </MessageBarBody></MessageBar>
                   )}
                 </>
               )}
 
-              {createError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
+              {createError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>

@@ -1563,12 +1563,12 @@ export function McpServersPanel() {
                     {server.lastTestResult && (
                       server.lastTestResult.error ? (
                         <div className={s.testStatus} title={server.lastTestResult.error}>
-                          <PlugDisconnected24Regular style={{ fontSize: 14, color: tokens.colorPaletteRedForeground1 }} />
+                          <PlugDisconnected24Regular style={{ fontSize: tokens.fontSizeBase300, color: tokens.colorPaletteRedForeground1 }} />
                           <Caption1>Unreachable {new Date(server.lastTestResult.at).toLocaleDateString()}</Caption1>
                         </div>
                       ) : (
                         <div className={s.testStatus}>
-                          <Checkmark20Regular style={{ fontSize: 14, color: tokens.colorPaletteGreenForeground1 }} />
+                          <Checkmark20Regular style={{ fontSize: tokens.fontSizeBase300, color: tokens.colorPaletteGreenForeground1 }} />
                           <Caption1>Tested {new Date(server.lastTestResult.at).toLocaleDateString()}</Caption1>
                         </div>
                       )

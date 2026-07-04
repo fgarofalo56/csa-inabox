@@ -288,7 +288,7 @@ export function PowerBiTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Workspace content</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Tooltip content="New semantic model (opens editor)" relationship="label">
             <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={() => onNewDataset?.()} disabled={!onNewDataset} aria-label="New semantic model" />
           </Tooltip>
@@ -308,7 +308,7 @@ export function PowerBiTree({
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading workspace content…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading workspace content…" /></div>}
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>

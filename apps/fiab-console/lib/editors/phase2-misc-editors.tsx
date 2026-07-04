@@ -791,7 +791,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
 
           {/* ── ADVANCED (legacy BYO-repo) ──────────────────────────── */}
           {tab === 'advanced' && (
-            <div className={styles.form} style={{ padding: 0 }}>
+            <div className={styles.form} style={{ padding: tokens.spacingVerticalNone }}>
               <MessageBar intent="info">
                 <MessageBarBody>
                   Advanced path: run an existing dbt project from a Git repo instead of the visual builder.

@@ -772,7 +772,7 @@ export function TabStrip() {
                         fontWeight: 600,
                         opacity: 0.8,
                         textTransform: 'uppercase',
-                        fontSize: 11,
+                        fontSize: tokens.fontSizeBase100,
                         letterSpacing: 0.5,
                         cursor: 'default',
                         backgroundColor: 'transparent',
@@ -795,7 +795,7 @@ export function TabStrip() {
                     style={groupBy && tab.workspaceId ? { paddingLeft: 24 } : undefined}
                   >
                     {tab.pinned && tab.id !== 'home' && (
-                      <Pin16Filled style={{ fontSize: 12, opacity: 0.7 }} aria-label="Pinned" />
+                      <Pin16Filled style={{ fontSize: tokens.fontSizeBase200, opacity: 0.7 }} aria-label="Pinned" />
                     )}
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {tab.title}

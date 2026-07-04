@@ -300,7 +300,7 @@ export function DataScienceHomeContent() {
                 title={e.displayName || e.name}
                 subtitle={e.experimentName || e.jobType || 'Run'}
                 meta={
-                  <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalSNudge, alignItems: 'center' }}>
                     {e.status && <Badge appearance="tint" size="small">{e.status}</Badge>}
                     {e.startTimeUtc && <Caption1>{fmtWhen(e.startTimeUtc)}</Caption1>}
                   </span>
@@ -337,7 +337,7 @@ export function DataScienceHomeContent() {
                 title={m.name}
                 subtitle={m.description || 'Registered model'}
                 meta={
-                  <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                  <span style={{ display: 'inline-flex', gap: tokens.spacingHorizontalSNudge, alignItems: 'center' }}>
                     {m.latestVersion && <Badge appearance="tint" size="small">v{m.latestVersion}</Badge>}
                     {m.createdAt && <Caption1>{fmtWhen(m.createdAt)}</Caption1>}
                   </span>

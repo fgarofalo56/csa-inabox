@@ -450,7 +450,7 @@ export function CopilotChatPane({
             <Button appearance="subtle" icon={<Dismiss20Regular />} aria-label="Close Copilot" onClick={() => onOpenChange(false)} />
           }
         >
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
             <Sparkle20Regular /> Copilot
           </span>
         </DrawerHeaderTitle>
@@ -484,7 +484,7 @@ export function CopilotChatPane({
                     ),
                   )}
                   {onApplyCells && msg.codeBlocks && msg.codeBlocks.length > 0 && (
-                    <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
                       <Button size="small" appearance="primary" icon={<Checkmark16Regular />} onClick={() => openApplyDiff(msg.codeBlocks!)}>
                         {msg.codeBlocks.length > 1 ? `Review ${msg.codeBlocks.length} cells` : 'Review & apply'}
                       </Button>

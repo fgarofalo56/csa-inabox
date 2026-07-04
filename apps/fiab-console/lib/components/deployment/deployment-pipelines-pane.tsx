@@ -632,7 +632,7 @@ function DeployDialog({
           </DialogTitle>
           <DialogContent>
             {backward && (
-              <MessageBar intent="warning" style={{ marginBottom: 8 }}>
+              <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
                 <MessageBarBody>
                   Backward deployment (a later stage into an earlier one) is allowed by Fabric
                   <strong> only when the earlier stage is empty</strong>. Fabric will create a fresh
@@ -647,7 +647,7 @@ function DeployDialog({
             </Text>
 
             {targetEmpty && (
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: tokens.spacingVerticalM }}>
                 <Field label="New workspace name (target stage is empty)" required>
                   <Input
                     value={newWorkspaceName}
@@ -658,7 +658,7 @@ function DeployDialog({
               </div>
             )}
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM }}>
               <Checkbox
                 label="Selective deploy (choose specific items)"
                 checked={selective}
@@ -681,7 +681,7 @@ function DeployDialog({
               </div>
             )}
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM }}>
               <Textarea
                 aria-label="Deployment note"
                 placeholder="Deployment note (optional, max 1024 chars)"
@@ -694,7 +694,7 @@ function DeployDialog({
             </div>
 
             {msg && (
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}>
                   <MessageBarBody>{msg.text}</MessageBarBody>
                 </MessageBar>
@@ -831,7 +831,7 @@ function AssignWorkspaceInline({ pipelineId, stage, onChanged }: { pipelineId: s
 
   return (
     <div>
-      <div className={styles.stageMeta} style={{ marginBottom: 6 }}>No workspace assigned. Add content to this stage:</div>
+      <div className={styles.stageMeta} style={{ marginBottom: tokens.spacingVerticalSNudge }}>No workspace assigned. Add content to this stage:</div>
       <div className={styles.assignRow}>
         <Dropdown
           aria-label="Assign workspace"
@@ -849,7 +849,7 @@ function AssignWorkspaceInline({ pipelineId, stage, onChanged }: { pipelineId: s
         </Button>
       </div>
       {workspaces && workspaces.length === 0 && (
-        <div className={styles.stageMeta} style={{ marginTop: 4 }}>No Fabric workspaces visible to the Console identity.</div>
+        <div className={styles.stageMeta} style={{ marginTop: tokens.spacingVerticalXS }}>No Fabric workspaces visible to the Console identity.</div>
       )}
       {err && <Text size={100} style={{ color: tokens.colorPaletteRedForeground1 }}>{err}</Text>}
     </div>
@@ -887,7 +887,7 @@ function UnassignWorkspaceButton({ pipelineId, stage, onChanged }: { pipelineId:
                 You lose this stage's <strong>deployment history and configured deployment rules</strong>.
               </MessageBarBody>
             </MessageBar>
-            {err && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {err && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
@@ -928,7 +928,7 @@ function DeploymentRulesButton({ stage }: { stage: Stage }) {
                 Once set, they apply automatically on the next deploy through Loom.
               </MessageBarBody>
             </MessageBar>
-            <Text block style={{ marginTop: 12 }} size={200}>
+            <Text block style={{ marginTop: tokens.spacingVerticalM }} size={200}>
               Supported rule types per item (Microsoft Learn): Dataflow Gen1 & Semantic model — data
               source + parameter; Paginated report & Mirrored database — data source; Notebook —
               default lakehouse.
@@ -980,7 +980,7 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
 
   return (
     <div className={styles.section}>
-      <div className={styles.assignRow} style={{ marginBottom: 8 }}>
+      <div className={styles.assignRow} style={{ marginBottom: tokens.spacingVerticalS }}>
         <Field label="Compare stage">
           <Dropdown
             value={target.displayName}
@@ -991,7 +991,7 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
             {stages.slice(1).map((s) => <Option key={s.id} value={s.id} text={s.displayName}>{s.displayName}</Option>)}
           </Dropdown>
         </Field>
-        <Text size={300} style={{ paddingBottom: 6 }}>
+        <Text size={300} style={{ paddingBottom: tokens.spacingVerticalSNudge }}>
           against source <strong>{source.displayName}</strong>
         </Text>
       </div>
@@ -1039,7 +1039,7 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
               </TableBody>
             </Table>
           )}
-          <MessageBar intent="info" style={{ marginTop: 8 }}>
+          <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
             <MessageBarBody>
               Content/change review (line-by-line schema diff) is a Fabric portal-only surface and not
               in the public REST API. The authoritative new/different/identical counts are returned by
@@ -1335,14 +1335,14 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
       title="Source control"
       actions={<Button appearance="subtle" size="small" icon={<ArrowSync20Regular />} onClick={() => setStatusTick((t) => t + 1)}>Refresh status</Button>}
     >
-      <div className={styles.gitMeta} style={{ marginBottom: 8 }}>
+      <div className={styles.gitMeta} style={{ marginBottom: tokens.spacingVerticalS }}>
         <span className={styles.gitMetaKey}>Workspace head</span><span className={styles.mono}>{status.workspaceHead?.slice(0, 12) || '—'}</span>
         <span className={styles.gitMetaKey}>Remote commit</span><span className={styles.mono}>{status.remoteCommitHash?.slice(0, 12) || '—'}</span>
         <span className={styles.gitMetaKey}>Changes</span><span>{changes.length}</span>
       </div>
 
       {hasConflict && (
-        <MessageBar intent="warning" style={{ marginBottom: 8 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
           <MessageBarBody>One or more items changed in both the workspace and the branch. Resolve conflicts in the Fabric portal / Git before updating.</MessageBarBody>
         </MessageBar>
       )}
@@ -1382,7 +1382,7 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
         </Table>
       )}
 
-      <div className={styles.formGrid} style={{ marginTop: 12 }}>
+      <div className={styles.formGrid} style={{ marginTop: tokens.spacingVerticalM }}>
         <Field label="Commit comment">
           <Input value={comment} onChange={(_, d) => setComment(d.value.slice(0, 300))} placeholder="Describe your changes (max 300 chars)" />
         </Field>
@@ -1431,7 +1431,7 @@ function InfraTab({ onUnauth }: { onUnauth: () => void }) {
     {
       key: 'provisioningState', label: 'State', sortable: true, filterable: true, width: 160,
       getValue: (d) => d.provisioningState || '',
-      render: (d) => <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>{provStateBadge(d.provisioningState)}{d.error ? <Text size={100} title={d.error}>{d.error.slice(0, 60)}</Text> : null}</span>,
+      render: (d) => <span style={{ display: 'inline-flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS }}>{provStateBadge(d.provisioningState)}{d.error ? <Text size={100} title={d.error}>{d.error.slice(0, 60)}</Text> : null}</span>,
     },
     {
       key: 'timestamp', label: 'Timestamp', sortable: true, filterable: false, width: 180,
@@ -1520,7 +1520,7 @@ function OperationsDialog({ deployment }: { deployment: ArmDeployment }) {
         <DialogBody>
           <DialogTitle>Deployment steps — {deployment.name}</DialogTitle>
           <DialogContent>
-            <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+            <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
               Per-resource operations for this rollout in <strong>{deployment.resourceGroup}</strong>{' '}
               (Azure <code>Microsoft.Resources/deployments/operations</code> REST).
             </Caption1>
@@ -1858,7 +1858,7 @@ function DeletePipelineButton({ pipelineId, name, onDeleted }: { pipelineId: str
               <MessageBarBody>This removes the pipeline definition, its stage deployment rules, and stops new deploys.
                 Items already deployed into the stage workspaces are left in place.</MessageBarBody>
             </MessageBar>
-            {err && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {err && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
@@ -1899,13 +1899,13 @@ function LoomStageCompare({ pipelineId, stages, tick }: { pipelineId: string; st
 
   return (
     <div className={styles.section}>
-      <div className={styles.assignRow} style={{ marginBottom: 8 }}>
+      <div className={styles.assignRow} style={{ marginBottom: tokens.spacingVerticalS }}>
         <Field label="Compare stage">
           <Dropdown value={target.displayName} selectedOptions={[target.id]} onOptionSelect={(_, d) => d.optionValue && setTargetId(d.optionValue)} style={{ minWidth: 200 }}>
             {stages.slice(1).map((s) => <Option key={s.id} value={s.id} text={s.displayName}>{s.displayName}</Option>)}
           </Dropdown>
         </Field>
-        <Text size={300} style={{ paddingBottom: 6 }}>against source <strong>{source.displayName}</strong></Text>
+        <Text size={300} style={{ paddingBottom: tokens.spacingVerticalSNudge }}>against source <strong>{source.displayName}</strong></Text>
       </div>
 
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
@@ -2025,9 +2025,9 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
               items (same type + name) are updated in place; new items are created.
             </Text>
 
-            {loadErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
+            {loadErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM }}>
               <Checkbox label="Selective deploy (choose specific items)" checked={selective} onChange={(_, d) => setSelective(!!d.checked)} />
             </div>
 
@@ -2046,14 +2046,14 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
               </div>
             )}
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM }}>
               <Textarea aria-label="Deployment note" placeholder="Deployment note (optional, max 1024 chars)" value={note}
                 onChange={(_, d) => setNote(d.value.slice(0, 1024))} rows={3} resize="vertical" style={{ width: '100%' }} />
             </div>
 
-            {msg && <div style={{ marginTop: 12 }}><MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar></div>}
+            {msg && <div style={{ marginTop: tokens.spacingVerticalM }}><MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar></div>}
             {receipt && receipt.deployedItemIds.length > 0 && (
-              <div style={{ marginTop: 8 }} className={styles.mono}>
+              <div style={{ marginTop: tokens.spacingVerticalS }} className={styles.mono}>
                 Deployed item ids: {receipt.deployedItemIds.join(', ')}
               </div>
             )}
@@ -2123,7 +2123,7 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
         <DialogBody>
           <DialogTitle>Deployment rules — {stage.displayName}</DialogTitle>
           <DialogContent>
-            <Text block size={200} style={{ marginBottom: 8 }}>
+            <Text block size={200} style={{ marginBottom: tokens.spacingVerticalS }}>
               When content is deployed INTO <strong>{stage.displayName}</strong>, each matching rule
               overrides a data-source or parameter on the re-provisioned item — so the model/report
               binds to this stage's warehouse, ADLS account, or Synapse workspace.
@@ -2178,12 +2178,12 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
                     })}
                   </TableBody>
                 </Table>
-                <div style={{ marginTop: 10 }}>
+                <div style={{ marginTop: tokens.spacingVerticalMNudge }}>
                   <Button appearance="subtle" icon={<Add20Regular />} onClick={addRule}>Add rule</Button>
                 </div>
               </>
             )}
-            {msg && <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'} style={{ marginTop: 10 }}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+            {msg && <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalMNudge }}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Close</Button></DialogTrigger>

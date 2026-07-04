@@ -1129,7 +1129,7 @@ export function ApiMarketplace() {
                     <MessageBar intent={miniMsg.intent} style={{ marginTop: tokens.spacingVerticalS }}>
                       <MessageBarBody>
                         {miniMsg.text}
-                        {miniMsg.link && <> <a href={miniMsg.link} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{miniMsg.linkLabel} <Open16Regular /></a></>}
+                        {miniMsg.link && <> <a href={miniMsg.link} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>{miniMsg.linkLabel} <Open16Regular /></a></>}
                       </MessageBarBody>
                     </MessageBar>
                   )}

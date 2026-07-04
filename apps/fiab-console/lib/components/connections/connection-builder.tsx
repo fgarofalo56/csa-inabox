@@ -245,7 +245,7 @@ export function ConnectionBuilder({
               )}
               {authMethod === 'entra-mi' && (
                 <Caption1 className={s.methodHint}>
-                  <ShieldKeyhole20Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />
+                  <ShieldKeyhole20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />
                   No secret stored. The source must allow the Console managed identity (Entra) to connect.
                 </Caption1>
               )}

@@ -2225,7 +2225,7 @@ export function NotebookEditor({ item, id }: Props) {
                 for a CI + datastores. No Fabric dependency on either path. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
               <Caption1>Compute backend</Caption1>
-              <div style={{ display: 'flex', gap: 0 }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalNone }}>
                 <Button
                   size="small"
                   appearance={workspaceType === 'loom' ? 'primary' : 'outline'}

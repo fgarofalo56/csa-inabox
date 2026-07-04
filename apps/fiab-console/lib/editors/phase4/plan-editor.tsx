@@ -732,7 +732,7 @@ function PlanningSheetPanel({
       </div>
 
       {/* Planning grid */}
-      <Card style={{ padding: 0, overflowX: 'auto' }}>
+      <Card style={{ padding: tokens.spacingVerticalNone, overflowX: 'auto' }}>
         <Table aria-label="Planning sheet grid" size="small">
           <TableHeader>
             <TableRow>

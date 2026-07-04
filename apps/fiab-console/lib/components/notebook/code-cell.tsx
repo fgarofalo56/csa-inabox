@@ -517,9 +517,9 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
             </PopoverTrigger>
             <PopoverSurface
               onClick={(e) => e.stopPropagation()}
-              style={{ padding: 12, width: 380, display: 'flex', flexDirection: 'column', gap: 8 }}
+              style={{ padding: tokens.spacingVerticalM, width: 380, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
                 <Sparkle16Regular style={{ color: tokens.colorBrandForeground1 }} />
                 <Caption1 style={{ fontWeight: 600 }}>In-cell Copilot</Caption1>
               </div>
@@ -537,7 +537,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
                 aria-label="Copilot prompt"
                 autoFocus
               />
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, flexWrap: 'wrap', alignItems: 'center' }}>
                 <Button size="small" appearance="subtle" disabled={copilotBusy || proposedCode !== null}
                   onClick={() => setCopilotDraft('/explain')}>/explain</Button>
                 <Button size="small" appearance="subtle" disabled={copilotBusy || proposedCode !== null}
@@ -556,20 +556,20 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
                 </Button>
               </div>
               {proposedCode !== null && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS }}>
                   <Caption1 style={{ fontWeight: 600, color: tokens.colorBrandForeground1 }}>
                     Proposed change — review before applying:
                   </Caption1>
                   <pre style={{
-                    fontFamily: 'Consolas, monospace', fontSize: 12, margin: 0, maxHeight: 240,
-                    overflow: 'auto', padding: 8, borderRadius: 4, whiteSpace: 'pre-wrap',
+                    fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, margin: tokens.spacingVerticalNone, maxHeight: 240,
+                    overflow: 'auto', padding: tokens.spacingVerticalS, borderRadius: 4, whiteSpace: 'pre-wrap',
                     overflowWrap: 'anywhere', wordBreak: 'break-word', maxWidth: '100%',
                     backgroundColor: tokens.colorNeutralBackground3,
                     border: `1px solid ${tokens.colorNeutralStroke2}`,
                   }}>
                     {proposedCode}
                   </pre>
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                     <Button size="small" appearance="primary"
                       onClick={() => {
                         onChange({ ...cell, source: proposedCode, output: undefined, executionCount: undefined });
@@ -681,7 +681,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
         const rich = richFromField || (richFromData && Array.isArray(richFromData.columns) ? richFromData : undefined);
         if (cell.output.status !== 'error' && rich) {
           return (
-            <div style={{ padding: 8, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <div style={{ padding: tokens.spacingVerticalS, borderTop: `1px solid ${tokens.colorNeutralStroke2}` }}>
               <RichDisplay payload={rich} cellId={cell.id} notebookId={notebookId || ''} workspaceId={workspaceId || ''} computeId={computeId || ''} />
             </div>
           );
@@ -694,7 +694,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
             cell.output.status === 'error' && s.outputError,
           )}>
             {cell.output.status === 'error' && (
-              <Badge appearance="filled" color="danger" size="small" style={{ marginBottom: 4 }}>
+              <Badge appearance="filled" color="danger" size="small" style={{ marginBottom: tokens.spacingVerticalXS }}>
                 {cell.output.ename || 'Error'}
               </Badge>
             )}

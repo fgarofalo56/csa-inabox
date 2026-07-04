@@ -281,7 +281,7 @@ function renderMarkdownLite(text: string): ReactNode {
   let list: string[] = [];
   const flush = () => {
     if (list.length) {
-      out.push(<ul key={`ul${out.length}`} style={{ margin: 0, paddingLeft: 18 }}>{list.map((li, i) => <li key={i}>{inlineBold(li)}</li>)}</ul>);
+      out.push(<ul key={`ul${out.length}`} style={{ margin: tokens.spacingVerticalNone, paddingLeft: tokens.spacingHorizontalXL }}>{list.map((li, i) => <li key={i}>{inlineBold(li)}</li>)}</ul>);
       list = [];
     }
   };

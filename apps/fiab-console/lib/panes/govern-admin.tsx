@@ -486,9 +486,9 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
                 {scanBusy ? 'Starting…' : 'Run scan'}
               </Button>
             </div>
-            {scanMsg && <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground2 }}>{scanMsg}</Caption1>}
+            {scanMsg && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground2 }}>{scanMsg}</Caption1>}
             {sources && sources.length === 0 && (
-              <Caption1 style={{ display: 'block', marginTop: 8 }} className={s.empty}>No registered Purview sources — register one under Governance → Scans &amp; sources.</Caption1>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS }} className={s.empty}>No registered Purview sources — register one under Governance → Scans &amp; sources.</Caption1>
             )}
           </>
         )}
@@ -541,13 +541,13 @@ function DiscoverTrustReuseTab({ posture }: { posture: PostureDoc }) {
           <div className={s.actionCards}>
             {actions.slice(0, 6).map((a) => (
               <div key={a.id} className={s.actionCard}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS }}>
                   <Text weight="semibold">{a.title}</Text>
                   <Badge appearance="tint" color={priorityColor(a.priority) as any} size="small">{a.priority || 'low'}</Badge>
                 </div>
                 {a.description && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{a.description}</Caption1>}
                 {a.ctaHref && (
-                  <Button as="a" href={a.ctaHref} appearance="secondary" size="small" icon={<Open16Regular />} style={{ alignSelf: 'flex-start', marginTop: 4 }}>
+                  <Button as="a" href={a.ctaHref} appearance="secondary" size="small" icon={<Open16Regular />} style={{ alignSelf: 'flex-start', marginTop: tokens.spacingVerticalXS }}>
                     {a.ctaLabel || 'Open'}
                   </Button>
                 )}
@@ -634,7 +634,7 @@ export function GovernAdminPane() {
           <Tab value="discover" icon={<Branch20Regular />}>Discover, trust, reuse</Tab>
         </TabList>
         {resp.precomputedAt && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS }}>
             Background refresh last ran {fmtDate(resp.precomputedAt)} · live values shown above.
           </Caption1>
         )}

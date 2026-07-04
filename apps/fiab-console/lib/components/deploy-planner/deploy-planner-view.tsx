@@ -1063,7 +1063,7 @@ function PlannerInner() {
                                   >
                                     {r.label}
                                     {r.source === 'fallback-list-price' && (
-                                      <Badge size="tiny" appearance="outline" color="warning" style={{ marginLeft: 6 }}>list</Badge>
+                                      <Badge size="tiny" appearance="outline" color="warning" style={{ marginLeft: tokens.spacingHorizontalSNudge }}>list</Badge>
                                     )}
                                   </TableCellLayout>
                                 </TableCell>

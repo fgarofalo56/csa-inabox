@@ -217,7 +217,7 @@ export function CommandPalette() {
       <DialogSurface className={s.surface}>
         <DialogBody>
           <DialogContent>
-            <div style={{ padding: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <div style={{ padding: tokens.spacingVerticalM, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
               <Input
                 className={s.input}
                 contentBefore={<Search20Regular />}
@@ -251,7 +251,7 @@ export function CommandPalette() {
                   })}
                 </div>
               ))}
-              {items.length === 0 && <div style={{ padding: 16, color: tokens.colorNeutralForeground3 }}>No matches.</div>}
+              {items.length === 0 && <div style={{ padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 }}>No matches.</div>}
             </div>
             <div className={s.hint}>
               <Caption1>↑ ↓ navigate</Caption1>

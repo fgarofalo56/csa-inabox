@@ -280,7 +280,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
         width: 200,
         getValue: (r) => r.column ?? '',
         render: (r) => (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
             <EyeOff20Regular style={{ width: 16, height: 16, color: tokens.colorPaletteRedForeground1 }} />
             <span>{r.column}</span>
             {denyConflictKeys.has(`${r.principal}|${r.schema}|${r.table}|${r.column}`) && (
@@ -768,7 +768,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
       </div>
 
       <div className={styles.note}>
-        <Info16Regular style={{ marginTop: 2, flexShrink: 0 }} />
+        <Info16Regular style={{ marginTop: tokens.spacingVerticalXXS, flexShrink: 0 }} />
         <Caption1>
           The saved policy applies as <code>(your predicate) OR IS_MEMBER(&apos;db_owner&apos;) = 1</code>, so database
           owners always see every row. When multiple security policies target the same table their predicates are{' '}
@@ -815,14 +815,14 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
       {testLoading && <Spinner size="tiny" label="Running preview against live rows…" labelPosition="after" />}
       {testResult && (
         <div>
-          <Body1 block style={{ marginBottom: 4 }}>
+          <Body1 block style={{ marginBottom: tokens.spacingVerticalXS }}>
             {testResult.rowCount.toLocaleString()} row{testResult.rowCount === 1 ? '' : 's'} visible to{' '}
             <code>{testResult.testIdentity || '(connection identity)'}</code> · {testResult.executionMs} ms
             {testResult.truncated ? ' · truncated' : ''}
           </Body1>
           <div className={styles.resultBox}>
             {testResult.columns.length === 0 ? (
-              <Caption1 style={{ display: 'block', padding: 8 }}>No rows match this predicate for that identity.</Caption1>
+              <Caption1 style={{ display: 'block', padding: tokens.spacingVerticalS }}>No rows match this predicate for that identity.</Caption1>
             ) : (
               <table className={styles.table}>
                 <thead>

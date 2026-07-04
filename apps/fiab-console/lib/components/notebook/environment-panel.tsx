@@ -254,7 +254,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
 
   return (
     <div className={s.root}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
         <Library20Regular />
         <Subtitle2>Manage environment</Subtitle2>
         <div style={{ flex: 1 }} />
@@ -362,7 +362,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
                 )}
                 {packages.map((p) => (
                   <TableRow key={`${p.source}:${p.name}`}>
-                    <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{p.name}</TableCell>
+                    <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}>{p.name}</TableCell>
                     <TableCell><Badge appearance="outline" color={p.source === 'pip' ? 'brand' : 'success'} size="small">{p.source}</Badge></TableCell>
                   </TableRow>
                 ))}
@@ -388,9 +388,9 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
             : (
               <div className={s.chips}>
                 {customLibraries.map((jar) => (
-                  <Badge key={jar} appearance="tint" color="informative" style={{ paddingRight: 4 }}>
+                  <Badge key={jar} appearance="tint" color="informative" style={{ paddingRight: tokens.spacingHorizontalXS }}>
                     {jar}
-                    <Button size="small" appearance="subtle" disabled={jarBusy} onClick={() => removeJar(jar)} style={{ minWidth: 20, marginLeft: 4 }}>×</Button>
+                    <Button size="small" appearance="subtle" disabled={jarBusy} onClick={() => removeJar(jar)} style={{ minWidth: 20, marginLeft: tokens.spacingHorizontalXS }}>×</Button>
                   </Badge>
                 ))}
               </div>

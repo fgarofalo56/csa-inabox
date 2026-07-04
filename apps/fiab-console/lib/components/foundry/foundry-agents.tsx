@@ -351,7 +351,7 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
                 <Bot24Regular />
                 <span className={s.grow}>
                   <strong>{a.name}</strong>
-                  {agentModel(a) && <Caption1 style={{ marginLeft: 6, color: tokens.colorNeutralForeground3 }}>{agentModel(a)}</Caption1>}
+                  {agentModel(a) && <Caption1 style={{ marginLeft: tokens.spacingHorizontalSNudge, color: tokens.colorNeutralForeground3 }}>{agentModel(a)}</Caption1>}
                   {a.description && <><br /><Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{a.description}</Caption1></>}
                 </span>
                 <Button
@@ -466,14 +466,14 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
                   <Badge appearance="filled" color={pgResult.status === 'completed' ? 'success' : pgResult.status === 'failed' ? 'danger' : 'warning'}>{pgResult.status}</Badge>
                   {pgResult.runId && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>run {pgResult.runId}</Caption1>}
                 </div>
-                {pgResult.lastError && <MessageBar intent="error" style={{ marginTop: 6 }}><MessageBarBody>{pgResult.lastError}</MessageBarBody></MessageBar>}
+                {pgResult.lastError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalSNudge }}><MessageBarBody>{pgResult.lastError}</MessageBarBody></MessageBar>}
                 {pgResult.answer && (
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
                     <Subtitle2>Answer</Subtitle2>
                     <Body1 className={s.answer}>{pgResult.answer}</Body1>
                   </div>
                 )}
-                <Subtitle2 style={{ marginTop: 10 }}>Run steps ({pgResult.steps?.length || 0})</Subtitle2>
+                <Subtitle2 style={{ marginTop: tokens.spacingVerticalMNudge }}>Run steps ({pgResult.steps?.length || 0})</Subtitle2>
                 {(pgResult.steps || []).length === 0 && <Caption1 className={s.empty}>No run steps returned.</Caption1>}
                 {(pgResult.steps || []).map((st: any, i: number) => (
                   <div key={st.id || i} className={s.step}>
@@ -482,13 +482,13 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
                       <Badge appearance="filled" color={st.status === 'completed' ? 'success' : st.status === 'failed' ? 'danger' : 'informative'}>{st.status}</Badge>
                     </div>
                     {(st.toolCalls || []).map((tc: any, j: number) => (
-                      <div key={j} className={s.mono} style={{ marginTop: 6 }}>
+                      <div key={j} className={s.mono} style={{ marginTop: tokens.spacingVerticalSNudge }}>
                         <div><strong>{tc.type}{tc.name ? ` · ${tc.name}` : ''}</strong></div>
                         {tc.input && <div style={{ color: tokens.colorNeutralForeground3 }}>{tc.input}</div>}
                         {tc.output && <div>{tc.output}</div>}
                       </div>
                     ))}
-                    {st.error && <div style={{ color: tokens.colorPaletteRedForeground1, marginTop: 4 }}>{st.error}</div>}
+                    {st.error && <div style={{ color: tokens.colorPaletteRedForeground1, marginTop: tokens.spacingVerticalXS }}>{st.error}</div>}
                   </div>
                 ))}
               </div>

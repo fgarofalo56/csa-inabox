@@ -487,7 +487,7 @@ export function ComputePicker({ value, onChange, filter, label, showLifecycle = 
         </div>
       )}
       {actionMsg && (
-        <MessageBar intent="info" style={{ marginTop: 4 }}>
+        <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalXS }}>
           <MessageBarBody>{actionMsg}</MessageBarBody>
         </MessageBar>
       )}

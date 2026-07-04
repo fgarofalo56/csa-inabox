@@ -2351,7 +2351,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
                 </div>
                 {predictResult && (
                   <div className={s.tableWrap} style={{ padding: tokens.spacingVerticalS }}>
-                    <pre style={{ margin: 0, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{predictResult}</pre>
+                    <pre style={{ margin: tokens.spacingVerticalNone, fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{predictResult}</pre>
                   </div>
                 )}
               </>

@@ -444,7 +444,7 @@ export function GatewayDatasourcesPanel({ workspaceId, datasetId }: { workspaceI
       {renderDs(datasources, 'Cloud data sources')}
       {renderDs(bound, 'Bound gateway data sources')}
 
-      <Subtitle2 style={{ marginTop: 8 }}>Bind to gateway</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Bind to gateway</Subtitle2>
       <div className={s.row}>
         <Field label="Gateway (DiscoverGateways)" style={{ minWidth: 300 }}>
           <Select value={gatewayId} onChange={(_, d) => setGatewayId(d.value)}>

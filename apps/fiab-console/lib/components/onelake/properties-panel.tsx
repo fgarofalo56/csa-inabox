@@ -334,13 +334,13 @@ azcopy copy \\
               <div className={styles.cardCode}>{paths.abfs}</div>
               <div className={styles.cardLinks}>
                 <Link href="https://learn.microsoft.com/azure/storage/blobs/blobfuse2-what-is" target="_blank" rel="noreferrer">
-                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />BlobFuse2 docs
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />BlobFuse2 docs
                 </Link>
                 <Link href="https://learn.microsoft.com/azure/storage/storage-explorer/vs-azure-tools-storage-manage-with-storage-explorer" target="_blank" rel="noreferrer">
-                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Azure Storage Explorer
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Azure Storage Explorer
                 </Link>
                 <Link href="https://learn.microsoft.com/azure/storage/common/storage-use-azcopy-v10" target="_blank" rel="noreferrer">
-                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Get AzCopy
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Get AzCopy
                 </Link>
               </div>
             </MessageBarBody>

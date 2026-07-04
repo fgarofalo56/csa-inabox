@@ -2550,7 +2550,7 @@ function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
                         onClick={() => void openRoom(r.name)}
                         onKeyDown={(e) => { if (e.key === 'Enter') void openRoom(r.name); }}
                         style={{
-                          padding: tokens.spacingVerticalS, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 2,
+                          padding: tokens.spacingVerticalS, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS,
                           backgroundColor: selected === r.name ? tokens.colorNeutralBackground1Selected : 'transparent',
                           borderBottom: `1px solid ${tokens.colorNeutralStroke3}`,
                         }}>

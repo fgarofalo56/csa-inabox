@@ -169,7 +169,7 @@ export function GovernOwnerPane() {
       </Body1>
 
       <div className={s.toolbar}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
           {data?.owner?.name && (
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
               Scope: {data.owner.name} ({data.owner.upn})

@@ -472,7 +472,7 @@ function ApprovalTriggerUrlFetcher({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS }}>
       <Caption1>
         The Approval activity posts to a Consumption Logic App that sends an Office 365
         approval email and calls back. Declare a <strong>string</strong> pipeline

@@ -224,7 +224,7 @@ function DataProductTryItPanel({ id }: { id: string }) {
       <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
         Preview this data product&rsquo;s live data — a read-only sample (top 25 rows) from its backing Azure Data Explorer table.
       </Caption1>
-      {result?.kql && <pre style={{ fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflowX: 'auto', maxWidth: '100%', margin: 0 }}>{result.kql}</pre>}
+      {result?.kql && <pre style={{ fontSize: tokens.fontSizeBase200, backgroundColor: tokens.colorNeutralBackground3, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, overflowX: 'auto', maxWidth: '100%', margin: tokens.spacingVerticalNone }}>{result.kql}</pre>}
       <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
         <Button appearance="primary" icon={loading ? undefined : <Play20Regular />} disabled={loading} onClick={run}>
           {loading ? 'Running…' : result ? 'Run again' : 'Run sample query'}

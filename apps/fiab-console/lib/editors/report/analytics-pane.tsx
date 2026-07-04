@@ -1702,7 +1702,7 @@ function AnomalyCard({
       />
       {anomaly.useAdx === true && !adxAvailable ? (
         <Caption1 className={styles.muted}>
-          <DatabasePlugConnected20Regular style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+          <DatabasePlugConnected20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />
           ADX path needs a Kusto-bound model. Bind an Azure Data Explorer source to run
           series_decompose_anomalies on the cluster — the in-browser rolling z-score computation is used until then.
         </Caption1>

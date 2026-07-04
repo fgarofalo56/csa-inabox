@@ -320,7 +320,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
               <div style={{
                 display: 'grid',
                 gridTemplateColumns: narrow ? '1fr' : 'repeat(12, 1fr)',
-                gap: tokens.spacingVerticalM, paddingTop: 12,
+                gap: tokens.spacingVerticalM, paddingTop: tokens.spacingVerticalM,
               }}>
                 {/* Pinned Power BI tiles (single-tile embed) */}
                 {tiles.map((t) => {

@@ -124,7 +124,7 @@ export function ActivityFeedPane({ showStats = true }: { showStats?: boolean }) 
   return (
     <>
       {unauth && <SignInRequired subject="activity" />}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalL }}>
         <Button
           appearance="primary"
           icon={<ArrowSync20Regular />}

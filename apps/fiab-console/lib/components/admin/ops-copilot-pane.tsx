@@ -153,7 +153,7 @@ export function OpsCopilotPane() {
             {EXAMPLES.map((ex) => (
               <Badge key={ex} appearance="outline" color="brand" className={s.chip}
                 onClick={() => { setPrompt(ex); classify(ex); }}>
-                <Sparkle20Regular style={{ width: 12, height: 12, marginInlineEnd: 4 }} />{ex}
+                <Sparkle20Regular style={{ width: 12, height: 12, marginInlineEnd: tokens.spacingHorizontalXS }} />{ex}
               </Badge>
             ))}
           </div>

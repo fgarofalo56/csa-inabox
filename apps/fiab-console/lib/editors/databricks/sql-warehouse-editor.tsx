@@ -1784,7 +1784,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
                           fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, overflow: 'auto',
                           whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', wordBreak: 'break-word',
                           maxHeight: 320, backgroundColor: tokens.colorNeutralBackground3,
-                          padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, margin: 0,
+                          padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, margin: tokens.spacingVerticalNone,
                         }}>
                           {JSON.stringify(profileData.plans, null, 2)}
                         </pre>

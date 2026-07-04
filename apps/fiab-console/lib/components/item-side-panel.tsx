@@ -166,8 +166,8 @@ function CommentsPane({ type, id }: Props) {
       {items !== null && items.length === 0 && <div className={styles.meta}>No comments yet.</div>}
       {items?.map(c => (
         <div key={c.id} className={styles.card}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{c.name || c.upn || 'Someone'}</div>
-          <div style={{ fontSize: 13 }}>{c.body}</div>
+          <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase200 }}>{c.name || c.upn || 'Someone'}</div>
+          <div style={{ fontSize: tokens.fontSizeBase200 }}>{c.body}</div>
           <div className={styles.meta}>{new Date(c.createdAt).toLocaleString()}</div>
         </div>
       ))}
@@ -192,7 +192,7 @@ function HistoryPane({ type, id }: Props) {
       )}
       {items?.map(e => (
         <div key={e.id} className={styles.card}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{e.action} {e.summary ? `· ${e.summary}` : ''}</div>
+          <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase200 }}>{e.action} {e.summary ? `· ${e.summary}` : ''}</div>
           <div className={styles.meta}>{e.upn ?? 'unknown'} · {new Date(e.at).toLocaleString()}</div>
         </div>
       ))}
@@ -230,11 +230,11 @@ function SharePane({ type, id }: Props) {
 
   return (
     <div className={styles.list}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <label style={{ fontSize: 12 }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
+        <label style={{ fontSize: tokens.fontSizeBase200 }}>
           Expires in (hours)&nbsp;
           <input value={hours} onChange={e => setHours(e.target.value)} type="number" min={1} max={720}
-                 style={{ width: 64, padding: 4, fontSize: 12 }} />
+                 style={{ width: 64, padding: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 }} />
         </label>
         <Button appearance="primary" onClick={create} disabled={busy}>
           {busy ? 'Creating…' : 'Create share link'}
@@ -248,7 +248,7 @@ function SharePane({ type, id }: Props) {
           <div className={styles.meta}>
             {s.scope} · expires {new Date(s.expiresAt).toLocaleString()} · by {s.createdBy}
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS }}>
             <Button size="small" icon={<Copy16Regular />}
               onClick={() => navigator.clipboard?.writeText(urlFor(s))}>Copy</Button>
             <Button size="small" appearance="subtle" onClick={() => revoke(s.token)}>Revoke</Button>
@@ -307,10 +307,10 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
   }
   return (
     <div className={styles.list}>
-      <h3 style={{ marginTop: 0 }}>{learn.title}</h3>
+      <h3 style={{ marginTop: tokens.spacingVerticalNone }}>{learn.title}</h3>
       {learn.summary && <p>{learn.summary}</p>}
       {learn.steps && learn.steps.length > 0 && (
-        <ol style={{ paddingLeft: 18 }}>
+        <ol style={{ paddingLeft: tokens.spacingHorizontalXL }}>
           {learn.steps.map((s, i) => {
             const isActive = i === activeStep;
             return (
@@ -318,7 +318,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
                 key={i}
                 aria-current={isActive ? 'step' : undefined}
                 style={{
-                  marginBottom: 8,
+                  marginBottom: tokens.spacingVerticalS,
                   padding: isActive ? 'var(--loom-space-2)' : 0,
                   borderRadius: 'var(--loom-radius-sm)',
                   backgroundColor: isActive ? tokens.colorNeutralBackground2 : 'transparent',
@@ -330,7 +330,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
                 {typeof s === 'string' ? s : (
                   <><b>{s.title}</b>{s.body ? ` — ${s.body}` : ''}</>
                 )}
-                <div style={{ marginTop: 4 }}>
+                <div style={{ marginTop: tokens.spacingVerticalXS }}>
                   <Button
                     appearance="subtle"
                     size="small"
@@ -350,7 +350,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
       {learn.tip && (
         <MessageBar intent="success"><MessageBarBody>{learn.tip}</MessageBarBody></MessageBar>
       )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
         {learn.docsUrl && (
           <a href={learn.docsUrl} target="_blank" rel="noreferrer"
              style={{ fontWeight: 600 }}>
@@ -360,7 +360,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
         {/* Secondary MS Learn link only when distinct from the primary Loom link. */}
         {learn.hasLoomDoc && learn.msLearnUrl && (
           <a href={learn.msLearnUrl} target="_blank" rel="noreferrer"
-             style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+             style={{ fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 }}>
             MS Learn ↗
           </a>
         )}

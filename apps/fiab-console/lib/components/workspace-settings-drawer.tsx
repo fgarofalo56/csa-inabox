@@ -110,7 +110,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             <Tab value="sensitivity">Sensitivity</Tab>
             <Tab value="danger">Danger zone</Tab>
           </TabList>
-          <div style={{ marginTop: 16 }}>
+          <div style={{ marginTop: tokens.spacingVerticalL }}>
             {tab === 'general' && <GeneralSection workspace={workspace} onSaved={() => qc.invalidateQueries({ queryKey: ['workspace', workspace.id] })} />}
             {tab === 'permissions' && <ManageAccessPane workspaceId={workspace.id} embeddedMode />}
             {tab === 'networking' && <NetworkingPane workspaceId={workspace.id} />}

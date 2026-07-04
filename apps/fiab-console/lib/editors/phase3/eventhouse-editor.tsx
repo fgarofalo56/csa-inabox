@@ -527,7 +527,7 @@ function EventhouseOverviewPanel({
     .map((d) => [d.name, Math.round((d.totalExtentSizeBytes ?? 0) / 1024 / 1024)]);
 
   return (
-    <div className={s.pad} style={{ paddingTop: 12 }}>
+    <div className={s.pad} style={{ paddingTop: tokens.spacingVerticalM }}>
       {/* time-range filter strip */}
       <div className={s.toolbar}>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Time range</Caption1>
