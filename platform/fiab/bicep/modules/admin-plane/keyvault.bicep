@@ -39,6 +39,13 @@ param consolePrincipalNeedsCmkRole bool = false
 @description('Skip role-assignment grants — set true when re-provisioning an environment that already has the grants, to avoid RoleAssignmentExists.')
 param skipRoleGrants bool = false
 
+@description('B9 — enable Key Vault purge protection. Required in Gov/prod (Gov boundaries keep it on): irreversible + blocks name reuse for 90 days, which is the compliance-desired posture. Disabled in commercial/test so a teardown can `az keyvault purge` the vault and let a redeploy reclaim the SAME name in the SAME resource group. main.bicep derives this from the deployment boundary (Commercial → purgeable). Passed to the resource as null (never false) when off, so an EXISTING purge-protected vault is never asked to downgrade — that is irreversible and ARM would reject it.')
+param enablePurgeProtection bool = true
+
+@allowed(['default', 'recover'])
+@description('B9 — Key Vault create mode. "recover" re-attaches this deployment to a SOFT-DELETED vault of the same name instead of colliding on it — the reconcile path for a Gov/prod redeploy into a resource group whose vault was soft-deleted (purge protection prevented a purge). "default" provisions a fresh vault. Left at "default" for normal deploys; set "recover" only when redeploying over a known soft-deleted vault of this exact name.')
+param createMode string = 'default'
+
 @description('Private endpoints subnet ID')
 param privateEndpointSubnetId string
 
@@ -65,6 +72,7 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
   location: location
   tags: complianceTags
   properties: {
+    createMode: createMode
     sku: {
       family: 'A'
       name: 'premium'
@@ -73,7 +81,10 @@ resource keyVault 'Microsoft.KeyVault/vaults@2024-11-01' = {
     enableRbacAuthorization: true
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
-    enablePurgeProtection: true
+    // B9 — off in commercial/test so teardown can purge + redeploy reclaims the
+    // name; on in Gov/prod. null (not false) when off so an existing protected
+    // vault is never asked to make the irreversible true→false downgrade.
+    enablePurgeProtection: enablePurgeProtection ? true : null
     publicNetworkAccess: 'Disabled'
     networkAcls: {
       bypass: 'AzureServices'

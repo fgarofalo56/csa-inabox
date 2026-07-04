@@ -154,7 +154,6 @@ const ALLOWLIST = new Set([
   'LOOM_DIRECT_LAKE_COSMOS_DB',     // opt-in Direct Lake mirror
   'LOOM_DQ_SOURCE_CONNECTION_STRING', // handled by _CONNECTION_STRING pattern; kept for clarity
   'LOOM_DSPM_AI_AGENT_ITEM_TYPES',  // classifier config list (code default)
-  'LOOM_EVENTHUBS_NAMESPACE',       // honest Azure infra gate (no-vaporware): unset until provisioned
   'LOOM_EVENTSTREAM_EVENTS_TABLE',  // ADX table default (code default)
   'LOOM_FABRIC_GRAPH_WORKSPACE',    // opt-in Fabric graph workspace
   'LOOM_FABRIC_SEMANTIC_MODEL_ID',  // opt-in Fabric semantic model

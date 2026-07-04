@@ -1773,7 +1773,7 @@ MessageBar names `LOOM_MAPS_BACKEND` / `LOOM_AZURE_MAPS_CLIENT_ID` and the
 ### Bicep sync
 
 - Account + Data Reader grant + `mapsClientId` (uniqueId) output:
-  `platform/fiab/bicep/modules/landing-zone/azure-maps.bicep` (and the
+  `platform/fiab/bicep/modules/admin-plane/azure-maps.bicep` (and the
   admin-plane variant `modules/admin-plane/azure-maps.bicep`). Deploys the Gen2
   `Microsoft.Maps/accounts` account and grants the Console UAMI "Azure Maps Data
   Reader".

@@ -48,12 +48,19 @@ az ad group member add --group "$GROUP_ID" --member-id "$USER_ID"
 echo "Loom Admins group: $GROUP_ID"
 ```
 
-## Step 3 — Deploy (40–90 min)
+## Step 3 — Deploy the infrastructure (40–90 min)
 
 The deploy is a single subscription-scoped Bicep deployment. Pick the parameter
 file for your boundary (`commercial-full.bicepparam` = Commercial, single-sub,
 F8 — Admin Plane + one DLZ in the same subscription) and pass **your** admin
 group as the one required override.
+
+> **Why `deployAppsEnabled=false` here.** A brand-new deploy creates an **empty**
+> Azure Container Registry. The Console/MCP/Copilot Container Apps pull their
+> images from that ACR, so they cannot come up until the images are built and
+> pushed (Step 3b). This first pass provisions everything **except** the
+> Container Apps; `deployAppsEnabled=false` overrides the param file's default so
+> the deploy doesn't fail trying to pull an image that doesn't exist yet.
 
 ```bash
 # Preview what will be created (optional but recommended):
@@ -62,31 +69,50 @@ az deployment sub create \
   --template-file platform/fiab/bicep/main.bicep \
   --parameters platform/fiab/bicep/params/commercial-full.bicepparam \
   --parameters adminEntraGroupId="$GROUP_ID" \
+  --parameters deployAppsEnabled=false \
   --what-if
 
-# Deploy:
+# Deploy the infrastructure:
 az deployment sub create \
   --name "csa-loom-$(date +%Y%m%d-%H%M)" \
   --location eastus2 \
   --template-file platform/fiab/bicep/main.bicep \
   --parameters platform/fiab/bicep/params/commercial-full.bicepparam \
-  --parameters adminEntraGroupId="$GROUP_ID"
+  --parameters adminEntraGroupId="$GROUP_ID" \
+  --parameters deployAppsEnabled=false
 ```
 
 This provisions the **Admin Plane** (hub VNet + Private DNS zones + ACR +
-Container Apps Env + Console + MCP + Copilot + Catalog + AI Foundry + AI Search
-+ Monitoring + Key Vault) and the first **Data Landing Zone** (spoke VNet +
-Databricks + Synapse Serverless + ADX + ADLS + parity services). The Console URL
-is emitted as a deployment output:
-
-```bash
-az deployment sub show --name <the-name-you-used> \
-  --query properties.outputs.consoleUrl.value -o tsv
-```
+Container Apps Env + AI Foundry + AI Search + Monitoring + Key Vault) and the
+first **Data Landing Zone** (spoke VNet + Databricks + Synapse Serverless + ADX +
+ADLS + parity services). The application Container Apps come up in Step 3b.
 
 > **The `.bicepparam` sets every other choice** (boundary, `deploymentMode`,
 > region, capacity SKU, topology). Edit that file to change region/SKU; the only
 > value you must supply on the command line is `adminEntraGroupId`.
+
+## Step 3b — Build the app images + bring up the Container Apps (15–25 min)
+
+The ACR created in Step 3 is empty, so the Console and its sibling apps have no
+image to run yet. The supported from-scratch app path is the
+**`full-app-deploy-commercial.yml`** workflow: it temporarily opens the ACR,
+builds every app image **server-side** with `az acr build` (works even though the
+registry is private), re-locks the ACR to its private endpoint, then rolls the
+Container Apps onto the new images.
+
+```bash
+# From your fork/clone, with repo secrets set (AZURE_CLIENT_ID / _SECRET /
+# _TENANT_ID / _SUBSCRIPTION_ID). Builds + pushes all app images, then enables
+# the Container Apps pointing at them:
+gh workflow run full-app-deploy-commercial.yml \
+  -f region=eastus2 \
+  -f enable_apps_after=true
+```
+
+When it finishes, the Console Container App is live and the workflow prints its
+Front Door / ingress URL. (A single `deployAppsEnabled=true` deploy against a
+just-created empty ACR is **not** a shortcut for this — the images must be built
+first; that is expected, not a bug.)
 
 ## Step 4 — Post-deploy bootstrap (10–15 min) — **required to sign in**
 
@@ -98,10 +124,19 @@ Synapse SQL admin, Purview roles, and the Spark private-endpoint fix.
 Run the bootstrap workflow against your freshly deployed resource group:
 
 ```bash
-# GitHub Actions (from your fork/clone, with repo secrets set):
+# GitHub Actions (from your fork/clone, with repo secrets set). region +
+# admin_subscription are REQUIRED (no estate defaults). boundary selects the
+# cloud + login secret set (Commercial | GCC | GCC-High | IL5):
 gh workflow run csa-loom-post-deploy-bootstrap.yml \
-  -f admin_rg=<your-admin-rg> -f subscription=<YOUR-SUBSCRIPTION-ID>
+  -f boundary=Commercial \
+  -f region=eastus2 \
+  -f admin_subscription=<YOUR-SUBSCRIPTION-ID>
 ```
+
+> **This bootstrap also runs automatically.** `full-app-deploy-commercial.yml`
+> and the Gov deploy workflows chain it after a real, kept deploy — so on the
+> workflow-driven path you don't run it by hand. The command above is for a
+> local/manual deploy or a re-run.
 
 …or run the scripts directly against your deployment (no GitHub required):
 
