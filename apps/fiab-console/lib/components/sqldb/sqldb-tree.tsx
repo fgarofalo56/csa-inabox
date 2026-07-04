@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * SqlDbTree — the Azure SQL Database / Fabric SQL database **schema object**
  * navigator. The T-SQL equivalent of the ADX KQL-database / Databricks
@@ -137,6 +138,7 @@ function notebookCell(sql: string): string {
 /** A typed, SSMS/portal-faithful Azure SQL / Fabric SQL object navigator. */
 export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, onOpenInNotebook, refreshKey = 0 }: SqlDbTreeProps) {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const router = useRouter();
 
   const q = useMemo(() => {
@@ -257,7 +259,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   }, [q]);
 
   const drop = useCallback(async (route: string, objectId: number, label: string) => {
-    if (typeof window !== 'undefined' && !window.confirm(`Drop ${label}? This cannot be undone.`)) return;
+    if (!(await confirm({ title: `Drop ${label}?`, body: 'This cannot be undone.', danger: true, confirmLabel: 'Drop' }))) return;
     setBusy(true); setError(null);
     try {
       const sep = route.includes('?') ? '&' : '?';
@@ -270,7 +272,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   }, [loadAll]);
 
   const dropIndex = useCallback(async (tableObjectId: number, indexId: number, label: string) => {
-    if (typeof window !== 'undefined' && !window.confirm(`Drop index ${label}? This cannot be undone.`)) return;
+    if (!(await confirm({ title: `Drop index ${label}?`, body: 'This cannot be undone.', danger: true, confirmLabel: 'Drop index' }))) return;
     setBusy(true); setError(null);
     try {
       const body = await clientFetch(`/api/sqldb/indexes?${q}&objectId=${tableObjectId}&indexId=${indexId}`, { method: 'DELETE' }).then(readJson);
@@ -297,7 +299,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   }, [q]);
 
   const dropConstraint = useCallback(async (tableObjectId: number, constraintId: number, label: string) => {
-    if (typeof window !== 'undefined' && !window.confirm(`Drop constraint ${label}? This cannot be undone.`)) return;
+    if (!(await confirm({ title: `Drop constraint ${label}?`, body: 'This cannot be undone.', danger: true, confirmLabel: 'Drop constraint' }))) return;
     setBusy(true); setError(null);
     try {
       const body = await clientFetch(`/api/sqldb/constraints?${q}&objectId=${tableObjectId}&constraintId=${constraintId}`, { method: 'DELETE' }).then(readJson);
@@ -477,6 +479,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
 
   return (
     <div className={s.root}>
+      {confirmDialog}
       <div className={s.header}>
         <span className={s.title}>{resolvedDb ? <>Database · <code>{resolvedDb}</code></> : 'SQL database objects'}</span>
         <span className={s.headerActions}>

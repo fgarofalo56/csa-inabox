@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * LakehouseEditor — real ADLS Gen2 browser + OPENROWSET preview, wired
  * to the DLZ storage account via the BFF (UAMI -> Storage Blob Data
@@ -79,6 +80,7 @@ interface Props { item: FabricItemType; id: string }
 
 export function LakehouseEditor({ item, id }: Props) {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const router = useRouter();
 
   // Bundle-installed lakehouses stamp their rich definition (folder tree,
@@ -548,10 +550,12 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const restoreToVersion = useCallback(async (tablePath: string, version: number) => {
     if (!activeContainer) return;
-    // eslint-disable-next-line no-alert
-    const confirmed = typeof window !== 'undefined'
-      ? window.confirm(`Restore table "${leafName(tablePath)}" to version ${version}? This overwrites the current table state with version ${version}. Ensure the data files for that version have not been removed by VACUUM.`)
-      : false;
+    const confirmed = await confirm({
+      title: `Restore table "${leafName(tablePath)}" to version ${version}?`,
+      body: `This overwrites the current table state with version ${version}. Ensure the data files for that version have not been removed by VACUUM.`,
+      danger: true,
+      confirmLabel: 'Restore version',
+    });
     if (!confirmed) return;
     setHistoryRestoring(version);
     setHistoryRestoreMsg(null);
@@ -750,10 +754,12 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [loadShortcuts]);
 
   const deleteShortcutRow = useCallback(async (row: ShortcutRow) => {
-    // eslint-disable-next-line no-alert
-    const ok = typeof window !== 'undefined'
-      ? window.confirm(`Delete shortcut "${row.name}"? This drops the registry pointer and any external table — it never deletes the underlying source data.`)
-      : false;
+    const ok = await confirm({
+      title: `Delete shortcut "${row.name}"?`,
+      body: 'This drops the registry pointer and any external table — it never deletes the underlying source data.',
+      danger: true,
+      confirmLabel: 'Delete shortcut',
+    });
     if (!ok) return;
     setShortcutsBusy(true); setShortcutsError(null);
     try {
@@ -845,10 +851,12 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const deleteSchema = useCallback(async (name: string) => {
     if (!shortcutLakehouseId) return;
-    // eslint-disable-next-line no-alert
-    const ok = typeof window !== 'undefined'
-      ? window.confirm(`Delete schema "${name}"? This runs DROP SCHEMA … CASCADE and removes the catalog entry.`)
-      : false;
+    const ok = await confirm({
+      title: `Delete schema "${name}"?`,
+      body: 'This runs DROP SCHEMA … CASCADE and removes the catalog entry. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Drop schema',
+    });
     if (!ok) return;
     setSchemasBusy(true); setSchemasError(null);
     try {
@@ -1831,10 +1839,14 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const onDelete = useCallback(async (entry: PathEntry) => {
     if (!activeContainer) return;
-    // eslint-disable-next-line no-alert
-    const ok = typeof window !== 'undefined'
-      ? window.confirm(`Delete ${entry.name}${entry.isDirectory ? ' (recursive)' : ''}?`)
-      : false;
+    const ok = await confirm({
+      title: `Delete ${entry.name}${entry.isDirectory ? ' (recursive)' : ''}?`,
+      body: entry.isDirectory
+        ? 'This recursively deletes the folder and everything under it. This cannot be undone.'
+        : 'This deletes the file. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete',
+    });
     if (!ok) return;
     setActionError(null);
     setActionStatus(null);
@@ -2233,6 +2245,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   // ---- render ---------------------------------------------------------
   return (
+    <>
     <ItemEditorChrome
       item={item}
       id={id}
@@ -4977,5 +4990,7 @@ export function LakehouseEditor({ item, id }: Props) {
         </>
       }
     />
+    {confirmDialog}
+    </>
   );
 }

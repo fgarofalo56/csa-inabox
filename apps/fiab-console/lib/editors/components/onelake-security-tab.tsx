@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * OneLakeSecurityTab (F7) — data-access roles for Lakehouse / Mirrored-Database
  * / Mirrored-Catalog items, with the Azure-native ADLS Gen2 ACL backend.
@@ -100,6 +101,7 @@ const DEFAULT_WARNING =
 
 export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, fabricItemId }: Props) {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const base = `/api/items/${itemType}/${encodeURIComponent(itemId)}/security-roles`;
   const effContainer = container || (itemType === 'lakehouse' ? 'gold' : 'bronze');
 
@@ -256,8 +258,12 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
   }, [base, roleName, effContainer, perms, pathMode, selectedPaths, members, loadRoles]);
 
   const deleteRole = useCallback(async (role: OneLakeSecurityRole) => {
-    // eslint-disable-next-line no-alert
-    if (typeof window !== 'undefined' && !window.confirm(`Delete role "${role.roleName}"? This revokes its ADLS ACL grants for all members.`)) return;
+    if (!(await confirm({
+      title: `Delete role "${role.roleName}"?`,
+      body: 'This revokes its ADLS ACL grants for all members. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete role',
+    }))) return;
     setBusy(true); setError(null);
     try {
       const r = await fetch(`${base}?roleId=${encodeURIComponent(role.id)}`, { method: 'DELETE' });
@@ -379,6 +385,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
 
   return (
     <div className={s.root}>
+      {confirmDialog}
       <div className={s.toolbar}>
         <Badge appearance="filled" color="brand" icon={<ShieldTask20Regular />}>OneLake security</Badge>
         <Caption1>container: <strong>{effContainer}</strong></Caption1>

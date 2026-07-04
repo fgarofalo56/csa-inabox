@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * ApiMarketplace — the consumer/catalog view over the tenant's Azure API
  * Management instance. The Loom equivalent of the APIM developer portal /
@@ -116,6 +117,7 @@ function stateBadge(state?: string) {
 
 export function ApiMarketplace() {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   // top-level view
   const [view, setView] = useState<'catalog' | 'subscriptions'>('catalog');
@@ -383,7 +385,12 @@ export function ApiMarketplace() {
   }, [loadSubscriptions]);
 
   const deleteSub = useCallback(async (sub: SubscriptionSummary) => {
-    if (!confirm(`Delete subscription "${sub.displayName || sub.name}"? This revokes its keys and cannot be undone.`)) return;
+    if (!(await confirm({
+      title: `Delete subscription "${sub.displayName || sub.name}"?`,
+      body: 'This revokes its API keys immediately and cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete & revoke keys',
+    }))) return;
     setSubActionMsg(null);
     try {
       const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}`, { method: 'DELETE' });
@@ -593,6 +600,7 @@ export function ApiMarketplace() {
   // ---------------- render ----------------
   return (
     <div className={s.root}>
+      {confirmDialog}
       <div className={s.topBar}>
         <TabList selectedValue={view} onTabSelect={(_, d) => setView(d.value as 'catalog' | 'subscriptions')}>
           <Tab value="catalog" icon={<Apps20Regular />}>Catalog</Tab>

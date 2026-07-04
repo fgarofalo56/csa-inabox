@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * PurviewPanel — inline management for the Purview tab of /admin/security.
  *
@@ -208,10 +209,12 @@ function PurviewStatusBanner() {
 
 export function PurviewPanel() {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [tab, setTab] = useState<SubTab>('sources');
 
   return (
     <div>
+      {confirmDialog}
       <PurviewStatusBanner />
       <TabList
         className={s.subTabs}
@@ -288,7 +291,12 @@ function DataSourcesSection() {
   };
 
   const remove = async (name: string) => {
-    if (!confirm(`De-register data source "${name}"?`)) return;
+    if (!(await confirm({
+      title: `De-register data source "${name}"?`,
+      body: 'This removes the source from the Purview Data Map. Existing scan results are retained but no new scans will run.',
+      danger: true,
+      confirmLabel: 'De-register',
+    }))) return;
     const r = await clientFetch(`/api/admin/security/purview/sources?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));

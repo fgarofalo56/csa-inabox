@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * Databricks Cluster editor — extracted verbatim from
  * databricks-editors.tsx (behavior-preserving split — zero logic change).
@@ -106,6 +107,7 @@ function KvEditor({ label, rows, setRows, kPlaceholder, vPlaceholder }: {
 
 export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id: string }) {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const [clusters, setClusters] = useState<Cluster[]>([]);
   const [clusterId, setClusterId] = useState<string | null>(null);
@@ -407,12 +409,17 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
 
   const del = useCallback(async () => {
     if (!clusterId) return;
-    if (!window.confirm(`Permanently delete cluster ${clusterId}?`)) return;
+    if (!(await confirm({
+      title: `Delete cluster ${clusterId}?`,
+      body: 'This permanently deletes the Databricks cluster. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete cluster',
+    }))) return;
     await clientFetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(clusterId)}&permanent=true`, { method: 'DELETE' });
     setClusterId(null);
     setCluster(null);
     await loadClusters();
-  }, [id, clusterId, loadClusters]);
+  }, [id, clusterId, loadClusters, confirm]);
 
   // Ctrl/Cmd+S to save when not already busy — works for both create
   // (clusterId === null → /clusters/create) and edit (existing cluster →
@@ -448,6 +455,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
   ], [saving, clusterId, save, del, canStartCluster, canStopCluster, canRestartCluster, doState]);
 
   return (
+    <>
     <ItemEditorChrome
       item={item}
       id={id}
@@ -760,5 +768,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         </div>
       }
     />
+    {confirmDialog}
+    </>
   );
 }

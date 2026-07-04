@@ -1,6 +1,7 @@
 'use client';
 
 import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * ActivatorEditor — extracted from phase3-editors.tsx (byte-for-byte).
  *
@@ -177,6 +178,7 @@ interface HistoryEventLite {
 }
 
 export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const s = useStyles();
   const ws = useWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
@@ -459,7 +461,12 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
   const deleteRule = useCallback(async (r: RuleLite) => {
     if (!workspaceId || !selectedId) return;
-    if (typeof window !== 'undefined' && !window.confirm(`Delete rule "${r.name}"? This removes its Azure Monitor scheduled-query rule.`)) return;
+    if (!(await confirm({
+      title: `Delete rule "${r.name}"?`,
+      body: 'This removes its Azure Monitor scheduled-query rule. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete rule',
+    }))) return;
     setBusyRuleId(r.id); setRulesErr(null);
     try {
       const res = await clientFetch(
@@ -697,6 +704,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   }
 
   return (
+    <>
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
@@ -1222,5 +1230,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
         </div>
       }
     />
+    {confirmDialog}
+    </>
   );
 }
