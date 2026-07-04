@@ -384,7 +384,7 @@ export function RealTimeHubView() {
           <MessageBarTitle>Real-time scope</MessageBarTitle>
           This is the <b>deployed streams</b> view — your Loom eventstreams plus the connector gallery to add new
           sources. To discover the raw Azure sources (Event Hubs, IoT Hub, ADX) across every subscription, use the{' '}
-          <FluentLink href="/rti-hub">RTI catalog</FluentLink>. Loom&apos;s real-time path is an Azure-native{' '}
+          <FluentLink href="/realtime-hub?tab=sources">Discover sources</FluentLink>. Loom&apos;s real-time path is an Azure-native{' '}
           <b>analytics</b> pipeline (Event Hubs → Stream Analytics / ADX), typically sub-second to low-second — not a
           sub-100&nbsp;ms transactional object store.
         </MessageBarBody>
@@ -426,7 +426,7 @@ export function RealTimeHubView() {
           Connect Microsoft, Azure, database CDC, and external streaming sources. Each tile creates a real CSA Loom
           Eventstream item carrying the chosen source.
           {' '}Want to discover the raw Azure sources (Event Hubs, IoT Hub, ADX) across every subscription?{' '}
-          <FluentLink href="/rti-hub">Open the RTI catalog</FluentLink>.
+          <FluentLink href="/realtime-hub?tab=sources">Open Discover sources</FluentLink>.
         </Caption1>
         <SourceGallery onPick={openConnect} />
       </Section>

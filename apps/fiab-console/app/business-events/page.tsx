@@ -1,13 +1,12 @@
-import { PageShell } from '@/lib/components/page-shell';
-import { BusinessEventsView } from '@/lib/components/business-events/business-events-view';
+import { redirect } from 'next/navigation';
 
-export default function BusinessEventsPage() {
-  return (
-    <PageShell
-      title="Business events"
-      subtitle="Publish structured, governed business signals to Event Hubs and Event Grid — discoverable in the Real-Time hub, capacity-metered, and consumable by Activator rules."
-    >
-      <BusinessEventsView />
-    </PageShell>
-  );
+/**
+ * /business-events — consolidated into the Real-Time Intelligence hub.
+ *
+ * Business events (<BusinessEventsView>) now renders as the "Business events"
+ * tab of /realtime-hub. This page preserves old bookmarks / links by bouncing
+ * to the tab so the full surface always renders.
+ */
+export default function BusinessEventsRedirect() {
+  redirect('/realtime-hub?tab=events');
 }
