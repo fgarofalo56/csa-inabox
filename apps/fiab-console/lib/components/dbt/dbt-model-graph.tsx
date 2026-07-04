@@ -573,7 +573,7 @@ function ModelInspector({ value, allModels, sources, onChange, onDelete }: {
         </div>
       ))}
       <Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={addTest}>Add test</Button>
-      <Button icon={<Delete20Regular />} appearance="subtle" onClick={onDelete} style={{ marginTop: 4 }}>Remove model</Button>
+      <Button icon={<Delete20Regular />} appearance="subtle" onClick={onDelete} style={{ marginTop: tokens.spacingVerticalXS }}>Remove model</Button>
     </div>
   );
 }

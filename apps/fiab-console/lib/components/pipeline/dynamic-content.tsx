@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Dynamic-content / expression builder — the Loom one-for-one of the Azure
  * Data Factory / Synapse / Fabric portal's "Add dynamic content" experience
@@ -450,7 +451,7 @@ export function ExpressionField({
     // Optional enhancement: pull the last real run's outputs to fill any blanks.
     if (pipelineId && workspaceId) {
       try {
-        const r = await fetch(
+        const r = await clientFetch(
           `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/evaluate?workspaceId=${encodeURIComponent(workspaceId)}`,
           { method: 'POST' },
         );

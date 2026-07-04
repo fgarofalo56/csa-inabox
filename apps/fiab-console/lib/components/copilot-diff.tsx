@@ -210,7 +210,7 @@ export function CopilotDiff({ change, onKeep, onUndo }: CopilotDiffProps) {
       <DialogSurface className={s.surface} aria-label="Review proposed change">
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
               <Sparkle20Regular style={{ color: tokens.colorBrandForeground1 }} />
               Review proposed change
             </span>
@@ -228,7 +228,7 @@ export function CopilotDiff({ change, onKeep, onUndo }: CopilotDiffProps) {
                   </Caption1>
                 </div>
                 {change.summary && (
-                  <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+                  <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
                     {change.summary}
                   </Caption1>
                 )}

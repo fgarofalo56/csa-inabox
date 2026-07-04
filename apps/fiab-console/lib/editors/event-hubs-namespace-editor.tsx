@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * EventHubsNamespaceEditor — navigator over the deployment-pinned Azure Event
  * Hubs namespace (Microsoft.EventHub/namespaces). Real ARM via
@@ -66,7 +67,7 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
   const load = useCallback(async () => {
     setLoading(true); setGate(null);
     try {
-      const r = await fetch('/api/items/event-hubs-namespace');
+      const r = await clientFetch('/api/items/event-hubs-namespace');
       const j = await r.json();
       if (!j.ok) { setGate({ error: j.error || 'not available', hint: j.hint, missing: j.missing }); setNs(null); setHubs([]); return; }
       setNs(j.namespace || null);
@@ -80,7 +81,7 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
   const loadCgs = useCallback(async (hub: string) => {
     setCgHub(hub); setCgs(null);
     try {
-      const r = await fetch(`/api/items/event-hubs-namespace?hub=${encodeURIComponent(hub)}&consumerGroups=1`);
+      const r = await clientFetch(`/api/items/event-hubs-namespace?hub=${encodeURIComponent(hub)}&consumerGroups=1`);
       const j = await r.json();
       setCgs(j.ok ? (j.consumerGroups || []) : []);
     } catch { setCgs([]); }
@@ -90,7 +91,7 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
     if (!cName.trim()) return;
     setCBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/items/event-hubs-namespace', {
+      const r = await clientFetch('/api/items/event-hubs-namespace', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'create-hub', name: cName.trim(), partitionCount: Number(cParts) || 4, messageRetentionInDays: Number(cRetention) || 1 }),
       });
@@ -105,7 +106,7 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
   const deleteHub = useCallback(async (name: string) => {
     setMsg(null);
     try {
-      const r = await fetch(`/api/items/event-hubs-namespace?hub=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/event-hubs-namespace?hub=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || 'delete failed' }); return; }
       setMsg({ intent: 'success', text: `Deleted "${name}".` });
@@ -118,7 +119,7 @@ export function EventHubsNamespaceEditor({ item, id }: Props) {
     if (!cgHub || !cgName.trim()) return;
     setCgBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/items/event-hubs-namespace', {
+      const r = await clientFetch('/api/items/event-hubs-namespace', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'create-consumer-group', hub: cgHub, name: cgName.trim() }),
       });

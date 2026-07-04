@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * EventSchemaSetEditor — Schema-registry CRUD for Loom event streams.
  *
@@ -159,7 +160,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
   const [checkResult, setCheckResult] = useState<{ compatible: boolean; violations: string[]; checkedVia: string; live: boolean } | null>(null);
 
   useEffect(() => {
-    fetch('/api/loom/workspaces').then(r => r.json()).then(j => {
+    clientFetch('/api/loom/workspaces').then(r => r.json()).then(j => {
       if (j.ok) setWorkspaces(j.workspaces || []);
       else setWorkspaces([]);
     }).catch(() => setWorkspaces([]));
@@ -167,7 +168,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
 
   const loadList = useCallback(async (wsId: string) => {
     try {
-      const r = await fetch(`/api/items/event-schema-set?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/event-schema-set?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setSets([]); return; }
       setSets(j.schemaSets || []);
@@ -177,7 +178,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
 
   const loadDetail = useCallback(async (wsId: string, sid: string) => {
     try {
-      const r = await fetch(`/api/items/event-schema-set/${encodeURIComponent(sid)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/event-schema-set/${encodeURIComponent(sid)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setActive(null); return; }
       setActive(j.schemaSet);
@@ -194,7 +195,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
     if (!workspaceId || !cName.trim()) return;
     setCBusy(true); setCErr(null);
     try {
-      const r = await fetch(`/api/items/event-schema-set?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/event-schema-set?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: cName.trim(), description: cDesc.trim() || undefined, format: cFormat }),
       });
@@ -213,7 +214,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
       // Validate JSON shape locally so an obvious typo doesn't roundtrip.
       try { JSON.parse(regSchema); }
       catch (e: any) { setRegErr(`Schema is not valid JSON: ${e?.message || String(e)}`); setRegBusy(false); return; }
-      const r = await fetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}/versions?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}/versions?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ subject: regSubject.trim(), schema: regSchema, format: active?.format || 'AVRO' }),
       });
@@ -253,7 +254,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
         if (!dryRun) setRegErr(`Schema is not valid JSON: ${e?.message || String(e)}`);
         return;
       }
-      const r = await fetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}/check-compat?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}/check-compat?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ subject: regSubject.trim(), newSchema: regSchema, format: active?.format || 'AVRO', dryRunInProcess: dryRun }),
       });
@@ -279,7 +280,7 @@ export function EventSchemaSetEditor({ item, id }: Props) {
     if (!workspaceId || !setId) return;
     setActionErr(null);
     try {
-      const r = await fetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/event-schema-set/${encodeURIComponent(setId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ compatibility: compat }),
       });

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * VisualExportDataDialog — REPORT-BUILDER PARITY · WAVE 9
  *
@@ -142,7 +143,7 @@ export function VisualExportDataDialog({
     setBusy(true);
     setErr(null);
     try {
-      const res = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/visual-data`, {
+      const res = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/visual-data`, {
         method: 'POST',
         credentials: 'same-origin',
         headers: { 'content-type': 'application/json' },

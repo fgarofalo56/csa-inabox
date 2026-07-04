@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * OneLake catalog — Storage tab (item-size reporting).
  *
@@ -297,7 +298,7 @@ export function StorageView({ workspaceId }: { workspaceId?: string | null }) {
     setError(null);
     try {
       const qs = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
-      const r = await fetch(`/api/onelake/storage${qs}`, { cache: 'no-store' });
+      const r = await clientFetch(`/api/onelake/storage${qs}`, { cache: 'no-store' });
       const j: StorageResponse = await r.json().catch(() => ({ ok: false }));
       setData(j);
       if (!j.ok && !j.code) setError(j.error || `Failed to load storage usage (HTTP ${r.status}).`);

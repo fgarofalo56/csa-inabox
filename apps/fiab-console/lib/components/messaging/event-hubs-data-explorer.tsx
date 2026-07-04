@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * EventHubsDataExplorer — the Send + View (peek) events surface for the Event
  * Hubs namespace editor. Wires the EXISTING data-plane BFF route
@@ -91,7 +92,7 @@ export function EventHubsDataExplorer({ hubs }: Props) {
     try { payload = JSON.parse(raw); } catch { /* send verbatim string */ }
     setSending(true); setSendMsg(null);
     try {
-      const r = await fetch('/api/eventhubs/data-explorer', {
+      const r = await clientFetch('/api/eventhubs/data-explorer', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ op: 'send', hub, events: [{ body: payload }], partitionKey: partitionKey.trim() || undefined }),
       });
@@ -107,7 +108,7 @@ export function EventHubsDataExplorer({ hubs }: Props) {
     if (!hub) { setPeekError('Select an event hub first.'); return; }
     setPeeking(true); setPeekGate(null); setPeekError(null); setEvents(null);
     try {
-      const r = await fetch('/api/eventhubs/data-explorer', {
+      const r = await clientFetch('/api/eventhubs/data-explorer', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           op: 'peek', hub,

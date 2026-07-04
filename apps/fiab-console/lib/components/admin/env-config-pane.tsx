@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Runtime configuration pane — /admin/env-config.
  *
@@ -67,10 +68,10 @@ const card: React.CSSProperties = {
   borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
   marginBottom: tokens.spacingVerticalXL, boxShadow: tokens.shadow4, minWidth: 0,
 };
-const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: 14, flexWrap: 'wrap' };
+const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalL, flexWrap: 'wrap' };
 const codeBox: React.CSSProperties = {
-  marginTop: 6, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground4,
-  color: tokens.colorNeutralForeground1, overflow: 'auto', maxWidth: '100%', maxHeight: 360, fontSize: 12,
+  marginTop: tokens.spacingVerticalSNudge, padding: tokens.spacingVerticalS, borderRadius: tokens.borderRadiusMedium, background: tokens.colorNeutralBackground4,
+  color: tokens.colorNeutralForeground1, overflow: 'auto', maxWidth: '100%', maxHeight: 360, fontSize: tokens.fontSizeBase200,
   fontFamily: 'Consolas, "Cascadia Code", monospace', whiteSpace: 'pre', lineHeight: 1.5,
 };
 
@@ -91,7 +92,7 @@ export function EnvConfigPane() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setForbidden(null);
     try {
-      const r = await fetch('/api/admin/env-config', { cache: 'no-store' });
+      const r = await clientFetch('/api/admin/env-config', { cache: 'no-store' });
       const j = await r.json();
       if (r.status === 401) { setForbidden('Sign in as a tenant admin to manage runtime configuration.'); return; }
       if (r.status === 403) { setForbidden(j?.remediation || 'Access denied — tenant admin required.'); return; }
@@ -141,7 +142,7 @@ export function EnvConfigPane() {
     const values: Record<string, string> = {};
     for (const k of dirtyKeys) values[k] = edits[k];
     try {
-      const r = await fetch('/api/admin/env-config', {
+      const r = await clientFetch('/api/admin/env-config', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ values }),
       });
@@ -154,7 +155,7 @@ export function EnvConfigPane() {
   }, [dirtyKeys, edits, load]);
 
   if (loading && !data) {
-    return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner label="Loading runtime configuration…" /></div>;
+    return <div style={{ padding: tokens.spacingVerticalXXXL, display: 'flex', justifyContent: 'center' }}><Spinner label="Loading runtime configuration…" /></div>;
   }
   if (forbidden) {
     return (
@@ -191,11 +192,11 @@ export function EnvConfigPane() {
     <div>
       {/* Intro + actions */}
       <div style={card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' }}>
           <Settings24Regular style={{ color: tokens.colorBrandForeground1 }} />
           <div style={{ flex: 1, minWidth: 240 }}>
             <Subtitle2>Deployment runtime configuration</Subtitle2>
-            <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginTop: 2 }}>
+            <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginTop: tokens.spacingVerticalXXS }}>
               View and set the <strong>{data.app}</strong> {data.platform === 'aks' ? 'Deployment' : 'container-app'} environment
               variables from inside Loom — no Azure portal. Saving applies a real{' '}
               {data.platform === 'aks'
@@ -204,7 +205,7 @@ export function EnvConfigPane() {
               Cloud boundary: <strong>{data.cloud}</strong>
               {data.platform === 'aks' ? ' · platform: AKS' : ' · platform: Container Apps'}.
             </Body1>
-            <div style={{ display: 'flex', gap: 8, marginTop: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalMNudge, flexWrap: 'wrap', alignItems: 'center' }}>
               <Badge appearance="tint" size="medium"
                 color={coverage.set === coverage.total ? 'success' : 'informative'}
                 icon={<CheckmarkCircle24Filled />}>
@@ -227,19 +228,19 @@ export function EnvConfigPane() {
               )}
             </div>
             {/* Coverage progress — at-a-glance completeness of the editable catalog. */}
-            <div style={{ marginTop: 12, maxWidth: 420 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM, maxWidth: 420 }}>
               <ProgressBar
                 value={coveragePct} thickness="large"
                 color={coverage.missingCritical > 0 ? 'warning' : coverage.set === coverage.total ? 'success' : 'brand'}
                 aria-label={`${coverage.set} of ${coverage.total} runtime variables configured (set, derived, or satisfied)`}
               />
-              <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: 4 }}>
+              <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS }}>
                 {Math.round(coveragePct * 100)}% of editable runtime variables are configured
                 (set, bicep-derived, or satisfied by an alternative backend)
               </Caption1>
             </div>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
             <Button icon={<ArrowSync24Regular />} appearance="outline" onClick={load} disabled={loading}>Re-check</Button>
             {dirtyKeys.length > 0 && (
               <Button icon={<ArrowResetRegular />} appearance="subtle" onClick={() => setEdits({})} disabled={saving}>
@@ -256,7 +257,7 @@ export function EnvConfigPane() {
 
       {/* Write gate (platform-aware: Container Apps on Commercial/GCC, AKS on GCC-High/IL5/DoD) */}
       {!data.acaConfigured && (
-        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>Write path not configured</MessageBarTitle>
             {data.writeError || data.acaError} The table below is read-only until the{' '}
@@ -267,16 +268,16 @@ export function EnvConfigPane() {
 
       {/* Drift banner */}
       {data.drift.length > 0 && (
-        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>Configuration drift ({data.drift.length})</MessageBarTitle>
             The desired value saved in the Loom store differs from what the running revision sees.
             Either a new revision is still rolling out, or a redeploy reverted the change. Fold the
             change into the loom-console env array in modules/admin-plane/main.bicep to make it permanent.
-            <div style={{ marginTop: 8, display: 'grid', gap: 4 }}>
+            <div style={{ marginTop: tokens.spacingVerticalS, display: 'grid', gap: tokens.spacingHorizontalXS }}>
               {data.drift.map((d) => (
-                <div key={d.key} style={{ display: 'flex', alignItems: 'baseline', gap: 8, flexWrap: 'wrap' }}>
-                  <Body1Strong style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{d.key}</Body1Strong>
+                <div key={d.key} style={{ display: 'flex', alignItems: 'baseline', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+                  <Body1Strong style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}>{d.key}</Body1Strong>
                   <Caption1 style={{ fontFamily: 'Consolas, monospace', color: tokens.colorPaletteGreenForeground1, wordBreak: 'break-all' }}>
                     desired: {d.desired}
                   </Caption1>
@@ -293,12 +294,12 @@ export function EnvConfigPane() {
 
       {/* Save result + reconcile artifacts */}
       {result?.ok && (
-        <MessageBar intent="success" style={{ marginBottom: 16 }}>
+        <MessageBar intent="success" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>{result.changedCount} change(s) applied</MessageBarTitle>
             {result.driftWarning}
             {Array.isArray(result.rejected) && result.rejected.length > 0 && (
-              <div style={{ marginTop: 6 }}>Rejected: {result.rejected.join(', ')}</div>
+              <div style={{ marginTop: tokens.spacingVerticalSNudge }}>Rejected: {result.rejected.join(', ')}</div>
             )}
           </MessageBarBody>
         </MessageBar>
@@ -309,11 +310,11 @@ export function EnvConfigPane() {
             <CheckmarkCircle24Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />
             <Subtitle2>Reconcile into infrastructure-as-code</Subtitle2>
           </div>
-          <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginBottom: 10 }}>
+          <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginBottom: tokens.spacingVerticalMNudge }}>
             The change is live now via a new revision, but the next bicep deployment will revert it
             unless you fold it in. Copy these into your IaC / pipeline.
           </Body1>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS }}>
             <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>bicep — loom-console env entries (modules/admin-plane/main.bicep)</Caption1>
             <Button size="small" appearance="outline"
               icon={copied === 'bicep' ? <Checkmark16Regular /> : <Copy16Regular />}
@@ -322,7 +323,7 @@ export function EnvConfigPane() {
             </Button>
           </div>
           <pre style={codeBox}>{result.sync.bicepEnvSnippet}</pre>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginTop: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalM }}>
             <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Az CLI — apply directly (equivalent)</Caption1>
             <Button size="small" appearance="outline"
               icon={copied === 'cli' ? <Checkmark16Regular /> : <Copy16Regular />}
@@ -334,7 +335,7 @@ export function EnvConfigPane() {
         </div>
       )}
       {error && (
-        <MessageBar intent="error" style={{ marginBottom: 16 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody><MessageBarTitle>Error</MessageBarTitle> {error}</MessageBarBody>
         </MessageBar>
       )}
@@ -342,8 +343,8 @@ export function EnvConfigPane() {
       {/* Filter toolbar — search + quick scopes over the editable catalog. */}
       {data.editable.length > 0 && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
-          marginBottom: 16, padding: '12px 16px',
+          display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalMNudge, flexWrap: 'wrap',
+          marginBottom: tokens.spacingVerticalL, padding: '12px 16px',
           border: `1px solid ${tokens.colorNeutralStroke2}`,
           borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
           boxShadow: tokens.shadow2,
@@ -395,14 +396,14 @@ export function EnvConfigPane() {
               <div key={e.key}>
                 {i > 0 && <Divider style={{ margin: '12px 0' }} />}
                 <div style={{
-                  display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap',
+                  display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start', flexWrap: 'wrap',
                   ...(modified ? {
                     margin: '-6px -10px', padding: '6px 10px', borderRadius: tokens.borderRadiusMedium,
                     backgroundColor: tokens.colorNeutralBackground1Selected,
                   } : null),
                 }}>
                   <div style={{ flex: 1, minWidth: 220 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                       <Body1Strong style={{ fontFamily: 'Consolas, monospace' }}>{e.key}</Body1Strong>
                       <Badge appearance="outline" size="small"
                         color={e.severity === 'critical' ? 'danger' : e.severity === 'recommended' ? 'warning' : 'informative'}>
@@ -419,9 +420,9 @@ export function EnvConfigPane() {
                       {modified && <Badge appearance="filled" size="small" color="brand" icon={<Edit16Filled />}>modified</Badge>}
                       {disabledIl5 && <Badge appearance="tint" size="small" color="danger">restricted in {data.cloud}</Badge>}
                     </div>
-                    <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginTop: 2 }}>{e.label}</Caption1>
+                    <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginTop: tokens.spacingVerticalXXS }}>{e.label}</Caption1>
                     {!e.secret && cur?.set && (
-                      <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: 2, fontFamily: 'Consolas, monospace', wordBreak: 'break-all' }}>
+                      <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXXS, fontFamily: 'Consolas, monospace', wordBreak: 'break-all' }}>
                         current: {cur.value}
                       </Caption1>
                     )}
@@ -429,22 +430,22 @@ export function EnvConfigPane() {
                         provisions this var (the "how to fill it" acceptance row).
                         Suppressed when an alias sibling already satisfies it. */}
                     {!cur?.set && !(cur?.status === 'satisfied' || cur?.satisfiedByAlias) && (e.provisionedBy || e.role) && (
-                      <div style={{ marginTop: 4, display: 'grid', gap: 2 }}>
+                      <div style={{ marginTop: tokens.spacingVerticalXS, display: 'grid', gap: tokens.spacingHorizontalXXS }}>
                         {e.provisionedBy && (
-                          <Caption1 style={{ display: 'flex', alignItems: 'flex-start', gap: 4, color: tokens.colorNeutralForeground3 }}>
-                            <Wrench16Regular style={{ flexShrink: 0, marginTop: 1, color: tokens.colorBrandForeground2 }} />
+                          <Caption1 style={{ display: 'flex', alignItems: 'flex-start', gap: tokens.spacingHorizontalXS, color: tokens.colorNeutralForeground3 }}>
+                            <Wrench16Regular style={{ flexShrink: 0, marginTop: tokens.spacingVerticalXXS, color: tokens.colorBrandForeground2 }} />
                             <span>{e.derived ? 'Derived by' : 'Provisioned by'}: {e.provisionedBy}</span>
                           </Caption1>
                         )}
                         {e.role && (
-                          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, paddingLeft: 20 }}>
+                          <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, paddingLeft: tokens.spacingHorizontalXL }}>
                             Role / action: {e.role}
                           </Caption1>
                         )}
                       </div>
                     )}
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 280, flex: 1, maxWidth: '100%' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, minWidth: 280, flex: 1, maxWidth: '100%' }}>
                     <Input
                       style={{ width: 280, maxWidth: '100%', flex: 1, minWidth: 0 }}
                       aria-label={`Value for ${e.key}`}
@@ -478,7 +479,7 @@ export function EnvConfigPane() {
             <Settings24Regular style={{ color: tokens.colorNeutralForeground3 }} />
             <Subtitle2>No variables match the current filter</Subtitle2>
           </div>
-          <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginBottom: 12 }}>
+          <Body1 style={{ display: 'block', color: tokens.colorNeutralForeground2, marginBottom: tokens.spacingVerticalM }}>
             None of the {data.editable.length} editable runtime variables match your search
             {unsetOnly ? ' · unset only' : ''}{criticalOnly ? ' · critical only' : ''}.
           </Body1>

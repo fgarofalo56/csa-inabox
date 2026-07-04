@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ThreadMenu — the universal "Weave" action on every Loom editor.
  *
@@ -62,7 +63,7 @@ function ThreadFieldControl({
     async function load() {
       try {
         if (field.kind === 'loom-item' && field.itemTypes?.length) {
-          const r = await fetch(`/api/items/by-type?types=${encodeURIComponent(field.itemTypes.join(','))}`);
+          const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(field.itemTypes.join(','))}`);
           const j = await r.json();
           const items: LoomItemOpt[] = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
           const base = items.map((it) => ({ value: it.id, label: it.name }));

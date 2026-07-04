@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Loom Health — self-audit / self-review pane.
  *
@@ -56,7 +57,7 @@ const card: React.CSSProperties = {
   borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
   marginBottom: tokens.spacingVerticalXL, boxShadow: tokens.shadow4,
 };
-const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 };
+const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalMNudge, marginBottom: tokens.spacingVerticalL };
 
 function StatusIcon({ s }: { s: AuditStatus }) {
   if (s === 'pass') return <CheckmarkCircle24Filled style={{ color: tokens.colorPaletteGreenForeground1 }} />;
@@ -90,7 +91,7 @@ export function HealthPane() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/admin/self-audit', { cache: 'no-store' });
+      const r = await clientFetch('/api/admin/self-audit', { cache: 'no-store' });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'audit failed'); return; }
       setReport(j.report); setIsAdmin(!!j.isAdmin);
@@ -103,7 +104,7 @@ export function HealthPane() {
   const heal = useCallback(async (fixId: string, dryRun = false) => {
     setHealing(fixId); setHealMsg(null);
     try {
-      const r = await fetch('/api/admin/self-audit', {
+      const r = await clientFetch('/api/admin/self-audit', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fixId, dryRun }),
       });
@@ -125,7 +126,7 @@ export function HealthPane() {
   const dryRunDemo = useCallback(() => heal('ensure-cosmos', true), [heal]);
 
   if (loading && !report) {
-    return <div style={{ padding: 40, display: 'flex', justifyContent: 'center' }}><Spinner label="Running self-audit…" /></div>;
+    return <div style={{ padding: tokens.spacingVerticalXXXL, display: 'flex', justifyContent: 'center' }}><Spinner label="Running self-audit…" /></div>;
   }
   if (error) {
     return (
@@ -145,19 +146,19 @@ export function HealthPane() {
     <div>
       {/* Scorecard */}
       <div style={card}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 24, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXXL, flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 120 }}>
             <div style={{ fontSize: 48, fontWeight: 700, lineHeight: 1, color: scoreColor(report.score) }}>{report.score}</div>
             <Caption1>Health score</Caption1>
           </div>
           <Divider vertical style={{ height: 64 }} />
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', flex: 1 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalMNudge, flexWrap: 'wrap', flex: 1 }}>
             <Badge appearance="filled" color="success" size="large">{report.summary.pass} passing</Badge>
             <Badge appearance="filled" color="warning" size="large">{report.summary.warn} warnings</Badge>
             <Badge appearance="filled" color="danger" size="large">{report.summary.fail} failing</Badge>
             <Badge appearance="outline" size="large">{report.summary.total} checks</Badge>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
             <Button icon={<ArrowSync24Regular />} appearance="outline" onClick={load} disabled={loading}>Re-run</Button>
             <Button
               icon={<Wrench24Regular />} appearance="outline"
@@ -173,18 +174,18 @@ export function HealthPane() {
             )}
           </div>
         </div>
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: tokens.spacingVerticalM }}>
           <Caption1>Last run {new Date(report.generatedAt).toLocaleString()} · agent-loom can run this and apply the same fixes conversationally from Copilot.</Caption1>
         </div>
       </div>
 
       {healMsg && (
-        <MessageBar intent="info" style={{ marginBottom: 16 }}>
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody><MessageBarTitle>Healer</MessageBarTitle> {healMsg}</MessageBarBody>
         </MessageBar>
       )}
       {!isAdmin && (
-        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>Read-only</MessageBarTitle>
             You can view the audit, but only a tenant admin can run the healer. Set LOOM_TENANT_ADMIN_OID / LOOM_TENANT_ADMIN_GROUP_ID to your principal.
@@ -202,10 +203,10 @@ export function HealthPane() {
           {items.map((r, i) => (
             <div key={r.id}>
               {i > 0 && <Divider style={{ margin: '12px 0' }} />}
-              <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-                <div style={{ marginTop: 2 }}><StatusIcon s={r.status} /></div>
+              <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'flex-start' }}>
+                <div style={{ marginTop: tokens.spacingVerticalXXS }}><StatusIcon s={r.status} /></div>
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                     <Body1Strong>{r.title}</Body1Strong>
                     <Badge appearance="outline" size="small"
                       color={r.severity === 'critical' ? 'danger' : r.severity === 'recommended' ? 'warning' : 'informative'}>
@@ -214,29 +215,29 @@ export function HealthPane() {
                     {r.fixId && <Badge appearance="tint" size="small" color="brand">auto-fixable</Badge>}
                     {r.redeploy && r.status !== 'pass' && <Badge appearance="tint" size="small">needs redeploy / grant</Badge>}
                   </div>
-                  <Body1 style={{ display: 'block', marginTop: 2, color: tokens.colorNeutralForeground2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.detail}</Body1>
+                  <Body1 style={{ display: 'block', marginTop: tokens.spacingVerticalXXS, color: tokens.colorNeutralForeground2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.detail}</Body1>
                   {r.status !== 'pass' && r.remediation && (
-                    <div style={{ marginTop: 8, padding: 10, borderRadius: 6, background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
+                    <div style={{ marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalMNudge, borderRadius: 6, background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}` }}>
                       <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Remediation</Caption1>
-                      <Body1 style={{ display: 'block', marginTop: 2, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.remediation}</Body1>
+                      <Body1 style={{ display: 'block', marginTop: tokens.spacingVerticalXXS, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.remediation}</Body1>
                       {r.docs && (
                         <a href={r.docs} target={r.docs.startsWith('http') ? '_blank' : undefined} rel="noreferrer"
-                          style={{ color: tokens.colorBrandForeground1, fontSize: 12 }}>Open reference →</a>
+                          style={{ color: tokens.colorBrandForeground1, fontSize: tokens.fontSizeBase200 }}>Open reference →</a>
                       )}
                     </div>
                   )}
                   {r.status !== 'pass' && (r.portalSteps?.length || r.fixScript) && (
-                    <div style={{ marginTop: 8 }}>
+                    <div style={{ marginTop: tokens.spacingVerticalS }}>
                       <Button size="small" appearance="subtle"
                         onClick={() => setOpenFix((o) => ({ ...o, [r.id]: !o[r.id] }))}>
                         {openFix[r.id] ? '▾ Hide fix instructions' : '▸ How to fix (portal + PowerShell)'}
                       </Button>
                       {openFix[r.id] && (
-                        <div style={{ marginTop: 8, padding: 12, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground2 }}>
+                        <div style={{ marginTop: tokens.spacingVerticalS, padding: tokens.spacingVerticalM, borderRadius: 6, border: `1px solid ${tokens.colorNeutralStroke2}`, background: tokens.colorNeutralBackground2 }}>
                           {r.portalSteps?.length ? (
                             <>
                               <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Fix via the Azure portal</Caption1>
-                              <ol style={{ margin: '6px 0 12px', paddingLeft: 20, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                              <ol style={{ margin: '6px 0 12px', paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS }}>
                                 {r.portalSteps.map((step, si) => (
                                   <li key={si}><Body1>{step}</Body1></li>
                                 ))}
@@ -245,14 +246,14 @@ export function HealthPane() {
                           ) : null}
                           {r.fixScript ? (
                             <>
-                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS }}>
                                 <Caption1 style={{ color: tokens.colorNeutralForeground2 }}>Fix via PowerShell (Az CLI — copy &amp; run)</Caption1>
                                 <Button size="small" appearance="outline"
                                   onClick={() => copyScript(r.id, r.fixScript!)}>
                                   {copiedId === r.id ? 'Copied ✓' : 'Copy script'}
                                 </Button>
                               </div>
-                              <pre style={{ marginTop: 6, padding: 10, borderRadius: 6, background: tokens.colorNeutralBackground4, color: tokens.colorNeutralForeground1, overflow: 'auto', maxWidth: '100%', maxHeight: 320, fontSize: 12, fontFamily: 'Consolas, "Cascadia Code", monospace', whiteSpace: 'pre', lineHeight: 1.5 }}>
+                              <pre style={{ marginTop: tokens.spacingVerticalSNudge, padding: tokens.spacingVerticalMNudge, borderRadius: 6, background: tokens.colorNeutralBackground4, color: tokens.colorNeutralForeground1, overflow: 'auto', maxWidth: '100%', maxHeight: 320, fontSize: tokens.fontSizeBase200, fontFamily: 'Consolas, "Cascadia Code", monospace', whiteSpace: 'pre', lineHeight: 1.5 }}>
                                 {r.fixScript}
                               </pre>
                               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
@@ -266,7 +267,7 @@ export function HealthPane() {
                   )}
                 </div>
                 {r.status !== 'pass' && r.fixId && (
-                  <div style={{ display: 'flex', gap: 6 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalSNudge }}>
                     <Button size="small" appearance="outline" icon={<Wrench24Regular />}
                       disabled={healing === r.fixId}
                       title="Preview this fix — no change is applied"

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Power BI governance panels — the parity surfaces that close the auditor's top
  * gaps (docs/fiab/parity/powerbi-workspace.md §A5, §B12-15, §H5):
@@ -82,7 +83,7 @@ export function ManageAccessPanel({ workspaceId }: { workspaceId: string }) {
     if (!workspaceId) { setUsers([]); return; }
     setLoading(true); setErr(null); setHint(null);
     try {
-      const body = await fetch(`/api/powerbi/access?workspaceId=${encodeURIComponent(workspaceId)}`).then(readJson);
+      const body = await clientFetch(`/api/powerbi/access?workspaceId=${encodeURIComponent(workspaceId)}`).then(readJson);
       if (applyGate(body)) { setLoading(false); return; }
       setGate(null);
       if (!body.ok) { setErr(body.error || 'failed to load access'); setHint(body.hint || null); setUsers([]); return; }
@@ -97,7 +98,7 @@ export function ManageAccessPanel({ workspaceId }: { workspaceId: string }) {
     if (!workspaceId || !identifier.trim()) return;
     setBusy(true); setMsg(null);
     try {
-      const body = await fetch('/api/powerbi/access', {
+      const body = await clientFetch('/api/powerbi/access', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, identifier: identifier.trim(), role, principalType }),
       }).then(readJson);
@@ -115,7 +116,7 @@ export function ManageAccessPanel({ workspaceId }: { workspaceId: string }) {
     if (!workspaceId || !id) return;
     setBusy(true); setMsg(null);
     try {
-      const body = await fetch('/api/powerbi/access', {
+      const body = await clientFetch('/api/powerbi/access', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, identifier: id, role: newRole, principalType: u.principalType || 'User' }),
       }).then(readJson);
@@ -132,7 +133,7 @@ export function ManageAccessPanel({ workspaceId }: { workspaceId: string }) {
     if (!workspaceId || !id) return;
     setBusy(true); setMsg(null);
     try {
-      const body = await fetch(`/api/powerbi/access?workspaceId=${encodeURIComponent(workspaceId)}&identifier=${encodeURIComponent(id)}`, { method: 'DELETE' }).then(readJson);
+      const body = await clientFetch(`/api/powerbi/access?workspaceId=${encodeURIComponent(workspaceId)}&identifier=${encodeURIComponent(id)}`, { method: 'DELETE' }).then(readJson);
       if (applyGate(body)) { setBusy(false); return; }
       if (!body.ok) { setMsg({ ok: false, text: body.error || 'remove failed' }); return; }
       setMsg({ ok: true, text: `Removed ${id}.` });
@@ -251,7 +252,7 @@ export function EndorsementControl({
     if (!workspaceId || !itemId) return;
     setLoading(true); setMsg(null);
     try {
-      const body = await fetch(`/api/powerbi/endorsement?workspaceId=${encodeURIComponent(workspaceId)}&itemId=${encodeURIComponent(itemId)}`).then(readJson);
+      const body = await clientFetch(`/api/powerbi/endorsement?workspaceId=${encodeURIComponent(workspaceId)}&itemId=${encodeURIComponent(itemId)}`).then(readJson);
       if (body.ok) { setStatus(body.endorsement?.endorsementStatus || 'None'); setCertifiedBy(body.endorsement?.certifiedBy || ''); }
       else setMsg({ ok: false, text: body.error || 'failed to read endorsement', hint: body.hint });
     } catch (e: any) { setMsg({ ok: false, text: e?.message || String(e) }); }
@@ -264,7 +265,7 @@ export function EndorsementControl({
     if (!workspaceId || !itemId) return;
     setBusy(true); setMsg(null);
     try {
-      const body = await fetch('/api/powerbi/endorsement', {
+      const body = await clientFetch('/api/powerbi/endorsement', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, itemId, itemType, endorsement: next, certifiedBy: certifierInput.trim() || undefined }),
       }).then(readJson);
@@ -353,7 +354,7 @@ export function GatewayDatasourcesPanel({ workspaceId, datasetId }: { workspaceI
     if (!workspaceId || !datasetId) return;
     setLoading(true); setErr(null); setHint(null);
     try {
-      const body = await fetch(`/api/powerbi/datasources?workspaceId=${encodeURIComponent(workspaceId)}&datasetId=${encodeURIComponent(datasetId)}`).then(readJson);
+      const body = await clientFetch(`/api/powerbi/datasources?workspaceId=${encodeURIComponent(workspaceId)}&datasetId=${encodeURIComponent(datasetId)}`).then(readJson);
       if (applyGate(body)) { setLoading(false); return; }
       setGate(null);
       if (!body.ok) { setErr(body.error || 'failed to load data sources'); setHint(body.hint || null); return; }
@@ -371,7 +372,7 @@ export function GatewayDatasourcesPanel({ workspaceId, datasetId }: { workspaceI
     if (!workspaceId || !datasetId || !gatewayId) return;
     setBusy(true); setMsg(null);
     try {
-      const body = await fetch('/api/powerbi/datasources', {
+      const body = await clientFetch('/api/powerbi/datasources', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, datasetId, action: 'bind', gatewayObjectId: gatewayId }),
       }).then(readJson);
@@ -444,7 +445,7 @@ export function GatewayDatasourcesPanel({ workspaceId, datasetId }: { workspaceI
       {renderDs(datasources, 'Cloud data sources')}
       {renderDs(bound, 'Bound gateway data sources')}
 
-      <Subtitle2 style={{ marginTop: 8 }}>Bind to gateway</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Bind to gateway</Subtitle2>
       <div className={s.row}>
         <Field label="Gateway (DiscoverGateways)" style={{ minWidth: 300 }}>
           <Select value={gatewayId} onChange={(_, d) => setGatewayId(d.value)}>

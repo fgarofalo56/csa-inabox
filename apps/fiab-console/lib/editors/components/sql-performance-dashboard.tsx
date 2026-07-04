@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SqlPerformanceDashboard — the Azure SQL Database "Performance" surface, a
  * one-for-one Loom build of the Azure portal **Query Performance Insight** /
@@ -165,7 +166,7 @@ function fmtValue(v: number, metric: Metric): string {
 }
 
 async function postPerf(id: string, body: Record<string, unknown>): Promise<any> {
-  const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/performance`, {
+  const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/performance`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),

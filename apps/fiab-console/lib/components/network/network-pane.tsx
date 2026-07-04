@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Network & Private DNS pane — the developer-facing view of CSA Loom's
  * private-endpoint topology. Reads live from ARM (/api/network/private-endpoints)
@@ -60,16 +61,16 @@ interface ApiResp {
 }
 
 const card: React.CSSProperties = {
-  padding: 20, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  padding: tokens.spacingVerticalXL, border: `1px solid ${tokens.colorNeutralStroke2}`,
   borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
-  marginBottom: 20, boxShadow: tokens.shadow4,
+  marginBottom: tokens.spacingVerticalXL, boxShadow: tokens.shadow4,
 };
-const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap', minWidth: 0 };
+const head: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalMNudge, marginBottom: tokens.spacingVerticalL, flexWrap: 'wrap', minWidth: 0 };
 const codeBox: React.CSSProperties = {
-  fontFamily: 'Consolas, monospace', fontSize: 12, whiteSpace: 'pre', overflow: 'auto',
+  fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre', overflow: 'auto',
   maxHeight: 320, maxWidth: '100%',
   background: tokens.colorNeutralBackground3, border: `1px solid ${tokens.colorNeutralStroke2}`,
-  borderRadius: 6, padding: 12, margin: 0,
+  borderRadius: 6, padding: tokens.spacingVerticalM, margin: tokens.spacingVerticalNone,
 };
 
 function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) {
@@ -132,7 +133,7 @@ function VnetGatewayCard() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/network/vnet-data-gateway');
+        const r = await clientFetch('/api/network/vnet-data-gateway');
         const j = (await r.json()) as GwApiResp;
         if (alive) setGw(j);
       } catch (e: any) {
@@ -151,7 +152,7 @@ function VnetGatewayCard() {
         <Badge appearance="outline" color="brand" style={{ marginLeft: 'auto' }}>Fabric tenant capability</Badge>
       </div>
 
-      <MessageBar intent="info" style={{ marginBottom: 12 }}>
+      <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}>
         <MessageBarBody>
           <MessageBarTitle>Tenant-managed — Loom does not provision this.</MessageBarTitle>
           A VNet data gateway is enabled by a <strong>Fabric administrator</strong> (Power Platform admin
@@ -175,7 +176,7 @@ function VnetGatewayCard() {
 
       {!gwLoading && r && (
         <>
-          <Body1 style={{ display: 'block', marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
+          <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalMNudge, color: tokens.colorNeutralForeground3 }}>
             Cloud boundary: <Body1Strong>{r.cloud}</Body1Strong>
             {!r.capabilityAvailable && ' — VNet data gateways are not offered in this sovereign cloud.'}
           </Body1>
@@ -210,7 +211,7 @@ function VnetGatewayCard() {
                   <TableCell>
                     <Caption1>{p.detail}</Caption1>
                     {p.docUrl && (
-                      <Caption1 block style={{ marginTop: 2 }}>
+                      <Caption1 block style={{ marginTop: tokens.spacingVerticalXXS }}>
                         <Link href={p.docUrl} target="_blank" rel="noreferrer">Microsoft Learn</Link>
                       </Caption1>
                     )}
@@ -220,7 +221,7 @@ function VnetGatewayCard() {
             </TableBody>
           </Table>
           {r.delegatedSubnets.length > 0 && (
-            <Body1 style={{ display: 'block', marginTop: 10 }}>
+            <Body1 style={{ display: 'block', marginTop: tokens.spacingVerticalMNudge }}>
               Delegated subnet(s) ready for a gateway:{' '}
               <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{r.delegatedSubnets.map((s) => `${s.vnet}/${s.subnet}`).join(', ')}</code>
             </Body1>
@@ -255,7 +256,7 @@ function VpnAccessCard() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/network/vpn-profile');
+        const r = await clientFetch('/api/network/vpn-profile');
         const j = await r.json();
         if (alive) setGw(j?.gateway ?? { found: false, ready: false });
       } catch { if (alive) setGw({ found: false, ready: false }); }
@@ -267,7 +268,7 @@ function VpnAccessCard() {
   const download = useCallback(async () => {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/network/vpn-profile', { method: 'POST' });
+      const r = await clientFetch('/api/network/vpn-profile', { method: 'POST' });
       const j = await r.json();
       if (j?.ok && j.profileUrl) {
         window.open(j.profileUrl, '_blank', 'noopener');
@@ -291,7 +292,7 @@ function VpnAccessCard() {
         )}
       </div>
 
-      <Body1 style={{ marginBottom: 12 }}>
+      <Body1 style={{ marginBottom: tokens.spacingVerticalM }}>
         Connect from your workstation to reach the private-by-default Azure backends — private endpoints,
         the Internal API Management gateway, and firewall-protected services (Databricks, AI Search, Synapse,
         Cosmos, Key Vault, Storage). Sign-in is your Microsoft Entra ID (no certificates).
@@ -320,7 +321,7 @@ function VpnAccessCard() {
 
       {!loading && gw?.found && (
         <>
-          <Table size="small" style={{ marginBottom: 12 }}>
+          <Table size="small" style={{ marginBottom: tokens.spacingVerticalM }}>
             <TableBody>
               <TableRow><TableCell><Body1Strong>Gateway</Body1Strong></TableCell><TableCell>{gw.name} {gw.publicIp ? `· ${gw.publicIp}` : ''}</TableCell></TableRow>
               <TableRow><TableCell><Body1Strong>Auth · protocol</Body1Strong></TableCell><TableCell>{(gw.vpnAuthTypes || []).join(', ') || 'AAD'} · {(gw.vpnClientProtocols || []).join(', ') || 'OpenVPN'}</TableCell></TableRow>
@@ -332,7 +333,7 @@ function VpnAccessCard() {
           <Button appearance="primary" icon={<PlugConnected24Regular />} disabled={!gw.ready || busy} onClick={download}>
             {busy ? 'Generating…' : 'Download VPN client config'}
           </Button>
-          {msg && <MessageBar intent="info" style={{ marginTop: 10 }}><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
+          {msg && <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalMNudge }}><MessageBarBody>{msg}</MessageBarBody></MessageBar>}
 
           <Divider style={{ margin: '14px 0' }} />
           <Body1Strong>Setup (one time)</Body1Strong>
@@ -359,7 +360,7 @@ export function NetworkPane() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/network/private-endpoints');
+        const r = await clientFetch('/api/network/private-endpoints');
         const j = (await r.json()) as ApiResp;
         if (alive) setData(j);
       } catch (e: any) {
@@ -380,7 +381,7 @@ export function NetworkPane() {
   return (
     <div>
       {/* Posture banner */}
-      <MessageBar intent="info" style={{ marginBottom: 16 }}>
+      <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalL }}>
         <MessageBarBody>
           <MessageBarTitle>Private by default.</MessageBarTitle>
           Loom backing services run with <strong>public network access disabled</strong>. The console reaches
@@ -402,7 +403,7 @@ export function NetworkPane() {
           <Subtitle2>CSA Loom network topology</Subtitle2>
           <Badge appearance="tint" color="brand" style={{ marginLeft: 'auto' }}>Azure Resource Graph</Badge>
         </div>
-        <Body1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+        <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
           A live resource-graph map of the whole network estate across the readable subscription(s):
           virtual networks &rarr; subnets &rarr; the private endpoints, NSGs, Azure Firewalls, Bastion hosts,
           Container Apps environments, application gateways and load balancers attached to each — plus
@@ -414,7 +415,7 @@ export function NetworkPane() {
       {loading && <Spinner label="Discovering private endpoints…" />}
 
       {!loading && data && !data.ok && (
-        <MessageBar intent="warning" style={{ marginBottom: 16 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>Couldn’t read private endpoints</MessageBarTitle>
             {data.error}{data.hint ? ` — ${data.hint}` : ''}
@@ -452,9 +453,9 @@ export function NetworkPane() {
                       <TableCell>{i === 0 ? (pe.connectedResourceName || pe.name) : ''}</TableCell>
                       <TableCell>{i === 0 ? (pe.loomDomain ? <Badge appearance="tint" color="brand">{pe.loomDomain}</Badge> : <span style={{ color: tokens.colorNeutralForeground3 }}>—</span>) : ''}</TableCell>
                       <TableCell>{i === 0 ? pe.groupIds.join(', ') : ''}</TableCell>
-                      <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{rec.fqdn}</TableCell>
-                      <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{rec.ips.join(', ') || '—'}</TableCell>
-                      <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 12 }}>{rec.zone || '—'}</TableCell>
+                      <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}>{rec.fqdn}</TableCell>
+                      <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}>{rec.ips.join(', ') || '—'}</TableCell>
+                      <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 }}>{rec.zone || '—'}</TableCell>
                       <TableCell>{i === 0 ? <Badge appearance="tint" color={pe.state === 'Approved' || pe.state === 'Succeeded' ? 'success' : 'warning'}>{pe.state || '—'}</Badge> : ''}</TableCell>
                     </TableRow>
                   )),
@@ -485,13 +486,13 @@ export function NetworkPane() {
             <DocumentBulletList24Regular />
             <Subtitle2>Local hosts-file override (developer quick-start)</Subtitle2>
           </div>
-          <Body1 style={{ display: 'block', marginBottom: 8 }}>
+          <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
             Paste into <code>C:\Windows\System32\drivers\etc\hosts</code> (Windows) or <code>/etc/hosts</code>
             (macOS/Linux) while on the VPN. This is a stop-gap for one machine — IPs can change on PE re-create,
             and it doesn’t cover wildcards. For anything shared, use the enterprise DNS below.
           </Body1>
           <pre style={codeBox}>{hostsBlock}</pre>
-          <div style={{ marginTop: 10 }}><CopyButton text={hostsBlock} label="Copy hosts block" /></div>
+          <div style={{ marginTop: tokens.spacingVerticalMNudge }}><CopyButton text={hostsBlock} label="Copy hosts block" /></div>
         </div>
       )}
 
@@ -556,7 +557,7 @@ export function NetworkPane() {
               ))}
             </TableBody>
           </Table>
-          <Caption1 block style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+          <Caption1 block style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
             Select an NSG node in the topology below to view its full inbound/outbound security-rule grid.
           </Caption1>
         </div>
@@ -574,7 +575,7 @@ export function NetworkPane() {
           <Globe24Regular />
           <Subtitle2>Enterprise / corporate DNS configuration</Subtitle2>
         </div>
-        <Body1 style={{ display: 'block', marginBottom: 12 }}>
+        <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM }}>
           The durable fix: make your corporate DNS resolve every Azure private-link domain to the private IPs.
           Pick <strong>one</strong> of the patterns below. Both let any VPN-connected user reach the services
           by their normal public FQDN, with traffic staying on the private endpoints.
@@ -594,22 +595,22 @@ export function NetworkPane() {
                 <code> *.privatelink.* </code> then resolve to the private IPs automatically.<br />
                 4. Route the resolver inbound IP over the VPN/ExpressRoute so on-prem clients can reach it.
               </Body1>
-              <Body1Strong style={{ display: 'block', marginTop: 10, marginBottom: 4 }}>Conditional-forwarder domains</Body1Strong>
+              <Body1Strong style={{ display: 'block', marginTop: tokens.spacingVerticalMNudge, marginBottom: tokens.spacingVerticalXS }}>Conditional-forwarder domains</Body1Strong>
               <pre style={codeBox}>{forwardDomains.length ? forwardDomains.join('\n') : '(load the inventory to populate)'}</pre>
-              <div style={{ marginTop: 8 }}><CopyButton text={forwardDomains.join('\n')} label="Copy domains" /></div>
+              <div style={{ marginTop: tokens.spacingVerticalS }}><CopyButton text={forwardDomains.join('\n')} label="Copy domains" /></div>
             </AccordionPanel>
           </AccordionItem>
 
           <AccordionItem value="zones">
             <AccordionHeader>Private DNS zones to host / link</AccordionHeader>
             <AccordionPanel>
-              <Body1 style={{ display: 'block', marginBottom: 8 }}>
+              <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
                 These are the <code>privatelink.*</code> zones the deployment uses. With the resolver pattern they
                 already exist in Azure (linked to the hub VNet). If instead you host DNS entirely on-prem, create
                 these zones on your DNS and add the A records from the inventory above.
               </Body1>
               <pre style={codeBox}>{zones.length ? zones.join('\n') : '(load the inventory to populate)'}</pre>
-              <div style={{ marginTop: 8 }}><CopyButton text={zones.join('\n')} label="Copy zones" /></div>
+              <div style={{ marginTop: tokens.spacingVerticalS }}><CopyButton text={zones.join('\n')} label="Copy zones" /></div>
             </AccordionPanel>
           </AccordionItem>
 

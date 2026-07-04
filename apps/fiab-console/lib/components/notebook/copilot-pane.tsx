@@ -151,7 +151,7 @@ export function CopilotPane({ open, cell, output, onAccept, onClose }: CopilotPa
       <DialogSurface className={s.surface}>
         <DialogBody>
           <DialogTitle>
-            <Sparkle20Regular style={{ verticalAlign: 'text-bottom', marginRight: 6 }} />
+            <Sparkle20Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalSNudge }} />
             Fix with Copilot
           </DialogTitle>
           <DialogContent className={s.content}>

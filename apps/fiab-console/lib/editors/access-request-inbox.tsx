@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AccessRequestInboxEditor — the F16 multi-tier approval inbox.
  *
@@ -171,7 +172,7 @@ export function AccessRequestInboxEditor() {
       if (isHistory) {
         // Merge denied requests into the history view too.
         try {
-          const rd = await fetch('/api/access-requests?status=denied');
+          const rd = await clientFetch('/api/access-requests?status=denied');
           const jd = await rd.json();
           if (jd.ok) rows = [...rows, ...(jd.requests || [])];
         } catch { /* completed-only is acceptable */ }
@@ -188,7 +189,7 @@ export function AccessRequestInboxEditor() {
     const next: Record<string, number> = {};
     await Promise.all(TIER_SEQUENCE.map(async (t) => {
       try {
-        const r = await fetch(`/api/access-requests?tier=${t}&status=open`);
+        const r = await clientFetch(`/api/access-requests?tier=${t}&status=open`);
         const j = await r.json();
         next[t] = j.ok ? (j.requests || []).length : 0;
       } catch { next[t] = 0; }
@@ -227,7 +228,7 @@ export function AccessRequestInboxEditor() {
         payload.scopeType = scopeType;
         if (scopeRef.trim()) payload.scopeRef = scopeRef.trim();
       }
-      const r = await fetch(`/api/access-requests/${dlg.req.id}/decision`, {
+      const r = await clientFetch(`/api/access-requests/${dlg.req.id}/decision`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       });

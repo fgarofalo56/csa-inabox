@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ReportVisualDesigner — the Power-BI-style visual gallery + Fields / Format /
  * Filters panes, built INTO the Loom report editor (no Power BI Desktop round
@@ -277,7 +278,7 @@ export function ReportVisualDesigner({ workspaceId, datasetId, reportId, tables:
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const j = await r.json();
         if (cancelled) return;
         if (j.ok) { setTables(j.tables || []); setTablesErr(null); }
@@ -321,7 +322,7 @@ export function ReportVisualDesigner({ workspaceId, datasetId, reportId, tables:
     setBusy(true); setRunErr(null);
     (async () => {
       try {
-        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/query`, {
+        const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/query`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ workspaceId, datasetId, dax }),

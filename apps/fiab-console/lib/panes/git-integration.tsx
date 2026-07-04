@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * GitIntegrationPane — F12 Git integration, Azure-native parity with the Fabric
  * workspace "Git integration" panel.
@@ -178,7 +179,7 @@ function ConnectedView({ workspaceId, binding, onChanged }: { workspaceId: strin
 
   const disconnect = useCallback(async () => {
     setDisconnecting(true);
-    await fetch(`/api/admin/workspaces/${workspaceId}/git`, { method: 'DELETE' });
+    await clientFetch(`/api/admin/workspaces/${workspaceId}/git`, { method: 'DELETE' });
     setDisconnecting(false);
     onChanged();
   }, [workspaceId, onChanged]);
@@ -333,7 +334,7 @@ function BranchOutDialog({ workspaceId, binding, repoLabel }: { workspaceId: str
                   </MessageBar>
                 )}
                 <Link href={`/workspaces/${result.workspaceId}`}>
-                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Open the new workspace
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Open the new workspace
                 </Link>
               </div>
             )}

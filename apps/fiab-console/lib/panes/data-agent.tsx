@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataAgentPane — Loom's full lifecycle-management surface for data agents.
  *
@@ -478,7 +479,7 @@ export function DataAgentPane() {
   // --- load workspaces (for the create dialog picker) -------------------
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/workspaces')
+    clientFetch('/api/workspaces')
       .then(async (r) => {
         const j = await r.json().catch(() => []);
         if (cancelled) return;
@@ -494,7 +495,7 @@ export function DataAgentPane() {
     setLoading(true);
     setListError(null);
     try {
-      const res = await fetch('/api/items/data-agent', { method: 'GET' });
+      const res = await clientFetch('/api/items/data-agent', { method: 'GET' });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.ok) {
         setListError(data?.error || `Failed to list data agents (HTTP ${res.status})`);
@@ -610,7 +611,7 @@ export function DataAgentPane() {
     setCreateBusy(true);
     setCreateErr(null);
     try {
-      const r = await fetch('/api/items/data-agent', {
+      const r = await clientFetch('/api/items/data-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspaceId: createWs, displayName: name }),
@@ -628,7 +629,7 @@ export function DataAgentPane() {
 
   const duplicate = useCallback(async (agent: AgentItem) => {
     try {
-      const r = await fetch('/api/items/data-agent', {
+      const r = await clientFetch('/api/items/data-agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: agent.id }),
@@ -656,7 +657,7 @@ export function DataAgentPane() {
     if (!name || name === renameTarget.displayName) { setRenameTarget(null); return; }
     setRenameBusy(true);
     try {
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(renameTarget.id)}`, {
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(renameTarget.id)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ displayName: name }),
@@ -680,7 +681,7 @@ export function DataAgentPane() {
     setDeleteBusy(true);
     setDeleteErr(null);
     try {
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(deleteTarget.id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(deleteTarget.id)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j?.ok === false) { setDeleteErr(j?.error || `Delete failed (HTTP ${r.status})`); return; }
       // Reflect immediately.

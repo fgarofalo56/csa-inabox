@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * TabStrip — multi-tab view like Fabric. Persists to /api/tabs (Cosmos
  * tabs-state container, partitioned by userId; one doc per user).
@@ -346,7 +347,7 @@ export function TabStrip() {
       const cached = localStorage.getItem('loom.tabs.wsNames');
       if (cached) setWsNames(JSON.parse(cached));
     } catch {/* ignore */}
-    fetch('/api/loom/workspaces')
+    clientFetch('/api/loom/workspaces')
       .then(r => r.json())
       .then(j => {
         if (!j?.ok || !Array.isArray(j.workspaces)) return;
@@ -359,7 +360,7 @@ export function TabStrip() {
       })
       .catch(() => {/* swallow — header falls back to truncated id */});
 
-    fetch('/api/tabs').then(r => r.json()).then(d => {
+    clientFetch('/api/tabs').then(r => r.json()).then(d => {
       if (Array.isArray(d?.tabs) && d.tabs.length) {
         const merged = mergeHome(d.tabs);
         const { next } = pruneStale(merged);
@@ -376,7 +377,7 @@ export function TabStrip() {
     } catch {}
     if (!loaded) return;
     const body = stripHome(next);
-    fetch('/api/tabs', {
+    clientFetch('/api/tabs', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ tabs: body }),
@@ -772,7 +773,7 @@ export function TabStrip() {
                         fontWeight: 600,
                         opacity: 0.8,
                         textTransform: 'uppercase',
-                        fontSize: 11,
+                        fontSize: tokens.fontSizeBase100,
                         letterSpacing: 0.5,
                         cursor: 'default',
                         backgroundColor: 'transparent',
@@ -795,7 +796,7 @@ export function TabStrip() {
                     style={groupBy && tab.workspaceId ? { paddingLeft: 24 } : undefined}
                   >
                     {tab.pinned && tab.id !== 'home' && (
-                      <Pin16Filled style={{ fontSize: 12, opacity: 0.7 }} aria-label="Pinned" />
+                      <Pin16Filled style={{ fontSize: tokens.fontSizeBase200, opacity: 0.7 }} aria-label="Pinned" />
                     )}
                     <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {tab.title}

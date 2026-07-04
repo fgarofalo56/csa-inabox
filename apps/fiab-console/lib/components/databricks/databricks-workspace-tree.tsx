@@ -701,26 +701,26 @@ export function DatabricksWorkspaceTree({
               )}
               {createGroup === 'notebook' && (
                 <>
-                  <Field label="Language" style={{ marginTop: 8 }}>
+                  <Field label="Language" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={createLang} selectedOptions={[createLang]} onOptionSelect={(_, d) => setCreateLang(d.optionValue || 'PYTHON')}>
                       {['PYTHON', 'SQL', 'SCALA', 'R'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Imports an empty notebook at <code>{nbPath}/{createName || '<name>'}</code>. Add cells and
                     attach a cluster in the Databricks Notebook editor.
                   </Caption1>
                 </>
               )}
               {createGroup === 'cluster' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates an autoscaling all-purpose cluster (1–4 workers, 30-min auto-terminate) using the
                   workspace default node type + latest LTS runtime. Tune node type / runtime / libraries in
                   the Databricks Cluster editor.
                 </Caption1>
               )}
               {createGroup === 'warehouse' && (
-                <Field label="Size" style={{ marginTop: 8 }}>
+                <Field label="Size" style={{ marginTop: tokens.spacingVerticalS }}>
                   <Dropdown value={createSize} selectedOptions={[createSize]} onOptionSelect={(_, d) => setCreateSize(d.optionValue || 'X-Small')}>
                     {['2X-Small', 'X-Small', 'Small', 'Medium', 'Large', 'X-Large', '2X-Large', '3X-Large', '4X-Large'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
                   </Dropdown>
@@ -731,19 +731,19 @@ export function DatabricksWorkspaceTree({
                   <Field label="Remote Git URL" required>
                     <Input value={repoUrl} onChange={(_, d) => setRepoUrl(d.value)} placeholder="https://github.com/org/repo.git" />
                   </Field>
-                  <Field label="Provider" style={{ marginTop: 8 }}>
+                  <Field label="Provider" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={repoProvider} selectedOptions={[repoProvider]} onOptionSelect={(_, d) => setRepoProvider(d.optionValue || 'gitHub')}>
                       {['gitHub', 'gitLab', 'azureDevOpsServices', 'bitbucketCloud', 'gitHubEnterprise', 'bitbucketServer', 'gitLabEnterpriseEdition', 'awsCodeCommit'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Programmatic Git folders must link a remote repo. The workspace needs a Git credential
                     (PAT) configured for the provider, set in Databricks → Settings → Linked accounts.
                   </Caption1>
                 </>
               )}
               {createGroup === 'dlt' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates a triggered DLT (Lakeflow Declarative) pipeline referencing a notebook at
                   <code> /Workspace/{createName || '<name>'}</code> (development mode). Author the notebook,
                   add libraries, and bind a UC target catalog in the Databricks pipeline editor. POST
@@ -751,14 +751,14 @@ export function DatabricksWorkspaceTree({
                 </Caption1>
               )}
               {createGroup === 'mlflow-experiment' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates an MLflow experiment to group runs. Use an absolute workspace path
                   (e.g. <code>/Users/you@org/{createName || 'my-experiment'}</code>). POST
                   <code> /api/2.0/mlflow/experiments/create</code>.
                 </Caption1>
               )}
               {createGroup === 'mlflow-model' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Registers a new model. Use a UC three-level name
                   (<code>catalog.schema.model</code>) for a Unity Catalog-governed model, or a bare name for
                   the workspace registry. POST <code>/api/2.0/mlflow/registered-models/create</code>.
@@ -766,19 +766,19 @@ export function DatabricksWorkspaceTree({
               )}
               {createGroup === 'serving-endpoint' && (
                 <>
-                  <Field label="Model name (UC)" required style={{ marginTop: 8 }} hint="catalog.schema.model">
+                  <Field label="Model name (UC)" required style={{ marginTop: tokens.spacingVerticalS }} hint="catalog.schema.model">
                     <Input value={servingModel} onChange={(_, d) => setServingModel(d.value)} placeholder="main.ml.churn" />
                   </Field>
-                  <Field label="Model version" required style={{ marginTop: 8 }}>
+                  <Field label="Model version" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Input value={servingVersion} onChange={(_, d) => setServingVersion(d.value)} placeholder="1" />
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Creates a Small, scale-to-zero serving endpoint hosting that model version. POST
                     <code> /api/2.0/serving-endpoints</code>. Not GA on Azure Government (GCC-High/DoD).
                   </Caption1>
                 </>
               )}
-              {createError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
+              {createError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>

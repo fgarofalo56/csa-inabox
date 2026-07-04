@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * RecommendedApps — renders the curated CSA apps catalog from
  * /api/apps-catalog. Same source as the top-bar AppLauncher; this
@@ -57,7 +58,7 @@ export function RecommendedApps() {
   const [apps, setApps] = useState<AppDoc[] | null>(null);
 
   useEffect(() => {
-    fetch('/api/apps-catalog').then(r => r.json()).then(d => {
+    clientFetch('/api/apps-catalog').then(r => r.json()).then(d => {
       setApps(Array.isArray(d?.apps) ? d.apps : []);
     }).catch(() => setApps([]));
   }, []);

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * GovernAdminPane — the Govern → Admin view (F2), one-for-one with the
  * Microsoft Purview / Fabric admin "Govern" monitoring experience, Loom-themed.
@@ -282,7 +283,7 @@ function ViewMorePanel() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch('/api/governance/govern/embed');
+      const res = await clientFetch('/api/governance/govern/embed');
       const j: EmbedResponse = await res.json();
       setData(j);
       if (!j.ok && !j.hint) setError(j.error || `Embed failed (${res.status})`);
@@ -393,7 +394,7 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/governance/govern/trigger-scan');
+        const res = await clientFetch('/api/governance/govern/trigger-scan');
         const j = await res.json();
         if (j.ok && Array.isArray(j.sources)) setSources(j.sources.map((x: any) => ({ name: x.name })));
         else if (j.code === 'purview_not_configured' && j.hint) setScanGate(j.hint);
@@ -405,7 +406,7 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
   const onPickSource = useCallback(async (name: string) => {
     setSelSource(name); setSelScan(''); setScans([]);
     try {
-      const res = await fetch(`/api/governance/govern/trigger-scan?source=${encodeURIComponent(name)}`);
+      const res = await clientFetch(`/api/governance/govern/trigger-scan?source=${encodeURIComponent(name)}`);
       const j = await res.json();
       if (j.ok && Array.isArray(j.scans)) setScans(j.scans.map((x: any) => ({ name: x.name })));
     } catch { /* leave empty */ }
@@ -415,7 +416,7 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
     if (!selSource || !selScan || scanBusy) return;
     setScanBusy(true); setScanMsg(null);
     try {
-      const res = await fetch('/api/governance/govern/trigger-scan', {
+      const res = await clientFetch('/api/governance/govern/trigger-scan', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ source: selSource, scan: selScan }),
       });
@@ -486,9 +487,9 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
                 {scanBusy ? 'Starting…' : 'Run scan'}
               </Button>
             </div>
-            {scanMsg && <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground2 }}>{scanMsg}</Caption1>}
+            {scanMsg && <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground2 }}>{scanMsg}</Caption1>}
             {sources && sources.length === 0 && (
-              <Caption1 style={{ display: 'block', marginTop: 8 }} className={s.empty}>No registered Purview sources — register one under Governance → Scans &amp; sources.</Caption1>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS }} className={s.empty}>No registered Purview sources — register one under Governance → Scans &amp; sources.</Caption1>
             )}
           </>
         )}
@@ -512,7 +513,7 @@ function DiscoverTrustReuseTab({ posture }: { posture: PostureDoc }) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/governance/govern/actions');
+        const res = await clientFetch('/api/governance/govern/actions');
         const j = await res.json();
         setActions(j.ok && Array.isArray(j.actions) ? j.actions : []);
       } catch { setActions([]); }
@@ -541,13 +542,13 @@ function DiscoverTrustReuseTab({ posture }: { posture: PostureDoc }) {
           <div className={s.actionCards}>
             {actions.slice(0, 6).map((a) => (
               <div key={a.id} className={s.actionCard}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: tokens.spacingHorizontalS }}>
                   <Text weight="semibold">{a.title}</Text>
                   <Badge appearance="tint" color={priorityColor(a.priority) as any} size="small">{a.priority || 'low'}</Badge>
                 </div>
                 {a.description && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{a.description}</Caption1>}
                 {a.ctaHref && (
-                  <Button as="a" href={a.ctaHref} appearance="secondary" size="small" icon={<Open16Regular />} style={{ alignSelf: 'flex-start', marginTop: 4 }}>
+                  <Button as="a" href={a.ctaHref} appearance="secondary" size="small" icon={<Open16Regular />} style={{ alignSelf: 'flex-start', marginTop: tokens.spacingVerticalXS }}>
                     {a.ctaLabel || 'Open'}
                   </Button>
                 )}
@@ -580,7 +581,7 @@ export function GovernAdminPane() {
     reqOnce.current = true;
     (async () => {
       try {
-        const res = await fetch('/api/governance/govern/posture');
+        const res = await clientFetch('/api/governance/govern/posture');
         const j: PostureResponse = await res.json();
         setResp(j);
       } catch (e: any) {
@@ -634,7 +635,7 @@ export function GovernAdminPane() {
           <Tab value="discover" icon={<Branch20Regular />}>Discover, trust, reuse</Tab>
         </TabList>
         {resp.precomputedAt && (
-          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: 4 }}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginTop: tokens.spacingVerticalXS }}>
             Background refresh last ran {fmtDate(resp.precomputedAt)} · live values shown above.
           </Caption1>
         )}

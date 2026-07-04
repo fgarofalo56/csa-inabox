@@ -156,7 +156,7 @@ export interface SqlTabBarProps<R = unknown> {
 
 export function SqlTabBar<R = unknown>({ tabs, activeTabId, onSelect, onAdd, onClose }: SqlTabBarProps<R>) {
   return (
-    <div style={{ display: 'flex', alignItems: 'center', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, gap: 2 }}>
+    <div style={{ display: 'flex', alignItems: 'center', borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, gap: tokens.spacingHorizontalXXS }}>
       <TabList
         selectedValue={activeTabId}
         onTabSelect={(_, d) => onSelect(d.value as string)}
@@ -165,7 +165,7 @@ export function SqlTabBar<R = unknown>({ tabs, activeTabId, onSelect, onAdd, onC
       >
         {tabs.map((t) => (
           <Tab key={t.id} value={t.id}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
               {t.label}
               {t.loading && <Spinner size="extra-tiny" />}
               {tabs.length > 1 && (
@@ -175,7 +175,7 @@ export function SqlTabBar<R = unknown>({ tabs, activeTabId, onSelect, onAdd, onC
                   icon={<Dismiss12Regular />}
                   aria-label={`Close ${t.label}`}
                   onClick={(e) => { e.stopPropagation(); onClose(t.id); }}
-                  style={{ minWidth: 'auto', padding: 0, height: 16, width: 16 }}
+                  style={{ minWidth: 'auto', padding: tokens.spacingVerticalNone, height: 16, width: 16 }}
                 />
               )}
             </span>

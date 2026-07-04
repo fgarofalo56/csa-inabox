@@ -33,13 +33,13 @@ export function AdminGate({ surface, backendRoute, envVar, cosmosContainer, bice
       <MessageBarBody>
         <MessageBarTitle>{surface} is not wired in this deployment</MessageBarTitle>
         Requires:
-        <ul style={{ marginTop: 6, marginBottom: 6, paddingLeft: 18 }}>
+        <ul style={{ marginTop: tokens.spacingVerticalSNudge, marginBottom: tokens.spacingVerticalSNudge, paddingLeft: tokens.spacingHorizontalXL }}>
           <li>Backend route <code>{backendRoute}</code> (not yet implemented)</li>
           {envVar && <li>Env var <code>{envVar}</code> set on the Loom container app</li>}
           {cosmosContainer && <li>Cosmos container <code>{cosmosContainer}</code></li>}
           {bicepModule && <li>Bicep module <code>{bicepModule}</code></li>}
         </ul>
-        {extra && <Caption1 style={{ display: 'block', marginBottom: 6 }}>{extra}</Caption1>}
+        {extra && <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalSNudge }}>{extra}</Caption1>}
         {deepLink && (
           <Caption1>
             For now, use the system of record:

@@ -315,7 +315,7 @@ export function SynapseWorkspaceTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Workspace Resources</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="Add new resource" relationship="label">
@@ -351,7 +351,7 @@ export function SynapseWorkspaceTree({
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading workspace resources…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading workspace resources…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Workspace error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
@@ -652,12 +652,12 @@ export function SynapseWorkspaceTree({
               </Field>
               {createGroup === 'dataset' && (
                 <>
-                  <Field label="Type" style={{ marginTop: 8 }}>
+                  <Field label="Type" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={createDsType} selectedOptions={[createDsType]} onOptionSelect={(_, d) => setCreateDsType(d.optionValue || 'DelimitedText')}>
                       {['DelimitedText', 'Json', 'Parquet', 'Binary', 'AzureSqlTable'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="Linked service" required style={{ marginTop: 8 }}>
+                  <Field label="Linked service" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown
                       placeholder={linkedServices.length ? 'Select a linked service' : 'No linked services — create one first'}
                       value={createDsLinkedService} selectedOptions={createDsLinkedService ? [createDsLinkedService] : []}
@@ -667,37 +667,37 @@ export function SynapseWorkspaceTree({
                       {linkedServices.map((l) => <Option key={l.name} value={l.name} text={l.name}>{l.name}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Refine location/format and schema after creation.
                   </Caption1>
                 </>
               )}
               {createGroup === 'dataflow' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates an empty Mapping Data Flow. Edit the data flow definition — add sources,
                   transformations, and sinks — in the data flow JSON editor.
                 </Caption1>
               )}
               {createGroup === 'notebook' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates an empty PySpark notebook (nbformat 4). Attach a Spark pool and add cells in the
                   notebook editor.
                 </Caption1>
               )}
               {createGroup === 'sqlscript' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates an empty SQL script targeting the built-in serverless SQL pool. Edit and run it in
                   the SQL script editor.
                 </Caption1>
               )}
               {createGroup === 'kqlscript' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates an empty KQL script. Pick a Synapse Data Explorer (Kusto) pool + database in the
                   editor, then write and run KQL against it.
                 </Caption1>
               )}
               {createGroup === 'sparkjobdef' && (
-                <Field label="Spark pool" required style={{ marginTop: 8 }}>
+                <Field label="Spark pool" required style={{ marginTop: tokens.spacingVerticalS }}>
                   <Dropdown
                     placeholder={sparkPools.length ? 'Select a Spark pool' : 'No Spark pools — provision one first'}
                     value={createSjdPool} selectedOptions={createSjdPool ? [createSjdPool] : []}
@@ -709,12 +709,12 @@ export function SynapseWorkspaceTree({
                 </Field>
               )}
               {createGroup === 'trigger' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates a daily Schedule trigger (Stopped). Wire it to a pipeline from that pipeline&apos;s
                   Triggers panel, then Start it.
                 </Caption1>
               )}
-              {createError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
+              {createError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>

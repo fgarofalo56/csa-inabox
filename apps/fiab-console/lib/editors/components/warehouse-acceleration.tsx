@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WarehouseAcceleration — the "Query acceleration" dialog for the Warehouse
  * editor, the Azure-native parity of Fabric's GPU-accelerated warehouse
@@ -113,7 +114,7 @@ export function WarehouseAcceleration({
     setLoading(true);
     setError(null);
     try {
-      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query-acceleration`);
+      const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/query-acceleration`);
       const j = (await r.json()) as AccelerationStatus;
       if (!j.ok) setError(j.error || 'Could not load acceleration status');
       setStatus(j);
@@ -137,7 +138,7 @@ export function WarehouseAcceleration({
       setError(null);
       setNotice(null);
       try {
-        const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query-acceleration`, {
+        const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/query-acceleration`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ tier: 'result-set-caching', accelerate: next }),
@@ -163,7 +164,7 @@ export function WarehouseAcceleration({
     setError(null);
     setNotice(null);
     try {
-      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query-acceleration`, {
+      const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/query-acceleration`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tier: 'gpu', accelerate: true }),

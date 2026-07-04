@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WarehouseMonitoringTab — the warehouse/dedicated-pool Monitoring surface.
  *
@@ -163,7 +164,7 @@ export function WarehouseMonitoringTab({
       const params = new URLSearchParams();
       params.set('window', String(windowSecs));
       if (warehouseId) params.set('warehouseId', warehouseId);
-      const r = await fetch(`/api/items/${engine}/${encodeURIComponent(itemId)}/monitoring?${params.toString()}`);
+      const r = await clientFetch(`/api/items/${engine}/${encodeURIComponent(itemId)}/monitoring?${params.toString()}`);
       const j = (await r.json()) as MonitoringData;
       setData(j);
     } catch (e: any) {

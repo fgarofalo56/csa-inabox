@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Paginated report (RDL) editor — extracted from phase3-editors.tsx.
  *
@@ -143,7 +144,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const r = await clientFetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition?workspaceId=${encodeURIComponent(workspaceId)}`);
         const j = await r.json();
         if (cancelled) return;
         if (j.ok) { setDef(j.definition); setSelectedTablix(j.definition.tablixes?.[0]?.id || ''); setIsDirty(false); }
@@ -158,7 +159,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/items/paginated-report/capabilities');
+        const r = await clientFetch('/api/items/paginated-report/capabilities');
         const j = await r.json();
         if (!cancelled && j.ok) setRenderDeployed(!!j.renderDeployed);
       } catch { /* leave disabled */ }
@@ -176,7 +177,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
     if (!def) return;
     setSaveBusy(true); setSaveMsg(null);
     try {
-      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition`, {
+      const r = await clientFetch(`/api/items/paginated-report/${encodeURIComponent(id)}/definition`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(def),
       });
@@ -199,7 +200,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
       const parameterValues = (def.parameters || [])
         .filter((p) => p.defaultValue != null && p.defaultValue !== '')
         .map((p) => ({ name: p.name, value: String(p.defaultValue) }));
-      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(id)}/export`, {
+      const r = await clientFetch(`/api/items/paginated-report/${encodeURIComponent(id)}/export`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ definition: def, workspaceId, format, parameterValues }),
       });
@@ -235,7 +236,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
     setPbiListErr(null);
     setPbiListBusy(true);
     try {
-      const r = await fetch(`/api/items/paginated-report?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`);
+      const r = await clientFetch(`/api/items/paginated-report?workspaceId=${encodeURIComponent(pbiWorkspaceId)}`);
       const j = await r.json();
       if (signal?.cancelled) return;
       if (j.ok) {
@@ -263,7 +264,7 @@ function PaginatedReportDesigner({ item, id }: { item: FabricItemType; id: strin
       setEmbedErr(null); setViewerErr(null);
       try {
         const sel = pbiReports?.find((r) => r.id === pbiReportId);
-        const r = await fetch(`/api/items/report/${encodeURIComponent(pbiReportId)}/paginated-embed-token`, {
+        const r = await clientFetch(`/api/items/report/${encodeURIComponent(pbiReportId)}/paginated-embed-token`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ workspaceId: pbiWorkspaceId, datasetIds: sel?.datasetId ? [sel.datasetId] : [] }),
@@ -756,7 +757,7 @@ function DatasetDialog({ open, editing, dataSources, reportId, onClose, onSave, 
     if (!ds) { setPreviewMsg({ ok: false, text: 'pick a data source first' }); return; }
     setPreviewBusy(true); setPreviewMsg(null);
     try {
-      const r = await fetch(`/api/items/paginated-report/${encodeURIComponent(reportId)}/preview`, {
+      const r = await clientFetch(`/api/items/paginated-report/${encodeURIComponent(reportId)}/preview`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dataSource: { type: ds.type, server: ds.server, database: ds.database }, query }),
       });

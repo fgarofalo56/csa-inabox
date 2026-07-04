@@ -1,5 +1,7 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * LakehouseEditor — real ADLS Gen2 browser + OPENROWSET preview, wired
  * to the DLZ storage account via the BFF (UAMI -> Storage Blob Data
@@ -78,6 +80,7 @@ interface Props { item: FabricItemType; id: string }
 
 export function LakehouseEditor({ item, id }: Props) {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const router = useRouter();
 
   // Bundle-installed lakehouses stamp their rich definition (folder tree,
@@ -354,7 +357,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!activeContainer) return;
     setLiveTablesLoading(true); setLiveTablesError(null); setLiveTablesGate(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/lakehouse/tables?containers=${encodeURIComponent(activeContainer)}&rowCounts=true`,
       );
       const j = await parseJsonOrError<{ ok: boolean; tables?: LiveCatalogTable[]; gate?: string; error?: string }>(r, 'List tables');
@@ -502,7 +505,7 @@ export function LakehouseEditor({ item, id }: Props) {
   useEffect(() => {
     if (!scWizardOpen || scType !== 'adls' || scAdlsMode !== 'picker' || storageAccts.length) return;
     setStorageAcctsLoading(true);
-    fetch('/api/storage/accounts').then((r) => r.json()).then((j) => {
+    clientFetch('/api/storage/accounts').then((r) => r.json()).then((j) => {
       if (j?.ok && Array.isArray(j.accounts)) setStorageAccts(j.accounts);
     }).catch(() => {}).finally(() => setStorageAcctsLoading(false));
   }, [scWizardOpen, scType, scAdlsMode, storageAccts.length]);
@@ -515,7 +518,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!shortcutLakehouseId) return;
     setShortcutsBusy(true); setShortcutsError(null);
     try {
-      const r = await fetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
+      const r = await clientFetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; data?: ShortcutRow[] }>(r, 'List shortcuts');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setShortcuts(j.data || []);
@@ -533,7 +536,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setHistoryPreviewResult(null);
     try {
       const qs = new URLSearchParams({ container: activeContainer, tablePath });
-      const r = await fetch(`/api/lakehouse/history?${qs.toString()}`);
+      const r = await clientFetch(`/api/lakehouse/history?${qs.toString()}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; versions?: HistoryRow[] }>(r, 'Load history');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setHistoryRows(j.versions || []);
@@ -547,15 +550,17 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const restoreToVersion = useCallback(async (tablePath: string, version: number) => {
     if (!activeContainer) return;
-    // eslint-disable-next-line no-alert
-    const confirmed = typeof window !== 'undefined'
-      ? window.confirm(`Restore table "${leafName(tablePath)}" to version ${version}? This overwrites the current table state with version ${version}. Ensure the data files for that version have not been removed by VACUUM.`)
-      : false;
+    const confirmed = await confirm({
+      title: `Restore table "${leafName(tablePath)}" to version ${version}?`,
+      body: `This overwrites the current table state with version ${version}. Ensure the data files for that version have not been removed by VACUUM.`,
+      danger: true,
+      confirmLabel: 'Restore version',
+    });
     if (!confirmed) return;
     setHistoryRestoring(version);
     setHistoryRestoreMsg(null);
     try {
-      const r = await fetch('/api/lakehouse/history', {
+      const r = await clientFetch('/api/lakehouse/history', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ container: activeContainer, tablePath, version, action: 'restore' }),
@@ -580,7 +585,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setHistoryPreviewVersion(version);
     setHistoryPreviewResult(null);
     try {
-      const r = await fetch('/api/lakehouse/history', {
+      const r = await clientFetch('/api/lakehouse/history', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ container: activeContainer, tablePath, version, action: 'preview' }),
@@ -624,7 +629,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!scExtSas.trim() || !shortcutLakehouseId) return;
     setScExtSasBusy(true); setScExtSasErr(null);
     try {
-      const r = await fetch('/api/lakehouse/shortcuts/credentials', {
+      const r = await clientFetch('/api/lakehouse/shortcuts/credentials', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: scName.trim() || 'ext-adls', sourceType: 'adls', secretValue: scExtSas.trim() }),
       });
@@ -691,7 +696,7 @@ export function LakehouseEditor({ item, id }: Props) {
       ? [scTargetSchema, scParentPath.trim()].filter(Boolean).join('/')
       : scParentPath.trim();
     try {
-      const r = await fetch('/api/lakehouse/shortcuts', {
+      const r = await clientFetch('/api/lakehouse/shortcuts', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           lakehouseId: shortcutLakehouseId, name: scName.trim(), kind: scKind,
@@ -717,7 +722,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!shortcutLakehouseId) return;
     setRegBusy(sc.name); setShortcutsError(null);
     try {
-      const r = await fetch('/api/lakehouse/shortcuts', {
+      const r = await clientFetch('/api/lakehouse/shortcuts', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           lakehouseId: shortcutLakehouseId, name: sc.name,
@@ -738,7 +743,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const testShortcut = useCallback(async (row: ShortcutRow) => {
     setShortcutsBusy(true); setShortcutsError(null);
     try {
-      const r = await fetch('/api/lakehouse/shortcuts/test', {
+      const r = await clientFetch('/api/lakehouse/shortcuts/test', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: row.lakehouseId, id: row.id }),
       });
@@ -749,14 +754,16 @@ export function LakehouseEditor({ item, id }: Props) {
   }, [loadShortcuts]);
 
   const deleteShortcutRow = useCallback(async (row: ShortcutRow) => {
-    // eslint-disable-next-line no-alert
-    const ok = typeof window !== 'undefined'
-      ? window.confirm(`Delete shortcut "${row.name}"? This drops the registry pointer and any external table — it never deletes the underlying source data.`)
-      : false;
+    const ok = await confirm({
+      title: `Delete shortcut "${row.name}"?`,
+      body: 'This drops the registry pointer and any external table — it never deletes the underlying source data.',
+      danger: true,
+      confirmLabel: 'Delete shortcut',
+    });
     if (!ok) return;
     setShortcutsBusy(true); setShortcutsError(null);
     try {
-      const r = await fetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(row.lakehouseId)}&id=${encodeURIComponent(row.id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/lakehouse/shortcuts?lakehouseId=${encodeURIComponent(row.lakehouseId)}&id=${encodeURIComponent(row.id)}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete shortcut');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadShortcuts();
@@ -816,7 +823,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!shortcutLakehouseId) return;
     setSchemasBusy(true); setSchemasError(null);
     try {
-      const r = await fetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
+      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; schemas?: SchemaRow[] }>(r, 'List schemas');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSchemas(j.schemas || []);
@@ -828,7 +835,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!shortcutLakehouseId || !newSchemaName.trim()) return;
     setNewSchemaBusy(true); setNewSchemaError(null);
     try {
-      const r = await fetch('/api/lakehouse/schemas', {
+      const r = await clientFetch('/api/lakehouse/schemas', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: shortcutLakehouseId, name: newSchemaName.trim(), description: newSchemaDesc.trim() || undefined }),
       });
@@ -844,14 +851,16 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const deleteSchema = useCallback(async (name: string) => {
     if (!shortcutLakehouseId) return;
-    // eslint-disable-next-line no-alert
-    const ok = typeof window !== 'undefined'
-      ? window.confirm(`Delete schema "${name}"? This runs DROP SCHEMA … CASCADE and removes the catalog entry.`)
-      : false;
+    const ok = await confirm({
+      title: `Delete schema "${name}"?`,
+      body: 'This runs DROP SCHEMA … CASCADE and removes the catalog entry. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Drop schema',
+    });
     if (!ok) return;
     setSchemasBusy(true); setSchemasError(null);
     try {
-      const r = await fetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/lakehouse/schemas?lakehouseId=${encodeURIComponent(shortcutLakehouseId)}&name=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Delete schema');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadSchemas();
@@ -870,7 +879,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setOpenPrefixes((p) => ({ ...p, [key]: 'loading' }));
     try {
       const qs = new URLSearchParams({ container, prefix });
-      const r = await fetch(`/api/lakehouse/paths?${qs.toString()}`);
+      const r = await clientFetch(`/api/lakehouse/paths?${qs.toString()}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'List paths');
       setOpenPrefixes((p) => ({
         ...p,
@@ -892,7 +901,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!shortcutLakehouseId || !moveTableName.trim() || !moveTableTo.trim()) return;
     setMoveTableBusy(true); setMoveTableError(null);
     try {
-      const r = await fetch('/api/lakehouse/schemas', {
+      const r = await clientFetch('/api/lakehouse/schemas', {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: shortcutLakehouseId, tableName: moveTableName.trim(), fromSchema: moveTableFrom, toSchema: moveTableTo.trim() }),
       });
@@ -921,7 +930,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!activeContainer) return;
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await fetch(`/api/lakehouse/permissions?container=${encodeURIComponent(activeContainer)}`);
+      const r = await clientFetch(`/api/lakehouse/permissions?container=${encodeURIComponent(activeContainer)}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; assignments?: PermAssignment[]; knownRoles?: PermRole[] }>(r, 'List permissions');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setPermsRows(j.assignments || []);
@@ -941,7 +950,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!activeContainer || !newPrincipalId.trim()) return;
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await fetch(`/api/lakehouse/permissions`, {
+      const r = await clientFetch(`/api/lakehouse/permissions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           container: activeContainer,
@@ -961,7 +970,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const revokePerm = useCallback(async (armId: string) => {
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await fetch(`/api/lakehouse/permissions?id=${encodeURIComponent(armId)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/lakehouse/permissions?id=${encodeURIComponent(armId)}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok: boolean; error?: string }>(r, 'Revoke permission');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadPerms();
@@ -975,20 +984,20 @@ export function LakehouseEditor({ item, id }: Props) {
     setPermsBusy(true); setPermsError(null); setSqlGate(null);
     try {
       if (t === 'row') {
-        const r = await fetch(`/api/lakehouse/permissions?tab=row`);
+        const r = await clientFetch(`/api/lakehouse/permissions?tab=row`);
         const j = await r.json();
         if (j.gate) { setSqlGate({ missing: j.missing, hint: j.hint }); return; }
         if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
         setRlsPolicies(j.policies || []);
       } else {
-        const r = await fetch(`/api/lakehouse/permissions?tab=${t}`);
+        const r = await clientFetch(`/api/lakehouse/permissions?tab=${t}`);
         const j = await r.json();
         if (j.gate) { setSqlGate({ missing: j.missing, hint: j.hint }); return; }
         if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
         setSqlGrants(j.grants || []);
       }
       // Shared table picker source.
-      const tr = await fetch(`/api/lakehouse/permissions?tab=${t}&list=tables`);
+      const tr = await clientFetch(`/api/lakehouse/permissions?tab=${t}&list=tables`);
       const tj = await tr.json();
       if (tj.gate) { setSqlGate({ missing: tj.missing, hint: tj.hint }); return; }
       if (tj.ok) setSqlTables(tj.tables || []);
@@ -998,7 +1007,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const loadSqlColumns = useCallback(async (objectId: number) => {
     try {
-      const r = await fetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${objectId}`);
+      const r = await clientFetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${objectId}`);
       const j = await r.json();
       if (j.ok) setSqlCols(j.columns || []);
     } catch { /* surfaced when the grant is attempted */ }
@@ -1012,7 +1021,7 @@ export function LakehouseEditor({ item, id }: Props) {
     const h = setTimeout(async () => {
       setPrincipalBusy(true);
       try {
-        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=user`);
+        const r = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=user`);
         const j = await r.json();
         setPrincipalResults(
           (j.results || [])
@@ -1043,7 +1052,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!selectedPrincipal || selTableId == null) return;
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await fetch('/api/lakehouse/permissions', {
+      const r = await clientFetch('/api/lakehouse/permissions', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tab: 'table', upn: selectedPrincipal.upn, objectId: selTableId }),
       });
@@ -1058,7 +1067,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!selectedPrincipal || selTableId == null || selColIds.length === 0) return;
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await fetch('/api/lakehouse/permissions', {
+      const r = await clientFetch('/api/lakehouse/permissions', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tab: 'column', upn: selectedPrincipal.upn, objectId: selTableId, columnIds: selColIds }),
       });
@@ -1074,7 +1083,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (selTableId == null || rlsFilterColId == null) return;
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await fetch('/api/lakehouse/permissions', {
+      const r = await clientFetch('/api/lakehouse/permissions', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tab: 'row', objectId: selTableId, filterColumnId: rlsFilterColId, subject: rlsSubject }),
       });
@@ -1092,12 +1101,12 @@ export function LakehouseEditor({ item, id }: Props) {
     try {
       let columnIds: number[] = [];
       if (g.column) {
-        const cr = await fetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${tbl.objectId}`);
+        const cr = await clientFetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${tbl.objectId}`);
         const cj = await cr.json();
         const hit = (cj.columns || []).find((c: any) => c.name === g.column);
         if (hit) columnIds = [hit.columnId];
       }
-      const r = await fetch(`/api/lakehouse/permissions?tab=${g.column ? 'column' : 'table'}`, {
+      const r = await clientFetch(`/api/lakehouse/permissions?tab=${g.column ? 'column' : 'table'}`, {
         method: 'DELETE', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ upn: g.principal, objectId: tbl.objectId, columnIds }),
       });
@@ -1111,7 +1120,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const dropRls = useCallback(async (p: RlsPolicy) => {
     setPermsBusy(true); setPermsError(null);
     try {
-      const r = await fetch(`/api/lakehouse/permissions?tab=row&policyObjectId=${p.policyObjectId}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/lakehouse/permissions?tab=row&policyObjectId=${p.policyObjectId}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadSqlPerms('row');
@@ -1169,7 +1178,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!activeContainer || !sharePrincipal.trim()) return;
     setShareBusy(true); setShareError(null); setShareSuccess(null);
     try {
-      const r = await fetch(`/api/lakehouse/permissions`, {
+      const r = await clientFetch(`/api/lakehouse/permissions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           container: activeContainer,
@@ -1190,7 +1199,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!activeContainer) return;
     setSettingsBusy(true); setSettingsError(null);
     try {
-      const r = await fetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`);
+      const r = await clientFetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; cloud?: typeof cloud; settings?: LakehouseSettings; icebergEndpoint?: IcebergEndpoint }>(r, 'Load settings');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setSettings(j.settings || {});
@@ -1212,7 +1221,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const loadSparkPools = useCallback(async () => {
     try {
-      const r = await fetch('/api/loom/compute-targets');
+      const r = await clientFetch('/api/loom/compute-targets');
       const j = await parseJsonOrError<{ ok: boolean; computes?: { name: string; kind: string }[] }>(r, 'List compute');
       if (j.ok && Array.isArray(j.computes)) {
         setSparkPools(
@@ -1239,7 +1248,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (!activeContainer) return;
     let cancelled = false;
     if (lhContent?.schemasEnabled) setSchemasEnabled(true);
-    fetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`)
+    clientFetch(`/api/lakehouse/settings?container=${encodeURIComponent(activeContainer)}`)
       .then((r) => parseJsonOrError<{ ok: boolean; settings?: { schemasEnabled?: boolean } }>(r, 'Load settings'))
       .then((j) => { if (!cancelled && j.ok && typeof j.settings?.schemasEnabled === 'boolean') setSchemasEnabled(j.settings.schemasEnabled); })
       .catch(() => {});
@@ -1270,7 +1279,7 @@ export function LakehouseEditor({ item, id }: Props) {
             schemaName: schemasEnabled && icebergSchema.trim() ? icebergSchema.trim() : undefined,
           }
         : undefined;
-      const r = await fetch(`/api/lakehouse/settings`, {
+      const r = await clientFetch(`/api/lakehouse/settings`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           container: activeContainer,
@@ -1319,7 +1328,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (isNewItem) return;
     setRefsLoading(true); setRefsError(null);
     try {
-      const r = await fetch(`/api/lakehouse/references?lakehouseId=${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/lakehouse/references?lakehouseId=${encodeURIComponent(id)}`);
       const j = await parseJsonOrError<{
         ok: boolean; error?: string;
         references?: ReferenceLakehouse[];
@@ -1335,7 +1344,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const addReference = useCallback(async (refId: string) => {
     setRefsError(null);
     try {
-      const r = await fetch('/api/lakehouse/references', {
+      const r = await clientFetch('/api/lakehouse/references', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: id, addId: refId }),
       });
@@ -1348,7 +1357,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const removeReference = useCallback(async (refId: string) => {
     setRefsError(null);
     try {
-      const r = await fetch('/api/lakehouse/references', {
+      const r = await clientFetch('/api/lakehouse/references', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId: id, removeId: refId }),
       });
@@ -1369,7 +1378,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setRefOpenPrefixes((p) => ({ ...p, [key]: 'loading' }));
     try {
       const qs = new URLSearchParams({ refId, container, prefix });
-      const r = await fetch(`/api/lakehouse/references/paths?${qs.toString()}`);
+      const r = await clientFetch(`/api/lakehouse/references/paths?${qs.toString()}`);
       const j = await parseJsonOrError<{ ok: boolean; error?: string; paths?: PathEntry[] }>(r, 'Reference paths');
       setRefOpenPrefixes((p) => ({
         ...p,
@@ -1390,7 +1399,7 @@ export function LakehouseEditor({ item, id }: Props) {
     try {
       const qs = new URLSearchParams({ container, path: entry.name });
       if (ref.account) qs.set('account', ref.account);
-      const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
+      const r = await clientFetch(`/api/lakehouse/preview?${qs.toString()}`);
       const j = await parseJsonOrError<PreviewResponse>(r, 'Reference preview');
       setRefPreview(j);
     } catch (e: any) {
@@ -1404,7 +1413,7 @@ export function LakehouseEditor({ item, id }: Props) {
   // ---- container load -------------------------------------------------
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/lakehouse/containers')
+    clientFetch('/api/lakehouse/containers')
       .then((r) => parseJsonOrError<{ ok: boolean; error?: string; containers?: ContainerInfo[] }>(r, 'List containers'))
       .then((j) => {
         if (cancelled) return;
@@ -1450,7 +1459,7 @@ export function LakehouseEditor({ item, id }: Props) {
       const qs = new URLSearchParams({ jobId: statsJobId });
       if (target) { qs.set('container', target.container); qs.set('path', target.path); }
       try {
-        const r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`);
+        const r = await clientFetch(`/api/lakehouse/table-stats?${qs.toString()}`);
         const j = await parseJsonOrError<{ ok: boolean; status?: string; error?: string; jobId?: string; stats?: Record<string, ColStat> }>(r, 'Column stats');
         if (cancelled) return;
         if (j.status === 'available' && j.stats) {
@@ -1529,7 +1538,7 @@ export function LakehouseEditor({ item, id }: Props) {
       const qs = new URLSearchParams({ container: activeContainer, path: entry.name });
       if (opts?.top) qs.set('top', String(opts.top));
       if (opts?.format) qs.set('format', opts.format);
-      const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
+      const r = await clientFetch(`/api/lakehouse/preview?${qs.toString()}`);
       const j = await parseJsonOrError<PreviewResponse>(r, 'Preview');
       setPreview(j);
       if (j.sql) {
@@ -1542,7 +1551,7 @@ export function LakehouseEditor({ item, id }: Props) {
         setStatsLoading(true);
         try {
           const sQs = new URLSearchParams({ container: activeContainer, path: entry.name });
-          const sr = await fetch(`/api/lakehouse/table-stats?${sQs.toString()}`);
+          const sr = await clientFetch(`/api/lakehouse/table-stats?${sQs.toString()}`);
           const sj = await parseJsonOrError<{ ok: boolean; error?: string; jobId?: string; code?: string }>(sr, 'Column stats');
           if (sj.ok && sj.jobId) {
             setStatsJobId(sj.jobId);
@@ -1588,7 +1597,7 @@ export function LakehouseEditor({ item, id }: Props) {
   const openAddToAgent = useCallback(async () => {
     setDaOpen(true); setDaMsg(null); setDaSel(''); setDaAgents(null); setDaLoadErr(null);
     try {
-      const r = await fetch('/api/items/data-agent');
+      const r = await clientFetch('/api/items/data-agent');
       const j = await parseJsonOrError<{ ok: boolean; items?: DaAgentRow[]; error?: string }>(r, 'List data agents');
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setDaAgents(j.items || []);
@@ -1610,7 +1619,7 @@ export function LakehouseEditor({ item, id }: Props) {
       }
       const src = { id: sourceId, type: 'lakehouse', name: lhName, tables: maintainTable || '', instructions: '', description: `Lakehouse ${lhName} (${id})`, examples: [] };
       const nextState = { ...(agent.state || {}), sources: [...existing, src] };
-      const r = await fetch(`/api/items/data-agent/${agent.id}`, {
+      const r = await clientFetch(`/api/items/data-agent/${agent.id}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state: nextState }),
       });
       const j = await parseJsonOrError<{ ok?: boolean; error?: string }>(r, 'Add source');
@@ -1681,7 +1690,7 @@ export function LakehouseEditor({ item, id }: Props) {
       fd.set('container', activeContainer);
       fd.set('path', targetPath);
       fd.set('file', file);
-      const r = await fetch('/api/lakehouse/upload', { method: 'POST', body: fd });
+      const r = await clientFetch('/api/lakehouse/upload', { method: 'POST', body: fd });
       const ct = r.headers.get('content-type') || '';
       let j: any = null;
       let bodyText: string | null = null;
@@ -1817,7 +1826,7 @@ export function LakehouseEditor({ item, id }: Props) {
     setActionStatus(null);
     try {
       const qs = new URLSearchParams({ container: activeContainer, path: targetPath });
-      const r = await fetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'POST' });
+      const r = await clientFetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'POST' });
       const j = await parseJsonOrError<{ ok?: boolean; error?: string }>(r, 'Create folder');
       if (!r.ok || j.ok === false) setActionError(j.error || `Mkdir failed (HTTP ${r.status})`);
       else setActionStatus(`Folder ${targetPath} created at ${new Date().toLocaleTimeString()}`);
@@ -1830,10 +1839,14 @@ export function LakehouseEditor({ item, id }: Props) {
 
   const onDelete = useCallback(async (entry: PathEntry) => {
     if (!activeContainer) return;
-    // eslint-disable-next-line no-alert
-    const ok = typeof window !== 'undefined'
-      ? window.confirm(`Delete ${entry.name}${entry.isDirectory ? ' (recursive)' : ''}?`)
-      : false;
+    const ok = await confirm({
+      title: `Delete ${entry.name}${entry.isDirectory ? ' (recursive)' : ''}?`,
+      body: entry.isDirectory
+        ? 'This recursively deletes the folder and everything under it. This cannot be undone.'
+        : 'This deletes the file. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete',
+    });
     if (!ok) return;
     setActionError(null);
     setActionStatus(null);
@@ -1843,7 +1856,7 @@ export function LakehouseEditor({ item, id }: Props) {
         path: entry.name,
         recursive: entry.isDirectory ? 'true' : 'false',
       });
-      const r = await fetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/lakehouse/path?${qs.toString()}`, { method: 'DELETE' });
       const j = await parseJsonOrError<{ ok?: boolean; error?: string }>(r, 'Delete');
       if (!r.ok || j.ok === false) setActionError(j.error || `Delete failed (HTTP ${r.status})`);
       else setActionStatus(`Deleted ${entry.name} at ${new Date().toLocaleTimeString()}`);
@@ -1877,7 +1890,7 @@ export function LakehouseEditor({ item, id }: Props) {
     }
     const qs = new URLSearchParams(params);
     try {
-      const r = await fetch(`/api/lakehouse/download?${qs.toString()}`);
+      const r = await clientFetch(`/api/lakehouse/download?${qs.toString()}`);
       if (!r.ok) {
         const j = await r.json().catch(() => null);
         setActionError(j?.error || `Download failed (HTTP ${r.status}).`);
@@ -1911,7 +1924,7 @@ export function LakehouseEditor({ item, id }: Props) {
     if (mipLabels) return; // labels already loaded
     setMipLabelsLoading(true);
     try {
-      const r = await fetch('/api/admin/security/mip/labels');
+      const r = await clientFetch('/api/admin/security/mip/labels');
       const j = await parseJsonOrError<{ ok?: boolean; error?: string; labels?: MipLabelOption[]; hint?: any }>(r, 'List sensitivity labels');
       if (!r.ok || j.ok === false) {
         // 503 → MIP not configured. Surface the hint's followUp when present.
@@ -1949,7 +1962,7 @@ export function LakehouseEditor({ item, id }: Props) {
       // OPENROWSET over the medallion lake. Previously this POSTed to the
       // synapse-serverless-sql-pool route with a LAKEHOUSE id (wrong item
       // type) which could 404 to an HTML page and crash JSON.parse.
-      const r = await fetch(`/api/items/lakehouse/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/lakehouse/${encodeURIComponent(id)}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: sqlText, database: 'master' }),
@@ -2232,6 +2245,7 @@ export function LakehouseEditor({ item, id }: Props) {
 
   // ---- render ---------------------------------------------------------
   return (
+    <>
     <ItemEditorChrome
       item={item}
       id={id}
@@ -4976,5 +4990,7 @@ export function LakehouseEditor({ item, id }: Props) {
         </>
       }
     />
+    {confirmDialog}
+    </>
   );
 }

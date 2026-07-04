@@ -548,7 +548,7 @@ function SasTab({ hub, onSaved }: { hub: string; onSaved?: () => void }) {
                   return (
                     <TableRow key={a.name}>
                       <TableCell>{a.name}</TableCell>
-                      <TableCell>{a.rights.map((r) => <Badge key={r} size="small" appearance="outline" style={{ marginRight: 2 }}>{r}</Badge>)}</TableCell>
+                      <TableCell>{a.rights.map((r) => <Badge key={r} size="small" appearance="outline" style={{ marginRight: tokens.spacingHorizontalXXS }}>{r}</Badge>)}</TableCell>
                       <TableCell>
                         {k ? (
                           k.localAuthDisabled ? (

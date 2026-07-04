@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AzureResourcePicker — cross-subscription, user-RBAC backing-resource selector.
  *
@@ -94,7 +95,7 @@ export function AzureResourcePicker({
     try {
       const qs = new URLSearchParams({ type });
       if (kind) qs.set('kind', kind);
-      const res = await fetch(`/api/azure/resources?${qs.toString()}`);
+      const res = await clientFetch(`/api/azure/resources?${qs.toString()}`);
       const j: ApiResponse = await res.json();
       if (j.ok && Array.isArray(j.resources)) {
         setResources(j.resources);

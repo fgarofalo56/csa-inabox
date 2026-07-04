@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * InstallAppDialog — the shared "install a content-bundle app" wizard.
  *
@@ -181,7 +182,7 @@ export function InstallAppDialog({
   // one (the Learn use-case card only knows the appId).
   React.useEffect(() => {
     if (!open || resolvedCount !== undefined) return;
-    fetch('/api/apps-catalog').then(r => r.json()).then((d: any) => {
+    clientFetch('/api/apps-catalog').then(r => r.json()).then((d: any) => {
       const a = (d?.apps ?? []).find((x: AppDoc) => x.id === appId);
       if (a) setResolvedCount(a.items?.length ?? 0);
     }).catch(() => {});
@@ -193,7 +194,7 @@ export function InstallAppDialog({
   React.useEffect(() => {
     if (!open || workspaces.length) return;
     setWsLoading(true);
-    fetch('/api/workspaces').then(r => r.json()).then((d: any) => {
+    clientFetch('/api/workspaces').then(r => r.json()).then((d: any) => {
       const list = Array.isArray(d) ? d : (d?.workspaces || []);
       setWorkspaces(list);
       if (list.length === 1) setPickedWs(list[0].id);
@@ -204,7 +205,7 @@ export function InstallAppDialog({
   React.useEffect(() => {
     setPickedFolder(''); setNewFolder(''); setFolders([]);
     if (!pickedWs) return;
-    fetch(`/api/workspaces/${pickedWs}/folders`).then(r => r.json()).then((d: any) => {
+    clientFetch(`/api/workspaces/${pickedWs}/folders`).then(r => r.json()).then((d: any) => {
       setFolders((d?.folders || []).map((f: any) => ({ id: f.id, name: f.name })));
     }).catch(() => setFolders([]));
   }, [pickedWs]);
@@ -215,7 +216,7 @@ export function InstallAppDialog({
     const name = newFolder.trim();
     if (name) {
       try {
-        const r = await fetch(`/api/workspaces/${pickedWs}/folders`, {
+        const r = await clientFetch(`/api/workspaces/${pickedWs}/folders`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name }),
         });

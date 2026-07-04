@@ -1,5 +1,7 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * ActivatorEditor — extracted from phase3-editors.tsx (byte-for-byte).
  *
@@ -60,7 +62,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/loom/workspaces');
+      const r = await clientFetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed to list workspaces'); setHint(j.hint || null); setWorkspaces([]); }
       else { setWorkspaces(j.workspaces || []); }
@@ -176,6 +178,7 @@ interface HistoryEventLite {
 }
 
 export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string }) {
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const s = useStyles();
   const ws = useWorkspaces();
   const [workspaceId, setWorkspaceId] = useState('');
@@ -261,7 +264,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const loadList = useCallback(async (wsId: string) => {
     setLoading(true); setListErr(null);
     try {
-      const r = await fetch(`/api/items/activator?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/activator?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setActivators([]); setListErr(j.error); return; }
       setActivators(j.activators || []);
@@ -277,7 +280,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const loadRules = useCallback(async (wsId: string, actId: string) => {
     setRulesErr(null);
     try {
-      const r = await fetch(`/api/items/activator/${encodeURIComponent(actId)}/rules?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/activator/${encodeURIComponent(actId)}/rules?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setRules([]); setRulesErr(j.error); return; }
       setRules(j.rules || []);
@@ -295,7 +298,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     setAdxLoading(true); setAdxGate(null);
     try {
       const qs = db ? `&database=${encodeURIComponent(db)}` : '';
-      const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/adx-source?_=1${qs}`);
+      const r = await clientFetch(`/api/items/activator/${encodeURIComponent(selectedId)}/adx-source?_=1${qs}`);
       const j = await r.json();
       if (!j.ok) { setAdxGate(j.gate?.remediation || j.error || 'Eventhouse not reachable'); if (!db) { setAdxDatabases([]); } else { setAdxTables([]); } return; }
       if (db) {
@@ -339,7 +342,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     if (!createName.trim() || !workspaceId) return;
     setCreateBusy(true); setCreateErr(null);
     try {
-      const r = await fetch(`/api/items/activator?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/activator?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: createName.trim(), description: createDesc.trim() || undefined }),
@@ -425,7 +428,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const triggerNow = useCallback(async (ruleId: string) => {
     if (!workspaceId || !selectedId) return;
     setTriggerResult(null);
-    const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
+    const r = await clientFetch(`/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
     const j = await r.json();
     if (!j.ok) { setRulesErr(j.error || j.gate?.remediation || 'trigger failed'); return; }
     // Azure-native trigger = run the rule's KQL now against its source (ADX for
@@ -444,7 +447,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     setBusyRuleId(r.id); setRulesErr(null);
     const next = r.state !== 'Active'; // Active → disable; anything else → enable
     try {
-      const res = await fetch(
+      const res = await clientFetch(
         `/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&ruleId=${encodeURIComponent(r.id)}&enabled=${next}`,
         { method: 'PATCH' },
       );
@@ -458,10 +461,15 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
 
   const deleteRule = useCallback(async (r: RuleLite) => {
     if (!workspaceId || !selectedId) return;
-    if (typeof window !== 'undefined' && !window.confirm(`Delete rule "${r.name}"? This removes its Azure Monitor scheduled-query rule.`)) return;
+    if (!(await confirm({
+      title: `Delete rule "${r.name}"?`,
+      body: 'This removes its Azure Monitor scheduled-query rule. This cannot be undone.',
+      danger: true,
+      confirmLabel: 'Delete rule',
+    }))) return;
     setBusyRuleId(r.id); setRulesErr(null);
     try {
-      const res = await fetch(
+      const res = await clientFetch(
         `/api/items/activator/${encodeURIComponent(selectedId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&ruleId=${encodeURIComponent(r.id)}`,
         { method: 'DELETE' },
       );
@@ -518,7 +526,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     if (!workspaceId || !selectedId) return;
     setHistoryLoading(true); setHistoryErr(null); setHistoryNote(null);
     try {
-      const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/history?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/activator/${encodeURIComponent(selectedId)}/history?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (!j.ok) { setHistoryEvents([]); setHistoryErr(j.error || j.gate?.remediation || 'history failed'); return; }
       setHistoryEvents(j.events || []);
@@ -542,7 +550,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   // — the create-new path still works without the list).
   const loadActionGroups = useCallback(async () => {
     try {
-      const r = await fetch('/api/monitor/action-groups');
+      const r = await clientFetch('/api/monitor/action-groups');
       const j = await r.json();
       if (j.ok) setAgList(j.actionGroups || []);
     } catch { /* non-fatal: pick-existing simply has no options */ }
@@ -555,7 +563,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     if (!actLogicAppResourceId.trim()) { setCallbackErr('Enter the Logic App resource id first.'); return; }
     setFetchingCallback(true); setCallbackErr(null);
     try {
-      const r = await fetch('/api/monitor/logic-app-callback', {
+      const r = await clientFetch('/api/monitor/logic-app-callback', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workflowResourceId: actLogicAppResourceId.trim(), triggerName: actLogicAppTrigger.trim() || undefined }),
@@ -573,7 +581,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   const testNotification = useCallback(async (actionGroupId: string) => {
     setAgBusy(actionGroupId); setAgMsg(null); setRulesErr(null);
     try {
-      const r = await fetch('/api/monitor/action-groups', {
+      const r = await clientFetch('/api/monitor/action-groups', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ _action: 'test', actionGroupId }),
@@ -597,7 +605,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
     if (!workspaceId || !selectedId) return;
     setReflexBusy(kind); setReflexMsg(null);
     try {
-      const r = await fetch(`/api/items/activator/${encodeURIComponent(selectedId)}/${kind}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/activator/${encodeURIComponent(selectedId)}/${kind}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) setReflexMsg(`${kind} failed: ${j.error || 'unknown'}`);
       // Prefer the route's honest per-backend message (e.g. on-demand ADX rules
@@ -696,6 +704,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
   }
 
   return (
+    <>
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       leftPanel={
         <div className={s.treePad}>
@@ -1221,5 +1230,7 @@ export function ActivatorEditor({ item, id }: { item: FabricItemType; id: string
         </div>
       }
     />
+    {confirmDialog}
+    </>
   );
 }

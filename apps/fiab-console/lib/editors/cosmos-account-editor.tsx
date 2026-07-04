@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Azure Cosmos DB **Data Explorer studio** — one-for-one with the live data-plane
  * studio (temp/ref-cosmos-data-explorer-studio.png), not the portal management
@@ -156,7 +157,7 @@ export function CosmosAccountEditor({ item, id }: { item: FabricItemType; id: st
   /** Open the New Container wizard, loading the live database list first. */
   const openContainerWizard = useCallback(async () => {
     try {
-      const res = await fetch('/api/cosmos/databases');
+      const res = await clientFetch('/api/cosmos/databases');
       const text = await res.text();
       const body = text ? JSON.parse(text) : {};
       setWizardDatabases(body.ok && Array.isArray(body.databases)

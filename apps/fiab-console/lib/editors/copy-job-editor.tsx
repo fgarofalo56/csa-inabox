@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CopyJobEditor — the Loom one-for-one of Microsoft Fabric's Copy job item.
  *
@@ -97,7 +98,7 @@ function useLinkedServices() {
   const reload = useCallback(async () => {
     setError(null); setHint(null);
     try {
-      const r = await fetch('/api/adf/linked-services');
+      const r = await clientFetch('/api/adf/linked-services');
       const j = await r.json();
       if (!j.ok) {
         setError(j.error || `HTTP ${r.status}`);
@@ -125,7 +126,7 @@ function useItem(itemType: string, id: string) {
     if (!id || id === 'new') return;
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/${itemType}/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/${itemType}/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'load failed');
       setItem(j.item);
@@ -137,7 +138,7 @@ function useItem(itemType: string, id: string) {
 }
 
 async function saveItem(itemType: string, id: string, state: Record<string, any>): Promise<void> {
-  const r = await fetch(`/api/items/${itemType}/${encodeURIComponent(id)}`, {
+  const r = await clientFetch(`/api/items/${itemType}/${encodeURIComponent(id)}`, {
     method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state }),
   });
   const j = await r.json();
@@ -187,7 +188,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   const loadRuns = useCallback(async () => {
     if (id === 'new') return;
     try {
-      const r = await fetch(`/api/items/copy-job/${encodeURIComponent(id)}/runs`);
+      const r = await clientFetch(`/api/items/copy-job/${encodeURIComponent(id)}/runs`);
       const j = await r.json();
       if (j.ok) setRuns(j.runs || []);
       else if (j.error) setErr(j.error);
@@ -197,7 +198,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   const loadWatermark = useCallback(async () => {
     if (id === 'new') return;
     try {
-      const r = await fetch(`/api/items/copy-job/${encodeURIComponent(id)}/watermark`);
+      const r = await clientFetch(`/api/items/copy-job/${encodeURIComponent(id)}/watermark`);
       const j = await r.json();
       setWmConfigured(!!j.configured);
       setWmMissing(j.missing || null);
@@ -222,7 +223,7 @@ export function CopyJobEditor({ item, id }: { item: FabricItemType; id: string }
   const run = useCallback(async () => {
     setBusy(true); setErr(null); setLastRun(null);
     try {
-      const r = await fetch(`/api/items/copy-job/${encodeURIComponent(id)}/run`, {
+      const r = await clientFetch(`/api/items/copy-job/${encodeURIComponent(id)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       });
       const j = await r.json();

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DeltaMaintenanceDialog — table-level Delta Lake maintenance: compaction
  * (OPTIMIZE), ZORDER BY column co-location, and VACUUM retention. Azure-native
@@ -105,7 +106,7 @@ export function DeltaMaintenanceDialog({ open, onOpenChange, container, tableNam
     setBusy(true);
     setResult(null);
     try {
-      const r = await fetch('/api/lakehouse/maintenance', {
+      const r = await clientFetch('/api/lakehouse/maintenance', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

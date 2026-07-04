@@ -619,7 +619,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Event Hubs namespace</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="Add new" relationship="label">
@@ -650,7 +650,7 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading namespace…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading namespace…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Namespace error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
@@ -898,20 +898,20 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
 
               {createGroup === 'hub' && (
                 <>
-                  <Field label="Partition count" style={{ marginTop: 8 }}>
+                  <Field label="Partition count" style={{ marginTop: tokens.spacingVerticalS }}>
                     <SpinButton min={1} max={32} value={hubPartitions} onChange={(_, d) => { const v = d.value ?? Number(d.displayValue); if (Number.isFinite(v)) setHubPartitions(Math.max(1, Math.min(32, Number(v)))); }} />
                   </Field>
-                  <Field label="Message retention (days)" style={{ marginTop: 8 }}>
+                  <Field label="Message retention (days)" style={{ marginTop: tokens.spacingVerticalS }}>
                     <SpinButton min={1} max={7} value={hubRetention} onChange={(_, d) => { const v = d.value ?? Number(d.displayValue); if (Number.isFinite(v)) setHubRetention(Math.max(1, Math.min(7, Number(v)))); }} />
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Standard namespaces allow 1–32 partitions and 1–7 days retention. Partition count is fixed
                     at create time. Tune Capture / longer retention in the Azure portal (not yet wired here).
                   </Caption1>
                 </>
               )}
               {createGroup === 'cg' && (
-                <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                   A consumer group is an independent read position into the event hub. Each downstream
                   consumer (an Eventstream source, an ADX data connection, a custom app) should use its own
                   group. The built-in <code>$Default</code> group always exists and cannot be deleted.
@@ -919,23 +919,23 @@ export function EventHubsNamespaceTree({ refreshKey = 0, onSelectEventHub }: Eve
               )}
               {createGroup === 'sg' && (
                 <>
-                  <Field label="Schema type" style={{ marginTop: 8 }}>
+                  <Field label="Schema type" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={sgSchemaType} selectedOptions={[sgSchemaType]} onOptionSelect={(_, d) => setSgSchemaType((d.optionValue as 'Avro' | 'Json') || 'Avro')}>
                       {['Avro', 'Json'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="Compatibility" style={{ marginTop: 8 }}>
+                  <Field label="Compatibility" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={sgCompat} selectedOptions={[sgCompat]} onOptionSelect={(_, d) => setSgCompat((d.optionValue as 'None' | 'Backward' | 'Forward') || 'None')}>
                       {['None', 'Backward', 'Forward'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Schema groups organize schemas in the namespace schema registry. Requires the Standard tier
                     or higher. Schemas themselves are registered via the schema-registry data plane.
                   </Caption1>
                 </>
               )}
-              {createError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
+              {createError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>

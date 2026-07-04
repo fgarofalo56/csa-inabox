@@ -297,7 +297,7 @@ export function AdxClusterEditor({ onChanged }: AdxClusterEditorProps) {
           </div>
 
           <div className={s.danger}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
               <Warning20Regular style={{ color: tokens.colorPaletteRedForeground1 }} />
               <strong>Danger zone — delete cluster</strong>
             </span>

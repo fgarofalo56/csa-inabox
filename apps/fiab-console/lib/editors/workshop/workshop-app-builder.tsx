@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Workshop app builder — the real, live low-code app builder surface for the
  * Fabric IQ `workshop-app` item (Palantir Foundry **Workshop** parity). Replaces
@@ -132,7 +133,7 @@ interface RunActionBody {
 
 async function runAction(id: string, body: RunActionBody): Promise<RunResult & { recordsAffected?: number }> {
   try {
-    const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/run-action`, {
+    const r = await clientFetch(`/api/items/workshop-app/${encodeURIComponent(id)}/run-action`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     const j = await r.json().catch(() => ({}));

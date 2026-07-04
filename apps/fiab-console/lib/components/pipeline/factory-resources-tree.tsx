@@ -423,7 +423,7 @@ export function FactoryResourcesTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Factory Resources</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Menu>
             <MenuTrigger disableButtonEnhancement>
               <Tooltip content="Add new resource" relationship="label">
@@ -457,7 +457,7 @@ export function FactoryResourcesTree({
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading factory resources…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading factory resources…" /></div>}
       {error && (
         <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Factory error</MessageBarTitle>{error}</MessageBarBody></MessageBar>
       )}
@@ -758,12 +758,12 @@ export function FactoryResourcesTree({
               </Field>
               {createGroup === 'dataset' && (
                 <>
-                  <Field label="Type" style={{ marginTop: 8 }}>
+                  <Field label="Type" style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown value={createDsType} selectedOptions={[createDsType]} onOptionSelect={(_, d) => setCreateDsType(d.optionValue || 'DelimitedText')}>
                       {['DelimitedText', 'Json', 'Parquet', 'Binary', 'AzureSqlTable'].map((t) => <Option key={t} value={t} text={t}>{t}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Field label="Linked service" required style={{ marginTop: 8 }}>
+                  <Field label="Linked service" required style={{ marginTop: tokens.spacingVerticalS }}>
                     <Dropdown
                       placeholder={linkedServices.length ? 'Select a linked service' : 'No linked services — create one in Manage'}
                       value={createDsLinkedService} selectedOptions={createDsLinkedService ? [createDsLinkedService] : []}
@@ -773,24 +773,24 @@ export function FactoryResourcesTree({
                       {linkedServices.map((l) => <Option key={l.name} value={l.name} text={l.name}>{l.name}</Option>)}
                     </Dropdown>
                   </Field>
-                  <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                  <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                     Refine location/format and schema in the Manage hub after creation.
                   </Caption1>
                 </>
               )}
               {createGroup === 'dataflow' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates an empty Mapping Data Flow. Edit the data flow definition — add sources,
                   transformations, and sinks — in the Manage hub data flow JSON editor.
                 </Caption1>
               )}
               {createGroup === 'trigger' && (
-                <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                   Creates a daily Schedule trigger (Stopped). Wire it to a pipeline from that pipeline&apos;s
                   Triggers panel, then Start it.
                 </Caption1>
               )}
-              {createError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
+              {createError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{createError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateGroup(null)} disabled={busy}>Cancel</Button>
@@ -853,7 +853,7 @@ export function FactoryResourcesTree({
                   <Button size="small" appearance="secondary" icon={<Add20Regular />} onClick={() => setGpRows((rows) => [...rows, { name: '', type: 'String', value: '' }])}>Add parameter</Button>
                 </div>
               </div>
-              {gpError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{gpError}</MessageBarBody></MessageBar>}
+              {gpError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{gpError}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setGpOpen(false)} disabled={busy}>Cancel</Button>
@@ -872,22 +872,22 @@ export function FactoryResourcesTree({
               <Field label="Name" required>
                 <Input value={mpeName} onChange={(_, d) => setMpeName(d.value)} placeholder="mpe-lake-dfs" disabled={!!mpeNote} />
               </Field>
-              <Field label="Target resource ID" required style={{ marginTop: 8 }}>
+              <Field label="Target resource ID" required style={{ marginTop: tokens.spacingVerticalS }}>
                 <Input value={mpeResourceId} onChange={(_, d) => setMpeResourceId(d.value)} placeholder="/subscriptions/…/providers/Microsoft.Storage/storageAccounts/…" disabled={!!mpeNote} />
               </Field>
-              <Field label="Sub-resource (groupId)" required style={{ marginTop: 8 }}>
+              <Field label="Sub-resource (groupId)" required style={{ marginTop: tokens.spacingVerticalS }}>
                 <Dropdown value={mpeGroupId} selectedOptions={[mpeGroupId]} onOptionSelect={(_, d) => setMpeGroupId(d.optionValue || 'dfs')} disabled={!!mpeNote}>
                   {['dfs', 'blob', 'sqlServer', 'vault', 'table', 'queue', 'file', 'namespace', 'sites'].map((gid) => <Option key={gid} value={gid} text={gid}>{gid}</Option>)}
                 </Dropdown>
               </Field>
-              <Caption1 style={{ display: 'block', marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
                 Created in managed virtual network <code>{mvnetName}</code>. Choose the target sub-resource:
                 <code> dfs</code>/<code>blob</code> for ADLS/Storage, <code>sqlServer</code> for Azure SQL,
                 <code> vault</code> for Key Vault. The endpoint is created <strong>Pending</strong> — the resource owner must approve the
                 connection before it carries traffic.
               </Caption1>
-              {mpeError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{mpeError}</MessageBarBody></MessageBar>}
-              {mpeNote && <MessageBar intent="warning" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Created — approval required</MessageBarTitle>{mpeNote}</MessageBarBody></MessageBar>}
+              {mpeError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Create failed</MessageBarTitle>{mpeError}</MessageBarBody></MessageBar>}
+              {mpeNote && <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Created — approval required</MessageBarTitle>{mpeNote}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setMpeOpen(false)} disabled={busy}>{mpeNote ? 'Close' : 'Cancel'}</Button>

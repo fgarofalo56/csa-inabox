@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Materialized Lake View (MLV) editor — Fabric-parity surface, Azure-native.
  *
@@ -176,7 +177,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
     if (id === 'new') return;
     setLoading(true); setLoadError(null);
     try {
-      const r = await fetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}`);
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || `HTTP ${r.status}`);
       const it: ItemDTO = await r.json();
       setCosmosItem(it);
@@ -204,7 +205,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
     if (problems.length) { setErr(problems.join(' ')); return; }
     setBusy(true); setErr(null); setSaveMsg('Saving…');
     try {
-      const r = await fetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: { ...(cosmosItem?.state || {}), spec } }),
       });
@@ -218,7 +219,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
   const loadRuns = useCallback(async () => {
     if (id === 'new') return;
     try {
-      const r = await fetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/runs?size=25`);
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/runs?size=25`);
       const j = await r.json();
       if (j.ok) setRuns(j.sessions || []);
       else if (j.gate) setGate({ error: j.error, remediation: j.remediation });
@@ -229,7 +230,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
   const loadLineage = useCallback(async () => {
     if (id === 'new') return;
     try {
-      const r = await fetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/lineage`);
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/lineage`);
       const j = await r.json();
       if (j.ok) { setLineageNodes(j.nodes || []); setLineageEdges(j.edges || []); }
     } catch { /* lineage is best-effort */ }
@@ -251,7 +252,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
     if (problems.length) { setErr(problems.join(' ')); return; }
     setBusy(true); setErr(null); setGate(null); setRefreshMsg('Submitting Spark batch…');
     try {
-      const r = await fetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/refresh`, {
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/refresh`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ spec, trigger: 'editor' }),
       });
@@ -273,7 +274,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
   const reDeriveLineage = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/lineage`, {
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/lineage`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ spec: buildSpec() }),
       });
       const j = await r.json();
@@ -286,7 +287,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
   const createAdfPipeline = useCallback(async (run: boolean) => {
     setBusy(true); setErr(null); setGate(null); setAdfStatus('Creating ADF pipeline…');
     try {
-      const r = await fetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/adf-pipeline`, {
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/adf-pipeline`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ run }),
       });
       const j = await r.json();
@@ -303,7 +304,7 @@ export function MaterializedLakeViewEditor({ item, id }: { item: FabricItemType;
   const doPreview = useCallback(async () => {
     setBusy(true); setErr(null); setGate(null); setPreview(null);
     try {
-      const r = await fetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/preview`, {
+      const r = await clientFetch(`/api/items/materialized-lake-view/${encodeURIComponent(id)}/preview`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ maxRows: 200 }),
       });
       const j = await r.json();

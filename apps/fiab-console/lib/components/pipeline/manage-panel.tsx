@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ManagePanel — the ADF "Manage" hub surfaced as a dialog from the data
  * pipeline editor ribbon (ADF only).
@@ -387,7 +388,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
   const loadShir = useCallback(async () => {
     setShirError(null);
     try {
-      const res = await fetch('/api/loom/shir');
+      const res = await clientFetch('/api/loom/shir');
       const body = await readJson(res);
       if (body?.code === 'not_configured') { setShirGate(body.error || 'SHIR not deployed'); setShir(null); return; }
       if (!body.ok) { setShirError(body.error || 'failed to read SHIR'); setShir(null); return; }
@@ -399,7 +400,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
   const scaleShir = useCallback(async (capacity: number) => {
     setShirBusy(true); setShirError(null);
     try {
-      const res = await fetch('/api/loom/shir', {
+      const res = await clientFetch('/api/loom/shir', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ capacity }),
       });
@@ -436,14 +437,14 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
         <DialogBody>
           <DialogTitle>Manage — {backendLabel} resources</DialogTitle>
           <DialogContent>
-            <Caption1 style={{ display: 'block', marginBottom: 8, color: tokens.colorNeutralForeground3 }}>
+            <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
               {backend === 'adf' ? 'Factory-level' : 'Workspace-level'} resources your pipeline activities
               reference. Every action below hits real{' '}
               {backend === 'adf' ? 'Azure Data Factory REST (api-version 2018-06-01).' : 'Synapse workspace dev REST.'}
             </Caption1>
 
             <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as ManageTab)}
-              style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: 12 }}>
+              style={{ borderBottom: `1px solid ${tokens.colorNeutralStroke2}`, marginBottom: tokens.spacingVerticalM }}>
               <Tab value="linked-services">Linked services</Tab>
               <Tab value="datasets">Datasets</Tab>
               {showIr && <Tab value="integration-runtimes">Integration runtimes</Tab>}
@@ -454,12 +455,12 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
             {/* ---------------- Linked services ---------------- */}
             {tab === 'linked-services' && !gate && (
               <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS }}>
                   <Subtitle2>Linked services ({lsList.length})</Subtitle2>
                   <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadLs} disabled={lsLoading}>Refresh</Button>
                   {lsLoading && <Spinner size="tiny" />}
                 </div>
-                <div style={{ overflow: 'auto', maxHeight: 200, marginBottom: 12 }}>
+                <div style={{ overflow: 'auto', maxHeight: 200, marginBottom: tokens.spacingVerticalM }}>
                   <Table size="small" aria-label="Linked services">
                     <TableHeader><TableRow>
                       <TableHeaderCell>Name</TableHeaderCell>
@@ -481,7 +482,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                   </Table>
                 </div>
                 <Subtitle2>New linked service</Subtitle2>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                   <Field label="Name"><Input value={lsName} onChange={(_, d) => setLsName(d.value)} placeholder="blob_landing" /></Field>
                   <Field label="Connector type">
                     <Dropdown
@@ -495,13 +496,13 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                 </div>
 
                 {lsType === CUSTOM_LS ? (
-                  <div style={{ marginTop: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS }}>
                     <Field label="Connector type identifier" hint="The ADF/Synapse linked-service type, e.g. ServiceNow, Oracle, SapHana.">
                       <Input value={lsCustomType} onChange={(_, d) => setLsCustomType(d.value)} placeholder="ServiceNow" />
                     </Field>
-                    <Caption1 style={{ display: 'block', marginTop: 8, marginBottom: 4 }}>Properties (key / value)</Caption1>
+                    <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS, marginBottom: tokens.spacingVerticalXS }}>Properties (key / value)</Caption1>
                     {lsKv.map((row, i) => (
-                      <div key={i} style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+                      <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalSNudge }}>
                         <Input style={{ flex: 1 }} placeholder="key (e.g. endpoint)" value={row.key}
                           onChange={(_, d) => setLsKv((rows) => rows.map((r, j) => (j === i ? { ...r, key: d.value } : r)))} />
                         <Input style={{ flex: 2 }} placeholder="value" value={row.value}
@@ -514,7 +515,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                       onClick={() => setLsKv((rows) => [...rows, { key: '', value: '' }])}>Add property</Button>
                   </div>
                 ) : (
-                  <div style={{ marginTop: 8, display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div style={{ marginTop: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS }}>
                     {(LS_FORMS.find((f) => f.value === lsType)?.fields || []).map((f) => (
                       <Field key={f.key} label={f.required ? f.label : `${f.label} (optional)`} hint={f.hint}>
                         <Input
@@ -528,24 +529,24 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                   </div>
                 )}
 
-                <div style={{ marginTop: 12 }}>
+                <div style={{ marginTop: tokens.spacingVerticalM }}>
                   <Button appearance="primary" icon={<Add20Regular />} disabled={lsBusy || !lsName.trim()} onClick={createLs}>
                     {lsBusy ? 'Saving…' : 'Create linked service'}
                   </Button>
                 </div>
-                {lsError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Linked service error</MessageBarTitle>{lsError}</MessageBarBody></MessageBar>}
+                {lsError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Linked service error</MessageBarTitle>{lsError}</MessageBarBody></MessageBar>}
               </>
             )}
 
             {/* ---------------- Datasets ---------------- */}
             {tab === 'datasets' && !gate && (
               <>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS }}>
                   <Subtitle2>Datasets ({dsList.length})</Subtitle2>
                   <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadDs} disabled={dsLoading}>Refresh</Button>
                   {dsLoading && <Spinner size="tiny" />}
                 </div>
-                <div style={{ overflow: 'auto', maxHeight: 200, marginBottom: 12 }}>
+                <div style={{ overflow: 'auto', maxHeight: 200, marginBottom: tokens.spacingVerticalM }}>
                   <Table size="small" aria-label="Datasets">
                     <TableHeader><TableRow>
                       <TableHeaderCell>Name</TableHeaderCell>
@@ -569,7 +570,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                   </Table>
                 </div>
                 <Subtitle2>New dataset</Subtitle2>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                   <Field label="Name"><Input value={dsName} onChange={(_, d) => setDsName(d.value)} placeholder="orders_csv" /></Field>
                   <Field label="Type">
                     <Dropdown value={dsType} selectedOptions={[dsType]} onOptionSelect={(_, d) => setDsType(d.optionValue || 'DelimitedText')}>
@@ -586,7 +587,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                 </div>
                 {FILE_DS_TYPES.has(dsType) && (
                   <>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                       <Field label="Container / file system" hint="Top-level container or ADLS file system.">
                         <Input value={dsContainer} onChange={(_, d) => setDsContainer(d.value)} placeholder="raw" />
                       </Field>
@@ -598,7 +599,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                       </Field>
                     </div>
                     {dsType === 'DelimitedText' && (
-                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginTop: 8, alignItems: 'end' }}>
+                      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS, alignItems: 'end' }}>
                         <Field label="Column delimiter">
                           <Dropdown value={dsColumnDelimiter} selectedOptions={[dsColumnDelimiter]}
                             onOptionSelect={(_, d) => d.optionValue && setDsColumnDelimiter(d.optionValue)}>
@@ -614,7 +615,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                           onChange={(_, d) => setDsFirstRowHeader(d.checked)} />
                       </div>
                     )}
-                    <Field label="Compression" style={{ marginTop: 8, maxWidth: 240 }}>
+                    <Field label="Compression" style={{ marginTop: tokens.spacingVerticalS, maxWidth: 240 }}>
                       <Dropdown value={dsCompression} selectedOptions={[dsCompression]}
                         onOptionSelect={(_, d) => d.optionValue && setDsCompression(d.optionValue)}>
                         <Option value="none">None</Option>
@@ -627,7 +628,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                   </>
                 )}
                 {TABLE_DS_TYPES.has(dsType) && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginTop: 8 }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                     <Field label="Schema" hint="Database schema (e.g. dbo).">
                       <Input value={dsSchema} onChange={(_, d) => setDsSchema(d.value)} placeholder="dbo" />
                     </Field>
@@ -636,12 +637,12 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                     </Field>
                   </div>
                 )}
-                <div style={{ marginTop: 8 }}>
+                <div style={{ marginTop: tokens.spacingVerticalS }}>
                   <Button appearance="primary" icon={<Add20Regular />} disabled={dsBusy || !dsName.trim() || !dsLinkedService} onClick={createDs}>
                     {dsBusy ? 'Saving…' : 'Create dataset'}
                   </Button>
                 </div>
-                {dsError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Dataset error</MessageBarTitle>{dsError}</MessageBarBody></MessageBar>}
+                {dsError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Dataset error</MessageBarTitle>{dsError}</MessageBarBody></MessageBar>}
               </>
             )}
 
@@ -650,35 +651,35 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
               <>
                 {/* Loom scaled self-hosted IR (VMSS, scale-to-0) — ADF-only */}
                 {showScaledShir && (shirGate ? (
-                  <MessageBar intent="info" style={{ marginBottom: 12 }}>
+                  <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}>
                     <MessageBarBody><MessageBarTitle>Scaled self-hosted IR</MessageBarTitle>{shirGate}</MessageBarBody>
                   </MessageBar>
                 ) : shir ? (
-                  <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 12, marginBottom: 12, backgroundColor: tokens.colorNeutralBackground2 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalM, backgroundColor: tokens.colorNeutralBackground2 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                       <Subtitle2>Scaled self-hosted IR</Subtitle2>
                       <Badge appearance="filled" color={shir.capacity === 0 ? 'informative' : (shir.runningNodes >= shir.capacity ? 'success' : 'warning')}>{shir.state}</Badge>
                       <Caption1>· {shir.name}</Caption1>
                       <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadShir} disabled={shirBusy} title="Refresh" />
                     </div>
-                    <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                    <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                       A 4-node cluster that costs nothing while idle — start it before a run, stop it after. {shir.runningNodes}/{shir.capacity} node(s) online.
                     </Caption1>
-                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalS }}>
                       <Button size="small" appearance="primary" icon={<Play20Regular />} disabled={shirBusy || shir.capacity > 0} onClick={() => scaleShir(4)}>
                         {shirBusy ? 'Working…' : 'Start (scale to 4)'}
                       </Button>
                       <Button size="small" icon={<Stop20Regular />} disabled={shirBusy || shir.capacity === 0} onClick={() => scaleShir(0)}>Stop (scale to 0)</Button>
                     </div>
-                    {shirError && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{shirError}</MessageBarBody></MessageBar>}
+                    {shirError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{shirError}</MessageBarBody></MessageBar>}
                   </div>
                 ) : null)}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS, marginBottom: tokens.spacingVerticalS }}>
                   <Subtitle2>Integration runtimes ({irList.length})</Subtitle2>
                   <Button size="small" appearance="subtle" icon={<ArrowSync20Regular />} onClick={loadIr} disabled={irLoading}>Refresh</Button>
                   {irLoading && <Spinner size="tiny" />}
                 </div>
-                <div style={{ overflow: 'auto', maxHeight: 220, marginBottom: 12 }}>
+                <div style={{ overflow: 'auto', maxHeight: 220, marginBottom: tokens.spacingVerticalM }}>
                   <Table size="small" aria-label="Integration runtimes">
                     <TableHeader><TableRow>
                       <TableHeaderCell>Name</TableHeaderCell>
@@ -696,7 +697,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                             <TableCell><code>{r.type || '—'}</code></TableCell>
                             <TableCell><Badge appearance="filled" color={stateColor(r.state)}>{r.state || '—'}</Badge></TableCell>
                             <TableCell>
-                              <div style={{ display: 'flex', gap: 4 }}>
+                              <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
                                 <Button size="small" icon={<Play20Regular />} disabled={irBusy || !isSelfHosted} title={isSelfHosted ? 'Start node set' : 'Start only applies to Self-Hosted IRs'} onClick={() => irLifecycle(r.name, 'start')}>Start</Button>
                                 <Button size="small" icon={<Stop20Regular />} disabled={irBusy || !isSelfHosted} title={isSelfHosted ? 'Stop node set' : 'Stop only applies to Self-Hosted IRs'} onClick={() => irLifecycle(r.name, 'stop')}>Stop</Button>
                                 <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={irBusy || r.name === 'AutoResolveIntegrationRuntime'} title={r.name === 'AutoResolveIntegrationRuntime' ? 'The default Azure IR cannot be deleted' : undefined} onClick={() => deleteIr(r.name)}>Delete</Button>
@@ -709,7 +710,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                   </Table>
                 </div>
                 <Subtitle2>New integration runtime</Subtitle2>
-                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 12, marginTop: 8 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: tokens.spacingHorizontalM, marginTop: tokens.spacingVerticalS }}>
                   <Field label="Name"><Input value={irName} onChange={(_, d) => setIrName(d.value)} placeholder="selfhosted-onprem" /></Field>
                   <Field label="Type">
                     <Dropdown value={irType} selectedOptions={[irType]} onOptionSelect={(_, d) => setIrType((d.optionValue as 'Managed' | 'SelfHosted') || 'SelfHosted')}>
@@ -718,16 +719,16 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
                     </Dropdown>
                   </Field>
                 </div>
-                <Caption1 style={{ display: 'block', marginTop: 4, color: tokens.colorNeutralForeground3 }}>
+                <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalXS, color: tokens.colorNeutralForeground3 }}>
                   Self-Hosted IRs are created in a NeedRegistration state — install the gateway on a node and
                   register it with the auth key. Start/Stop control the node set once registered.
                 </Caption1>
-                <div style={{ marginTop: 8 }}>
+                <div style={{ marginTop: tokens.spacingVerticalS }}>
                   <Button appearance="primary" icon={<Add20Regular />} disabled={irBusy || !irName.trim()} onClick={createIr}>
                     {irBusy ? 'Saving…' : 'Create integration runtime'}
                   </Button>
                 </div>
-                {irError && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody><MessageBarTitle>Integration runtime error</MessageBarTitle>{irError}</MessageBarBody></MessageBar>}
+                {irError && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Integration runtime error</MessageBarTitle>{irError}</MessageBarBody></MessageBar>}
               </>
             )}
           </DialogContent>

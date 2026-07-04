@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ScorecardEditor — goals + rollups + check-ins + connected metrics.
  *
@@ -268,7 +269,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
     try {
-      const r = await fetch(`/api/items/scorecard${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
+      const r = await clientFetch(`/api/items/scorecard${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
       const j = await r.json();
       if (!j.ok) { setScorecards([]); setErr(j.error); return; }
       setScorecards(j.scorecards || []);
@@ -278,7 +279,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
 
   const loadGoals = useCallback(async (wsId: string, scId: string) => {
     try {
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scId)}${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
+      const r = await clientFetch(`/api/items/scorecard/${encodeURIComponent(scId)}${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
       const j = await r.json();
       if (j.ok) { setGoals(j.goals || []); setDraft(j.goals || []); } else setErr(j.error);
     } catch (e: any) { setErr(e?.message || String(e)); }
@@ -302,7 +303,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     if (!Number.isFinite(value)) { setEntryErr('numeric value required'); return; }
     setEntryBusy(true); setEntryErr(null);
     try {
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}${wsQs(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}${wsQs(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -330,7 +331,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     setBindTestValue(undefined); setBindErr(null); setBindDatasets([]);
     if (!workspaceId) return;
     try {
-      const r = await fetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (j.ok) setBindDatasets(j.datasets || []);
     } catch { /* dataset list is best-effort; the binder still works by saving */ }
@@ -344,14 +345,14 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     if (!bindDatasetId || !bindDax.trim()) { setBindErr('pick a dataset and enter a DAX expression'); return; }
     setBindBusy(true); setBindErr(null); setBindTestValue(undefined);
     try {
-      const put = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const put = await clientFetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ goalId: bindOpen.goalId, connectedMetric: { workspaceId, datasetId: bindDatasetId, daxExpression: bindDax.trim() } }),
       });
       const pj = await put.json();
       if (!pj.ok) { setBindErr(pj.error || 'bind failed'); return; }
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/metric-value?goalId=${encodeURIComponent(bindOpen.goalId)}&workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/metric-value?goalId=${encodeURIComponent(bindOpen.goalId)}&workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (!j.ok) { setBindErr(`${j.error}${j.remediation ? ' — ' + j.remediation : ''}`); return; }
       setBindTestValue(j.value);
@@ -364,7 +365,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     if (!bindDatasetId || !bindDax.trim()) { setBindErr('pick a dataset and enter a DAX expression'); return; }
     setBindBusy(true); setBindErr(null);
     try {
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ goalId: bindOpen.goalId, connectedMetric: { workspaceId, datasetId: bindDatasetId, daxExpression: bindDax.trim() } }),
@@ -381,7 +382,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
     if (!workspaceId || !scorecardId) return;
     setMetricBusy(goalId);
     try {
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/metric-value?goalId=${encodeURIComponent(goalId)}&workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/metric-value?goalId=${encodeURIComponent(goalId)}&workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (j.ok) setMetricValues((m) => ({ ...m, [goalId]: j.value }));
       else setErr(`${j.error}${j.remediation ? ' — ' + j.remediation : ''}`);
@@ -397,7 +398,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
       const qs = new URLSearchParams();
       if (workspaceId) qs.set('workspaceId', workspaceId);
       qs.set('history', goalId);
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?${qs.toString()}`);
+      const r = await clientFetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}?${qs.toString()}`);
       const j = await r.json();
       if (j.ok) setHistoryRows(j.checkIns || []); else setErr(j.error);
     } catch (e: any) { setErr(e?.message || String(e)); } finally { setHistoryBusy(false); }
@@ -446,7 +447,7 @@ export function ScorecardEditor({ item, id }: { item: FabricItemType; id: string
         statusRules: g.statusRules,
         otherwiseStatus: g.otherwiseStatus,
       }));
-      const r = await fetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/config${wsQs(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/scorecard/${encodeURIComponent(scorecardId)}/config${wsQs(workspaceId)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ goals: payload }),

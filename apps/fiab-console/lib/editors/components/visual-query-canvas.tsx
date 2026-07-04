@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * VisualQueryCanvas — Power-Query-style no-code query builder.
  *
@@ -350,7 +351,7 @@ function CanvasInner(props: VisualQueryCanvasProps) {
   const fetchColumns = useCallback(async (nodeId: string, tblSchema: string | undefined, table: string) => {
     setColError(null);
     try {
-      const r = await fetch(`/api/items/${engine}/${encodeURIComponent(id)}/visual-query`, {
+      const r = await clientFetch(`/api/items/${engine}/${encodeURIComponent(id)}/visual-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...baseBody, describe: { schema: tblSchema, table } }),
       });
@@ -505,7 +506,7 @@ function CanvasInner(props: VisualQueryCanvasProps) {
     if (!nodes.length) return;
     setRunning(true); setResult(null); setResultFilter('');
     try {
-      const r = await fetch(`/api/items/${engine}/${encodeURIComponent(id)}/visual-query`, {
+      const r = await clientFetch(`/api/items/${engine}/${encodeURIComponent(id)}/visual-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...baseBody, graph: buildGraph(nodes, edges, outputId) }),
       });

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ServiceBusNamespaceEditor — navigator over the deployment-pinned Azure Service
  * Bus namespace (Microsoft.ServiceBus/namespaces). Real ARM via
@@ -130,7 +131,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const load = useCallback(async () => {
     setLoading(true); setGate(null);
     try {
-      const r = await fetch('/api/items/service-bus-namespace');
+      const r = await clientFetch('/api/items/service-bus-namespace');
       const j = await r.json();
       if (!j.ok) { setGate({ error: j.error || 'not available', hint: j.hint }); setNs(null); setQueues([]); setTopics([]); return; }
       setNs(j.namespace || null);
@@ -163,7 +164,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
       const payload = kind === 'queue'
         ? { action: 'create-queue', ...common, requiresSession: cSession, lockDurationSeconds: Number(cLockSec) || undefined, maxDeliveryCount: Number(cMaxDelivery) || undefined, deadLetteringOnMessageExpiration: cDlqExpire, forwardTo: cForwardTo.trim() || undefined }
         : { action: 'create-topic', ...common, supportOrdering: cSupportOrdering };
-      const r = await fetch('/api/items/service-bus-namespace', {
+      const r = await clientFetch('/api/items/service-bus-namespace', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
       const j = await r.json();
@@ -177,7 +178,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const del = useCallback(async (k: 'queue' | 'topic', name: string) => {
     setMsg(null);
     try {
-      const r = await fetch(`/api/items/service-bus-namespace?${k}=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/service-bus-namespace?${k}=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || 'delete failed' }); return; }
       setMsg({ intent: 'success', text: `Deleted ${k} "${name}".` });
@@ -190,7 +191,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const loadSubs = useCallback(async (topic: string) => {
     setSubsTopic(topic); setSubs(null); setRulesFor(null); setRules(null);
     try {
-      const r = await fetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(topic)}&subscriptions=1`);
+      const r = await clientFetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(topic)}&subscriptions=1`);
       const j = await r.json();
       setSubs(j.ok ? (j.subscriptions || []) : []);
       if (!j.ok) setMsg({ intent: 'error', text: j.error || 'failed to list subscriptions' });
@@ -201,7 +202,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
     if (!subsTopic || !sName.trim()) return;
     setSubBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/items/service-bus-namespace', {
+      const r = await clientFetch('/api/items/service-bus-namespace', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           action: 'create-subscription', topic: subsTopic, name: sName.trim(),
@@ -222,7 +223,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const delSub = useCallback(async (topic: string, name: string) => {
     setMsg(null);
     try {
-      const r = await fetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(topic)}&subscription=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(topic)}&subscription=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || 'delete failed' }); return; }
       setMsg({ intent: 'success', text: `Deleted subscription "${name}".` });
@@ -236,7 +237,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const loadRules = useCallback(async (topic: string, sub: string) => {
     setRulesFor({ topic, sub }); setRules(null);
     try {
-      const r = await fetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(topic)}&subscription=${encodeURIComponent(sub)}&rules=1`);
+      const r = await clientFetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(topic)}&subscription=${encodeURIComponent(sub)}&rules=1`);
       const j = await r.json();
       setRules(j.ok ? (j.rules || []) : []);
       if (!j.ok) setMsg({ intent: 'error', text: j.error || 'failed to list rules' });
@@ -262,7 +263,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
         label: rcLabel.trim() || undefined,
         contentType: rcContentType.trim() || undefined,
       };
-      const r = await fetch('/api/items/service-bus-namespace', {
+      const r = await clientFetch('/api/items/service-bus-namespace', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
       const j = await r.json();
@@ -277,7 +278,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
     if (!rulesFor) return;
     setMsg(null);
     try {
-      const r = await fetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(rulesFor.topic)}&subscription=${encodeURIComponent(rulesFor.sub)}&rule=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(rulesFor.topic)}&subscription=${encodeURIComponent(rulesFor.sub)}&rule=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || 'delete failed' }); return; }
       await loadRules(rulesFor.topic, rulesFor.sub);
@@ -288,7 +289,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const loadAuthRules = useCallback(async () => {
     setAuthRules(null); setKeysFor(null); setKeys(null);
     try {
-      const r = await fetch('/api/items/service-bus-namespace?authRules=1');
+      const r = await clientFetch('/api/items/service-bus-namespace?authRules=1');
       const j = await r.json();
       setAuthRules(j.ok ? (j.authorizationRules || []) : []);
       if (!j.ok) setMsg({ intent: 'error', text: j.error || 'failed to list policies' });
@@ -301,7 +302,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
     if (!rights.length) { setMsg({ intent: 'error', text: 'select at least one right' }); return; }
     setAuthBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/items/service-bus-namespace', {
+      const r = await clientFetch('/api/items/service-bus-namespace', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'create-auth-rule', name: aName.trim(), rights }),
       });
@@ -316,7 +317,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const delAuth = useCallback(async (name: string) => {
     setMsg(null);
     try {
-      const r = await fetch(`/api/items/service-bus-namespace?authRule=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/service-bus-namespace?authRule=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || 'delete failed' }); return; }
       if (keysFor === name) { setKeysFor(null); setKeys(null); }
@@ -327,7 +328,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const showKeys = useCallback(async (rule: string) => {
     setKeysFor(rule); setKeys(null); setKeysBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/items/service-bus-namespace', {
+      const r = await clientFetch('/api/items/service-bus-namespace', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'list-keys', rule }),
       });
@@ -340,7 +341,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const regenKeys = useCallback(async (rule: string, keyType: 'PrimaryKey' | 'SecondaryKey') => {
     setKeysBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/items/service-bus-namespace', {
+      const r = await clientFetch('/api/items/service-bus-namespace', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'regenerate-keys', rule, keyType }),
       });
@@ -355,7 +356,7 @@ export function ServiceBusNamespaceEditor({ item, id }: Props) {
   const loadNetwork = useCallback(async () => {
     setNetLoading(true);
     try {
-      const r = await fetch('/api/items/service-bus-namespace?network=1');
+      const r = await clientFetch('/api/items/service-bus-namespace?network=1');
       const j = await r.json();
       if (j.ok) { setNetwork(j.network || null); setPrivateEndpoints(Array.isArray(j.privateEndpoints) ? j.privateEndpoints : []); }
       else setMsg({ intent: 'error', text: j.error || 'failed to load networking' });

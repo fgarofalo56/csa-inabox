@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * LifecycleRulesPanel — OneLake Lifecycle Management rules editor.
  *
@@ -138,7 +139,7 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/onelake/lifecycle?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const res = await clientFetch(`/api/onelake/lifecycle?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await res.json();
       if (j?.gate) { setGate({ missing: j.missing, hint: j.hint, bicepModule: j.bicepModule }); setRules([]); }
       else if (j?.ok) { setGate(null); setRules(j.rules || []); setAccount(j.account); }
@@ -157,7 +158,7 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch('/api/onelake/lifecycle', {
+      const res = await clientFetch('/api/onelake/lifecycle', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, rules: next }),
@@ -265,7 +266,7 @@ export function LifecycleRulesPanel({ workspaceId }: { workspaceId: string }) {
           {gate.bicepModule && (
             <Caption1 block>Bicep module: <code>{gate.bicepModule}</code></Caption1>
           )}
-          {gate.hint && <Caption1 block style={{ marginTop: 6 }}>{gate.hint}</Caption1>}
+          {gate.hint && <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>{gate.hint}</Caption1>}
         </MessageBarBody>
       </MessageBar>
     );

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * UnifiedSqlDatabaseEditor — the Loom "SQL database" surface, backed by REAL
  * Azure database services (NOT Fabric SQL). Replaces the misleading
@@ -901,7 +902,7 @@ export function UnifiedSqlDatabaseEditor({ item, id }: { item: FabricItemType; i
   const cancelQuery = useCallback(async () => {
     if (!activeRequestId || family === 'postgres') return;
     try {
-      await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
+      await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ requestId: activeRequestId }),

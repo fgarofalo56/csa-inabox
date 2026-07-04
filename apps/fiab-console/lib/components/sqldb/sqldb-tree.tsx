@@ -1,5 +1,7 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * SqlDbTree — the Azure SQL Database / Fabric SQL database **schema object**
  * navigator. The T-SQL equivalent of the ADX KQL-database / Databricks
@@ -136,6 +138,7 @@ function notebookCell(sql: string): string {
 /** A typed, SSMS/portal-faithful Azure SQL / Fabric SQL object navigator. */
 export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, onOpenInNotebook, refreshKey = 0 }: SqlDbTreeProps) {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const router = useRouter();
 
   const q = useMemo(() => {
@@ -236,7 +239,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   const loadColumns = useCallback(async (objectId: number) => {
     setCols((c) => ({ ...c, [objectId]: 'loading' }));
     try {
-      const body = await fetch(`/api/sqldb/columns?${q}&objectId=${objectId}`).then(readJson);
+      const body = await clientFetch(`/api/sqldb/columns?${q}&objectId=${objectId}`).then(readJson);
       if (body.ok) setCols((c) => ({ ...c, [objectId]: body.columns || [] }));
       else setCols((c) => ({ ...c, [objectId]: { error: body.error || 'failed to load columns' } }));
     } catch (e: any) {
@@ -247,7 +250,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   const loadIndexes = useCallback(async (objectId: number) => {
     setIndexes((ix) => ({ ...ix, [objectId]: 'loading' }));
     try {
-      const body = await fetch(`/api/sqldb/indexes?${q}&objectId=${objectId}`).then(readJson);
+      const body = await clientFetch(`/api/sqldb/indexes?${q}&objectId=${objectId}`).then(readJson);
       if (body.ok) setIndexes((ix) => ({ ...ix, [objectId]: body.indexes || [] }));
       else setIndexes((ix) => ({ ...ix, [objectId]: { error: body.error || 'failed to load indexes' } }));
     } catch (e: any) {
@@ -256,7 +259,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   }, [q]);
 
   const drop = useCallback(async (route: string, objectId: number, label: string) => {
-    if (typeof window !== 'undefined' && !window.confirm(`Drop ${label}? This cannot be undone.`)) return;
+    if (!(await confirm({ title: `Drop ${label}?`, body: 'This cannot be undone.', danger: true, confirmLabel: 'Drop' }))) return;
     setBusy(true); setError(null);
     try {
       const sep = route.includes('?') ? '&' : '?';
@@ -269,10 +272,10 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   }, [loadAll]);
 
   const dropIndex = useCallback(async (tableObjectId: number, indexId: number, label: string) => {
-    if (typeof window !== 'undefined' && !window.confirm(`Drop index ${label}? This cannot be undone.`)) return;
+    if (!(await confirm({ title: `Drop index ${label}?`, body: 'This cannot be undone.', danger: true, confirmLabel: 'Drop index' }))) return;
     setBusy(true); setError(null);
     try {
-      const body = await fetch(`/api/sqldb/indexes?${q}&objectId=${tableObjectId}&indexId=${indexId}`, { method: 'DELETE' }).then(readJson);
+      const body = await clientFetch(`/api/sqldb/indexes?${q}&objectId=${tableObjectId}&indexId=${indexId}`, { method: 'DELETE' }).then(readJson);
       if (!body.ok) { setError(body.error || 'drop index failed'); setBusy(false); return; }
       await loadIndexes(tableObjectId);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -282,7 +285,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   const loadConstraints = useCallback(async (objectId: number) => {
     setConstraints((cs) => ({ ...cs, [objectId]: 'loading' }));
     try {
-      const body = await fetch(`/api/sqldb/constraints?${q}&objectId=${objectId}`).then(readJson);
+      const body = await clientFetch(`/api/sqldb/constraints?${q}&objectId=${objectId}`).then(readJson);
       if (body.ok) {
         setConstraints((cs) => ({ ...cs, [objectId]: body.constraints || [] }));
         if (body.backendKind === 'sqldb' || body.backendKind === 'warehouse' || body.backendKind === 'synapse-dedicated') {
@@ -296,10 +299,10 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   }, [q]);
 
   const dropConstraint = useCallback(async (tableObjectId: number, constraintId: number, label: string) => {
-    if (typeof window !== 'undefined' && !window.confirm(`Drop constraint ${label}? This cannot be undone.`)) return;
+    if (!(await confirm({ title: `Drop constraint ${label}?`, body: 'This cannot be undone.', danger: true, confirmLabel: 'Drop constraint' }))) return;
     setBusy(true); setError(null);
     try {
-      const body = await fetch(`/api/sqldb/constraints?${q}&objectId=${tableObjectId}&constraintId=${constraintId}`, { method: 'DELETE' }).then(readJson);
+      const body = await clientFetch(`/api/sqldb/constraints?${q}&objectId=${tableObjectId}&constraintId=${constraintId}`, { method: 'DELETE' }).then(readJson);
       if (!body.ok) { setError(body.error || 'drop constraint failed'); setBusy(false); return; }
       await loadConstraints(tableObjectId);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -309,7 +312,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
   const toggleConstraint = useCallback(async (tableObjectId: number, constraintId: number, enable: boolean, label: string) => {
     setBusy(true); setError(null);
     try {
-      const body = await fetch(`/api/sqldb/constraints?${q}&objectId=${tableObjectId}&constraintId=${constraintId}`, {
+      const body = await clientFetch(`/api/sqldb/constraints?${q}&objectId=${tableObjectId}&constraintId=${constraintId}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enable }),
@@ -352,7 +355,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
     setBusy(true); setError(null);
     try {
       const ixp = indexId != null ? `&indexId=${indexId}` : '';
-      const body = await fetch(`/api/sqldb/script?${q}&objectId=${objectId}&group=${group}&variant=${variant}${ixp}`).then(readJson);
+      const body = await clientFetch(`/api/sqldb/script?${q}&objectId=${objectId}&group=${group}&variant=${variant}${ixp}`).then(readJson);
       if (body.ok && typeof body.script === 'string') openQuery(body.script);
       else setError(body.error || 'script generation failed');
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -363,7 +366,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
     setPreviewOpen(true); setPreviewName(fullName);
     setPreviewLoading(true); setPreviewData(null); setPreviewError(null);
     try {
-      const body = await fetch(`/api/sqldb/preview?${q}&objectId=${objectId}&top=1000`).then(readJson);
+      const body = await clientFetch(`/api/sqldb/preview?${q}&objectId=${objectId}&top=1000`).then(readJson);
       if (body.ok) setPreviewData({ columns: body.columns || [], rows: body.rows || [], truncated: !!body.truncated });
       else setPreviewError(body.error || 'preview failed');
     } catch (e: any) { setPreviewError(e?.message || String(e)); }
@@ -386,7 +389,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
     if (!renameState) return;
     setBusy(true); setRenameError(null);
     try {
-      const body = await fetch(`/api/sqldb/rename?${q}`, {
+      const body = await clientFetch(`/api/sqldb/rename?${q}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ group: renameState.group, objectId: renameState.objectId, newName: renameTo }),
@@ -476,6 +479,7 @@ export function SqlDbTree({ workspaceId, itemId, server, database, onOpenQuery, 
 
   return (
     <div className={s.root}>
+      {confirmDialog}
       <div className={s.header}>
         <span className={s.title}>{resolvedDb ? <>Database · <code>{resolvedDb}</code></> : 'SQL database objects'}</span>
         <span className={s.headerActions}>

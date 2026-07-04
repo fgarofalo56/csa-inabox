@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * OneLake Recycle bin — parity with the Microsoft Fabric workspace recycle bin
  * (recoverableItems / recover / delete), themed with Fluent v9 + Loom tokens.
@@ -156,7 +157,7 @@ export function RecycleView({ workspaceNames }: RecycleViewProps) {
   const load = useCallback(() => {
     setItems(null);
     setError(null);
-    fetch('/api/onelake/recycle')
+    clientFetch('/api/onelake/recycle')
       .then((r) => (r.ok ? r.json() : r.json().then((j) => Promise.reject(new Error(j?.error || `HTTP ${r.status}`)))))
       .then((d) => setItems(Array.isArray(d?.items) ? d.items : []))
       .catch((e) => { setError(e?.message ?? 'Failed to load recycle bin'); setItems([]); });
@@ -174,12 +175,12 @@ export function RecycleView({ workspaceNames }: RecycleViewProps) {
     setActionError(null);
     try {
       const res = kind === 'restore'
-        ? await fetch('/api/onelake/recycle', {
+        ? await clientFetch('/api/onelake/recycle', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ itemId: item.id }),
           })
-        : await fetch(`/api/onelake/recycle?itemId=${encodeURIComponent(item.id)}`, { method: 'DELETE' });
+        : await clientFetch(`/api/onelake/recycle?itemId=${encodeURIComponent(item.id)}`, { method: 'DELETE' });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.ok === false) throw new Error(j?.error || `HTTP ${res.status}`);
       // Optimistic remove + reconcile with server.

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * EventhouseEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -135,7 +136,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
     setLoading(true);
     setErr(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/capacity`);
+      const r = await clientFetch(`/api/items/eventhouse/${id}/capacity`);
       const j = (await r.json()) as CapacityResponse;
       setData(j);
       const ing = j.capacityPolicy?.IngestionCapacity;
@@ -156,7 +157,7 @@ export function EventhouseCapacityPanel({ id }: { id: string }) {
     setApplying(true);
     setApplyResult(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/capacity`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/capacity`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -527,7 +528,7 @@ function EventhouseOverviewPanel({
     .map((d) => [d.name, Math.round((d.totalExtentSizeBytes ?? 0) / 1024 / 1024)]);
 
   return (
-    <div className={s.pad} style={{ paddingTop: 12 }}>
+    <div className={s.pad} style={{ paddingTop: tokens.spacingVerticalM }}>
       {/* time-range filter strip */}
       <div className={s.toolbar}>
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Time range</Caption1>
@@ -879,7 +880,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     // Skip the fetch — the editor renders its "create database" flow instead.
     if (!id || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}`);
+      const r = await clientFetch(`/api/items/eventhouse/${id}`);
       const j = (await r.json()) as EventhouseState;
       setState(j);
       // Seed the auto-scale dialog from live ARM cluster state.
@@ -903,7 +904,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setCreating(true);
     setCreateErr(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/database`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/database`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: newName.trim() }),
@@ -961,7 +962,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
       //         non-empty and every control is immediately editable.
       if (dbName) {
         const dsId = crypto.randomUUID();
-        const seedRes = await fetch(`/api/items/kql-dashboard/${created.id}`, {
+        const seedRes = await clientFetch(`/api/items/kql-dashboard/${created.id}`, {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -1006,7 +1007,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setDeleting(true);
     setDeleteErr(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/eventhouse/${id}/database?name=${encodeURIComponent(dbName)}`,
         { method: 'DELETE' },
       );
@@ -1038,12 +1039,12 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         fd.set('database', selectedDb);
         fd.set('table', getDataTable.trim());
         fd.set('file', getDataFile);
-        const r = await fetch(`/api/items/eventhouse/${id}/ingest`, { method: 'POST', body: fd });
+        const r = await clientFetch(`/api/items/eventhouse/${id}/ingest`, { method: 'POST', body: fd });
         const ct = r.headers.get('content-type') || '';
         const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
         setGetDataResult(j);
       } else if (getDataMode === 'eventhub') {
-        const r = await fetch(`/api/items/eventhouse/${id}/ingest`, {
+        const r = await clientFetch(`/api/items/eventhouse/${id}/ingest`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -1055,7 +1056,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
         const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
         setGetDataResult(j);
       } else {
-        const r = await fetch(`/api/items/eventhouse/${id}/ingest`, {
+        const r = await clientFetch(`/api/items/eventhouse/${id}/ingest`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -1083,7 +1084,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     let cancelled = false;
     setEhHubsLoading(true);
     setEhHubsErr(null);
-    fetch('/api/eventhubs/hubs')
+    clientFetch('/api/eventhubs/hubs')
       .then((r) => r.json())
       .then((j: any) => {
         if (cancelled) return;
@@ -1101,7 +1102,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     if (!getDataHubName) { setEhConsumerGroups(['$Default']); return; }
     let cancelled = false;
     setEhCgLoading(true);
-    fetch(`/api/eventhubs/consumergroups?eventHub=${encodeURIComponent(getDataHubName)}`)
+    clientFetch(`/api/eventhubs/consumergroups?eventHub=${encodeURIComponent(getDataHubName)}`)
       .then((r) => r.json())
       .then((j: any) => {
         if (cancelled) return;
@@ -1119,7 +1120,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
   useEffect(() => {
     if (!getDataOpen) return;
     let cancelled = false;
-    fetch('/api/loom/storage-paths')
+    clientFetch('/api/loom/storage-paths')
       .then((r) => r.json())
       .then((j: any) => { if (!cancelled && j?.ok) setLoomContainers(j.containers || []); })
       .catch(() => { /* quick-pick row simply stays hidden */ });
@@ -1178,7 +1179,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setPreviewErr(null);
     setSchemaPreview(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/ingest/preview`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/ingest/preview`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ url: getDataOneLakePath.trim(), format: getDataFormat }),
@@ -1200,7 +1201,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setPoliciesBusy(true);
     setPoliciesErr(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/policies`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/policies`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -1226,7 +1227,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     if (!selectedDb) return;
     setExportsLoading(true);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/eventhouse/${id}/continuous-export?database=${encodeURIComponent(selectedDb)}`,
       );
       const j = await r.json();
@@ -1245,7 +1246,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setExportBusy(true);
     setExportResult(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/continuous-export`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/continuous-export`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -1275,7 +1276,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setAutoscaleBusy(true);
     setAutoscaleResult(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/policies`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/policies`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -1319,7 +1320,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setPurgePredicates([{ column: '', op: '==', value: '' }]);
     if (!selectedDb) return;
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/purge?database=${encodeURIComponent(selectedDb)}`);
+      const r = await clientFetch(`/api/items/eventhouse/${id}/purge?database=${encodeURIComponent(selectedDb)}`);
       const ct = r.headers.get('content-type') || '';
       const j = ct.includes('application/json') ? await r.json() : { ok: false, error: `HTTP ${r.status}` };
       if (j.ok) setPurgeTableList(j.tables || []);
@@ -1335,7 +1336,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setPurgeColumns([]);
     if (!selectedDb || !tableName) return;
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/eventhouse/${id}/purge?database=${encodeURIComponent(selectedDb)}&table=${encodeURIComponent(tableName)}`,
       );
       const ct = r.headers.get('content-type') || '';
@@ -1350,7 +1351,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setPurgeBusy(true);
     setPurgeErr(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/purge`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/purge`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ database: selectedDb, table: purgeTable, predicates: purgePredicates, step: 'verify' }),
@@ -1378,7 +1379,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setPurgeBusy(true);
     setPurgeErr(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/purge`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/purge`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -1411,7 +1412,7 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setDeltaBusy(true);
     setDeltaResult(null);
     try {
-      const r = await fetch(`/api/items/eventhouse/${id}/continuous-export`, {
+      const r = await clientFetch(`/api/items/eventhouse/${id}/continuous-export`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -1445,8 +1446,8 @@ export function EventhouseEditor({ item, id }: { item: FabricItemType; id: strin
     setOverviewErr(null);
     try {
       const [ovRes, jRes] = await Promise.all([
-        fetch(`/api/items/eventhouse/${id}/overview?timespan=${timespan}`),
-        fetch(`/api/items/eventhouse/${id}/journal?limit=50`),
+        clientFetch(`/api/items/eventhouse/${id}/overview?timespan=${timespan}`),
+        clientFetch(`/api/items/eventhouse/${id}/journal?limit=50`),
       ]);
       const ov = (await ovRes.json()) as EhOverviewData;
       setOverview(ov);

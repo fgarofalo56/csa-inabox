@@ -263,9 +263,9 @@ export function IdentityPicker({
         <MessageBar intent="warning">
           <MessageBarBody>
             <MessageBarTitle>{error.message}</MessageBarTitle>
-            {error.remediation && <div style={{ marginTop: 4 }}>{error.remediation}</div>}
+            {error.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}>{error.remediation}</div>}
             {error.hint?.rolesRequired && error.hint.rolesRequired.length > 0 && (
-              <div style={{ marginTop: 6 }}>
+              <div style={{ marginTop: tokens.spacingVerticalSNudge }}>
                 Grant the Console UAMI these Microsoft Graph application permissions:
                 {error.hint.rolesRequired.map((r) => (
                   <code key={r.appRoleId} className={styles.hintCode}>
@@ -274,7 +274,7 @@ export function IdentityPicker({
                 ))}
               </div>
             )}
-            {error.hint?.followUp && <div style={{ marginTop: 6 }}>{error.hint.followUp}</div>}
+            {error.hint?.followUp && <div style={{ marginTop: tokens.spacingVerticalSNudge }}>{error.hint.followUp}</div>}
           </MessageBarBody>
           {error.hint?.bicepModule && (
             <MessageBarActions>

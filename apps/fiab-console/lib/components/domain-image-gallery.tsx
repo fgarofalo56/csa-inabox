@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DomainImageGallery — the domain Image-tab picker, one-for-one with Fabric's
  * "photo gallery" that pops up when you choose Image > Select an image for a
@@ -94,7 +95,7 @@ export function DomainImageGallery({ value, onChange }: DomainImageGalleryProps)
 
   useEffect(() => {
     let alive = true;
-    fetch('/api/admin/domains/images')
+    clientFetch('/api/admin/domains/images')
       .then((r) => r.json())
       .then((j) => {
         if (!alive) return;
@@ -114,7 +115,7 @@ export function DomainImageGallery({ value, onChange }: DomainImageGalleryProps)
     <div className={styles.root}>
       <div>
         <Subtitle2 className={styles.sectionTitle}>Color</Subtitle2>
-        <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
+        <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalS }}>
           A solid color to represent this domain in the catalog domain selector.
         </Caption1>
         <div className={styles.swatchGrid} role="radiogroup" aria-label="Domain color">
@@ -137,7 +138,7 @@ export function DomainImageGallery({ value, onChange }: DomainImageGalleryProps)
 
       <div>
         <Subtitle2 className={styles.sectionTitle}>Icon</Subtitle2>
-        <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: 8 }}>
+        <Caption1 style={{ display: 'block', color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalS }}>
           A department symbol on a branded tile.
         </Caption1>
         <div className={styles.iconGrid} role="radiogroup" aria-label="Domain icon">
@@ -201,7 +202,7 @@ export function DomainImageGallery({ value, onChange }: DomainImageGalleryProps)
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={img.url} alt={img.name} className={styles.blobImg} />
-                  {sel && <span className={styles.selBadge}><Checkmark16Filled style={{ fontSize: 12 }} /></span>}
+                  {sel && <span className={styles.selBadge}><Checkmark16Filled style={{ fontSize: tokens.fontSizeBase200 }} /></span>}
                 </button>
               );
             })}

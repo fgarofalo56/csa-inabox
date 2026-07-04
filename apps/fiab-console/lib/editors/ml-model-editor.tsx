@@ -401,7 +401,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const bindPanel = (
     <div className={s.card} style={{ maxWidth: 640 }}>
       <Subtitle2>Bind to an Azure ML registered model</Subtitle2>
-      <Body1 style={{ color: tokens.colorNeutralForeground3, marginTop: 4 }}>
+      <Body1 style={{ color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS }}>
         Choose the Azure Machine Learning workspace and a registered model. The binding is saved on this item; all actions then target the bound model&apos;s real registry.
       </Body1>
       {wsError && (

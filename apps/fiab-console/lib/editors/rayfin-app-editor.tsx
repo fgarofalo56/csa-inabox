@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * RayfinAppEditor — the Fabric-Apps (Rayfin) surface in CSA Loom. Three modes:
  *
@@ -240,7 +241,7 @@ export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string
     let alive = true;
     (async () => {
       try {
-        const r = await fetch(`/api/items/rayfin-app/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/items/rayfin-app/${encodeURIComponent(id)}`);
         const j = await r.json().catch(() => ({}));
         const saved = (j?.state?.spec || j?.item?.state?.spec || j?.definition?.state?.spec) as RayfinSpec | undefined;
         if (alive && saved && Array.isArray(saved.entities)) {
@@ -259,7 +260,7 @@ export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string
   const loadModels = useCallback(async () => {
     setModelsLoading(true); setModelsErr(null); setModelsGate(null);
     try {
-      const r = await fetch('/api/items/rayfin-app/models');
+      const r = await clientFetch('/api/items/rayfin-app/models');
       const j = await r.json().catch(() => ({}));
       if (j?.ok) { setModels(j.models || []); }
       else if (j?.gate) { setModelsGate(j.gate); setModels([]); }
@@ -276,7 +277,7 @@ export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string
     if (!m) { setObjects(null); return; }
     setObjLoading(true); setObjErr(null);
     try {
-      const r = await fetch(`/api/items/rayfin-app/model-objects?model=${encodeURIComponent(m)}`);
+      const r = await clientFetch(`/api/items/rayfin-app/model-objects?model=${encodeURIComponent(m)}`);
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setObjects({ measures: j.measures || [], columns: j.columns || [] });
       else { setObjErr(j?.error || `HTTP ${r.status}`); setObjects(null); }
@@ -305,7 +306,7 @@ export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string
   const save = useCallback(async () => {
     setSaving(true);
     try {
-      const r = await fetch(`/api/items/rayfin-app/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/rayfin-app/${encodeURIComponent(id)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: { spec } }),
       });
@@ -320,7 +321,7 @@ export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string
     setPreviewing(true); setPreviewErr(null); setPreview(null);
     try {
       const groupBy = binding.groupBy.map((k) => gbParse(k));
-      const r = await fetch('/api/items/rayfin-app/preview', {
+      const r = await clientFetch('/api/items/rayfin-app/preview', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ model: binding.model, measures: binding.measures, groupBy, topN: binding.topN }),
       });
@@ -334,7 +335,7 @@ export function RayfinAppEditor({ item, id }: { item: FabricItemType; id: string
   const runAppPreview = useCallback(async () => {
     setRendering(true); setRenderErr(null); setAppRender(null);
     try {
-      const r = await fetch(`/api/items/rayfin-app/${encodeURIComponent(id)}/render`, {
+      const r = await clientFetch(`/api/items/rayfin-app/${encodeURIComponent(id)}/render`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ app: appDef }),
       });

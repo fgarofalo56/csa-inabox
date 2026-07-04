@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Manage Policies dialog (F8) — data-product access-policy editor.
  *
@@ -71,7 +72,7 @@ function PrincipalPicker({
     const handle = setTimeout(async () => {
       setLoading(true); setErr(null);
       try {
-        const res = await fetch(
+        const res = await clientFetch(
           `/api/data-products/${encodeURIComponent(productId)}/principal-search?q=${encodeURIComponent(q)}&kind=${kind}`,
           { cache: 'no-store' },
         );
@@ -194,7 +195,7 @@ export function ManagePoliciesDialog({ open, productId, isPublished, onClose, on
     setLoading(true); setErr(null);
     (async () => {
       try {
-        const r = await fetch(`/api/data-products/${encodeURIComponent(productId)}/access-policy`, { cache: 'no-store' });
+        const r = await clientFetch(`/api/data-products/${encodeURIComponent(productId)}/access-policy`, { cache: 'no-store' });
         const j = await r.json();
         if (cancelled) return;
         if (!r.ok || !j.ok) {
@@ -232,7 +233,7 @@ export function ManagePoliciesDialog({ open, productId, isPublished, onClose, on
   const save = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(productId)}/access-policy`, {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(productId)}/access-policy`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(policy),

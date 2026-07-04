@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Ontology editor (text-stored OWL/RDF; typed object/link/action model).
  *
@@ -208,7 +209,7 @@ function OntoInstancePicker({
     if (!ontologyId || ontologyId === 'new' || !objectType) { setInstances([]); return; }
     setLoading(true);
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(ontologyId)}/objects?objectType=${encodeURIComponent(objectType)}&top=200`);
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(ontologyId)}/objects?objectType=${encodeURIComponent(objectType)}&top=200`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setFallback(j?.error || `HTTP ${r.status}`); setInstances([]); return; }
       setFallback(null);
@@ -316,7 +317,7 @@ function WeaveInstancePanel({
     if (!id || id === 'new' || !t) return;
     setObjLoading(true); setObjMsg(null);
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/objects?objectType=${encodeURIComponent(t)}&top=100`);
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/objects?objectType=${encodeURIComponent(t)}&top=100`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
@@ -354,7 +355,7 @@ function WeaveInstancePanel({
     }
     setCreating(true); setObjMsg(null);
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/objects`, {
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/objects`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ objectType: objType, properties }),
       });
@@ -395,7 +396,7 @@ function WeaveInstancePanel({
     if (!id || id === 'new' || !lt) { setLinks([]); return; }
     setLinksLoading(true); setLinkMsg(null);
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/links?linkType=${encodeURIComponent(lt)}&top=200`);
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/links?linkType=${encodeURIComponent(lt)}&top=200`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
@@ -417,7 +418,7 @@ function WeaveInstancePanel({
     if (!fromId || !toId) { setLinkMsg({ intent: 'error', text: 'Pick both a source and a target instance.' }); return; }
     setLinkCreating(true); setLinkMsg(null);
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/links`, {
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/links`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           fromObjectType: selectedLt.fromType, fromId,
@@ -442,7 +443,7 @@ function WeaveInstancePanel({
   const removeLinkInstance = useCallback(async (linkId: string) => {
     setLinkDeleting(linkId); setLinkMsg(null);
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/links?linkId=${encodeURIComponent(linkId)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/links?linkId=${encodeURIComponent(linkId)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || j.gate.reason || ''}` : '';
@@ -516,7 +517,7 @@ function WeaveInstancePanel({
       }
     }
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/run-action`, {
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/run-action`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: action.name, params }),
       });
@@ -2009,7 +2010,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
   const loadBindings = useCallback(async () => {
     if (!id || id === 'new') { setBindingsLoaded(true); return; }
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/bind`);
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/bind`);
       const ct = r.headers.get('content-type') || '';
       if (!ct.includes('application/json')) { setBindingsLoaded(true); return; }
       const j = await r.json();
@@ -2045,7 +2046,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
     const sourceDisplayName = sourceList.find((s) => s.id === bindSourceId)?.displayName || bindSourceId;
     setBindBusy(true); setBindMsg(null);
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/bind`, {
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/bind`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourceKind: bindSourceKind, sourceItemId: bindSourceId, sourceDisplayName, entityTypes: bindEntityTypes }),
@@ -2069,7 +2070,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
     setEntityBindings((cur) => cur.filter((x) => x.sourceItemId !== b.sourceItemId));
     setBindMsg(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/ontology/${encodeURIComponent(id)}/bind?sourceItemId=${encodeURIComponent(b.sourceItemId)}`,
         { method: 'DELETE' },
       );
@@ -2092,7 +2093,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
     const binding = entityBindings.find((b) => (b.entityTypes || []).includes(actEntityType));
     setActivatorBusy(true); setActivatorMsg(null);
     try {
-      const r = await fetch(`/api/items/ontology/${encodeURIComponent(id)}/activator`, {
+      const r = await clientFetch(`/api/items/ontology/${encodeURIComponent(id)}/activator`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -2195,7 +2196,7 @@ export function OntologyEditor({ item, id }: { item: FabricItemType; id: string 
       const edges = hasParents
         ? [{ name: 'IS_A', properties: [{ name: 'inheritedAt', type: 'datetime' }] }]
         : [];
-      const r = await fetch('/api/items/graph-model', {
+      const r = await clientFetch('/api/items/graph-model', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

@@ -214,7 +214,7 @@ export default function IrmPage() {
                 label={`${ind.label}`}
                 onChange={(_, dt) => toggleIndicator(ind.id, !!dt.checked)}
               />
-              <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: 44 }}>
+              <Caption1 style={{ color: tokens.colorNeutralForeground3, marginLeft: tokens.spacingHorizontalXXXL }}>
                 {ind.description} <Badge appearance="outline" size="small">{ind.source}</Badge>
               </Caption1>
             </div>

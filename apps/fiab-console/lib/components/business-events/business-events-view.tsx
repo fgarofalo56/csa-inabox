@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * BusinessEventsView — Activator structured-signals / "business events"
  * publishing surface, Azure-native (Event Grid custom topics + Event Hubs).
@@ -115,8 +116,8 @@ export function BusinessEventsView() {
     setBusy(true);
     try {
       const [tRes, cRes] = await Promise.all([
-        fetch('/api/business-events/types', { cache: 'no-store' }),
-        fetch('/api/business-events/channels', { cache: 'no-store' }),
+        clientFetch('/api/business-events/types', { cache: 'no-store' }),
+        clientFetch('/api/business-events/channels', { cache: 'no-store' }),
       ]);
       if (tRes.status === 401 || cRes.status === 401) { setUnauth(true); return; }
       const t = await tRes.json().catch(() => ({}));
@@ -143,12 +144,12 @@ export function BusinessEventsView() {
   return (
     <div>
       {loadErr && (
-        <MessageBar intent="error" style={{ marginBottom: 12 }}>
+        <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Load error</MessageBarTitle>{loadErr}</MessageBarBody>
         </MessageBar>
       )}
       {regGate && (
-        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>
             <MessageBarTitle>Business-event registry not configured</MessageBarTitle>
             The governed event-type registry needs Cosmos. Set <code>{regGate}</code> on the Console app.
@@ -211,7 +212,7 @@ export function BusinessEventsView() {
                         icon={<Delete20Regular />} appearance="subtle" size="small"
                         onClick={async () => {
                           if (!confirm(`Delete governed type "${t.displayName}"?`)) return;
-                          await fetch(`/api/business-events/types?id=${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+                          await clientFetch(`/api/business-events/types?id=${encodeURIComponent(t.id)}`, { method: 'DELETE' });
                           load();
                         }}
                       />
@@ -236,7 +237,7 @@ export function BusinessEventsView() {
       {/* ── Channels + capacity ───────────────────────────────── */}
       <Section title="Channels & capacity">
         {channels?.eventGrid.gate && (
-          <MessageBar intent="warning" style={{ marginBottom: 8 }}>
+          <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
             <MessageBarBody>
               <MessageBarTitle>Event Grid channel not configured</MessageBarTitle>
               Set <code>{channels.eventGrid.gate.missing}</code> to enable the Event Grid fan-out channel.
@@ -244,7 +245,7 @@ export function BusinessEventsView() {
           </MessageBar>
         )}
         {channels?.eventHub.gate && (
-          <MessageBar intent="warning" style={{ marginBottom: 8 }}>
+          <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
             <MessageBarBody>
               <MessageBarTitle>Event Hubs channel not configured</MessageBarTitle>
               Set <code>{channels.eventHub.gate.missing}</code> to enable the durable Event Hubs channel.
@@ -265,7 +266,7 @@ export function BusinessEventsView() {
               </ul>
             )}
             {channels?.metering && (
-              <Caption1 style={{ display: 'block', marginTop: 6 }}>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalSNudge }}>
                 Published (24h): {sumMeter(channels.metering.eventGrid.find((m) => /PublishSuccess/i.test(m.name)))} · failed {sumMeter(channels.metering.eventGrid.find((m) => /PublishFail/i.test(m.name)))}
               </Caption1>
             )}
@@ -279,7 +280,7 @@ export function BusinessEventsView() {
               </ul>
             )}
             {channels?.metering && (
-              <Caption1 style={{ display: 'block', marginTop: 6 }}>
+              <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalSNudge }}>
                 Incoming (24h): {sumMeter(channels.metering.eventHub.find((m) => /IncomingMessages/i.test(m.name)))} msgs
               </Caption1>
             )}
@@ -326,7 +327,7 @@ function RegisterTypeDialog({
     if (chEventGrid) channels.push('eventgrid');
     if (chEventHub) channels.push('eventhub');
     try {
-      const res = await fetch('/api/business-events/types', {
+      const res = await clientFetch('/api/business-events/types', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           eventType, displayName, category, description: description || undefined, owner: owner || undefined,
@@ -485,7 +486,7 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
       if (v !== undefined) data[f.name] = v;
     }
     try {
-      const res = await fetch('/api/business-events/publish', {
+      const res = await clientFetch('/api/business-events/publish', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ typeId: type.id, subject, data }),
       });
@@ -531,7 +532,7 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
   return (
     <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) { setResult(null); setErr(null); setErrors([]); setChannelStatus([]); } }}>
       <DialogTrigger disableButtonEnhancement>
-        <Button appearance="primary" size="small" icon={<Send20Regular />} style={{ marginTop: 8 }}>Publish event</Button>
+        <Button appearance="primary" size="small" icon={<Send20Regular />} style={{ marginTop: tokens.spacingVerticalS }}>Publish event</Button>
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
@@ -543,13 +544,13 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
                 <MessageBar intent="error">
                   <MessageBarBody>
                     <MessageBarTitle>Schema validation failed</MessageBarTitle>
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
+                    <ul style={{ margin: tokens.spacingVerticalNone, paddingLeft: tokens.spacingHorizontalXL }}>{errors.map((e, i) => <li key={i}>{e}</li>)}</ul>
                   </MessageBarBody>
                 </MessageBar>
               )}
               {result && <MessageBar intent="success"><MessageBarBody>{result}</MessageBarBody></MessageBar>}
               {channelStatus.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge }}>
                   {channelStatus.map((c) => (
                     <MessageBar key={c.channel} intent={c.ok ? 'success' : 'error'}>
                       <MessageBarBody>
@@ -634,7 +635,7 @@ function DeleteTopicButton({ name, onDeleted }: { name: string; onDeleted: () =>
     if (!confirm(`Delete Event Grid custom topic "${name}"? Active subscribers will stop receiving events.`)) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/business-events/topics?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const res = await clientFetch(`/api/business-events/topics?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j?.ok) alert(j?.error || `Delete failed (${res.status})`);
       onDeleted();
@@ -666,7 +667,7 @@ function CreateTopicDialog({ onCreated, disabled }: { onCreated: () => void; dis
   const create = async () => {
     setCreating(true); setErr(null);
     try {
-      const res = await fetch('/api/business-events/topics', {
+      const res = await clientFetch('/api/business-events/topics', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name, inputSchema: schema }),
       });
@@ -680,13 +681,13 @@ function CreateTopicDialog({ onCreated, disabled }: { onCreated: () => void; dis
   return (
     <Dialog open={open} onOpenChange={(_, d) => { setOpen(d.open); if (!d.open) setErr(null); }}>
       <DialogTrigger disableButtonEnhancement>
-        <Button appearance="subtle" size="small" icon={<Add20Regular />} disabled={disabled} style={{ marginTop: 8 }}>New topic</Button>
+        <Button appearance="subtle" size="small" icon={<Add20Regular />} disabled={disabled} style={{ marginTop: tokens.spacingVerticalS }}>New topic</Button>
       </DialogTrigger>
       <DialogSurface>
         <DialogBody>
           <DialogTitle>Create Event Grid custom topic</DialogTitle>
           <DialogContent>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, minWidth: 400 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM, minWidth: 400 }}>
               {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
               <Field label="Topic name" required>
                 <Input value={name} onChange={(_, d) => setName(d.value)} placeholder="loom-business-events" />

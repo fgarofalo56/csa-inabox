@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useState } from 'react';
 import { AdminShell } from '@/lib/components/admin-shell';
 import {
@@ -78,7 +79,7 @@ export default function ApiManagementPage() {
     // guarantees the UI resolves even if the route hangs.
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), 6000);
-    fetch('/api/marketplace/gate', { signal: ctrl.signal, cache: 'no-store' })
+    clientFetch('/api/marketplace/gate', { signal: ctrl.signal, cache: 'no-store' })
       .then(async (r) => {
         if (r.status === 401 || r.status === 403) { setUnauth(true); return; }
         const d = await r.json().catch(() => null);

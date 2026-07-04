@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ServiceScanPanel — Setup-Wizard "scan-and-choose" surface for the networking
  * / API domain (APIM, Azure Maps, Key Vault, hub Azure Firewall).
@@ -100,7 +101,7 @@ export function ServiceScanPanel({ boundary }: { boundary: string }) {
   const scan = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/setup/discover-services?boundary=${encodeURIComponent(boundary)}`);
+      const res = await clientFetch(`/api/setup/discover-services?boundary=${encodeURIComponent(boundary)}`);
       const j = (await res.json()) as ScanResponse;
       setData(j);
     } catch (e) {

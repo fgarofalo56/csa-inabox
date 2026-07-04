@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * BundleContentBar — when an item was created by an app install (state.sourceApp
  * set + state.content populated by lib/apps/content-bundles), surfaces the
@@ -82,7 +83,7 @@ export function BundleContentBar({ itemType, itemId }: Props) {
     let cancel = false;
     (async () => {
       try {
-        const r = await fetch(`/api/cosmos-items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}`);
+        const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}`);
         if (!r.ok) return;
         const j = await r.json();
         if (!cancel && j?.state?.content) setItem(j as CosmosItem);
@@ -148,7 +149,7 @@ export function BundleContentBar({ itemType, itemId }: Props) {
           <MessageBarTitle>App-installed starter content</MessageBarTitle>
           From <strong>{item.state?.sourceApp || 'an app'}</strong> — {summary}.
           {' '}
-          <Button appearance="primary" size="small" icon={<Open16Regular />} onClick={() => setOpen(true)} style={{ marginLeft: 8 }}>
+          <Button appearance="primary" size="small" icon={<Open16Regular />} onClick={() => setOpen(true)} style={{ marginLeft: tokens.spacingHorizontalS }}>
             View bundle
           </Button>
         </MessageBarBody>
@@ -184,11 +185,11 @@ function BundleDialog({
       <DialogSurface style={{ maxWidth: '90vw', width: 1100 }}>
         <DialogBody>
           <DialogTitle>
-            <AppFolder20Regular style={{ verticalAlign: 'middle', marginRight: 8 }} />
+            <AppFolder20Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalS }} />
             {item.displayName} — Bundle content
           </DialogTitle>
           <DialogContent style={{ maxHeight: '70vh', overflow: 'auto' }}>
-            <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+            <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
               {item.description}
             </Caption1>
             {tabs.length > 1 && (
@@ -314,9 +315,9 @@ function buildTabs(content: any): RenderableTab[] {
             <div>
               <Subtitle2>Sources</Subtitle2>
               {pre(JSON.stringify(content.sources || [], null, 2), s)}
-              <Subtitle2 style={{ marginTop: 12 }}>Transforms</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Transforms</Subtitle2>
               {pre(JSON.stringify(content.transforms || [], null, 2), s)}
-              <Subtitle2 style={{ marginTop: 12 }}>Destinations</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Destinations</Subtitle2>
               {pre(JSON.stringify(content.destinations || [], null, 2), s)}
             </div>
           ),
@@ -370,7 +371,7 @@ function buildTabs(content: any): RenderableTab[] {
               {(content.folders || []).map((f: any) => (
                 <div key={f.path}>
                   <Body1>{f.path}</Body1>
-                  {f.description && <Caption1 style={{ display: 'block', marginBottom: 6 }}>{f.description}</Caption1>}
+                  {f.description && <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalSNudge }}>{f.description}</Caption1>}
                 </div>
               ))}
             </div>
@@ -459,7 +460,7 @@ function buildTabs(content: any): RenderableTab[] {
               {(content.okrs || []).map((o: any) => (
                 <div key={o.id} className={s.section}>
                   <Subtitle2>{o.id} — {o.name}</Subtitle2>
-                  {o.description && <Caption1 style={{ display: 'block', marginBottom: 4 }}>{o.description}</Caption1>}
+                  {o.description && <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalXS }}>{o.description}</Caption1>}
                   <Body1>Target: {o.target} · Current: {o.current ?? '—'} · Metric: {o.metric}</Body1>
                 </div>
               ))}
@@ -519,11 +520,11 @@ function buildTabs(content: any): RenderableTab[] {
             <div>
               <Subtitle2>Nodes</Subtitle2>
               {pre(JSON.stringify(content.nodes || [], null, 2), s)}
-              <Subtitle2 style={{ marginTop: 12 }}>Edges</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Edges</Subtitle2>
               {pre(JSON.stringify(content.edges || [], null, 2), s)}
               {content.systemPrompt && (
                 <>
-                  <Subtitle2 style={{ marginTop: 12 }}>System prompt</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>System prompt</Subtitle2>
                   {pre(content.systemPrompt, s)}
                 </>
               )}
@@ -561,17 +562,17 @@ function buildTabs(content: any): RenderableTab[] {
             <div>
               <Body1><strong>Algorithm:</strong> {content.algorithm} · <strong>Framework:</strong> {content.framework}</Body1>
               {content.target && <Body1><strong>Target:</strong> {content.target}</Body1>}
-              <Subtitle2 style={{ marginTop: 12 }}>Hyperparameters</Subtitle2>
+              <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Hyperparameters</Subtitle2>
               {pre(JSON.stringify(content.hyperparameters || {}, null, 2), s)}
               {content.features?.length && (
                 <>
-                  <Subtitle2 style={{ marginTop: 12 }}>Features</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Features</Subtitle2>
                   {pre(JSON.stringify(content.features, null, 2), s)}
                 </>
               )}
               {content.trainingCode && (
                 <>
-                  <Subtitle2 style={{ marginTop: 12 }}>Training code</Subtitle2>
+                  <Subtitle2 style={{ marginTop: tokens.spacingVerticalM }}>Training code</Subtitle2>
                   {pre(content.trainingCode, s)}
                 </>
               )}

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DeploymentPipelinesPane — the CSA Loom Deployment surface, one-for-one with
  * the Fabric Deployment Pipelines experience plus the platform's own ARM /
@@ -245,7 +246,7 @@ export function DeploymentPipelinesPane() {
 function useLoomWorkspaces(): WorkspaceOpt[] | null {
   const [list, setList] = useState<WorkspaceOpt[] | null>(null);
   useEffect(() => {
-    fetch('/api/workspaces').then(async (r) => {
+    clientFetch('/api/workspaces').then(async (r) => {
       const j = await r.json().catch(() => null);
       if (Array.isArray(j)) setList(j.map((w: any) => ({ id: w.id, name: w.name })));
       else setList([]);
@@ -271,7 +272,7 @@ function useFabricWorkspacesState(): { list: WorkspaceOpt[] | null; gate: Gate |
   const [list, setList] = useState<WorkspaceOpt[] | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
   useEffect(() => {
-    fetch('/api/fabric/workspaces').then(async (r) => {
+    clientFetch('/api/fabric/workspaces').then(async (r) => {
       const j = await r.json().catch(() => ({}));
       if (j?.gate) { setGate(j.gate as Gate); setList([]); return; }
       if (j?.ok && Array.isArray(j.workspaces)) {
@@ -299,7 +300,7 @@ function PipelinesTab({ onUnauth }: { onUnauth: () => void }) {
 
   useEffect(() => {
     setPipelines(null); setGate(null); setErr(null);
-    fetch('/api/deployment-pipelines').then(async (r) => {
+    clientFetch('/api/deployment-pipelines').then(async (r) => {
       if (r.status === 401 || r.status === 403) { onUnauth(); setPipelines([]); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); setPipelines([]); return; }
@@ -361,7 +362,7 @@ function PipelineDetail({ pipeline }: { pipeline: Pipeline }) {
   // stages
   useEffect(() => {
     setStages(null); setStageItems({}); setErr(null);
-    fetch(`/api/deployment-pipelines/${pipeline.id}/stages`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/${pipeline.id}/stages`).then(async (r) => {
       const j = await r.json();
       if (j.gate) { setErr(j.gate.message); setStages([]); return; }
       if (!j.ok) { setErr(j.error || 'Failed to load stages'); setStages([]); return; }
@@ -370,7 +371,7 @@ function PipelineDetail({ pipeline }: { pipeline: Pipeline }) {
       // fetch items per stage that has a workspace
       s.forEach((st) => {
         if (!st.workspaceId) return;
-        fetch(`/api/deployment-pipelines/${pipeline.id}/stages/${st.id}/items`).then(async (ri) => {
+        clientFetch(`/api/deployment-pipelines/${pipeline.id}/stages/${st.id}/items`).then(async (ri) => {
           const ji = await ri.json();
           if (ji.ok) setStageItems((prev) => ({ ...prev, [st.id]: ji.data.items || [] }));
         }).catch(() => {});
@@ -381,7 +382,7 @@ function PipelineDetail({ pipeline }: { pipeline: Pipeline }) {
   // history
   useEffect(() => {
     setOperations(null);
-    fetch(`/api/deployment-pipelines/${pipeline.id}/operations`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/${pipeline.id}/operations`).then(async (r) => {
       const j = await r.json();
       if (j.ok) setOperations(j.data.operations || []);
       else setOperations([]);
@@ -592,7 +593,7 @@ function DeployDialog({
         }
         body.createdWorkspaceDetails = { name: newWorkspaceName.trim() };
       }
-      const r = await fetch(`/api/deployment-pipelines/${pipelineId}/deploy`, {
+      const r = await clientFetch(`/api/deployment-pipelines/${pipelineId}/deploy`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -632,7 +633,7 @@ function DeployDialog({
           </DialogTitle>
           <DialogContent>
             {backward && (
-              <MessageBar intent="warning" style={{ marginBottom: 8 }}>
+              <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
                 <MessageBarBody>
                   Backward deployment (a later stage into an earlier one) is allowed by Fabric
                   <strong> only when the earlier stage is empty</strong>. Fabric will create a fresh
@@ -647,7 +648,7 @@ function DeployDialog({
             </Text>
 
             {targetEmpty && (
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: tokens.spacingVerticalM }}>
                 <Field label="New workspace name (target stage is empty)" required>
                   <Input
                     value={newWorkspaceName}
@@ -658,7 +659,7 @@ function DeployDialog({
               </div>
             )}
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM }}>
               <Checkbox
                 label="Selective deploy (choose specific items)"
                 checked={selective}
@@ -681,7 +682,7 @@ function DeployDialog({
               </div>
             )}
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM }}>
               <Textarea
                 aria-label="Deployment note"
                 placeholder="Deployment note (optional, max 1024 chars)"
@@ -694,7 +695,7 @@ function DeployDialog({
             </div>
 
             {msg && (
-              <div style={{ marginTop: 12 }}>
+              <div style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}>
                   <MessageBarBody>{msg.text}</MessageBarBody>
                 </MessageBar>
@@ -743,7 +744,7 @@ function CreatePipelineDialog({ onCreated }: { onCreated: (id: string) => void }
       const cleanStages = stages.map((s) => ({ displayName: s.displayName.trim(), isPublic: s.isPublic })).filter((s) => s.displayName);
       if (!name.trim()) { setMsg({ kind: 'error', text: 'Pipeline name is required.' }); setBusy(false); return; }
       if (cleanStages.length < 2) { setMsg({ kind: 'error', text: 'At least 2 named stages are required.' }); setBusy(false); return; }
-      const r = await fetch('/api/deployment-pipelines/create', {
+      const r = await clientFetch('/api/deployment-pipelines/create', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: name.trim(), description: description.trim() || undefined, stages: cleanStages }),
       });
@@ -817,7 +818,7 @@ function AssignWorkspaceInline({ pipelineId, stage, onChanged }: { pipelineId: s
     if (!selected) return;
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/deployment-pipelines/${pipelineId}/stages/${stage.id}/workspace`, {
+      const r = await clientFetch(`/api/deployment-pipelines/${pipelineId}/stages/${stage.id}/workspace`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceId: selected }),
       });
       const j = await r.json();
@@ -831,7 +832,7 @@ function AssignWorkspaceInline({ pipelineId, stage, onChanged }: { pipelineId: s
 
   return (
     <div>
-      <div className={styles.stageMeta} style={{ marginBottom: 6 }}>No workspace assigned. Add content to this stage:</div>
+      <div className={styles.stageMeta} style={{ marginBottom: tokens.spacingVerticalSNudge }}>No workspace assigned. Add content to this stage:</div>
       <div className={styles.assignRow}>
         <Dropdown
           aria-label="Assign workspace"
@@ -849,7 +850,7 @@ function AssignWorkspaceInline({ pipelineId, stage, onChanged }: { pipelineId: s
         </Button>
       </div>
       {workspaces && workspaces.length === 0 && (
-        <div className={styles.stageMeta} style={{ marginTop: 4 }}>No Fabric workspaces visible to the Console identity.</div>
+        <div className={styles.stageMeta} style={{ marginTop: tokens.spacingVerticalXS }}>No Fabric workspaces visible to the Console identity.</div>
       )}
       {err && <Text size={100} style={{ color: tokens.colorPaletteRedForeground1 }}>{err}</Text>}
     </div>
@@ -864,7 +865,7 @@ function UnassignWorkspaceButton({ pipelineId, stage, onChanged }: { pipelineId:
   const unassign = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/deployment-pipelines/${pipelineId}/stages/${stage.id}/workspace`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/deployment-pipelines/${pipelineId}/stages/${stage.id}/workspace`, { method: 'DELETE' });
       const j = await r.json();
       if (j.gate) { setErr(j.gate.message); return; }
       if (!j.ok) { setErr(j.error || 'Unassign failed'); return; }
@@ -887,7 +888,7 @@ function UnassignWorkspaceButton({ pipelineId, stage, onChanged }: { pipelineId:
                 You lose this stage's <strong>deployment history and configured deployment rules</strong>.
               </MessageBarBody>
             </MessageBar>
-            {err && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {err && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
@@ -928,7 +929,7 @@ function DeploymentRulesButton({ stage }: { stage: Stage }) {
                 Once set, they apply automatically on the next deploy through Loom.
               </MessageBarBody>
             </MessageBar>
-            <Text block style={{ marginTop: 12 }} size={200}>
+            <Text block style={{ marginTop: tokens.spacingVerticalM }} size={200}>
               Supported rule types per item (Microsoft Learn): Dataflow Gen1 & Semantic model — data
               source + parameter; Paginated report & Mirrored database — data source; Notebook —
               default lakehouse.
@@ -963,7 +964,7 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
   useEffect(() => {
     if (!source || !target) { setResult(null); return; }
     setLoading(true); setErr(null); setGate(null); setResult(null);
-    fetch(`/api/deployment-pipelines/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
+    clientFetch(`/api/deployment-pipelines/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
       .then(async (r) => {
         const j = await r.json();
         if (j.gate) { setGate(j.gate); return; }
@@ -980,7 +981,7 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
 
   return (
     <div className={styles.section}>
-      <div className={styles.assignRow} style={{ marginBottom: 8 }}>
+      <div className={styles.assignRow} style={{ marginBottom: tokens.spacingVerticalS }}>
         <Field label="Compare stage">
           <Dropdown
             value={target.displayName}
@@ -991,7 +992,7 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
             {stages.slice(1).map((s) => <Option key={s.id} value={s.id} text={s.displayName}>{s.displayName}</Option>)}
           </Dropdown>
         </Field>
-        <Text size={300} style={{ paddingBottom: 6 }}>
+        <Text size={300} style={{ paddingBottom: tokens.spacingVerticalSNudge }}>
           against source <strong>{source.displayName}</strong>
         </Text>
       </div>
@@ -1039,7 +1040,7 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
               </TableBody>
             </Table>
           )}
-          <MessageBar intent="info" style={{ marginTop: 8 }}>
+          <MessageBar intent="info" style={{ marginTop: tokens.spacingVerticalS }}>
             <MessageBarBody>
               Content/change review (line-by-line schema diff) is a Fabric portal-only surface and not
               in the public REST API. The authoritative new/different/identical counts are returned by
@@ -1127,7 +1128,7 @@ function GitWorkspacePanel({ workspaceId, onUnauth }: { workspaceId: string; onU
 
   useEffect(() => {
     setConnection(null); setGate(null); setErr(null);
-    fetch(`/api/deployment-pipelines/git/${workspaceId}/connection`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/git/${workspaceId}/connection`).then(async (r) => {
       if (r.status === 401) { onUnauth(); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); return; }
@@ -1190,7 +1191,7 @@ function GitConnectForm({ workspaceId, onConnected }: { workspaceId: string; onC
       const body: any = { provider, branchName: f.branchName, directoryName: f.directoryName, repositoryName: f.repositoryName, connectionId: f.connectionId };
       if (provider === 'AzureDevOps') { body.organizationName = f.organizationName; body.projectName = f.projectName; }
       else { body.ownerName = f.ownerName; body.customDomainName = f.customDomainName; }
-      const r = await fetch(`/api/deployment-pipelines/git/${workspaceId}/connection`, {
+      const r = await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/connection`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
@@ -1239,7 +1240,7 @@ function InitializeButton({ workspaceId, onDone }: { workspaceId: string; onDone
   const init = useCallback(async () => {
     setBusy(true);
     try {
-      await fetch(`/api/deployment-pipelines/git/${workspaceId}/initialize`, { method: 'POST' });
+      await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/initialize`, { method: 'POST' });
       onDone();
     } finally { setBusy(false); }
   }, [workspaceId, onDone]);
@@ -1251,7 +1252,7 @@ function DisconnectButton({ workspaceId, onDone }: { workspaceId: string; onDone
   const disconnect = useCallback(async () => {
     setBusy(true);
     try {
-      await fetch(`/api/deployment-pipelines/git/${workspaceId}/connection`, { method: 'DELETE' });
+      await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/connection`, { method: 'DELETE' });
       onDone();
     } finally { setBusy(false); }
   }, [workspaceId, onDone]);
@@ -1274,7 +1275,7 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
 
   useEffect(() => {
     setStatus(null); setPending(false); setNotConnected(false); setErr(null);
-    fetch(`/api/deployment-pipelines/git/${workspaceId}/status`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/git/${workspaceId}/status`).then(async (r) => {
       const j = await r.json();
       if (j.gate) { setErr(j.gate.message); return; }
       if (!j.ok) { setErr(j.error || 'Failed to load Git status'); return; }
@@ -1291,7 +1292,7 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
         ? (status?.changes || []).filter((c) => chosen[idOf(c)] && c.workspaceChange).map((c) => c.itemMetadata.itemIdentifier)
         : undefined;
       if (mode === 'Selective' && (!items || items.length === 0)) { setMsg({ kind: 'error', text: 'Select at least one workspace-changed item to commit.' }); setBusy(null); return; }
-      const r = await fetch(`/api/deployment-pipelines/git/${workspaceId}/commit`, {
+      const r = await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/commit`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mode, comment: comment.trim() || undefined, workspaceHead: status?.workspaceHead, items }),
       });
@@ -1306,7 +1307,7 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
   const update = useCallback(async () => {
     setBusy('update'); setMsg(null);
     try {
-      const r = await fetch(`/api/deployment-pipelines/git/${workspaceId}/update`, {
+      const r = await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/update`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceHead: status?.workspaceHead, remoteCommitHash: status?.remoteCommitHash, allowOverrideItems: true }),
       });
@@ -1335,14 +1336,14 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
       title="Source control"
       actions={<Button appearance="subtle" size="small" icon={<ArrowSync20Regular />} onClick={() => setStatusTick((t) => t + 1)}>Refresh status</Button>}
     >
-      <div className={styles.gitMeta} style={{ marginBottom: 8 }}>
+      <div className={styles.gitMeta} style={{ marginBottom: tokens.spacingVerticalS }}>
         <span className={styles.gitMetaKey}>Workspace head</span><span className={styles.mono}>{status.workspaceHead?.slice(0, 12) || '—'}</span>
         <span className={styles.gitMetaKey}>Remote commit</span><span className={styles.mono}>{status.remoteCommitHash?.slice(0, 12) || '—'}</span>
         <span className={styles.gitMetaKey}>Changes</span><span>{changes.length}</span>
       </div>
 
       {hasConflict && (
-        <MessageBar intent="warning" style={{ marginBottom: 8 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalS }}>
           <MessageBarBody>One or more items changed in both the workspace and the branch. Resolve conflicts in the Fabric portal / Git before updating.</MessageBarBody>
         </MessageBar>
       )}
@@ -1382,7 +1383,7 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
         </Table>
       )}
 
-      <div className={styles.formGrid} style={{ marginTop: 12 }}>
+      <div className={styles.formGrid} style={{ marginTop: tokens.spacingVerticalM }}>
         <Field label="Commit comment">
           <Input value={comment} onChange={(_, d) => setComment(d.value.slice(0, 300))} placeholder="Describe your changes (max 300 chars)" />
         </Field>
@@ -1414,7 +1415,7 @@ function InfraTab({ onUnauth }: { onUnauth: () => void }) {
 
   useEffect(() => {
     setDeployments(null); setGate(null); setErr(null);
-    fetch('/api/deployment-pipelines/arm').then(async (r) => {
+    clientFetch('/api/deployment-pipelines/arm').then(async (r) => {
       if (r.status === 401 || r.status === 403) { onUnauth(); setDeployments([]); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); setDeployments([]); return; }
@@ -1431,7 +1432,7 @@ function InfraTab({ onUnauth }: { onUnauth: () => void }) {
     {
       key: 'provisioningState', label: 'State', sortable: true, filterable: true, width: 160,
       getValue: (d) => d.provisioningState || '',
-      render: (d) => <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 2 }}>{provStateBadge(d.provisioningState)}{d.error ? <Text size={100} title={d.error}>{d.error.slice(0, 60)}</Text> : null}</span>,
+      render: (d) => <span style={{ display: 'inline-flex', flexDirection: 'column', gap: tokens.spacingHorizontalXXS }}>{provStateBadge(d.provisioningState)}{d.error ? <Text size={100} title={d.error}>{d.error.slice(0, 60)}</Text> : null}</span>,
     },
     {
       key: 'timestamp', label: 'Timestamp', sortable: true, filterable: false, width: 180,
@@ -1520,7 +1521,7 @@ function OperationsDialog({ deployment }: { deployment: ArmDeployment }) {
         <DialogBody>
           <DialogTitle>Deployment steps — {deployment.name}</DialogTitle>
           <DialogContent>
-            <Caption1 style={{ display: 'block', marginBottom: 8 }}>
+            <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalS }}>
               Per-resource operations for this rollout in <strong>{deployment.resourceGroup}</strong>{' '}
               (Azure <code>Microsoft.Resources/deployments/operations</code> REST).
             </Caption1>
@@ -1597,7 +1598,7 @@ function LoomPipelinesTab() {
 
   useEffect(() => {
     setPipelines(null); setErr(null);
-    fetch('/api/deployment-pipelines/loom').then(async (r) => {
+    clientFetch('/api/deployment-pipelines/loom').then(async (r) => {
       if (r.status === 401) { setErr('Sign in to manage deployment pipelines.'); setPipelines([]); return; }
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'Failed to load pipelines'); setPipelines([]); return; }
@@ -1691,7 +1692,7 @@ function LoomCreatePipelineDialog({ onCreated }: { onCreated: (id: string) => vo
         setMsg({ kind: 'error', text: 'Each stage needs its own workspace — content is promoted between stages, so two stages can’t share one workspace.' });
         setBusy(false); return;
       }
-      const r = await fetch('/api/deployment-pipelines/loom', {
+      const r = await clientFetch('/api/deployment-pipelines/loom', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: name.trim(), description: description.trim() || undefined, stages: clean }),
       });
@@ -1839,7 +1840,7 @@ function DeletePipelineButton({ pipelineId, name, onDeleted }: { pipelineId: str
   const del = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/deployment-pipelines/loom/${pipelineId}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'Delete failed'); return; }
       setOpen(false); onDeleted();
@@ -1858,7 +1859,7 @@ function DeletePipelineButton({ pipelineId, name, onDeleted }: { pipelineId: str
               <MessageBarBody>This removes the pipeline definition, its stage deployment rules, and stops new deploys.
                 Items already deployed into the stage workspaces are left in place.</MessageBarBody>
             </MessageBar>
-            {err && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+            {err && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Cancel</Button></DialogTrigger>
@@ -1884,7 +1885,7 @@ function LoomStageCompare({ pipelineId, stages, tick }: { pipelineId: string; st
   useEffect(() => {
     if (!source || !target) { setResult(null); return; }
     setLoading(true); setErr(null); setResult(null);
-    fetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
       .then(async (r) => {
         const j = await r.json();
         if (!j.ok) { setErr(j.error || 'Compare failed'); return; }
@@ -1899,13 +1900,13 @@ function LoomStageCompare({ pipelineId, stages, tick }: { pipelineId: string; st
 
   return (
     <div className={styles.section}>
-      <div className={styles.assignRow} style={{ marginBottom: 8 }}>
+      <div className={styles.assignRow} style={{ marginBottom: tokens.spacingVerticalS }}>
         <Field label="Compare stage">
           <Dropdown value={target.displayName} selectedOptions={[target.id]} onOptionSelect={(_, d) => d.optionValue && setTargetId(d.optionValue)} style={{ minWidth: 200 }}>
             {stages.slice(1).map((s) => <Option key={s.id} value={s.id} text={s.displayName}>{s.displayName}</Option>)}
           </Dropdown>
         </Field>
-        <Text size={300} style={{ paddingBottom: 6 }}>against source <strong>{source.displayName}</strong></Text>
+        <Text size={300} style={{ paddingBottom: tokens.spacingVerticalSNudge }}>against source <strong>{source.displayName}</strong></Text>
       </div>
 
       {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
@@ -1974,7 +1975,7 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
   useEffect(() => {
     if (!open) return;
     setPairs(null); setLoadErr(null); setReceipt(null); setMsg(null);
-    fetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
       .then(async (r) => {
         const j = await r.json();
         if (!j.ok) { setLoadErr(j.error || 'Failed to load source items'); setPairs([]); return; }
@@ -1997,7 +1998,7 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
         if (chosenList.length === 0) { setMsg({ kind: 'error', text: 'Select at least one item, or switch off selective deploy.' }); setBusy(false); return; }
         body.items = chosenList;
       }
-      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}/deploy`, {
+      const r = await clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/deploy`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
@@ -2025,9 +2026,9 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
               items (same type + name) are updated in place; new items are created.
             </Text>
 
-            {loadErr && <MessageBar intent="error" style={{ marginTop: 8 }}><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
+            {loadErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}><MessageBarBody>{loadErr}</MessageBarBody></MessageBar>}
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM }}>
               <Checkbox label="Selective deploy (choose specific items)" checked={selective} onChange={(_, d) => setSelective(!!d.checked)} />
             </div>
 
@@ -2046,14 +2047,14 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
               </div>
             )}
 
-            <div style={{ marginTop: 12 }}>
+            <div style={{ marginTop: tokens.spacingVerticalM }}>
               <Textarea aria-label="Deployment note" placeholder="Deployment note (optional, max 1024 chars)" value={note}
                 onChange={(_, d) => setNote(d.value.slice(0, 1024))} rows={3} resize="vertical" style={{ width: '100%' }} />
             </div>
 
-            {msg && <div style={{ marginTop: 12 }}><MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar></div>}
+            {msg && <div style={{ marginTop: tokens.spacingVerticalM }}><MessageBar intent={msg.kind === 'success' ? 'success' : 'error'}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar></div>}
             {receipt && receipt.deployedItemIds.length > 0 && (
-              <div style={{ marginTop: 8 }} className={styles.mono}>
+              <div style={{ marginTop: tokens.spacingVerticalS }} className={styles.mono}>
                 Deployed item ids: {receipt.deployedItemIds.join(', ')}
               </div>
             )}
@@ -2080,7 +2081,7 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
   useEffect(() => {
     if (!open) return;
     setRules(null); setMsg(null);
-    fetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`).then(async (r) => {
       const j = await r.json();
       if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Failed to load rules' }); setRules([]); return; }
       setRules(j.data.rules || []);
@@ -2105,7 +2106,7 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
     try {
       const clean = (rules || []).map((r) => ({ ...r, value: (r.value || '').trim(), itemDisplayName: r.itemDisplayName?.trim() || undefined }));
       if (clean.some((r) => !r.value)) { setMsg({ kind: 'error', text: 'Every rule needs a value.' }); setBusy(false); return; }
-      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`, {
+      const r = await clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`, {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rules: clean }),
       });
       const j = await r.json();
@@ -2123,7 +2124,7 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
         <DialogBody>
           <DialogTitle>Deployment rules — {stage.displayName}</DialogTitle>
           <DialogContent>
-            <Text block size={200} style={{ marginBottom: 8 }}>
+            <Text block size={200} style={{ marginBottom: tokens.spacingVerticalS }}>
               When content is deployed INTO <strong>{stage.displayName}</strong>, each matching rule
               overrides a data-source or parameter on the re-provisioned item — so the model/report
               binds to this stage's warehouse, ADLS account, or Synapse workspace.
@@ -2178,12 +2179,12 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
                     })}
                   </TableBody>
                 </Table>
-                <div style={{ marginTop: 10 }}>
+                <div style={{ marginTop: tokens.spacingVerticalMNudge }}>
                   <Button appearance="subtle" icon={<Add20Regular />} onClick={addRule}>Add rule</Button>
                 </div>
               </>
             )}
-            {msg && <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'} style={{ marginTop: 10 }}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
+            {msg && <MessageBar intent={msg.kind === 'success' ? 'success' : 'error'} style={{ marginTop: tokens.spacingVerticalMNudge }}><MessageBarBody>{msg.text}</MessageBarBody></MessageBar>}
           </DialogContent>
           <DialogActions>
             <DialogTrigger disableButtonEnhancement><Button appearance="secondary" disabled={busy}>Close</Button></DialogTrigger>
@@ -2199,7 +2200,7 @@ function LoomHistoryPanel({ pipelineId, stages, tick }: { pipelineId: string; st
   const [records, setRecords] = useState<LoomHistoryRecord[] | null>(null);
   useEffect(() => {
     setRecords(null);
-    fetch(`/api/deployment-pipelines/loom/${pipelineId}/history`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/history`).then(async (r) => {
       const j = await r.json();
       setRecords(j.ok ? (j.data.records || []) : []);
     }).catch(() => setRecords([]));

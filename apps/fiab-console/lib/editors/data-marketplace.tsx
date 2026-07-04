@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataMarketplaceEditor — F14/F18 consumer data-product discovery surface.
  *
@@ -155,7 +156,7 @@ export function DataProductsMarketplace() {
   const runSearch = useCallback(async (q: string, sel: Record<string, string[]>) => {
     setLoading(true); setErr(null);
     try {
-      const r = await fetch('/api/data-products/search', {
+      const r = await clientFetch('/api/data-products/search', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ q, selectedFacets: sel, top: 50 }),
@@ -185,8 +186,8 @@ export function DataProductsMarketplace() {
   const loadWorkspacesAndDomains = useCallback(async () => {
     try {
       const [wr, dr] = await Promise.all([
-        fetch('/api/loom/workspaces').then((r) => r.json()).catch(() => ({})),
-        fetch('/api/admin/domains').then((r) => r.json()).catch(() => ({})),
+        clientFetch('/api/loom/workspaces').then((r) => r.json()).catch(() => ({})),
+        clientFetch('/api/admin/domains').then((r) => r.json()).catch(() => ({})),
       ]);
       if (wr?.ok) setWorkspaces(wr.workspaces || []); else setWorkspaces([]);
       if (dr?.ok) setDomains((dr.domains || []).map((d: any) => ({ id: d.id, name: d.name, color: d.color })));
@@ -195,7 +196,7 @@ export function DataProductsMarketplace() {
 
   const loadProducts = useCallback(async () => {
     try {
-      const r = await fetch('/api/data-products');
+      const r = await clientFetch('/api/data-products');
       const j = await r.json();
       setProducts(j.ok ? (j.products || []) : []);
     } catch { setProducts([]); }
@@ -204,7 +205,7 @@ export function DataProductsMarketplace() {
   const loadRequests = useCallback(async () => {
     setReqErr(null);
     try {
-      const r = await fetch('/api/data-products/my-access-requests');
+      const r = await clientFetch('/api/data-products/my-access-requests');
       const j = await r.json();
       if (!j.ok) { setReqErr(j.error || `HTTP ${r.status}`); setRequests([]); return; }
       setRequests(j.requests || []);
@@ -241,7 +242,7 @@ export function DataProductsMarketplace() {
   );
 
   const requestAccess = useCallback(async (hit: Hit, permission: string) => {
-    const r = await fetch('/api/catalog/request-access', {
+    const r = await clientFetch('/api/catalog/request-access', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -574,7 +575,7 @@ function PublishTab({
     if (!workspaceId || !name) { setErr('Workspace and name are required.'); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await fetch('/api/data-products', {
+      const r = await clientFetch('/api/data-products', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -590,14 +591,14 @@ function PublishTab({
   };
 
   const setStatus = async (p: Product, status: string) => {
-    await fetch(`/api/data-products/${p.id}`, {
+    await clientFetch(`/api/data-products/${p.id}`, {
       method: 'PATCH', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ publishStatus: status }),
     });
     onReload();
   };
   const remove = async (p: Product) => {
-    await fetch(`/api/data-products/${p.id}`, { method: 'DELETE' });
+    await clientFetch(`/api/data-products/${p.id}`, { method: 'DELETE' });
     onReload();
   };
 

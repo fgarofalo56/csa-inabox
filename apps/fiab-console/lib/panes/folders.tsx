@@ -608,7 +608,7 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
       {!loading && totalItems === 0 && folders.length === 0 && (
         <div className={s.empty}>
           <Body1>No items in this workspace yet. Add an item, or create a folder to organize.</Body1>
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: tokens.spacingVerticalM }}>
             <Button icon={<FolderAdd20Regular />} onClick={() => openCreateFolder(null)} disabled={busy}>New folder</Button>
           </div>
         </div>
@@ -865,7 +865,7 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
           <DialogBody>
             <DialogTitle>Move item</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge }}>
                 <Button appearance="subtle"
                   onClick={async () => { if (moveItem) await onMoveItem(moveItem.id, null); setMoveItem(null); }}>
                   / Workspace root

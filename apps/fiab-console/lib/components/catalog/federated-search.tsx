@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * FederatedSearch — single search box across Purview + UC + OneLake.
  *
@@ -322,7 +323,7 @@ export function FederatedSearch() {
       if (sourceFilter.size) params.set('source', Array.from(sourceFilter).join(','));
       if (classification) params.set('classification', classification);
       if (term) params.set('term', term);
-      const r = await fetch(`/api/catalog/search?${params.toString()}`);
+      const r = await clientFetch(`/api/catalog/search?${params.toString()}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setHits(j.hits || []);
@@ -657,7 +658,7 @@ function CatalogDetailTile({ hit, onClose }: { hit: FederatedHit | null; onClose
       <DialogSurface style={{ maxWidth: 620 }}>
         <DialogBody>
           <DialogTitle>
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalMNudge }}>
               <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 34, height: 34, borderRadius: 8, backgroundColor: `${visual.color}1f`, color: visual.color }}>
                 <Icon style={{ width: 20, height: 20, color: visual.color }} />
               </span>
@@ -666,9 +667,9 @@ function CatalogDetailTile({ hit, onClose }: { hit: FederatedHit | null; onClose
           </DialogTitle>
           <DialogContent>
             {hit.description && (
-              <Text style={{ display: 'block', marginBottom: 14, color: tokens.colorNeutralForeground2 }}>{hit.description}</Text>
+              <Text style={{ display: 'block', marginBottom: tokens.spacingVerticalL, color: tokens.colorNeutralForeground2 }}>{hit.description}</Text>
             )}
-            <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', rowGap: 8, columnGap: 12 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '160px 1fr', rowGap: tokens.spacingVerticalS, columnGap: tokens.spacingHorizontalM }}>
               {meta.map((m) => (
                 <Fragment key={m.label}>
                   <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{m.label}</Caption1>
@@ -676,7 +677,7 @@ function CatalogDetailTile({ hit, onClose }: { hit: FederatedHit | null; onClose
                 </Fragment>
               ))}
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Classifications</Caption1>
-              <span style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              <span style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalSNudge }}>
                 {hit.classifications && hit.classifications.length
                   ? hit.classifications.map((c) => <Badge key={c} appearance="tint" color="informative" size="small">{c}</Badge>)
                   : <Text className={s.muted}>None</Text>}

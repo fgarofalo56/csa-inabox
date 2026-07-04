@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * GovernOwnerPane — data-owner ("My items") view of the Govern tab (F3).
  *
@@ -119,7 +120,7 @@ export function GovernOwnerPane() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/governance/govern/owner');
+      const r = await clientFetch('/api/governance/govern/owner');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'Failed to load posture'); return; }
       setData(j as OwnerPosture);
@@ -136,7 +137,7 @@ export function GovernOwnerPane() {
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const r = await fetch('/api/governance/govern/refresh', { method: 'POST' });
+      const r = await clientFetch('/api/governance/govern/refresh', { method: 'POST' });
       const j = await r.json();
       if (j.ok === false && j.gate === 'not_configured') {
         setGate({ missingEnvVar: j.missingEnvVar, bicepModule: j.bicepModule, message: j.message });
@@ -169,7 +170,7 @@ export function GovernOwnerPane() {
       </Body1>
 
       <div className={s.toolbar}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
           {data?.owner?.name && (
             <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
               Scope: {data.owner.name} ({data.owner.upn})

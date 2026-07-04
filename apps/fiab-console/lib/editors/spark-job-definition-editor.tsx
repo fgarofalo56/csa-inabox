@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Spark Job Definition (SJD) editor — Fabric-parity surface over Azure
  * Synapse Spark (Livy batches). Replaces the thin form that previously lived
@@ -144,7 +145,7 @@ function usePoolList() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/items/synapse-spark-pool/list');
+        const r = await clientFetch('/api/items/synapse-spark-pool/list');
         const j = await r.json();
         if (j.ok) setPools(j.pools || []);
         else setPoolErr(j.error || 'failed to list Spark pools');
@@ -159,7 +160,7 @@ function useEnvironments() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/items/environment');
+        const r = await clientFetch('/api/items/environment');
         const j = await r.json();
         if (j.ok) setEnvs((j.items || []).map((i: any) => ({ id: i.id, displayName: i.displayName })));
       } catch { /* environment is optional; ignore */ }
@@ -176,7 +177,7 @@ function useItem(itemType: string, id: string) {
     if (!id || id === 'new') return;
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/${itemType}/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/${itemType}/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'load failed');
       setItem(j.item);
@@ -188,7 +189,7 @@ function useItem(itemType: string, id: string) {
 }
 
 async function saveItemState(itemType: string, id: string, state: Record<string, any>): Promise<void> {
-  const r = await fetch(`/api/items/${itemType}/${encodeURIComponent(id)}`, {
+  const r = await clientFetch(`/api/items/${itemType}/${encodeURIComponent(id)}`, {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ state }),
   });
@@ -279,7 +280,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   const loadRuns = useCallback(async () => {
     if (id === 'new') return;
     try {
-      const r = await fetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs?size=25`);
+      const r = await clientFetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs?size=25`);
       const j = await r.json();
       if (j.ok) setRuns(j.sessions || []);
       else if (j.error) setErr(j.error);
@@ -357,7 +358,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
       // Persist before submit so /submit reads the freshest spec.
       await saveItemState('spark-job-definition', id, { ...(cosmosItem?.state || {}), spec });
       setDirty(false);
-      const r = await fetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/submit`, {
+      const r = await clientFetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/submit`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       });
       const j = await r.json();
@@ -375,7 +376,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
       const fd = new FormData();
       fd.append('kind', 'main');
       fd.append('file', chosen);
-      const r = await fetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/files`, {
+      const r = await clientFetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/files`, {
         method: 'POST', body: fd,
       });
       const j = await r.json();
@@ -389,7 +390,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   const cancelRun = async (runId: number) => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs/${runId}/cancel`, {
+      const r = await clientFetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs/${runId}/cancel`, {
         method: 'POST',
       });
       const j = await r.json();
@@ -402,7 +403,7 @@ export function SparkJobDefinitionEditor({ item, id }: { item: FabricItemType; i
   const loadLog = async (runId: number) => {
     setLogs((m) => ({ ...m, [runId]: { loading: true } }));
     try {
-      const r = await fetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs/${runId}`);
+      const r = await clientFetch(`/api/items/spark-job-definition/${encodeURIComponent(id)}/runs/${runId}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'log fetch failed');
       const log: string[] = j.job?.log || [];

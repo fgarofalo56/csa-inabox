@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataSourcePicker — choose the DATA SOURCE that backs a Loom report.
  *
@@ -299,7 +300,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
   const loadModels = useCallback(async () => {
     setModelsLoading(true); setModelsErr(null);
     try {
-      const r = await fetch('/api/items/by-type?types=semantic-model');
+      const r = await clientFetch('/api/items/by-type?types=semantic-model');
       const j = await r.json();
       if (!j.ok) { setModels([]); setModelsErr(j.error || `HTTP ${r.status}`); return; }
       const items: ModelItem[] = (j.items || []).map((it: any) => ({
@@ -322,7 +323,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
     if (!guard.ok) { setPreviewErr(guard.error); setPreviewCols(null); return; }
     setPreviewLoading(true); setPreviewErr(null); setPreviewCols(null);
     try {
-      const r = await fetch('/api/items/semantic-model/scaffold', {
+      const r = await clientFetch('/api/items/semantic-model/scaffold', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dryRun: true, target, sql: guard.sql }),
       });
@@ -393,7 +394,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/report/${reportId}/data-source`);
+        const r = await clientFetch(`/api/items/report/${reportId}/data-source`);
         const j = await r.json().catch(() => ({}));
         if (!cancelled && j && typeof j === 'object' && j.tableStorage && typeof j.tableStorage === 'object') {
           setTableStorage(j.tableStorage as TableStorageMap);
@@ -410,7 +411,7 @@ export function DataSourcePicker({ open, reportId, value, onChange, onDismiss, s
   const persistTableStorage = useCallback(async (map: TableStorageMap) => {
     if (!reportId) return;
     try {
-      await fetch(`/api/items/report/${reportId}/data-source`, {
+      await clientFetch(`/api/items/report/${reportId}/data-source`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tableStorage: map }),

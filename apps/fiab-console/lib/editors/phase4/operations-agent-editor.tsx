@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Operations Agent editor.
  *
@@ -88,7 +89,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
   const [ontoOpts, setOntoOpts] = useState<ItemOption[]>([]);
   useEffect(() => {
     const load = (type: string, set: (o: ItemOption[]) => void) => {
-      fetch(`/api/items/by-type?types=${encodeURIComponent(type)}`)
+      clientFetch(`/api/items/by-type?types=${encodeURIComponent(type)}`)
         .then((r) => r.json())
         .then((j) => set((j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }))))
         .catch(() => { /* leave empty; user can still type below */ });
@@ -105,7 +106,7 @@ export function OperationsAgentEditor({ item, id }: { item: FabricItemType; id: 
     try {
       const saved = await save();
       if (!saved) { setDeployResult({ ok: false, error: 'Save failed before deploy — fix the save error and retry.' }); return; }
-      const r = await fetch(`/api/items/operations-agent/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/operations-agent/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
       const j: DeployResponse = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
       setDeployResult(j);
       if (j.ok) await reload();
@@ -297,7 +298,7 @@ function RunPane({ id, deployedAgentId, boundEventhouse, dirty, save, chatStyles
     setQuestion(''); setAsking(true);
     let asst: RunMsg;
     try {
-      const r = await fetch(`/api/items/operations-agent/${encodeURIComponent(id)}/run`, {
+      const r = await clientFetch(`/api/items/operations-agent/${encodeURIComponent(id)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ question: q, history }),
       });
@@ -471,7 +472,7 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
   const loadRules = useCallback(async () => {
     setLoading(true); setListErr(null); setGate(null);
     try {
-      const r = await fetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules`);
+      const r = await clientFetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setRules([]); if (j?.gate) setGate(j.gate); setListErr(j?.error || `HTTP ${r.status}`); return; }
       setRules(Array.isArray(j.rules) ? j.rules : []);
@@ -488,7 +489,7 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
     if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
     if (sourceKind === 'adx' && adxDatabase.trim()) body.adxDatabase = adxDatabase.trim();
     try {
-      const r = await fetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules`, {
+      const r = await clientFetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
@@ -502,7 +503,7 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
   const triggerNow = useCallback(async (ruleId: string) => {
     setTriggering(ruleId); setTriggerResult(null); setListErr(null); setGate(null);
     try {
-      const r = await fetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules?trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules?trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { if (j?.gate) setGate(j.gate); setListErr(j?.error || j?.gate?.remediation || `HTTP ${r.status}`); return; }
       setTriggerResult({ ruleId, fired: !!j.fired, count: typeof j.count === 'number' ? j.count : (Array.isArray(j.rows) ? j.rows.length : 0) });
@@ -513,7 +514,7 @@ function TriggersPane({ id, chatStyles: s }: { id: string; chatStyles: StyleBag 
   const deleteRule = useCallback(async (ruleId: string) => {
     setDeleting(ruleId); setListErr(null); setGate(null);
     try {
-      const r = await fetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules?ruleId=${encodeURIComponent(ruleId)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/operations-agent/${encodeURIComponent(id)}/rules?ruleId=${encodeURIComponent(ruleId)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { if (j?.gate) setGate(j.gate); setListErr(j?.error || `HTTP ${r.status}`); return; }
       await loadRules();

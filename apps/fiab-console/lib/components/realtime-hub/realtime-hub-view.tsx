@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * RealTimeHubView — Fabric Real-Time Hub parity surface.
  *
@@ -190,7 +191,7 @@ export function RealTimeHubView() {
 
   function load() {
     setData(null); setLoadErr(null);
-    fetch('/api/realtime-hub/streams').then(async (r) => {
+    clientFetch('/api/realtime-hub/streams').then(async (r) => {
       if (r.status === 401 || r.status === 403) {
         const j = await r.json().catch(() => ({}));
         if (r.status === 401 && !j?.hint) { setUnauth(true); setData({ ok: false, streams: [] }); return; }
@@ -220,7 +221,7 @@ export function RealTimeHubView() {
   // Loom workspaces for the Connect-source dialog (Azure-native default) — so a
   // source can be connected even before any eventstream exists.
   useEffect(() => {
-    fetch('/api/loom/workspaces').then(async (r) => {
+    clientFetch('/api/loom/workspaces').then(async (r) => {
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setLoomWorkspaces((j.workspaces || []).map((w: any) => ({ id: w.id, name: w.name })));
     }).catch(() => { /* dialog falls back to stream-derived workspaces */ });
@@ -256,7 +257,7 @@ export function RealTimeHubView() {
       !window.confirm(`Delete eventstream "${s.name}"? This removes the Loom eventstream item.`)) return;
     setDeleting(s.id);
     try {
-      const r = await fetch(`/api/items/eventstream/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/eventstream/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (typeof window !== 'undefined') window.alert(`Delete failed: ${j?.error || r.status}`);
@@ -422,7 +423,7 @@ export function RealTimeHubView() {
           </Button>
         }
       >
-        <Caption1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+        <Caption1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
           Connect Microsoft, Azure, database CDC, and external streaming sources. Each tile creates a real CSA Loom
           Eventstream item carrying the chosen source.
           {' '}Want to discover the raw Azure sources (Event Hubs, IoT Hub, ADX) across every subscription?{' '}
@@ -434,7 +435,7 @@ export function RealTimeHubView() {
       {/* All data streams */}
       <Section
         title={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
             All data streams
             {data?.workspaceCount != null && (
               <Badge appearance="tint">{streams.length} across {data.workspaceCount} workspaces</Badge>
@@ -442,7 +443,7 @@ export function RealTimeHubView() {
           </span>
         }
         actions={
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalS }}>
             <ViewToggle value={view} onChange={setView} ariaLabel="Stream view" />
             <Button appearance="subtle" icon={<ArrowSync20Regular />} onClick={load}>Refresh</Button>
           </span>

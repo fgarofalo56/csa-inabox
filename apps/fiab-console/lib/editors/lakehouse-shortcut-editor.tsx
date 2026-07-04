@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * LakehouseShortcutEditor — the Azure-native equivalent of a OneLake shortcut:
  * a named pointer to external data a lakehouse reads IN PLACE without copying.
@@ -107,13 +108,13 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
   const [verifyBusy, setVerifyBusy] = useState(false);
 
   useEffect(() => {
-    fetch('/api/loom/workspaces').then(r => r.json()).then(j => setWorkspaces(j.ok ? (j.workspaces || []) : [])).catch(() => setWorkspaces([]));
+    clientFetch('/api/loom/workspaces').then(r => r.json()).then(j => setWorkspaces(j.ok ? (j.workspaces || []) : [])).catch(() => setWorkspaces([]));
   }, []);
 
   const load = useCallback(async (wsId: string) => {
     setShortcuts(null);
     try {
-      const r = await fetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setShortcuts([]); return; }
       setShortcuts(j.shortcuts || []);
@@ -159,7 +160,7 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
     if (!workspaceId || missing) return;
     setVerifyBusy(true); setVerifyResult(null); setCErr(null);
     try {
-      const r = await fetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'verify', ...connectorBody() }),
       });
@@ -174,7 +175,7 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
     if (!workspaceId || !cName.trim() || missing) return;
     setCBusy(true); setCErr(null);
     try {
-      const r = await fetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: cName.trim(), ...connectorBody() }),
       });
@@ -190,7 +191,7 @@ export function LakehouseShortcutEditor({ item, id }: Props) {
     if (!workspaceId) return;
     setMsg(null);
     try {
-      const r = await fetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(sid)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/lakehouse-shortcut?workspaceId=${encodeURIComponent(workspaceId)}&id=${encodeURIComponent(sid)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || 'delete failed' }); return; }
       setMsg({ intent: 'success', text: 'Shortcut deleted (the external data is untouched).' });

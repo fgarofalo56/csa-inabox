@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Databricks Job editor — extracted verbatim from
  * databricks-editors.tsx (behavior-preserving split — zero logic change).
@@ -423,7 +424,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
 
   const loadJobs = useCallback(async () => {
     try {
-      const r = await fetch('/api/items/databricks-job');
+      const r = await clientFetch('/api/items/databricks-job');
       const j = await r.json();
       if (!j.ok) { setListError(j.error || `HTTP ${r.status}`); return; }
       setListError(null);
@@ -441,7 +442,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     // workspace gate
     void (async () => {
       try {
-        const r = await fetch('/api/databricks/workspace');
+        const r = await clientFetch('/api/databricks/workspace');
         const j = await r.json();
         if (j.ok) { setWorkspaceHost(j.workspace?.hostname || null); setGateError(null); }
         else { setGateError(j.error || `HTTP ${r.status}`); setGateHint(j.hint || null); }
@@ -449,13 +450,13 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     })();
     // clusters
     void (async () => {
-      const r = await fetch('/api/items/databricks-cluster');
+      const r = await clientFetch('/api/items/databricks-cluster');
       const j = await r.json();
       if (j.ok) setClusters(j.clusters || []);
     })();
     // compute options (spark versions + node types) for new job clusters
     void (async () => {
-      const r = await fetch('/api/items/databricks-cluster/options');
+      const r = await clientFetch('/api/items/databricks-cluster/options');
       const j = await r.json();
       if (j.ok) { setNodeTypes(j.nodeTypes || []); setSparkVersions(j.sparkVersions || []); }
     })();
@@ -463,7 +464,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     // a free-text fallback remains if the workspace has none / list fails.
     void (async () => {
       try {
-        const r = await fetch('/api/databricks/warehouses');
+        const r = await clientFetch('/api/databricks/warehouses');
         const j = await r.json();
         if (j.ok) {
           setWarehouses((j.warehouses || []).map((w: any) => ({ id: w.id, name: w.name || w.id })));
@@ -473,7 +474,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     // notebooks under /Workspace for the notebook-task path picker
     void (async () => {
       try {
-        const r = await fetch('/api/items/databricks-notebook/list?path=/Workspace');
+        const r = await clientFetch('/api/items/databricks-notebook/list?path=/Workspace');
         const j = await r.json();
         if (j.ok) {
           setNotebooks((j.objects || [])
@@ -506,7 +507,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     let cancelled = false;
     void (async () => {
       try {
-        const r = await fetch(`/api/items/databricks-job/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/items/databricks-job/${encodeURIComponent(id)}`);
         const j = await r.json();
         if (cancelled || !j.ok || j.source !== 'bundle' || !j.job?.settings) return;
         const settings = j.job.settings;
@@ -525,7 +526,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     setJobId(jid);
     setSaveError(null); setSaveMessage(null); setRunError(null);
     try {
-      const r = await fetch(`/api/items/databricks-job/${id}?jobId=${jid}`);
+      const r = await clientFetch(`/api/items/databricks-job/${id}?jobId=${jid}`);
       const j = await r.json();
       if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
       const job = j.job as JobRow;
@@ -557,7 +558,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       } else {
         setTriggerType('none');
       }
-      const rr = await fetch(`/api/items/databricks-job/${id}/runs?jobId=${jid}`);
+      const rr = await clientFetch(`/api/items/databricks-job/${id}/runs?jobId=${jid}`);
       const rj = await rr.json();
       if (rj.ok) setRuns(rj.runs || []);
       setDirty(false);
@@ -605,7 +606,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     const spec = buildSpec();
     try {
       if (jobId === null) {
-        const r = await fetch('/api/items/databricks-job', {
+        const r = await clientFetch('/api/items/databricks-job', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ spec }),
         });
@@ -617,7 +618,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
         setNavRefresh((n) => n + 1);
         setDirty(false);
       } else {
-        const r = await fetch(`/api/items/databricks-job/${id}?jobId=${jobId}`, {
+        const r = await clientFetch(`/api/items/databricks-job/${id}?jobId=${jobId}`, {
           method: 'PUT', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ spec }),
         });
@@ -637,7 +638,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
   const del = useCallback(async () => {
     if (jobId === null) return;
     if (!window.confirm(`Delete job ${jobId}?`)) return;
-    await fetch(`/api/items/databricks-job/${id}?jobId=${jobId}`, { method: 'DELETE' });
+    await clientFetch(`/api/items/databricks-job/${id}?jobId=${jobId}`, { method: 'DELETE' });
     resetForNew();
     await loadJobs();
     setNavRefresh((n) => n + 1);
@@ -645,7 +646,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
 
   const refreshRuns = useCallback(async () => {
     if (jobId === null) return;
-    const rr = await fetch(`/api/items/databricks-job/${id}/runs?jobId=${jobId}`);
+    const rr = await clientFetch(`/api/items/databricks-job/${id}/runs?jobId=${jobId}`);
     const rj = await rr.json();
     if (rj.ok) setRuns(rj.runs || []);
   }, [id, jobId]);
@@ -658,7 +659,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
       // run-now param shape); the API also honours notebook/python/etc.
       const jp = parseKv(jobParamsText);
       const body = Object.keys(jp).length ? { params: { job_parameters: jp } } : {};
-      const r = await fetch(`/api/items/databricks-job/${id}/run?jobId=${jobId}`, {
+      const r = await clientFetch(`/api/items/databricks-job/${id}/run?jobId=${jobId}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -677,7 +678,7 @@ export function DatabricksJobEditor({ item, id }: { item: FabricItemType; id: st
     setOutOpen(true); setOutBusy(true); setOutRunId(runId);
     setOutData(null); setOutNote(null); setOutError(null);
     try {
-      const r = await fetch(`/api/items/databricks-job/${id}/run-output?runId=${runId}`);
+      const r = await clientFetch(`/api/items/databricks-job/${id}/run-output?runId=${runId}`);
       const j = await r.json();
       if (!j.ok) { setOutError(j.error || `HTTP ${r.status}`); return; }
       setOutData(j); setOutNote(j.outputNote || null);

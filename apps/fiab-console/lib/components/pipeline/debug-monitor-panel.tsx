@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DebugRunPanel — the Loom one-for-one of Azure Data Factory Studio's "Debug"
  * experience (the canvas Output strip that lights up while a debug run streams).
@@ -215,7 +216,7 @@ export function DebugRunPanel({
   // One poll of /output?runId=… — refresh the per-activity grid + overall state.
   const pollOnce = useCallback(async (rid: string) => {
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output` +
         `?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(rid)}`,
         { cache: 'no-store' },
@@ -267,7 +268,7 @@ export function DebugRunPanel({
     setDebugging(true); setErr(null); setGate(null);
     setActivities([]); setExpanded(null); setRunId(null); setOverall('Queued');
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/debug?workspaceId=${encodeURIComponent(workspaceId)}`,
         {
           method: 'POST', headers: { 'content-type': 'application/json' },

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ImportDataProductsFlyout — right-side OverlayDrawer that bulk-creates DRAFT
  * `data-product` items from a CSV (≤1000 rows) and monitors the import job.
@@ -109,7 +110,7 @@ export function ImportDataProductsFlyout({
     if (!open) return;
     (async () => {
       try {
-        const r = await fetch('/api/loom/workspaces');
+        const r = await clientFetch('/api/loom/workspaces');
         const j = await r.json();
         if (!j.ok) { setWsError(j.error || `HTTP ${r.status}`); setWorkspaces([]); return; }
         setWorkspaces(j.workspaces || []);
@@ -153,7 +154,7 @@ export function ImportDataProductsFlyout({
     try {
       const formData = new FormData();
       formData.append('file', fileBlob, fileName || 'import.csv');
-      const r = await fetch(`/api/data-products/import?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/data-products/import?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', body: formData,
       });
       const j = await r.json();
@@ -172,7 +173,7 @@ export function ImportDataProductsFlyout({
   // Poll the job every 5s while running.
   const pollOnce = useCallback(async (id: string) => {
     try {
-      const r = await fetch(`/api/data-products/jobs/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/data-products/jobs/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) { setMonitorErr(j.error || `HTTP ${r.status}`); return null; }
       setMonitorErr(null);

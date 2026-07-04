@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataflowGen2Editor — Azure-native Dataflow Gen2 (Power Query Online parity).
  *
@@ -59,7 +60,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/loom/workspaces');
+      const r = await clientFetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
@@ -77,7 +78,7 @@ function useDataflowConfig() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/items/dataflow/config');
+        const r = await clientFetch('/api/items/dataflow/config');
         const j = await r.json();
         if (!cancelled && j.ok) setConfig(j);
       } catch { /* non-fatal — editor still renders */ }
@@ -149,7 +150,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null); setListHint(null);
     try {
-      const r = await fetch(`/api/items/dataflow?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/dataflow?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDataflows([]); setListErr(j.error); setListHint(j.hint); return; }
       setDataflows(j.dataflows || []);
@@ -160,7 +161,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
   const loadDetail = useCallback(async (wsId: string, dId: string) => {
     setDetailErr(null); setRunMsg(null); setRunHint(null); setRunOk(null);
     try {
-      const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/dataflow/${encodeURIComponent(dId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
       const parts: Array<{ path: string; payload: string }> = j.definition?.parts || [];
@@ -186,7 +187,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
     setSink((prev) => { sinkSnapshot = prev; return prev; });
     try {
       const definition = { parts: [{ path: partPath, payload: toB64(textSnapshot), payloadType: 'InlineBase64' }] };
-      const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ definition, sink: sinkSnapshot }),
       });
@@ -218,7 +219,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
     setRunning(true); setRunMsg(null); setRunHint(null); setRunOk(null);
     try {
       if (dirty) { const ok = await save(); if (!ok) { setRunOk(false); setRunMsg('Save failed — fix the error above before running.'); return; } }
-      const r = await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}/refresh?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}/refresh?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) { setRunOk(false); setRunMsg(j.error || 'Run failed'); setRunHint(j.hint || null); return; }
       setRunOk(true);
@@ -231,7 +232,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
     if (!workspaceId || !createName.trim()) return;
     setCreateBusy(true); setCreateErr(null);
     try {
-      const r = await fetch(`/api/items/dataflow?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/dataflow?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: createName.trim() }),
       });
@@ -246,7 +247,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
   const del = useCallback(async () => {
     if (!workspaceId || !dataflowId) return;
     if (!confirm('Delete this dataflow? This cannot be undone.')) return;
-    await fetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+    await clientFetch(`/api/items/dataflow/${encodeURIComponent(dataflowId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
     setDataflowId('');
     await loadList(workspaceId);
   }, [workspaceId, dataflowId, loadList]);

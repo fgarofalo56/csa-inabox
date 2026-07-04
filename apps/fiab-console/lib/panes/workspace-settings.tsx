@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WorkspaceSettingsPane — the admin workspace "Settings" flyout, one-for-one
  * with the Fabric workspace settings pane's data-platform tabs:
@@ -199,7 +200,7 @@ function LicenseTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/admin/scaling/capacity').then((r) => r.json())
+    clientFetch('/api/admin/scaling/capacity').then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
         if (j?.ok === false || !Array.isArray(j?.capacities)) { setCapGate(j?.hint || j?.error || 'Fabric capacity API not available.'); setCaps([]); }
@@ -291,7 +292,7 @@ function M365Tab({ ws, onSaved }: { ws: Workspace; onSaved: (w: Workspace) => vo
     const id = setTimeout(async () => {
       setSearching(true); setGate(null);
       try {
-        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(term)}&kind=group`);
+        const r = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(term)}&kind=group`);
         const j = await r.json();
         if (r.status === 503 || j?.ok === false) { setGate(j?.remediation || j?.error || 'Microsoft Graph group search is not configured.'); setResults([]); }
         else setResults((j.results || []).map((g: any) => ({ id: g.id, displayName: g.displayName, mail: g.mail })));
@@ -304,7 +305,7 @@ function M365Tab({ ws, onSaved }: { ws: Workspace; onSaved: (w: Workspace) => vo
   const callM365 = async (body: Record<string, unknown>) => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/admin/workspaces/${encodeURIComponent(ws.id)}/m365`, {
+      const r = await clientFetch(`/api/admin/workspaces/${encodeURIComponent(ws.id)}/m365`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
@@ -413,11 +414,11 @@ function OneLakeTab({ ws, isAdmin, onSaved }: { ws: Workspace; isAdmin?: boolean
   useEffect(() => {
     let cancelled = false;
     setMLoading(true);
-    fetch(`/api/admin/workspaces/${encodeURIComponent(ws.id)}/storage-metrics`).then((r) => r.json())
+    clientFetch(`/api/admin/workspaces/${encodeURIComponent(ws.id)}/storage-metrics`).then((r) => r.json())
       .then((j) => { if (!cancelled) setMetrics(j); })
       .catch((e) => { if (!cancelled) setMetrics({ ok: false, error: String(e?.message || e) }); })
       .finally(() => { if (!cancelled) setMLoading(false); });
-    fetch('/api/storage/accounts').then((r) => r.json())
+    clientFetch('/api/storage/accounts').then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
         if (j?.ok && Array.isArray(j.accounts)) setStorage(j.accounts.map((a: any) => ({ id: a.id, name: a.name, isHns: a.isHns, resourceGroup: a.resourceGroup })));

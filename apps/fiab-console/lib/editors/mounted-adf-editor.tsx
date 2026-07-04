@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MountedAdfEditor — Fabric MountedDataFactory focused editor, now carrying a
  * full ADF-Studio-parity authoring surface.
@@ -80,7 +81,7 @@ function useWorkspaces() {
   const [workspaces, setWorkspaces] = useState<WorkspaceLite[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
-    fetch('/api/loom/workspaces').then(r => r.json()).then(j => {
+    clientFetch('/api/loom/workspaces').then(r => r.json()).then(j => {
       if (!j.ok) { setError(j.error || 'failed'); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
     }).catch(e => { setError(e?.message || String(e)); setWorkspaces([]); });
@@ -116,7 +117,7 @@ export function MountedAdfEditor({ item, id }: Props) {
 
   const loadList = useCallback(async (wsId: string) => {
     try {
-      const r = await fetch(`/api/items/mounted-adf?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/mounted-adf?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setMounts([]); return; }
       setMounts(j.mounts || []);
@@ -128,7 +129,7 @@ export function MountedAdfEditor({ item, id }: Props) {
     setDetailErr(null); setPartialErr(null);
     setPipelines(null); setTriggers(null); setRuns(null);
     try {
-      const r = await fetch(`/api/items/mounted-adf/${encodeURIComponent(mid)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/mounted-adf/${encodeURIComponent(mid)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) {
         setDetailErr(j.error || 'failed');
@@ -154,7 +155,7 @@ export function MountedAdfEditor({ item, id }: Props) {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch(`/api/cosmos-items/mounted-adf/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/cosmos-items/mounted-adf/${encodeURIComponent(id)}`);
         const j = await r.json().catch(() => ({}));
         if (alive && j?.workspaceId) setWorkspaceId(j.workspaceId);
       } catch { /* fall back to manual pick */ }
@@ -169,7 +170,7 @@ export function MountedAdfEditor({ item, id }: Props) {
     if (!workspaceId || !cName.trim() || !cSub.trim() || !cRg.trim() || !cFactory.trim()) return;
     setCBusy(true); setCErr(null);
     try {
-      const r = await fetch(`/api/items/mounted-adf?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/mounted-adf?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           displayName: cName.trim(),
@@ -190,7 +191,7 @@ export function MountedAdfEditor({ item, id }: Props) {
     if (!workspaceId || !mountId) return;
     setRunMsg(null);
     try {
-      const r = await fetch(`/api/items/mounted-adf/${encodeURIComponent(mountId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/mounted-adf/${encodeURIComponent(mountId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pipelineName }),
       });
@@ -408,7 +409,7 @@ export function MountedAdfEditor({ item, id }: Props) {
                 <Button appearance="subtle" icon={<Delete20Regular />} onClick={async () => {
                   if (!workspaceId || !mountId) return;
                   if (typeof window !== 'undefined' && !window.confirm('Unmount this factory? (The factory itself is untouched.)')) return;
-                  await fetch(`/api/items/mounted-adf/${encodeURIComponent(mountId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+                  await clientFetch(`/api/items/mounted-adf/${encodeURIComponent(mountId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
                   setMountId(''); setActive(null);
                   await loadList(workspaceId);
                 }}>Unmount factory</Button>
@@ -445,7 +446,7 @@ function DataFlowsTab() {
   const loadFlows = useCallback(async () => {
     setErr(null); setGate(null);
     try {
-      const r = await fetch('/api/adf/dataflows');
+      const r = await clientFetch('/api/adf/dataflows');
       const j = await r.json();
       if (!j.ok) {
         if (j.code === 'not_configured') { setGate({ missing: j.missing }); setFlows([]); return; }
@@ -458,7 +459,7 @@ function DataFlowsTab() {
 
   const loadDatasets = useCallback(async () => {
     try {
-      const r = await fetch('/api/adf/datasets');
+      const r = await clientFetch('/api/adf/datasets');
       const j = await r.json();
       if (j.ok) setDatasets((j.datasets || []).map((d: any) => ({ name: d.name })));
     } catch { /* dataset picker just stays empty */ }
@@ -470,7 +471,7 @@ function DataFlowsTab() {
     if (!newName.trim()) return;
     setBusy(true); setCreateErr(null);
     try {
-      const r = await fetch('/api/adf/dataflows', {
+      const r = await clientFetch('/api/adf/dataflows', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: newName.trim() }),
       });
@@ -486,7 +487,7 @@ function DataFlowsTab() {
 
   const del = useCallback(async (name: string) => {
     if (typeof window !== 'undefined' && !window.confirm(`Delete data flow "${name}"? This cannot be undone.`)) return;
-    await fetch(`/api/adf/dataflows/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    await clientFetch(`/api/adf/dataflows/${encodeURIComponent(name)}`, { method: 'DELETE' });
     if (selected === name) setSelected(null);
     await loadFlows();
   }, [selected, loadFlows]);
@@ -782,7 +783,7 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
   const load = useCallback(async (flowName: string) => {
     setLoading(true); setErr(null); setMsg(null);
     try {
-      const r = await fetch(`/api/adf/dataflows/${encodeURIComponent(flowName)}`);
+      const r = await clientFetch(`/api/adf/dataflows/${encodeURIComponent(flowName)}`);
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'load failed'); setModel({ streams: [] }); return; }
       const next = definitionToModel(j.dataflow?.properties);
@@ -906,7 +907,7 @@ function InnerDesigner({ name, datasets, reloadKey }: DesignerProps) {
     setSaving(true); setErr(null); setMsg(null);
     try {
       const typeProperties = modelToTypeProperties(model);
-      const r = await fetch(`/api/adf/dataflows/${encodeURIComponent(name)}`, {
+      const r = await clientFetch(`/api/adf/dataflows/${encodeURIComponent(name)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ properties: { type: 'MappingDataFlow', typeProperties } }),
       });

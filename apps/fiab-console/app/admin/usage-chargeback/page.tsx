@@ -268,7 +268,7 @@ export default function UsageChargebackPage() {
           )}
 
           {loading && !model && (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: 48 }}><Spinner label="Aggregating cost + utilization…" /></div>
+            <div style={{ display: 'flex', justifyContent: 'center', padding: tokens.spacingVerticalXXXL }}><Spinner label="Aggregating cost + utilization…" /></div>
           )}
 
           {model && !gate && (
@@ -394,7 +394,7 @@ export default function UsageChargebackPage() {
                       {model.subscriptions.map((sub) => (
                         <div key={sub} className={styles.kpi}>
                           <Caption1>Subscription</Caption1>
-                          <Text style={{ fontFamily: 'monospace', fontSize: 12, wordBreak: 'break-all' }}>{sub}</Text>
+                          <Text style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, wordBreak: 'break-all' }}>{sub}</Text>
                           {model.subscriptionErrors.find((e) => e.subscription === sub)
                             ? <Badge appearance="tint" color="warning">No Cost Management access</Badge>
                             : <Badge appearance="tint" color="success">Reporting</Badge>}

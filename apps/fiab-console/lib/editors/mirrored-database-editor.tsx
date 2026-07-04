@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MirroredDatabaseEditor — Azure-native Mirrored Database editor (no Microsoft
  * Fabric). Lists existing mirrored databases in a workspace, shows mirroring
@@ -67,7 +68,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/loom/workspaces');
+      const r = await clientFetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
@@ -135,7 +136,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null); setListHint(null);
     try {
-      const r = await fetch(`/api/items/mirrored-database?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/mirrored-database?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setMirrors([]); setListErr(j.error); setListHint(j.hint); return; }
       setMirrors(j.mirroredDatabases || []);
@@ -146,7 +147,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const loadDetail = useCallback(async (wsId: string, mId: string) => {
     setDetailErr(null); setActionMsg(null);
     try {
-      const r = await fetch(`/api/items/mirrored-database/${encodeURIComponent(mId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/mirrored-database/${encodeURIComponent(mId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
       setDetail(j);
@@ -166,7 +167,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     if (!workspaceId || !mirrorId) { setSqlPaired(null); return; }
     setSqlPairedLoading(true);
     try {
-      const r = await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/sql-endpoint?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/sql-endpoint?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (j.ok && j.provisioned && j.sqlItemId) setSqlPaired({ itemId: j.sqlItemId, endpoint: j.endpoint, database: j.database });
       else setSqlPaired(null);
@@ -183,7 +184,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     if (!workspaceId || !mirrorId) return;
     setActing(true); setActionMsg(null);
     try {
-      const r = await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/state?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/state?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),
       });
@@ -211,7 +212,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     if (!workspaceId || !mirrorId) return;
     setMonitorLoading(true); setMonitorErr(null);
     try {
-      const r = await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/monitor?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/monitor?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (!j.ok) { setMonitorErr(j.error || 'monitor failed'); return; }
       setMonitorData(j);
@@ -232,7 +233,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     if (!workspaceId || !mirrorId) return;
     setLifecycleBusy(true); setLifecycleMsg(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/lifecycle?workspaceId=${encodeURIComponent(workspaceId)}`,
         { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) },
       );
@@ -272,7 +273,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
     if (!sc.server || !sc.database) { setTestMsg({ intent: 'error', text: 'This mirror has no source server/database set. Edit it first.' }); return; }
     setTesting(true); setTestMsg(null);
     try {
-      const r = await fetch('/api/items/mirrored-database/verify', {
+      const r = await clientFetch('/api/items/mirrored-database/verify', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourceType: sc.sourceType, server: sc.server, database: sc.database }),
       });
@@ -287,7 +288,7 @@ export function MirroredDatabaseEditor({ item, id }: Props) {
   const del = useCallback(async () => {
     if (!workspaceId || !mirrorId) return;
     if (!confirm('Delete this mirrored database? This cannot be undone.')) return;
-    await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+    await clientFetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
     setMirrorId(''); setDetail(null);
     await loadList(workspaceId);
   }, [workspaceId, mirrorId, loadList]);

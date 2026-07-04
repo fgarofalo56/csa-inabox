@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DSPM for AI panel — the Azure-native 1:1 of Microsoft Purview DSPM for AI →
  * "Discover › Apps and agents". An admin security report of which AI agents /
@@ -115,7 +116,7 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/admin/dspm-ai?days=${days}`);
+      const r = await clientFetch(`/api/admin/dspm-ai?days=${days}`);
       setResp(await r.json());
     } catch (e) {
       setResp({ ok: false, error: e instanceof Error ? e.message : String(e) });

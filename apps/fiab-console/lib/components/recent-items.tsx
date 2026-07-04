@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * RecentItems — pulls /api/items/recent (audit-log-backed) for the
  * current user and renders a row of cards linking back to the item.
@@ -49,7 +50,7 @@ export function RecentItems() {
   const [items, setItems] = useState<Recent[] | null>(null);
 
   useEffect(() => {
-    fetch('/api/items/recent?n=8').then(r => r.json()).then(d => {
+    clientFetch('/api/items/recent?n=8').then(r => r.json()).then(d => {
       setItems(Array.isArray(d?.items) ? d.items : []);
     }).catch(() => setItems([]));
   }, []);

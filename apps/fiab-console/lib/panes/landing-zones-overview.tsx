@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Data Landing Zone overview & management (item-3).
  *
@@ -104,7 +105,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
     setGranting(true);
     setGrant(null);
     try {
-      const res = await fetch('/api/setup/landing-zones/grant', {
+      const res = await clientFetch('/api/setup/landing-zones/grant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subscriptionId: zone.subscriptionId, resourceGroup: zone.rg }),
@@ -121,7 +122,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/setup/landing-zones');
+      const res = await clientFetch('/api/setup/landing-zones');
       const j = (await res.json().catch(() => ({}))) as Overview;
       setData(res.ok ? j : { ...j, ok: false });
     } catch (e) {
@@ -265,7 +266,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
               <div className={styles.detailRow}><Body1Strong>Subscription</Body1Strong><br /><span className={styles.mono}>{selected.subscriptionId}</span>{selected.crossSubscription && <> <Badge appearance="outline" size="small">cross-subscription</Badge></>}</div>
               <div className={styles.detailRow}><Body1Strong>Resource group</Body1Strong><br /><span className={styles.mono}>{selected.rg}</span></div>
               <Divider style={{ margin: '12px 0' }} />
-              <div className={styles.actionsCell} style={{ marginBottom: 12 }}>
+              <div className={styles.actionsCell} style={{ marginBottom: tokens.spacingVerticalM }}>
                 <Button as="a" href="/admin/scaling" size="small" icon={<GaugeRegular />}>Scale this DLZ’s compute</Button>
                 {onAttach && <Button size="small" icon={<Add16Regular />} onClick={() => { setSelected(null); onAttach(); }}>Deploy more resources</Button>}
               </div>
@@ -278,7 +279,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
                     Console assigns itself Contributor (+ the minimal data-plane roles) scoped to the
                     DLZ resource group, in its own subscription (no subscription-wide grant). Then
                     Refresh.
-                    <div style={{ marginTop: 10 }}>
+                    <div style={{ marginTop: tokens.spacingVerticalMNudge }}>
                       <Button
                         appearance="primary"
                         size="small"
@@ -296,12 +297,12 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
               {/* Grant outcome — success, or the honest copy-paste gate when the
                   Console UAMI itself cannot write role assignments on the RG. */}
               {grant && grant.ok && (
-                <MessageBar intent="success" style={{ marginTop: 12 }}>
+                <MessageBar intent="success" style={{ marginTop: tokens.spacingVerticalM }}>
                   <MessageBarBody>
                     <MessageBarTitle>RBAC granted</MessageBarTitle>
                     The Console now holds the least-privilege role set on this landing zone&apos;s
                     resource group. Refresh to see it as <b>Attached</b>.
-                    <div style={{ marginTop: 10 }}>
+                    <div style={{ marginTop: tokens.spacingVerticalMNudge }}>
                       <Button appearance="primary" size="small" icon={<ArrowClockwise20Regular />} onClick={() => { setGrant(null); setSelected(null); void load(); }}>
                         Refresh
                       </Button>
@@ -310,14 +311,14 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
                 </MessageBar>
               )}
               {grant && !grant.ok && (
-                <MessageBar intent="warning" style={{ marginTop: 12 }}>
+                <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
                   <MessageBarBody>
                     <MessageBarTitle>
                       {grant.commands?.length ? 'Run this grant as an operator with RBAC rights' : 'Could not grant RBAC'}
                     </MessageBarTitle>
                     <div className={styles.preWrap}>{grant.remediation || grant.error || 'Unknown error.'}</div>
                     {grant.commands?.length ? (
-                      <pre className={mergeClasses(styles.mono, styles.preWrap)} style={{ marginTop: 8, maxHeight: 240, maxWidth: '100%', overflow: 'auto', overflowWrap: 'anywhere' }}>{grant.commands.join('\n')}</pre>
+                      <pre className={mergeClasses(styles.mono, styles.preWrap)} style={{ marginTop: tokens.spacingVerticalS, maxHeight: 240, maxWidth: '100%', overflow: 'auto', overflowWrap: 'anywhere' }}>{grant.commands.join('\n')}</pre>
                     ) : null}
                   </MessageBarBody>
                 </MessageBar>

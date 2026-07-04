@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CosmosMetrics — the Cosmos DB account/container **Metrics** surface, one-for-one
  * with the Azure portal Cosmos DB "Metrics" / "Insights" blades. Charts the live
@@ -94,7 +95,7 @@ export function CosmosMetrics({ id, db, container }: CosmosMetricsProps) {
       const qs = new URLSearchParams({ timespan });
       if (db) qs.set('db', db);
       if (container) qs.set('container', container);
-      const r = await fetch(`/api/items/cosmos-db/${encodeURIComponent(id)}/metrics?${qs.toString()}`);
+      const r = await clientFetch(`/api/items/cosmos-db/${encodeURIComponent(id)}/metrics?${qs.toString()}`);
       const text = await r.text();
       let j: any = {};
       try { j = text ? JSON.parse(text) : {}; } catch { j = { ok: false, error: text || `HTTP ${r.status}` }; }

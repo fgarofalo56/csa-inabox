@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * McpCatalogBrowser — the "Browse library" surface for External MCP Tools.
  *
@@ -226,7 +227,7 @@ function DeployWizard({
   const deploy = useCallback(async () => {
     setDeploying(true); setError(null); setGate(null);
     try {
-      const r = await fetch('/api/admin/mcp-servers/deploy', {
+      const r = await clientFetch('/api/admin/mcp-servers/deploy', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ catalogId: entry.id, name, values }),
@@ -387,7 +388,7 @@ function DeployedServers({
   const refresh = async (server: McpServerConfigDoc) => {
     setBusyId(server.serverId);
     try {
-      const r = await fetch(`/api/admin/mcp-servers/deployed/status?id=${encodeURIComponent(server.serverId)}`);
+      const r = await clientFetch(`/api/admin/mcp-servers/deployed/status?id=${encodeURIComponent(server.serverId)}`);
       const j = await r.json();
       if (j.ok && j.status) setStatuses((p) => ({ ...p, [server.serverId]: j.status }));
     } catch { /* surfaced via the stored snapshot below */ } finally { setBusyId(null); }
@@ -397,7 +398,7 @@ function DeployedServers({
     if (!confirm(`Delete the deployed MCP server "${server.name}"? This removes the Azure Container App and its Key Vault secrets.`)) return;
     setBusyId(server.serverId);
     try {
-      const r = await fetch(`/api/admin/mcp-servers/deployed/teardown?id=${encodeURIComponent(server.serverId)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/mcp-servers/deployed/teardown?id=${encodeURIComponent(server.serverId)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { alert(`Delete failed: ${j.error || `HTTP ${r.status}`}`); return; }
       onChanged();

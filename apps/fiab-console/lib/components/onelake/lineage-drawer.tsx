@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * LineageDrawer — item-to-item OneLake lineage drawer.
  *
@@ -105,7 +106,7 @@ export function LineageDrawer({
     setLoading(true);
     setGate(null);
     setErr(null);
-    fetch(`/api/items/${encodeURIComponent(type)}/${encodeURIComponent(id)}/lineage`)
+    clientFetch(`/api/items/${encodeURIComponent(type)}/${encodeURIComponent(id)}/lineage`)
       .then((r) => r.json())
       .then((j) => {
         if (!j?.ok && j?.gate) {

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * QuotaPreflightPanel — Setup-Wizard review-step Azure vCPU quota pre-flight.
  *
@@ -141,7 +142,7 @@ export function QuotaPreflightPanel({
     }
     setLoading(true);
     try {
-      const res = await fetch('/api/setup/quota-preflight', {
+      const res = await clientFetch('/api/setup/quota-preflight', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ boundary, targets }),

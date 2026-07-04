@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * HealthCheckEditor (Checks) — Azure Monitor scheduledQueryRules + notifications.
  *
@@ -176,7 +177,7 @@ function HealthCheckWizard({ id, def, onClose, onCreate }: {
     if (!def) return;
     setSample({ busy: true });
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/preview`, {
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/preview`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ checkType: def.id, params: hcParamsFor(def, params) }),
       });
@@ -287,7 +288,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
 
   const loadRules = useCallback(async () => {
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule`);
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/rule`);
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setRules(Array.isArray(j.rules) ? j.rules : []);
     } catch { /* ignore */ }
@@ -297,7 +298,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   const loadHistory = useCallback(async () => {
     setHistoryBusy(true); setHistoryMsg(null);
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/history?days=14`);
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/history?days=14`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
@@ -315,7 +316,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   const createRule = useCallback(async (cfg: HcWizardConfig): Promise<boolean> => {
     setMsg(null);
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule`, {
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/rule`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           checkType: cfg.checkType, params: cfg.params, name: cfg.name || undefined,
@@ -339,7 +340,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   const toggleRule = useCallback(async (rl: MonitorRule, enabled: boolean) => {
     setRowBusy(rl.id); setMsg(null);
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}`, {
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ enabled }),
       });
       const j = await r.json().catch(() => ({}));
@@ -357,7 +358,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   const deleteRule = useCallback(async (rl: MonitorRule) => {
     setRowBusy(rl.id); setMsg(null);
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
@@ -374,7 +375,7 @@ export function HealthCheckEditor({ item, id }: { item: FabricItemType; id: stri
   const runRule = useCallback(async (rl: MonitorRule) => {
     setRowBusy(rl.id); setMsg(null); setRun(null);
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}/run`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/rule/${encodeURIComponent(rl.id)}/run`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
@@ -622,7 +623,7 @@ function HealthCheckNotifications({ id, itemName }: { id: string; itemName: stri
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`);
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || ''}` : '';
@@ -652,7 +653,7 @@ function HealthCheckNotifications({ id, itemName }: { id: string; itemName: stri
   const save = useCallback(async () => {
     setSaving(true); setMsg(null);
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`, {
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), shortName: shortName.trim() || undefined, emails, sms, webhooks, functions, logicApps }),
       });
@@ -672,7 +673,7 @@ function HealthCheckNotifications({ id, itemName }: { id: string; itemName: stri
   const test = useCallback(async () => {
     setTesting(true); setMsg(null);
     try {
-      const r = await fetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`, {
+      const r = await clientFetch(`/api/items/health-check/${encodeURIComponent(id)}/action-group`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ actionGroupId: savedId }),
       });
       const j = await r.json().catch(() => ({}));

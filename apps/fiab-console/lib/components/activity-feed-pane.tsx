@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ActivityFeedPane — real tenant activity rendered from /api/activity
  * (joins audit-log + comments + shares). Used by /governance + /monitor.
@@ -92,7 +93,7 @@ export function ActivityFeedPane({ showStats = true }: { showStats?: boolean }) 
 
   useEffect(() => {
     setEntries(null);
-    fetch('/api/activity?n=50').then(r => {
+    clientFetch('/api/activity?n=50').then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setEntries([]); return null; }
       return r.json();
     }).then(d => {
@@ -124,7 +125,7 @@ export function ActivityFeedPane({ showStats = true }: { showStats?: boolean }) 
   return (
     <>
       {unauth && <SignInRequired subject="activity" />}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalL }}>
         <Button
           appearance="primary"
           icon={<ArrowSync20Regular />}

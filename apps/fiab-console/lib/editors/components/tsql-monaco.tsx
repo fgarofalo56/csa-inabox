@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * TsqlMonaco — the Fabric-parity T-SQL **query editor** surface.
  *
@@ -255,7 +256,7 @@ export function TsqlMonaco({
     const cached = columnsCacheRef.current.get(objectId);
     if (cached) return cached;
     try {
-      const res = await fetch(`/api/sqldb/columns?${qRef.current}&objectId=${objectId}`);
+      const res = await clientFetch(`/api/sqldb/columns?${qRef.current}&objectId=${objectId}`);
       const j = await res.json().catch(() => null);
       const cols: string[] = j?.ok ? (j.columns || []).map((c: any) => String(c.name)) : [];
       columnsCacheRef.current.set(objectId, cols);
@@ -273,10 +274,10 @@ export function TsqlMonaco({
     (async () => {
       try {
         const [tr, vr, pr, fr] = await Promise.all([
-          fetch(`/api/sqldb/tables?${q}`).then((r) => r.json()).catch(() => null),
-          fetch(`/api/sqldb/views?${q}`).then((r) => r.json()).catch(() => null),
-          fetch(`/api/sqldb/procedures?${q}`).then((r) => r.json()).catch(() => null),
-          fetch(`/api/sqldb/functions?${q}`).then((r) => r.json()).catch(() => null),
+          clientFetch(`/api/sqldb/tables?${q}`).then((r) => r.json()).catch(() => null),
+          clientFetch(`/api/sqldb/views?${q}`).then((r) => r.json()).catch(() => null),
+          clientFetch(`/api/sqldb/procedures?${q}`).then((r) => r.json()).catch(() => null),
+          clientFetch(`/api/sqldb/functions?${q}`).then((r) => r.json()).catch(() => null),
         ]);
         if (cancelled) return;
         const gate = [tr, vr, pr, fr].find((b) => b?.code === 'not_configured');

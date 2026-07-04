@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DatastoreExplorer — the AML notebook path's "Data" sidebar.
  *
@@ -61,7 +62,7 @@ export function DatastoreExplorer({ onInsertPath }: Props) {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/aml/datastores');
+      const r = await clientFetch('/api/aml/datastores');
       const j = await r.json();
       if (j.ok) {
         setStores(j.datastores || []);
@@ -130,12 +131,12 @@ export function DatastoreExplorer({ onInsertPath }: Props) {
                     <div className={s.row}>
                       <span style={{ flex: 1 }}>
                         {d.isDefault ? <strong>{d.name}</strong> : d.name}
-                        {d.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: 6 }}>default</Badge>}
-                        <Badge appearance="tint" color="informative" size="small" style={{ marginLeft: 6 }}>{d.datastoreType}</Badge>
+                        {d.isDefault && <Badge appearance="outline" color="brand" size="small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}>default</Badge>}
+                        <Badge appearance="tint" color="informative" size="small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}>{d.datastoreType}</Badge>
                       </span>
                     </div>
                   </TreeItemLayout>
-                  {d.path && <div className={s.path} style={{ paddingLeft: 28 }}>{d.path}</div>}
+                  {d.path && <div className={s.path} style={{ paddingLeft: tokens.spacingHorizontalXXXL }}>{d.path}</div>}
                 </TreeItem>
               );
             })}

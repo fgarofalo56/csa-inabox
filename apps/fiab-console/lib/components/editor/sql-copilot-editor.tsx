@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SqlCopilotEditor — Warehouse Copilot surface shared by the SQL warehouse
  * family editors (Synapse Dedicated / Serverless / Databricks SQL warehouse).
@@ -122,7 +123,7 @@ export function SqlCopilotEditor({
       setAssistView('loading');
       setAssistError(null);
       try {
-        const r = await fetch(`/api/items/${engine}/${encodeURIComponent(id)}/assist`, {
+        const r = await clientFetch(`/api/items/${engine}/${encodeURIComponent(id)}/assist`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({

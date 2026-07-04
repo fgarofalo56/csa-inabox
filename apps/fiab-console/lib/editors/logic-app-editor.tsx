@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * LogicAppEditor — Azure Logic Apps (Consumption) focused editor.
  *
@@ -247,7 +248,7 @@ export function LogicAppEditor({ item, id }: Props) {
     if (!workspaceId || id === 'new') { setDetail({ ok: true, definition: { triggers: {}, actions: {} } }); return; }
     setLoadErr(null);
     try {
-      const r = await fetch(`/api/items/logic-app/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/logic-app/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j: DetailResponse = await r.json();
       if (!j.ok) { setLoadErr(j.error || 'failed to load workflow'); return; }
       setDetail(j);
@@ -283,7 +284,7 @@ export function LogicAppEditor({ item, id }: Props) {
     catch (e: any) { setSaveMsg({ intent: 'error', text: `Invalid JSON: ${e?.message || String(e)}` }); return; }
     setSavingDef(true); setSaveMsg(null);
     try {
-      const r = await fetch(`/api/items/logic-app/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/logic-app/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ definition: parsed }),
       });
@@ -300,7 +301,7 @@ export function LogicAppEditor({ item, id }: Props) {
     if (!workspaceId) return;
     setRunning(true); setRunRes(null);
     try {
-      const r = await fetch(`/api/items/logic-app/${encodeURIComponent(id)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/logic-app/${encodeURIComponent(id)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ trigger: selTrigger || triggerNames[0] }),
       });

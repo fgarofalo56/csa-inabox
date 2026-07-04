@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Synapse Dedicated + Serverless SQL editors — fully wired against the
  * Loom-deployed Synapse workspace via Container App MI + private endpoint
@@ -260,7 +261,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/items/synapse-serverless-sql-pool/${id}/schema`)
+    clientFetch(`/api/items/synapse-serverless-sql-pool/${id}/schema`)
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
@@ -286,7 +287,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     try {
       // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
       const statement = substituteSynapse(sqlToRun, queryParams);
-      const res = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/query`, {
+      const res = await clientFetch(`/api/items/synapse-serverless-sql-pool/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: statement, database, parameters: queryParams, queryId }),
@@ -306,7 +307,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
     if (!qid) return;
     setCanceling(true);
     try {
-      await fetch(`/api/items/synapse-serverless-sql-pool/${id}/cancel`, {
+      await clientFetch(`/api/items/synapse-serverless-sql-pool/${id}/cancel`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ queryId: qid }),
       });
@@ -318,7 +319,7 @@ export function SynapseServerlessSqlPoolEditor({ item, id }: { item: FabricItemT
   const openInExcel = useCallback(async () => {
     if (!sqlText.trim()) return;
     try {
-      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/iqy`, {
+      const r = await clientFetch(`/api/items/synapse-serverless-sql-pool/${id}/iqy`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: sqlText, database }),
@@ -615,7 +616,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const loadQueryHistory = useCallback(async () => {
     setQhBusy(true); setQhError(null);
     try {
-      const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/query-history`);
+      const r = await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/query-history`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setQhEntries((j.entries || []) as DmvEntry[]);
@@ -651,14 +652,14 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const [siReceipt, setSiReceipt] = useState<string | null>(null);
 
   const refreshState = useCallback(async () => {
-    const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/state`);
+    const r = await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/state`);
     const j = (await r.json()) as PoolState;
     setPoolState(j);
     return j;
   }, [id]);
 
   const refreshSchema = useCallback(async () => {
-    const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/schema`);
+    const r = await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/schema`);
     const j = (await r.json()) as DedicatedSchema;
     setSchema(j);
     if (j.ok) {
@@ -676,7 +677,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   // typing `schema.table.` suggests real column names.
   const cacheColumns = useCallback(async (schemaName: string, tbl: string) => {
     try {
-      const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/schema?table=${encodeURIComponent(`${schemaName}.${tbl}`)}`);
+      const r = await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/schema?table=${encodeURIComponent(`${schemaName}.${tbl}`)}`);
       const j = (await r.json()) as { ok?: boolean; columns?: string[] };
       if (j.ok && j.columns) schemaCacheRef.current.columns.set(`${schemaName}.${tbl}`, j.columns);
     } catch { /* best-effort */ }
@@ -702,7 +703,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   const resume = useCallback(async () => {
     setResuming(true);
     try {
-      await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/resume`, { method: 'POST' });
+      await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/resume`, { method: 'POST' });
       startPolling();
     } catch (e: any) {
       setResult({ ok: false, error: e?.message || String(e) });
@@ -711,7 +712,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
   }, [id, startPolling]);
 
   const pause = useCallback(async () => {
-    await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/state`, {
+    await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/state`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'pause' }),
@@ -728,7 +729,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     try {
       // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
       const statement = substituteSynapse(sqlToRun, queryParams);
-      const res = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/query`, {
+      const res = await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: statement, parameters: queryParams, queryId, database: database || undefined }),
@@ -753,7 +754,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     if (!qid) return;
     setCanceling(true);
     try {
-      await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/cancel`, {
+      await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/cancel`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ queryId: qid }),
       });
@@ -832,7 +833,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
         'AS',
         cleaned + ';',
       ].join('\n');
-      const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/query`, {
+      const r = await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: ddl }),
       });
@@ -860,7 +861,7 @@ export function SynapseDedicatedSqlPoolEditor({ item, id }: { item: FabricItemTy
     if (!siSourceTable.trim() || !siTargetTable.trim()) { setSiError('source and target table names required'); return; }
     setSiBusy(true); setSiError(null);
     try {
-      const r = await fetch(`/api/items/synapse-dedicated-sql-pool/${id}/clone`, {
+      const r = await clientFetch(`/api/items/synapse-dedicated-sql-pool/${id}/clone`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourceSchema: siSourceSchema.trim() || 'dbo', sourceTable: siSourceTable.trim(), targetSchema: siTargetSchema.trim() || 'dbo', targetTable: siTargetTable.trim() }),
       });

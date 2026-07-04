@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MirrorSourceWizard — the standalone New/Edit-mirrored-database wizard.
  *
@@ -236,7 +237,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
 
   const loadConnections = useCallback(async () => {
     try {
-      const r = await fetch('/api/connections');
+      const r = await clientFetch('/api/connections');
       const j = await r.json();
       if (j.ok) setConnections(j.connections || []);
     } catch { /* honest empty */ }
@@ -309,8 +310,8 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
       // Editing an existing mirror → credential-aware per-item route (resolves the
       // stored connection's Key Vault secretRef). Pre-create → flat enumerator.
       const r = mirrorId
-        ? await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/tables?workspaceId=${encodeURIComponent(workspaceId)}`)
-        : await fetch('/api/items/mirrored-database/source-tables', {
+        ? await clientFetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}/tables?workspaceId=${encodeURIComponent(workspaceId)}`)
+        : await clientFetch('/api/items/mirrored-database/source-tables', {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ sourceType: createSrc, server: effServer, database: effDb }),
           });
@@ -326,7 +327,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     if ((!effServer && !isCosmos) || !effDb) { setVerify({ status: 'err', msg: isBigQuery ? 'Enter the GCP project and dataset first.' : isOracle ? 'Enter the host and service name first.' : isCosmos ? 'Enter the database first.' : 'Enter the server and database first.' }); return; }
     setVerify({ status: 'busy' });
     try {
-      const r = await fetch('/api/items/mirrored-database/verify', {
+      const r = await clientFetch('/api/items/mirrored-database/verify', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sourceType: createSrc, server: effServer, database: effDb }),
       });
@@ -341,7 +342,7 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
     if (!pickedConn) return;
     setConnTest({ status: 'busy' });
     try {
-      const r = await fetch(`/api/connections/${encodeURIComponent(pickedConn.id)}/test`, { method: 'POST' });
+      const r = await clientFetch(`/api/connections/${encodeURIComponent(pickedConn.id)}/test`, { method: 'POST' });
       const j = await r.json();
       if (!r.ok || !j.ok) {
         setConnTest({ status: 'err', msg: j.hint ? `${j.error} — ${j.hint}` : (j.error || 'test failed') });
@@ -398,10 +399,10 @@ export function MirrorSourceWizard(props: MirrorSourceWizardProps) {
         syncMode,
       };
       const r = editing && mirrorId
-        ? await fetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        ? await clientFetch(`/api/items/mirrored-database/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
             method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
           })
-        : await fetch(`/api/items/mirrored-database?workspaceId=${encodeURIComponent(workspaceId)}`, {
+        : await clientFetch(`/api/items/mirrored-database?workspaceId=${encodeURIComponent(workspaceId)}`, {
             method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
           });
       const j = await r.json();

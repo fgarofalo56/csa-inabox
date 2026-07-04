@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Data API Builder (DAB) editor — a WYSIWYG builder for a Microsoft Data API
  * builder `dab-config.json`, one-for-one with what the `dab` CLI / portal lets
@@ -185,7 +186,7 @@ function DabNewGate({ item }: { item: FabricItemType }) {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/loom/workspaces');
+        const r = await clientFetch('/api/loom/workspaces');
         const j = await r.json();
         if (!j.ok) { setWsError(j.error || `HTTP ${r.status}`); }
         else setWorkspaces(j.workspaces || []);
@@ -201,7 +202,7 @@ function DabNewGate({ item }: { item: FabricItemType }) {
     if (!canCreate) return;
     setBusy(true); setError(null);
     try {
-      const r = await fetch('/api/dab/create', {
+      const r = await clientFetch('/api/dab/create', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, displayName: name.trim() }),
       });
@@ -271,7 +272,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`/api/dab/${encodeURIComponent(id)}/config`);
+        const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/config`);
         const j = await r.json();
         if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
         setCfg(j.config as DabConfig);
@@ -288,7 +289,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
     if (!cfg) return;
     setSaving(true); setSaveMsg(null);
     try {
-      const r = await fetch(`/api/dab/${encodeURIComponent(id)}/config`, {
+      const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/config`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ config: cfg }),
       });
@@ -304,7 +305,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
   const validate = useCallback(async () => {
     if (!cfg) return;
     try {
-      const r = await fetch(`/api/dab/${encodeURIComponent(id)}/validate`, {
+      const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/validate`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ config: cfg }),
       });
@@ -316,7 +317,7 @@ function DabBuilder({ item, id }: { item: FabricItemType; id: string }) {
 
   const download = useCallback(async () => {
     if (!cfg) return;
-    const r = await fetch(`/api/dab/${encodeURIComponent(id)}/download`, {
+    const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/download`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ config: cfg }),
     });
@@ -438,7 +439,7 @@ function SourceStage({ cfg, mutate }: { cfg: DabConfig; mutate: (fn: (c: DabConf
     if (uiKind === 'databricks') { setSources(null); setGate(null); return; }
     setLoading(true); setGate(null); setSources(null);
     try {
-      const r = await fetch(`/api/dab/sources?kind=${encodeURIComponent(dKind)}`);
+      const r = await clientFetch(`/api/dab/sources?kind=${encodeURIComponent(dKind)}`);
       const j = await r.json();
       if (!j.ok) { setGate({ missing: j.gate?.missing || 'unknown', error: j.error || `HTTP ${r.status}` }); }
       else setSources(j.sources || []);
@@ -600,14 +601,14 @@ function DeploySourcePanel({ cfg, mutate, onClose, onDeployed }: {
 
   useEffect(() => {
     (async () => {
-      try { const r = await fetch('/api/dab/deploy-source'); setCaps(await r.json()); } catch { /* non-fatal */ }
+      try { const r = await clientFetch('/api/dab/deploy-source'); setCaps(await r.json()); } catch { /* non-fatal */ }
     })();
   }, []);
 
   const deploy = useCallback(async () => {
     setBusy(true); setResult(null);
     try {
-      const r = await fetch('/api/dab/deploy-source', {
+      const r = await clientFetch('/api/dab/deploy-source', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ target, name: name.trim(), adminGroupSid: adminGroupSid.trim() || undefined, registerPurview, registerUnityCatalog: registerUc }),
       });
@@ -737,7 +738,7 @@ function EntitiesStage({ cfg, mutate, activeEntity, setActiveEntity }: {
     }
     setLoading(true); setSchemaGate(null);
     try {
-      const r = await fetch(`/api/dab/sources/${k}/schema?server=${encodeURIComponent(cfg.sourceRef.server)}&database=${encodeURIComponent(cfg.sourceRef.database)}`);
+      const r = await clientFetch(`/api/dab/sources/${k}/schema?server=${encodeURIComponent(cfg.sourceRef.server)}&database=${encodeURIComponent(cfg.sourceRef.database)}`);
       const j = await r.json();
       if (!j.ok) setSchemaGate({ error: j.error || `HTTP ${r.status}`, missing: j.gate?.missing, remediation: j.gate?.remediation });
       else setSchema({ tables: j.tables, views: j.views, procedures: j.procedures });
@@ -882,7 +883,7 @@ function EntityDetail({ cfg, entity, tab, mutate }: {
     // Resolve objectId via schema endpoint is costly; instead re-introspect columns by object name match.
     (async () => {
       try {
-        const sr = await fetch(`/api/dab/sources/${k}/schema?server=${encodeURIComponent(cfg.sourceRef.server!)}&database=${encodeURIComponent(cfg.sourceRef.database!)}`);
+        const sr = await clientFetch(`/api/dab/sources/${k}/schema?server=${encodeURIComponent(cfg.sourceRef.server!)}&database=${encodeURIComponent(cfg.sourceRef.database!)}`);
         const sj = await sr.json();
         if (!sj.ok) return;
         const all = [...(sj.tables || []), ...(sj.views || [])];
@@ -890,7 +891,7 @@ function EntityDetail({ cfg, entity, tab, mutate }: {
         const [schemaName, objName] = obj.split('.');
         const match = all.find((o: any) => o.schema === schemaName && o.name === objName);
         if (!match) return;
-        const cr = await fetch(`/api/dab/sources/${k}/columns?server=${encodeURIComponent(cfg.sourceRef.server!)}&database=${encodeURIComponent(cfg.sourceRef.database!)}&objectId=${match.objectId}`);
+        const cr = await clientFetch(`/api/dab/sources/${k}/columns?server=${encodeURIComponent(cfg.sourceRef.server!)}&database=${encodeURIComponent(cfg.sourceRef.database!)}&objectId=${match.objectId}`);
         const cj = await cr.json();
         if (cj.ok) setCols(cj.columns);
       } catch { /* non-fatal */ }
@@ -1306,7 +1307,7 @@ function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate:
   const doProbe = useCallback(async () => {
     setProbing(true);
     try {
-      const r = await fetch(`/api/dab/${encodeURIComponent(id)}/preview/probe`);
+      const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/preview/probe`);
       const j = await r.json();
       setProbe(j);
     } catch (e: any) { setProbe({ ok: false, error: e?.message || String(e) }); }
@@ -1322,7 +1323,7 @@ function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate:
     if (!selEntity) return;
     setRestResult('Running…');
     try {
-      const r = await fetch(`/api/dab/${encodeURIComponent(id)}/preview/rest`, {
+      const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/preview/rest`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           restBasePath: cfg.runtime.rest.path,
@@ -1339,7 +1340,7 @@ function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate:
   const runGql = useCallback(async () => {
     setGqlResult('Running…');
     try {
-      const r = await fetch(`/api/dab/${encodeURIComponent(id)}/preview/graphql`, {
+      const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/preview/graphql`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ graphqlPath: cfg.runtime.graphql.path, query: gqlQuery, role: restRole || undefined }),
       });
@@ -1351,7 +1352,7 @@ function PreviewStage({ cfg, id, mutate }: { cfg: DabConfig; id: string; mutate:
   const publish = useCallback(async () => {
     setPublishResult('Publishing…');
     try {
-      const r = await fetch(`/api/dab/${encodeURIComponent(id)}/publish`, {
+      const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         // The publish route imports the runtime's OpenAPI doc (REST) today; the
         // graphql/graphqlPath flags are forward-compatible hints so the route
@@ -1491,7 +1492,7 @@ function ConfigStage({ cfg, id }: { cfg: DabConfig; id: string }) {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch(`/api/dab/${encodeURIComponent(id)}/validate`, {
+        const r = await clientFetch(`/api/dab/${encodeURIComponent(id)}/validate`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ config: cfg }),
         });

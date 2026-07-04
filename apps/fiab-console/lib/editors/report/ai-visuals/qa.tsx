@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * qa — the Power BI "Q&A" AI visual for the Loom-native Report Designer
  * (report-designer wave 3, the "AI" gallery section).
@@ -415,7 +416,7 @@ export function ReportQA(props: ReportQAProps): ReactElement {
     setResult(null);
     try {
       // 1) NL question → STRUCTURED spec (REAL Azure OpenAI, grounded in the model).
-      const res = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/ai-visual`, {
+      const res = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/ai-visual`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mode: 'qa', question: text, fields: fieldsPayload }),

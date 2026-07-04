@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * onelake-security-tab — two OneLake security authoring surfaces that share this
  * file:
@@ -131,7 +132,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
   const loadState = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/lakehouse/permissions?tab=cls');
+      const r = await clientFetch('/api/lakehouse/permissions?tab=cls');
       const j = await r.json();
       if (j.gate) { setGate({ missing: j.missing, hint: j.hint }); return; }
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
@@ -145,7 +146,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
 
   const loadTables = useCallback(async () => {
     try {
-      const r = await fetch('/api/lakehouse/permissions?tab=cls&list=tables');
+      const r = await clientFetch('/api/lakehouse/permissions?tab=cls&list=tables');
       const j = await r.json();
       if (j.gate) { setGate({ missing: j.missing, hint: j.hint }); return; }
       if (j.ok) setTables(Array.isArray(j.tables) ? j.tables : []);
@@ -168,7 +169,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
     setNotice(null);
     if (objectId == null) return;
     try {
-      const r = await fetch(`/api/lakehouse/permissions?tab=cls&list=columns&objectId=${objectId}`);
+      const r = await clientFetch(`/api/lakehouse/permissions?tab=cls&list=columns&objectId=${objectId}`);
       const j = await r.json();
       if (j.ok) setColumns(Array.isArray(j.columns) ? j.columns : []);
       else if (j.error) setError(j.error);
@@ -209,7 +210,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
     if (!selObjectId || !upn.trim() || selColIds.length === 0) return;
     setBusy(true); setError(null); setNotice(null);
     try {
-      const r = await fetch('/api/lakehouse/permissions', {
+      const r = await clientFetch('/api/lakehouse/permissions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tab: 'cls', upn: upn.trim(), objectId: selObjectId, columnIds: selColIds, maskView }),
@@ -236,11 +237,11 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
     setBusy(true); setError(null); setNotice(null);
     try {
       // resolve the column_id of the denied column on that table
-      const cr = await fetch(`/api/lakehouse/permissions?tab=cls&list=columns&objectId=${tbl.objectId}`);
+      const cr = await clientFetch(`/api/lakehouse/permissions?tab=cls&list=columns&objectId=${tbl.objectId}`);
       const cj = await cr.json();
       const hit = (cj.columns || []).find((c: SqlColumn) => c.name === row.column);
       if (!hit) throw new Error(`Column ${row.column} no longer exists on ${row.schema}.${row.table}`);
-      const r = await fetch('/api/lakehouse/permissions?tab=cls', {
+      const r = await clientFetch('/api/lakehouse/permissions?tab=cls', {
         method: 'DELETE',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ upn: row.principal, objectId: tbl.objectId, columnIds: [hit.columnId] }),
@@ -280,7 +281,7 @@ export function OneLakeSecurityTab({ lakehouseId }: { lakehouseId: string }) {
         width: 200,
         getValue: (r) => r.column ?? '',
         render: (r) => (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge }}>
             <EyeOff20Regular style={{ width: 16, height: 16, color: tokens.colorPaletteRedForeground1 }} />
             <span>{r.column}</span>
             {denyConflictKeys.has(`${r.principal}|${r.schema}|${r.table}|${r.column}`) && (
@@ -595,7 +596,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
   const loadColumns = useCallback(async (oid: number) => {
     setColsLoading(true);
     try {
-      const r = await fetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${oid}`);
+      const r = await clientFetch(`/api/lakehouse/permissions?tab=column&list=columns&objectId=${oid}`);
       const j = await r.json();
       setCols(j.ok ? j.columns || [] : []);
     } catch {
@@ -634,7 +635,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
     setTestError(null);
     setTestResult(null);
     try {
-      const r = await fetch('/api/lakehouse/permissions/rls-test', {
+      const r = await clientFetch('/api/lakehouse/permissions/rls-test', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ objectId, filterColumnId, whereClause, testIdentity: testIdentity.trim() }),
@@ -665,7 +666,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
     setSaveError(null);
     setSaveReceipt(null);
     try {
-      const r = await fetch('/api/lakehouse/permissions', {
+      const r = await clientFetch('/api/lakehouse/permissions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tab: 'row', objectId, filterColumnId, whereClause }),
@@ -768,7 +769,7 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
       </div>
 
       <div className={styles.note}>
-        <Info16Regular style={{ marginTop: 2, flexShrink: 0 }} />
+        <Info16Regular style={{ marginTop: tokens.spacingVerticalXXS, flexShrink: 0 }} />
         <Caption1>
           The saved policy applies as <code>(your predicate) OR IS_MEMBER(&apos;db_owner&apos;) = 1</code>, so database
           owners always see every row. When multiple security policies target the same table their predicates are{' '}
@@ -815,14 +816,14 @@ export function OnelakeRlsPredicateEditor({ tables, defaultIdentity, onSaved }: 
       {testLoading && <Spinner size="tiny" label="Running preview against live rows…" labelPosition="after" />}
       {testResult && (
         <div>
-          <Body1 block style={{ marginBottom: 4 }}>
+          <Body1 block style={{ marginBottom: tokens.spacingVerticalXS }}>
             {testResult.rowCount.toLocaleString()} row{testResult.rowCount === 1 ? '' : 's'} visible to{' '}
             <code>{testResult.testIdentity || '(connection identity)'}</code> · {testResult.executionMs} ms
             {testResult.truncated ? ' · truncated' : ''}
           </Body1>
           <div className={styles.resultBox}>
             {testResult.columns.length === 0 ? (
-              <Caption1 style={{ display: 'block', padding: 8 }}>No rows match this predicate for that identity.</Caption1>
+              <Caption1 style={{ display: 'block', padding: tokens.spacingVerticalS }}>No rows match this predicate for that identity.</Caption1>
             ) : (
               <table className={styles.table}>
                 <thead>

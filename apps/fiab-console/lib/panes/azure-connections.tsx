@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AzureConnectionsPane (F16) — connect ADLS Gen2 + Log Analytics to a workspace.
  *
@@ -135,7 +136,7 @@ function ConnectionsBody({ workspaceId }: { workspaceId: string }) {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const res = await fetch(`/api/admin/workspaces/${workspaceId}/connections`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/admin/workspaces/${workspaceId}/connections`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok || !json.ok) { setLoadError(json?.error || `HTTP ${res.status}`); return; }
       setConnections(json.connections || []);
@@ -176,7 +177,7 @@ function GateBar({ conn, workspaceId, onRetry }: { conn: AzureConnection; worksp
       const body = conn.kind === 'adls-gen2'
         ? { kind: 'adls-gen2', storageAccountId: conn.storageAccountId, containerName: conn.containerName, name: conn.name }
         : { kind: 'log-analytics', lawResourceId: conn.lawResourceId, name: conn.name };
-      await fetch(`/api/admin/workspaces/${workspaceId}/connections`, {
+      await clientFetch(`/api/admin/workspaces/${workspaceId}/connections`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       onRetry();
@@ -232,7 +233,7 @@ function AdlsSection({ workspaceId, current, onChanged }: { workspaceId: string;
   const loadAccounts = useCallback(async () => {
     setAccountsError(null);
     try {
-      const res = await fetch(`/api/admin/workspaces/${workspaceId}/connections/adls-accounts`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/admin/workspaces/${workspaceId}/connections/adls-accounts`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok || !json.ok) { setAccountsError(json?.error || `HTTP ${res.status}`); return; }
       setAccounts(json.accounts || []);
@@ -247,7 +248,7 @@ function AdlsSection({ workspaceId, current, onChanged }: { workspaceId: string;
     if (!selected) return;
     setSaving(true); setError(null);
     try {
-      const res = await fetch(`/api/admin/workspaces/${workspaceId}/connections`, {
+      const res = await clientFetch(`/api/admin/workspaces/${workspaceId}/connections`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: 'adls-gen2', storageAccountId: selected, containerName: container }),
       });
@@ -266,7 +267,7 @@ function AdlsSection({ workspaceId, current, onChanged }: { workspaceId: string;
     if (!current) return;
     setSaving(true);
     try {
-      await fetch(`/api/admin/workspaces/${workspaceId}/connections/${encodeURIComponent(current.id)}`, { method: 'DELETE' });
+      await clientFetch(`/api/admin/workspaces/${workspaceId}/connections/${encodeURIComponent(current.id)}`, { method: 'DELETE' });
       onChanged();
     } finally {
       setSaving(false);
@@ -378,7 +379,7 @@ function LawSection({ workspaceId, current, onChanged }: { workspaceId: string; 
   const loadWs = useCallback(async () => {
     setWsError(null);
     try {
-      const res = await fetch(`/api/admin/workspaces/${workspaceId}/connections/log-analytics-workspaces`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/admin/workspaces/${workspaceId}/connections/log-analytics-workspaces`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok || !json.ok) { setWsError(json?.error || `HTTP ${res.status}`); return; }
       setWorkspaces(json.workspaces || []);
@@ -393,7 +394,7 @@ function LawSection({ workspaceId, current, onChanged }: { workspaceId: string; 
     if (!selected) return;
     setSaving(true); setError(null);
     try {
-      const res = await fetch(`/api/admin/workspaces/${workspaceId}/connections`, {
+      const res = await clientFetch(`/api/admin/workspaces/${workspaceId}/connections`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: 'log-analytics', lawResourceId: selected }),
       });
@@ -412,7 +413,7 @@ function LawSection({ workspaceId, current, onChanged }: { workspaceId: string; 
     if (!current) return;
     setSaving(true);
     try {
-      await fetch(`/api/admin/workspaces/${workspaceId}/connections/${encodeURIComponent(current.id)}`, { method: 'DELETE' });
+      await clientFetch(`/api/admin/workspaces/${workspaceId}/connections/${encodeURIComponent(current.id)}`, { method: 'DELETE' });
       onChanged();
     } finally {
       setSaving(false);

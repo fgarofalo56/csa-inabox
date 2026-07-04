@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * GlobalErrorBoundary — class component that catches React render
  * errors AND wires window.onerror + unhandledrejection so any browser-
@@ -34,7 +35,7 @@ export async function autoReport(err: Error | { name?: string; message?: string;
   SEEN.add(fp);
   reportCount += 1;
   try {
-    await fetch('/api/feedback', {
+    await clientFetch('/api/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -73,16 +74,16 @@ export class GlobalErrorBoundary extends Component<{ children: ReactNode }, Stat
       return (
         <div className={s.shell} role="alert">
           <Subtitle1>Something went wrong.</Subtitle1>
-          <Body1 style={{ marginTop: 8 }}>
+          <Body1 style={{ marginTop: tokens.spacingVerticalS }}>
             CSA Loom hit an unexpected error rendering this page. A redacted report has been queued
             for the maintainers — no user names, workspace IDs, or data values were sent.
           </Body1>
           {err && (
-            <pre style={{ marginTop: 12, fontSize: 12, color: tokens.colorNeutralForeground2, whiteSpace: 'pre-wrap' }}>
+            <pre style={{ marginTop: tokens.spacingVerticalM, fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2, whiteSpace: 'pre-wrap' }}>
               {redact(err.message)}
             </pre>
           )}
-          <Button appearance="primary" style={{ marginTop: 12 }} onClick={() => { this.setState({ err: null }); }}>
+          <Button appearance="primary" style={{ marginTop: tokens.spacingVerticalM }} onClick={() => { this.setState({ err: null }); }}>
             Try again
           </Button>
           <div className={s.hint}>Loom version: {LOOM_VERSION}</div>

@@ -610,9 +610,9 @@ function NsgRuleTable({ rules }: { rules: NsgRule[] }): React.ReactElement {
               </Badge>
             </TableCell>
             <TableCell>{r.protocol}</TableCell>
-            <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 11 }}>{r.sourcePrefix}</TableCell>
-            <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 11 }}>{r.destPrefix}</TableCell>
-            <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: 11 }}>{r.destPort}</TableCell>
+            <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100 }}>{r.sourcePrefix}</TableCell>
+            <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100 }}>{r.destPrefix}</TableCell>
+            <TableCell style={{ fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100 }}>{r.destPort}</TableCell>
           </TableRow>
         ))}
       </TableBody>
@@ -633,7 +633,7 @@ function DetailBody({ detail }: { detail: NodeDetail }): React.ReactElement {
           <span className={styles.mono}>{v.resourceGroup || '—'}</span></div>
         <Divider style={{ margin: '12px 0' }} />
         <Subtitle2>Subnets ({v.subnets.length})</Subtitle2>
-        <Table size="small" aria-label="Subnets" style={{ marginTop: 8 }}>
+        <Table size="small" aria-label="Subnets" style={{ marginTop: tokens.spacingVerticalS }}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>Subnet</TableHeaderCell>
@@ -681,7 +681,7 @@ function DetailBody({ detail }: { detail: NodeDetail }): React.ReactElement {
           {n.subnetIds.length ? n.subnetIds.map((s) => s.split('/').pop()).join(', ') : '—'}</div>
         <Divider style={{ margin: '12px 0' }} />
         <Subtitle2>Security rules ({n.rules.length})</Subtitle2>
-        <div style={{ marginTop: 8 }}><NsgRuleTable rules={n.rules} /></div>
+        <div style={{ marginTop: tokens.spacingVerticalS }}><NsgRuleTable rules={n.rules} /></div>
       </div>
     );
   }
@@ -709,7 +709,7 @@ function DetailBody({ detail }: { detail: NodeDetail }): React.ReactElement {
           </Badge></div>
         <Divider style={{ margin: '12px 0' }} />
         <Subtitle2>FQDN → private IP → zone</Subtitle2>
-        <Table size="small" aria-label="PE DNS" style={{ marginTop: 8 }}>
+        <Table size="small" aria-label="PE DNS" style={{ marginTop: tokens.spacingVerticalS }}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>FQDN</TableHeaderCell>
@@ -738,7 +738,7 @@ function DetailBody({ detail }: { detail: NodeDetail }): React.ReactElement {
       <Divider style={{ margin: '12px 0' }} />
       <Subtitle2>Registered records ({detail.fqdns.length})</Subtitle2>
       {detail.fqdns.length ? (
-        <Table size="small" aria-label="Zone records" style={{ marginTop: 8 }}>
+        <Table size="small" aria-label="Zone records" style={{ marginTop: tokens.spacingVerticalS }}>
           <TableHeader>
             <TableRow>
               <TableHeaderCell>FQDN</TableHeaderCell>
@@ -754,7 +754,7 @@ function DetailBody({ detail }: { detail: NodeDetail }): React.ReactElement {
             ))}
           </TableBody>
         </Table>
-      ) : <Caption1 style={{ display: 'block', marginTop: 8 }}>No endpoints register in this zone yet.</Caption1>}
+      ) : <Caption1 style={{ display: 'block', marginTop: tokens.spacingVerticalS }}>No endpoints register in this zone yet.</Caption1>}
     </div>
   );
 }

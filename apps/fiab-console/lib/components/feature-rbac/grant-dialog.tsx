@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Grant dialog — pick an Entra principal (user or group via Graph
  * search) and a role; POSTs to /api/admin/permissions/grants.
@@ -61,7 +62,7 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${kind}`, { cache: 'no-store' });
+        const res = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${kind}`, { cache: 'no-store' });
         const json = await res.json();
         if (!res.ok) {
           setError({ message: json?.error || `Graph ${res.status}`, remediation: json?.remediation });
@@ -83,7 +84,7 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch('/api/admin/permissions/grants', {
+      const res = await clientFetch('/api/admin/permissions/grants', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -121,7 +122,7 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
               <Tab value="user">User</Tab>
               <Tab value="group">Group</Tab>
             </TabList>
-            <Field label="Search Entra" style={{ marginTop: 12 }}>
+            <Field label="Search Entra" style={{ marginTop: tokens.spacingVerticalM }}>
               <Input
                 value={q}
                 onChange={(_e, d) => setQ(d.value)}
@@ -131,18 +132,18 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
             </Field>
 
             {error && (
-              <MessageBar intent="warning" style={{ marginTop: 12 }}>
+              <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
                 <MessageBarBody>
                   <MessageBarTitle>{error.message}</MessageBarTitle>
-                  {error.remediation && <div style={{ marginTop: 4 }}>{error.remediation}</div>}
+                  {error.remediation && <div style={{ marginTop: tokens.spacingVerticalXS }}>{error.remediation}</div>}
                 </MessageBarBody>
               </MessageBar>
             )}
 
-            <div className={styles.results} style={{ marginTop: 12 }}>
+            <div className={styles.results} style={{ marginTop: tokens.spacingVerticalM }}>
               {loading && <Spinner size="tiny" label="Searching Entra…" />}
               {!loading && hits.length === 0 && q.trim() && !error && (
-                <div style={{ padding: 8, color: tokens.colorNeutralForeground3 }}>No matches.</div>
+                <div style={{ padding: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>No matches.</div>
               )}
               {hits.map((h) => (
                 <div
@@ -162,7 +163,7 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
               ))}
             </div>
 
-            <Field label="Role" style={{ marginTop: 16 }}>
+            <Field label="Role" style={{ marginTop: tokens.spacingVerticalL }}>
               <Dropdown value={role} selectedOptions={[role]} onOptionSelect={(_e, d) => setRole((d.optionValue || 'Reader') as FeatureRole)}>
                 <Option value="Reader">Reader — can view</Option>
                 <Option value="Contributor">Contributor — can view and edit</Option>

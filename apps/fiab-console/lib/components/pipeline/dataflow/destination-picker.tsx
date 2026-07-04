@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DestinationPicker — the Dataflow Gen2 "Output destination" surface. Mirrors
  * Power Query Online's data-destination dialog: choose where the output query
@@ -50,7 +51,7 @@ export function DestinationPicker({ sink, queries, onChange, readOnly = false }:
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/adf/linked-services');
+        const r = await clientFetch('/api/adf/linked-services');
         const j = await r.json();
         if (cancelled) return;
         if (!j.ok) { setLsError(j.error || 'failed'); setLinkedServices([]); return; }

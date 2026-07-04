@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * GraphQL API editor (Cosmos state + real APIM publish).
  *
@@ -132,7 +133,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
       try { variables = JSON.parse(queryVars); } catch (e: any) { setQueryErr(`Variables must be valid JSON: ${e?.message}`); setQueryBusy(false); return; }
     }
     try {
-      const r = await fetch(`/api/items/graphql-api/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/graphql-api/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query: queryText, variables }),
       });
@@ -148,7 +149,7 @@ export function GraphqlApiEditor({ item, id }: { item: FabricItemType; id: strin
     const ok = await save();
     if (!ok) { setPublishing(false); return; }
     try {
-      const r = await fetch(`/api/items/graphql-api/${encodeURIComponent(id)}/publish`, {
+      const r = await clientFetch(`/api/items/graphql-api/${encodeURIComponent(id)}/publish`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

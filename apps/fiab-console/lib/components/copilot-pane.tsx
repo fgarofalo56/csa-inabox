@@ -68,7 +68,7 @@ function TabularResult({ result }: { result: unknown }): JSX.Element | null {
     render: (row) => String(row[c] ?? ''),
   }));
   return (
-    <div style={{ marginTop: 6, maxHeight: 320, overflow: 'auto' }}>
+    <div style={{ marginTop: tokens.spacingVerticalSNudge, maxHeight: 320, overflow: 'auto' }}>
       <LoomDataTable<Record<string, unknown>>
         columns={cols}
         rows={rows}
