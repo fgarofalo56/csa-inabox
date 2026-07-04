@@ -25,6 +25,37 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.52.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.51.0...csa-inabox-v0.52.0) (2026-07-04)
+
+
+### Features
+
+* **loom,deploy:** Gov post-deploy bootstrap + deploy→bootstrap chaining + first-run image path (rel-T32/T34/T37, B8) ([#1626](https://github.com/fgarofalo56/csa-inabox/issues/1626)) ([d43c7da](https://github.com/fgarofalo56/csa-inabox/commit/d43c7da5363b16b642dad9b59944c9bf91d5d785))
+* **loom,setup:** Azure-quota pre-flight gate + deploy progress survives refresh (rel-T42/T43) ([#1625](https://github.com/fgarofalo56/csa-inabox/issues/1625)) ([789f97a](https://github.com/fgarofalo56/csa-inabox/commit/789f97a6dfe473d9e92b8a2ed55129371da3161d))
+* **loom:** truthed DR posture + Cosmos PITR runbook + self-update compat manifest (rel-T40/T41, B14/B15) ([#1624](https://github.com/fgarofalo56/csa-inabox/issues/1624)) ([2037aa5](https://github.com/fgarofalo56/csa-inabox/commit/2037aa5be5eda86e6de9b64f9bee96f73f3f76ee))
+
+
+### Bug Fixes
+
+* **loom,bicep:** single AAS owner + duplicate-env guard + bicep-sync prune + eventstream env-name (rel-T31/T33/T39/T44, B7) ([#1627](https://github.com/fgarofalo56/csa-inabox/issues/1627)) ([1f759a9](https://github.com/fgarofalo56/csa-inabox/commit/1f759a909a92d22f8a858911bd7241036a8d09db))
+* **loom,deploy:** teardown purges soft-deletes + Gov private-DNS zones + scoped KV-flip (rel-T35/T36/T38, B9/B10) ([#1623](https://github.com/fgarofalo56/csa-inabox/issues/1623)) ([1a8c92f](https://github.com/fgarofalo56/csa-inabox/commit/1a8c92f910bd243bc8a9e4874bcd0f680350e53f))
+
+
+### Documentation
+
+* **session:** Wave 1 + 1b landing + live-verification state (2026-07-03) ([#1622](https://github.com/fgarofalo56/csa-inabox/issues/1622)) ([27d293e](https://github.com/fgarofalo56/csa-inabox/commit/27d293e8d45cc1042cff7c2a5e8377d320e0a0a3))
+
+
+### Miscellaneous
+
+* **deps-dev:** Bump @types/node in /portal/react-webapp ([#1612](https://github.com/fgarofalo56/csa-inabox/issues/1612)) ([3e3953c](https://github.com/fgarofalo56/csa-inabox/commit/3e3953ccc4f638b20b3ae939e30fe22960497257))
+* **deps-dev:** Update azure-mgmt-cosmosdb requirement ([#1617](https://github.com/fgarofalo56/csa-inabox/issues/1617)) ([94ad913](https://github.com/fgarofalo56/csa-inabox/commit/94ad9130f433e03ffea070fb8b69f8b29030a5c2))
+* **deps:** Bump @azure/msal-browser in /portal/react-webapp ([#1610](https://github.com/fgarofalo56/csa-inabox/issues/1610)) ([53da858](https://github.com/fgarofalo56/csa-inabox/commit/53da858468712fbd1163d96f129ee5aedd0032bd))
+* **deps:** Bump @radix-ui/react-dialog in /portal/react-webapp ([#1607](https://github.com/fgarofalo56/csa-inabox/issues/1607)) ([966a3a8](https://github.com/fgarofalo56/csa-inabox/commit/966a3a837bdc982051e92cb0d70fa92103779e23))
+* **deps:** Bump @radix-ui/react-select in /portal/react-webapp ([#1613](https://github.com/fgarofalo56/csa-inabox/issues/1613)) ([0726ada](https://github.com/fgarofalo56/csa-inabox/commit/0726ada9bea4dccf15bfe616e6da2c496a9aaf58))
+* **deps:** Bump @tanstack/react-query in /portal/react-webapp ([#1611](https://github.com/fgarofalo56/csa-inabox/issues/1611)) ([27ca346](https://github.com/fgarofalo56/csa-inabox/commit/27ca3469df942ef46c07e95b470012d455cb79ec))
+* **deps:** Bump react-hook-form in /portal/react-webapp ([#1608](https://github.com/fgarofalo56/csa-inabox/issues/1608)) ([459a04b](https://github.com/fgarofalo56/csa-inabox/commit/459a04b6ad393b86be145e30be100085b91c04b2))
+
 ## [0.51.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.50.0...csa-inabox-v0.51.0) (2026-07-03)
 
 
