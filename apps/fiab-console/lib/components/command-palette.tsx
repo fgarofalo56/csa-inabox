@@ -28,7 +28,7 @@ const NAV_HINT_BY_HREF: Record<string, string> = {
   '/': 'Hero + quick links',
   '/workspaces': 'Root primitive',
   '/browse': 'Shared with me + recents',
-  '/onelake': 'Explore + Govern',
+  '/onelake': 'Explore, federated search + govern',
   '/catalog': 'Search + govern all items',
   '/org-reports': 'Organization report library',
   '/semantic-model': 'Tabular models over the lakehouse',
