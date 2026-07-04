@@ -36,6 +36,7 @@ import {
   type AdfCdcSpec, type MapperConnection, type MapperTable,
 } from './adf-client';
 import { dfsSuffix } from './cloud-endpoints';
+import { escapeSqlLiteral, bracket as qbracket } from '@/lib/sql/quoting';
 // httpsToAbfss lives in cloud-endpoints (pure, sovereign-aware) so it is unit-
 // testable without this module's mssql/identity native chain; re-exported here
 // for the existing `@/lib/azure/mirror-engine` consumers (Thread edges).
@@ -196,9 +197,9 @@ function bronzeConfigured(): boolean {
   try { getAccountName(); return true; } catch { return false; }
 }
 
-/** Bracket-quote a SQL identifier (double any `]`). */
+/** Bracket-quote a SQL identifier (double any `]`). Centralised in `@/lib/sql/quoting`. */
 function bracket(ident: string): string {
-  return `[${String(ident).replace(/]/g, ']]')}]`;
+  return qbracket(String(ident));
 }
 
 /** RFC-4180 CSV cell: dates → ISO, null → empty, quote when needed. */
@@ -243,7 +244,7 @@ async function writeCsvSnapshot(
   // is robust. SQL-family columns are cleanly typed, so they keep the simpler
   // auto-schema read (already proven against AdventureWorks).
   const withClause = schema === 'cosmos' && columns.length
-    ? ` WITH (${columns.map((c) => `[${String(c).replace(/]/g, ']]')}] VARCHAR(8000)`).join(', ')})`
+    ? ` WITH (${columns.map((c) => `${bracket(String(c))} VARCHAR(8000)`).join(', ')})`
     : '';
   const openrowset =
     `SELECT TOP 100 * FROM OPENROWSET(BULK '${folderUrl}', ` +
@@ -398,7 +399,7 @@ async function snapshotTableIncremental(
 
 /** PG string literal (single-quote-escaped) — for values in WHERE clauses. */
 function pgLit(s: string): string {
-  return `'${String(s).replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(String(s))}'`;
 }
 
 /**

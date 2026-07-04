@@ -15,6 +15,7 @@ import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { KNOWN_CONTAINERS, listPaths } from '@/lib/azure/adls-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,7 +27,7 @@ interface LakehouseState {
 }
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, code }, { status });
+  return apiError(error, status, code === undefined ? undefined : { code });
 }
 
 async function loadLakehouse(itemId: string, tenantId: string): Promise<WorkspaceItem | null> {

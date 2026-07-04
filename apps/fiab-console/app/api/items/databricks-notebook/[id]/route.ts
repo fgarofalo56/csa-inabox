@@ -25,6 +25,7 @@ import {
 } from '@/lib/azure/databricks-client';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { buildDatabricksSource } from '@/lib/install/provisioners/_seed-databricks';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -60,7 +61,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       return NextResponse.json({ ok: true, path: null, language: 'PYTHON', content, source: 'cosmos' });
     } catch (e: any) {
       if (e?.code === 404) return NextResponse.json({ ok: false, error: 'notebook not found' }, { status: 404 });
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 

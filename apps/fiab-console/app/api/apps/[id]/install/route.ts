@@ -49,6 +49,7 @@ import { resolveBundleItem, getBundle } from '@/lib/apps/content-bundles';
 import { substituteCellsPlaceholders } from '@/lib/apps/notebook-placeholders';
 import { appWantsSuperchargeSeed, runSuperchargeSeed } from '@/lib/apps/supercharge-seed';
 import { runProvisioning, type ProvisionReport } from '@/lib/install/provisioning-engine';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -155,7 +156,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     const jobs = await appInstallJobsContainer();
     await jobs.items.create<AppInstallJob>(initial);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: `Failed to create install job: ${e?.message || e}` }, { status: 500 });
+    return apiServerError(e, 'Failed to create install job');
   }
 
   // Fire the worker. The Container App Node process stays alive across the

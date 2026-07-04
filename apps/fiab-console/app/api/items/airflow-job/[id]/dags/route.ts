@@ -17,12 +17,13 @@ import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiServerError, apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -80,7 +81,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       })),
     });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -132,6 +133,6 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     }
     return NextResponse.json({ ok: true, dagId, is_paused: resp?.is_paused ?? body.isPaused });
   } catch (e: any) {
-    return err(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

@@ -25,6 +25,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { createOwnedItem, jerr, listOwnedItems, loadOwnedItem } from '../_lib/item-crud';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -67,7 +68,7 @@ export async function GET() {
     }));
     return NextResponse.json({ ok: true, items: rows });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -106,6 +107,6 @@ export async function POST(req: NextRequest) {
     if (!r.ok) return jerr(r.error, r.status);
     return NextResponse.json({ ok: true, item: r.item }, { status: 201 });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

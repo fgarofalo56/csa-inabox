@@ -24,6 +24,7 @@ import {
 import type { AccessRequest } from '@/lib/types/access-request';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import crypto from 'node:crypto';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -93,7 +94,7 @@ export async function POST(
     const { resource } = await container.items.create(doc);
     return NextResponse.json({ ok: true, request: resource }, { status: 201 });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -139,6 +140,6 @@ export async function GET(
       .fetchAll();
     return NextResponse.json({ ok: true, requests: resources });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -16,6 +16,7 @@ import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   dbListFolders, dbCreateFolder, dbRenameFolder, dbDeleteFolder,
 } from '@/lib/clients/folders-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,7 +36,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     const folders = await dbListFolders(params.id);
     return NextResponse.json({ ok: true, folders });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     );
     return NextResponse.json({ ok: true, folder }, { status: 201 });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -87,6 +88,6 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ id: st
     await dbDeleteFolder(params.id, id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

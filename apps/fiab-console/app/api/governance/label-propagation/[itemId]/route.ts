@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer, labelPropagationContainer } from '@/lib/azure/cosmos-client';
 import { computePropagation } from '@/lib/governance/label-propagation';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -85,6 +86,6 @@ export async function GET(_req: Request, { params }: { params: Promise<{ itemId:
       lastRunAt,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

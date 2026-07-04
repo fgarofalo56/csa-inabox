@@ -25,6 +25,7 @@ import { getIndex, searchConfigGate } from '../azure/search-index-client';
 import { AGENT_CONFIG_COPILOT } from '../azure/copilot-personas';
 import { mergeSuggestionIntoSources } from '../editors/_da-config-merge';
 import type { DataAgentSource } from '../azure/data-agent-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export { NoAoaiDeploymentError };
 export { mergeSuggestionIntoSources, mergeInstructions, descriptionsToBlock } from '../editors/_da-config-merge';
@@ -112,7 +113,7 @@ async function sqlSchema(
   // INFORMATION_SCHEMA.COLUMNS is read-only metadata — works on both dedicated
   // and serverless SQL. Filter to the selected tables when the author scoped them.
   const where = sel
-    ? `WHERE TABLE_NAME IN (${sel.map((t) => `'${t.replace(/'/g, "''")}'`).join(', ')})`
+    ? `WHERE TABLE_NAME IN (${sel.map((t) => `'${escapeSqlLiteral(t)}'`).join(', ')})`
     : '';
   const sql =
     'SELECT TABLE_SCHEMA, TABLE_NAME, COLUMN_NAME, DATA_TYPE, CHARACTER_MAXIMUM_LENGTH ' +

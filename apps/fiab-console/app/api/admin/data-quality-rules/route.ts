@@ -27,6 +27,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -96,7 +97,7 @@ export async function GET() {
     const doc = await loadOrSeed(tenantId);
     return NextResponse.json({ ok: true, rules: doc.items, updatedAt: doc.updatedAt });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -137,7 +138,7 @@ export async function POST(req: NextRequest) {
     await c.item(docId, tenantId).replace(doc);
     return NextResponse.json({ ok: true, rule, rules: doc.items });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -177,7 +178,7 @@ export async function PUT(req: NextRequest) {
     await c.item(docId, tenantId).replace(doc);
     return NextResponse.json({ ok: true, rule: doc.items[idx], rules: doc.items });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -201,6 +202,6 @@ export async function DELETE(req: NextRequest) {
     await c.item(docId, tenantId).replace(doc);
     return NextResponse.json({ ok: true, rules: doc.items });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

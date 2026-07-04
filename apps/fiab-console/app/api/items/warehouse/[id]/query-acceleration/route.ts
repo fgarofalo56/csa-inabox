@@ -28,6 +28,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,7 +78,7 @@ async function readResultSetCaching(poolName: string): Promise<boolean | null> {
   try {
     const r = await executeQuery(
       dedicatedTarget(),
-      `SELECT is_result_set_caching_on FROM sys.databases WHERE name = '${poolName.replace(/'/g, "''")}'`,
+      `SELECT is_result_set_caching_on FROM sys.databases WHERE name = '${escapeSqlLiteral(poolName)}'`,
     );
     if (!r.rows.length) return null;
     return Boolean(r.rows[0][0]);

@@ -17,12 +17,13 @@ import {
   listMountedFactoryPipelines, listMountedFactoryTriggers, listMountedFactoryRuns,
   type MountedFactoryRef,
 } from '@/lib/azure/adf-client';
+import { apiServerError, apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -65,7 +66,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     });
   } catch (e: any) {
     if (e?.code === 404) return err('mounted data factory not found', 404);
-    return err(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -81,6 +82,6 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
-    return err(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

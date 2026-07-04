@@ -11,6 +11,7 @@
  */
 
 import type { ReportContent } from '@/lib/apps/content-bundles/types';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /**
  * Visual types the renderer + DAX/SQL synthesizer support. The first 11 are the
@@ -1711,7 +1712,7 @@ function deriveField(values: any[], category: any[]): string | undefined {
   if (!first) return undefined;
   if (first.measure) return `[${first.measure}]`;
   if (first.column) {
-    const tbl = first.table ? `'${first.table.replace(/'/g, "''")}'` : '';
+    const tbl = first.table ? `'${escapeSqlLiteral(first.table)}'` : '';
     return `${tbl}[${first.column}]`;
   }
   return undefined;

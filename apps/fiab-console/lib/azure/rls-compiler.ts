@@ -13,6 +13,7 @@
  */
 
 import { sqlBracket, sqlString } from '@/lib/azure/synapse-permissions-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 // Re-export the identifier/literal escapers so callers that reuse the Synapse
 // SECURITY-POLICY / TVF DDL shape (e.g. the OneLake RLS/CLS reconciler) import a
@@ -73,7 +74,7 @@ export function bq(ident: string): string {
   return '`' + String(ident).replace(/`/g, '') + '`';
 }
 export function sparkString(s: string): string {
-  return `'${String(s).replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(String(s))}'`;
 }
 
 export interface PredDialect {

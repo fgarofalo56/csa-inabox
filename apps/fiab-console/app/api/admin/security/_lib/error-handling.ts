@@ -17,6 +17,7 @@
  *   - Upstream 5xx   → 502
  */
 import { NextResponse } from 'next/server';
+import { apiServerError } from '@/lib/api/respond';
 import { PurviewError, PurviewNotConfiguredError, notConfiguredHint } from '@/lib/azure/purview-client';
 import { MipError, MipNotConfiguredError } from '@/lib/azure/mip-graph-client';
 import { SccError, SccNotConfiguredError } from '@/lib/azure/scc-labels-client';
@@ -117,6 +118,5 @@ export function handleSecurityError(e: unknown): NextResponse {
       { status },
     );
   }
-  const msg = (e as any)?.message || String(e);
-  return NextResponse.json({ ok: false, error: msg, code: 'unexpected' }, { status: 500 });
+  return apiServerError(e, 'internal error', 'unexpected');
 }

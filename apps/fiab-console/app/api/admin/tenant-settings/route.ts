@@ -9,7 +9,7 @@
  * No mocks, no stubs — real Cosmos persistence + audit trail.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
@@ -90,7 +90,7 @@ export async function GET() {
       groups: TENANT_SETTING_GROUPS,
     });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -244,6 +244,6 @@ export async function PUT(req: NextRequest) {
       updatedAt: updated.updatedAt,
     });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

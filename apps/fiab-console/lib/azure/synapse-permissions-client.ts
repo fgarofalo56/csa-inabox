@@ -38,10 +38,10 @@ export { dedicatedTarget, serverlessTarget, type SynapseTarget };
 
 // ── identifier / literal escaping (no string injection) ──────────────────────
 export function sqlBracket(ident: string): string {
-  return `[${ident.replace(/]/g, ']]')}]`;
+  return bracket(ident);
 }
 export function sqlString(s: string): string {
-  return `N'${s.replace(/'/g, "''")}'`;
+  return `N'${escapeSqlLiteral(s)}'`;
 }
 
 /** Map a column-array QueryResult into row objects keyed by column name. */
@@ -458,7 +458,7 @@ export async function createRlsPolicy(
   await ensureRlsSchema(target);
   // Drop any existing policy first (it depends on the function).
   await synapseExecute(target, `IF EXISTS (SELECT 1 FROM sys.security_policies WHERE name = ${sqlString(polName)}) DROP SECURITY POLICY ${polFq};`);
-  await synapseExecute(target, `IF OBJECT_ID('${RLS_SCHEMA}.${fnName.replace(/'/g, "''")}') IS NOT NULL DROP FUNCTION ${fnFq};`);
+  await synapseExecute(target, `IF OBJECT_ID('${RLS_SCHEMA}.${escapeSqlLiteral(fnName)}') IS NOT NULL DROP FUNCTION ${fnFq};`);
   // CREATE FUNCTION must be the only statement in its batch.
   await synapseExecute(
     target,
@@ -484,6 +484,7 @@ export async function createRlsPolicy(
 // the BFF route imports validation + DDL from one place.
 export { RLS_WHERE_MAX, validateWhereClause } from './rls-predicate';
 import { validateWhereClause } from './rls-predicate';
+import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
 
 function whereClauseError(message: string): Error & { status: number; code: string } {
   const err = new Error(message) as Error & { status: number; code: string };
@@ -545,7 +546,7 @@ export async function createRlsPolicyWithPredicate(
   );
   await synapseExecute(
     target,
-    `IF OBJECT_ID('${RLS_SCHEMA}.${fnName.replace(/'/g, "''")}') IS NOT NULL DROP FUNCTION ${fnFq};`,
+    `IF OBJECT_ID('${RLS_SCHEMA}.${escapeSqlLiteral(fnName)}') IS NOT NULL DROP FUNCTION ${fnFq};`,
   );
   // CREATE FUNCTION must be the only statement in its batch.
   await synapseExecute(

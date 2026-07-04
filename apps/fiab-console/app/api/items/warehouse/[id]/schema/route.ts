@@ -13,6 +13,7 @@ import { getSession } from '@/lib/auth/session';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
 import { enumerateSqlObjects } from '@/lib/azure/sql-object-scripting';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,8 +70,8 @@ export async function GET(req: NextRequest) {
       const cols = await executeQuery(
         dedicatedTarget(),
         `SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS
-         WHERE TABLE_SCHEMA = '${schemaName.replace(/'/g, "''")}'
-           AND TABLE_NAME = '${tableName.replace(/'/g, "''")}'
+         WHERE TABLE_SCHEMA = '${escapeSqlLiteral(schemaName)}'
+           AND TABLE_NAME = '${escapeSqlLiteral(tableName)}'
          ORDER BY ORDINAL_POSITION`,
       );
       return NextResponse.json({ ok: true, state: 'Online', columns: cols.rows.map((r) => String(r[0])) });

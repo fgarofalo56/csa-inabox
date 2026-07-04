@@ -22,6 +22,7 @@ import { getPoolState, resumePool } from '@/lib/azure/synapse-pool-arm';
 import type { Provisioner, ProvisionResult, RemediationGate } from './types';
 import { resolveInfraResidual } from './types';
 import { loomDocUrl } from '@/lib/learn/content';
+import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
 
 const BACKEND = process.env.LOOM_WAREHOUSE_BACKEND || 'synapse-dedicated';
 
@@ -111,7 +112,7 @@ function makeAddConstraintIdempotent(batch: string): string {
   if (/^\s*IF\s+NOT\s+EXISTS/i.test(batch)) return batch;
   const m = batch.match(/^\s*ALTER\s+TABLE\s+\S+\s+ADD\s+CONSTRAINT\s+\[?([^\s\]]+)\]?/i);
   if (!m) return batch;
-  const c = m[1].replace(/'/g, "''");
+  const c = escapeSqlLiteral(m[1]);
   return `IF NOT EXISTS (SELECT 1 FROM sys.objects WHERE name = N'${c}')\n${batch}`;
 }
 
@@ -183,7 +184,7 @@ function makeCreateTableIdempotent(batch: string): string {
   // IF NOT EXISTS and wrap with the OBJECT_ID guard.
   const ifne = batch.match(/^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+([^\s(]+)/i);
   if (ifne) {
-    const literal = ifne[1].replace(/'/g, "''");
+    const literal = escapeSqlLiteral(ifne[1]);
     const rewritten = batch.replace(/^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+/i, 'CREATE TABLE ');
     return `IF OBJECT_ID(N'${literal}', N'U') IS NULL\n${rewritten}`;
   }
@@ -194,7 +195,7 @@ function makeCreateTableIdempotent(batch: string): string {
   // OBJECT_ID guard so re-install / shared-pool installs are idempotent.
   const plain = batch.match(/^\s*CREATE\s+TABLE\s+([^\s(]+)/i);
   if (plain) {
-    const literal = plain[1].replace(/'/g, "''");
+    const literal = escapeSqlLiteral(plain[1]);
     return `IF OBJECT_ID(N'${literal}', N'U') IS NULL\n${batch}`;
   }
   return batch;
@@ -226,8 +227,8 @@ function makeCreateSchemaIdempotent(batch: string): string {
   // Schema name may be bracket-quoted ([hybrid]) or bare (hybrid); strip
   // brackets and any embedded quote-doubling for the sys.schemas comparison.
   const rawName = m[1].replace(/^\[|\]$/g, '');
-  const nameLiteral = rawName.replace(/'/g, "''");
-  const innerSql = batch.replace(/;\s*$/, '').trim().replace(/'/g, "''");
+  const nameLiteral = escapeSqlLiteral(rawName);
+  const innerSql = escapeSqlLiteral(batch.replace(/;\s*$/, '').trim());
   return `IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = N'${nameLiteral}')\nEXEC('${innerSql}');`;
 }
 
@@ -288,14 +289,14 @@ function sqlLiteral(v: any): string {
     return String(v);
   }
   if (typeof v === 'boolean') return v ? '1' : '0';
-  if (v instanceof Date) return `'${v.toISOString().replace(/'/g, "''")}'`;
+  if (v instanceof Date) return `'${escapeSqlLiteral(v.toISOString())}'`;
   const s = typeof v === 'string' ? v : JSON.stringify(v);
-  return `N'${s.replace(/'/g, "''")}'`;
+  return `N'${escapeSqlLiteral(s)}'`;
 }
 
-/** Quote a SQL identifier (table / column) defensively. */
+/** Quote a SQL identifier (table / column) defensively. Centralised in `@/lib/sql/quoting`. */
 function quoteIdent(name: string): string {
-  return `[${String(name).replace(/]/g, ']]')}]`;
+  return bracket(String(name));
 }
 
 /** Quote a possibly schema-qualified table name: 'gold.fact_sales' →
@@ -424,7 +425,7 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
       if (isCreateViewBatch(raw)) {
         const vn = viewNameFromCreate(raw);
         if (vn) {
-          const bare = vn.replace(/^\[|\]$/g, '').replace(/'/g, "''");
+          const bare = escapeSqlLiteral(vn.replace(/^\[|\]$/g, ''));
           batches.push(`IF OBJECT_ID(N'${bare}', N'V') IS NOT NULL DROP VIEW ${vn};`);
         }
         // Bare CREATE VIEW (OR ALTER stripped) alone in its own batch.
@@ -509,7 +510,7 @@ export const warehouseProvisioner: Provisioner = async (input): Promise<Provisio
       // bare CREATE VIEW in its own batch.
       //   https://learn.microsoft.com/sql/t-sql/statements/create-view-transact-sql#remarks
       try {
-        await synapseExec(target, `IF OBJECT_ID(N'${viewName.replace(/'/g, "''")}', N'V') IS NOT NULL DROP VIEW [${viewName}];`);
+        await synapseExec(target, `IF OBJECT_ID(N'${escapeSqlLiteral(viewName)}', N'V') IS NOT NULL DROP VIEW [${viewName}];`);
         await synapseExec(target, `CREATE VIEW [${viewName}] AS ${m.sql}`);
         steps.push(`Created dbt model view [${viewName}] (${m.layer}).`);
       } catch (e: any) {

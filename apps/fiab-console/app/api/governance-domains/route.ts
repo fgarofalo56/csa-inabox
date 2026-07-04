@@ -25,6 +25,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -106,6 +107,6 @@ export async function GET() {
         : { purviewHint: 'Showing Loom-local governance domains. To register data products in Microsoft Purview Unified Catalog, set LOOM_PURVIEW_UC_ENDPOINT (or LOOM_PURVIEW_ACCOUNT) and create a published governance domain there.' }),
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

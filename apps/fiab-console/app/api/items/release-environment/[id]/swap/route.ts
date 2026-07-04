@@ -16,12 +16,13 @@ import {
   listSlots, swapSlots, type SwapAction,
   AppServiceNotConfiguredError, AppServiceSlotsError,
 } from '@/lib/azure/app-service-slots-client';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'release-environment';
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 function gateBody(missing: string[]) {
   return {

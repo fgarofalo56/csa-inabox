@@ -42,6 +42,7 @@ import {
   ApimError,
 } from '@/lib/azure/apim-client';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,7 +50,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'data-product';
 
 function err(error: string, status: number, extra: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: false, error, ...extra }, { status });
+  return apiError(error, status, extra);
 }
 
 /** APIM entity ids must start alphanumeric, then [a-zA-Z0-9-], max 256. */

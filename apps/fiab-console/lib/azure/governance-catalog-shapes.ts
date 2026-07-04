@@ -7,6 +7,8 @@
  * `search-index-client.ts`.
  */
 
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
+
 /** AI Search index name for the data catalog. */
 export const GOVERNANCE_CATALOG_INDEX = 'loom-governance-items';
 
@@ -123,7 +125,7 @@ export interface CatalogSearchOpts {
 
 /** Escape a string literal for an OData filter. */
 function quote(v: string): string {
-  return v.replace(/'/g, "''");
+  return escapeSqlLiteral(v);
 }
 
 /**

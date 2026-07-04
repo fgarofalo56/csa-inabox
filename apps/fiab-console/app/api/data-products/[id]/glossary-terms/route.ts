@@ -28,6 +28,7 @@ import {
   PurviewError,
 } from '@/lib/azure/purview-client';
 import { loadOwnedItem, updateOwnedItem } from '../../../items/_lib/item-crud';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,7 +38,7 @@ const ITEM_TYPE = 'data-product';
 interface GlossaryLink { name: string; guid?: string; glossaryGuid?: string; }
 
 function err(error: string, status: number, extra: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: false, error, ...extra }, { status });
+  return apiError(error, status, extra);
 }
 
 function readLinks(state: Record<string, unknown>): GlossaryLink[] {

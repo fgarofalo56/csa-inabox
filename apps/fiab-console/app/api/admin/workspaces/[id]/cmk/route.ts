@@ -35,6 +35,7 @@ import {
   KV_CRYPTO_SVC_ENC_USER_ROLE_ID,
   STORAGE_ACCOUNT_CONTRIBUTOR_ROLE_ID,
 } from '@/lib/clients/cmk-client';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,7 +48,7 @@ const STORAGE_GATE_HINT =
   'storage account. Deploy platform/fiab/bicep/modules/landing-zone/storage-lifecycle-rbac.bicep with consolePrincipalNeedsCmkBind=true.';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, code }, { status });
+  return apiError(error, status, code === undefined ? undefined : { code });
 }
 
 /** Map a KV/ARM 403 onto an honest gate payload (HTTP 200, ok:false, gate:true). */

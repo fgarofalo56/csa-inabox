@@ -45,6 +45,7 @@ import {
   ensureClassificationDefs,
   addAssetClassification,
 } from '@/lib/azure/purview-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -158,7 +159,7 @@ export async function GET() {
       pbiAdminConfigured: process.env.LOOM_POWERBI_ADMIN_LABELS === 'true',
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 

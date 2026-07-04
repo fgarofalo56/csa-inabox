@@ -22,6 +22,7 @@ import {
   certVaultUrl,
   KeyVaultError,
 } from '@/lib/azure/kv-secrets-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,6 +60,6 @@ export async function GET() {
           : undefined;
       return NextResponse.json({ ok: false, error: e.message, hint }, { status: e.status });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -23,12 +23,13 @@ import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertPipeline, adfConfigGate } from '@/lib/azure/adf-client';
 import { readZip } from '@/lib/azure/zip';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { apiServerError, apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, extra?: object) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 /** Shape guard for a pipeline spec: must have properties.activities array. */
@@ -52,7 +53,7 @@ export async function POST(req: NextRequest) {
     if (!ws || ws.tenantId !== s.claims.oid) return err('workspace not found', 404);
   } catch (e: any) {
     if (e?.code === 404) return err('workspace not found', 404);
-    return err(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 
   // Parse multipart/form-data

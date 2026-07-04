@@ -9,6 +9,7 @@ import { getSession } from '@/lib/auth/session';
 import { foldersContainer, itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import crypto from 'node:crypto';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -81,7 +82,7 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ id: str
     return NextResponse.json({ ok: true, folder: saved });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: false, error: 'folder not found' }, { status: 404 });
-    return NextResponse.json({ ok: false, error: e?.message || 'failed to rename folder' }, { status: 500 });
+    return apiServerError(e, 'failed to rename folder');
   }
 }
 

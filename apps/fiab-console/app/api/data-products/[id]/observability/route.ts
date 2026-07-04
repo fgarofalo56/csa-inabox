@@ -27,6 +27,7 @@ import {
 } from '@/lib/azure/purview-client';
 import { adxConfigGate, computeDqScore, runHealthCharts } from '@/lib/azure/data-quality-client';
 import { defaultDatabase } from '@/lib/azure/kusto-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -72,7 +73,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       } else if (e instanceof PurviewError) {
         return NextResponse.json({ ok: false, error: `Purview lineage failed: ${e.message}` }, { status: 502 });
       } else {
-        return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+        return apiServerError(e);
       }
     }
   }

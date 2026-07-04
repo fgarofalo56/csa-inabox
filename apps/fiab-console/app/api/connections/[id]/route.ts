@@ -12,6 +12,7 @@ import {
 import { putKeyVaultSecret, kvSecretsConfigGate } from '@/lib/azure/kv-secrets-client';
 import { connectionsContainer } from '@/lib/azure/cosmos-client';
 import type { LoomConnection } from '@/lib/azure/connections-store';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,7 @@ export async function GET(
     if (!conn) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     return NextResponse.json({ ok: true, connection: toView(conn) });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -129,6 +130,6 @@ export async function DELETE(
     await deleteConnection(session, params.id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

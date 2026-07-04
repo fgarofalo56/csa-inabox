@@ -5,7 +5,7 @@
  * Triggers a pipeline run on the referenced ADF (cross-factory createRun).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
@@ -42,6 +42,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     const out = await runMountedFactoryPipeline(ref, pipelineName, body?.parameters);
     return NextResponse.json({ ok: true, runId: out.runId });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

@@ -19,6 +19,7 @@ import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { loadOrSeedDomains } from '@/lib/azure/domain-registry';
 import { domainResourceInventory, InventoryError } from '@/lib/azure/topology-inventory';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -88,6 +89,6 @@ export async function GET(
       throw e;
     }
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

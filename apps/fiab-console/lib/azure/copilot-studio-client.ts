@@ -49,6 +49,7 @@ import {
   type TokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const BAP_BASE = process.env.LOOM_POWER_PLATFORM_BAP_BASE || 'https://api.bap.microsoft.com';
 const BAP_SCOPE = 'https://api.bap.microsoft.com/.default';
@@ -737,7 +738,7 @@ function actionEntitySupportsAttribute(host: string, attribute: string): Promise
   const key = `${host}|${attribute}`;
   const cached = _actionAttrCache.get(key);
   if (cached) return cached;
-  const safe = attribute.replace(/'/g, "''");
+  const safe = escapeSqlLiteral(attribute);
   const probe = rawCall<{ value: any[] }>(
     dvUrl(host, `/EntityDefinitions(LogicalName='msdyn_pluginaction')/Attributes`, {
       $select: 'LogicalName',
@@ -1097,7 +1098,7 @@ export function resolvePublishEnvId(envId?: string): string | null {
 /** Find an existing Copilot Studio agent by exact display name (idempotent upsert support). */
 export async function findAgentByName(envId: string, name: string): Promise<CopilotAgent | null> {
   const host = await envHost(envId);
-  const safe = name.replace(/'/g, "''");
+  const safe = escapeSqlLiteral(name);
   const j = await rawCall<{ value: any[] }>(
     dvUrl(host, '/msdyn_copilots', {
       $select: AGENT_SELECT,

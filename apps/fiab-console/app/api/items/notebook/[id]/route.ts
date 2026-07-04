@@ -11,7 +11,7 @@
  * (Synapse Spark Livy / Databricks Jobs) — see [id]/run/route.ts.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
@@ -71,7 +71,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     });
   } catch (e: any) {
     if (e?.code === 404) return apiError('notebook not found', 404);
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -149,7 +149,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
         sessionConfig: respState.sessionConfig || null,
       },
     });
-  } catch (e: any) { return apiError(e?.message || String(e), 500); }
+  } catch (e: any) { return apiServerError(e); }
 }
 
 export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -164,6 +164,6 @@ export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: stri
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: true });
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

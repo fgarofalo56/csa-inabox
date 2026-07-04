@@ -25,12 +25,13 @@ import { upsertPipeline, adfConfigGate, type AdfPipeline } from '@/lib/azure/adf
 import { pipelineDefinitionFromContent } from '@/lib/azure/pipeline-binding';
 import { prepareItemCreate, isDeployTargetGate } from '@/lib/azure/topology';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 /** ADF pipeline names allow letters/digits/space/_/-/(). Derive a stable, valid

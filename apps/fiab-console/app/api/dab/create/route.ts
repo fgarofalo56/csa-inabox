@@ -13,6 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { createOwnedItem, jerr } from '../../items/_lib/item-crud';
 import { emptyDabConfig, emitDabConfigJson, type DabConfig } from '../_lib/dab-config-model';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,6 +35,6 @@ export async function POST(req: NextRequest) {
     if (!r.ok) return jerr(r.error, r.status);
     return NextResponse.json({ ok: true, item: r.item }, { status: 201 });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

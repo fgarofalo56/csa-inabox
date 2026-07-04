@@ -12,7 +12,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
@@ -122,7 +122,7 @@ export async function GET() {
     const { resources } = await c.items.query<McpServerConfigDoc>(q).fetchAll();
     return NextResponse.json({ ok: true, servers: (resources || []).map(toView) });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -236,6 +236,6 @@ export async function DELETE(req: NextRequest) {
     } catch { /* audit is best-effort */ }
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

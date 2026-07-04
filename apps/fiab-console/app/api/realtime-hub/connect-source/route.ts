@@ -24,6 +24,7 @@ import {
   FabricError,
 } from '@/lib/azure/fabric-client';
 import { putKeyVaultSecret, vaultUrl, KeyVaultError } from '@/lib/azure/kv-secrets-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -84,7 +85,7 @@ export async function POST(req: NextRequest) {
       });
     } catch (e: any) {
       if (e instanceof FabricError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint }, { status: e.status });
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 
@@ -119,7 +120,7 @@ export async function POST(req: NextRequest) {
         : undefined;
       return NextResponse.json({ ok: false, error: e.message, hint }, { status: e.status });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 
   const res = await createOwnedItem(session, 'eventstream', {

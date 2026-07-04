@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listCrosswalk, approveCrosswalkPairs, removeCrosswalkPair } from '@/lib/azure/mdm-store';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,7 @@ export async function GET(req: NextRequest) {
     const pairs = await listCrosswalk(s.claims.oid, modelId);
     return NextResponse.json({ ok: true, pairs });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest) {
     const all = await approveCrosswalkPairs(s.claims.oid, modelId, pairs, s.claims.upn || s.claims.oid);
     return NextResponse.json({ ok: true, pairs: all, approved: pairs.length });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -62,6 +63,6 @@ export async function DELETE(req: NextRequest) {
     const pairs = await removeCrosswalkPair(s.claims.oid, modelId, idA, idB);
     return NextResponse.json({ ok: true, pairs });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

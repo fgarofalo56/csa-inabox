@@ -22,6 +22,7 @@ import {
   FoundryAgentError,
 } from '@/lib/azure/foundry-agent-client';
 import { loadOwnedItem } from '../../../_lib/item-crud';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -73,6 +74,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (e instanceof FoundryAgentError) {
       return NextResponse.json({ ok: false, error: e.message, status: e.status, body: e.body }, { status: 502 });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

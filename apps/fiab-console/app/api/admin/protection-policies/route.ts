@@ -15,6 +15,7 @@ import {
   listPolicies, upsertPolicy, normalizePolicy, validatePolicy,
 } from '@/lib/azure/protection-policy-client';
 import { reconcilePolicy } from '@/lib/azure/protection-policy-reconciler';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -30,7 +31,7 @@ export async function GET() {
     const policies = await listPolicies(tenantId);
     return NextResponse.json({ ok: true, policies });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -49,6 +50,6 @@ export async function POST(req: NextRequest) {
     const receipt = await reconcilePolicy(saved); // on-demand reconcile
     return NextResponse.json({ ok: true, policy: saved, receipt });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

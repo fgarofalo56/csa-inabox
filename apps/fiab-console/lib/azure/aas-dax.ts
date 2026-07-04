@@ -8,6 +8,7 @@
  */
 
 import { parseAasServer } from './cloud-endpoints';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /** Parsed row shape returned by the AAS query endpoint. */
 export type AasRow = Record<string, unknown>;
@@ -80,7 +81,7 @@ const DAX_AGG_FN: Record<string, string> = {
 
 /** Single-quote a table name (always safe; escapes embedded quotes). */
 function daxTable(t: string): string {
-  return `'${t.replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(t)}'`;
 }
 /** Build a `'Table'[Column]` reference (bracket-escaped). */
 function daxColumnRef(w: DaxWellField): string | null {

@@ -24,6 +24,7 @@ import {
   FabricError,
   fabricHint,
 } from '@/lib/azure/fabric-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,7 +44,7 @@ function gateOrError(e: unknown) {
       },
     });
   }
-  return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
+  return apiServerError(e);
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string; stageId: string }> }) {

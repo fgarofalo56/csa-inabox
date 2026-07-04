@@ -28,6 +28,7 @@ import {
   type PurviewDataProductPayload,
 } from '@/lib/azure/purview-client';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,7 +41,7 @@ const ITEM_TYPE = 'data-product';
 const GUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function err(error: string, status: number, extra: Record<string, unknown> = {}) {
-  return NextResponse.json({ ok: false, error, ...extra }, { status });
+  return apiError(error, status, extra);
 }
 
 export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

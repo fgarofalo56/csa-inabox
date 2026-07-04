@@ -21,6 +21,7 @@
  * Returns: { ok, message, link, linkLabel } | { ok:false, error }
  */
 import { NextRequest, NextResponse } from 'next/server';
+import { bracket } from '@/lib/sql/quoting';
 import { getSession } from '@/lib/auth/session';
 import { createOwnedItem, loadOwnedItem, listOwnedWorkspaces } from '../../items/_lib/item-crud';
 import { dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
@@ -31,6 +32,7 @@ import {
 } from '../../dab/_lib/dab-config-model';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
 import { readOnlySelect } from '@/lib/thread/sql-guard';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -115,7 +117,7 @@ export async function POST(req: NextRequest) {
     // Azure-native warehouse, the deliberate step that makes the query a stable
     // API-addressable object.
     try {
-      await executeQuery(target, `CREATE OR ALTER VIEW [${schema}].[${name.replace(/]/g, ']]')}] AS\n${guard.sql}`);
+      await executeQuery(target, `CREATE OR ALTER VIEW [${schema}].${bracket(name)} AS\n${guard.sql}`);
     } catch (e: any) {
       return NextResponse.json({ ok: false, error: `Could not create the view from your query: ${e?.message || String(e)}` }, { status: 400 });
     }
@@ -136,7 +138,7 @@ export async function POST(req: NextRequest) {
       // DAB auto-discovers columns; we only need to declare the primary key(s).
       fields = cols.filter((c) => c.isPrimaryKey).map((c) => ({ name: c.name, primaryKey: true }));
     } catch (e: any) {
-      return NextResponse.json({ ok: false, error: `Could not read schema for ${schema}.${name}: ${e?.message || String(e)}` }, { status: 500 });
+      return apiServerError(e, `Could not read schema for ${schema}.${name}`);
     }
     sourceDescr = `${from.type} table ${schema}.${name}`;
   }

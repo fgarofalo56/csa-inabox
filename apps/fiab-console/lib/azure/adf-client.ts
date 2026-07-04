@@ -24,6 +24,7 @@ import { armBase, armScope, armHost, adfFactoryDeepLinkId, getLogAnalyticsHost, 
 import { pathToHttpsUrl, KNOWN_CONTAINERS } from './adls-client';
 import { executeQuery, serverlessTarget } from './synapse-sql-client';
 import { discoverResourceCoordsByName } from './resource-graph-coords';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const API = '2018-06-01';
 
@@ -443,7 +444,7 @@ interface LaQueryResponse { tables?: LaTable[]; error?: { message?: string } }
 
 /** Escape a single-quoted KQL string literal (double the quote). */
 function kqlStr(v: string): string {
-  return v.replace(/'/g, "''");
+  return escapeSqlLiteral(v);
 }
 
 async function laQuery(workspaceGuid: string, kql: string): Promise<LaQueryResponse> {
@@ -1574,7 +1575,7 @@ function cdcTargetEntities(c: AdfCdc): AdfCdcTargetEntity[] {
 }
 
 function escapeSqlSingleQuotes(s: string): string {
-  return s.replace(/'/g, "''");
+  return escapeSqlLiteral(s);
 }
 
 /**

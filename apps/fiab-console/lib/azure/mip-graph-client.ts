@@ -61,6 +61,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { getGraphHost, getGraphScope } from './cloud-endpoints';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /**
  * Graph host + AAD scope are resolved at CALL time (not import time) so the
@@ -334,7 +335,7 @@ export async function getSensitivityLabelWithRights(
 ): Promise<SensitivityLabelUsageRights | null> {
   assertEnabled();
   if (!labelId || !ownerEmail) return null;
-  const filter = `(id eq '${labelId.replace(/'/g, "''")}' and ownerEmail eq '${ownerEmail.replace(/'/g, "''")}')`;
+  const filter = `(id eq '${escapeSqlLiteral(labelId)}' and ownerEmail eq '${escapeSqlLiteral(ownerEmail)}')`;
   const endpoint = `/beta/security/informationProtection/sensitivityLabels?$filter=${encodeURIComponent(filter)}`;
   let res: Response;
   try {

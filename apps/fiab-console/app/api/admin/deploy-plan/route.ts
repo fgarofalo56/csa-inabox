@@ -26,6 +26,7 @@ import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import type { PlanSubscription, ServiceConfig } from '@/lib/components/deploy-planner/types';
 import { configFor, coerceConfigValue } from '@/lib/components/deploy-planner/service-catalog';
 import { pruneEdges } from '@/lib/components/deploy-planner/plan-validation';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -95,7 +96,7 @@ export async function GET() {
       updatedAt: plan.updatedAt,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -166,6 +167,6 @@ export async function PUT(req: NextRequest) {
     await c.item(docId, tenantId).replace(doc);
     return NextResponse.json({ ok: true, plan: { subscriptions: doc.subscriptions }, updatedAt: doc.updatedAt });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -13,6 +13,7 @@ import { getSession } from '@/lib/auth/session';
 import { resolveWorkspaceRole } from '@/lib/auth/workspace-role';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { removeWorkspaceRole } from '@/lib/azure/workspace-roles-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,6 +39,6 @@ export async function DELETE(
     const result = await removeWorkspaceRole(id, pid, (workspace as any).fabricWorkspaceId ?? null);
     return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

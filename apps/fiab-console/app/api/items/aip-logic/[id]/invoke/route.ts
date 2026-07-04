@@ -29,12 +29,13 @@ import { chatGrounded, NoAoaiDeploymentError, type DataAgentConfig } from '@/lib
 import { orchestrate, buildDefaultRegistry, type OrchestratorStep, type OrchestratorUsage } from '@/lib/azure/copilot-orchestrator';
 import { resolveSpindleGrounding } from '../_spindle-grounding';
 import { runBlockGraph, composeGraphPrompt } from '../_block-graph';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'aip-logic';
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 const NO_AOAI_GATE = {

@@ -19,7 +19,7 @@
  *   - rights filter unavailable (GCC-High/IL5) → CSV/TXT still blocked by FORMAT
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
@@ -91,6 +91,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
     return NextResponse.json({ ok: true, ...result });
   } catch (e: any) {
     // MIP upstream/config errors must not silently allow export — surface them.
-    return apiError(e?.message || 'Failed to evaluate export protection', 500);
+    return apiServerError(e, 'Failed to evaluate export protection');
   }
 }

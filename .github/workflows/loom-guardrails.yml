@@ -33,6 +33,10 @@ jobs:
         run: node scripts/ci/check-route-guards.mjs
       - name: no-freeform (raw-JSON config surfaces)
         run: node scripts/ci/check-no-freeform.mjs
+      - name: sql-quoting (inline identifier/literal quoting outside lib/sql/quoting.ts)
+        run: node scripts/ci/check-sql-quoting.mjs
+      - name: bff-errors (raw exception text on 500 + raw-envelope helpers)
+        run: node scripts/ci/check-bff-errors.mjs
       - name: no-raw-px (raw-px inline styles vs Loom tokens, ratchet)
         run: node scripts/ci/check-no-raw-px.mjs
       - name: no-bare-client-fetch (client /api fetch must use clientFetch)

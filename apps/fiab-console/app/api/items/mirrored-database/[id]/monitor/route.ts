@@ -12,7 +12,7 @@
  * See lib/azure/mirror-engine.ts → getMirrorStatus().
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
@@ -39,6 +39,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     return NextResponse.json({ ok: true, ...payload });
   } catch (e: any) {
     if (e?.code === 404) return apiError('mirrored database not found', 404);
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

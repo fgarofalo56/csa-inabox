@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer, labelPropagationContainer } from '@/lib/azure/cosmos-client';
 import { computePropagation, type PropagationStatus } from '@/lib/governance/label-propagation';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -177,6 +178,6 @@ export async function GET() {
       source: 'cosmos', // 'purview' once binding lands
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../items/_lib/item-crud';
 import { getEventstreamDefinition, FabricError, type FabricItemDefinition } from '@/lib/azure/fabric-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -58,7 +59,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ ok: true, backend: 'fabric', eventstreamId, endpoints: projectTopology(topo) });
     } catch (e: any) {
       if (e instanceof FabricError) return NextResponse.json({ ok: false, error: e.message, hint: e.hint }, { status: e.status });
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 

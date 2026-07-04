@@ -95,6 +95,7 @@ import {
   EventGridError,
 } from '@/lib/azure/eventgrid-client';
 import { xmlaEndpointFromWorkspace } from '@/lib/azure/cloud-endpoints';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -187,7 +188,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   if (warm) {
     // Warm path: DAX EVALUATE TOPN via the Power BI executeQueries REST API.
     try {
-      const dax = `EVALUATE TOPN(${maxRows}, '${table.replace(/'/g, "''")}')`;
+      const dax = `EVALUATE TOPN(${maxRows}, '${escapeSqlLiteral(table)}')`;
       const pbiResult = await executeDatasetQueries(workspaceId, id, dax);
       const pbiRows = pbiResult.results?.[0]?.tables?.[0]?.rows ?? [];
       const columns = pbiRows.length > 0 ? Object.keys(pbiRows[0]) : [];

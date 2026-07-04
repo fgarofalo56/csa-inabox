@@ -46,6 +46,7 @@ import {
   PurviewNotConfiguredError,
   PurviewError,
 } from '@/lib/azure/purview-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -125,8 +126,7 @@ export async function GET() {
     if (e instanceof PurviewError) {
       return NextResponse.json({ ok: false, error: e.message }, { status: 502 });
     }
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -206,7 +206,6 @@ export async function POST(req: NextRequest) {
     if (e instanceof PurviewError) {
       return NextResponse.json({ ok: false, error: e.message }, { status: 502 });
     }
-    const msg = e instanceof Error ? e.message : String(e);
-    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -23,6 +23,7 @@ import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { applyWorkspaceBindings } from '@/lib/azure/workspace-bindings';
 import { domainExists, DEFAULT_DOMAIN_ID } from '@/lib/azure/domain-registry';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,7 +48,7 @@ export async function GET() {
     const workspaces = await listAllWorkspacesAdmin();
     return NextResponse.json({ ok: true, total: workspaces.length, workspaces });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -144,6 +145,6 @@ export async function POST(req: NextRequest) {
     void upsertLoomDoc(docForWorkspace(merged));
     return NextResponse.json({ ok: true, workspace: merged }, { status: 201 });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'Failed to create workspace' }, { status: 500 });
+    return apiServerError(e, 'Failed to create workspace');
   }
 }

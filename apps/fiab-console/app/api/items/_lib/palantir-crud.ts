@@ -17,6 +17,7 @@ import {
 } from './item-crud';
 import { parseOntologyHierarchy, type OntologyEntityBinding, type OntologyClass } from '@/lib/editors/_family-utils';
 import { normalizeActionTypes, type WeaveActionType } from '@/lib/azure/weave-ontology-store';
+import { apiServerError } from '@/lib/api/respond';
 
 /** Summary of a saved ontology, for the bind-ontology dropdowns. */
 export interface OntologySummary {
@@ -107,7 +108,7 @@ export function makeItemRoute(itemType: string) {
         updatedAt: item.updatedAt || null,
       });
     } catch (e: any) {
-      return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
   async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -125,7 +126,7 @@ export function makeItemRoute(itemType: string) {
       if (!updated) return NextResponse.json({ error: 'not found' }, { status: 404 });
       return NextResponse.json({ ok: true, id: updated.id, updatedAt: updated.updatedAt });
     } catch (e: any) {
-      return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
   async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -136,7 +137,7 @@ export function makeItemRoute(itemType: string) {
       await deleteOwnedItem(id, itemType, s.claims.oid);
       return NextResponse.json({ ok: true });
     } catch (e: any) {
-      return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
   return { GET, PATCH, DELETE };

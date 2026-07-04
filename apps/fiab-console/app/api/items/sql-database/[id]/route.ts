@@ -26,6 +26,7 @@ import {
   getFabricSqlDatabase, deleteFabricSqlDatabase,
 } from '@/lib/azure/fabric-client';
 import type { Workspace } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,7 +40,7 @@ function fabricBackendOptedIn(): boolean {
 }
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {

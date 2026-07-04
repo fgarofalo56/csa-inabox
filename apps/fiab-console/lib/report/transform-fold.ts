@@ -45,6 +45,7 @@ import { fromLegacyState, hasTransform } from '@/lib/editors/report/report-data-
 import { foldAppliedStepsToSql, parseSharedQueries } from '@/lib/components/pipeline/dataflow/m-script';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { whitelist, isAggregateVisual, objectRows } from './query-projection';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /** The Loom-native report path folds + compiles over the Synapse SQL family. */
 export const TRANSFORM_DIALECT: SqlDialect = 'synapse';
@@ -217,7 +218,7 @@ export async function tryConnectionCacheRead(
 
   // Compile the wells over a serverless OPENROWSET(FORMAT='DELTA') derived source —
   // the SAME proven shape `makeFileExecutor` uses for an ADLS Delta read.
-  const u = deltaUrl.replace(/'/g, "''");
+  const u = escapeSqlLiteral(deltaUrl);
   const sqlSource: SqlSource = {
     from: { kind: 'derived', sql: `SELECT * FROM OPENROWSET(BULK '${u}', FORMAT='DELTA') AS r` },
     columns,

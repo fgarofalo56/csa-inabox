@@ -13,7 +13,7 @@
  * Loom or directly into ADF Studio.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
@@ -93,6 +93,6 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     });
   } catch (e: any) {
     if (e?.code === 404) return apiError('pipeline not found', 404);
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

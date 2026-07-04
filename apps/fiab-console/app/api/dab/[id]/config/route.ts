@@ -17,6 +17,7 @@ import {
   validateDabConfig,
   type DabConfig,
 } from '../../_lib/dab-config-model';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const config = (item.state?.dabConfig as DabConfig | undefined) ?? emptyDabConfig();
     return NextResponse.json({ ok: true, config, displayName: item.displayName });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -66,6 +67,6 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (!updated) return jerr('item not found', 404);
     return NextResponse.json({ ok: true, issues, json });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

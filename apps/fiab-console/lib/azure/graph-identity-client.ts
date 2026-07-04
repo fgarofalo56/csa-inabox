@@ -57,6 +57,7 @@ import {
   type TokenCredential,
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 // ----------------------------------------------------------------------------
 // Sovereign-correct base + scope derivation
@@ -548,7 +549,7 @@ export async function listUsersWithLicenses(
     for (let i = 0; i < upns.length; i += 15) {
       const slice = upns.slice(i, i + 15);
       const filter = slice
-        .map((u) => `userPrincipalName eq '${u.replace(/'/g, "''")}'`)
+        .map((u) => `userPrincipalName eq '${escapeSqlLiteral(u)}'`)
         .join(' or ');
       const endpoint =
         `/users?$select=id,userPrincipalName,displayName,department,accountEnabled,assignedLicenses` +

@@ -27,6 +27,7 @@ import {
 } from '@/lib/copilot/agent-config-tools';
 import type { DataAgentSource } from '@/lib/azure/data-agent-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'cosmos error' }, { status: 500 });
+    return apiServerError(e, 'cosmos error');
   }
   if (!item) return NextResponse.json({ ok: false, error: 'data-agent item not found' }, { status: 404 });
 

@@ -21,6 +21,7 @@ import {
   normalizeMeasure, upsertMeasure,
   type StoredMeasure, type StoredRelationship,
 } from '../../../_lib/model-store';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,7 +66,7 @@ async function readTables(warehouseId: string, catalog: string, schema: string):
        FROM ${bt(catalog)}.information_schema.table_constraints tc
        JOIN ${bt(catalog)}.information_schema.key_column_usage kcu
          ON tc.constraint_name = kcu.constraint_name AND tc.table_schema = kcu.table_schema
-       WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = '${schema.replace(/'/g, "''")}'`,
+       WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = '${escapeSqlLiteral(schema)}'`,
       catalog,
       schema,
     );
@@ -109,7 +110,7 @@ async function readUcRelationships(warehouseId: string, catalog: string, schema:
          ON rc.constraint_name = tc.constraint_name AND rc.constraint_schema = tc.table_schema
        JOIN ${bt(catalog)}.information_schema.key_column_usage kcu2
          ON kcu2.constraint_name = rc.unique_constraint_name AND kcu2.table_schema = rc.unique_constraint_schema
-       WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = '${schema.replace(/'/g, "''")}'`,
+       WHERE tc.constraint_type = 'FOREIGN KEY' AND tc.table_schema = '${escapeSqlLiteral(schema)}'`,
       catalog,
       schema,
     );

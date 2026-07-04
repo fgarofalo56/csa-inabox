@@ -32,6 +32,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const uamiClientId = process.env.LOOM_UAMI_CLIENT_ID || process.env.AZURE_CLIENT_ID;
 const credential = uamiClientId
@@ -276,7 +277,7 @@ export async function deleteDataProductDoc(id: string): Promise<void> {
 }
 
 function esc(v: string): string {
-  return v.replace(/'/g, "''");
+  return escapeSqlLiteral(v);
 }
 
 export interface DataProductSearchOpts {

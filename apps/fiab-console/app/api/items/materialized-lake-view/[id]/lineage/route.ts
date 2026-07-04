@@ -17,6 +17,7 @@ import { loadMlvItem, specFromItem } from '../../_lib/load';
 import { getMlvLineage, setMlvLineage, type MlvLineageEdgeInput } from '@/lib/thread/mlv-lineage';
 import { deriveSources, type MlvSpec } from '@/lib/azure/materialized-lake-view-model';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,7 +60,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
 
   let item: WorkspaceItem | null;
   try { item = await loadMlvItem(id, session.claims.oid); }
-  catch (e: any) { return NextResponse.json({ ok: false, error: e?.message || 'lookup failed' }, { status: 500 }); }
+  catch (e: any) { return apiServerError(e, 'lookup failed'); }
   if (!item) return NextResponse.json({ ok: false, error: 'MLV not found' }, { status: 404 });
 
   const graph = await getMlvLineage(session, item.id);
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
   let item: WorkspaceItem | null;
   try { item = await loadMlvItem(id, session.claims.oid); }
-  catch (e: any) { return NextResponse.json({ ok: false, error: e?.message || 'lookup failed' }, { status: 500 }); }
+  catch (e: any) { return apiServerError(e, 'lookup failed'); }
   if (!item) return NextResponse.json({ ok: false, error: 'MLV not found' }, { status: 404 });
 
   const spec: MlvSpec | null = (body?.spec && typeof body.spec === 'object' ? body.spec : null) || specFromItem(item);

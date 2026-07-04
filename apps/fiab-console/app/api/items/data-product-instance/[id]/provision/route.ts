@@ -13,6 +13,7 @@ import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit } from '@/lib/azure/rate-limiter';
 import { loadOwnedItem, updateOwnedItem, jerr } from '../../../_lib/item-crud';
 import { runProvisioning } from '@/lib/install/provisioning-engine';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,7 +39,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
       { deploy: true, mode: 'shared' },
     );
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 
   await updateOwnedItem(id, 'data-product-instance', session.claims.oid, {

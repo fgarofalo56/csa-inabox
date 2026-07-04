@@ -29,6 +29,7 @@ import {
 import { prewarmPurviewShirForScan } from '@/lib/azure/shir-autoscale';
 import { adxConfigGate, computeDqScore } from '@/lib/azure/data-quality-client';
 import { defaultDatabase } from '@/lib/azure/kusto-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -113,6 +114,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
     if (e instanceof PurviewError) {
       return NextResponse.json({ ok: false, error: e.message }, { status: 502 });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

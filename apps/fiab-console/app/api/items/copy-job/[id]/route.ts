@@ -10,6 +10,7 @@ import { deletePipeline } from '@/lib/azure/synapse-dev-client';
 import {
   deleteOwnedItem, jerr, loadOwnedItem, updateOwnedItem,
 } from '../../_lib/item-crud';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -25,7 +26,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     if (!item) return jerr('not found', 404);
     return NextResponse.json({ ok: true, item });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -38,7 +39,7 @@ export async function PUT(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (!updated) return jerr('not found', 404);
     return NextResponse.json({ ok: true, item: updated });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -53,6 +54,6 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     try { await deletePipeline(pipelineName((await ctx.params).id)); } catch { /* ignore */ }
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

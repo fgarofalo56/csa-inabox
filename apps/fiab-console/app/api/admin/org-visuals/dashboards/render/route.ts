@@ -17,7 +17,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { getDashboard } from '@/lib/coe-library/builder/dashboard-store';
@@ -132,7 +132,7 @@ export async function GET(req: NextRequest) {
     if (!dash) return apiError(`unknown dashboard: ${id}`, 404);
     return buildPayload(dash.spec, live, overrides);
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 

@@ -48,6 +48,7 @@ import {
   type AiFnOptions,
 } from '@/lib/azure/ai-functions-client';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -73,13 +74,13 @@ const DBX_FN: Record<AiFn, (col: string, o: AiFnOptions) => string> = {
   summarize: (col) => `ai_summarize(${col})`,
   classify: (col, o) =>
     `ai_classify(${col}, ARRAY(${(o.labels && o.labels.length ? o.labels : ['positive', 'negative', 'neutral'])
-      .map((l) => `'${String(l).replace(/'/g, "''")}'`)
+      .map((l) => `'${escapeSqlLiteral(String(l))}'`)
       .join(', ')}))`,
   translate: (col, o) =>
-    `ai_translate(${col}, '${String(o.targetLang || 'English').replace(/'/g, "''")}')`,
+    `ai_translate(${col}, '${escapeSqlLiteral(String(o.targetLang || 'English'))}')`,
   extract: (col, o) =>
     `ai_extract(${col}, ARRAY(${(o.fields && o.fields.length ? o.fields : ['entity'])
-      .map((f) => `'${String(f).replace(/'/g, "''")}'`)
+      .map((f) => `'${escapeSqlLiteral(String(f))}'`)
       .join(', ')}))`,
 };
 

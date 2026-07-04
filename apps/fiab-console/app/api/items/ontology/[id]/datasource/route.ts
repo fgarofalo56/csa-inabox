@@ -22,6 +22,8 @@ import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { serverlessTarget, dedicatedTarget, executeQuery } from '@/lib/azure/synapse-sql-client';
 import { getPoolState } from '@/lib/azure/synapse-pool-arm';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -29,7 +31,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'ontology';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 function sanitize(e: unknown): string {
@@ -68,8 +70,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
         const cols = await executeQuery(
           dedicatedTarget(),
           `SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
-           WHERE TABLE_SCHEMA = '${schemaName.replace(/'/g, "''")}'
-             AND TABLE_NAME = '${tableName.replace(/'/g, "''")}'
+           WHERE TABLE_SCHEMA = '${escapeSqlLiteral(schemaName)}'
+             AND TABLE_NAME = '${escapeSqlLiteral(tableName)}'
            ORDER BY ORDINAL_POSITION`,
         );
         return NextResponse.json({ ok: true, columns: cols.rows.map((r) => ({ name: String(r[0]), dataType: String(r[1] || '') })) });
@@ -104,8 +106,8 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
       const cols = await executeQuery(
         serverlessTarget('master'),
         `SELECT COLUMN_NAME, DATA_TYPE FROM INFORMATION_SCHEMA.COLUMNS
-         WHERE TABLE_SCHEMA = '${schemaName.replace(/'/g, "''")}'
-           AND TABLE_NAME = '${tableName.replace(/'/g, "''")}'
+         WHERE TABLE_SCHEMA = '${escapeSqlLiteral(schemaName)}'
+           AND TABLE_NAME = '${escapeSqlLiteral(tableName)}'
          ORDER BY ORDINAL_POSITION`,
       );
       return NextResponse.json({ ok: true, columns: cols.rows.map((r) => ({ name: String(r[0]), dataType: String(r[1] || '') })) });

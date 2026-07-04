@@ -39,6 +39,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { resolveMapsBackend } from '@/lib/azure/maps-client';
 import { loadOwnedItem } from '../../../_lib/item-crud';
+import { apiServerError, apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,7 +54,7 @@ const MAX_ADDRESSES = 250;
 interface GeoRow { lat: number; lon: number; label?: string; query?: string; confidence?: number }
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
@@ -67,7 +68,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       const item = await loadOwnedItem(id, ITEM_TYPE, s.claims.oid);
       if (!item) return err('map item not found', 404);
     } catch (e: any) {
-      return err(e?.message || String(e), 500);
+      return apiServerError(e);
     }
   }
 

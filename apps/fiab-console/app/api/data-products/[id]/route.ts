@@ -90,6 +90,7 @@ import type {
   DataProductDoc, DataProductOwner, DataProductCustomAttribute,
   DataProductLink, DataProductStatus,
 } from '@/lib/types/data-product';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -97,7 +98,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'data-product';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, code }, { status });
+  return apiError(error, status, code === undefined ? undefined : { code });
 }
 
 /** Cosmos stamps `_etag` on every read; it isn't on the WorkspaceItem type. */

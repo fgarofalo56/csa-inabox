@@ -60,6 +60,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { bracket } from '@/lib/sql/quoting';
 import { getSession } from '@/lib/auth/session';
 import {
   executeQuery,
@@ -124,7 +125,7 @@ function err(status: number, payload: Record<string, unknown>): NextResponse {
 
 /** Bracket-quote a Synapse/T-SQL identifier (structured M names only; `]` → `]]`). */
 function q(ident: string): string {
-  return `[${ident.replace(/]/g, ']]')}]`;
+  return bracket(ident);
 }
 
 /** Strip a trailing `;` so a base SELECT splices cleanly as a derived relation. */

@@ -20,6 +20,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { queryLogs, MonitorNotConfiguredError, type LogQueryResult } from '@/lib/azure/monitor-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -152,6 +153,6 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
     if (isMissingTable) {
       return NextResponse.json({ ok: true, data: null, noEvents: true });
     }
-    return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
+    return apiServerError(e);
   }
 }

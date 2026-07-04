@@ -27,6 +27,7 @@ import {
   loadTenantCopilotConfig,
 } from '@/lib/azure/copilot-config-store';
 import type { WorkspaceAgentConfig } from '@/lib/types/copilot-config';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -76,7 +77,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
       },
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -102,6 +103,6 @@ export async function PUT(req: NextRequest, props: { params: Promise<{ id: strin
     const { id: _i, workspaceId: _w, tenantId: _t, updatedAt, updatedBy, ...config } = doc;
     return NextResponse.json({ ok: true, config, updatedAt, updatedBy });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

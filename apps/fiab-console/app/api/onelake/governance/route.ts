@@ -47,6 +47,7 @@ import {
   PurviewNotConfiguredError,
   type PurviewNotConfiguredHint,
 } from '@/lib/azure/purview-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -230,7 +231,7 @@ export async function GET() {
       ...(purviewGate ? { purviewGate } : {}),
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 

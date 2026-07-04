@@ -15,6 +15,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { getReport, generateReportEmbedToken, PowerBiError } from '@/lib/azure/powerbi-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -70,7 +71,7 @@ export async function GET() {
           { status: e.status >= 400 && e.status < 500 ? e.status : 502 },
         );
       }
-      return NextResponse.json({ ok: false, code: 'unexpected', error: (e as any)?.message || String(e) }, { status: 500 });
+      return apiServerError(e, 'internal error', 'unexpected');
     }
   }
 

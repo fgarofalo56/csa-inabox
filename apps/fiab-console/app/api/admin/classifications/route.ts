@@ -29,6 +29,7 @@ import {
   removeClassificationRuleFromPurview,
   type LoomClassificationRule,
 } from '@/lib/azure/purview-classification-sync';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -130,7 +131,7 @@ export async function GET() {
       purview: { configured: isPurviewConfigured(), account: getPurviewAccountName() },
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -149,7 +150,7 @@ export async function POST(req: NextRequest) {
       const purview = await pushTaxonomy(tenantId, doc.rules);
       return NextResponse.json({ ok: true, rules: doc.rules, purview });
     } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 
@@ -197,7 +198,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ ok: true, rule: doc.rules[doc.rules.length - 1], rules: doc.rules, purview });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -230,6 +231,6 @@ export async function DELETE(req: NextRequest) {
 
     return NextResponse.json({ ok: true, rules: doc.rules, purview });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

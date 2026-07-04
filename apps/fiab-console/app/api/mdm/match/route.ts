@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getModel, appendMdmRun, type MdmRunRecord } from '@/lib/azure/mdm-store';
 import { runMatch, mdmConfigGate } from '@/lib/azure/mdm-match-merge';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,6 +46,6 @@ export async function POST(req: NextRequest) {
     await appendMdmRun(tenantId, rec);
     return NextResponse.json({ ok: true, sql, candidates });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

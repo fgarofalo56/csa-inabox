@@ -32,6 +32,7 @@ import {
   type EventHubsConfig,
 } from '@/lib/azure/eventhubs-client';
 import { ensureIoTHubConsumerGroup, IoTHubArmError } from '@/lib/azure/iothub-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,7 +44,7 @@ function passThrough(e: unknown) {
       { status: e.status >= 400 && e.status < 600 ? e.status : 502 },
     );
   }
-  return NextResponse.json({ ok: false, error: (e as any)?.message || String(e) }, { status: 500 });
+  return apiServerError(e);
 }
 
 function readScope(body: any): EventHubsConfig | null {

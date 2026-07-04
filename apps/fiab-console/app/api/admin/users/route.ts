@@ -29,6 +29,7 @@ import { workspacesContainer, itemsContainer, workspacePermissionsContainer } fr
 import { fetchSubscribedSkus, listUsersWithLicenses } from '@/lib/azure/graph-identity-client';
 import { listAllWorkspaceRolesForWorkspaces } from '@/lib/azure/workspace-roles-client';
 import { detectLoomCloud } from '@/lib/azure/cloud-endpoints';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -225,6 +226,6 @@ export async function GET() {
       m365AdminBase: m365AdminBaseFor(),
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

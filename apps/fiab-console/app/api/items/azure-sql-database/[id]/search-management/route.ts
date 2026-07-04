@@ -31,6 +31,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { executeQuery, AzureSqlError } from '@/lib/azure/azure-sql-client';
+import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -48,14 +50,14 @@ function quoteIdent(name: string, label: string): string {
   if (!v) throw new ValidationError(`${label} is required`);
   if (v.length > 128) throw new ValidationError(`${label} too long (max 128)`);
   if (!IDENT_RE.test(v)) throw new ValidationError(`${label} '${v}' contains characters that aren't allowed here`);
-  return `[${v.replace(/]/g, ']]')}]`;
+  return bracket(v);
 }
 function quoteString(v: string): string {
-  return `'${String(v ?? '').replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(String(v ?? ''))}'`;
 }
 
 function jerr(error: string, status = 400) {
-  return NextResponse.json({ ok: false, error }, { status });
+  return apiError(error, status);
 }
 
 function readState(req: NextRequest) {

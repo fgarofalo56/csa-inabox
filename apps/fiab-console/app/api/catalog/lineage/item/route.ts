@@ -20,6 +20,7 @@ import { getTableLineage, UnityCatalogNotConfiguredError, UnityCatalogError } fr
 import { getWorkspaceLineage, OneLakeError, OneLakeLineageNotSupportedError } from '@/lib/azure/onelake-catalog-client';
 import { getFabricItem } from '@/lib/azure/fabric-client';
 import { getUnifiedLineage } from '@/lib/azure/unified-lineage';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,7 +54,7 @@ export async function GET(req: NextRequest) {
       });
       return NextResponse.json({ source, merged: true, ...result });
     } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 

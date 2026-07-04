@@ -34,6 +34,7 @@ import {
   type AccessRequestDoc, type ApprovalStep, type ApprovalTier,
 } from '@/lib/types/access-request-workflow';
 import crypto from 'node:crypto';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -174,6 +175,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       { status: httpStatus },
     );
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

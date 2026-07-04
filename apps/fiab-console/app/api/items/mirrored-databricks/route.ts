@@ -27,12 +27,13 @@ import { resolveUcMirrorTables } from '@/lib/azure/databricks-uc-mirror';
 import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { synapseSqlPoolProvisioner } from '@/lib/install/provisioners/synapse-serverless-sql-pool';
 import { resolveTarget } from '@/lib/install/provisioning-engine';
+import { apiServerError, apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 async function loadWs(id: string, tenantId: string): Promise<Workspace | null> {
@@ -69,7 +70,7 @@ export async function GET(req: NextRequest) {
         createdAt: r.createdAt, updatedAt: r.updatedAt,
       })),
     });
-  } catch (e: any) { return err(e?.message || String(e), 500); }
+  } catch (e: any) { return apiServerError(e); }
 }
 
 export async function POST(req: NextRequest) {
@@ -197,5 +198,5 @@ export async function POST(req: NextRequest) {
     }
 
     return NextResponse.json({ ok: true, mirror: created, pairing });
-  } catch (e: any) { return err(e?.message || String(e), 500); }
+  } catch (e: any) { return apiServerError(e); }
 }

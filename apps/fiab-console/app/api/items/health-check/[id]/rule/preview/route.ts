@@ -16,13 +16,14 @@ import { loadOwnedItem } from '../../../../_lib/item-crud';
 import { triggerMonitorActivatorRule } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import { buildCheckQuery, CHECK_TYPE_BY_ID } from '../../../_lib/check-types';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'health-check';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

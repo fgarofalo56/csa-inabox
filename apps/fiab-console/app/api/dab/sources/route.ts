@@ -13,6 +13,7 @@ import { getSession } from '@/lib/auth/session';
 import { jerr } from '../../items/_lib/item-crud';
 import { listServers, listDatabases } from '@/lib/azure/azure-sql-client';
 import { synapseSqlSuffix } from '@/lib/azure/cloud-endpoints';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -103,6 +104,6 @@ export async function GET(req: NextRequest) {
       { status: 503 },
     );
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

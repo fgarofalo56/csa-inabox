@@ -18,6 +18,7 @@ import {
   listFabricWorkspaces, listEventstreams, listKqlDatabases, listEventhouses,
   FabricError, fabricHint, type FabricWorkspace,
 } from '@/lib/azure/fabric-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,7 +56,7 @@ export async function GET() {
       rows.sort((a, b) => a.name.localeCompare(b.name));
       return NextResponse.json({ ok: true, backend: 'azure-native', workspaceCount: workspaces.length, streams: rows, warnings: [] });
     } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 

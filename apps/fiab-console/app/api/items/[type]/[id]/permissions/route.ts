@@ -30,6 +30,7 @@ import {
 } from '@/lib/azure/item-permissions-client';
 import { listDlpPolicies, DlpNotConfiguredError } from '@/lib/azure/dlp-graph-client';
 import type { WorkspaceItem, Workspace } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -202,7 +203,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ type: st
     });
     return NextResponse.json({ ok: true, permission: grant }, { status: 201 });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'grant failed' }, { status: 500 });
+    return apiServerError(e, 'grant failed');
   }
 }
 
@@ -227,6 +228,6 @@ export async function DELETE(req: NextRequest, props: { params: Promise<{ type: 
     const { notes } = await revokeItemPermission(id, permissionId);
     return NextResponse.json({ ok: true, notes });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'revoke failed' }, { status: 500 });
+    return apiServerError(e, 'revoke failed');
   }
 }

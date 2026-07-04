@@ -32,6 +32,7 @@ import { loadOwnedItem } from '../../../_lib/item-crud';
 import { resolveSpindleGrounding } from '../_spindle-grounding';
 import { composeGraphPrompt } from '../_block-graph';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,7 +54,7 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
   try {
     item = await loadOwnedItem((await ctx.params).id, ITEM_TYPE, session.claims.oid);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'cosmos error' }, { status: 500 });
+    return apiServerError(e, 'cosmos error');
   }
   if (!item) return NextResponse.json({ ok: false, error: 'aip-logic function not found' }, { status: 404 });
 
@@ -143,6 +144,6 @@ export async function POST(_req: NextRequest, ctx: { params: Promise<{ id: strin
     if (e instanceof FoundryAgentError) {
       return NextResponse.json({ ok: false, error: e.message, status: e.status, body: e.body }, { status: 502 });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { appInstallJobsContainer, type AppInstallJob } from '@/lib/azure/cosmos-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,6 +34,6 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ jobId: s
     return NextResponse.json({ ok: true, job: resource });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

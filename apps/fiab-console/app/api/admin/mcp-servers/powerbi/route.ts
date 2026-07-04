@@ -50,6 +50,7 @@ import { listMcpTools } from '@/lib/azure/mcp-client';
 import { REMOTE_BUILTIN_MCP, isPbiMcpConfigured, pbiMcpScopeUris } from '@/lib/mcp/catalog';
 import { getPbiUserToken } from '@/lib/azure/pbi-user-token-store';
 import type { McpServerConfig, McpServerConfigDoc } from '@/lib/types/mcp-config';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -272,6 +273,6 @@ export async function POST(_req: NextRequest) {
 
     return NextResponse.json({ ok: true, configured: true, server: doc, probe });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

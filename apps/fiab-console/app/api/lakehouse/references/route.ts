@@ -24,6 +24,7 @@ import {
   KNOWN_CONTAINERS, getAccountName, containerExistsOn,
 } from '@/lib/azure/adls-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,7 @@ interface LakehouseState {
 }
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, code }, { status });
+  return apiError(error, status, code === undefined ? undefined : { code });
 }
 
 /** Load a lakehouse item by id and verify it belongs to the caller's tenant. */

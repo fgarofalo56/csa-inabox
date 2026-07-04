@@ -18,6 +18,7 @@ import { getSession } from '@/lib/auth/session';
 import { getDataAsset, FoundryError, NotDeployedError } from '@/lib/azure/foundry-client';
 import { KNOWN_CONTAINERS, pathToHttpsUrl, pathToHttpsUrlFor } from '@/lib/azure/adls-client';
 import { executeQuery, serverlessTarget } from '@/lib/azure/synapse-sql-client';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -127,7 +128,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
   }
   const known = (KNOWN_CONTAINERS as readonly string[]).includes(parsed.container);
   const url = known ? pathToHttpsUrl(parsed.container, normalizeBulk(parsed.path, fmt)) : pathToHttpsUrlFor(parsed.account, parsed.container, normalizeBulk(parsed.path, fmt));
-  const safeUrl = url.replace(/'/g, "''");
+  const safeUrl = escapeSqlLiteral(url);
   const sql = fmt === 'CSV'
     ? `SELECT TOP ${top} * FROM OPENROWSET(BULK '${safeUrl}', FORMAT='CSV', PARSER_VERSION='2.0', HEADER_ROW=TRUE) AS r;`
     : `SELECT TOP ${top} * FROM OPENROWSET(BULK '${safeUrl}', FORMAT='${fmt}') AS r;`;

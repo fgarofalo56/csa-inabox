@@ -31,6 +31,7 @@ import {
   postureAggregatesContainer,
   recommendedActionsContainer,
 } from '@/lib/azure/cosmos-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -168,6 +169,6 @@ export async function GET() {
       owner: { upn: ownerUpn, name: s.claims.name },
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

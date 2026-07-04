@@ -8,6 +8,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listThreadEdges } from '@/lib/thread/thread-edges';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,6 +20,6 @@ export async function GET() {
     const edges = await listThreadEdges(session);
     return NextResponse.json({ ok: true, edges });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

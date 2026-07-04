@@ -43,6 +43,7 @@ import type {
   ShortcutEngine,
   ShortcutCredentialRef,
 } from './lakehouse-shortcuts';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /** An honest-gate result — the control rendered, but a credential/resource is missing. */
 export interface EngineGate {
@@ -377,7 +378,7 @@ export async function createTablesShortcut(args: {
       };
     }
     const [cat, sch, tbl] = obj.split('.');
-    const loc = `${credPath}#${ds.share}.${ds.schema}.${ds.table}`.replace(/'/g, "''");
+    const loc = escapeSqlLiteral(`${credPath}#${ds.share}.${ds.schema}.${ds.table}`);
     const ddl =
       `CREATE SCHEMA IF NOT EXISTS ${cat}.${sch};\n` +
       `CREATE TABLE IF NOT EXISTS ${cat}.${sch}.${tbl} USING deltaSharing LOCATION '${loc}';`;
@@ -412,9 +413,9 @@ export async function createTablesShortcut(args: {
     const cred = `loom_adls_sas_${args.name.replace(/[^a-z0-9_]+/gi, '_')}`.toLowerCase();
     const dsName = `${cred}_ds`;
     // SECRET must NOT carry a leading '?'; escape single quotes for the T-SQL literal.
-    const sasSecret = sas.trim().replace(/^\?+/, '').replace(/'/g, "''");
+    const sasSecret = escapeSqlLiteral(sas.trim().replace(/^\?+/, ''));
     const location = `https://${account.split('.')[0]}.${getDfsSuffix()}/${container}`;
-    const key = (path || '').replace(/^\/+/, '').replace(/'/g, "''");
+    const key = escapeSqlLiteral((path || '').replace(/^\/+/, ''));
     const csvOpts = fmt === 'CSV' ? `, PARSER_VERSION = ''2.0'', HEADER_ROW = TRUE` : '';
     const ddl =
       `IF NOT EXISTS (SELECT 1 FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##') CREATE MASTER KEY;\n` +
@@ -453,7 +454,7 @@ export async function createTablesShortcut(args: {
     // EXTERNAL DATA SOURCE (built by bindExternalSource). The BULK arg is the
     // object key relative to the data source LOCATION.
     if (args.external?.synapseDataSource) {
-      const key = (args.external.objectKey || '').replace(/'/g, "''");
+      const key = escapeSqlLiteral((args.external.objectKey || ''));
       const ddl =
         `IF SCHEMA_ID('shortcuts') IS NULL EXEC('CREATE SCHEMA shortcuts');\n` +
         `IF OBJECT_ID('${obj}','V') IS NOT NULL DROP VIEW ${obj};\n` +
@@ -497,7 +498,7 @@ export async function createTablesShortcut(args: {
   const [cat, sch, tbl] = obj.split('.');
   // For external S3/GCS sources the LOCATION is the object URI (covered by the
   // UC external location created in bindExternalSource); otherwise it's abfss.
-  const location = (args.external?.objectUri || args.abfssUri).replace(/'/g, "''");
+  const location = escapeSqlLiteral((args.external?.objectUri || args.abfssUri));
   const ddl =
     `CREATE SCHEMA IF NOT EXISTS ${cat}.${sch};\n` +
     `CREATE TABLE IF NOT EXISTS ${cat}.${sch}.${tbl} ` +
@@ -946,7 +947,7 @@ export async function bindExternalSource(args: {
       `IF EXISTS (SELECT 1 FROM sys.database_scoped_credentials WHERE name = '${cred}') ` +
       `DROP DATABASE SCOPED CREDENTIAL ${cred};\n` +
       `CREATE DATABASE SCOPED CREDENTIAL ${cred} ` +
-      `WITH IDENTITY = 'S3 Access Key', SECRET = '${secret.trim().replace(/'/g, "''")}';\n` +
+      `WITH IDENTITY = 'S3 Access Key', SECRET = '${escapeSqlLiteral(secret.trim())}';\n` +
       `CREATE EXTERNAL DATA SOURCE ${dsName} ` +
       `WITH (LOCATION = '${obj.prefix}', CREDENTIAL = ${cred});`;
     await ensureServerlessDb();

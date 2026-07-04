@@ -15,6 +15,7 @@ import { DefaultAzureCredential, ManagedIdentityCredential, ChainedTokenCredenti
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import sql from 'mssql';
 import { getSqlSuffix, synapseSqlSuffix } from './cloud-endpoints';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 /**
  * TDS AAD token scope — cloud-portable. The SQL audience host differs per
@@ -393,7 +394,7 @@ export function buildDeltaOpenRowsetSql(deltaBulkUrl: string, maxRows = 5_000): 
   // Single-quotes in the URL would break out of the BULK string literal; double
   // them per T-SQL escaping. URLs never legitimately contain a quote, so this is
   // purely defensive against a malformed table name reaching here.
-  const safeUrl = deltaBulkUrl.replace(/'/g, "''");
+  const safeUrl = escapeSqlLiteral(deltaBulkUrl);
   return `SELECT TOP ${safeMax} *\nFROM OPENROWSET(\n  BULK '${safeUrl}',\n  FORMAT = 'DELTA'\n) AS r;`;
 }
 

@@ -27,6 +27,7 @@ import {
   addDatabasePrincipal,
   dropDatabasePrincipal,
 } from './kusto-client';
+import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
 
 export type AccessPermission = 'read' | 'write' | 'admin';
 export type AccessScopeType = 'adls-container' | 'adls-path' | 'warehouse' | 'warehouse-schema' | 'kql-database' | 'workspace' | 'item' | 'collection';
@@ -72,8 +73,8 @@ export interface AccessGrantResult {
 }
 
 // ── SQL identifier/literal escaping (no string injection) ─────────────────────
-function sqlBracket(ident: string): string { return `[${ident.replace(/]/g, ']]')}]`; }
-function sqlString(s: string): string { return `N'${s.replace(/'/g, "''")}'`; }
+function sqlBracket(ident: string): string { return bracket(ident); }
+function sqlString(s: string): string { return `N'${escapeSqlLiteral(s)}'`; }
 
 /** Build the ADX principal selector for `.add/.drop database role`. */
 function adxPrincipalToken(input: AccessGrantInput): { token: string } | { gate: string } {

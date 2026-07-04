@@ -17,12 +17,13 @@ import {
   generateTypeScriptSdk, generatePythonSdk, generateDabConfig,
   generateActionReference, deriveObjectProperties, type SdkActionTypeInput,
 } from '@/lib/editors/_palantir-codegen';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'ontology-sdk';
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 /** Stable identity for a link in the scope selector (kind + endpoints). */

@@ -35,6 +35,7 @@ import {
   type AdfIntegrationRuntime,
 } from '@/lib/azure/adf-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,7 +43,7 @@ export const dynamic = 'force-dynamic';
 const NAME_RE = /^[A-Za-z0-9_]{1,260}$/;
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 function gate() {

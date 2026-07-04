@@ -29,6 +29,7 @@
 
 import type { DaxVisual, DaxWellField } from './aas-dax';
 import type { SynapseQueryParam, SynapseTarget } from './synapse-sql-client';
+import { escapeSqlLiteral, quoteIdent as quoteIdentDialect, type SqlDialect } from '@/lib/sql/quoting';
 
 // ── SQL source (resolver-supplied; the FROM relation + identifier whitelist) ───
 
@@ -42,8 +43,12 @@ import type { SynapseQueryParam, SynapseTarget } from './synapse-sql-client';
  * `LIMIT n`), and MySQL / Databricks SQL (`` `id` ``, `LIMIT n`). Only identifier
  * quoting + the row-cap form differ across dialects — never the structured
  * wells/filters logic. See `quoteIdent` / `rowCap`.
+ *
+ * The `SqlDialect` union + identifier quoting now live in `@/lib/sql/quoting`;
+ * re-exported here so existing `import { SqlDialect } from './wells-to-sql'`
+ * callers are unchanged.
  */
-export type SqlDialect = 'tsql' | 'synapse' | 'generic-sql' | 'postgres' | 'mysql' | 'databricks-sql';
+export type { SqlDialect };
 
 /** A base table the FROM clause can target (`[schema].[table]`). */
 export interface SqlSourceTable {
@@ -333,7 +338,7 @@ function relDateDir(f: ReportFilterInput): RelativeDateDirection {
 
 /** Bracket-quote a SQL identifier (double any `]`). Mirrors sql-to-pushdataset. */
 export function bracket(ident: string): string {
-  return `[${ident.replace(/]/g, ']]')}]`;
+  return quoteIdentDialect(ident);
 }
 
 /**
@@ -342,19 +347,10 @@ export function bracket(ident: string): string {
  * pre-dialect compiler; PostgreSQL double-quotes (`"` → `""`); MySQL and
  * Databricks SQL back-tick (`` ` `` → ``` `` ```). Identifiers are still ONLY
  * ever resolver-whitelisted names — never client text — so dialect choice never
- * widens the injection surface.
+ * widens the injection surface. Centralised in `@/lib/sql/quoting`.
  */
 export function quoteIdent(name: string, dialect?: SqlDialect): string {
-  switch (dialect) {
-    case 'postgres':
-      return `"${name.replace(/"/g, '""')}"`;
-    case 'mysql':
-    case 'databricks-sql':
-      return '`' + name.replace(/`/g, '``') + '`';
-    default:
-      // tsql | synapse | generic-sql | undefined → bracket-quote (identical to bracket()).
-      return bracket(name);
-  }
+  return quoteIdentDialect(name, dialect);
 }
 
 /** A row cap rendered as a SELECT-list prefix and/or a trailing clause. */
@@ -918,7 +914,7 @@ export function buildSqlFromVisual(
 
 /** A `'Table'[Column]` reference for a DAX boolean predicate (table required). */
 function daxQualifiedColumn(table: string, column: string): string {
-  const t = `'${table.replace(/'/g, "''")}'`;
+  const t = `'${escapeSqlLiteral(table)}'`;
   return `${t}[${column.replace(/\]/g, ']]')}]`;
 }
 

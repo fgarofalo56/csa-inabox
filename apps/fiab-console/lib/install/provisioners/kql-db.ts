@@ -18,6 +18,7 @@
 import { createDatabase, executeMgmtCommand, executeQuery, ingestInline, KustoError } from '@/lib/azure/kusto-client';
 import type { Provisioner, ProvisionResult } from './types';
 import { resolveInfraResidual } from './types';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -581,7 +582,7 @@ export const kqlDatabaseProvisioner: Provisioner = async (input): Promise<Provis
       }
     } else {
       try {
-        await executeMgmtCommand(dbName, `.alter table ${p.table} policy ingestionbatching @'${raw.replace(/'/g, "''")}'`);
+        await executeMgmtCommand(dbName, `.alter table ${p.table} policy ingestionbatching @'${escapeSqlLiteral(raw)}'`);
         steps.push(`.alter ingestionbatching policy on ${p.table} OK.`);
       } catch (e: any) {
         policyFailures += 1;

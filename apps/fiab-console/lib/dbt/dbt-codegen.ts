@@ -23,6 +23,7 @@
 import type {
   DbtProjectGraph, DbtModel, DbtSource, DbtTarget, DbtTest, MedallionLayer,
 } from './dbt-project-model';
+import { escapeSqlLiteral } from '@/lib/sql/quoting';
 
 export interface GeneratedFile {
   /** POSIX-relative path within the dbt project root. */
@@ -38,7 +39,7 @@ function yamlScalar(v: string | number | boolean): string {
   const s = String(v);
   if (s === '' ) return "''";
   if (/^[A-Za-z0-9_./@$+-]+$/.test(s)) return s;
-  return `'${s.replace(/'/g, "''")}'`;
+  return `'${escapeSqlLiteral(s)}'`;
 }
 
 /** dbt project config (dbt_project.yml). Models are grouped by medallion folder. */
