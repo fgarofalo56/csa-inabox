@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * PowerBiTree — the Power BI **workspace navigator** (parity wave 9).
  *
@@ -115,7 +116,7 @@ export function PowerBiTree({
   const loadPipelines = useCallback(async () => {
     if (pipelines !== null) return; // load once
     try {
-      const j = await fetch('/api/powerbi/pipelines').then(readJson);
+      const j = await clientFetch('/api/powerbi/pipelines').then(readJson);
       if (j.ok) { setPipelines(j.pipelines || []); setPipelinesErr(null); }
       else { setPipelines([]); setPipelinesErr(j.error || j.hint || 'could not load pipelines'); }
     } catch (e: any) { setPipelines([]); setPipelinesErr(e?.message || String(e)); }
@@ -123,7 +124,7 @@ export function PowerBiTree({
   const deployStage = useCallback(async (pipelineId: string, sourceStageOrder: number, label: string) => {
     setBusy(true); setActionMsg(null);
     try {
-      const j = await fetch('/api/powerbi/pipelines', {
+      const j = await clientFetch('/api/powerbi/pipelines', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pipelineId, sourceStageOrder }),
       }).then(readJson);
@@ -288,7 +289,7 @@ export function PowerBiTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Workspace content</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Tooltip content="New semantic model (opens editor)" relationship="label">
             <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={() => onNewDataset?.()} disabled={!onNewDataset} aria-label="New semantic model" />
           </Tooltip>
@@ -308,7 +309,7 @@ export function PowerBiTree({
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading workspace content…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading workspace content…" /></div>}
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>

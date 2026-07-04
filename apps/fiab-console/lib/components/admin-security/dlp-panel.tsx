@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DlpPanel — DLP tab for /admin/security.
  *
@@ -158,12 +159,12 @@ function PoliciesSection() {
             <MessageBarTitle>Could not load policies (HTTP {state.errorStatus})</MessageBarTitle>
             {state.error}
             {state.errorStatus === 403 && (
-              <Caption1 block style={{ marginTop: 6 }}>
+              <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>
                 403 indicates the <code>Policy.Read.All</code> AppRole has not been admin-consented for the Console UAMI. Run the post-deploy bootstrap job <code>Grant MIP+DLP Graph AppRoles</code> then grant admin consent.
               </Caption1>
             )}
             {state.errorStatus === 404 && (
-              <Caption1 block style={{ marginTop: 6 }}>
+              <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>
                 The Graph DLP /beta endpoint returned 404 — this tenant is likely not enrolled in the DLP-via-Graph preview. Open a Microsoft support ticket referencing <code>/beta/informationProtection/dataLossPreventionPolicies</code>. The Restrict-access tab works without this preview.
               </Caption1>
             )}
@@ -197,7 +198,7 @@ function PoliciesSection() {
                 <TableCell><strong>{p.displayName || p.name}</strong></TableCell>
                 <TableCell><Badge appearance="outline">{p.mode || '—'}</Badge></TableCell>
                 <TableCell><Badge color={p.status === 'Enabled' ? 'success' : 'subtle'}>{p.status || '—'}</Badge></TableCell>
-                <TableCell>{(p.locations || []).map((l) => <Badge key={l} appearance="outline" style={{ marginRight: 4 }}>{l}</Badge>)}</TableCell>
+                <TableCell>{(p.locations || []).map((l) => <Badge key={l} appearance="outline" style={{ marginRight: tokens.spacingHorizontalXS }}>{l}</Badge>)}</TableCell>
                 <TableCell>{p.ruleCount ?? '—'}</TableCell>
                 <TableCell><Caption1>{p.lastModifiedDateTime?.slice(0, 16) || '—'}</Caption1></TableCell>
                 <TableCell><Button size="small" onClick={() => showRules(p.id)}>Rules</Button></TableCell>
@@ -208,7 +209,7 @@ function PoliciesSection() {
       )}
 
       {selected && (
-        <div style={{ marginTop: 16 }}>
+        <div style={{ marginTop: tokens.spacingVerticalL }}>
           <Subtitle2 block>Rules for {selected}</Subtitle2>
           {rules.loading && <Spinner label="Loading rules…" />}
           {rules.error && (
@@ -299,7 +300,7 @@ function ViolationsSection() {
                 <TableCell><strong>{v.policyName || '—'}</strong>{v.ruleName ? <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{v.ruleName}</Caption1> : null}</TableCell>
                 <TableCell>
                   <Caption1 title={v.itemPath}>{(v.itemPath || '—').slice(0, 48)}</Caption1>
-                  {v.itemType ? <Badge appearance="outline" size="small" style={{ marginLeft: 4 }}>{v.itemType}</Badge> : null}
+                  {v.itemType ? <Badge appearance="outline" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>{v.itemType}</Badge> : null}
                 </TableCell>
                 <TableCell><Caption1>{v.user || '—'}</Caption1></TableCell>
                 <TableCell><Badge color={sevColor(v.severity)}>{v.severity || '—'}</Badge></TableCell>
@@ -424,19 +425,19 @@ function RestrictSection() {
 
   const loadHistory = useCallback(async () => {
     try {
-      const j = await fetch('/api/governance/dlp/meta').then((r) => r.json());
+      const j = await clientFetch('/api/governance/dlp/meta').then((r) => r.json());
       setHistory(Array.isArray(j?.restrictions) ? j.restrictions : []);
     } catch { /* best-effort */ } finally { setHistoryLoaded(true); }
   }, []);
 
   useEffect(() => {
     setContainersLoading(true);
-    fetch('/api/lakehouse/containers').then((r) => r.json())
+    clientFetch('/api/lakehouse/containers').then((r) => r.json())
       .then((d) => setContainers((d?.containers || []).map((c: any) => c.name).filter(Boolean)))
       .catch(() => {})
       .finally(() => setContainersLoading(false));
     setKqlLoading(true);
-    fetch('/api/items/by-type?types=kql-database').then((r) => r.json())
+    clientFetch('/api/items/by-type?types=kql-database').then((r) => r.json())
       .then((d) => setKqlDbs((d?.items || []).map((x: any) => ({ id: x.id, name: x.displayName || x.id }))))
       .catch(() => {})
       .finally(() => setKqlLoading(false));
@@ -448,7 +449,7 @@ function RestrictSection() {
     if (scope !== 'warehouse-schema') return;
     setSchemaGate(null);
     setSchemasLoading(true);
-    fetch('/api/governance/dlp/schemas').then(async (r) => {
+    clientFetch('/api/governance/dlp/schemas').then(async (r) => {
       const j = await r.json();
       if (r.status === 503 || j?.code === 'warehouse_not_configured') {
         setSchemas([]); setSchemaGate(j?.error || 'The Azure-native warehouse is not configured.');
@@ -472,7 +473,7 @@ function RestrictSection() {
     if (!principal) { setErr('Select a principal to restrict.'); return; }
     setRunning(true); setErr(null); setResult(null);
     try {
-      const r = await fetch('/api/governance/dlp/restrict', {
+      const r = await clientFetch('/api/governance/dlp/restrict', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -503,7 +504,7 @@ function RestrictSection() {
         <Subtitle2 style={{ marginRight: 'auto' }}>Restrict access</Subtitle2>
         <Button icon={<ArrowSync24Regular />} onClick={loadHistory}>Refresh history</Button>
       </div>
-      <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 10 }}>
+      <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalMNudge }}>
         The Azure-native equivalent of Microsoft Purview DLP&apos;s &quot;Restrict access&quot; action.
         Revokes a principal&apos;s real data-plane access on the selected scope — Storage RBAC / POSIX ACL,
         Synapse SQL <code>DENY</code>, or ADX — and records the change. No Microsoft Fabric or Power BI
@@ -584,21 +585,21 @@ function RestrictSection() {
       </div>
 
       {err && (
-        <MessageBar intent="error" style={{ marginTop: 12 }}>
+        <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Restrict failed</MessageBarTitle>{err}</MessageBarBody>
         </MessageBar>
       )}
       {result && (
-        <MessageBar intent={result.restricted ? 'success' : 'info'} style={{ marginTop: 12 }}>
+        <MessageBar intent={result.restricted ? 'success' : 'info'} style={{ marginTop: tokens.spacingVerticalM }}>
           <MessageBarBody>
             <MessageBarTitle>{result.restricted ? 'Access restricted' : 'Nothing to revoke'}</MessageBarTitle>
             {result.detail || (result.restricted
               ? `Revoked: ${(result.revokedRoleNames || []).join(', ') || '—'}${result.armConfirmed ? ' (ARM read-back confirmed)' : ''}${result.aclConfirmed ? ' (ACL read-back confirmed)' : ''}.`
               : 'The principal held no matching access on this scope.')}
             {typeof result.policiesUpdated === 'number' && result.policiesUpdated > 0 && (
-              <Caption1 block style={{ marginTop: 4 }}>{result.policiesUpdated} matching Access policy marked restricted.</Caption1>
+              <Caption1 block style={{ marginTop: tokens.spacingVerticalXS }}>{result.policiesUpdated} matching Access policy marked restricted.</Caption1>
             )}
-            {result.note && <Caption1 block style={{ marginTop: 4 }}>{result.note}</Caption1>}
+            {result.note && <Caption1 block style={{ marginTop: tokens.spacingVerticalXS }}>{result.note}</Caption1>}
           </MessageBarBody>
         </MessageBar>
       )}
@@ -611,8 +612,8 @@ function RestrictSection() {
         />
       )}
       {history.length > 0 && (
-        <div style={{ marginTop: 16 }}>
-          <Subtitle2 block style={{ marginBottom: 6 }}>Recent restrict-access actions</Subtitle2>
+        <div style={{ marginTop: tokens.spacingVerticalL }}>
+          <Subtitle2 block style={{ marginBottom: tokens.spacingVerticalSNudge }}>Recent restrict-access actions</Subtitle2>
           <Table size="small" aria-label="DLP restrict-access history">
             <TableHeader>
               <TableRow>
@@ -656,7 +657,7 @@ function SimulateSection() {
   const run = async () => {
     setRunning(true); setErr(null); setResult(null);
     try {
-      const r = await fetch('/api/admin/security/dlp/simulate', {
+      const r = await clientFetch('/api/admin/security/dlp/simulate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content }),
@@ -671,8 +672,8 @@ function SimulateSection() {
 
   return (
     <div className={s.section}>
-      <Subtitle2 block style={{ marginBottom: 8 }}>Simulate DLP policy match <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
-      <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 10 }}>
+      <Subtitle2 block style={{ marginBottom: tokens.spacingVerticalS }}>Simulate DLP policy match <Badge appearance="tint" color="warning">Preview</Badge></Subtitle2>
+      <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalMNudge }}>
         Microsoft Graph exposes no public REST API to simulate DLP policies, so this returns an honest 501 gate (no fabricated results). Test a policy in the Microsoft Purview portal (Data loss prevention &rarr; Policies &rarr; &ldquo;Test policy&rdquo;) or via Security &amp; Compliance PowerShell.
       </Caption1>
       <div className={s.fieldStack}>
@@ -686,20 +687,20 @@ function SimulateSection() {
         </div>
       </div>
       {err && (
-        <MessageBar intent={err.status === 501 ? 'warning' : 'error'} style={{ marginTop: 12 }}>
+        <MessageBar intent={err.status === 501 ? 'warning' : 'error'} style={{ marginTop: tokens.spacingVerticalM }}>
           <MessageBarBody>
             <MessageBarTitle>Simulation {err.status === 501 ? 'unavailable' : 'failed'} (HTTP {err.status})</MessageBarTitle>
             {err.message}
             {err.hint?.followUp && (
-              <Caption1 block style={{ marginTop: 6 }}>{err.hint.followUp}</Caption1>
+              <Caption1 block style={{ marginTop: tokens.spacingVerticalSNudge }}>{err.hint.followUp}</Caption1>
             )}
           </MessageBarBody>
         </MessageBar>
       )}
       {result !== null && (
-        <div style={{ marginTop: 12 }}>
+        <div style={{ marginTop: tokens.spacingVerticalM }}>
           <Subtitle2 block>Result</Subtitle2>
-          <pre style={{ fontSize: 11, backgroundColor: tokens.colorNeutralBackground2, padding: 8, borderRadius: 4, overflow: 'auto', maxHeight: 300 }}>
+          <pre style={{ fontSize: tokens.fontSizeBase100, backgroundColor: tokens.colorNeutralBackground2, padding: tokens.spacingVerticalS, borderRadius: 4, overflow: 'auto', maxHeight: 300 }}>
             {JSON.stringify(result, null, 2)}
           </pre>
         </div>

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Cross-item Copilot console — shared UI for both
  *   - /copilot                                (full-screen page)
@@ -307,7 +308,7 @@ function PowerBiAuthoringPanel({ onSuggestedPrompt }: { onSuggestedPrompt: (p: s
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/admin/mcp-servers/powerbi');
+        const r = await clientFetch('/api/admin/mcp-servers/powerbi');
         const j = await r.json().catch(() => ({} as any));
         if (!alive) return;
         setPbi(

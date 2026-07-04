@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AdminOverview — live-count tile grid for the admin landing page.
  *
@@ -101,7 +102,7 @@ const useStyles = makeStyles({
 });
 
 async function fetchOverview(): Promise<{ ok: boolean; tiles?: OverviewTiles; error?: string; status: number }> {
-  const res = await fetch('/api/admin/overview', { cache: 'no-store' });
+  const res = await clientFetch('/api/admin/overview', { cache: 'no-store' });
   const json = await res.json().catch(() => ({}));
   return { ...json, status: res.status };
 }

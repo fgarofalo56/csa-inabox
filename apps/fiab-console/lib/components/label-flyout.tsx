@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SensitivityLabelPane — manual sensitivity-label flyout (F12), backed by the
  * live Microsoft Graph Information Protection taxonomy and applied through
@@ -84,7 +85,7 @@ export function SensitivityLabelPane({ type, id }: Props) {
     setGate(null);
     setError(null);
     try {
-      const res = await fetch(`/api/items/${type}/${id}/sensitivity-label`);
+      const res = await clientFetch(`/api/items/${type}/${id}/sensitivity-label`);
       const data = await res.json().catch(() => ({}));
       if (res.status === 503 || data?.code === 'mip_not_configured') {
         setGate({
@@ -114,7 +115,7 @@ export function SensitivityLabelPane({ type, id }: Props) {
   const apply = async () => {
     setBusy(true); setError(null); setWarn(null); setOk(null);
     try {
-      const res = await fetch(`/api/items/${type}/${id}/sensitivity-label`, {
+      const res = await clientFetch(`/api/items/${type}/${id}/sensitivity-label`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ labelId: selected }),
@@ -145,7 +146,7 @@ export function SensitivityLabelPane({ type, id }: Props) {
   const clear = async () => {
     setBusy(true); setError(null); setWarn(null); setOk(null);
     try {
-      const res = await fetch(`/api/items/${type}/${id}/sensitivity-label`, {
+      const res = await clientFetch(`/api/items/${type}/${id}/sensitivity-label`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ labelId: '' }),

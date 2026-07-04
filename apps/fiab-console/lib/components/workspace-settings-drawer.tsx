@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WorkspaceSettingsDrawer — Fabric workspace Settings affordance.
  *
@@ -110,7 +111,7 @@ export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChang
             <Tab value="sensitivity">Sensitivity</Tab>
             <Tab value="danger">Danger zone</Tab>
           </TabList>
-          <div style={{ marginTop: 16 }}>
+          <div style={{ marginTop: tokens.spacingVerticalL }}>
             {tab === 'general' && <GeneralSection workspace={workspace} onSaved={() => qc.invalidateQueries({ queryKey: ['workspace', workspace.id] })} />}
             {tab === 'permissions' && <ManageAccessPane workspaceId={workspace.id} embeddedMode />}
             {tab === 'networking' && <NetworkingPane workspaceId={workspace.id} />}
@@ -245,7 +246,7 @@ function WorkspaceSensitivitySection({ workspaceId }: { workspaceId: string }) {
 
   useEffect(() => {
     setLoading(true);
-    fetch('/api/admin/security/mip/labels')
+    clientFetch('/api/admin/security/mip/labels')
       .then((r) => r.json())
       .then((d: any) => {
         if (d?.ok && Array.isArray(d.labels)) {
@@ -394,7 +395,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
   const [error, setError] = useState<string | null>(null);
 
   const load = () =>
-    fetch(`/api/workspaces/${workspaceId}/scm`).then(r => r.json())
+    clientFetch(`/api/workspaces/${workspaceId}/scm`).then(r => r.json())
       .then(d => {
         setBinding(d?.git ?? null);
         if (d?.git) {
@@ -411,7 +412,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
 
   const save = async () => {
     setBusy(true); setError(null);
-    const r = await fetch(`/api/workspaces/${workspaceId}/scm`, {
+    const r = await clientFetch(`/api/workspaces/${workspaceId}/scm`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         provider, repoHost, repoPath, branch,
@@ -425,7 +426,7 @@ function GitSection({ workspaceId }: { workspaceId: string }) {
   };
 
   const disconnect = async () => {
-    await fetch(`/api/workspaces/${workspaceId}/scm`, { method: 'DELETE' });
+    await clientFetch(`/api/workspaces/${workspaceId}/scm`, { method: 'DELETE' });
     setBinding(null); setRepoHost('github.com'); setRepoPath(''); setDirectory('');
   };
 
@@ -507,7 +508,7 @@ function SourceControlPanel({ workspaceId, binding }: { workspaceId: string; bin
   const fetchStatus = async () => {
     setStatus('loading'); setNote(null);
     try {
-      const r = await fetch(`/api/git-integration/status?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/git-integration/status?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (!r.ok || !j?.ok) {
         setChanged(null);
@@ -534,7 +535,7 @@ function SourceControlPanel({ workspaceId, binding }: { workspaceId: string; bin
     if (selectedIds.length === 0) { setNote({ intent: 'warning', text: 'Select at least one item to commit.' }); return; }
     setBusy(true); setNote(null);
     try {
-      const r = await fetch('/api/git-integration/commit', {
+      const r = await clientFetch('/api/git-integration/commit', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, itemIds: selectedIds, message: message || 'Loom commit' }),
       });
@@ -549,7 +550,7 @@ function SourceControlPanel({ workspaceId, binding }: { workspaceId: string; bin
   const update = async () => {
     setBusy(true); setNote(null);
     try {
-      const r = await fetch('/api/git-integration/pull', {
+      const r = await clientFetch('/api/git-integration/pull', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId }),
       });
@@ -564,7 +565,7 @@ function SourceControlPanel({ workspaceId, binding }: { workspaceId: string; bin
     if (!target.itemId) return;
     setBusy(true); setNote(null); setResolveTarget(null);
     try {
-      const r = await fetch('/api/git-integration/resolve', {
+      const r = await clientFetch('/api/git-integration/resolve', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, itemId: target.itemId, resolution }),
       });
@@ -673,7 +674,7 @@ function StorageBindingSection({ workspace }: { workspace: Workspace }) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/storage/accounts').then((r) => r.json())
+    clientFetch('/api/storage/accounts').then((r) => r.json())
       .then((d: any) => {
         if (d?.ok && Array.isArray(d.accounts)) {
           setAccounts(d.accounts.map((a: any) => ({ id: a.id, name: a.name, isHns: a.isHns, location: a.location })));
@@ -763,7 +764,7 @@ function OneLakeSection({ workspace }: { workspace: Workspace }) {
   const [resolved, setResolved] = useState<string | null | undefined>(url);
   useEffect(() => {
     if (resolved !== undefined) return;
-    fetch(`/api/workspaces/${workspace.id}`).then(r => r.json())
+    clientFetch(`/api/workspaces/${workspace.id}`).then(r => r.json())
       .then((d: any) => setResolved(d?.oneLake ?? null))
       .catch(() => setResolved(null));
   }, [workspace.id, resolved]);

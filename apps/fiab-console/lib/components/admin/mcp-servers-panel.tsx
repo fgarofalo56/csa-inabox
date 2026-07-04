@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MCPServersPanel — admin tenant-wide "External MCP Tools" configuration.
  *
@@ -208,7 +209,7 @@ function McpServerForm({
   const testConnection = useCallback(async () => {
     setTesting(true); setTestError(null); setTestResult(null);
     try {
-      const r = await fetch('/api/admin/mcp-servers/test-connection', {
+      const r = await clientFetch('/api/admin/mcp-servers/test-connection', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ config: form }),
@@ -355,7 +356,7 @@ function BuiltinMcpCard({
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/admin/mcp-servers/builtin')
+    clientFetch('/api/admin/mcp-servers/builtin')
       .then((r) => r.json())
       .then((j) => { if (!cancelled) setStatus(j.ok ? j : null); })
       .catch(() => { if (!cancelled) setStatus(null); })
@@ -458,7 +459,7 @@ function BridgeMcpCard({
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/admin/mcp-servers/bridge')
+    clientFetch('/api/admin/mcp-servers/bridge')
       .then((r) => r.json())
       .then((j) => { if (!cancelled) setStatus(j.ok ? j : null); })
       .catch(() => { if (!cancelled) setStatus(null); })
@@ -646,7 +647,7 @@ function PowerBiRemoteMcpCard({
 
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch('/api/admin/mcp-servers/powerbi');
+      const r = await clientFetch('/api/admin/mcp-servers/powerbi');
       const j = await r.json();
       setStatus(j && j.ok ? j : null);
     } catch {
@@ -656,7 +657,7 @@ function PowerBiRemoteMcpCard({
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/admin/mcp-servers/powerbi')
+    clientFetch('/api/admin/mcp-servers/powerbi')
       .then((r) => r.json())
       .then((j) => { if (!cancelled) setStatus(j && j.ok ? j : null); })
       .catch(() => { if (!cancelled) setStatus(null); })
@@ -680,7 +681,7 @@ function PowerBiRemoteMcpCard({
         source: 'remote-builtin',
         catalogId: status.id,
       };
-      const r = await fetch('/api/admin/mcp-servers/test-connection', {
+      const r = await clientFetch('/api/admin/mcp-servers/test-connection', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ config }),
@@ -696,7 +697,7 @@ function PowerBiRemoteMcpCard({
   const connect = useCallback(async () => {
     setConnecting(true); setConnectError(null); setConnectNote(null);
     try {
-      const r = await fetch('/api/admin/mcp-servers/powerbi', { method: 'POST' });
+      const r = await clientFetch('/api/admin/mcp-servers/powerbi', { method: 'POST' });
       const j = await r.json();
       if (!j.ok) {
         setConnectError(j.gate?.message || j.error || `HTTP ${r.status}`);
@@ -1012,7 +1013,7 @@ function MsRemoteMcpCard({
 
   const refresh = useCallback(async () => {
     try {
-      const r = await fetch(`/api/admin/mcp-servers/ms-remote?id=${encodeURIComponent(initial.id)}`);
+      const r = await clientFetch(`/api/admin/mcp-servers/ms-remote?id=${encodeURIComponent(initial.id)}`);
       const j = await r.json();
       if (j && j.id) setStatus(j as MsRemoteStatus);
     } catch { /* keep prior status — honest, no fake refresh */ }
@@ -1024,7 +1025,7 @@ function MsRemoteMcpCard({
   const runProbe = useCallback(async () => {
     setTesting(true); setTestError(null); setProbe(null);
     try {
-      const r = await fetch(`/api/admin/mcp-servers/ms-remote?id=${encodeURIComponent(initial.id)}&probe=1`);
+      const r = await clientFetch(`/api/admin/mcp-servers/ms-remote?id=${encodeURIComponent(initial.id)}&probe=1`);
       const j = await r.json();
       if (!j || j.ok === false) { setTestError(j?.error || `HTTP ${r.status}`); return; }
       const p: MsRemoteProbe = j.probe || {};
@@ -1044,7 +1045,7 @@ function MsRemoteMcpCard({
   const connect = useCallback(async () => {
     setConnecting(true); setConnectError(null); setConnectNote(null);
     try {
-      const r = await fetch('/api/admin/mcp-servers/ms-remote', {
+      const r = await clientFetch('/api/admin/mcp-servers/ms-remote', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: initial.id }),
@@ -1280,7 +1281,7 @@ function MicrosoftMcpServersSection({
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/admin/mcp-servers/ms-remote');
+      const r = await clientFetch('/api/admin/mcp-servers/ms-remote');
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setServers([]); return; }
       const list = (Array.isArray(j.servers) ? j.servers : []) as MsRemoteStatus[];
@@ -1348,7 +1349,7 @@ export function McpServersPanel() {
   const load = useCallback(async () => {
     setLoading(true); setLoadError(null);
     try {
-      const r = await fetch('/api/admin/mcp-servers');
+      const r = await clientFetch('/api/admin/mcp-servers');
       const j = await r.json();
       if (!j.ok) { setLoadError(j.error || `HTTP ${r.status}`); return; }
       setServers(Array.isArray(j.servers) ? j.servers : []);
@@ -1386,7 +1387,7 @@ export function McpServersPanel() {
   const deleteServer = useCallback(async (serverId: string) => {
     if (!confirm(`Delete MCP server? This cannot be undone.`)) return;
     try {
-      const r = await fetch(`/api/admin/mcp-servers?id=${serverId}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/mcp-servers?id=${serverId}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setServers((prev) => prev.filter((s) => s.serverId !== serverId));
@@ -1563,12 +1564,12 @@ export function McpServersPanel() {
                     {server.lastTestResult && (
                       server.lastTestResult.error ? (
                         <div className={s.testStatus} title={server.lastTestResult.error}>
-                          <PlugDisconnected24Regular style={{ fontSize: 14, color: tokens.colorPaletteRedForeground1 }} />
+                          <PlugDisconnected24Regular style={{ fontSize: tokens.fontSizeBase300, color: tokens.colorPaletteRedForeground1 }} />
                           <Caption1>Unreachable {new Date(server.lastTestResult.at).toLocaleDateString()}</Caption1>
                         </div>
                       ) : (
                         <div className={s.testStatus}>
-                          <Checkmark20Regular style={{ fontSize: 14, color: tokens.colorPaletteGreenForeground1 }} />
+                          <Checkmark20Regular style={{ fontSize: tokens.fontSizeBase300, color: tokens.colorPaletteGreenForeground1 }} />
                           <Caption1>Tested {new Date(server.lastTestResult.at).toLocaleDateString()}</Caption1>
                         </div>
                       )

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Geoanalytics editors — Geo map, Geo dataset, Geo query, Geo pipeline.
  *
@@ -79,7 +80,7 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
     (async () => {
       setLoading(true); setError(null);
       try {
-        const r = await fetch(`/api/cosmos-items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`);
         if (cancelled) return;
         if (r.status === 404) { setLoading(false); return; }
         const j = await r.json();
@@ -97,7 +98,7 @@ function useGeoItemState<T extends Record<string, unknown>>(slug: string, id: st
     if (!id || id === 'new') { setError('Save requires a real item id — open from the workspace list.'); return false; }
     setSaving(true); setError(null);
     try {
-      const r = await fetch(`/api/cosmos-items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(slug)}/${encodeURIComponent(id)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state }),
       });
@@ -457,7 +458,7 @@ function useLakehouseContainers() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/lakehouse/containers');
+        const r = await clientFetch('/api/lakehouse/containers');
         const j = await r.json();
         if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setContainers([]); }
         else { setContainers(j.containers || []); }
@@ -520,7 +521,7 @@ function GeoDatasetEditorBody({ item, id }: { item: FabricItemType; id: string }
     }
     const sql = `SELECT TOP 1 * FROM OPENROWSET(BULK '${state.adlsPath.replace(/'/g, "''")}', ${fmt}) AS r;`;
     try {
-      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/synapse-serverless-sql-pool/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql }),
       });
@@ -800,7 +801,7 @@ export function GeoQueryEditor({ item, id }: { item: FabricItemType; id: string 
   const installH3 = useCallback(async () => {
     setInstalling(true); setInstallMsg('Installing H3 functions…');
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/query`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kql: H3_ADX_INSTALL }),
       });
@@ -915,7 +916,7 @@ function useAdfPipelines() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/items/adf-pipeline');
+        const r = await clientFetch('/api/items/adf-pipeline');
         const j = await r.json();
         if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setPipelines([]); }
         else { setPipelines(j.pipelines || []); }
@@ -1017,7 +1018,7 @@ function GeoPipelineEditorBody({ item, id }: { item: FabricItemType; id: string 
       // back and maps them to real ADF pipeline parameters. Persist first so an
       // unsaved flag change is honored on the run (no stale state on the server).
       if (dirty) await save();
-      const r = await fetch(`/api/items/geo-pipeline/${encodeURIComponent(id)}/run`, {
+      const r = await clientFetch(`/api/items/geo-pipeline/${encodeURIComponent(id)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
       });
       const j = await r.json();

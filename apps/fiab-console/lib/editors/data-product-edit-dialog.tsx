@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataProductEditDialog — the Loom one-for-one of Microsoft Purview's
  * "Edit data product" modal (Data Marketplace F4 + F7).
@@ -109,7 +110,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
     setLoading(true); setLoadErr(null); setSave({ kind: 'idle' }); setStep('basic'); setDupName(null);
     (async () => {
       try {
-        const r = await fetch(`/api/data-products/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}`);
         const j = await r.json();
         if (cancelled) return;
         if (!j.ok) {
@@ -145,7 +146,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/admin/domains');
+        const r = await clientFetch('/api/admin/domains');
         const j = await r.json();
         if (!cancelled && j?.ok) setDomains((j.domains || []).map((d: any) => ({ id: d.id, name: d.name })));
       } catch { /* picker is best-effort; the field still accepts the current value */ }
@@ -161,7 +162,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
     if (!trimmed) { setDupName(null); return; }
     dupTimer.current = setTimeout(async () => {
       try {
-        const r = await fetch(
+        const r = await clientFetch(
           `/api/data-products?name=${encodeURIComponent(trimmed)}&excludeId=${encodeURIComponent(id)}`,
         );
         const j = await r.json();
@@ -189,7 +190,7 @@ export function DataProductEditDialog({ id, open, onOpenChange, onSaved }: DataP
     };
     const patchBody = pickStepFields(which, fullState);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json', 'if-match': etag },
         body: JSON.stringify(patchBody),

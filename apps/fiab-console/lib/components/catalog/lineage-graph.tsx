@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * LineageGraph — force-directed (radial) lineage visualization. Renders
  * the lineage subgraph returned by /api/catalog/lineage using pure SVG.
@@ -42,7 +43,7 @@ export function LineageGraph({ source, id, host, workspaceId }: Props) {
     const params = new URLSearchParams({ source, id });
     if (host) params.set('host', host);
     if (workspaceId) params.set('workspaceId', workspaceId);
-    fetch(`/api/catalog/lineage?${params.toString()}`)
+    clientFetch(`/api/catalog/lineage?${params.toString()}`)
       .then((r) => r.json())
       .then((j) => {
         if (!alive) return;
@@ -59,7 +60,7 @@ export function LineageGraph({ source, id, host, workspaceId }: Props) {
     <MessageBar intent="warning">
       <MessageBarBody>
         <strong>Lineage unavailable:</strong> {error}
-        {hint && <pre style={{ marginTop: 8, fontSize: 11, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}
+        {hint && <pre style={{ marginTop: tokens.spacingVerticalS, fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}
       </MessageBarBody>
     </MessageBar>
   );

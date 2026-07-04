@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   MessageBar, MessageBarBody, MessageBarTitle, MessageBarActions,
@@ -47,7 +48,7 @@ export function DatamartEditor({ item, id }: { item: FabricItemType; id: string 
   const loadDetail = useCallback(async () => {
     if (isNew) return;
     try {
-      const r = await fetch(`/api/cosmos-items/datamart/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/cosmos-items/datamart/${encodeURIComponent(id)}`);
       const j = await r.json();
       // GET returns the item record directly (not wrapped).
       if (r.ok && j?.id) {
@@ -62,7 +63,7 @@ export function DatamartEditor({ item, id }: { item: FabricItemType; id: string 
     if (isNew || migrating) return;
     setMigrating(true); setMigrateResult(null);
     try {
-      const r = await fetch('/api/items/datamart/migrate', {
+      const r = await clientFetch('/api/items/datamart/migrate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ datamartId: id }),

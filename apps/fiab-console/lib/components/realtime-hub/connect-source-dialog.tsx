@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ConnectSourceDialog — Fabric Real-Time Hub "Get events" / "Connect data
  * source" wizard. Three panes, one-for-one with Fabric:
@@ -212,7 +213,7 @@ export function ConnectSourceDialog({
   async function loadCerts() {
     setCertsLoading(true); setCertError(null);
     try {
-      const res = await fetch('/api/realtime-hub/keyvault-certificates', { cache: 'no-store' });
+      const res = await clientFetch('/api/realtime-hub/keyvault-certificates', { cache: 'no-store' });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) { setCertError(j.error || `Could not list certificates (HTTP ${res.status}).`); return; }
       setCerts(Array.isArray(j.certificates) ? j.certificates : []);
@@ -278,7 +279,7 @@ export function ConnectSourceDialog({
     setOptLoading((l) => ({ ...l, [f.key]: true }));
     setOptError((e) => ({ ...e, [f.key]: null }));
     try {
-      const res = await fetch(`/api/realtime-hub/options?${optionsQuery(src)}`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/realtime-hub/options?${optionsQuery(src)}`, { cache: 'no-store' });
       const j = await res.json().catch(() => ({}));
       if (res.status === 503 && j.code === 'not_configured') {
         setOptGate({ hint: j.hint || 'Set LOOM_SUBSCRIPTION_ID so source discovery can enumerate resources.', bicep: j.bicep });
@@ -393,7 +394,7 @@ export function ConnectSourceDialog({
         // event-hub / consumer-group dropdowns immediately after selection.
         createdOption = { name, subscriptionId: sub, resourceGroup: rg, location: loc };
       }
-      const res = await fetch('/api/realtime-hub/provision', {
+      const res = await clientFetch('/api/realtime-hub/provision', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await res.json().catch(() => ({}));
@@ -482,7 +483,7 @@ export function ConnectSourceDialog({
       if (hasCertFields && (props.useMtls === 'true') && certVaultUri) {
         properties.certVaultUri = certVaultUri;
       }
-      const res = await fetch('/api/realtime-hub/connect-source', {
+      const res = await clientFetch('/api/realtime-hub/connect-source', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

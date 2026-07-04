@@ -1,5 +1,7 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 /**
  * PurviewPanel — inline management for the Purview tab of /admin/security.
  *
@@ -176,7 +178,7 @@ function PurviewStatusBanner() {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/governance/purview/status');
+        const r = await clientFetch('/api/governance/purview/status');
         const j = (await r.json()) as PurviewStatus;
         if (!cancelled) setStatus(j);
       } catch {
@@ -251,6 +253,7 @@ interface SourcesPayload {
 
 function DataSourcesSection() {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [state, setState] = useState<ApiState<SourcesPayload>>(emptyState());
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -266,7 +269,7 @@ function DataSourcesSection() {
   const create = async () => {
     setCreating(true);
     try {
-      const r = await fetch('/api/admin/security/purview/sources', {
+      const r = await clientFetch('/api/admin/security/purview/sources', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -287,8 +290,13 @@ function DataSourcesSection() {
   };
 
   const remove = async (name: string) => {
-    if (!confirm(`De-register data source "${name}"?`)) return;
-    const r = await fetch(`/api/admin/security/purview/sources?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+    if (!(await confirm({
+      title: `De-register data source "${name}"?`,
+      body: 'This removes the source from the Purview Data Map. Existing scan results are retained but no new scans will run.',
+      danger: true,
+      confirmLabel: 'De-register',
+    }))) return;
+    const r = await clientFetch(`/api/admin/security/purview/sources?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       alert(`Delete failed: ${j?.error || r.statusText}`);
@@ -298,6 +306,7 @@ function DataSourcesSection() {
 
   return (
     <div className={s.section}>
+      {confirmDialog}
       <div className={s.toolbar}>
         <Subtitle2 className={s.grow}>Registered data sources</Subtitle2>
         <Input
@@ -461,7 +470,7 @@ function ScansSection() {
 
   const triggerRun = async (scanName: string) => {
     if (!selectedSource) return;
-    const r = await fetch('/api/admin/security/purview/scans', {
+    const r = await clientFetch('/api/admin/security/purview/scans', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ source: selectedSource, scan: scanName }),
@@ -646,7 +655,7 @@ function GlossarySection() {
     }
     setCreating(true);
     try {
-      const r = await fetch('/api/admin/security/purview/glossary', {
+      const r = await clientFetch('/api/admin/security/purview/glossary', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -763,7 +772,7 @@ function DomainsSection() {
   const create = async () => {
     setCreating(true);
     try {
-      const r = await fetch('/api/admin/security/purview/domains', {
+      const r = await clientFetch('/api/admin/security/purview/domains', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(form),

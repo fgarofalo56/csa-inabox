@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Synapse Notebook editor — the heavy-designer surface that brings the Synapse
  * Studio "Develop → Notebooks" experience into Loom 1:1: a multi-cell Spark
@@ -353,7 +354,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   const refreshSchedules = useCallback(async () => {
     try {
-      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/schedule`);
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/schedule`);
       const j = await r.json();
       if (j?.configured === false) {
         setSchedulesConfigured(false);
@@ -371,7 +372,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const createSchedule = useCallback(async (params: ScheduleCreateParams) => {
     setScheduleBusy(true); setScheduleError(null);
     try {
-      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/schedule`, {
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/schedule`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(params),
       });
@@ -388,7 +389,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   const toggleSchedule = useCallback(async (scheduleName: string, isEnabled: boolean) => {
     try {
-      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/schedule`, {
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/schedule`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scheduleName, isEnabled }),
       });
@@ -414,7 +415,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const refreshList = useCallback(async () => {
     setLoadingList(true);
     try {
-      const r = await fetch('/api/synapse/notebooks');
+      const r = await clientFetch('/api/synapse/notebooks');
       const j = await r.json();
       if (r.status === 503 && j?.missing) { setGate({ missing: j.missing }); setNotebooks([]); }
       else if (j?.ok) { setGate(null); setNotebooks(j.notebooks || []); }
@@ -426,7 +427,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
 
   const refreshPools = useCallback(async () => {
     try {
-      const r = await fetch('/api/items/synapse-spark-pool/list');
+      const r = await clientFetch('/api/items/synapse-spark-pool/list');
       const j = await r.json();
       if (j?.ok) setPools(j.pools || []);
     } catch { /* attach picker shows empty — non-fatal */ }
@@ -437,7 +438,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   // to "(none)" with no gate.
   const refreshEnvs = useCallback(async () => {
     try {
-      const r = await fetch('/api/synapse/environments');
+      const r = await clientFetch('/api/synapse/environments');
       const j = await r.json();
       if (j?.ok) setEnvironments(j.environments || []);
     } catch { /* non-fatal — environment attach is optional */ }
@@ -452,13 +453,13 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/session?probe=1`);
+        const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?probe=1`);
         const j = await r.json();
         if (cancelled || !j?.ok) return;
         const b: 'synapse' | 'databricks' = j.backend === 'databricks' ? 'databricks' : 'synapse';
         setBackend(b);
         if (b === 'databricks') {
-          const cr = await fetch('/api/admin/scaling/databricks-cluster');
+          const cr = await clientFetch('/api/admin/scaling/databricks-cluster');
           const cj = await cr.json();
           if (!cancelled && cj?.ok) setClusters(cj.clusters || []);
         }
@@ -477,7 +478,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       ? `cluster=${encodeURIComponent(compute)}&sessionId=${encodeURIComponent(String(sessionId))}`
       : `pool=${encodeURIComponent(compute)}&sessionId=${encodeURIComponent(String(sessionId))}`;
     const timer = setInterval(() => {
-      fetch(`/api/notebook/${encodeURIComponent(id)}/session?${param}`).catch(() => {});
+      clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${param}`).catch(() => {});
     }, 4 * 60 * 1000);
     return () => clearInterval(timer);
   }, [sessionId, backend, attachedPool, attachedCluster, id]);
@@ -490,7 +491,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       const param = backend === 'databricks'
         ? `cluster=${encodeURIComponent(ref.compute)}&sessionId=${encodeURIComponent(String(ref.sessionId))}`
         : `pool=${encodeURIComponent(ref.compute)}&sessionId=${encodeURIComponent(String(ref.sessionId))}`;
-      fetch(`/api/notebook/${encodeURIComponent(id)}/session?${param}`, { method: 'DELETE', keepalive: true }).catch(() => {});
+      clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${param}`, { method: 'DELETE', keepalive: true }).catch(() => {});
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id, backend]);
@@ -510,11 +511,11 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     (async () => {
       try {
         // Resolve the owning workspace, then pull the Cosmos-backed cells.
-        const lookup = await fetch(`/api/cosmos-items/synapse-notebook/${encodeURIComponent(id)}`);
+        const lookup = await clientFetch(`/api/cosmos-items/synapse-notebook/${encodeURIComponent(id)}`);
         if (!lookup.ok) return;
         const item = await lookup.json();
         if (cancelled || !item?.workspaceId) return;
-        const r = await fetch(`/api/items/synapse-notebook/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(item.workspaceId)}`);
+        const r = await clientFetch(`/api/items/synapse-notebook/${encodeURIComponent(id)}?workspaceId=${encodeURIComponent(item.workspaceId)}`);
         const j = await r.json();
         if (cancelled || !j?.ok) return;
         const props = j.notebook?.properties || {};
@@ -533,7 +534,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const openNotebook = useCallback(async (name: string) => {
     setBanner(null);
     try {
-      const r = await fetch(`/api/synapse/notebooks/${encodeURIComponent(name)}`);
+      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(name)}`);
       const j = await r.json();
       if (!j?.ok) { setBanner({ intent: 'error', text: j?.error || `Failed to open ${name}` }); return; }
       const props = j.notebook?.properties || {};
@@ -550,7 +551,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     if (!name) return;
     setBanner(null);
     try {
-      const r = await fetch('/api/synapse/notebooks', {
+      const r = await clientFetch('/api/synapse/notebooks', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name }),
       });
@@ -566,7 +567,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     if (!openName) { setBanner({ intent: 'info', text: 'Open or create a notebook first.' }); return; }
     setSaving(true); setBanner(null);
     try {
-      const r = await fetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}`, {
+      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ properties: cellsToIpynb(cells, attachedPool, attachedEnv) }),
       });
@@ -588,7 +589,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const deleteOpen = useCallback(async () => {
     if (!openName) return;
     try {
-      const r = await fetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/synapse/notebooks/${encodeURIComponent(openName)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j?.ok) { setBanner({ intent: 'error', text: j?.error || 'Delete failed' }); return; }
       setOpenName(null); setCells([{ id: uid(), type: 'code', lang: 'pyspark', source: '' }]); setDirty(false);
@@ -698,7 +699,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
   const pollStatement = useCallback(async (sess: number | string, stmt: number | string, cid: string) => {
     for (let i = 0; i < 200; i++) {
       await new Promise((r) => setTimeout(r, 2000));
-      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, stmt)}`);
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute?${computeParam(sess, stmt)}`);
       const j = await r.json();
       if (!j?.ok) { patchCell(cid, { running: false, output: { status: 'error', text: j?.error || 'poll failed' } }); return; }
       const st = String(j.state);
@@ -724,7 +725,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
     // %%configure interception — store the compute options for the next session
     // (re)create; the session must be restarted for them to take effect.
     if (isConfigureCell(cell.source)) {
-      const r = await fetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sessionId ?? undefined, code: cell.source, kind: cell.lang }),
       });
@@ -742,7 +743,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       // 1. Ensure a live, idle session (create or reuse). Poll to idle.
       let sess = sessionId;
       for (let attempt = 0; attempt < 90; attempt++) {
-        const sr = await fetch(`/api/notebook/${encodeURIComponent(id)}/session`, {
+        const sr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             pool: attachedPool, cluster: attachedCluster,
@@ -759,7 +760,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
           setSessionState(sj.state || 'starting');
           // Poll the session GET until idle.
           await new Promise((r2) => setTimeout(r2, 3000));
-          const gr = await fetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!)}`);
+          const gr = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/session?${computeParam(sess!)}`);
           const gj = await gr.json();
           if (gj?.ok) { setSessionState(gj.state); sess = gj.sessionId ?? sess; }
           if (gj?.state === 'idle') break;
@@ -773,7 +774,7 @@ export function SynapseNotebookEditor({ item, id }: { item: FabricItemType; id: 
       liveSessionRef.current = { compute, sessionId: sess };
 
       // 2. Submit the statement.
-      const er = await fetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
+      const er = await clientFetch(`/api/notebook/${encodeURIComponent(id)}/execute`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pool: attachedPool, cluster: attachedCluster, sessionId: sess, code: cell.source, kind: cell.lang }),
       });
@@ -1201,7 +1202,7 @@ function NotebookCellView(props: {
           .filter(Boolean).join('\n')
       : '';
     try {
-      const r = await fetch(`/api/notebook/${encodeURIComponent(props.notebookId)}/assist`, {
+      const r = await clientFetch(`/api/notebook/${encodeURIComponent(props.notebookId)}/assist`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           mode,

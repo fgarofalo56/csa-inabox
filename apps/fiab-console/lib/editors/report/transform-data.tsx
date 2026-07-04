@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * TransformDataDrawer — the report builder's "Transform Data" surface (Wave 4).
  *
@@ -270,7 +271,7 @@ export function TransformDataDrawer({
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/fields`);
+        const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/fields`);
         const j = await r.json().catch(() => null);
         if (cancelled) return;
         setSchema(j && j.ok ? flattenFieldColumns(j.tables) : undefined);
@@ -285,7 +286,7 @@ export function TransformDataDrawer({
       return { ok: false, code: 'unbound', error: 'Save the report first to profile its data on Synapse.' };
     }
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/profile`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/profile`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -307,7 +308,7 @@ export function TransformDataDrawer({
     // 1) Real route — the compiled SQL for the bound dialect + resolved relation.
     if (!isNew) {
       try {
-        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/native-query`);
+        const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/native-query`);
         if (r.ok) {
           const j = await r.json().catch(() => null);
           if (j?.ok && typeof j.sql === 'string') {
@@ -346,7 +347,7 @@ export function TransformDataDrawer({
     setRefreshing(true);
     setRefreshNote(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/refresh`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/refresh`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: '{}',
@@ -395,7 +396,7 @@ export function TransformDataDrawer({
     // spread the source + the authored M + the connectivity choice.
     const next = { ...dataSource, appliedSteps: mScript, transformMode: mode } as ReportDataSource;
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/data-source`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/data-source`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dataSource: next }),

@@ -155,7 +155,7 @@ export function AdminShell({ sectionTitle, children }: { sectionTitle?: string; 
           })}
         </nav>
         <div className={styles.body}>
-          {sectionTitle && <Title3 as="h2" style={{ marginBottom: 16 }}>{sectionTitle}</Title3>}
+          {sectionTitle && <Title3 as="h2" style={{ marginBottom: tokens.spacingVerticalL }}>{sectionTitle}</Title3>}
           {children}
         </div>
       </div>

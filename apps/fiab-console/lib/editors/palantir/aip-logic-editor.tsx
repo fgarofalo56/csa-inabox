@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AipLogicEditor (AIP-Logic → Spindle) — no-code typed LLM function with a block graph.
  *
@@ -463,7 +464,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/items/aip-logic');
+        const r = await clientFetch('/api/items/aip-logic');
         const j = await r.json().catch(() => ({}));
         if (alive && j?.ok && Array.isArray(j.items)) {
           setSiblingFns(j.items.filter((it: any) => it?.id && it.id !== id).map((it: any) => ({ id: it.id, displayName: it.displayName || it.id })));
@@ -558,7 +559,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
         const ok = await save();
         if (!ok) { setInvokeMsg({ intent: 'error', text: 'Could not save the block graph before running.' }); return; }
       }
-      const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/invoke`, {
+      const r = await clientFetch(`/api/items/aip-logic/${encodeURIComponent(id)}/invoke`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ inputs: typed, mode: agentMode ? 'agent' : 'logic' }),
       });
@@ -586,7 +587,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
   const deploy = useCallback(async () => {
     setDeployBusy(true); setDeployMsg(null);
     try {
-      const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/aip-logic/${encodeURIComponent(id)}/deploy`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         const gate = j?.gate ? ` ${j.gate.remediation || ''}` : j?.hint ? ` ${j.hint}` : '';
@@ -603,7 +604,7 @@ export function AipLogicEditor({ item, id }: { item: FabricItemType; id: string 
     setInvokeBusy(true); setInvokeMsg(null); setInvokeOut(null); setRunSteps([]);
     const typed = buildTyped();
     try {
-      const r = await fetch(`/api/items/aip-logic/${encodeURIComponent(id)}/run-agent`, {
+      const r = await clientFetch(`/api/items/aip-logic/${encodeURIComponent(id)}/run-agent`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ inputs: typed }),
       });
       const j = await r.json().catch(() => ({}));

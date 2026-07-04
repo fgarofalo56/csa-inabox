@@ -942,10 +942,10 @@ function AggregateRows({
   const add = () => onChange([...rows, { func: 'AVG', field: '', alias: '' }]);
   const remove = (i: number) => onChange(rows.filter((_, j) => j !== i));
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge }}>
       <Label size="small">Aggregations</Label>
       {rows.map((r, i) => (
-        <div key={i} style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+        <div key={i} style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center' }}>
           <Dropdown
             style={{ minWidth: 84 }}
             value={r.func}
@@ -1007,7 +1007,7 @@ function WindowPanel({
         </Dropdown>
       </Field>
       {value.windowType && value.windowType !== 'Snapshot' && (
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
           <Field label="Size" style={{ flex: 1 }}>
             <SpinButton
               min={1}
@@ -1080,7 +1080,7 @@ export function AsaTransformInspector({
   const isAgg = value.kind === 'aggregate' || value.kind === 'group-by' || value.kind === 'window';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowY: 'auto' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS, overflowY: 'auto' }}>
       <Label weight="semibold">Transform · {value.kind}</Label>
       <Field label="Name">
         <Input value={value.name} onChange={(_: unknown, d: any) => onChange({ name: d.value })} />
@@ -1230,7 +1230,7 @@ export function AsaTransformInspector({
         icon={<Delete20Regular />}
         appearance="subtle"
         onClick={onDelete}
-        style={{ marginTop: 4 }}
+        style={{ marginTop: tokens.spacingVerticalXS }}
       >
         Remove transform
       </Button>

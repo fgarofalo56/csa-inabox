@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Native Azure-service editors — Synapse, Databricks, ADF, U-SQL.
  *
@@ -152,7 +153,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   const loadPools = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/items/synapse-spark-pool/list');
+      const r = await clientFetch('/api/items/synapse-spark-pool/list');
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'list failed');
       setPools(j.pools || []);
@@ -166,7 +167,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   const loadPool = useCallback(async (name: string) => {
     setError(null);
     try {
-      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(name)}`);
+      const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(name)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'get failed');
       setPool(j.pool);
@@ -175,7 +176,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
 
   const loadBatches = useCallback(async (name: string) => {
     try {
-      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(name)}/runs?size=20`);
+      const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(name)}/runs?size=20`);
       const j = await r.json();
       if (!j.ok) { setBatches([]); return; }
       setBatches(j.sessions || []);
@@ -189,7 +190,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
     if (!selected) return;
     setBusy(true); setError(null);
     try {
-      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/submit`, {
+      const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/submit`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -228,7 +229,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
         scaleMode === 'fixed'
           ? { nodeCount: scaleNodeCount }
           : { autoScale: { enabled: true, minNodeCount: scaleMin, maxNodeCount: scaleMax } };
-      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/scale`, {
+      const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/scale`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -251,7 +252,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
     if (!selected) return;
     setBusy(true); setApError(null);
     try {
-      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/auto-pause`, {
+      const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/auto-pause`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enabled: apEnabled, delayInMinutes: apEnabled ? apDelay : undefined }),
       });
@@ -308,7 +309,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
           : { enabled: false },
         nodeCount: cfgAsEnabled ? undefined : Number(cfgNodeCount),
       };
-      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/config`, {
+      const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/config`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -327,7 +328,7 @@ export function SynapseSparkPoolEditor({ item, id }: { item: FabricItemType; id:
   const setAutoPause = useCallback(async (action: 'pause' | 'resume') => {    if (!selected) return;
     setBusy(true); setError(null);
     try {
-      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/state`, {
+      const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(selected)}/state`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),
       });
@@ -719,7 +720,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   const loadList = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/items/adf-dataset');
+      const r = await clientFetch('/api/items/adf-dataset');
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'list failed');
       setDatasets(j.datasets || []);
@@ -731,7 +732,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
 
   const loadLinkedServices = useCallback(async () => {
     try {
-      const r = await fetch('/api/adf/linked-services');
+      const r = await clientFetch('/api/adf/linked-services');
       const j = await r.json();
       if (j.ok) setLinkedServices(j.linkedServices || []);
     } catch { /* ignore */ }
@@ -740,7 +741,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
   const loadDataset = useCallback(async (name: string) => {
     setError(null);
     try {
-      const r = await fetch(`/api/items/adf-dataset/${encodeURIComponent(name)}`);
+      const r = await clientFetch(`/api/items/adf-dataset/${encodeURIComponent(name)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'get failed');
       setDs(j.dataset);
@@ -813,7 +814,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
         },
       };
       try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
-      const r = await fetch(`/api/items/adf-dataset/${encodeURIComponent(selected)}`, {
+      const r = await clientFetch(`/api/items/adf-dataset/${encodeURIComponent(selected)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -873,7 +874,7 @@ export function AdfDatasetEditor({ item, id }: { item: FabricItemType; id: strin
           typeProperties,
         },
       };
-      const r = await fetch('/api/items/adf-dataset', {
+      const r = await clientFetch('/api/items/adf-dataset', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -1153,7 +1154,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
   const loadList = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/items/adf-trigger');
+      const r = await clientFetch('/api/items/adf-trigger');
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'list failed');
       setTriggers(j.triggers || []);
@@ -1165,7 +1166,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
 
   const loadPipelines = useCallback(async () => {
     try {
-      const r = await fetch('/api/items/adf-pipeline');
+      const r = await clientFetch('/api/items/adf-pipeline');
       const j = await r.json();
       if (j.ok) setPipelines(j.pipelines || []);
     } catch { /* ignore */ }
@@ -1174,7 +1175,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
   const loadTrigger = useCallback(async (name: string) => {
     setError(null);
     try {
-      const r = await fetch(`/api/items/adf-trigger/${encodeURIComponent(name)}`);
+      const r = await clientFetch(`/api/items/adf-trigger/${encodeURIComponent(name)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'get failed');
       setTr(j.trigger);
@@ -1244,7 +1245,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
         },
       };
       try { window.dispatchEvent(new CustomEvent('loom:item-saving')); } catch {}
-      const r = await fetch(`/api/items/adf-trigger/${encodeURIComponent(selected)}`, {
+      const r = await clientFetch(`/api/items/adf-trigger/${encodeURIComponent(selected)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -1272,7 +1273,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
     if (!selected) return;
     setBusy(true); setError(null);
     try {
-      const r = await fetch(`/api/items/adf-trigger/${encodeURIComponent(selected)}/state`, {
+      const r = await clientFetch(`/api/items/adf-trigger/${encodeURIComponent(selected)}/state`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),
       });
@@ -1299,7 +1300,7 @@ export function AdfTriggerEditor({ item, id }: { item: FabricItemType; id: strin
           typeProperties: { recurrence: { frequency: 'Hour', interval: 1, timeZone: 'UTC', startTime: new Date().toISOString() } },
         },
       };
-      const r = await fetch('/api/items/adf-trigger', {
+      const r = await clientFetch('/api/items/adf-trigger', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });

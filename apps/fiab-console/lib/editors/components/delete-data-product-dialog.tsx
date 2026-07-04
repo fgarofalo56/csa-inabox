@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DeleteDataProductDialog — precondition-gated, type-name-to-confirm destructive
  * delete for a data product. Azure-native parity with the Microsoft Purview
@@ -102,7 +103,7 @@ export function DeleteDataProductDialog({
     setLoading(true); setPreflightErr(null);
     (async () => {
       try {
-        const r = await fetch(`/api/data-products/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}`);
         const j: PreflightResponse = await r.json();
         if (cancelled) return;
         if (!j.ok) setPreflightErr(j.error || `HTTP ${r.status}`);
@@ -122,7 +123,7 @@ export function DeleteDataProductDialog({
   const onConfirm = useCallback(async () => {
     setBusy(true); setDeleteErr(null); setDeleteBlockers(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({ ok: false, error: `HTTP ${r.status}` }));
       if (!j.ok) {
         setDeleteErr(j.error || `HTTP ${r.status}`);

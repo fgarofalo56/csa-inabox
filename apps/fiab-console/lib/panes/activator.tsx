@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ActivatorPane — workspace-level Activator overview.
  *
@@ -174,7 +175,7 @@ export function ActivatorPane() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/loom/workspaces');
+        const r = await clientFetch('/api/loom/workspaces');
         const j = await r.json();
         if (!j.ok) { setWsError(j.error || 'failed to list workspaces'); return; }
         const ws: WorkspaceLite[] = (j.workspaces || []).map((w: any) => ({ id: w.id, name: w.name || w.id }));
@@ -191,7 +192,7 @@ export function ActivatorPane() {
     if (!wsId) return;
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/activator?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/activator?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed to list activators'); setActivators([]); return; }
       const list: { id: string; displayName: string }[] = (j.activators || j.items || []).map((a: any) => ({
@@ -199,7 +200,7 @@ export function ActivatorPane() {
       }));
       const withRules = await Promise.all(list.map(async (a) => {
         try {
-          const rr = await fetch(`/api/items/activator/${encodeURIComponent(a.id)}/rules?workspaceId=${encodeURIComponent(wsId)}`);
+          const rr = await clientFetch(`/api/items/activator/${encodeURIComponent(a.id)}/rules?workspaceId=${encodeURIComponent(wsId)}`);
           const rj = await rr.json();
           const rules: MonitorRuleRecord[] = rj.ok && Array.isArray(rj.rules)
             ? rj.rules.map((x: any) => ({ ...x, state: x.state === 'Disabled' ? 'Disabled' : 'Active' }))
@@ -227,7 +228,7 @@ export function ActivatorPane() {
     try {
       const merged: HistoryEvent[] = [];
       for (const a of withRules) {
-        const r = await fetch(`/api/items/activator/${encodeURIComponent(a.id)}/history?workspaceId=${encodeURIComponent(wsId)}`);
+        const r = await clientFetch(`/api/items/activator/${encodeURIComponent(a.id)}/history?workspaceId=${encodeURIComponent(wsId)}`);
         const j = await r.json();
         if (!j.ok) {
           setHistoryError(j.gate?.remediation || j.error || 'history failed');
@@ -281,7 +282,7 @@ export function ActivatorPane() {
     setBusyRuleId(row.id); setError(null);
     const next = row.state !== 'Active';
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/activator/${encodeURIComponent(row.activatorId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&ruleId=${encodeURIComponent(row.id)}&enabled=${next}`,
         { method: 'PATCH' },
       );
@@ -299,7 +300,7 @@ export function ActivatorPane() {
     if (typeof window !== 'undefined' && !window.confirm(`Delete rule "${row.name}"? This removes its Azure Monitor scheduled-query rule.`)) return;
     setBusyRuleId(row.id); setError(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/activator/${encodeURIComponent(row.activatorId)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&ruleId=${encodeURIComponent(row.id)}`,
         { method: 'DELETE' },
       );

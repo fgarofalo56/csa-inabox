@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * StreamEndpointsDrawer — Fabric Real-Time hub eventstream "Endpoints" / source
  * & destination connection details. Pulls the live connection endpoints from
@@ -46,7 +47,7 @@ export function StreamEndpointsDrawer({ open, onClose, name, workspaceId, events
     if (!open || !eventstreamId) return;
     let cancelled = false;
     setBusy(true); setErr(null); setEndpoints(null);
-    fetch(`/api/realtime-hub/endpoints?workspaceId=${encodeURIComponent(workspaceId)}&eventstreamId=${encodeURIComponent(eventstreamId)}`)
+    clientFetch(`/api/realtime-hub/endpoints?workspaceId=${encodeURIComponent(workspaceId)}&eventstreamId=${encodeURIComponent(eventstreamId)}`)
       .then(async (r) => {
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;
@@ -67,9 +68,9 @@ export function StreamEndpointsDrawer({ open, onClose, name, workspaceId, events
       </DrawerHeader>
       <DrawerBody>
         <Caption1>Live connection endpoints pulled from the eventstream definition (sources, destinations, streams).</Caption1>
-        {busy && <Spinner label="Pulling definition…" style={{ marginTop: 12 }} />}
-        {err && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
-        {endpoints && endpoints.length === 0 && <Body1 style={{ marginTop: 12 }}>No endpoints in this eventstream yet — open the editor to add sources and destinations.</Body1>}
+        {busy && <Spinner label="Pulling definition…" style={{ marginTop: tokens.spacingVerticalM }} />}
+        {err && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody>{err}</MessageBarBody></MessageBar>}
+        {endpoints && endpoints.length === 0 && <Body1 style={{ marginTop: tokens.spacingVerticalM }}>No endpoints in this eventstream yet — open the editor to add sources and destinations.</Body1>}
         {endpoints && endpoints.map((ep, i) => (
           <div key={i} className={styles.card}>
             <div className={styles.head}>

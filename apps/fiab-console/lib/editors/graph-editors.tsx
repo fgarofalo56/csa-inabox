@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Graph + Vector editors — Cosmos Gremlin, Cypher, GQL, and Vector store.
  *
@@ -168,7 +169,7 @@ export function CosmosGremlinGraphEditor({ item, id }: { item: FabricItemType; i
   const runGremlin = useCallback(async (gremlin: string) => {
     setLoading(true); setResult(null);
     try {
-      const r = await fetch(`/api/items/cosmos-gremlin-graph/${id}/query`, {
+      const r = await clientFetch(`/api/items/cosmos-gremlin-graph/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query: gremlin }),
       });
@@ -287,7 +288,7 @@ export function CypherGraphEditor({ item, id }: { item: FabricItemType; id: stri
           return;
         }
       }
-      const r = await fetch(`/api/items/kql-database/${id}/query`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kql: kqlBody }),
       });
@@ -427,32 +428,32 @@ export function GqlGraphEditor({ item, id }: { item: FabricItemType; id: string 
           setLoading(false);
           return;
         }
-        const r = await fetch(`/api/items/kql-database/${id}/query`, {
+        const r = await clientFetch(`/api/items/kql-database/${id}/query`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ kql: kqlBody }),
         });
         setResult(await r.json());
       } else if (backend === 'adx-graph') {
         // Azure-native default — runs make-graph + graph-match on ADX (no Fabric).
-        const r = await fetch(`/api/items/gql-graph/${id}/query`, {
+        const r = await clientFetch(`/api/items/gql-graph/${id}/query`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ query, backend: 'adx', mode: 'kql-graph' }),
         });
         setResult(await r.json());
       } else if (backend === 'fabric-graph') {
-        const r = await fetch(`/api/items/gql-graph/${id}/query`, {
+        const r = await clientFetch(`/api/items/gql-graph/${id}/query`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ query, backend: 'fabric' }),
         });
         setResult(await r.json());
       } else if (backend === 'cosmos-gremlin-translate') {
-        const r = await fetch(`/api/items/cosmos-gremlin-graph/${id}/query`, {
+        const r = await clientFetch(`/api/items/cosmos-gremlin-graph/${id}/query`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ query, lang: 'gql' }),
         });
         setResult(await r.json());
       } else {
-        const r = await fetch(`/api/cosmos-items/gql-graph/${encodeURIComponent(id)}`, {
+        const r = await clientFetch(`/api/cosmos-items/gql-graph/${encodeURIComponent(id)}`, {
           method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ state: { query, backend } }),
         });
@@ -781,7 +782,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`);
         if (cancelled || r.status === 404) return;
         const j = await r.json();
         if (j?.ok && j.item?.state) {
@@ -804,11 +805,11 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     try {
       const isNew = !id || id === 'new';
       const r = isNew
-        ? await fetch(`/api/items/vector-store`, {
+        ? await clientFetch(`/api/items/vector-store`, {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ workspaceId: 'default', displayName: indexName, state: { backend, indexName, dim, metric, algorithm } }),
           })
-        : await fetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`, {
+        : await clientFetch(`/api/cosmos-items/${encodeURIComponent('vector-store')}/${encodeURIComponent(id)}`, {
             method: 'PATCH', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ state: { backend, indexName, dim, metric, algorithm } }),
           });
@@ -828,7 +829,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     if (!backendLive || !indexName) return;
     setSchemaMsg(null); setLiveIndex(null); setSchemaLoading(true);
     try {
-      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index?name=${encodeURIComponent(indexName)}&backend=${encodeURIComponent(backend)}`);
+      const r = await clientFetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index?name=${encodeURIComponent(indexName)}&backend=${encodeURIComponent(backend)}`);
       const j = await r.json();
       if (!j.ok) { setSchemaMsg(j); return; }
       setLiveIndex(j.exists ? j.index : null);
@@ -845,7 +846,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     if (!backendLive) { setCreateResult({ ok: false, deferred: true, error: `The "${backend}" backend is config-only in this build. The spec was persisted to Cosmos; switch to ai-search, cosmos-vcore, or pgvector to create a live index.` }); return; }
     setCreating(true); setCreateResult(null);
     try {
-      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
+      const r = await clientFetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ indexName, dim, metric, algorithm, backend }),
       });
@@ -862,7 +863,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
       let documents: any;
       try { documents = JSON.parse(docsText); } catch (e: any) { setUploadResult({ ok: false, error: `Invalid JSON: ${e?.message || e}` }); return; }
       if (!Array.isArray(documents)) documents = [documents];
-      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
+      const r = await clientFetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/index`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ indexName, documents, backend }),
       });
@@ -876,7 +877,7 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
     try {
       let vector: number[];
       try { vector = JSON.parse(searchVec); } catch { setSearchResult({ ok: false, error: 'Query vector must be a JSON number array, e.g. [0.1, 0.2, …]' }); return; }
-      const r = await fetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/search`, {
+      const r = await clientFetch(`/api/items/vector-store/${encodeURIComponent(id || 'new')}/search`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ indexName, vector, k, metric, text: searchText || undefined, backend }),
       });

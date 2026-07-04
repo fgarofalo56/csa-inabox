@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SemanticModelEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -144,7 +145,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
   const loadDatabases = useCallback(async () => {
     setLoading(true); setGate(null);
     try {
-      const r = await fetch('/api/items/semantic-model/aas-databases');
+      const r = await clientFetch('/api/items/semantic-model/aas-databases');
       const j = await r.json();
       if (!j.ok) { setGate(j.error || `HTTP ${r.status}`); setDatabases([]); return; }
       setDatabases(j.databases || []);
@@ -157,7 +158,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
   const loadRefreshes = useCallback(async (db: string) => {
     if (!db) return;
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(db)}/refreshes?dbName=${encodeURIComponent(db)}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(db)}/refreshes?dbName=${encodeURIComponent(db)}`);
       const j = await r.json();
       if (j.ok) setRefreshes(j.refreshes || []);
     } catch { /* keep last */ }
@@ -167,7 +168,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
     if (!db) return;
     setSchedMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(db)}/refresh-schedule`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(db)}/refresh-schedule`);
       const j = await r.json();
       const sch: AasScheduleLite | null = j.ok ? j.schedule : null;
       if (sch && typeof sch === 'object') {
@@ -190,7 +191,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
     if (!dbName) return;
     setRefreshing(true); setRefreshMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dbName)}/refresh?dbName=${encodeURIComponent(dbName)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dbName)}/refresh?dbName=${encodeURIComponent(dbName)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ type: 'automatic' }),
       });
       const j = await r.json();
@@ -210,7 +211,7 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
     setSchedBusy(true); setSchedMsg(null);
     const times = schedTimes.split(',').map((t) => t.trim()).filter(Boolean);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dbName)}/refresh-schedule`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dbName)}/refresh-schedule`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enabled: schedEnabled, days: schedDays, times, localTimeZoneId: schedTz, notifyOption: schedNotify }),
       });
@@ -993,11 +994,11 @@ function SemanticModelCopilotPane({ id }: { id: string }) {
             <MessageBarTitle>{applyResult.ok ? 'Edits applied' : 'Apply failed'}</MessageBarTitle>
             {applyResult.text}
             {applyResult.applied && applyResult.applied.length > 0 && (
-              <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: 18 }}>{applyResult.applied.map((a, i) => <li key={i}>{a}</li>)}</ul>
+              <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL }}>{applyResult.applied.map((a, i) => <li key={i}>{a}</li>)}</ul>
             )}
             {applyResult.skipped && applyResult.skipped.length > 0 && (
               <div style={{ marginTop: tokens.spacingVerticalS}}><strong>Skipped:</strong>
-                <ul style={{ margin: `${tokens.spacingVerticalXXS} 0 0`, paddingLeft: 18 }}>{applyResult.skipped.map((a, i) => <li key={i}>{a}</li>)}</ul>
+                <ul style={{ margin: `${tokens.spacingVerticalXXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL }}>{applyResult.skipped.map((a, i) => <li key={i}>{a}</li>)}</ul>
               </div>
             )}
           </MessageBarBody>
@@ -1223,7 +1224,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!datasetId) return;
     setModelLoading(true); setModelGate(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (!j.ok && j.gate) { setModelGate(j.gate); setModelTables(null); return; }
       if (!j.ok) { setModelGate({ missing: 'error', detail: j.error || `HTTP ${r.status}` }); setModelTables(null); return; }
@@ -1258,7 +1259,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const loadModelingSlice = useCallback(async () => {
     if (!id) { setModelingSlice({ whatIfParameters: [], calculatedTables: [], dateTables: [] }); return; }
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/model`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(id)}/model`);
       const j = await r.json().catch(() => ({}));
       setModelingSlice({
         whatIfParameters: Array.isArray(j?.whatIfParameters) ? j.whatIfParameters : [],
@@ -1281,7 +1282,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     // (TMSL Alter requires every read-write property, not a partial patch).
     const full: SmColumn = { ...editCol.col, ...colPatch };
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ op: 'alter-column', tableName: editCol.tableName, columnName: editCol.col.name, column: full }),
       });
@@ -1298,7 +1299,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!datasetId || !selectedTableName || !calcColName.trim() || !calcColExpr.trim()) return;
     setCalcBusy(true); setCalcMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           op: 'add-calculated-column', tableName: selectedTableName,
@@ -1318,7 +1319,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!datasetId || !calcTableName.trim() || !calcTableExpr.trim()) return;
     setCalcBusy(true); setCalcMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ op: 'add-calculated-table', tableName: calcTableName.trim(), expression: calcTableExpr.trim() }),
       });
@@ -1395,7 +1396,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const loadRoles = useCallback(async (dsId: string, wsId: string) => {
     setSecBusy(true); setSecErr(null); setSecGate(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/roles?workspaceId=${encodeURIComponent(wsId)}&catalog=${encodeURIComponent(dsId)}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/roles?workspaceId=${encodeURIComponent(wsId)}&catalog=${encodeURIComponent(dsId)}`);
       const j = await r.json();
       if (r.status === 501 && j.gate) { setSecGate(j.gate); setSecRoles([]); return; }
       if (!j.ok) { setSecErr(j.error || `HTTP ${r.status}`); setSecRoles([]); return; }
@@ -1417,7 +1418,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     }
     setSecSaving(true); setSecSaveMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ roles: secRoles }),
       });
@@ -1432,7 +1433,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!datasetId || !secSelectedRole || !testRoleUpn.trim() || !testQuery.trim()) return;
     setTestBusy(true); setTestErr(null); setTestResult(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?action=test&workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/roles?action=test&workspaceId=${encodeURIComponent(workspaceId)}&catalog=${encodeURIComponent(datasetId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ roleName: secSelectedRole, effectiveUserName: testRoleUpn.trim(), daxQuery: testQuery }),
       });
@@ -1500,7 +1501,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!workspaceId || !datasetId || !aggTableName.trim() || aggAltMaps.length === 0) return;
     setAggBusy(true); setAggMsg(null); setAggProbeResult(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/semantic-model/${encodeURIComponent(datasetId)}/model?workspaceId=${encodeURIComponent(workspaceId)}`,
         {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -1596,7 +1597,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!dsId) return;
     setDlLoading(true); setDlMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/direct-lake${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/direct-lake${wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : ''}`);
       const j = await r.json();
       if (!j.ok) { setDlMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); setDlEnabled(true); return; }
       setDlEnabled(!!j.shimEnabled);
@@ -1644,7 +1645,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     }
     setDlBusy(true); setDlMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/direct-lake`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/direct-lake`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           deltaSourcePath: dlDeltaPath.trim(),
@@ -1711,7 +1712,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const runIngest = useCallback(async () => {
     setIngestRunning(true); setIngestResult(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(id)}/ingest`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(id)}/ingest`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           mScript: typeof window === 'undefined' ? '' : window.btoa(unescape(encodeURIComponent(ingestMScript))),
@@ -1730,7 +1731,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
     try {
-      const r = await fetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDatasets([]); setListErr(j.error); return; }
       setDatasets(j.datasets || []);
@@ -1743,7 +1744,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const loadDetail = useCallback(async (wsId: string, dsId: string) => {
     setDetailErr(null); setDetail(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
       setDetail({ dataset: j.dataset, tables: j.tables || [], refreshSchedule: j.refreshSchedule });
@@ -1753,7 +1754,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
 
   const loadRefreshes = useCallback(async (wsId: string, dsId: string) => {
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/refreshes?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/refreshes?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (j.ok) setRefreshes(j.refreshes || []);
     } catch { /* silently keep last */ }
@@ -1764,7 +1765,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
   const loadModelObjects = useCallback(async (wsId: string, dsId: string) => {
     try {
       const q = wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : '';
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/model${q}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(dsId)}/model${q}`);
       const j = await r.json();
       if (j.ok) {
         if (Array.isArray(j.calculationGroups)) setCalcGroups(j.calculationGroups);
@@ -1778,7 +1779,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     setCgBusy(true); setCgMsg(null);
     try {
       const q = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ calculationGroups: calcGroups }),
       });
@@ -1794,7 +1795,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     setFpBusy(true); setFpMsg(null);
     try {
       const q = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : '';
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${q}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fieldParameters: fieldParams }),
       });
@@ -1839,7 +1840,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!workspaceId || !datasetId) return;
     setRefreshing(true); setRefreshErr(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) setRefreshErr(j.error || 'refresh failed');
       else { setTimeout(() => loadRefreshes(workspaceId, datasetId), 1500); }
@@ -1871,7 +1872,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     setSchedBusy(true); setSchedMsg(null);
     const times = schedTimes.split(',').map((t) => t.trim()).filter(Boolean);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-schedule?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-schedule?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enabled: schedEnabled, days: schedDays, times, localTimeZoneId: schedTz, notifyOption: schedNotify }),
       });
@@ -1887,7 +1888,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!workspaceId || !datasetId) return;
     setTakeoverBusy(true); setSchedMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/take-over?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/take-over?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) { setSchedMsg({ ok: false, text: j.error || `HTTP ${r.status}` }); return; }
       setSchedMsg({ ok: true, text: 'Dataset taken over by the Console identity. You can now edit the schedule.' });
@@ -1902,7 +1903,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!workspaceId || !datasetId) return;
     setIrGate(null); setIrPartitions([]);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}&tableName=${encodeURIComponent(irTableName)}`);
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}&tableName=${encodeURIComponent(irTableName)}`);
       const j = await r.json();
       if (!j.ok) { setIrGate(j.error); return; }
       setIrPartitions(j.partitions || []);
@@ -1916,7 +1917,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!workspaceId || !datasetId || !irTableName) return;
     setIrBusy(true); setIrMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refresh-policy?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           tableName: irTableName,
@@ -1947,7 +1948,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!workspaceId || !datasetId) return;
     setEnhBusy(true); setEnhMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refreshes?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/refreshes?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           type: 'full',
@@ -1990,7 +1991,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
           toTable: r.toTable!, toColumn: r.toColumn!,
           crossFilteringBehavior: (r.crossFilteringBehavior === 'bothDirections' ? 'bothDirections' : 'oneDirection') as 'oneDirection' | 'bothDirections',
         }));
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/semantic-model/${encodeURIComponent(datasetId)}/datasource?workspaceId=${encodeURIComponent(workspaceId)}`,
         {
           method: 'POST', headers: { 'content-type': 'application/json' },
@@ -2019,7 +2020,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!workspaceId || !datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()) return;
     setDaxBusy(true); setDaxResult(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/measures?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/measures?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ measureName: measureName.trim(), tableName: measureTable.trim(), daxExpression: daxExpr }),
       });
@@ -2040,7 +2041,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model`);
+        const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model`);
         const j = await r.json();
         if (!cancelled) setXmlaPersistence(!!j?.xmlaPersistence);
       } catch { if (!cancelled) setXmlaPersistence(false); }
@@ -2057,7 +2058,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!datasetId || !measureName.trim() || !measureTable.trim() || !daxExpr.trim()) return;
     setSaveBusy(true); setSaveResult(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(datasetId)}/model${workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           tableName: measureTable.trim(),
@@ -2095,7 +2096,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     setDlqLoading(true); setDlResult(null);
     try {
       const dsPath = datasetId ? encodeURIComponent(datasetId) : '_';
-      const r = await fetch(`/api/items/semantic-model/${dsPath}/direct-lake`, {
+      const r = await clientFetch(`/api/items/semantic-model/${dsPath}/direct-lake`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, table: dlTable, maxRows: dlMaxRows }),
@@ -2116,7 +2117,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
     if (!workspaceId || !bModelName.trim() || bTables.length === 0) return;
     setBBusy(true); setBMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/build?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/semantic-model/build?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: bModelName.trim(),
@@ -2930,7 +2931,7 @@ export function SemanticModelEditor({ item, id }: { item: FabricItemType; id: st
                       <div key={`${t.name}-${m.name}`} className={s.card} style={{ marginTop: tokens.spacingVerticalS}}>
                         <Caption1>{t.name}</Caption1>
                         <div style={{ fontWeight: 600 }}>{m.name}</div>
-                        <pre style={{ margin: 0, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: '100%' }}>{m.expression || '—'}</pre>
+                        <pre style={{ margin: tokens.spacingVerticalNone, fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', maxWidth: '100%' }}>{m.expression || '—'}</pre>
                       </div>
                     )))}
                     {((detail?.tables || []).flatMap((t) => t.measures || []).length === 0) && (

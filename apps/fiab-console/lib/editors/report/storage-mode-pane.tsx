@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * storage-mode-pane — per-table STORAGE / CONNECTIVITY MODE editor for a Loom
  * report, and the SHARED-CONTRACT source of truth for the `StorageMode` /
@@ -344,7 +345,7 @@ export function StorageModePane({ reportId, dataSource, onChange }: StorageModeP
       // 1. /data-source — the authoritative bound source + persisted tableStorage.
       let ds: ReportDataSource | null = dataSource ?? null;
       try {
-        const dsRes = await fetch(`/api/items/report/${reportId}/data-source`);
+        const dsRes = await clientFetch(`/api/items/report/${reportId}/data-source`);
         const dsJson = await dsRes.json().catch(() => ({}));
         if (dsJson && typeof dsJson === 'object') {
           if (!ds && dsJson.dataSource) ds = dsJson.dataSource as ReportDataSource;
@@ -356,7 +357,7 @@ export function StorageModePane({ reportId, dataSource, onChange }: StorageModeP
       if (!isBound(ds)) { setTables(null); setLoading(false); return; }
 
       // 2. /fields — the real resolver-introspected schema (no mock).
-      const fRes = await fetch(`/api/items/report/${reportId}/fields`);
+      const fRes = await clientFetch(`/api/items/report/${reportId}/fields`);
       const fJson = await fRes.json().catch(() => ({}));
       if (!fJson?.ok) {
         if (fRes.status === 412) setGate(fJson?.error || 'This report has no resolvable model schema yet.');
@@ -374,7 +375,7 @@ export function StorageModePane({ reportId, dataSource, onChange }: StorageModeP
       // 3. refresh GET — last-materialization per table (served by the rewritten
       //    Azure-native refresh route). Defensive: absent / 405 ⇒ no cache yet.
       try {
-        const rRes = await fetch(`/api/items/report/${reportId}/refresh`);
+        const rRes = await clientFetch(`/api/items/report/${reportId}/refresh`);
         if (rRes.ok) {
           const rJson = await rRes.json().catch(() => ({}));
           setLastRefresh(rJson?.ok && rJson.lastRefresh && typeof rJson.lastRefresh === 'object'
@@ -406,7 +407,7 @@ export function StorageModePane({ reportId, dataSource, onChange }: StorageModeP
     setMap(next);
     setSavingTable(table); setSavedTable(null); setSaveErr(null);
     try {
-      const res = await fetch(`/api/items/report/${reportId}/data-source`, {
+      const res = await clientFetch(`/api/items/report/${reportId}/data-source`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tableStorage: next }),

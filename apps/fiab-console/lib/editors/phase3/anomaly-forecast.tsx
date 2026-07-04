@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AnomalyForecastDialog — native-KQL time-series anomaly detection + forecasting
  * over the Azure-native ADX cluster (no Fabric, no external ML service).
@@ -138,7 +139,7 @@ export function AnomalyForecastDialog({
     if (!fetchSchema || !tbl || !itemId || itemId === 'new') { setColumns([]); return; }
     setColsLoading(true);
     try {
-      const r = await fetch(`/api/adx/tables?id=${encodeURIComponent(itemId)}&schema=${encodeURIComponent(tbl)}`);
+      const r = await clientFetch(`/api/adx/tables?id=${encodeURIComponent(itemId)}&schema=${encodeURIComponent(tbl)}`);
       const j = await r.json().catch(() => ({}));
       const cols = j?.ok && j.cslSchema ? parseKustoSchema(j.cslSchema) : [];
       setColumns(cols);
@@ -158,7 +159,7 @@ export function AnomalyForecastDialog({
   const run = useCallback(async () => {
     setRunning(true); setResp(null);
     try {
-      const r = await fetch(`/api/adx/anomaly?id=${encodeURIComponent(itemId)}`, {
+      const r = await clientFetch(`/api/adx/anomaly?id=${encodeURIComponent(itemId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

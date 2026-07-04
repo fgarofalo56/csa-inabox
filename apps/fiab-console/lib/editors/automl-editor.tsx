@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AutoML editor — the low-code Automated ML wizard over Azure Machine Learning
  * AutoML (Fabric Build 2026 #37; there is no Fabric "AutoML" item, so this is
@@ -218,7 +219,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
   const loadOptions = useCallback(async () => {
     setOptionsLoading(true);
     try {
-      const r = await fetch('/api/items/automl/options');
+      const r = await clientFetch('/api/items/automl/options');
       const j = await r.json();
       if (j.configured === false) {
         setConfigured(false);
@@ -270,7 +271,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
   const loadJobs = useCallback(async () => {
     setJobsLoading(true);
     try {
-      const r = await fetch('/api/items/automl/jobs?maxResults=100');
+      const r = await clientFetch('/api/items/automl/jobs?maxResults=100');
       const j = await r.json();
       if (j.configured === false) {
         setConfigured(false);
@@ -363,7 +364,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
             .split(',').map((s) => s.trim()).filter(Boolean),
         };
       }
-      const r = await fetch('/api/items/automl/submit', {
+      const r = await clientFetch('/api/items/automl/submit', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -386,7 +387,7 @@ export function AutoMlEditor({ item, id }: { item: FabricItemType; id: string })
   const cancelJob = useCallback(async (name: string) => {
     setCancelingName(name);
     try {
-      const r = await fetch(`/api/items/automl/jobs/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/automl/jobs/${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await r.json();
       if (j.ok) setTimeout(loadJobs, 1200);
     } finally {

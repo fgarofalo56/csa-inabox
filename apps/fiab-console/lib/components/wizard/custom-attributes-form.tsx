@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CustomAttributesForm (F17)
  * --------------------------
@@ -83,7 +84,7 @@ export function CustomAttributesForm({
     let cancelled = false;
     setLoading(true);
     setError(null);
-    fetch(`/api/attribute-groups?domainId=${encodeURIComponent(domainId)}`)
+    clientFetch(`/api/attribute-groups?domainId=${encodeURIComponent(domainId)}`)
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Graph Model editor (Cosmos config + real ADX materialize).
  *
@@ -342,7 +343,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     const q = typeof queryText === 'string' ? queryText : gql;
     setQRunning(true); setQResult(null);
     try {
-      const r = await fetch(`/api/items/graph-model/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/graph-model/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           database: state.database, gql: q,
@@ -528,7 +529,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     const ok = await save();
     if (!ok) { setMaterializing(false); return; }
     try {
-      const r = await fetch(`/api/items/graph-model/${encodeURIComponent(id)}/materialize`, {
+      const r = await clientFetch(`/api/items/graph-model/${encodeURIComponent(id)}/materialize`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ database: state.database, nodes: arr(state.nodes), edges: arr(state.edges) }),
@@ -628,7 +629,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
                   : 'Build graph failed'}
               </MessageBarTitle>
               {Array.isArray(matResult.created) && matResult.created.length > 0 && (
-                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0 ${tokens.spacingHorizontalL}`, padding: 0 }}>
+                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0 ${tokens.spacingHorizontalL}`, padding: tokens.spacingVerticalNone }}>
                   {matResult.created.map((c: any, i: number) => {
                     const tbl = `${c.kind === 'node' ? 'Node_' : 'Edge_'}${c.name}`;
                     const rows = matResult.counts && (tbl in matResult.counts) ? matResult.counts[tbl] : undefined;
@@ -641,7 +642,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
                 </ul>
               )}
               {Array.isArray(matResult.loaded) && matResult.loaded.some((l: any) => !l.ok) && (
-                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0 ${tokens.spacingHorizontalL}`, padding: 0 }}>
+                <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0 ${tokens.spacingHorizontalL}`, padding: tokens.spacingVerticalNone }}>
                   {matResult.loaded.filter((l: any) => !l.ok).map((l: any, i: number) => (
                     <li key={i} style={{ fontFamily: 'monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', color: tokens.colorPaletteRedForeground1 }}>
                       load {l.table} failed — {l.error}
@@ -748,7 +749,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
             <div>
               <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Composed query (read-only — also copied into the editor below when run):</Caption1>
               <pre aria-label="Composed GQL query" style={{
-                margin: 0, marginTop: tokens.spacingVerticalXXS, padding: tokens.spacingVerticalS,
+                margin: tokens.spacingVerticalNone, marginTop: tokens.spacingVerticalXXS, padding: tokens.spacingVerticalS,
                 fontFamily: tokens.fontFamilyMonospace, fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
                 borderRadius: tokens.borderRadiusMedium, border: `1px solid ${tokens.colorNeutralStroke2}`,
                 backgroundColor: tokens.colorNeutralBackground1, color: tokens.colorNeutralForeground2,

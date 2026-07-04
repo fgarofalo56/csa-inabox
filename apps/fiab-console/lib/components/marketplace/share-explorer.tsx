@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ShareExplorer — the in-Loom "Explore / Query" experience for a SUBSCRIBED
  * Delta Share's mounted, read-only Unity Catalog catalog.
@@ -146,7 +147,7 @@ export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: s
     if (!host) { setBrowseErr('No workspace host bound.'); setSchemas([]); return; }
     setBrowseErr(null); setSchemas(null);
     try {
-      const r = await fetch(`/api/catalog/browse?source=unity-catalog&path=${encodeURIComponent([host, catalog].join('|'))}`);
+      const r = await clientFetch(`/api/catalog/browse?source=unity-catalog&path=${encodeURIComponent([host, catalog].join('|'))}`);
       const j = await r.json().catch(() => ({}));
       if (!j.ok) { setBrowseErr(j.error || `HTTP ${r.status}`); setSchemas([]); return; }
       setSchemas((j.nodes || []).map((n: any) => n.id as string));
@@ -162,7 +163,7 @@ export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: s
     if (!host) return;
     setExpanded((prev) => ({ ...prev, [schema]: { tables: null } }));
     try {
-      const r = await fetch(`/api/catalog/browse?source=unity-catalog&path=${encodeURIComponent([host, catalog, schema].join('|'))}`);
+      const r = await clientFetch(`/api/catalog/browse?source=unity-catalog&path=${encodeURIComponent([host, catalog, schema].join('|'))}`);
       const j = await r.json().catch(() => ({}));
       if (!j.ok) { setExpanded((prev) => ({ ...prev, [schema]: { tables: [], err: j.error || `HTTP ${r.status}` } })); return; }
       const tables = (j.nodes || []).filter((n: any) => n.kind === 'table').map((n: any) => n.label as string);
@@ -176,7 +177,7 @@ export function ShareExplorerPanel({ catalog, host }: { catalog: string; host: s
   const runSql = useCallback(async (statement: string, schema?: string) => {
     setRunning(true); setQueryErr(null); setGate(null); setFilter('');
     try {
-      const r = await fetch('/api/marketplace/sharing/query', {
+      const r = await clientFetch('/api/marketplace/sharing/query', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ catalog, schema, sql: statement }),
       });

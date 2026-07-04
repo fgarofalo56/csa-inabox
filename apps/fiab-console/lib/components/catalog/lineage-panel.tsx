@@ -1,4 +1,5 @@
 'use client';
+import { clientFetch } from '@/lib/client-fetch';
 import { useEffect, useRef, useState } from 'react';
 import {
   Spinner, MessageBar, MessageBarBody, MessageBarTitle, Button, Badge, Switch,
@@ -72,7 +73,7 @@ export function LineagePanel({ source, id, host, workspaceId, itemId }: LineageP
     if (itemId) params.set('itemId', itemId);
     if (merge && mergeable) params.set('merge', 'true');
     if (columns && columnsAvailable) params.set('columns', 'true');
-    fetch(`/api/catalog/lineage/item?${params.toString()}`)
+    clientFetch(`/api/catalog/lineage/item?${params.toString()}`)
       .then(r => r.json())
       .then(j => {
         if (!j.ok) { setError(j.error); setHint(j.hint); return; }

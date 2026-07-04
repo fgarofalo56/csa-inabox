@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ManageAccessPane — F5 workspace RBAC "Manage access" side-pane.
  *
@@ -154,7 +155,7 @@ function ManageAccessBody({ workspaceId }: { workspaceId: string }) {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId}/role-assignments`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/workspaces/${workspaceId}/role-assignments`, { cache: 'no-store' });
       const json = await res.json();
       if (!res.ok || !json.ok) { setLoadError(json?.error || `HTTP ${res.status}`); return; }
       setData(json as ListResponse);
@@ -168,7 +169,7 @@ function ManageAccessBody({ workspaceId }: { workspaceId: string }) {
   const remove = useCallback(async (principalId: string) => {
     setRemoving(principalId);
     try {
-      await fetch(`/api/workspaces/${workspaceId}/role-assignments/${encodeURIComponent(principalId)}`, { method: 'DELETE' });
+      await clientFetch(`/api/workspaces/${workspaceId}/role-assignments/${encodeURIComponent(principalId)}`, { method: 'DELETE' });
       await load();
     } finally {
       setRemoving(null);
@@ -307,7 +308,7 @@ function AddRoleDialog({
     const handle = setTimeout(async () => {
       setSearching(true); setSearchGate(null);
       try {
-        const res = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${kind}`, { cache: 'no-store' });
+        const res = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${kind}`, { cache: 'no-store' });
         const json = await res.json();
         if (!res.ok || !json.ok) {
           setSearchGate({ message: json?.error || `Graph ${res.status}`, remediation: json?.remediation });
@@ -328,7 +329,7 @@ function AddRoleDialog({
     if (!selected) return;
     setSaving(true); setError(null);
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId}/role-assignments`, {
+      const res = await clientFetch(`/api/workspaces/${workspaceId}/role-assignments`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

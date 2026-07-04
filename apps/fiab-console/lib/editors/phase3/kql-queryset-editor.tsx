@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * KqlQuerysetEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -103,7 +104,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     // Pre-save gate: /items/kql-queryset/new fires this before any record exists.
     if (!id || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/kql-queryset/${id}`);
+      const r = await clientFetch(`/api/items/kql-queryset/${id}`);
       const j = (await r.json()) as QuerysetState;
       setQs(j);
       const arr = j.queries || [];
@@ -167,7 +168,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     // is the authoritative source.
     const updated = queries.map((q, i) => i === selectedIdx ? draft : q);
     try {
-      const r = await fetch(`/api/items/kql-queryset/${id}`, {
+      const r = await clientFetch(`/api/items/kql-queryset/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ queries: updated }),
@@ -216,7 +217,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     const ctrl = new AbortController();
     abortRef.current = ctrl;
     try {
-      const r = await fetch(`/api/items/kql-queryset/${id}/run`, {
+      const r = await clientFetch(`/api/items/kql-queryset/${id}/run`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -245,7 +246,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     setPinErr(null);
     setPinTitle(draft.title || 'Pinned from queryset');
     try {
-      const r = await fetch('/api/items?type=kql-dashboard');
+      const r = await clientFetch('/api/items?type=kql-dashboard');
       const j = await r.json();
       const arr: Array<{ id: string; displayName?: string; name?: string }> = j?.items || j?.value || [];
       const dashboards = arr.map((d) => ({ id: d.id, name: d.displayName || d.name || d.id }));
@@ -262,10 +263,10 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     setPinBusy(true); setPinErr(null);
     try {
       // Read current tiles + append; PUT the new array.
-      const cur = await fetch(`/api/items/kql-dashboard/${pinDashboardId}`).then((r) => r.json());
+      const cur = await clientFetch(`/api/items/kql-dashboard/${pinDashboardId}`).then((r) => r.json());
       const tiles = Array.isArray(cur?.tiles) ? cur.tiles : [];
       tiles.push({ title: pinTitle || draft.title || 'Pinned tile', kql: draft.kql, viz: 'table', database: draft.database });
-      const r = await fetch(`/api/items/kql-dashboard/${pinDashboardId}`, {
+      const r = await clientFetch(`/api/items/kql-dashboard/${pinDashboardId}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tiles }),
       });
@@ -285,7 +286,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     setAlertErr(null);
     setAlertName(`alert-${(draft.title || 'queryset').toLowerCase().replace(/[^a-z0-9-]/g, '-')}`);
     try {
-      const r = await fetch('/api/items?type=activator');
+      const r = await clientFetch('/api/items?type=activator');
       const j = await r.json();
       const arr: Array<{ id: string; displayName?: string; name?: string }> = j?.items || j?.value || [];
       const acts = arr.map((d) => ({ id: d.id, name: d.displayName || d.name || d.id }));
@@ -301,7 +302,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     if (!draft.kql.trim()) { setAlertErr('Query is empty'); return; }
     setAlertBusy(true); setAlertErr(null);
     try {
-      const r = await fetch(`/api/items/activator/${alertActivatorId}/rules`, {
+      const r = await clientFetch(`/api/items/activator/${alertActivatorId}/rules`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: alertName,
@@ -323,7 +324,7 @@ export function KqlQuerysetEditor({ item, id }: { item: FabricItemType; id: stri
     lastModeRef.current = mode;
     setAssistView('loading'); setAssistError(null);
     try {
-      const r = await fetch(`/api/items/kql-queryset/${id}/assist`, {
+      const r = await clientFetch(`/api/items/kql-queryset/${id}/assist`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           mode,

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Setup Wizard — "Identity & Admin" card (deploy-readiness, GH #1383).
  *
@@ -67,7 +68,7 @@ export function SetupIdentityCard() {
     let active = true;
     (async () => {
       try {
-        const r = await fetch('/api/setup/identity', { cache: 'no-store' });
+        const r = await clientFetch('/api/setup/identity', { cache: 'no-store' });
         const j = await r.json();
         if (!active) return;
         if (!j?.ok) {
@@ -91,7 +92,7 @@ export function SetupIdentityCard() {
   async function apply() {
     setSaved(null);
     try {
-      const r = await fetch('/api/setup/identity', {
+      const r = await clientFetch('/api/setup/identity', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

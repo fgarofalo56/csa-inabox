@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * KqlDashboardEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -394,7 +395,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     }
     const qs = sp.toString();
     try {
-      const r = await fetch(`/api/items/kql-dashboard/${id}${qs ? '?' + qs : ''}`);
+      const r = await clientFetch(`/api/items/kql-dashboard/${id}${qs ? '?' + qs : ''}`);
       const ct = r.headers.get('content-type') || '';
       const j: DashboardState = ct.includes('application/json')
         ? await r.json()
@@ -420,7 +421,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     runInFlightRef.current = true;
     setRunning(true); setSaveErr(null);
     try {
-      const r = await fetch(`/api/items/kql-dashboard/${id}/run`, {
+      const r = await clientFetch(`/api/items/kql-dashboard/${id}/run`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(buildModel()),
@@ -454,7 +455,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/items/eventhouse/cluster');
+        const r = await clientFetch('/api/items/eventhouse/cluster');
         const ct = r.headers.get('content-type') || '';
         const j = ct.includes('application/json') ? await r.json() : { ok: false };
         if (!cancelled && j.ok && Array.isArray(j.databases)) {
@@ -489,7 +490,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     if (!prompt) { setAiErr('Describe the tile you want (e.g. "errors per service over time").'); return; }
     setAiBusy(true); setAiErr(null); setAiNote(null);
     try {
-      const r = await fetch(`/api/items/kql-dashboard/${id}/generate-tile`, {
+      const r = await clientFetch(`/api/items/kql-dashboard/${id}/generate-tile`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ prompt, dataSourceId: aiDataSourceId || undefined, timeRange }),
@@ -580,7 +581,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     if (!t) return;
     updateTile(idx, { error: undefined });
     try {
-      const r = await fetch(`/api/items/kql-dashboard/${id}/run`, {
+      const r = await clientFetch(`/api/items/kql-dashboard/${id}/run`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...buildModel(), tiles: [{ title: t.title, kql: t.kql, viz: t.viz, dataSourceId: t.dataSourceId, database: t.database }] }),
@@ -650,7 +651,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
     setAlertBusy(true); setAlertErr(null); setAlertHint(null); setAlertResult(null);
     try {
       const action = alertEmail.trim() ? { target: alertEmail.trim() } : undefined;
-      const r = await fetch(`/api/items/kql-dashboard/${id}/activator`, {
+      const r = await clientFetch(`/api/items/kql-dashboard/${id}/activator`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -710,7 +711,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const save = useCallback(async () => {
     setSaving(true); setSaveErr(null); setSaveMsg('Saving…');
     try {
-      const r = await fetch(`/api/items/kql-dashboard/${id}`, {
+      const r = await clientFetch(`/api/items/kql-dashboard/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(buildModel()),
@@ -806,7 +807,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
   const loadParamValues = useCallback(async (p: DashParam) => {
     if (p.type !== 'query' || !p.query?.trim()) return;
     try {
-      const r = await fetch(`/api/items/kql-dashboard/${id}/param-values`, {
+      const r = await clientFetch(`/api/items/kql-dashboard/${id}/param-values`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query: p.query, dataSourceId: p.dataSourceId, dataSources }),
@@ -1131,7 +1132,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     {/* Drill-through (Fabric: visual Interactions > Drillthrough).
                         Clicking a result value sets a dashboard parameter and
                         re-runs every tile (single-page cross-filter). */}
-                    <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: tokens.spacingVerticalXS}}>
+                    <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS}}>
                       <Caption1 style={{ fontWeight: 600 }}>Drill-through</Caption1>
                       <Caption1 style={{ color: tokens.colorNeutralForeground3, display: 'block', marginBottom: tokens.spacingVerticalXS}}>
                         Clicking a value in this tile injects it into a dashboard parameter and re-runs all tiles.
@@ -1209,7 +1210,7 @@ export function KqlDashboardEditor({ item, id }: { item: FabricItemType; id: str
                     {/* Conditional formatting (Fabric RTD: color by condition / by value).
                         Applies to table + stat (card) visuals. */}
                     {(t.viz === 'table' || t.viz === 'stat') && (
-                      <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: 8, marginTop: tokens.spacingVerticalXS}}>
+                      <div style={{ borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalS, marginTop: tokens.spacingVerticalXS}}>
                         <ConditionalFormattingEditor
                           viz={t.viz}
                           rules={t.conditionalRules || []}

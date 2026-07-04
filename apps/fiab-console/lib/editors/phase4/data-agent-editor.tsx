@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Data Agent editor (typed source picker + grounded test chat + eval + monitoring).
  *
@@ -208,7 +209,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     if (!cfg.itemType) { setAvailable((prev) => ({ ...prev, [t]: [] })); return; }
     setPickerLoading(true);
     try {
-      const r = await fetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}`);
+      const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(cfg.itemType)}`);
       const j = await r.json();
       const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
       setAvailable((prev) => ({ ...prev, [t]: items }));
@@ -271,7 +272,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
 
   const loadConvos = useCallback(async () => {
     try {
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`);
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`);
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setConvos(j.conversations || []);
     } catch { /* non-fatal */ }
@@ -281,7 +282,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
   const saveConvo = useCallback(async (thread: DaChatMsg[]) => {
     if (!thread.length || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`, {
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ conversationId: convId || undefined, messages: thread }),
       });
@@ -292,7 +293,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
 
   const loadConvo = useCallback(async (cid: string) => {
     try {
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations?conversationId=${encodeURIComponent(cid)}`);
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/conversations?conversationId=${encodeURIComponent(cid)}`);
       const j = await r.json().catch(() => ({}));
       if (j?.ok && Array.isArray(j.conversation?.messages)) {
         setChat(j.conversation.messages as DaChatMsg[]);
@@ -358,7 +359,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
           return;
         }
       }
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish`, {
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ description: state.description, alias: state.alias || undefined }),
       });
@@ -422,7 +423,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     if (typeof window !== 'undefined' && !window.confirm('Delete this data agent? This removes the agent and its configuration permanently. This cannot be undone.')) return;
     setDeleting(true);
     try {
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j?.ok === false) {
         setPublishResult({ ok: false, error: `Delete failed: ${j?.error || `HTTP ${r.status}`}` });
@@ -454,7 +455,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     if (!q || inspecting) return;
     setInspecting(true); setInspectResult(null); setInspectGate(null);
     try {
-      const r = await fetch('/api/data-agent/run-steps', {
+      const r = await clientFetch('/api/data-agent/run-steps', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ agent: agent || undefined, question: q, id }),
       });
@@ -497,7 +498,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
     setEvaluating(true); setEvalGate(null); setEvalError(null);
     try {
       if (dirty) await save();
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/evaluate`, {
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/evaluate`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ questions }),
       });
@@ -1262,7 +1263,7 @@ function SourceSchemaTree({ id, src, onChange }: { id: string; src: DaSource; on
     setLoadingSchema(true); setGate(null); setErr(null);
     try {
       const params = new URLSearchParams({ sourceKind: src.type, name: src.name });
-      const r = await fetch(`/api/items/data-agent/${encodeURIComponent(id)}/source-schema?${params.toString()}`);
+      const r = await clientFetch(`/api/items/data-agent/${encodeURIComponent(id)}/source-schema?${params.toString()}`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         if (j?.gate) setGate(j.gate.remediation || j.gate.reason || 'Schema unavailable.');
@@ -1525,7 +1526,7 @@ function DataAgentMonitoringPanel({ id }: { id: string }) {
     if (!workspaceId) return;
     setLoading(true); setListErr(null); setGate(null);
     try {
-      const r = await fetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         setRules([]);
@@ -1551,7 +1552,7 @@ function DataAgentMonitoringPanel({ id }: { id: string }) {
     if (query.trim()) body.query = query.trim();
     if (sourceTable.trim()) body.sourceTable = sourceTable.trim();
     try {
-      const r = await fetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -1572,7 +1573,7 @@ function DataAgentMonitoringPanel({ id }: { id: string }) {
     if (!workspaceId) return;
     setTriggering(ruleId); setTriggerResult(null); setListErr(null); setGate(null);
     try {
-      const r = await fetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/activator/${encodeURIComponent(id)}/rules?workspaceId=${encodeURIComponent(workspaceId)}&trigger=${encodeURIComponent(ruleId)}`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) {
         if (j?.gate) setGate(j.gate);

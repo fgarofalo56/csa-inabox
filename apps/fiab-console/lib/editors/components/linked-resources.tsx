@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * LinkedResourcesPanel — F10 "Linked resources" surface for the data-product
  * editor. Three sections, each with an ellipsis (⋯) Remove per row:
@@ -85,7 +86,7 @@ function GlossarySection({
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/admin/security/purview/glossary?list=glossaries');
+        const r = await clientFetch('/api/admin/security/purview/glossary?list=glossaries');
         const j = await r.json();
         if (r.status === 501) { setGate('Purview not provisioned (LOOM_PURVIEW_ACCOUNT unset) — glossary search is unavailable, but you can still manage already-linked terms.'); return; }
         if (j?.ok) setGlossaries(j.glossaries || []);
@@ -99,7 +100,7 @@ function GlossarySection({
       const qs = new URLSearchParams();
       if (glossaryGuid) qs.set('glossaryGuid', glossaryGuid);
       if (keyword.trim()) qs.set('keyword', keyword.trim());
-      const r = await fetch(`/api/admin/security/purview/glossary?${qs.toString()}`);
+      const r = await clientFetch(`/api/admin/security/purview/glossary?${qs.toString()}`);
       const j = await r.json();
       if (r.status === 501) { setGate('Purview not provisioned (LOOM_PURVIEW_ACCOUNT unset) — set the env var to search the live glossary.'); setResults([]); return; }
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); setResults([]); return; }
@@ -126,7 +127,7 @@ function GlossarySection({
       for (const guid of selected) {
         const term = results.find((t) => t.guid === guid);
         if (!term) continue;
-        const r = await fetch(`/api/data-products/${encodeURIComponent(dataProductId)}/glossary-terms`, {
+        const r = await clientFetch(`/api/data-products/${encodeURIComponent(dataProductId)}/glossary-terms`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ termGuid: term.guid, name: term.name || term.qualifiedName || term.guid, glossaryGuid: glossaryGuid || undefined }),
         });
@@ -147,7 +148,7 @@ function GlossarySection({
     try {
       const qs = new URLSearchParams();
       if (link.guid) qs.set('termGuid', link.guid); else qs.set('name', link.name);
-      const r = await fetch(`/api/data-products/${encodeURIComponent(dataProductId)}/glossary-terms?${qs.toString()}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(dataProductId)}/glossary-terms?${qs.toString()}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
       onLinksChange(j.links || []);
@@ -251,7 +252,7 @@ function OkrSection({ dataProductId }: { dataProductId: string }) {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(dataProductId)}/okrs`);
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(dataProductId)}/okrs`);
       const j = await r.json();
       if (j.ok) setOkrs(j.okrs || []); else { setOkrs([]); setMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); }
     } catch (e: any) { setOkrs([]); setMsg({ intent: 'error', text: e?.message || String(e) }); }
@@ -263,7 +264,7 @@ function OkrSection({ dataProductId }: { dataProductId: string }) {
     if (!name.trim()) { setMsg({ intent: 'error', text: 'OKR name is required.' }); return; }
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(dataProductId)}/okrs`, {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(dataProductId)}/okrs`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), metric: metric.trim() || undefined, target: target.trim() || undefined, current: current.trim() || undefined, status, description: description.trim() || undefined }),
       });
@@ -279,7 +280,7 @@ function OkrSection({ dataProductId }: { dataProductId: string }) {
   const remove = useCallback(async (okrId: string) => {
     setMsg(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(dataProductId)}/okrs?okrId=${encodeURIComponent(okrId)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(dataProductId)}/okrs?okrId=${encodeURIComponent(okrId)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
       load();
@@ -354,7 +355,7 @@ function CdeSection({ dataProductId, refreshKey }: { dataProductId: string; refr
   const load = useCallback(async () => {
     setErr(null); setGated(null); setNote(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(dataProductId)}/cdes`);
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(dataProductId)}/cdes`);
       const j = await r.json();
       if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); setCdes([]); return; }
       setCdes(j.cdes || []);

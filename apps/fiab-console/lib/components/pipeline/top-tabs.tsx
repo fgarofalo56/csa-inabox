@@ -61,7 +61,7 @@ export function TopTabs({ active, onChange, counts, children }: TopTabsProps) {
             <Tab key={t.id} value={t.id}>
               {t.label}
               {typeof n === 'number' && n > 0 && (
-                <Badge size="small" appearance="outline" style={{ marginLeft: 6 }}>{n}</Badge>
+                <Badge size="small" appearance="outline" style={{ marginLeft: tokens.spacingHorizontalSNudge }}>{n}</Badge>
               )}
             </Tab>
           );

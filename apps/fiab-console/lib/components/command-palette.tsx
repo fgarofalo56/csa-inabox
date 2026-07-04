@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CommandPalette — Ctrl+K (or Cmd+K on Mac) opens a fuzzy-search modal
  * over every navigable surface and every Fabric item type. Per Phase 6
@@ -121,7 +122,7 @@ export function CommandPalette() {
     debounceRef.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const res = await fetch('/api/search/items', {
+        const res = await clientFetch('/api/search/items', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ q: qq, top: 12 }),
@@ -217,7 +218,7 @@ export function CommandPalette() {
       <DialogSurface className={s.surface}>
         <DialogBody>
           <DialogContent>
-            <div style={{ padding: 12, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
+            <div style={{ padding: tokens.spacingVerticalM, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` }}>
               <Input
                 className={s.input}
                 contentBefore={<Search20Regular />}
@@ -251,7 +252,7 @@ export function CommandPalette() {
                   })}
                 </div>
               ))}
-              {items.length === 0 && <div style={{ padding: 16, color: tokens.colorNeutralForeground3 }}>No matches.</div>}
+              {items.length === 0 && <div style={{ padding: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 }}>No matches.</div>}
             </div>
             <div className={s.hint}>
               <Caption1>↑ ↓ navigate</Caption1>

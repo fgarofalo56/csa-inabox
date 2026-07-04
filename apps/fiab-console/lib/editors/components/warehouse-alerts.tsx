@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WarehouseAlerts — query-result alerting for warehouse-style items, with full
  * parity to the Databricks SQL "Alerts" surface (query + condition + schedule +
@@ -173,7 +174,7 @@ export function WarehouseAlerts({ engine, id, warehouseId, open, onOpenChange }:
   const loadActionGroups = useCallback(async () => {
     setAgNote(null);
     try {
-      const r = await fetch('/api/monitor/action-groups');
+      const r = await clientFetch('/api/monitor/action-groups');
       const j = await r.json();
       if (j.ok && Array.isArray(j.actionGroups)) {
         setActionGroups(j.actionGroups.map((a: any) => ({ id: a.id, name: a.name })));

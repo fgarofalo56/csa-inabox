@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Typed per-activity property forms — the Loom one-for-one of each Azure Data
  * Factory / Synapse activity's Settings panel (ui-parity.md). Instead of making
@@ -451,7 +452,7 @@ function ApprovalTriggerUrlFetcher({
     if (!canFetch) return;
     setBusy(true); setGate(null); setErr(null); setOk(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/${apiSlug}/${encodeURIComponent(itemId!)}/approval-logicapp` +
           `?workspaceId=${encodeURIComponent(workspaceId!)}`,
       );
@@ -472,7 +473,7 @@ function ApprovalTriggerUrlFetcher({
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalS }}>
       <Caption1>
         The Approval activity posts to a Consumption Logic App that sends an Office 365
         approval email and calls back. Declare a <strong>string</strong> pipeline

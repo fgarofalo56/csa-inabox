@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Tapestry — investigative graph workspace (the Azure-native Gotham-equivalent).
  *
@@ -139,7 +140,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
   const runLink = useCallback(async () => {
     setLinkLoading(true); setLinkResult(null);
     try {
-      const r = await fetch(`/api/items/tapestry/${id}/link`, {
+      const r = await clientFetch(`/api/items/tapestry/${id}/link`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           analysis, hops,
@@ -157,7 +158,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
   const runGeo = useCallback(async () => {
     setGeoLoading(true); setGeoResult(null);
     try {
-      const r = await fetch(`/api/items/tapestry/${id}/geo`, {
+      const r = await clientFetch(`/api/items/tapestry/${id}/geo`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ...dbBody }),
       });
@@ -169,7 +170,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
   const runTimeline = useCallback(async () => {
     setTimelineLoading(true); setTimelineResult(null);
     try {
-      const r = await fetch(`/api/items/tapestry/${id}/timeline`, {
+      const r = await clientFetch(`/api/items/tapestry/${id}/timeline`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ window: twindow, ...dbBody }),
       });
@@ -192,7 +193,7 @@ export function TapestryEditor({ item, id }: { item: FabricItemType; id: string 
   const loadSampleGraph = useCallback(async () => {
     setSeeding(true); setSeedMsg(null);
     try {
-      const r = await fetch('/api/admin/load-sample-data?kind=investigation', { method: 'POST' });
+      const r = await clientFetch('/api/admin/load-sample-data?kind=investigation', { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j?.ok === false) {
         setSeedMsg(j?.error || j?.gate?.message || `Could not load sample graph (HTTP ${r.status}).`);

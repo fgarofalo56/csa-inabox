@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Azure AI Foundry — Model catalog + Chat playground panels.
  *
@@ -188,7 +189,7 @@ function DeployDialog({ model, open, onClose, onDeployed, acct }: {
     if (!model) return;
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/foundry/model-deployments', {
+      const r = await clientFetch('/api/foundry/model-deployments', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           modelName: model.name,
@@ -524,7 +525,7 @@ export function ChatPlaygroundPanel({ active, nonce, acct = null }: { active: bo
   const loadDataSources = useCallback(async () => {
     setDsAvail((p) => ({ ...p, loading: true }));
     try {
-      const r = await fetch('/api/foundry/data-sources');
+      const r = await clientFetch('/api/foundry/data-sources');
       const j = await r.json();
       if (j.ok) {
         setDsAvail({
@@ -705,7 +706,7 @@ print(response.choices[0].message.content)${grounding ? '\n# response.choices[0]
               <div className={s.dsList}>
                 {dataSources.map((d, i) => (
                   <div key={`${d.indexName}-${d.authType}-${i}`} className={s.dsRow}>
-                    <Search24Regular style={{ fontSize: 16, flexShrink: 0 }} />
+                    <Search24Regular style={{ fontSize: tokens.fontSizeBase400, flexShrink: 0 }} />
                     <Caption1 className={s.dsRowName}>{d.indexName}</Caption1>
                     <Badge size="small" appearance="tint" color={d.authType === 'api_key' ? 'warning' : 'brand'}>
                       {d.authType === 'api_key' ? 'API key' : 'Managed identity'}
@@ -778,7 +779,7 @@ print(response.choices[0].message.content)${grounding ? '\n# response.choices[0]
                 {!m.pending && m.role === 'assistant' && m.citations && m.citations.length > 0 && (
                   <div className={s.citations}>
                     <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
-                      <DocumentText16Regular style={{ verticalAlign: 'text-bottom', marginRight: 4 }} />
+                      <DocumentText16Regular style={{ verticalAlign: 'text-bottom', marginRight: tokens.spacingHorizontalXS }} />
                       Citations ({m.citations.length})
                     </Caption1>
                     {m.citations.map((c, ci) => (
@@ -1030,7 +1031,7 @@ export function ImagesPlaygroundPanel({ active, nonce, acct = null }: { active: 
     if (!deployment || !prompt.trim()) return;
     setBusy(true); setMsg(null); setImages([]);
     try {
-      const r = await fetch('/api/foundry/images', {
+      const r = await clientFetch('/api/foundry/images', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ deployment, prompt: prompt.trim(), n: Number(n) || 1, size, quality, style, ...acctBody(acct) }),
       });
@@ -1175,7 +1176,7 @@ export function AudioPlaygroundPanel({ active, nonce, acct = null }: { active: b
       const ab = acctBody(acct);
       if (ab.account) form.append('account', ab.account);
       if (ab.rg) form.append('rg', ab.rg);
-      const r = await fetch('/api/foundry/audio', { method: 'POST', body: form });
+      const r = await clientFetch('/api/foundry/audio', { method: 'POST', body: form });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
       setText(j.text || '(empty transcript)');

@@ -318,7 +318,7 @@ export function ResultsPanel({ result, loading }: { result: BatchQueryResponse |
 function MessagesView({ messages, rowsAffected, executionMs }: { messages: InfoMsg[]; rowsAffected: number[]; executionMs: number }) {
   const s = useStyles();
   return (
-    <div className={s.box} style={{ borderTop: 'none', paddingTop: 0 }}>
+    <div className={s.box} style={{ borderTop: 'none', paddingTop: tokens.spacingVerticalNone }}>
       <div className={s.meta}>
         <Badge appearance="outline">{messages.length} message{messages.length === 1 ? '' : 's'}</Badge>
         {rowsAffected.length > 0 && <Caption1>Rows affected per statement: <strong>{rowsAffected.join(', ')}</strong></Caption1>}

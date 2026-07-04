@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * TreeBrowser — generic lazy-loaded tree rooted at a single source. Each
  * node click expands by hitting /api/catalog/browse with the path so far.
@@ -153,7 +154,7 @@ export function TreeBrowser({ source, onSelect }: Props) {
   const fetchPath = useCallback(async (path: string[]): Promise<TreeNode[]> => {
     const params = new URLSearchParams({ source });
     if (path.length) params.set('path', path.join('|'));
-    const r = await fetch(`/api/catalog/browse?${params.toString()}`);
+    const r = await clientFetch(`/api/catalog/browse?${params.toString()}`);
     const j = await r.json();
     if (!j.ok) {
       const err = new Error(j.error || 'browse failed');
@@ -217,7 +218,7 @@ export function TreeBrowser({ source, onSelect }: Props) {
               </ul>
             )}
             {m.learnMore && (
-              <div style={{ marginTop: 6 }}>
+              <div style={{ marginTop: tokens.spacingVerticalSNudge }}>
                 <Link href={m.learnMore} target="_blank" rel="noreferrer">Learn more</Link>
               </div>
             )}
@@ -292,7 +293,7 @@ export function TreeBrowser({ source, onSelect }: Props) {
       <MessageBarBody>
         <MessageBarTitle>Tree unavailable</MessageBarTitle>
         <div>{error}</div>
-        {hint && <pre style={{ fontSize: 11, marginTop: 8, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}
+        {hint && <pre style={{ fontSize: tokens.fontSizeBase100, marginTop: tokens.spacingVerticalS, whiteSpace: 'pre-wrap' }}>{JSON.stringify(hint, null, 2)}</pre>}
       </MessageBarBody>
     </MessageBar>
   );
@@ -319,7 +320,7 @@ export function TreeBrowser({ source, onSelect }: Props) {
         )
         : (
           <>
-            <div style={{ display: 'flex', gap: 4, alignItems: 'center', padding: '2px 0 6px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, marginBottom: 4 }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalXS, alignItems: 'center', padding: '2px 0 6px', borderBottom: `1px solid ${tokens.colorNeutralStroke3}`, marginBottom: tokens.spacingVerticalXS }}>
               <Tooltip content="Expand all top-level nodes" relationship="label">
                 <Button size="small" appearance="subtle" icon={<ChevronDoubleRight16Regular />}
                   onClick={() => { (roots || []).forEach((r) => { if (r.hasChildren && !expanded.has(r.id)) toggle(r, []); }); }}>

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * PropertiesPanel — the OneLake item "Properties" surface, one-for-one with
  * the Microsoft Fabric item Properties pane (Paths + Connect), themed in
@@ -215,7 +216,7 @@ export function PropertiesPanel({
     const qs = new URLSearchParams({ container, itemPath });
     if (workspaceGuid) qs.set('workspaceGuid', workspaceGuid);
     if (itemGuid) qs.set('itemGuid', itemGuid);
-    fetch(`/api/onelake/paths?${qs.toString()}`)
+    clientFetch(`/api/onelake/paths?${qs.toString()}`)
       .then((r) => r.json().then((j) => ({ status: r.status, j })))
       .then(({ j }) => { if (!cancelled) { setData(j as PathsResponse); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setData({ ok: false, error: e?.message || 'request failed' }); setLoading(false); } });
@@ -334,13 +335,13 @@ azcopy copy \\
               <div className={styles.cardCode}>{paths.abfs}</div>
               <div className={styles.cardLinks}>
                 <Link href="https://learn.microsoft.com/azure/storage/blobs/blobfuse2-what-is" target="_blank" rel="noreferrer">
-                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />BlobFuse2 docs
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />BlobFuse2 docs
                 </Link>
                 <Link href="https://learn.microsoft.com/azure/storage/storage-explorer/vs-azure-tools-storage-manage-with-storage-explorer" target="_blank" rel="noreferrer">
-                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Azure Storage Explorer
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Azure Storage Explorer
                 </Link>
                 <Link href="https://learn.microsoft.com/azure/storage/common/storage-use-azcopy-v10" target="_blank" rel="noreferrer">
-                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: 4 }} />Get AzCopy
+                  <Open16Regular style={{ verticalAlign: 'middle', marginRight: tokens.spacingHorizontalXS }} />Get AzCopy
                 </Link>
               </div>
             </MessageBarBody>

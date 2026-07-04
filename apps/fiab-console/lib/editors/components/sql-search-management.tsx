@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Full-text search (FTS) + SQL Server 2025 vector-index management panels for
  * the AzureSqlDatabaseEditor (Fabric Build 2026 #23).
@@ -97,7 +98,7 @@ function useInventory(id: string, server: string, database: string) {
     (async () => {
       setLoading(true); setError(null);
       try {
-        const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/search-management?server=${encodeURIComponent(server)}&database=${encodeURIComponent(database)}&kind=inventory`);
+        const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/search-management?server=${encodeURIComponent(server)}&database=${encodeURIComponent(database)}&kind=inventory`);
         const j = await r.json();
         if (cancelled) return;
         if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setInv(null); }
@@ -118,7 +119,7 @@ function useInventory(id: string, server: string, database: string) {
 }
 
 async function postAction(id: string, body: Record<string, unknown>): Promise<{ ok: boolean; error?: string; ddl?: string; sqlNumber?: number }> {
-  const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/search-management`, {
+  const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/search-management`, {
     method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
   });
   return r.json();

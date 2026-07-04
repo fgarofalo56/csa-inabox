@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * UpstreamSensitivityField (F17) — read-only "Sensitivity label (source)" field.
  *
@@ -54,7 +55,7 @@ export function UpstreamSensitivityField({ itemId }: { itemId: string }) {
     (async () => {
       setLoading(true); setErr(null);
       try {
-        const r = await fetch(`/api/governance/label-propagation/${encodeURIComponent(itemId)}`);
+        const r = await clientFetch(`/api/governance/label-propagation/${encodeURIComponent(itemId)}`);
         const j: PropResp = await r.json();
         if (cancelled) return;
         if (!j.ok) { setErr(j.error || 'failed'); return; }

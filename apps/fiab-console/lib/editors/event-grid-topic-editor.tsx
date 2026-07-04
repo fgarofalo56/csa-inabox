@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * EventGridTopicEditor — navigator over the deployment-pinned Azure Event Grid
  * custom topics (Microsoft.EventGrid/topics). Real ARM via
@@ -112,7 +113,7 @@ export function EventGridTopicEditor({ item, id }: Props) {
   const load = useCallback(async () => {
     setLoading(true); setGate(null);
     try {
-      const r = await fetch('/api/items/event-grid-topic');
+      const r = await clientFetch('/api/items/event-grid-topic');
       const j = await r.json();
       if (!j.ok) { setGate({ error: j.error || 'not available', hint: j.hint }); setTopics([]); return; }
       setTopics(Array.isArray(j.topics) ? j.topics : []);
@@ -125,7 +126,7 @@ export function EventGridTopicEditor({ item, id }: Props) {
   const loadDetail = useCallback(async (name: string) => {
     setSelected(name); setDetail(null); setDetailLoading(true); setTab('detail');
     try {
-      const r = await fetch(`/api/items/event-grid-topic?topic=${encodeURIComponent(name)}&detail=1`);
+      const r = await clientFetch(`/api/items/event-grid-topic?topic=${encodeURIComponent(name)}&detail=1`);
       const j = await r.json();
       if (j.ok) setDetail({ topic: j.topic, subscriptions: j.subscriptions || [], keys: j.keys });
     } finally { setDetailLoading(false); }
@@ -135,7 +136,7 @@ export function EventGridTopicEditor({ item, id }: Props) {
     if (!cName.trim()) return;
     setCBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/items/event-grid-topic', {
+      const r = await clientFetch('/api/items/event-grid-topic', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: cName.trim(), inputSchema: 'CloudEventSchemaV1_0' }),
       });
@@ -150,7 +151,7 @@ export function EventGridTopicEditor({ item, id }: Props) {
   const del = useCallback(async (name: string) => {
     setMsg(null);
     try {
-      const r = await fetch(`/api/items/event-grid-topic?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/event-grid-topic?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: 'error', text: j.error || 'delete failed' }); return; }
       setMsg({ intent: 'success', text: `Deleted "${name}".` });
@@ -198,7 +199,7 @@ export function EventGridTopicEditor({ item, id }: Props) {
       else subscription.resourceId = destResourceId.trim();
       if (destType === 'StorageQueue') subscription.queueName = destQueueName.trim();
 
-      const r = await fetch('/api/items/event-grid-topic', {
+      const r = await clientFetch('/api/items/event-grid-topic', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'create-event-subscription', topic: selected, subscription }),
       });
@@ -215,7 +216,7 @@ export function EventGridTopicEditor({ item, id }: Props) {
     if (!selected) return;
     setKeyBusy(keyName); setMsg(null);
     try {
-      const r = await fetch('/api/items/event-grid-topic', {
+      const r = await clientFetch('/api/items/event-grid-topic', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'regenerate-key', topic: selected, keyName }),
       });

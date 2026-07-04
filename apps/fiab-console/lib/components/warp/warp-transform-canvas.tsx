@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WarpTransformCanvas — the editable visual transform builder for Warp.
  *
@@ -386,7 +387,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
     if (!target) { setColError('Pick a run target to resolve table columns.'); return; }
     setColError(null);
     try {
-      const r = await fetch(`/api/items/${target.engine}/${encodeURIComponent(target.id)}/visual-query`, {
+      const r = await clientFetch(`/api/items/${target.engine}/${encodeURIComponent(target.id)}/visual-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dialect: target.dialect, describe: { schema, table } }),
       });
@@ -519,7 +520,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
     setRunning(true); setResult(null); setValidateMsg(null);
     try {
       // For Validate, attach a top-1 cap so the engine compiles + plans cheaply.
-      const r = await fetch(`/api/items/${target.engine}/${encodeURIComponent(target.id)}/visual-query`, {
+      const r = await clientFetch(`/api/items/${target.engine}/${encodeURIComponent(target.id)}/visual-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dialect: target.dialect, graph: buildGraph(nodes, edges, outputId) }),
       });
@@ -543,7 +544,7 @@ function CanvasInner(props: WarpTransformCanvasProps) {
     if (!saveName.trim() || !saveWs) { setSaveMsg('Name and workspace are required.'); return; }
     setSaving(true); setSaveMsg(null);
     try {
-      const r = await fetch('/api/experience/warp/transforms', {
+      const r = await clientFetch('/api/experience/warp/transforms', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           id: transformId, displayName: saveName.trim(), workspaceId: saveWs,

@@ -541,7 +541,7 @@ export function PowerPlatformTree({
     <div className={s.root}>
       <div className={s.header}>
         <span className={s.title}>Environments</span>
-        <span style={{ display: 'flex', gap: 2 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXXS }}>
           <Tooltip content="New environment (admin centre)" relationship="label">
             <Button size="small" appearance="primary" icon={<Add20Regular />} onClick={() => openMaker(`${ADMIN_BASE}/environments`)} aria-label="New environment" />
           </Tooltip>
@@ -561,7 +561,7 @@ export function PowerPlatformTree({
         />
       </Field>
 
-      {loading && <div style={{ padding: 8 }}><Spinner size="tiny" label="Loading environments…" /></div>}
+      {loading && <div style={{ padding: tokens.spacingVerticalS }}><Spinner size="tiny" label="Loading environments…" /></div>}
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>

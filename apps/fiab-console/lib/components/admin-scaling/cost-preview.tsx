@@ -84,7 +84,7 @@ export function CostPreview({
           <>
             {' '}→ <strong>${(target * mult).toLocaleString()}</strong>
             {delta !== undefined && (
-              <span style={{ marginLeft: 6, color: delta > 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>
+              <span style={{ marginLeft: tokens.spacingHorizontalSNudge, color: delta > 0 ? tokens.colorPaletteRedForeground1 : tokens.colorPaletteGreenForeground1 }}>
                 ({delta > 0 ? '+' : ''}${delta.toLocaleString()}/mo)
               </span>
             )}

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WorkshopAppEditor (Workshop → Atelier) — ontology-bound low-code app.
  *
@@ -95,7 +96,7 @@ export function WorkshopAppEditor({ item, id }: { item: FabricItemType; id: stri
     try {
       // Persist the latest widgets/variables first so Publish deploys the current app.
       if (dirty) await save();
-      const r = await fetch(`/api/items/workshop-app/${encodeURIComponent(id)}/publish`, {
+      const r = await clientFetch(`/api/items/workshop-app/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
       });
       const j = await r.json().catch(() => ({}));

@@ -412,7 +412,7 @@ export default function PoliciesPage() {
           <span>
             <code className={s.rule}>{p.rule || '—'}</code>
             {p.enforcement && (
-              <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
+              <Badge appearance="tint" size="small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}
                 color={p.enforcement.status === 'active' ? 'success' : p.enforcement.status === 'error' ? 'danger' : 'warning'}
                 title={p.enforcement.detail || p.enforcement.roleName}>
                 {p.enforcement.status === 'active' ? `enforced${p.enforcement.roleName ? ` · ${p.enforcement.roleName.replace('Storage Blob Data ', '')}` : ''}` : p.enforcement.status}
@@ -423,7 +423,7 @@ export default function PoliciesPage() {
               <Tooltip relationship="label" content={tip.count > 0
                 ? `${tip.count} active DLP violation(s) matched this policy in the last 30 days`
                 : 'No violations matched this policy name; it is actively monitored'}>
-                <Badge appearance="tint" size="small" style={{ marginLeft: 6 }}
+                <Badge appearance="tint" size="small" style={{ marginLeft: tokens.spacingHorizontalSNudge }}
                   color={tip.count > 0 ? 'danger' : 'subtle'}>
                   {tip.count > 0 ? `${tip.count} tip${tip.count === 1 ? '' : 's'}` : 'monitored'}
                 </Badge>
@@ -431,7 +431,7 @@ export default function PoliciesPage() {
             )}
             {/* Access rows that were revoked by DLP restrict-access. */}
             {p.dlpRestricted && (
-              <Badge appearance="tint" size="small" color="warning" style={{ marginLeft: 6 }}
+              <Badge appearance="tint" size="small" color="warning" style={{ marginLeft: tokens.spacingHorizontalSNudge }}
                 title={p.dlpRestrictedAt ? `Restricted ${p.dlpRestrictedAt.slice(0, 16)}` : 'Access revoked by DLP'}>
                 restricted
               </Badge>
@@ -541,7 +541,7 @@ export default function PoliciesPage() {
               <MessageBarTitle>{scanMsg.title}</MessageBarTitle>
               {scanMsg.body}
               {scanMsg.portalLink && (
-                <Caption1 block style={{ marginTop: 4 }}>
+                <Caption1 block style={{ marginTop: tokens.spacingVerticalXS }}>
                   Run it now: <a href={scanMsg.portalLink} target="_blank" rel="noreferrer">Purview content scan jobs → Scan now</a>{' '}
                   (or <code>Start-Scan</code> in the PurviewInformationProtection PowerShell module).
                 </Caption1>
@@ -579,7 +579,7 @@ export default function PoliciesPage() {
             columns={[
               { key: 'detectedAt', label: 'Detected', sortable: true, width: 150, getValue: (v) => v.detectedAt || '', render: (v) => <Caption1>{v.detectedAt?.slice(0, 16).replace('T', ' ') || '—'}</Caption1> },
               { key: 'policyName', label: 'Policy', sortable: true, filterable: true, getValue: (v) => v.policyName || '', render: (v) => <><strong>{v.policyName || '—'}</strong>{v.ruleName ? <Caption1 block style={{ color: tokens.colorNeutralForeground3 }}>{v.ruleName}</Caption1> : null}</> },
-              { key: 'itemPath', label: 'Item', sortable: true, filterable: true, getValue: (v) => v.itemPath || '', render: (v) => <><Caption1 title={v.itemPath}>{(v.itemPath || '—').slice(0, 44)}</Caption1>{v.itemType ? <Badge appearance="tint" size="small" style={{ marginLeft: 4 }}>{v.itemType}</Badge> : null}</> },
+              { key: 'itemPath', label: 'Item', sortable: true, filterable: true, getValue: (v) => v.itemPath || '', render: (v) => <><Caption1 title={v.itemPath}>{(v.itemPath || '—').slice(0, 44)}</Caption1>{v.itemType ? <Badge appearance="tint" size="small" style={{ marginLeft: tokens.spacingHorizontalXS }}>{v.itemType}</Badge> : null}</> },
               { key: 'user', label: 'User', sortable: true, filterable: true, getValue: (v) => v.user || '', render: (v) => <Caption1>{v.user || '—'}</Caption1> },
               { key: 'severity', label: 'Severity', sortable: true, filterable: true, width: 110, getValue: (v) => v.severity || '', render: (v) => <Badge appearance="tint" color={v.severity === 'high' ? 'danger' : v.severity === 'medium' ? 'warning' : 'subtle'} size="small">{v.severity || '—'}</Badge> },
               { key: 'action', label: 'Action', sortable: true, filterable: true, getValue: (v) => v.action || v.status || '', render: (v) => <Caption1>{v.action || v.status || '—'}</Caption1> },
@@ -590,7 +590,7 @@ export default function PoliciesPage() {
         {(dlpMeta?.restrictions?.length ?? 0) > 0 && (
           <>
             <Divider style={{ marginTop: tokens.spacingVerticalM, marginBottom: tokens.spacingVerticalS }} />
-            <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 4 }}>Recent restrict-access actions</Caption1>
+            <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalXS }}>Recent restrict-access actions</Caption1>
             <div className={s.chips}>
               {dlpMeta!.restrictions!.slice(0, 8).map((r) => (
                 <Badge key={r.id} appearance="tint" color={(r.armConfirmed || r.aclConfirmed) ? 'success' : 'warning'}
@@ -631,7 +631,7 @@ export default function PoliciesPage() {
           <DialogBody>
             <DialogTitle>New policy</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM }}>
                 <Field label="Name"><Input value={draftName} onChange={(_, d) => setDraftName(d.value)} /></Field>
                 <Field label="Kind">
                   <Dropdown value={draftKind} selectedOptions={[draftKind]}
@@ -640,7 +640,7 @@ export default function PoliciesPage() {
                   </Dropdown>
                 </Field>
                 {/* Scope — selectable dropdowns (type + target) */}
-                <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                   <Field label="Applies to" style={{ flex: 1 }}>
                     <Dropdown value={scopeType} selectedOptions={[scopeType]}
                       onOptionSelect={(_, d) => { setScopeType(d.optionValue as any); setScopeTarget(''); }}>
@@ -662,7 +662,7 @@ export default function PoliciesPage() {
                 {/* Rule wizard — fields depend on the policy kind */}
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>Configure the {draftKind} rule</Caption1>
                 {draftKind === 'DLP' && (
-                  <div style={{ display: 'flex', gap: 12 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                     <Field label="Detect" style={{ flex: 1 }}>
                       <Dropdown value={w.dlpDetect} selectedOptions={[w.dlpDetect]} onOptionSelect={(_, d) => setWf('dlpDetect', d.optionValue || '')}>
                         {['Email', 'SSN', 'Credit card', 'Phone', 'IP address', 'Custom classification'].map((o) => <Option key={o} value={o}>{o}</Option>)}
@@ -676,7 +676,7 @@ export default function PoliciesPage() {
                   </div>
                 )}
                 {draftKind === 'Masking' && (
-                  <div style={{ display: 'flex', gap: 12 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                     <Field label="Column" style={{ flex: 1 }}><Input value={w.maskColumn} placeholder="e.g. email" onChange={(_, d) => setWf('maskColumn', d.value)} /></Field>
                     <Field label="Masking function" style={{ flex: 1 }}>
                       <Dropdown value={w.maskFn} selectedOptions={[w.maskFn]} onOptionSelect={(_, d) => setWf('maskFn', d.optionValue || '')}>
@@ -686,7 +686,7 @@ export default function PoliciesPage() {
                   </div>
                 )}
                 {draftKind === 'RLS' && (
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                     <Field label="Column" style={{ flex: 1 }}><Input value={w.rlsColumn} placeholder="e.g. region" onChange={(_, d) => setWf('rlsColumn', d.value)} /></Field>
                     <Field label="Operator" style={{ width: 100 }}>
                       <Dropdown value={w.rlsOp} selectedOptions={[w.rlsOp]} onOptionSelect={(_, d) => setWf('rlsOp', d.optionValue || '=')}>
@@ -697,7 +697,7 @@ export default function PoliciesPage() {
                   </div>
                 )}
                 {draftKind === 'Retention' && (
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                     <Field label="Keep for" style={{ width: 120 }}><Input type="number" value={w.retPeriod} onChange={(_, d) => setWf('retPeriod', d.value)} /></Field>
                     <Field label="Unit" style={{ width: 120 }}>
                       <Dropdown value={w.retUnit} selectedOptions={[w.retUnit]} onOptionSelect={(_, d) => setWf('retUnit', d.optionValue || 'Days')}>
@@ -712,9 +712,9 @@ export default function PoliciesPage() {
                   </div>
                 )}
                 {draftKind === 'Access' && (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalMNudge }}>
                     <Field label="Principal — search Entra users / groups">
-                      <div style={{ display: 'flex', gap: 8 }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                         <Dropdown value={accKind === 'user' ? 'User' : 'Group'} selectedOptions={[accKind]} style={{ minWidth: 100 }}
                           onOptionSelect={(_, d) => { setAccKind((d.optionValue as 'user' | 'group') || 'user'); setAccResults([]); }}>
                           <Option value="user">User</Option>
@@ -729,7 +729,7 @@ export default function PoliciesPage() {
                       </div>
                     </Field>
                     {accResults.length > 0 && !accPicked && (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 140, overflowY: 'auto' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalXS, maxHeight: 140, overflowY: 'auto' }}>
                         {accResults.map((r) => (
                           <Button key={r.id} appearance="subtle" style={{ justifyContent: 'flex-start' }}
                             onClick={() => { setAccPicked({ id: r.id, name: r.displayName, type: r.type === 'group' ? 'Group' : 'User', upn: r.upn }); setAccResults([]); }}>
@@ -744,7 +744,7 @@ export default function PoliciesPage() {
                         <Button size="small" appearance="subtle" onClick={() => setAccPicked(null)}>change</Button>
                       </Caption1>
                     )}
-                    <div style={{ display: 'flex', gap: 12 }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                       <Field label="Scope (data plane)" style={{ flex: 1 }}
                         hint="Where the grant is enforced — each is a real Azure-native grant.">
                         <Dropdown
@@ -805,7 +805,7 @@ export default function PoliciesPage() {
           <DialogBody>
             <DialogTitle>Restrict access (DLP)</DialogTitle>
             <DialogContent>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalM }}>
                 <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
                   Revokes a principal&apos;s <strong>real</strong> data-plane access on a scope.
                   ADLS containers revoke a Storage RBAC role assignment (ARM read-back); ADLS paths
@@ -814,7 +814,7 @@ export default function PoliciesPage() {
                   inverse grant. Exempt principals are never touched.
                 </Caption1>
 
-                <div style={{ display: 'flex', gap: 12 }}>
+                <div style={{ display: 'flex', gap: tokens.spacingHorizontalM }}>
                   <Field label="Scope (data plane)" style={{ flex: 1 }}>
                     <Dropdown
                       value={
@@ -879,8 +879,8 @@ export default function PoliciesPage() {
                 {rstScope === 'adls-path' && rstRef && (
                   <Field label="Path under the container"
                     hint="ACLs restrict a principal granted via ACL. A principal holding container-level Storage RBAC is unaffected — restrict at the container scope to cover that.">
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalSNudge }}>
+                      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' }}>
                         <Caption1 style={{ fontFamily: 'Consolas, monospace', minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{rstRef}/{rstSubPath || ''}</Caption1>
                         {rstSubPath && (
                           <Button size="small" appearance="subtle" icon={<ArrowUp16Regular />}
@@ -925,7 +925,7 @@ export default function PoliciesPage() {
                 )}
 
                 <Field label="Principal to restrict — search Entra users / groups">
-                  <div style={{ display: 'flex', gap: 8 }}>
+                  <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
                     <Dropdown value={rstKind === 'user' ? 'User' : 'Group'} selectedOptions={[rstKind]} style={{ minWidth: 100 }}
                       onOptionSelect={(_, d) => { setRstKind((d.optionValue as 'user' | 'group') || 'user'); setRstResults([]); }}>
                       <Option value="user">User</Option>
@@ -942,7 +942,7 @@ export default function PoliciesPage() {
                 {rstResults.length > 0 && (
                   <div className={s.pickList}>
                     {rstResults.map((r) => (
-                      <div key={r.id} style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <div key={r.id} style={{ display: 'flex', gap: tokens.spacingHorizontalSNudge, alignItems: 'center' }}>
                         <Button appearance={rstPicked?.id === r.id ? 'primary' : 'subtle'} style={{ justifyContent: 'flex-start', flex: 1 }}
                           onClick={() => setRstPicked({ id: r.id, name: r.displayName, type: r.type === 'group' ? 'Group' : 'User', upn: r.upn })}>
                           {r.displayName}{r.upn ? ` · ${r.upn}` : ''}
@@ -960,7 +960,7 @@ export default function PoliciesPage() {
                 )}
                 {rstExempt.length > 0 && (
                   <div>
-                    <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 4 }}>Exempt (never restricted):</Caption1>
+                    <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalXS }}>Exempt (never restricted):</Caption1>
                     <div className={s.chips}>
                       {rstExempt.map((x) => (
                         <Badge key={x.id} appearance="tint" color="informative"

@@ -460,7 +460,7 @@ export function CosmosDataExplorer({ db, container, partitionKey, initialQuery }
           <DialogBody>
             <DialogTitle>{editorMode === 'new' ? 'New item' : 'Edit item'}</DialogTitle>
             <DialogContent>
-              <Caption1 className={s.muted} style={{ display: 'block', marginBottom: 6 }}>
+              <Caption1 className={s.muted} style={{ display: 'block', marginBottom: tokens.spacingVerticalSNudge }}>
                 Container <code>{container}</code> · partition key <code>{pkLabel}</code>.
                 The document must include an <code>id</code>{partitionKey && partitionKey !== '/id'
                   ? <> and the partition-key field (<code>{partitionKey}</code>)</>
@@ -474,7 +474,7 @@ export function CosmosDataExplorer({ db, container, partitionKey, initialQuery }
                 ariaLabel="Document JSON"
               />
               {editorError && (
-                <MessageBar intent="error" style={{ marginTop: 10 }}>
+                <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalMNudge }}>
                   <MessageBarBody><MessageBarTitle>Cannot save</MessageBarTitle>{editorError}</MessageBarBody>
                 </MessageBar>
               )}

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AddExistingConnectionWizard — discover + one-click import any Azure resource
  * the signed-in user can already reach (their RBAC + ABAC, across ALL their
@@ -139,7 +140,7 @@ export function AddExistingConnectionWizard({
   const load = useCallback(async () => {
     setLoading(true); setGate(null); setError(null);
     try {
-      const res = await fetch('/api/azure/connectables');
+      const res = await clientFetch('/api/azure/connectables');
       const j: ApiResponse = await res.json();
       if (j.ok && Array.isArray(j.resources)) {
         setResources(j.resources);
@@ -243,7 +244,7 @@ export function AddExistingConnectionWizard({
         body.secret = st.secret;
         if (st.username) body.username = st.username;
       }
-      const res = await fetch('/api/connections', {
+      const res = await clientFetch('/api/connections', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });

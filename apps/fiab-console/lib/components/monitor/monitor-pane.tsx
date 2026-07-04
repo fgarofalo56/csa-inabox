@@ -1787,7 +1787,7 @@ function SecurityTab({ onUnauth }: { onUnauth: () => void }) {
 
               {remTab === 'portal' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS }}>
-                  <ol style={{ margin: 0, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                  <ol style={{ margin: tokens.spacingVerticalNone, paddingLeft: tokens.spacingHorizontalXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
                     {portalSteps({ name: remRec.name, severity: remRec.severity, assessmentName: remRec.assessmentName, remediation: remRec.remediation, portalLink: remRec.portalLink }).map((st, i) => (
                       <li key={i}><Body1>{st}</Body1></li>
                     ))}

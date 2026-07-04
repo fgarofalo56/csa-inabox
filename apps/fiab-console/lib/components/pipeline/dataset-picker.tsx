@@ -59,7 +59,7 @@ export function DatasetPicker({
   return (
     <Field label={label} required={required} hint={hint}>
       {gateError && (
-        <MessageBar intent="warning" style={{ marginBottom: 6 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalSNudge }}>
           <MessageBarBody>{gateError}</MessageBarBody>
         </MessageBar>
       )}
@@ -86,7 +86,7 @@ export function DatasetPicker({
         ))}
       </Dropdown>
       {selected && (
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalSNudge, alignItems: 'center', marginTop: tokens.spacingVerticalXS, flexWrap: 'wrap' }}>
           <Badge appearance="tint" color="brand" size="small">{selected.properties.type}</Badge>
           <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
             → {selected.properties.linkedServiceName?.referenceName || '(no linked service)'}
@@ -94,7 +94,7 @@ export function DatasetPicker({
         </div>
       )}
       {!hasData && !gateError && (
-        <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: 4 }}>
+        <Caption1 style={{ color: tokens.colorNeutralForeground3, marginTop: tokens.spacingVerticalXS }}>
           No datasets found — create one in the ribbon&apos;s <strong>Manage</strong> hub.
         </Caption1>
       )}

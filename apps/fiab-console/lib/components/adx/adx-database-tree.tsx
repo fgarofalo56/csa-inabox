@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AdxDatabaseTree — the Azure Data Explorer / Fabric Eventhouse "KQL database"
  * object navigator.
@@ -365,7 +366,7 @@ export function AdxDatabaseTree({ itemId, onOpenQuery, onEditFunction, onAlterTa
     if (!rlsTarget) return;
     setRlsBusy(true); setRlsError(null); setRlsNotice(null);
     try {
-      const res = await fetch(`/api/adx/rls?${idq}`, {
+      const res = await clientFetch(`/api/adx/rls?${idq}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ table: rlsTarget, enabled: rlsEnabled, query: rlsQuery }),
       });

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * F22 — Embed codes pane.
  *
@@ -64,7 +65,7 @@ export function EmbedCodesPane() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setGate(null);
     try {
-      const r = await fetch('/api/admin/embed-codes');
+      const r = await clientFetch('/api/admin/embed-codes');
       const j = await r.json();
       if (r.status === 503 && j.code === 'not-configured') { setGate(j.hint || {}); setCodes([]); return; }
       if (!j.ok) { setError(j.error || 'failed'); return; }
@@ -87,7 +88,7 @@ export function EmbedCodesPane() {
     if (!newReport.trim()) { setActionErr('Report name is required'); return; }
     setCreating(true); setActionErr(null);
     try {
-      const r = await fetch('/api/admin/embed-codes', {
+      const r = await clientFetch('/api/admin/embed-codes', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ report: newReport.trim() }),
       });
@@ -105,7 +106,7 @@ export function EmbedCodesPane() {
     if (!confirm('Revoke this embed code? The signed URL will stop working immediately.')) return;
     setActionErr(null);
     try {
-      const r = await fetch(`/api/admin/embed-codes?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/embed-codes?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       await load();
@@ -138,7 +139,7 @@ export function EmbedCodesPane() {
     {
       key: 'actions', label: '', width: 200, sortable: false, filterable: false,
       render: (c) => c.status === 'active' ? (
-        <span style={{ display: 'flex', gap: 4 }}>
+        <span style={{ display: 'flex', gap: tokens.spacingHorizontalXS }}>
           <Button size="small" appearance="subtle" icon={<Copy20Regular />} onClick={(e) => { e.stopPropagation(); copy(c.signedUrl, c.id); }}>
             {copied === c.id ? 'Copied' : 'Copy URL'}
           </Button>
@@ -162,20 +163,20 @@ export function EmbedCodesPane() {
       </Section>
 
       {gate && (
-        <div style={{ marginBottom: 16 }}>
+        <div style={{ marginBottom: tokens.spacingVerticalL }}>
           <NotConfiguredBar surface="Embed codes" hint={gate} />
         </div>
       )}
-      {error && <MessageBar intent="error" style={{ marginBottom: 16 }}><MessageBarBody><MessageBarTitle>Could not load embed codes</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
-      {actionErr && <MessageBar intent="error" style={{ marginBottom: 16 }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}><MessageBarBody><MessageBarTitle>Could not load embed codes</MessageBarTitle>{error}</MessageBarBody></MessageBar>}
+      {actionErr && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalL }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
 
       {created && (
-        <MessageBar intent="success" style={{ marginBottom: 16 }}>
+        <MessageBar intent="success" style={{ marginBottom: tokens.spacingVerticalL }}>
           <MessageBarBody>
             <MessageBarTitle>Embed code created for “{created.report}”</MessageBarTitle>
-            <Caption1 block style={{ marginBottom: 6 }}>Copy this signed URL — it is loadable now and expires {fmt(created.expiresAt)}.</Caption1>
+            <Caption1 block style={{ marginBottom: tokens.spacingVerticalSNudge }}>Copy this signed URL — it is loadable now and expires {fmt(created.expiresAt)}.</Caption1>
             <span className={s.urlRow}>
-              <Input readOnly value={created.signedUrl} style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: 11 }} onFocus={(e) => e.currentTarget.select()} />
+              <Input readOnly value={created.signedUrl} style={{ flex: 1, minWidth: 0, fontFamily: 'monospace', fontSize: tokens.fontSizeBase100 }} onFocus={(e) => e.currentTarget.select()} />
               <Button size="small" icon={<Copy20Regular />} onClick={() => copy(created.signedUrl, 'created')}>
                 {copied === 'created' ? 'Copied' : 'Copy'}
               </Button>
@@ -216,7 +217,7 @@ export function EmbedCodesPane() {
               <Field label="Report or visual" hint="A name for what this code embeds. A real signed URL is minted for it.">
                 <Input value={newReport} onChange={(_, d) => setNewReport(d.value)} placeholder="e.g. Quarterly sales report" />
               </Field>
-              {actionErr && <MessageBar intent="error" style={{ marginTop: 12 }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
+              {actionErr && <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalM }}><MessageBarBody>{actionErr}</MessageBarBody></MessageBar>}
             </DialogContent>
             <DialogActions>
               <Button appearance="secondary" onClick={() => setCreateOpen(false)}>Cancel</Button>

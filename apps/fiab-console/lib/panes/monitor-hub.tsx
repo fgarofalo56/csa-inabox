@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MonitorHubPane — the Fabric Monitor-hub "Activities" feed, Azure-native.
  *
@@ -156,7 +157,7 @@ export function MonitorHubPane() {
     let alive = true;
     setData(null); setErr(null);
     const params = new URLSearchParams({ days: debouncedDays });
-    fetch(`/api/monitor/activities?${params.toString()}`)
+    clientFetch(`/api/monitor/activities?${params.toString()}`)
       .then(async (r) => {
         if (!alive) return;
         if (r.status === 401 || r.status === 403) { setUnauth(true); setData({ ok: false }); return; }

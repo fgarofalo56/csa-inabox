@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Loom Setup Wizard — PRP-04 (redesigned multi-step wizard)
  *
@@ -527,7 +528,7 @@ export function SetupWizardPane() {
     setStorageScanLoading(true);
     setStorageScanError(undefined);
     try {
-      const res = await fetch('/api/setup/existing-storage');
+      const res = await clientFetch('/api/setup/existing-storage');
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) {
         setStorageScanError(j.error || `Storage scan failed (HTTP ${res.status}).`);
@@ -556,7 +557,7 @@ export function SetupWizardPane() {
   const loadConfig = useCallback(async () => {
     setConfigError(undefined);
     try {
-      const res = await fetch('/api/setup/config');
+      const res = await clientFetch('/api/setup/config');
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) {
         setConfigError(j.error || `Could not read deployment config (HTTP ${res.status}).`);
@@ -612,7 +613,7 @@ export function SetupWizardPane() {
       const qs = new URLSearchParams();
       if (boundary) qs.set('boundary', boundary);
       if (subscriptionId) qs.set('subscription', subscriptionId);
-      const res = await fetch(`/api/setup/regions?${qs.toString()}`);
+      const res = await clientFetch(`/api/setup/regions?${qs.toString()}`);
       const j = await res.json().catch(() => ({}));
       if (res.ok && j.ok && Array.isArray(j.regions)) {
         setRegions(j.regions);
@@ -633,7 +634,7 @@ export function SetupWizardPane() {
     setSubsLoading(true);
     setSubsError(undefined);
     try {
-      const res = await fetch('/api/setup/subscriptions');
+      const res = await clientFetch('/api/setup/subscriptions');
       const ct = res.headers.get('content-type') || '';
       if (!ct.includes('application/json')) {
         const t = await res.text().catch(() => '');
@@ -664,7 +665,7 @@ export function SetupWizardPane() {
     setExistingLoading(true);
     setExistingError(undefined);
     try {
-      const res = await fetch('/api/setup/existing-dlzs');
+      const res = await clientFetch('/api/setup/existing-dlzs');
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) {
         setExistingError(j.error || j.hint || `Could not discover existing DLZs (HTTP ${res.status}).`);
@@ -736,7 +737,7 @@ export function SetupWizardPane() {
       try {
         const qs = new URLSearchParams({ workflow: state.workflowFile! });
         if (state.dispatchedAt) qs.set('since', state.dispatchedAt);
-        const res = await fetch(`/api/setup/workflow-run-status?${qs.toString()}`);
+        const res = await clientFetch(`/api/setup/workflow-run-status?${qs.toString()}`);
         const j = await res.json().catch(() => ({}));
         if (cancelled || !j?.ok) return;
         // Terminal — drop the persisted handle so a later refresh starts fresh.
@@ -772,7 +773,7 @@ export function SetupWizardPane() {
     setState((s) => ({ ...s, step: 'deploying', deployProgress: 0, deployStage: 'Wiring existing Data Landing Zone(s)…', deployError: undefined }));
     try {
       const selected = (state.selectedExistingDlzs || []);
-      const res = await fetch('/api/setup/wire-existing', {
+      const res = await clientFetch('/api/setup/wire-existing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -835,7 +836,7 @@ export function SetupWizardPane() {
             }
           : {}),
       };
-      const res = await fetch('/api/setup/deploy', {
+      const res = await clientFetch('/api/setup/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

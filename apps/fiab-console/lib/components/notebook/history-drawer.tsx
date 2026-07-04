@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * HistoryDrawer — right-side OverlayDrawer that lists notebook run history.
  *
@@ -134,7 +135,7 @@ export function HistoryDrawer({ open, onOpenChange, notebookId, workspaceId, com
     if (!notebookId || !workspaceId) return;
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/jobs?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/jobs?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed to load jobs'); setJobs([]); return; }
       setJobs(j.jobs || []);
@@ -231,7 +232,7 @@ export function HistoryDrawer({ open, onOpenChange, notebookId, workspaceId, com
                         {j.failureReason.errorCode}: {j.failureReason.message}
                       </Caption1>
                     )}
-                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
                       <Button
                         size="small"
                         appearance="primary"

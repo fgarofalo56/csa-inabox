@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CatalogItemActions — per-hit actions for a Loom (OneLake-source) catalog
  * record, rendered inside the CatalogDetailTile metadata dialog (alongside
@@ -187,7 +188,7 @@ export function CatalogItemActions({ hit }: { hit: CatalogActionHit }) {
     setTablesLoading(true);
     setTablesError(null);
     setTablesGate(null);
-    fetch(`/api/thread/warehouse-tables?fromType=warehouse&fromId=${encodeURIComponent(hit.id)}`)
+    clientFetch(`/api/thread/warehouse-tables?fromType=warehouse&fromId=${encodeURIComponent(hit.id)}`)
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
@@ -256,7 +257,7 @@ export function CatalogItemActions({ hit }: { hit: CatalogActionHit }) {
         values.query = query.trim();
       }
 
-      const r = await fetch('/api/thread/build-loom-report', {
+      const r = await clientFetch('/api/thread/build-loom-report', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

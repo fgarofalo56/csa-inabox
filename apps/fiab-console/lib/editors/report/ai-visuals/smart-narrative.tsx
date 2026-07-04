@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * smart-narrative — the Power BI "Smart narrative" AI visual for the Loom-native
  * Report Designer (report-designer wave 3, the "AI" gallery section).
@@ -247,7 +248,7 @@ export function SmartNarrative(props: SmartNarrativeProps): ReactElement {
       setError(null);
       setGate(null);
       try {
-        const res = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/ai-visual`, {
+        const res = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/ai-visual`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ mode: 'narrative', context: contextRef.current }),

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * OutputPane — the bottom-area (or Output tab) of the Data Pipeline editor.
  *
@@ -164,7 +165,7 @@ function MonitorView({
     if (!workspaceId || !pipelineId) return;
     setLoading(true); setErr(null);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: 'no-store' });
+      const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}`, { cache: 'no-store' });
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'failed'); setRuns([]); setLaFallback(false); }
       else { setRuns(j.runs || []); setLaFallback(!!j.laFallback); }
@@ -182,7 +183,7 @@ function MonitorView({
     if (activities[runId]) return;
     setActivitiesLoading((m) => ({ ...m, [runId]: true }));
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`, { cache: 'no-store' });
+      const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/output?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`, { cache: 'no-store' });
       const j = await r.json();
       if (!j.ok) {
         setActivitiesErr((m) => ({ ...m, [runId]: j.error || 'failed' }));

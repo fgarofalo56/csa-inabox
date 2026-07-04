@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Shared KQL results / visualization / conditional-formatting cluster —
  * extracted from phase3-editors.tsx (byte-for-byte move).
@@ -217,7 +218,7 @@ export function StatCard({ columns, rows, conditionalRules }: { columns: string[
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
         {deco?.icon && <span style={{ display: 'inline-flex', color: deco.fg ?? tokens.colorBrandForeground1 }}>{deco.icon}</span>}
-        <div style={{ fontSize: 40, fontWeight: 700, color: deco?.fg ?? tokens.colorBrandForeground1, lineHeight: 1.1 }}>{display}</div>
+        <div style={{ fontSize: tokens.fontSizeHero900, fontWeight: 700, color: deco?.fg ?? tokens.colorBrandForeground1, lineHeight: 1.1 }}>{display}</div>
       </div>
       <Caption1 style={{ color: deco?.fg ?? tokens.colorNeutralForeground3 }}>{columns[cellIdx] || 'value'}</Caption1>
       {deco?.tag && <Caption1 style={{ color: deco.fg ?? tokens.colorNeutralForeground3, fontStyle: 'italic' }}>{deco.tag}</Caption1>}
@@ -530,7 +531,7 @@ export function KqlResultsPanel({ result, loading, itemId, itemType }: { result:
     if (!itemId || !itemType) return undefined;
     return async (): Promise<{ blocked: boolean; reason?: string }> => {
       try {
-        const r = await fetch(`/api/items/${itemType}/${itemId}/export-check`, {
+        const r = await clientFetch(`/api/items/${itemType}/${itemId}/export-check`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ format: 'csv' }),

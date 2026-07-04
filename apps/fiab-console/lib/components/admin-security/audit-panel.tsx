@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AuditPanel — expanded audit log surface for /admin/security.
  *
@@ -79,7 +80,7 @@ export function AuditPanel() {
       params.set('top', '500');
       if (q.trim()) params.set('q', q.trim());
       if (kind) params.set('type', kind);
-      const r = await fetch(`/api/admin/audit-logs?${params.toString()}`);
+      const r = await clientFetch(`/api/admin/audit-logs?${params.toString()}`);
       const j = await r.json();
       if (!r.ok) setError(j?.error || `HTTP ${r.status}`);
       else setData(j);
@@ -110,7 +111,7 @@ export function AuditPanel() {
     {
       key: 'itemId', label: 'Target',
       getValue: (r) => r.itemId || '',
-      render: (r) => <code style={{ fontSize: 11 }}>{r.itemId || '—'}</code>,
+      render: (r) => <code style={{ fontSize: tokens.fontSizeBase100 }}>{r.itemId || '—'}</code>,
     },
   ], []);
 
@@ -135,7 +136,7 @@ export function AuditPanel() {
 
   return (
     <div className={s.section}>
-      <Subtitle2 block style={{ marginBottom: 8 }}>Audit log</Subtitle2>
+      <Subtitle2 block style={{ marginBottom: tokens.spacingVerticalS }}>Audit log</Subtitle2>
       <div className={s.toolbar}>
         <Field label="Search">
           <Input value={q} onChange={(_: unknown, d: any) => setQ(d.value)} placeholder="who / key / itemId" />
@@ -152,7 +153,7 @@ export function AuditPanel() {
             {(data?.kinds || []).map((k) => <Option key={k} value={k}>{k}</Option>)}
           </Dropdown>
         </Field>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
           <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>
           <Button icon={<ArrowDownload20Regular />} onClick={exportCsv} disabled={!filteredRows.length}>CSV</Button>
         </div>
@@ -174,7 +175,7 @@ export function AuditPanel() {
         />
       )}
       {filteredRows.length > 200 && (
-        <Caption1 block style={{ marginTop: 8, color: tokens.colorNeutralForeground3 }}>
+        <Caption1 block style={{ marginTop: tokens.spacingVerticalS, color: tokens.colorNeutralForeground3 }}>
           Showing first 200 of {filteredRows.length}. Refine filters to see more, or click CSV to export the full filtered set.
         </Caption1>
       )}

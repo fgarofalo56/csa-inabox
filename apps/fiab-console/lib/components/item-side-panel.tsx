@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ItemSidePanel — four Fabric-style item utility buttons rendered in the
  * editor chrome action row. Each opens a Drawer backed by a real BFF
@@ -68,7 +69,7 @@ export function ItemSidePanel({ type, id }: Props) {
         return;
       }
     }
-    fetch(`/api/user-prefs?key=learnDismissed:${type}`).then(r => r.json()).then(d => {
+    clientFetch(`/api/user-prefs?key=learnDismissed:${type}`).then(r => r.json()).then(d => {
       if (!d?.value) {
         const learn = getLearn(type);
         if (learn) setOpen('learn');
@@ -137,7 +138,7 @@ function CommentsPane({ type, id }: Props) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const load = () => fetch(`/api/items/${type}/${id}/comments`)
+  const load = () => clientFetch(`/api/items/${type}/${id}/comments`)
     .then(r => r.json()).then(d => setItems(d?.comments ?? []))
     .catch(() => setItems([]));
 
@@ -146,7 +147,7 @@ function CommentsPane({ type, id }: Props) {
   const submit = async () => {
     if (!draft.trim()) return;
     setBusy(true);
-    await fetch(`/api/items/${type}/${id}/comments`, {
+    await clientFetch(`/api/items/${type}/${id}/comments`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ body: draft.trim() }),
     });
@@ -166,8 +167,8 @@ function CommentsPane({ type, id }: Props) {
       {items !== null && items.length === 0 && <div className={styles.meta}>No comments yet.</div>}
       {items?.map(c => (
         <div key={c.id} className={styles.card}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{c.name || c.upn || 'Someone'}</div>
-          <div style={{ fontSize: 13 }}>{c.body}</div>
+          <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase200 }}>{c.name || c.upn || 'Someone'}</div>
+          <div style={{ fontSize: tokens.fontSizeBase200 }}>{c.body}</div>
           <div className={styles.meta}>{new Date(c.createdAt).toLocaleString()}</div>
         </div>
       ))}
@@ -180,7 +181,7 @@ function HistoryPane({ type, id }: Props) {
   const styles = useStyles();
   const [items, setItems] = useState<AuditEntry[] | null>(null);
   useEffect(() => {
-    fetch(`/api/items/${type}/${id}/audit`).then(r => r.json())
+    clientFetch(`/api/items/${type}/${id}/audit`).then(r => r.json())
       .then(d => setItems(d?.entries ?? []))
       .catch(() => setItems([]));
   }, [type, id]);
@@ -192,7 +193,7 @@ function HistoryPane({ type, id }: Props) {
       )}
       {items?.map(e => (
         <div key={e.id} className={styles.card}>
-          <div style={{ fontWeight: 600, fontSize: 13 }}>{e.action} {e.summary ? `· ${e.summary}` : ''}</div>
+          <div style={{ fontWeight: 600, fontSize: tokens.fontSizeBase200 }}>{e.action} {e.summary ? `· ${e.summary}` : ''}</div>
           <div className={styles.meta}>{e.upn ?? 'unknown'} · {new Date(e.at).toLocaleString()}</div>
         </div>
       ))}
@@ -207,13 +208,13 @@ function SharePane({ type, id }: Props) {
   const [hours, setHours] = useState('24');
   const [busy, setBusy] = useState(false);
 
-  const load = () => fetch(`/api/items/${type}/${id}/share`).then(r => r.json())
+  const load = () => clientFetch(`/api/items/${type}/${id}/share`).then(r => r.json())
     .then(d => setItems(d?.shares ?? [])).catch(() => setItems([]));
   useEffect(() => { load(); }, [type, id]);
 
   const create = async () => {
     setBusy(true);
-    await fetch(`/api/items/${type}/${id}/share`, {
+    await clientFetch(`/api/items/${type}/${id}/share`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ expiresInHours: Number(hours) || 24 }),
     });
@@ -221,7 +222,7 @@ function SharePane({ type, id }: Props) {
   };
 
   const revoke = async (token: string) => {
-    await fetch(`/api/items/${type}/${id}/share?token=${encodeURIComponent(token)}`, { method: 'DELETE' });
+    await clientFetch(`/api/items/${type}/${id}/share?token=${encodeURIComponent(token)}`, { method: 'DELETE' });
     load();
   };
 
@@ -230,11 +231,11 @@ function SharePane({ type, id }: Props) {
 
   return (
     <div className={styles.list}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-        <label style={{ fontSize: 12 }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center' }}>
+        <label style={{ fontSize: tokens.fontSizeBase200 }}>
           Expires in (hours)&nbsp;
           <input value={hours} onChange={e => setHours(e.target.value)} type="number" min={1} max={720}
-                 style={{ width: 64, padding: 4, fontSize: 12 }} />
+                 style={{ width: 64, padding: tokens.spacingVerticalXS, fontSize: tokens.fontSizeBase200 }} />
         </label>
         <Button appearance="primary" onClick={create} disabled={busy}>
           {busy ? 'Creating…' : 'Create share link'}
@@ -248,7 +249,7 @@ function SharePane({ type, id }: Props) {
           <div className={styles.meta}>
             {s.scope} · expires {new Date(s.expiresAt).toLocaleString()} · by {s.createdBy}
           </div>
-          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, marginTop: tokens.spacingVerticalXS }}>
             <Button size="small" icon={<Copy16Regular />}
               onClick={() => navigator.clipboard?.writeText(urlFor(s))}>Copy</Button>
             <Button size="small" appearance="subtle" onClick={() => revoke(s.token)}>Revoke</Button>
@@ -266,7 +267,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
   const [activeStep, setActiveStep] = useState(0);
   const save = async () => {
     if (dismiss) {
-      await fetch('/api/user-prefs', {
+      await clientFetch('/api/user-prefs', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ key: `learnDismissed:${type}`, value: true }),
       }).catch(() => {});
@@ -307,10 +308,10 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
   }
   return (
     <div className={styles.list}>
-      <h3 style={{ marginTop: 0 }}>{learn.title}</h3>
+      <h3 style={{ marginTop: tokens.spacingVerticalNone }}>{learn.title}</h3>
       {learn.summary && <p>{learn.summary}</p>}
       {learn.steps && learn.steps.length > 0 && (
-        <ol style={{ paddingLeft: 18 }}>
+        <ol style={{ paddingLeft: tokens.spacingHorizontalXL }}>
           {learn.steps.map((s, i) => {
             const isActive = i === activeStep;
             return (
@@ -318,7 +319,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
                 key={i}
                 aria-current={isActive ? 'step' : undefined}
                 style={{
-                  marginBottom: 8,
+                  marginBottom: tokens.spacingVerticalS,
                   padding: isActive ? 'var(--loom-space-2)' : 0,
                   borderRadius: 'var(--loom-radius-sm)',
                   backgroundColor: isActive ? tokens.colorNeutralBackground2 : 'transparent',
@@ -330,7 +331,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
                 {typeof s === 'string' ? s : (
                   <><b>{s.title}</b>{s.body ? ` — ${s.body}` : ''}</>
                 )}
-                <div style={{ marginTop: 4 }}>
+                <div style={{ marginTop: tokens.spacingVerticalXS }}>
                   <Button
                     appearance="subtle"
                     size="small"
@@ -350,7 +351,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
       {learn.tip && (
         <MessageBar intent="success"><MessageBarBody>{learn.tip}</MessageBarBody></MessageBar>
       )}
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalM, alignItems: 'center' }}>
         {learn.docsUrl && (
           <a href={learn.docsUrl} target="_blank" rel="noreferrer"
              style={{ fontWeight: 600 }}>
@@ -360,7 +361,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
         {/* Secondary MS Learn link only when distinct from the primary Loom link. */}
         {learn.hasLoomDoc && learn.msLearnUrl && (
           <a href={learn.msLearnUrl} target="_blank" rel="noreferrer"
-             style={{ fontSize: 12, color: tokens.colorNeutralForeground3 }}>
+             style={{ fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground3 }}>
             MS Learn ↗
           </a>
         )}

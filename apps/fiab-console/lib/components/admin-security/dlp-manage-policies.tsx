@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DlpManagePolicies — real DLP compliance-policy CRUD for the /admin/security
  * DLP → Policies tab. Backed by /api/admin/security/dlp/manage, which proxies
@@ -118,7 +119,7 @@ export function DlpManagePolicies() {
   const load = useCallback(async () => {
     setState({ loading: true, policies: null });
     try {
-      const r = await fetch('/api/admin/security/dlp/manage');
+      const r = await clientFetch('/api/admin/security/dlp/manage');
       const j = await r.json();
       if (r.status === 503 && j?.code === 'dlp_admin_not_configured') {
         setState({ loading: false, policies: null, notConfigured: j.hint, error: j.error, errorStatus: 503 });
@@ -172,7 +173,7 @@ export function DlpManagePolicies() {
       rule,
     };
     try {
-      const r = await fetch('/api/admin/security/dlp/manage', {
+      const r = await clientFetch('/api/admin/security/dlp/manage', {
         method: isEdit ? 'PATCH' : 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(isEdit ? { id: form.editingId, policy } : { policy }),
@@ -195,7 +196,7 @@ export function DlpManagePolicies() {
     setPendingDelete(null);
     setState((st) => ({ ...st, loading: true }));
     try {
-      await fetch(`/api/admin/security/dlp/manage?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      await clientFetch(`/api/admin/security/dlp/manage?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
     } catch { /* surfaced on reload */ }
     load();
   };

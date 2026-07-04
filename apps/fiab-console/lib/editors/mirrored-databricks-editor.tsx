@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MirroredDatabricksEditor — Fabric MirroredAzureDatabricksCatalog focused
  * editor. Lets a user mount a Databricks Unity Catalog as a read-only
@@ -67,7 +68,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/loom/workspaces');
+      const r = await clientFetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setWorkspaces([]); return; }
       setWorkspaces(j.workspaces || []);
@@ -107,7 +108,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     let live = true;
     (async () => {
       try {
-        const r = await fetch('/api/items/mirrored-databricks/catalogs');
+        const r = await clientFetch('/api/items/mirrored-databricks/catalogs');
         const j = await r.json();
         if (live && j.ok && Array.isArray(j.catalogs)) setUcCatalogs(j.catalogs);
       } catch { /* keep freeform fallback */ }
@@ -134,7 +135,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
     try {
-      const r = await fetch(`/api/items/mirrored-databricks?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/mirrored-databricks?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setMirrors([]); setListErr(j.error || 'failed'); return; }
       setMirrors(j.mirrors || []);
@@ -144,7 +145,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
 
   const loadDetail = useCallback(async (wsId: string, mid: string) => {
     try {
-      const r = await fetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setActive(null); return; }
       setActive(j.mirror);
@@ -156,7 +157,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const loadSchemas = useCallback(async (wsId: string, mid: string) => {
     setSchemas(null); setSchemasErr(null);
     try {
-      const r = await fetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}/catalog?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}/catalog?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setSchemasErr({ error: j.error, code: j.code, hint: j.hint }); setSchemas([]); return; }
       setSchemas(j.schemas || []);
@@ -166,7 +167,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const loadTables = useCallback(async (wsId: string, mid: string, schema: string) => {
     setTables(null); setTablesErr(null);
     try {
-      const r = await fetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}/catalog?workspaceId=${encodeURIComponent(wsId)}&schema=${encodeURIComponent(schema)}`);
+      const r = await clientFetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}/catalog?workspaceId=${encodeURIComponent(wsId)}&schema=${encodeURIComponent(schema)}`);
       const j = await r.json();
       if (!j.ok) { setTablesErr(j.error || 'failed'); setTables([]); return; }
       setTables(j.tables || []);
@@ -176,7 +177,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
   const loadSqlEndpoint = useCallback(async (wsId: string, mid: string) => {
     setSqlBusy(true); setSqlInfo(null);
     try {
-      const r = await fetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}/sql-endpoint?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/mirrored-databricks/${encodeURIComponent(mid)}/sql-endpoint?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       setSqlInfo(j as SqlEndpointInfo);
     } catch (e: any) {
@@ -208,7 +209,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     if (!workspaceId || !cName.trim() || !cCatalog.trim()) return;
     setCBusy(true); setCErr(null); setCPairing(null);
     try {
-      const r = await fetch(`/api/items/mirrored-databricks?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/mirrored-databricks?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           displayName: cName.trim(),
@@ -240,7 +241,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
     if (!workspaceId || !mirrorId) return;
     setSettingsBusy(true); setSettingsErr(null); setSettingsMsg(null);
     try {
-      const r = await fetch(`/api/items/mirrored-databricks/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/mirrored-databricks/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ catalogName: editCatalog, hostname: editHostname || null }),
       });
@@ -617,7 +618,7 @@ export function MirroredDatabricksEditor({ item, id }: Props) {
                       <Button appearance="subtle" icon={<Delete20Regular />} onClick={async () => {
                         if (!workspaceId || !mirrorId) return;
                         if (typeof window !== 'undefined' && !window.confirm('Delete this mirror? (Cosmos record removed; UC catalog itself unchanged.)')) return;
-                        await fetch(`/api/items/mirrored-databricks/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+                        await clientFetch(`/api/items/mirrored-databricks/${encodeURIComponent(mirrorId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
                         setMirrorId(''); setActive(null);
                         await loadList(workspaceId);
                       }}>Delete mirror</Button>

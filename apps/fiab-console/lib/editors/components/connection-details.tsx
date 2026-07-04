@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ConnectionDetailsPanel — surface server hostname, HTTP path / database,
  * JDBC URL, and a CLI snippet per SQL engine, each with a copy button. Read-only
@@ -135,7 +136,7 @@ export function ConnectionDetailsPanel({ engine, id, warehouseId, database }: Pr
       if (warehouseId) params.set('warehouseId', warehouseId);
       if (database) params.set('database', database);
       const qs = params.toString();
-      const res = await fetch(
+      const res = await clientFetch(
         `/api/items/${engine}/${encodeURIComponent(id)}/connection${qs ? `?${qs}` : ''}`,
       );
       const j = await res.json();

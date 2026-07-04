@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * OnboardingTour — first-run guided tour overlay.
  *
@@ -148,7 +149,7 @@ export function OnboardingTour() {
 
   const persistStep = useCallback((i: number) => {
     lastStepRef.current = i;
-    fetch('/api/user-prefs', {
+    clientFetch('/api/user-prefs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: PREF_STEP, value: i }),
@@ -157,7 +158,7 @@ export function OnboardingTour() {
 
   const markDone = useCallback(() => {
     try { localStorage.setItem(SEEN_KEY, '1'); } catch { /* no storage */ }
-    fetch('/api/user-prefs', {
+    clientFetch('/api/user-prefs', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: PREF_DONE, value: true }),
@@ -170,15 +171,15 @@ export function OnboardingTour() {
     try { if (localStorage.getItem(SEEN_KEY) === '1') return; } catch { /* continue */ }
     (async () => {
       try {
-        const me: MeResponse = await fetch('/api/me').then((r) => r.json());
+        const me: MeResponse = await clientFetch('/api/me').then((r) => r.json());
         if (cancelled || !me?.authenticated) return;
-        const done = await fetch(`/api/user-prefs?key=${encodeURIComponent(PREF_DONE)}`).then((r) => r.json());
+        const done = await clientFetch(`/api/user-prefs?key=${encodeURIComponent(PREF_DONE)}`).then((r) => r.json());
         if (cancelled) return;
         if (done?.value) {
           try { localStorage.setItem(SEEN_KEY, '1'); } catch { /* ignore */ }
           return;
         }
-        const last = await fetch(`/api/user-prefs?key=${encodeURIComponent(PREF_STEP)}`).then((r) => r.json());
+        const last = await clientFetch(`/api/user-prefs?key=${encodeURIComponent(PREF_STEP)}`).then((r) => r.json());
         if (cancelled) return;
         const resumeAt = typeof last?.value === 'number'
           ? Math.min(Math.max(last.value, 0), TOUR_STEPS.length - 1)

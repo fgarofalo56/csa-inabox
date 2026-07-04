@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SqlDatabaseEditor — Fabric-native SQL database (Microsoft.Fabric
  * SQLDatabase REST type) focused editor.
@@ -132,7 +133,7 @@ WHERE is_ms_shipped = 0;`,
   const [actionMsg, setActionMsg] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/loom/workspaces').then(r => r.json()).then(j => {
+    clientFetch('/api/loom/workspaces').then(r => r.json()).then(j => {
       if (j.ok) setWorkspaces(j.workspaces || []);
       else setWorkspaces([]);
     }).catch(() => setWorkspaces([]));
@@ -141,7 +142,7 @@ WHERE is_ms_shipped = 0;`,
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null);
     try {
-      const r = await fetch(`/api/items/sql-database?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/sql-database?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) {
         setListErr({ error: j.error, code: j.code, hint: j.hint });
@@ -159,7 +160,7 @@ WHERE is_ms_shipped = 0;`,
 
   const loadDetail = useCallback(async (wsId: string, dId: string) => {
     try {
-      const r = await fetch(`/api/items/sql-database/${encodeURIComponent(dId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/sql-database/${encodeURIComponent(dId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setActive(null); return; }
       setActive(j.sqlDatabase);
@@ -173,7 +174,7 @@ WHERE is_ms_shipped = 0;`,
     if (!workspaceId || !cName.trim()) return;
     setCBusy(true); setCErr(null);
     try {
-      const r = await fetch(`/api/items/sql-database?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/sql-database?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: cName.trim(), description: cDesc.trim() || undefined }),
       });
@@ -192,7 +193,7 @@ WHERE is_ms_shipped = 0;`,
     try {
       // The Fabric SQL DB shares the engine with Azure SQL DB; route through
       // the existing azure-sql-database query path.
-      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(dbId)}/query`, {
+      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(dbId)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: sqlToRun }),
       });
@@ -227,7 +228,7 @@ WHERE is_ms_shipped = 0;`,
   const del = useCallback(async () => {
     if (!workspaceId || !dbId) return;
     if (typeof window !== 'undefined' && !window.confirm('Delete this Fabric SQL database?')) return;
-    const r = await fetch(`/api/items/sql-database/${encodeURIComponent(dbId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+    const r = await clientFetch(`/api/items/sql-database/${encodeURIComponent(dbId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
     const j = await r.json();
     if (!j.ok) { setActionMsg(`Delete failed: ${j.error}`); return; }
     setActionMsg('Delete accepted');

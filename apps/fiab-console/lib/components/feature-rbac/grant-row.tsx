@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Grant row — renders a single FeatureGrant in the capability detail
  * pane.  Inline Remove button calls DELETE
@@ -31,7 +32,7 @@ export function GrantRow({ grant, onRemoved }: GrantRowProps) {
     if (!confirm(`Remove ${grant.principalDisplayName || grant.principalId} from ${grant.capabilityId}?`)) return;
     setRemoving(true);
     try {
-      const res = await fetch(`/api/admin/permissions/grants?id=${encodeURIComponent(grant.id)}`, { method: 'DELETE' });
+      const res = await clientFetch(`/api/admin/permissions/grants?id=${encodeURIComponent(grant.id)}`, { method: 'DELETE' });
       if (res.ok) onRemoved();
     } finally {
       setRemoving(false);

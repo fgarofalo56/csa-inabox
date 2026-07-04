@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Trusted workspace access — storage resource-instance rules on the shared
  * admin Network page (Fabric-parity Phase 4 G6).
@@ -32,14 +33,14 @@ import {
 } from '@fluentui/react-icons';
 
 const card: React.CSSProperties = {
-  padding: 20, border: `1px solid ${tokens.colorNeutralStroke2}`,
+  padding: tokens.spacingVerticalXL, border: `1px solid ${tokens.colorNeutralStroke2}`,
   borderRadius: tokens.borderRadiusXLarge, backgroundColor: tokens.colorNeutralBackground1,
-  marginBottom: 20, boxShadow: tokens.shadow4,
+  marginBottom: tokens.spacingVerticalXL, boxShadow: tokens.shadow4,
 };
 const head: React.CSSProperties = {
-  display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14, flexWrap: 'wrap', minWidth: 0,
+  display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalMNudge, marginBottom: tokens.spacingVerticalL, flexWrap: 'wrap', minWidth: 0,
 };
-const mono: React.CSSProperties = { fontFamily: 'Consolas, monospace', fontSize: 12, overflowWrap: 'anywhere' };
+const mono: React.CSSProperties = { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere' };
 
 const api = (ws: string) => `/api/admin/workspaces/${encodeURIComponent(ws)}/networking/trusted-resources`;
 
@@ -111,7 +112,7 @@ export function TrustedWorkspaceAccessCard() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/workspaces');
+        const r = await clientFetch('/api/workspaces');
         const j = await r.json();
         const list: WsLite[] = Array.isArray(j) ? j : (j?.workspaces || []);
         if (!alive) return;
@@ -127,7 +128,7 @@ export function TrustedWorkspaceAccessCard() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/storage/accounts');
+        const r = await clientFetch('/api/storage/accounts');
         const j = await r.json();
         if (!alive) return;
         if (j?.ok) setAccounts(Array.isArray(j.accounts) ? j.accounts : []);
@@ -227,7 +228,7 @@ export function TrustedWorkspaceAccessCard() {
         <Badge appearance="tint" color="brand" style={{ marginLeft: 'auto' }}>Azure-native · trusted workspace access</Badge>
       </div>
 
-      <Body1 style={{ display: 'block', marginBottom: 12, color: tokens.colorNeutralForeground3 }}>
+      <Body1 style={{ display: 'block', marginBottom: tokens.spacingVerticalM, color: tokens.colorNeutralForeground3 }}>
         Authorize a managed identity through a firewalled storage account&rsquo;s network rules — the Azure-native
         equivalent of Fabric&rsquo;s trusted workspace access. Adding an identity writes a real
         {' '}<code>networkAcls.resourceAccessRules</code> entry (<code>{'{ tenantId, resourceId }'}</code>) on the
@@ -235,7 +236,7 @@ export function TrustedWorkspaceAccessCard() {
       </Body1>
 
       {/* Scope pickers */}
-      <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: tokens.spacingHorizontalL, flexWrap: 'wrap', marginBottom: tokens.spacingVerticalL }}>
         <Field label="Workspace" hint="Scopes the request + the workspace-identity option" style={{ minWidth: 240 }}>
           <Dropdown
             placeholder={workspaces === null ? 'Loading…' : workspaces.length === 0 ? 'No workspaces' : 'Select a workspace'}
@@ -272,12 +273,12 @@ export function TrustedWorkspaceAccessCard() {
       </div>
 
       {wsErr && (
-        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Couldn&rsquo;t list workspaces</MessageBarTitle>{wsErr}</MessageBarBody>
         </MessageBar>
       )}
       {workspaces !== null && workspaces.length === 0 && !wsErr && (
-        <MessageBar intent="info" style={{ marginBottom: 12 }}>
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>
             <MessageBarTitle>No workspaces yet</MessageBarTitle>
             Trusted access routes through a workspace&rsquo;s networking surface — create a workspace first.
@@ -285,13 +286,13 @@ export function TrustedWorkspaceAccessCard() {
         </MessageBar>
       )}
       {acctErr && (
-        <MessageBar intent="warning" style={{ marginBottom: 12 }}>
+        <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody><MessageBarTitle>Couldn&rsquo;t list storage accounts</MessageBarTitle>{acctErr}</MessageBarBody>
         </MessageBar>
       )}
 
       {notice && (
-        <MessageBar intent="info" style={{ marginBottom: 12 }}>
+        <MessageBar intent="info" style={{ marginBottom: tokens.spacingVerticalM }}>
           <MessageBarBody>{notice}</MessageBarBody>
         </MessageBar>
       )}
@@ -310,7 +311,7 @@ export function TrustedWorkspaceAccessCard() {
       {!loading && state && (
         <>
           {hint && (
-            <MessageBar intent={hint.intent} style={{ marginBottom: 12 }}>
+            <MessageBar intent={hint.intent} style={{ marginBottom: tokens.spacingVerticalM }}>
               <MessageBarBody>
                 <MessageBarTitle>{hint.title}</MessageBarTitle>
                 {hint.body}
@@ -318,7 +319,7 @@ export function TrustedWorkspaceAccessCard() {
             </MessageBar>
           )}
 
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap', alignItems: 'center', marginBottom: tokens.spacingVerticalM }}>
             <Badge appearance="tint" color={(state.defaultAction || '').toLowerCase() === 'deny' ? 'success' : 'warning'} icon={<Info16Filled />}>
               Default action: {state.defaultAction || '—'}
             </Badge>
@@ -329,7 +330,7 @@ export function TrustedWorkspaceAccessCard() {
           </div>
 
           {/* Add rule */}
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: 14 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalMNudge, flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: tokens.spacingVerticalL }}>
             <Field label="Identity to authorize" hint="The rule admits this identity's ARM resource instance" style={{ minWidth: 300 }}>
               <Dropdown
                 placeholder={identities && (identities.consoleUami || identities.workspaceIdentity) ? 'Select an identity' : 'No identity resolvable'}
@@ -362,7 +363,7 @@ export function TrustedWorkspaceAccessCard() {
           </div>
 
           {identities && !identities.workspaceIdentity && (
-            <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: 12 }}>
+            <Caption1 block style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
               <Warning16Filled style={{ verticalAlign: 'text-bottom' }} /> This workspace has no per-workspace managed
               identity (uami-ws-{wsId || '<id>'}) — only the Console UAMI can be authorized. Provision one with
               {' '}<code>platform/fiab/bicep/modules/landing-zone/workspace-identity.bicep</code> to grant the

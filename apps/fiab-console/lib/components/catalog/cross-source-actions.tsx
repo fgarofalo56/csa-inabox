@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CrossSourceActions — buttons that fan an asset out to the other two
  * catalog stores. Surfaced on the asset detail page.
@@ -94,7 +95,7 @@ export function CrossSourceActions({ source, id, host, workspaceId, detail }: Pr
         body.source = 'onelake'; body.workspaceId = workspaceId; body.itemId = id;
       } else { return; }
       if (domain) body.domain = domain;
-      const r = await fetch('/api/catalog/register', {
+      const r = await clientFetch('/api/catalog/register', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
@@ -124,7 +125,7 @@ export function CrossSourceActions({ source, id, host, workspaceId, detail }: Pr
       if (source === 'purview') {
         body.applyTo = { source: 'purview', entityGuid: id };
       }
-      const r = await fetch('/api/catalog/glossary', {
+      const r = await clientFetch('/api/catalog/glossary', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
@@ -158,7 +159,7 @@ export function CrossSourceActions({ source, id, host, workspaceId, detail }: Pr
         registerInPurview: true,
         domain: domain || undefined,
       };
-      const r = await fetch('/api/catalog/shortcut', {
+      const r = await clientFetch('/api/catalog/shortcut', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();

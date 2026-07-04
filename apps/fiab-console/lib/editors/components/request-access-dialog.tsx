@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useState, useEffect, useCallback } from 'react';
 import {
   Dialog, DialogSurface, DialogTitle, DialogBody, DialogContent, DialogActions,
@@ -115,7 +116,7 @@ export function RequestAccessDialog({
     setLoadingPolicies(true);
     setError(null);
     try {
-      const r = await fetch(`/api/data-products/${dataProductId}/policies`);
+      const r = await clientFetch(`/api/data-products/${dataProductId}/policies`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setPolicies([]); return; }
       setPolicies(j.policies ?? []);
@@ -143,7 +144,7 @@ export function RequestAccessDialog({
     setBusy(true);
     setError(null);
     try {
-      const r = await fetch(`/api/data-products/${dataProductId}/access-requests`, {
+      const r = await clientFetch(`/api/data-products/${dataProductId}/access-requests`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ policyId: selectedPolicyId, purposeName: selectedPurposeName, justification }),

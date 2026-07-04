@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MappingDataFlowDesigner — the visual ADF / Synapse SPARK-based MAPPING DATA
  * FLOW designer.
@@ -537,7 +538,7 @@ function TransformNodeImpl({ data, selected }: NodeProps) {
                 }}
                 style={{
                   position: 'absolute', right: -28, top: `calc(${top} - 9px)`,
-                  width: 18, height: 18, padding: 0, zIndex: 4, cursor: 'pointer',
+                  width: 18, height: 18, padding: tokens.spacingVerticalNone, zIndex: 4, cursor: 'pointer',
                   display: 'flex', alignItems: 'center', justifyContent: 'center',
                   borderRadius: '50%', border: `1px solid ${accent}`,
                   background: tokens.colorNeutralBackground1, color: accent,
@@ -1125,7 +1126,7 @@ function DesignerInner({
       if (onSave) {
         await onSave(props);
       } else {
-        const r = await fetch(`/api/adf/dataflows/${encodeURIComponent(name)}`, {
+        const r = await clientFetch(`/api/adf/dataflows/${encodeURIComponent(name)}`, {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ properties: props }),

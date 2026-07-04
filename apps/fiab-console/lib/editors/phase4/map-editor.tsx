@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Map editor (Fabric IQ Map — dataset binding + layers over Lakehouse/KQL/Ontology).
  *
@@ -188,10 +189,10 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
   // Lazy-load pickers when the relevant source is chosen.
   useEffect(() => {
     if (binding.source === 'kql' && kqlItems === null) {
-      fetch('/api/items?type=kql-database').then((r) => r.json()).then((j) => setKqlItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setKqlItems([]));
+      clientFetch('/api/items?type=kql-database').then((r) => r.json()).then((j) => setKqlItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setKqlItems([]));
     }
     if (binding.source === 'ontology' && ontologyItems === null) {
-      fetch('/api/items?type=ontology').then((r) => r.json()).then((j) => setOntologyItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setOntologyItems([]));
+      clientFetch('/api/items?type=ontology').then((r) => r.json()).then((j) => setOntologyItems((j?.items || []).map((it: any) => ({ id: it.id, displayName: it.displayName })))).catch(() => setOntologyItems([]));
     }
   }, [binding.source, kqlItems, ontologyItems]);
 
@@ -262,7 +263,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     if (!id || id === 'new') { setRunMsg({ intent: 'error', text: 'Save the map once so it has an id, then bind data.' }); return; }
     setRunning(true); setRunMsg(null);
     try {
-      const r = await fetch(`/api/items/map/${encodeURIComponent(id)}/data`, {
+      const r = await clientFetch(`/api/items/map/${encodeURIComponent(id)}/data`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ binding }),
       });
@@ -299,7 +300,7 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
     if (!addresses.length) { setGeoMsg({ intent: 'error', text: 'Enter one or more addresses (one per line).' }); return; }
     setGeocoding(true); setGeoMsg(null);
     try {
-      const r = await fetch(`/api/items/map/${encodeURIComponent(id)}/geocode`, {
+      const r = await clientFetch(`/api/items/map/${encodeURIComponent(id)}/geocode`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ addresses }),
       });

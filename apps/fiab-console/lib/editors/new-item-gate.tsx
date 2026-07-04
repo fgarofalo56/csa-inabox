@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * NewItemGate — shared `/new` create surface for focused editors.
  *
@@ -68,7 +69,7 @@ function useLoomWorkspaces() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/loom/workspaces');
+        const r = await clientFetch('/api/loom/workspaces');
         const j = await r.json();
         if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setWorkspaces([]); }
         else { setWorkspaces(j.workspaces || []); }
@@ -107,7 +108,7 @@ export function NewItemCreateGate({ item, createLabel, intro }: CreateGateProps)
     if (!canCreate) return;
     setBusy(true); setError(null);
     try {
-      const r = await fetch(`/api/cosmos-items/${encodeURIComponent(item.slug)}`, {
+      const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(item.slug)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, displayName: displayName.trim() }),
       });

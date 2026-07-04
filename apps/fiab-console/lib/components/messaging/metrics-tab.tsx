@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MessagingMetricsTab — the shared Metrics blade for the three messaging
  * namespace editors (Event Hubs / Service Bus / Event Grid). Queries the real
@@ -77,7 +78,7 @@ export function MessagingMetricsTab({ kind, topic, scopeLabel }: Props) {
     try {
       const qs = new URLSearchParams({ kind, range });
       if (topic) qs.set('topic', topic);
-      const r = await fetch(`/api/messaging/metrics?${qs.toString()}`);
+      const r = await clientFetch(`/api/messaging/metrics?${qs.toString()}`);
       const j = await r.json();
       if (!j.ok) {
         if (j.code === 'not_configured') {

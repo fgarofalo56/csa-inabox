@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * OneLake catalog — Govern tab.
  *
@@ -316,7 +317,7 @@ export function GovernView() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/onelake/governance')
+    clientFetch('/api/onelake/governance')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: GovernanceData) => {
         if (cancelled) return;
@@ -533,7 +534,7 @@ export function GovernView() {
           <Text weight="semibold" block>
             One physical Delta table — many engines
           </Text>
-          <Caption1 block style={{ marginTop: 4 }}>
+          <Caption1 block style={{ marginTop: tokens.spacingVerticalXS }}>
             Every lakehouse table in this catalog is a Delta Lake table stored once in OneLake (ADLS
             Gen2). The same physical Parquet + <code>_delta_log</code> files are simultaneously
             readable by Azure Synapse Analytics SQL (external tables / OPENROWSET), Apache Spark

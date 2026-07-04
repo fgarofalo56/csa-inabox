@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * KqlDatabaseEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -265,7 +266,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setRlsTable(tableName); setRlsError(null); setRlsNotice(null);
     setRlsEnabled(false); setRlsQuery(''); setRlsLoading(true);
     try {
-      const res = await fetch(`/api/adx/rls?id=${encodeURIComponent(id)}&table=${encodeURIComponent(tableName)}`);
+      const res = await clientFetch(`/api/adx/rls?id=${encodeURIComponent(id)}&table=${encodeURIComponent(tableName)}`);
       const body = await res.json().catch(() => ({}));
       if (body?.ok && body.policy) { setRlsEnabled(!!body.policy.isEnabled); setRlsQuery(body.policy.query || ''); }
       else if (!body?.ok && body?.error) setRlsError(body.error);
@@ -280,7 +281,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     if (!rlsTable) return;
     setRlsBusy(true); setRlsError(null); setRlsNotice(null);
     try {
-      const res = await fetch(`/api/adx/rls?id=${encodeURIComponent(id)}`, {
+      const res = await clientFetch(`/api/adx/rls?id=${encodeURIComponent(id)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ table: rlsTable, enabled: rlsEnabled, query: rlsQuery }),
       });
@@ -349,7 +350,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     // Pre-save gate: /items/kql-database/new fires this before any record exists.
     if (!id || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/kql-database/${id}`);
+      const r = await clientFetch(`/api/items/kql-database/${id}`);
       const j = (await r.json()) as KqlDbInfo;
       setInfo(j);
       // Re-list the navigator (ribbon wizards call load() after a create).
@@ -365,7 +366,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setLoading(true);
     setResult(null);
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/query`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kql }),
@@ -383,7 +384,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     lastModeRef.current = mode;
     setAssistView('loading'); setAssistError(null);
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/assist`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/assist`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           mode,
@@ -448,7 +449,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       // Step 1: create the Cosmos item (POST /api/workspaces/<wsId>/items).
       const created = await createItem(wsId, { itemType: 'kql-dashboard', displayName });
       // Step 2: seed the first tile (PUT /api/items/kql-dashboard/<id>).
-      await fetch(`/api/items/kql-dashboard/${created.id}`, {
+      await clientFetch(`/api/items/kql-dashboard/${created.id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -471,7 +472,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     if (wizardKind !== 'data-connection' || !id || id === 'new') return;
     setWizDcLoading(true);
     setWizDcHubs([]); setWizDcGroups([]); setWizDcEhGate(null);
-    fetch(`/api/items/kql-database/${id}/data-connections`)
+    clientFetch(`/api/items/kql-database/${id}/data-connections`)
       .then((r) => r.json())
       .then((j: any) => {
         if (j?.ok === false && j?.code === 'not_configured') {
@@ -493,7 +494,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   useEffect(() => {
     if (wizardKind !== 'data-connection' || !wizDcHub || !id || id === 'new') return;
     setWizDcGroups([]);
-    fetch(`/api/items/kql-database/${id}/data-connections?hub=${encodeURIComponent(wizDcHub)}`)
+    clientFetch(`/api/items/kql-database/${id}/data-connections?hub=${encodeURIComponent(wizDcHub)}`)
       .then((r) => r.json())
       .then((j: any) => setWizDcGroups(j.consumerGroups || []))
       .catch(() => { /* leave empty */ });
@@ -506,7 +507,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     if (!id || id === 'new') return;
     setGraphLoading(true); setGraphError(null);
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/schema-graph`);
+      const r = await clientFetch(`/api/items/kql-database/${id}/schema-graph`);
       const j = await r.json();
       if (!j.ok) setGraphError(j.error || 'Schema graph failed');
       else setGraphData({ nodes: j.nodes || [], edges: j.edges || [] });
@@ -542,7 +543,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     if (!cmd) { setDeleteError('This entity type cannot be deleted from the diagram.'); return; }
     setDeleteSubmitting(true); setDeleteError(null);
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/query`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kql: cmd }),
       });
@@ -577,7 +578,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     // pull the real table list off the bound ADX/Eventhouse cluster.
     if ((k === 'mv' || k === 'ingest' || k === 'update-policy') && id && id !== 'new') {
       setWizTables([]);
-      fetch(`/api/adx/tables?id=${encodeURIComponent(id)}`)
+      clientFetch(`/api/adx/tables?id=${encodeURIComponent(id)}`)
         .then((r) => r.json())
         .then((j) => {
           if (j?.ok && Array.isArray(j.tables)) {
@@ -598,8 +599,8 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     let cancelled = false;
     setUpLoading(true);
     Promise.all([
-      fetch(`/api/adx/tables?id=${id}`).then((r) => r.json()),
-      fetch(`/api/adx/functions?id=${id}`).then((r) => r.json()),
+      clientFetch(`/api/adx/tables?id=${id}`).then((r) => r.json()),
+      clientFetch(`/api/adx/functions?id=${id}`).then((r) => r.json()),
     ]).then(([tj, fj]) => {
       if (cancelled) return;
       setUpTables(((tj.tables || []) as Array<{ name: string }>).map((t) => t.name));
@@ -616,7 +617,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setWizardKind('alter-table'); setWizError(null); setWizSuccess(null);
     setWizAlterTarget(tableName); setWizColumns([]);
     try {
-      const r = await fetch(`/api/adx/tables?id=${encodeURIComponent(id)}&schema=${encodeURIComponent(tableName)}`);
+      const r = await clientFetch(`/api/adx/tables?id=${encodeURIComponent(id)}&schema=${encodeURIComponent(tableName)}`);
       const j = await r.json();
       if (j.ok && j.cslSchema) setWizColumns(parseKustoSchema(j.cslSchema));
     } catch {
@@ -644,7 +645,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       if (!wizDcConsumerGroup) { setWizError('Consumer group is required'); return; }
       setWizSubmitting(true);
       try {
-        const r = await fetch(`/api/items/kql-database/${id}/data-connections`, {
+        const r = await clientFetch(`/api/items/kql-database/${id}/data-connections`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
             name: wizName.trim() || undefined,
@@ -725,7 +726,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
       if (!wizLeaderResourceId.trim()) { setWizError('Leader cluster ARM resource ID is required'); return; }
       setWizSubmitting(true);
       try {
-        const r = await fetch(`/api/items/kql-database/${id}/follower`, {
+        const r = await clientFetch(`/api/items/kql-database/${id}/follower`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({
@@ -764,7 +765,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         // with (backfill=true)`. Short-circuit the generic /query path below.
         setWizSubmitting(true);
         try {
-          const res = await fetch(`/api/adx/materialized-views?id=${encodeURIComponent(id)}`, {
+          const res = await clientFetch(`/api/adx/materialized-views?id=${encodeURIComponent(id)}`, {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ name: wizName, sourceTable: wizSource, query: wizQuery, backfill: wizBackfill }),
           });
@@ -796,7 +797,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
         try {
           // POST to the dedicated policies route (.alter table policy update),
           // NOT the generic query route — the route reads the policy back as a receipt.
-          const r2 = await fetch(`/api/adx/policies?id=${id}`, {
+          const r2 = await clientFetch(`/api/adx/policies?id=${id}`, {
             method: 'POST', headers: { 'content-type': 'application/json' },
             body: JSON.stringify({
               targetTable: wizName.trim(),
@@ -861,7 +862,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     }
     setWizSubmitting(true);
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/query`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kql: mgmtCmd }),
       });
@@ -911,7 +912,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     if (!fnBody.trim()) { setFnErr('Body is required, e.g. "events | take 10"'); return; }
     setFnBusy(true); setFnErr(null); setFnReceipt(null);
     try {
-      const res = await fetch(`/api/adx/functions?id=${encodeURIComponent(id)}`, {
+      const res = await clientFetch(`/api/adx/functions?id=${encodeURIComponent(id)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -937,7 +938,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     if (!fnName.trim()) return;
     setFnDeleteBusy(true); setFnErr(null); setFnReceipt(null);
     try {
-      const res = await fetch(
+      const res = await clientFetch(
         `/api/adx/functions?id=${encodeURIComponent(id)}&name=${encodeURIComponent(fnName.trim())}`,
         { method: 'DELETE' },
       );
@@ -958,7 +959,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     if (!info?.followerConfigName) return;
     setDetaching(true);
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/follower?configName=${encodeURIComponent(info.followerConfigName)}`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/follower?configName=${encodeURIComponent(info.followerConfigName)}`, {
         method: 'DELETE',
       });
       const j = await r.json();
@@ -978,7 +979,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
   const loadDcExisting = useCallback(async () => {
     if (!id || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/data-connections`);
+      const r = await clientFetch(`/api/items/kql-database/${id}/data-connections`);
       const j = await r.json();
       setDcExisting(j.ok ? (j.connections ?? []) : []);
     } catch {
@@ -995,7 +996,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setDcPolicies([]);
     setDcPolicyNote(null);
     try {
-      const r = await fetch(`/api/azure/resources?type=${encodeURIComponent(ARM_TYPE_BY_KIND[kind])}`);
+      const r = await clientFetch(`/api/azure/resources?type=${encodeURIComponent(ARM_TYPE_BY_KIND[kind])}`);
       const j = await r.json();
       const rows: DcSourceRow[] = Array.isArray(j.resources) ? j.resources : [];
       if (!j.ok || rows.length === 0) {
@@ -1045,7 +1046,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     setDcPolicyNote(null);
     if (dcKind !== 'iothub' || !sourceId) return;
     try {
-      const r = await fetch(`/api/azure/iothub/policies?iotHubId=${encodeURIComponent(sourceId)}`);
+      const r = await clientFetch(`/api/azure/iothub/policies?iotHubId=${encodeURIComponent(sourceId)}`);
       const j = await r.json();
       const list = (j.ok ? j.policies : j.fallback) ?? [];
       setDcPolicies(list);
@@ -1090,7 +1091,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     }
     setDcBusy(true);
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/data-connections`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/data-connections`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -1112,7 +1113,7 @@ export function KqlDatabaseEditor({ item, id }: { item: FabricItemType; id: stri
     if (!connectionName) return;
     setDcBusy(true);
     try {
-      const r = await fetch(`/api/items/kql-database/${id}/data-connections`, {
+      const r = await clientFetch(`/api/items/kql-database/${id}/data-connections`, {
         method: 'DELETE', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ connectionName }),
       });

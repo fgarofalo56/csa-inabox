@@ -104,9 +104,9 @@ export function CitationChips({ citations }: { citations: Citation[] }) {
             relationship="description"
             content={
               <div style={{ maxWidth: 360 }}>
-                <div style={{ fontWeight: 600, marginBottom: 4 }}>{c.path}</div>
-                {c.heading && <div style={{ fontStyle: 'italic', marginBottom: 4 }}>{c.heading}</div>}
-                <div style={{ fontSize: 12, opacity: 0.9 }}>{c.preview}…</div>
+                <div style={{ fontWeight: 600, marginBottom: tokens.spacingVerticalXS }}>{c.path}</div>
+                {c.heading && <div style={{ fontStyle: 'italic', marginBottom: tokens.spacingVerticalXS }}>{c.heading}</div>}
+                <div style={{ fontSize: tokens.fontSizeBase200, opacity: 0.9 }}>{c.preview}…</div>
               </div>
             }
           >

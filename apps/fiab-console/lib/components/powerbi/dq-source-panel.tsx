@@ -214,7 +214,7 @@ export function DqSourcePanel({
         </>
       )}
 
-      <Subtitle2 style={{ marginTop: 8 }}>Apply to Analysis Services model</Subtitle2>
+      <Subtitle2 style={{ marginTop: tokens.spacingVerticalS }}>Apply to Analysis Services model</Subtitle2>
       <Caption1 className={s.hint}>
         Pushes TMSL (<code>createOrReplace</code> DataSource + DirectQuery partitions) to the AAS model via XMLA.
         The Console managed identity must be an Analysis Services server administrator on the bound server.

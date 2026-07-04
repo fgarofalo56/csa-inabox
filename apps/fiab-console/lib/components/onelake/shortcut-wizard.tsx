@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ShortcutWizard + ShortcutListGrid + ShortcutsPanel — internal
  * (lakehouse-to-lakehouse) shortcut parity with Microsoft Fabric OneLake
@@ -457,7 +458,7 @@ export function ShortcutWizard({ itemType = 'lakehouse', lakehouseId, workspaceI
                 <div className={styles.browser}>
                   <div className={styles.crumbs}>
                     {crumbs.map((c, i) => (
-                      <span key={c.prefix} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <span key={c.prefix} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
                         {i > 0 && <ChevronRight16Regular />}
                         <Link onClick={() => setBrowsePrefix(c.prefix)}>{c.label}</Link>
                       </span>
@@ -697,7 +698,7 @@ export function ShortcutListGrid({ itemType = 'lakehouse', lakehouseId, rows, lo
                 <Input value={editName} onChange={(_, d) => setEditName(d.value)} />
               </Field>
               {editError && (
-                <MessageBar intent="error" style={{ marginTop: 8 }}>
+                <MessageBar intent="error" style={{ marginTop: tokens.spacingVerticalS }}>
                   <MessageBarBody>{editError}</MessageBarBody>
                 </MessageBar>
               )}
@@ -744,7 +745,7 @@ export function ShortcutsPanel({ itemType = 'lakehouse', lakehouseId, workspaceI
     <div className={styles.root}>
       <div className={styles.toolbar}>
         <Body1><b>Shortcuts</b> — zero-copy pointers to other lakehouse data (Azure-native, no Fabric)</Body1>
-        <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
           <Button appearance="secondary" icon={<ArrowSync16Regular />} onClick={load}>Refresh</Button>
           <Button appearance="primary" icon={<Add20Regular />} onClick={() => setWizardOpen(true)}>New shortcut</Button>
         </div>
@@ -940,7 +941,7 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       secretValue = dvPath.trim();
     }
     try {
-      const r = await fetch('/api/lakehouse/shortcuts/credentials', {
+      const r = await clientFetch('/api/lakehouse/shortcuts/credentials', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId, name: shortcutName || sourceType, sourceType, secretValue }),
       });
@@ -966,10 +967,10 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       : dvPath.trim().length > 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingHorizontalMNudge }}>
       {sourceType === 's3' && (
         <>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
             <Field label="Bucket" required style={{ flex: 2 }}>
               <Input value={value.bucket || ''} onChange={(_, d) => set({ bucket: d.value })} placeholder="my-bucket" />
             </Field>
@@ -984,7 +985,7 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
             </Field>
           </div>
           <Field label="Authentication">
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
               <Button size="small" appearance={s3Mode === 'keys' ? 'primary' : 'outline'} onClick={() => setS3Mode('keys')}>Access key / secret</Button>
               <Button size="small" appearance={s3Mode === 'role' ? 'primary' : 'outline'} onClick={() => setS3Mode('role')}>IAM role ARN (Unity Catalog)</Button>
             </div>
@@ -1027,7 +1028,7 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
 
       {sourceType === 'adls' && (
         <>
-          <div style={{ display: 'flex', gap: 8 }}>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
             <Field label="Storage account" required style={{ flex: 1 }} hint="Account name (browse runs on the Console UAMI)">
               <Input value={value.account || ''} onChange={(_, d) => set({ account: d.value })} placeholder="contosolake" />
             </Field>
@@ -1140,7 +1141,7 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
       if (account) qs.set('account', account);
       if (container) qs.set('container', container);
       if (kvSecret) qs.set('kvSecret', kvSecret);
-      const r = await fetch(`/api/lakehouse/shortcuts/browse?${qs.toString()}`);
+      const r = await clientFetch(`/api/lakehouse/shortcuts/browse?${qs.toString()}`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) throw new Error(j?.error || j?.hint || `HTTP ${r.status}`);
       setChildrenByPrefix((c) => ({ ...c, [prefix]: (j.data?.entries || []) as RemoteEntryUi[] }));
@@ -1223,8 +1224,8 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
   }
 
   return (
-    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: 6, maxHeight: 240, overflow: 'auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
+    <div style={{ border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: 6, padding: tokens.spacingVerticalSNudge, maxHeight: 240, overflow: 'auto' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalSNudge, marginBottom: tokens.spacingVerticalXS }}>
         <Caption1 style={{ flex: 1, color: tokens.colorNeutralForeground3 }}>
           {selectedPath ? <>Target: <code>{selectedPath || '(root)'}</code></> : 'Click a folder or file to set the target'}
         </Caption1>
@@ -1494,7 +1495,7 @@ export function SharePointBrowser({ onSelect, selected }: SharePointBrowserProps
         <div className={styles.browser}>
           <div className={styles.crumbs}>
             {crumbs.map((c, i) => (
-              <span key={c.prefix} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span key={c.prefix} style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
                 {i > 0 && <ChevronRight16Regular />}
                 <Link onClick={() => openDrive(activeDrive, c.prefix)}>{c.label}</Link>
               </span>

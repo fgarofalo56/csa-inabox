@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * FullNetworkTopologyCanvas — interactive resource-graph visual of the ENTIRE
  * CSA Loom network estate, rendered from REAL Azure Resource Graph data served
@@ -446,7 +447,7 @@ function DetailBody({ topo }: { topo: TopoNode }): React.ReactElement {
           : <span className={styles.mono}>{String(v) || '—'}</span>,
       ))}
       <Divider style={{ margin: '12px 0' }} />
-      {row('Resource ID', <span className={styles.mono} style={{ fontSize: 11 }}>{topo.armId}</span>)}
+      {row('Resource ID', <span className={styles.mono} style={{ fontSize: tokens.fontSizeBase100 }}>{topo.armId}</span>)}
     </div>
   );
 }
@@ -589,7 +590,7 @@ export function FullNetworkTopologyCanvas(): React.ReactElement {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/admin/network/topology');
+        const r = await clientFetch('/api/admin/network/topology');
         const j = (await r.json()) as ApiResp;
         if (alive) setData(j);
       } catch (e: any) {
@@ -631,7 +632,7 @@ export function FullNetworkTopologyCanvas(): React.ReactElement {
   return (
     <div>
       {summary && (
-        <Caption1 block style={{ marginBottom: 10, color: tokens.colorNeutralForeground3 }}>
+        <Caption1 block style={{ marginBottom: tokens.spacingVerticalMNudge, color: tokens.colorNeutralForeground3 }}>
           {summary}
           {data.subscriptions?.length ? ` — across ${data.subscriptions.length} subscription${data.subscriptions.length > 1 ? 's' : ''}` : ''}
         </Caption1>

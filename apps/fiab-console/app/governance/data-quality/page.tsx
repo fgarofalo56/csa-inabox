@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Governance → Data quality (run + results + monitors).
  *
@@ -72,7 +73,7 @@ export default function GovernanceDataQualityPage() {
         Define data-quality rules, run them on your workspace engine (Kusto, Databricks SQL, or Synapse SQL), review results over time,
         and enforce always-on quality with Delta constraints + Databricks Lakehouse Monitoring. No Microsoft Fabric dependency.
       </Caption1>
-      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)} style={{ marginBottom: 16 }}>
+      <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as any)} style={{ marginBottom: tokens.spacingVerticalL }}>
         <Tab value="rules">Rules</Tab>
         <Tab value="run">Run</Tab>
         <Tab value="results">Results</Tab>
@@ -103,7 +104,7 @@ function RulesTab() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/dq/rules'); const j = await r.json();
+      const r = await clientFetch('/api/dq/rules'); const j = await r.json();
       if (!j.ok) { setError(j.error || 'Failed to load'); return; }
       setRules(j.rules || []);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -128,14 +129,14 @@ function RulesTab() {
     if (check === 'range') { payload.min = parseInt(min, 10); payload.max = parseInt(max, 10); }
     if (editing) payload.id = editing.id;
     try {
-      const r = await fetch('/api/dq/rules', { method: editing ? 'PUT' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      const r = await clientFetch('/api/dq/rules', { method: editing ? 'PUT' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const j = await r.json();
       if (!j.ok) { setDlgErr(Array.isArray(j.errors) ? j.errors : [j.error || 'Error']); return; }
       setRules(j.rules || []); setOpen(false); reset();
     } catch (e: any) { setDlgErr([e?.message || String(e)]); } finally { setBusy(false); }
   }
   async function del(id: string) {
-    const r = await fetch(`/api/dq/rules?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const r = await clientFetch(`/api/dq/rules?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
     const j = await r.json(); if (j.ok) setRules(j.rules || []); else setError(j.error || 'Delete failed');
   }
 
@@ -146,7 +147,7 @@ function RulesTab() {
     { key: 'threshold', label: 'Threshold', sortable: true, width: 110, getValue: (r) => r.threshold, render: (r) => <Caption1>{r.threshold}{r.check === 'freshness' ? 'd' : '%'}</Caption1> },
     { key: 'enabled', label: 'Status', sortable: true, width: 110, getValue: (r) => (r.enabled ? 1 : 0), render: (r) => <Badge appearance="tint" color={r.enabled ? 'success' : 'warning'} size="small">{r.enabled ? 'Enabled' : 'Disabled'}</Badge> },
     { key: 'actions', label: 'Actions', sortable: false, width: 96, render: (r) => (
-      <span style={{ display: 'flex', gap: 8 }} onClick={(e) => e.stopPropagation()}>
+      <span style={{ display: 'flex', gap: tokens.spacingHorizontalS }} onClick={(e) => e.stopPropagation()}>
         <Button size="small" appearance="transparent" icon={<Edit20Regular />} onClick={() => edit(r)} aria-label="Edit" />
         <Button size="small" appearance="transparent" icon={<Delete20Regular />} onClick={() => del(r.id)} aria-label="Delete" />
       </span>) },
@@ -154,11 +155,11 @@ function RulesTab() {
 
   return (
     <Section title="Quality rules" actions={
-      <span style={{ display: 'flex', gap: 8 }}>
+      <span style={{ display: 'flex', gap: tokens.spacingHorizontalS }}>
         <Button icon={<ArrowSync24Regular />} onClick={load}>Refresh</Button>
         <Button appearance="primary" icon={<Add24Regular />} onClick={() => { reset(); setOpen(true); }}>New rule</Button>
       </span>}>
-      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {!rules ? <Spinner label="Loading rules…" /> : (
         <LoomDataTable<DqRule> columns={cols} rows={rules} getRowId={(r) => r.id} empty="No rules yet. Create one to start monitoring data quality." />
       )}
@@ -167,7 +168,7 @@ function RulesTab() {
           <DialogBody>
             <DialogTitle>{editing ? 'Edit rule' : 'New data-quality rule'}</DialogTitle>
             <DialogContent>
-              {dlgErr && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{dlgErr.map((e, i) => <div key={i}>{e}</div>)}</MessageBarBody></MessageBar>}
+              {dlgErr && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{dlgErr.map((e, i) => <div key={i}>{e}</div>)}</MessageBarBody></MessageBar>}
               <div className={s.fields}>
                 <Field label="Rule name" required><Input value={name} onChange={(_, d) => setName(d.value)} placeholder="Customer ID not null" /></Field>
                 <div className={s.row}>
@@ -232,7 +233,7 @@ function RunTab() {
     const t = tables.split(',').map((x) => x.trim()).filter(Boolean);
     if (t.length) body.tableNames = t;
     try {
-      const r = await fetch('/api/dq/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await clientFetch('/api/dq/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
       const j = await r.json();
       if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
       if (!j.ok) { setError(j.error || 'Run failed'); return; }
@@ -251,7 +252,7 @@ function RunTab() {
 
   return (
     <Section title="Run rules" actions={<Button appearance="primary" icon={<Play20Regular />} onClick={doRun} disabled={busy}>{busy ? 'Running…' : 'Run rules'}</Button>}>
-      <div className={s.row} style={{ marginBottom: 16 }}>
+      <div className={s.row} style={{ marginBottom: tokens.spacingVerticalL }}>
         <Field label="Engine" style={{ minWidth: 240 }}>
           <Dropdown selectedOptions={[backend]} value={BACKENDS.find((b) => b.value === backend)?.label} onOptionSelect={(_, d) => setBackend(d.optionValue || 'kusto')}>
             {BACKENDS.map((b) => <Option key={b.value} value={b.value}>{b.label}</Option>)}
@@ -272,8 +273,8 @@ function RunTab() {
         <Field label="Tables (comma-sep, optional)" style={{ flex: 1, minWidth: 220 }}><Input value={tables} onChange={(_, d) => setTables(d.value)} placeholder="all enabled rules if blank" /></Field>
       </div>
 
-      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Engine not configured</MessageBarTitle>{gate.error} Set the <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{gate.missing}</code> app setting on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
-      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Engine not configured</MessageBarTitle>{gate.error} Set the <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{gate.missing}</code> app setting on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       {run && (<>
         <div className={s.toolbar}>
@@ -293,7 +294,7 @@ function ResultsTab() {
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     setError(null);
-    try { const r = await fetch('/api/dq/results'); const j = await r.json(); if (!j.ok) { setError(j.error || 'Failed'); return; } setRuns(j.runs || []); }
+    try { const r = await clientFetch('/api/dq/results'); const j = await r.json(); if (!j.ok) { setError(j.error || 'Failed'); return; } setRuns(j.runs || []); }
     catch (e: any) { setError(e?.message || String(e)); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -308,7 +309,7 @@ function ResultsTab() {
   ];
   return (
     <Section title="Run history" actions={<Button icon={<ArrowSync24Regular />} onClick={load}>Refresh</Button>}>
-      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
       {!runs ? <Spinner label="Loading run history…" /> : (
         <LoomDataTable<DqRun> columns={cols} rows={runs} getRowId={(r) => r.id} empty="No runs yet. Use the Run tab to execute your rule set." />
       )}
@@ -328,7 +329,7 @@ function MonitorsTab() {
   const [ruleId, setRuleId] = useState('');
   const [outputSchema, setOutputSchema] = useState(''); const [assetsDir, setAssetsDir] = useState('');
 
-  useEffect(() => { fetch('/api/dq/rules').then((r) => r.json()).then((j) => { if (j.ok) setRules(j.rules || []); }).catch(() => {}); }, []);
+  useEffect(() => { clientFetch('/api/dq/rules').then((r) => r.json()).then((j) => { if (j.ok) setRules(j.rules || []); }).catch(() => {}); }, []);
 
   async function load() {
     if (!table.trim()) return;
@@ -337,7 +338,7 @@ function MonitorsTab() {
     if (catalog.trim()) qs.set('catalog', catalog.trim());
     if (schema.trim()) qs.set('schema', schema.trim());
     try {
-      const r = await fetch(`/api/dq/monitors?${qs}`); const j = await r.json();
+      const r = await clientFetch(`/api/dq/monitors?${qs}`); const j = await r.json();
       if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
       if (!j.ok) { setError(j.error || 'Failed'); return; }
       setData(j);
@@ -346,7 +347,7 @@ function MonitorsTab() {
   async function action(payload: any) {
     setBusy(true); setError(null);
     try {
-      const r = await fetch('/api/dq/monitors', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ table: table.trim(), catalog: catalog.trim() || undefined, schema: schema.trim() || undefined, ...payload }) });
+      const r = await clientFetch('/api/dq/monitors', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ table: table.trim(), catalog: catalog.trim() || undefined, schema: schema.trim() || undefined, ...payload }) });
       const j = await r.json();
       if (!j.ok && j.error) setError(j.error);
       await load();
@@ -360,19 +361,19 @@ function MonitorsTab() {
   return (
     <Section title="Always-on monitors" actions={<Badge appearance="tint" color="informative">Databricks · Delta + Lakehouse Monitoring</Badge>}>
       <Caption1 className={s.intro}>Enforce a rule as a Delta CHECK / NOT NULL constraint, or attach Databricks Lakehouse Monitoring for profiling + drift. Unity Catalog table on the workspace Databricks SQL Warehouse.</Caption1>
-      <div className={s.row} style={{ marginBottom: 16 }}>
+      <div className={s.row} style={{ marginBottom: tokens.spacingVerticalL }}>
         <Field label="Catalog" style={{ minWidth: 160 }}><Input value={catalog} onChange={(_, d) => setCatalog(d.value)} placeholder="main" /></Field>
         <Field label="Schema" style={{ minWidth: 160 }}><Input value={schema} onChange={(_, d) => setSchema(d.value)} placeholder="sales" /></Field>
         <Field label="Table" style={{ minWidth: 200 }} required><Input value={table} onChange={(_, d) => setTable(d.value)} placeholder="customers" /></Field>
         <Button appearance="primary" onClick={load} disabled={busy || !table.trim()} style={{ alignSelf: 'flex-end' }}>Load</Button>
       </div>
 
-      {gate && <MessageBar intent="warning" style={{ marginBottom: 12 }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
-      {error && <MessageBar intent="error" style={{ marginBottom: 12 }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {gate && <MessageBar intent="warning" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody><MessageBarTitle>Databricks not configured</MessageBarTitle>{gate.error} Set <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{gate.missing}</code> on the Console (admin-plane bicep).</MessageBarBody></MessageBar>}
+      {error && <MessageBar intent="error" style={{ marginBottom: tokens.spacingVerticalM }}><MessageBarBody>{error}</MessageBarBody></MessageBar>}
 
       {data && <>
-        <Subtitle2 style={{ display: 'block', marginTop: 16, marginBottom: 8 }}>Delta enforced constraints</Subtitle2>
-        <div className={s.row} style={{ marginBottom: 12 }}>
+        <Subtitle2 style={{ display: 'block', marginTop: tokens.spacingVerticalL, marginBottom: tokens.spacingVerticalS }}>Delta enforced constraints</Subtitle2>
+        <div className={s.row} style={{ marginBottom: tokens.spacingVerticalM }}>
           <Field label="Apply rule as constraint" style={{ minWidth: 280 }}>
             <Dropdown selectedOptions={ruleId ? [ruleId] : []} value={rules.find((r) => r.id === ruleId)?.name || ''} onOptionSelect={(_, d) => setRuleId(d.optionValue || '')} placeholder="Pick a rule">
               {rules.filter((r) => r.check !== 'unique' && r.check !== 'freshness').map((r) => <Option key={r.id} value={r.id} text={`${r.name} (${r.check})`}>{`${r.name} (${r.check})`}</Option>)}
@@ -388,7 +389,7 @@ function MonitorsTab() {
           ]} rows={constraints} getRowId={(c) => c.name} empty="No constraints." />
         )}
 
-        <Subtitle2 style={{ display: 'block', marginTop: 24, marginBottom: 8 }}>Lakehouse Monitoring</Subtitle2>
+        <Subtitle2 style={{ display: 'block', marginTop: tokens.spacingVerticalXXL, marginBottom: tokens.spacingVerticalS }}>Lakehouse Monitoring</Subtitle2>
         {monitor ? (<>
           <div className={s.toolbar}>
             <Badge appearance="tint" color="success">{monitor.status || 'active'}</Badge>
