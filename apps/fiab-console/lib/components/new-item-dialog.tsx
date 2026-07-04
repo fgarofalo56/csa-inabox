@@ -5,14 +5,18 @@
  *  - left: workload category list
  *  - right: item type grid for the selected category
  *
- * On select we ALWAYS create a real Cosmos item first, then redirect to
- * /items/[slug]/[realId]. When opened with a `workspaceId` we scope to it.
- * When opened from home (no prop) we resolve the caller's default (newest)
- * workspace and scope creation to that — so the home path never lands on the
- * literal /items/[slug]/new route with a non-existent id (which made the
- * per-item editor drive its bind route with the id "new" and 404). Only if no
- * workspace can be resolved do we fall back to pushing /items/[slug]/new, where
- * the per-item editor renders a create-gate (a safe, non-error landing).
+ * Create flow is TWO-STEP and never writes on browse (rel-T50): picking a type
+ * only advances to the name/configure step in memory — the real Cosmos item is
+ * created in `createInline` when the user confirms with the Create button, so
+ * merely browsing item types no longer leaves ghost items behind.
+ *
+ * When opened WITHIN a workspace (a `workspaceId` prop) creation is scoped to
+ * it. When opened from home / the "+ Create" rail entry (no prop) the dialog
+ * shows a Workspace picker seeded from the active-workspace context (rel-T49),
+ * falling back to the caller's newest workspace, so the user chooses where the
+ * item lands. Only if the tenant has NO workspace do we fall back to pushing
+ * /items/[slug]/new, where the per-item editor renders a create-gate (a safe,
+ * non-error landing).
  */
 
 import { useState, useMemo, useEffect } from 'react';
@@ -34,6 +38,8 @@ import { shorthands,
   RadioGroup,
   Radio,
   Switch,
+  Dropdown,
+  Option,
   makeStyles,
   tokens,
   Subtitle2,
@@ -41,7 +47,8 @@ import { shorthands,
   Caption1,
 } from '@fluentui/react-components';
 import { Add24Regular, Search20Regular, ArrowLeft20Regular } from '@fluentui/react-icons';
-import { createItem, getWorkspace, listWorkspaces } from '@/lib/api/workspaces';
+import { createItem, getWorkspace, listWorkspaces, type Workspace } from '@/lib/api/workspaces';
+import { useUi } from '@/lib/stores/ui';
 import { CustomAttributesForm, type AttributeValues } from '@/lib/components/wizard/custom-attributes-form';
 import {
   type AttributeGroup,
@@ -192,6 +199,12 @@ const useStyles = makeStyles({
     rowGap: tokens.spacingVerticalXXS,
   },
   radioDesc: { color: tokens.colorNeutralForeground3 },
+  // Workspace picker (rel-T50) — shown only when the dialog isn't already scoped
+  // to a workspace via prop. Bounded width so it doesn't span the whole surface.
+  wsField: {
+    marginBottom: tokens.spacingVerticalM,
+    maxWidth: '380px',
+  },
 });
 
 interface Props {
@@ -236,28 +249,39 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
   const [customAttrs, setCustomAttrs] = useState<AttributeValues>({});
   const [attrGroups, setAttrGroups] = useState<AttributeGroup[]>([]);
   const [showAttrValidation, setShowAttrValidation] = useState(false);
-  // Home/no-workspace entry: the caller's default (newest) workspace, resolved
-  // best-effort on open so the same create-then-redirect flow can run against a
-  // REAL workspace. null until resolved (or when the tenant has none — then
-  // onPick falls back to the editor's /new create-gate).
-  const [resolvedWorkspaceId, setResolvedWorkspaceId] = useState<string | null>(null);
+  // Home / "+ Create" entry (no workspaceId prop): the caller's accessible
+  // workspaces, fetched best-effort on open. The Workspace picker (rel-T50) is
+  // seeded from the active-workspace context (rel-T49) when present, else the
+  // newest workspace. null list = loading; empty = tenant has none (then onPick
+  // falls back to the editor's /new create-gate).
+  const activeWorkspace = useUi((s) => s.activeWorkspace);
+  const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
+  const [pickedWorkspaceId, setPickedWorkspaceId] = useState<string | null>(null);
 
   // The workspace creation scopes to: the explicit prop when present, else the
-  // resolved default. undefined => not yet known (loading) or none exists.
-  const effectiveWorkspaceId: string | undefined = workspaceId ?? resolvedWorkspaceId ?? undefined;
+  // user-picked workspace from the dialog's picker. undefined => not yet known
+  // (loading) or none exists.
+  const effectiveWorkspaceId: string | undefined = workspaceId ?? pickedWorkspaceId ?? undefined;
 
-  // When opened from home (no workspaceId prop), resolve the caller's default
-  // workspace (newest first). Tenant-scoped + credentialed via the shared API
-  // client, so the create flow can scope to a real workspace instead of the
-  // literal /new route. Best-effort — failure/empty leaves it unresolved.
+  // When opened from home (no workspaceId prop), load the caller's accessible
+  // workspaces and seed the picker. Tenant-scoped + credentialed via the shared
+  // API client. Best-effort — failure/empty leaves the picker empty and onPick
+  // falls back to the editor's /new create-gate.
   useEffect(() => {
     if (workspaceId || !open) return;
     let cancelled = false;
     listWorkspaces()
-      .then((ws) => { if (!cancelled) setResolvedWorkspaceId(ws[0]?.id ?? null); })
-      .catch(() => { if (!cancelled) setResolvedWorkspaceId(null); });
+      .then((ws) => {
+        if (cancelled) return;
+        setWorkspaces(ws);
+        // Prefer the active workspace (T49) when it's still in the list, else
+        // the newest workspace (list is newest-first).
+        const active = activeWorkspace ? ws.find((w) => w.id === activeWorkspace.id) : undefined;
+        setPickedWorkspaceId((active ?? ws[0])?.id ?? null);
+      })
+      .catch(() => { if (!cancelled) { setWorkspaces([]); setPickedWorkspaceId(null); } });
     return () => { cancelled = true; };
-  }, [workspaceId, open]);
+  }, [workspaceId, open, activeWorkspace]);
 
   // Resolve the workspace's domain once, so the Custom attributes step knows
   // which schema to render. Best-effort — failure just means no custom attrs.
@@ -471,6 +495,37 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
               : 'New item'}
           </DialogTitle>
           <DialogContent>
+            {/* rel-T50 — Workspace picker. Shown only when the dialog isn't
+                already scoped to a workspace via prop (i.e. opened from home or
+                the "+ Create" rail entry). Seeded from the active-workspace
+                context; the user can retarget where the item lands. */}
+            {!workspaceId && (
+              workspaces !== null && workspaces.length === 0 ? (
+                <MessageBar intent="warning" className={styles.wsField}>
+                  <MessageBarBody>
+                    No workspaces yet — create a workspace first, then add items to it.
+                  </MessageBarBody>
+                </MessageBar>
+              ) : (
+                <Field label="Workspace" className={styles.wsField} hint="Where this new item will be created">
+                  <Dropdown
+                    aria-label="Workspace"
+                    disabled={workspaces === null}
+                    value={
+                      workspaces === null
+                        ? 'Loading…'
+                        : workspaces.find((w) => w.id === pickedWorkspaceId)?.name ?? 'Select a workspace'
+                    }
+                    selectedOptions={pickedWorkspaceId ? [pickedWorkspaceId] : []}
+                    onOptionSelect={(_, d) => setPickedWorkspaceId(d.optionValue ?? null)}
+                  >
+                    {(workspaces ?? []).map((w) => (
+                      <Option key={w.id} value={w.id} text={w.name}>{w.name}</Option>
+                    ))}
+                  </Dropdown>
+                </Field>
+              )
+            )}
             {picked && effectiveWorkspaceId ? (
               <div className={styles.configPane}>
                 <Button appearance="subtle" icon={<ArrowLeft20Regular />}

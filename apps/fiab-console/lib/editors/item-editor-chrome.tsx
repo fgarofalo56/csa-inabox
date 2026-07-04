@@ -7,10 +7,12 @@
  * docs/fiab/fabric-feature-inventory.md §3.
  */
 
-import { ReactNode, useState } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { Badge, Button, Tooltip, makeStyles, tokens } from '@fluentui/react-components';
 import { PanelLeftContract20Regular, PanelLeftExpand20Regular, Sparkle20Regular, Share20Regular } from '@fluentui/react-icons';
-import { PageShell } from '@/lib/components/page-shell';
+import { PageShell, type Crumb } from '@/lib/components/page-shell';
+import { getItem, getWorkspace } from '@/lib/api/workspaces';
+import { useUi } from '@/lib/stores/ui';
 import { openCopilot } from '@/lib/components/copilot-pane';
 import { Ribbon, type RibbonTab } from '@/lib/components/ribbon';
 import { ItemSidePanel } from '@/lib/components/item-side-panel';
@@ -115,6 +117,38 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
   const isNew = id === 'new';
   const title = isNew ? `New ${item.displayName.toLowerCase()}` : `${item.displayName} (${id.substring(0, 8)})`;
 
+  // Resolve which workspace this item belongs to so the header shows a
+  // workspace › item breadcrumb (Fabric's editor breadcrumb) and the topbar
+  // workspace switcher auto-pins the last-opened workspace (rel-T49). Real
+  // backend: GET /api/cosmos-items/[type]/[id] → workspaceId, then GET
+  // /api/workspaces/[id] → name. Best-effort — a failure leaves the default
+  // Home › <title> trail intact.
+  const setActiveWorkspace = useUi((s) => s.setActiveWorkspace);
+  const [workspace, setWorkspace] = useState<{ id: string; name: string } | null>(null);
+  useEffect(() => {
+    if (isNew) return;
+    let cancelled = false;
+    getItem(item.slug, id)
+      .then((it) => getWorkspace(it.workspaceId))
+      .then((ws) => {
+        if (cancelled) return;
+        const ref = { id: ws.id, name: ws.name };
+        setWorkspace(ref);
+        setActiveWorkspace(ref);
+      })
+      .catch(() => { /* leave breadcrumb + switcher at their prior state */ });
+    return () => { cancelled = true; };
+  }, [item.slug, id, isNew, setActiveWorkspace]);
+
+  const breadcrumbs: Crumb[] | undefined = workspace
+    ? [
+        { label: 'Home', href: '/' },
+        { label: 'Workspaces', href: '/workspaces' },
+        { label: workspace.name, href: `/workspaces/${workspace.id}` },
+        { label: title },
+      ]
+    : undefined;
+
   // When a left and/or right panel exists, lay the body out as a grid. The left
   // panel can collapse to a thin rail so the canvas gets the full width
   // (ADF/Fabric let you hide the factory-resources pane). The right rail hosts
@@ -134,6 +168,7 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
     <PageShell
       title={title}
       subtitle={item.description}
+      breadcrumbs={breadcrumbs}
       actions={
         <div className={styles.meta}>
           <Badge appearance="outline">{item.category}</Badge>
