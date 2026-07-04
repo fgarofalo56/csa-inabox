@@ -27,8 +27,12 @@ import { BUNDLE_ITEM_TYPES } from './bundle-items';
 // Lazy per-bundle payload loaders — one `() => import()` per bundle so webpack
 // code-splits each payload into its own async chunk (keeps the ~3.1 MB out of
 // the static server graph; loaded on demand). Keys are the bundle appIds (the
-// 'app-<slug>' convention, matching the file name and CATALOG_META id).
-const LOADERS: Record<string, () => Promise<{ default: AppBundle }>> = {
+// 'app-<slug>' convention, matching the file name and CATALOG_META id). Named
+// REGISTRY (not LOADERS) with the loader type behind a `BundleLoader` alias so
+// the offline fixture-gen parser (scripts/csa-loom/gen-apps-catalog-fixture.mjs)
+// that enumerates bundle ids from `const REGISTRY = { … }` keeps matching.
+type BundleLoader = () => Promise<{ default: AppBundle }>;
+const REGISTRY: Record<string, BundleLoader> = {
   'app-casino-analytics': () => import('./app-casino-analytics'),
   'app-iot-realtime': () => import('./app-iot-realtime'),
   'app-healthcare-popmgt': () => import('./app-healthcare-popmgt'),
@@ -62,7 +66,7 @@ const LOADERS: Record<string, () => Promise<{ default: AppBundle }>> = {
 
 /** All registered bundle appIds. Synchronous — never loads a payload. */
 export function listBundleIds(): string[] {
-  return Object.keys(LOADERS);
+  return Object.keys(REGISTRY);
 }
 
 /**
@@ -72,7 +76,7 @@ export function listBundleIds(): string[] {
  * `getBundle` promise.
  */
 export function hasBundle(appId: string): boolean {
-  return Object.prototype.hasOwnProperty.call(LOADERS, appId);
+  return Object.prototype.hasOwnProperty.call(REGISTRY, appId);
 }
 
 /**
@@ -92,7 +96,7 @@ export function getBundleItemTypes(appId: string): string[] {
  * appId.
  */
 export async function getBundle(appId: string): Promise<AppBundle | undefined> {
-  const loader = LOADERS[appId];
+  const loader = REGISTRY[appId];
   if (!loader) return undefined;
   const mod = await loader();
   return mod.default;
@@ -185,7 +189,7 @@ function humaniseBundleId(appId: string): string {
  */
 export async function listNotebookImports(): Promise<NotebookImportOption[]> {
   const out: NotebookImportOption[] = [];
-  for (const appId of Object.keys(LOADERS)) {
+  for (const appId of Object.keys(REGISTRY)) {
     const b = await getBundle(appId);
     if (!b) continue;
     const hasSampleData = b.items.some(lakehouseHasSampleData);

@@ -47,24 +47,24 @@ function loadCatalogMetaIds() {
 }
 
 /**
- * Parse the registered bundle ids from index.ts. REGISTRY is keyed by
- * `<import>.appId`, so we resolve each `[<import>.appId]: <import>,` line back to
- * the import's module specifier (./app-<slug>) — the bundle's appId convention
- * is `app-<slug>` matching the file name, asserted by the bundle's own source.
- * We read the import map then the REGISTRY entries.
+ * Parse the registered bundle ids from index.ts. Since rel-T63 the bundles are
+ * registered in a lazy `const LOADERS = { '<app-slug>': () => import('./<app-slug>'), … }`
+ * map (per-bundle dynamic import so the 3.1 MB payloads stay out of the server
+ * graph). The map keys ARE the bundle ids (appId convention `app-<slug>` == file
+ * name), so we read them directly.
+ */
+/**
+ * Parse the registered bundle ids from index.ts. Since rel-T63 REGISTRY is a
+ * lazy `const REGISTRY: Record<string, BundleLoader> = { '<app-slug>': () =>
+ * import('./<app-slug>'), … }` map (per-bundle dynamic import; payloads stay
+ * out of the server graph). The string-literal keys ARE the bundle ids
+ * (appId convention `app-<slug>` == file name), so we read them directly.
  */
 function loadBundleIds() {
   const src = fs.readFileSync(INDEX, 'utf-8');
-  // import <name> from './app-<slug>';
-  const imports = new Map(
-    [...src.matchAll(/import\s+(\w+)\s+from\s+'\.\/(app-[a-z0-9-]+)';/g)].map((m) => [m[1], m[2]]),
-  );
-  // [<name>.appId]: <name>,  inside REGISTRY
-  const reg = src.match(/const REGISTRY[^=]*=\s*\{([\s\S]*?)\};/);
+  const reg = src.match(/const REGISTRY[^=]*=\s*\{([\s\S]*?)\n\};/);
   if (!reg) throw new Error('could not locate REGISTRY object in index.ts');
-  const ids = [...reg[1].matchAll(/\[(\w+)\.appId\]\s*:/g)]
-    .map((m) => imports.get(m[1]))
-    .filter(Boolean);
+  const ids = [...reg[1].matchAll(/'(app-[a-z0-9-]+)'\s*:/g)].map((m) => m[1]);
   return ids;
 }
 
