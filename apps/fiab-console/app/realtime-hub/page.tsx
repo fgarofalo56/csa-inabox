@@ -1,13 +1,19 @@
+import { Suspense } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
-import { RealTimeHubView } from '@/lib/components/realtime-hub/realtime-hub-view';
+import { RealTimeIntelligenceHub } from '@/lib/components/realtime-hub/realtime-intelligence-hub';
+
+export const dynamic = 'force-dynamic';
 
 export default function RealTimeHubPage() {
   return (
     <PageShell
-      title="Real-Time hub"
-      subtitle="Your DEPLOYED streams catalog — every Loom eventstream and KQL table, with preview, test, endpoints, and open-editor actions. Use Connect a source to add Microsoft, Azure, and external sources. To discover raw Azure sources across all subscriptions, see the RTI catalog."
+      title="Real-Time Intelligence"
+      subtitle="Your unified real-time surface — deployed streams and KQL tables, source discovery across every subscription, Activator automation rules, and governed business events, all in one hub. Azure-native by default; no Microsoft Fabric required."
     >
-      <RealTimeHubView />
+      {/* useSearchParams in RealTimeIntelligenceHub requires a Suspense boundary. */}
+      <Suspense fallback={null}>
+        <RealTimeIntelligenceHub />
+      </Suspense>
     </PageShell>
   );
 }
