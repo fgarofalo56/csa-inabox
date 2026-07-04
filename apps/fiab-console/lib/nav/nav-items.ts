@@ -20,7 +20,6 @@ export const NAV_ITEMS: NavItem[] = [
   { href: '/workspaces', label: 'Workspaces' },
   { href: '/browse', label: 'Browse' },
   { href: '/onelake', label: 'OneLake catalog' },
-  { href: '/catalog', label: 'Unified catalog' },
   { href: '/org-reports', label: 'Organization reports' },
   { href: '/semantic-model', label: 'Semantic models' },
   { href: '/thread', label: 'Mesh lineage' },
