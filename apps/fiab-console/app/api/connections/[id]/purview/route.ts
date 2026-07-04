@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadConnection, registerConnectionInPurview } from '@/lib/azure/connections-store';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -49,6 +50,6 @@ export async function POST(
     }
     return NextResponse.json(result, { status: 200 });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

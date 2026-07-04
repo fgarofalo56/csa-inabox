@@ -14,6 +14,7 @@ import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import {
   dbGetTaskFlow, dbUpsertTaskFlow, dbDeleteTaskFlow,
 } from '@/lib/clients/taskflow-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,7 +35,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     if (!flow) return NextResponse.json({ ok: false, error: 'task flow not found' }, { status: 404 });
     return NextResponse.json({ ok: true, flow });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -68,6 +69,6 @@ export async function DELETE(_req: NextRequest, props: { params: Promise<{ id: s
     await dbDeleteTaskFlow(params.id, params.flowId);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

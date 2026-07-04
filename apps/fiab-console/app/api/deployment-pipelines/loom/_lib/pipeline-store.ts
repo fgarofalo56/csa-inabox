@@ -17,12 +17,13 @@ import { getSession, type SessionPayload } from '@/lib/auth/session';
 import { isValidInternalToken, INTERNAL_USER_OID_HEADER } from '@/lib/auth/internal-token';
 import type { LoomPipeline, LoomDeployRule, LoomPipelineStageRulesDoc } from '@/lib/types/loom-pipeline';
 import type { Workspace } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export function jok(data: unknown, status = 200) {
   return NextResponse.json({ ok: true, data }, { status });
 }
 export function jerr(error: string, status = 500, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 // ---------------------------------------------------------------------------

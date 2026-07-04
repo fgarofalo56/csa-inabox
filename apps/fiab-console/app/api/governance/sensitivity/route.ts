@@ -5,6 +5,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,6 +66,6 @@ export async function GET() {
       source: 'cosmos',
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

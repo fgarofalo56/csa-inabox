@@ -12,6 +12,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { getDomainsStore, DomainsBackendGateError } from '@/lib/azure/domains-client';
 import { writeDomainAudit } from '@/lib/governance/domain-audit';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,6 +38,6 @@ export async function POST(
   } catch (e: any) {
     if (e instanceof DomainsBackendGateError)
       return NextResponse.json({ ok: false, error: e.message, gate: e.backend }, { status: 501 });
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

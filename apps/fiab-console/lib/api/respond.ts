@@ -47,13 +47,18 @@ export const apiConflict = (error = 'conflict') => apiError(error, 409)
 
 /**
  * 500 wrapper. Logs the raw error server-side and returns a SAFE public
- * message — never leak stack traces, SQL, or connection strings to the client
- * (see the security rules in CLAUDE.md). Pass a `publicMessage` when the caller
- * has a more specific user-facing string.
+ * message + stable code — never leak stack traces, SQL, or connection strings
+ * to the client (see the security rules in CLAUDE.md). Pass a `publicMessage`
+ * when the caller has a more specific user-facing string, and/or a `code` when
+ * a route wants a more specific stable error code than `internal_error`.
  */
-export function apiServerError(err: unknown, publicMessage = 'internal error') {
-  const detail = err instanceof Error ? err.message : String(err)
+export function apiServerError(
+  err: unknown,
+  publicMessage = 'internal error',
+  code = 'internal_error',
+) {
+  const detail = err instanceof Error ? (err.stack || err.message) : String(err)
   // eslint-disable-next-line no-console
   console.error('[api] server error:', detail)
-  return apiError(publicMessage, 500)
+  return apiError(publicMessage, 500, { code })
 }

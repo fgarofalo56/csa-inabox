@@ -33,6 +33,7 @@ import {
   type DomainTierDomain,
 } from '@/lib/auth/domain-role';
 import { resolveEffectiveRole } from '@/lib/azure/workspace-roles-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -153,6 +154,6 @@ export async function POST(req: NextRequest) {
     }
     return NextResponse.json({ ok: true, updated, skipped, overrodeCount: affected.length });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -18,7 +18,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { getPublishedReport, getTemplate, getTemplateFiles } from '@/lib/coe-library/coe-library-client';
 import { parseReportModel } from '@/lib/coe-library/report-render/pbir-parse';
@@ -89,7 +89,7 @@ async function buildPayload(req: NextRequest, overrides: ReportParamOverrides): 
   // A published Loom-native dashboard is rendered via the dashboard synthesizer.
   if (url.searchParams.get('kind') === 'dashboard') {
     try { return await buildDashboardPayload(id, overrides); }
-    catch (e: any) { return apiError(e?.message || String(e), 500); }
+    catch (e: any) { return apiServerError(e); }
   }
 
   try {
@@ -130,7 +130,7 @@ async function buildPayload(req: NextRequest, overrides: ReportParamOverrides): 
       });
     }
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 

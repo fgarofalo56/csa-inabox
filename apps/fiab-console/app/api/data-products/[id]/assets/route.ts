@@ -39,6 +39,7 @@ import {
   type DataAssetRef,
   type DqRule,
 } from './asset-helpers';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,7 +47,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'data-product';
 
 function jerr(error: string, status = 500, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 function readDataAssets(state: Record<string, unknown> | undefined): DataAssetRef[] {

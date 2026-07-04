@@ -29,6 +29,7 @@ import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError } from '@/lib/azure/kusto-client';
 import { loadContentBackedItem, activatorRuleFromContent } from '../../../_lib/ai-content-fallback';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -108,7 +109,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     if (fb) return NextResponse.json({ ok: true, rules: fb, source: 'bundle', backend: 'azure-monitor' });
     return NextResponse.json({ ok: true, rules: [], backend: 'azure-monitor' });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 

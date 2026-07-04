@@ -34,6 +34,7 @@ import {
   type FeatureRow,
   type LaTopItem,
 } from '@/lib/clients/usage-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -195,6 +196,6 @@ export async function GET(req: NextRequest) {
       featureAdoption,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

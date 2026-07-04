@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { createOwnedItem, jerr } from '../../_lib/item-crud';
 import { parseNotebookFile } from '@/lib/notebook/import-parser';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -78,6 +79,6 @@ export async function POST(req: NextRequest) {
       { status: 201 },
     );
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

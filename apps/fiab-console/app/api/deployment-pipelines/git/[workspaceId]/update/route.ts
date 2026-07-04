@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { updateWorkspaceFromGit, FabricError, fabricHint } from '@/lib/azure/fabric-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,6 +54,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ workspaceI
         },
       });
     }
-    return NextResponse.json({ ok: false, error: (e as Error).message }, { status: 500 });
+    return apiServerError(e);
   }
 }

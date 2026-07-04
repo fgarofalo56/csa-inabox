@@ -29,6 +29,7 @@ import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError } from '@/lib/azure/kusto-client';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -80,7 +81,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
     return NextResponse.json({ ok: true, rules: persistedRules(item), backend: 'azure-monitor' });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 

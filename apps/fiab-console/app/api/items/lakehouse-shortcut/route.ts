@@ -41,6 +41,7 @@ import {
   putShortcutSecret, deleteShortcutSecret, shortcutKeyVaultConfigGate,
 } from '@/lib/azure/kv-secrets-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,7 +52,7 @@ const SOURCE_TYPES: SourceType[] = ['internal', 'adls', 'blob', 's3', 's3compati
 const SECRET_REQUIRED = new Set<SourceType>(['s3', 's3compatible', 'gcs']);
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 function sanitize(e: any): string {

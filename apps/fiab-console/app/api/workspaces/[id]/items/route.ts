@@ -5,12 +5,13 @@ import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, code }, { status });
+  return apiError(error, status, code === undefined ? undefined : { code });
 }
 
 /**

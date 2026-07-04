@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listReferenceData, upsertReferenceData, deleteReferenceData } from '@/lib/azure/mdm-store';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,7 @@ export async function GET() {
     const sets = await listReferenceData(s.claims.oid);
     return NextResponse.json({ ok: true, sets });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
     if (errors.length) return NextResponse.json({ ok: false, errors }, { status: 400 });
     return NextResponse.json({ ok: true, set, sets: items });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -43,6 +44,6 @@ export async function DELETE(req: NextRequest) {
     const sets = await deleteReferenceData(s.claims.oid, id);
     return NextResponse.json({ ok: true, sets });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

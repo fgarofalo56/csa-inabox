@@ -37,6 +37,7 @@ import {
 } from '@/lib/azure/pbids';
 import { serverlessEndpoint, dedicatedTarget } from '@/lib/azure/synapse-sql-client';
 import { clusterUri, defaultDatabase, normalizeClusterUri } from '@/lib/azure/kusto-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -192,7 +193,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ type: strin
   try {
     item = await loadItem(id, type, session.claims.oid);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'Failed to load item' }, { status: 500 });
+    return apiServerError(e, 'Failed to load item');
   }
   if (!item) return NextResponse.json({ ok: false, error: 'Item not found' }, { status: 404 });
 
@@ -206,7 +207,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ type: strin
     if (e instanceof PbidsError) {
       return gate(e.missing, e.message);
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 
   return new NextResponse(body, {

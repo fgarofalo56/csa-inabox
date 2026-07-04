@@ -39,6 +39,7 @@ import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { KustoError, resolveDashboardDatabase, type KustoItem } from '@/lib/azure/kusto-client';
 import { buildTileKql, resolveTileDatabase, sanitizeModel } from '@/lib/azure/kql-dashboard-model';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -46,7 +47,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'kql-dashboard';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 /** Honest Azure infra-gate (NOT a Fabric gate) for Monitor errors. */

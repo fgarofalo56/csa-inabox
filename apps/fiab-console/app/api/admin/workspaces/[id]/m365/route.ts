@@ -20,6 +20,7 @@ import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { getM365Group, createM365Group, m365LinkEnabled, M365GroupError } from '@/lib/azure/m365-groups';
 import type { Workspace } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -57,7 +58,7 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
   try {
     ws = await loadWorkspace(params.id, s.claims.oid);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'Cosmos error' }, { status: 500 });
+    return apiServerError(e, 'Cosmos error');
   }
   if (!ws) return NextResponse.json({ ok: false, error: 'Workspace not found' }, { status: 404 });
 
@@ -115,6 +116,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
         { status: e.status },
       );
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -31,6 +31,7 @@ import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { uamiArmCredential } from '@/lib/azure/arm-credential';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { armBase, armScope } from '@/lib/azure/cloud-endpoints';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -45,7 +46,7 @@ const LOGIC_API = '2019-05-01';
 const credential = uamiArmCredential();
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 /** Honest config gate — returns the first missing env var, or null when ready. */

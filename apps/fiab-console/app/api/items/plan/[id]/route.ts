@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem, deleteOwnedItem } from '../../_lib/item-crud';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -34,7 +35,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
       updatedAt: item.updatedAt || null,
     });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -53,7 +54,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     if (!updated) return NextResponse.json({ error: 'not found' }, { status: 404 });
     return NextResponse.json({ ok: true, id: updated.id, updatedAt: updated.updatedAt });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -65,6 +66,6 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     await deleteOwnedItem(id, ITEM_TYPE, s.claims.oid);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

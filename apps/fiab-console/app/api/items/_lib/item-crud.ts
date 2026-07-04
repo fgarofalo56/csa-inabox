@@ -6,7 +6,6 @@
  * Underscore-prefixed folder — Next.js does not treat this as a route.
  */
 
-import { NextResponse } from 'next/server';
 import type { SessionPayload } from '@/lib/auth/session';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import { itemsContainer, workspacesContainer, tenantSettingsContainer } from '@/lib/azure/cosmos-client';
@@ -21,6 +20,7 @@ import { autoOnboardToPurview, offboardFromPurview } from '@/lib/azure/purview-a
 import { reconcileThreadEdgesOnDelete, restoreThreadEdgesForItem } from '@/lib/thread/thread-edges';
 import { labelRank } from '@/lib/governance/label-propagation';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 /**
  * Soft-delete (Recycle bin) metadata stamped onto an item's `state._recycled`.
@@ -62,7 +62,7 @@ async function mirrorGovernanceDoc(item: WorkspaceItem, tenantId: string): Promi
 }
 
 export function jerr(error: string, status = 500, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 /**

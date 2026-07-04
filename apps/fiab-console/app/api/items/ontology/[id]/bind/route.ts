@@ -30,6 +30,7 @@ import { getSession } from '@/lib/auth/session';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import type { OntologyEntityBinding } from '@/lib/editors/_family-utils';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,7 +38,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'ontology';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 /** List {id, displayName} for items of a type within a workspace (Cosmos only). */

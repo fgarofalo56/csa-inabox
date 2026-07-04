@@ -32,6 +32,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { executeQuery, AzureSqlError } from '@/lib/azure/azure-sql-client';
 import { escapeSqlLiteral, bracket } from '@/lib/sql/quoting';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -56,7 +57,7 @@ function quoteString(v: string): string {
 }
 
 function jerr(error: string, status = 400) {
-  return NextResponse.json({ ok: false, error }, { status });
+  return apiError(error, status);
 }
 
 function readState(req: NextRequest) {

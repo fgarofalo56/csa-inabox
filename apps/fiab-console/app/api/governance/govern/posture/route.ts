@@ -26,6 +26,7 @@ import {
   readPostureDoc,
   PostureNotConfiguredError,
 } from '@/lib/azure/posture-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -65,7 +66,6 @@ export async function GET() {
         { status: 503 },
       );
     }
-    const msg = (e as any)?.message || String(e);
-    return NextResponse.json({ ok: false, error: msg, code: 'unexpected' }, { status: 500 });
+    return apiServerError(e, 'internal error', 'unexpected');
   }
 }

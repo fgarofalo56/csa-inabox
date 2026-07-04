@@ -15,12 +15,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import { deployForPromotion, type DeployedEnv } from '../../_shared';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'release-environment';
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 interface ApprovalRecord { by: string; at: string; decision: 'approve' | 'reject'; comment?: string }

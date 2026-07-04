@@ -15,7 +15,7 @@
  * carries an honest error naming LOOM_KEY_VAULT_URI (no-vaporware).
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import {
@@ -83,6 +83,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
 
     return NextResponse.json({ ok: true, valueSet, resolved, expanded });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

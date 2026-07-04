@@ -22,6 +22,7 @@ import {
 import { inferScopeType, type AccessRequestDoc } from '@/lib/types/access-request-workflow';
 import { enforceAccessGrant, type AccessScopeType } from '@/lib/azure/access-policy-client';
 import crypto from 'node:crypto';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -163,6 +164,6 @@ export async function POST(req: NextRequest) {
             'in Governance → Access requests.',
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

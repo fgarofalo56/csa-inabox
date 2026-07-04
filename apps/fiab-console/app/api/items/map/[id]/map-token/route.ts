@@ -39,6 +39,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { resolveMapsBackend } from '@/lib/azure/maps-client';
 import { loadOwnedItem } from '../../../_lib/item-crud';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +67,7 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
         return NextResponse.json({ ok: false, error: 'map item not found' }, { status: 404 });
       }
     } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 

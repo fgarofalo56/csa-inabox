@@ -42,6 +42,7 @@ import {
   PurviewError,
 } from '@/lib/azure/purview-client';
 import { loadOwnedItem, updateOwnedItem, jerr } from '@/app/api/items/_lib/item-crud';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -180,6 +181,6 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
       item: updated,
     });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

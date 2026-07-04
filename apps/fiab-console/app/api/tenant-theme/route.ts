@@ -12,6 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { tenantThemesContainer } from '@/lib/azure/cosmos-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -37,7 +38,7 @@ export async function GET(_req: NextRequest) {
     return NextResponse.json({ ok: true, theme: resource || null });
   } catch (e: any) {
     if (e?.code === 404) return NextResponse.json({ ok: true, theme: null });
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -64,6 +65,6 @@ export async function PUT(req: NextRequest) {
     await c.items.upsert(theme);
     return NextResponse.json({ ok: true, theme });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

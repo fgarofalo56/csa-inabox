@@ -32,6 +32,7 @@ import {
   isWorkspaceRoleName,
   type PrincipalType,
 } from '@/lib/azure/workspace-roles-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -85,7 +86,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
       callerRole: tenantAdmin || owningDomainAdmin ? 'admin' : role,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -123,6 +124,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     );
     return NextResponse.json({ ok: true, ...result }, { status: 201 });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

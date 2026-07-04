@@ -10,6 +10,7 @@ import {
   enforceAccessGrant, revokeAccessGrant, revokeStructuredGrant,
   type AccessPermission, type AccessScopeType, type PrincipalType,
 } from '@/lib/azure/access-policy-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -82,7 +83,7 @@ export async function GET() {
     return NextResponse.json({ ok: true, policies: doc.items, updatedAt: doc.updatedAt });
   } catch (e: any) {
     if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -144,7 +145,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ ok: true, policy, policies: doc.items });
   } catch (e: any) {
     if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -166,7 +167,7 @@ export async function PUT(req: NextRequest) {
     return NextResponse.json({ ok: true, policy: doc.items[ix], policies: doc.items });
   } catch (e: any) {
     if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -205,6 +206,6 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ ok: true, policies: doc.items });
   } catch (e: any) {
     if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

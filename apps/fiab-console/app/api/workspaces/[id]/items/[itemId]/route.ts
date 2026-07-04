@@ -14,12 +14,13 @@ import { itemsContainer, workspacesContainer, foldersContainer } from '@/lib/azu
 import { deleteLoomDoc, docForItem, upsertLoomDoc } from '@/lib/azure/loom-search';
 import { reconcileThreadEdgesOnDelete } from '@/lib/thread/thread-edges';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 async function loadOwned(

@@ -22,6 +22,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { KNOWN_CONTAINERS } from '@/lib/azure/adls-client';
 import { scanLakehouseTables } from '@/lib/azure/synapse-catalog-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -55,6 +56,6 @@ export async function GET(req: NextRequest) {
     const tables = await scanLakehouseTables({ containers, rowCounts });
     return NextResponse.json({ ok: true, tables, scannedAt: new Date().toISOString() });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

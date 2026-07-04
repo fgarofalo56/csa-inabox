@@ -14,6 +14,7 @@ import {
   listConnections, createConnection, deleteConnection, authNeedsSecret,
   type ConnectionType, type AuthMethod,
 } from '@/lib/azure/connections-store';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,7 @@ export async function GET() {
   try {
     return NextResponse.json({ ok: true, connections: await listConnections(session) });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -70,6 +71,6 @@ export async function DELETE(req: NextRequest) {
     await deleteConnection(session, id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

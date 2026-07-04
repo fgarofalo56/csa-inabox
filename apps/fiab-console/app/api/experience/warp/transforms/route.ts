@@ -32,6 +32,7 @@ import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
 import type { VqGraph, SqlDialect } from '@/lib/editors/visual-query-compiler';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,7 +72,7 @@ export interface WarpTransform {
 }
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, code }, { status });
+  return apiError(error, status, code === undefined ? undefined : { code });
 }
 
 /** All workspace ids in the signed-in user's tenant. */

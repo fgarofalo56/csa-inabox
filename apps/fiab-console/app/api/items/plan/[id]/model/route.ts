@@ -25,6 +25,7 @@ import {
   validateModel, validateFormulaRows, emptyPlanModel,
   type PlanModel, type PlanningSheet, type ModelIssue,
 } from '@/lib/editors/_plan-model';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -32,7 +33,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'plan';
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 function asModel(v: unknown): PlanModel {

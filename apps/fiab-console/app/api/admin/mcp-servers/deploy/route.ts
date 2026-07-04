@@ -28,7 +28,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { enforceCapability } from '@/lib/auth/feature-gate';
 import { pdpCheck } from '@/lib/auth/pdp/enforce';
@@ -328,7 +328,7 @@ async function deployCatalogServer(
         { status: 502 },
       );
     }
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 

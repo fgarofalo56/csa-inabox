@@ -21,6 +21,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { computeDspmAiPosture, DspmAiNotConfiguredError } from '@/lib/azure/dspm-ai-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -54,7 +55,6 @@ export async function GET(req: NextRequest) {
         { status: 503 },
       );
     }
-    const msg = (e as any)?.message || String(e);
-    return NextResponse.json({ ok: false, error: msg, code: 'unexpected' }, { status: 500 });
+    return apiServerError(e, 'internal error', 'unexpected');
   }
 }

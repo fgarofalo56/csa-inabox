@@ -40,6 +40,7 @@ import {
   type PurviewSourceInput,
 } from '@/lib/azure/purview-source-map';
 import type { ConnectionType } from '@/lib/azure/connections-store';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -154,6 +155,6 @@ export async function POST(req: NextRequest) {
     if (e instanceof PurviewError) {
       return NextResponse.json({ ok: false, error: e.message, status: e.status }, { status: e.status >= 400 && e.status < 600 ? e.status : 502 });
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

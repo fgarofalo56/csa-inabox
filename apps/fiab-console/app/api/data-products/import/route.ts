@@ -33,6 +33,7 @@ import { createOwnedItem } from '@/app/api/items/_lib/item-crud';
 import { uploadFile } from '@/lib/azure/adls-client';
 import { validateImportCsv, splitTags, MAX_IMPORT_ROWS } from '@/lib/util/csv-parse';
 import type { Workspace } from '@/lib/types/workspace';
+import { apiServerError, apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,7 +41,7 @@ export const dynamic = 'force-dynamic';
 const MAX_BYTES = 5 * 1024 * 1024; // 5 MB hard cap on the uploaded CSV
 
 function err(error: string, status: number, extra?: object) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 export async function POST(req: NextRequest) {
@@ -58,7 +59,7 @@ export async function POST(req: NextRequest) {
     if (!ws || ws.tenantId !== tenantId) return err('workspace not found', 404);
   } catch (e: any) {
     if (e?.code === 404) return err('workspace not found', 404);
-    return err(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 
   // 2. Parse multipart/form-data.
@@ -141,7 +142,7 @@ export async function POST(req: NextRequest) {
   try {
     await jobs.items.create<DataProductImportJob>(initial);
   } catch (e: any) {
-    return err(`Failed to create import job: ${e?.message || e}`, 500);
+    return apiServerError(e, 'Failed to create import job');
   }
 
   // 6. Process rows in the background (floating promise). The Container App

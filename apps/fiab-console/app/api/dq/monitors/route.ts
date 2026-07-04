@@ -22,6 +22,7 @@ import {
   getMonitor, createMonitor, refreshMonitor, listRefreshes, deleteMonitor,
   type MonitorProfileType,
 } from '@/lib/azure/dq-monitor-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,7 +69,7 @@ export async function GET(req: NextRequest) {
     }
     return NextResponse.json({ ok: true, fullName, constraints, monitor, refreshes });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -122,7 +123,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ ok: false, error: `unknown action "${action}"` }, { status: 400 });
     }
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -139,6 +140,6 @@ export async function DELETE(req: NextRequest) {
     await deleteMonitor(fullName);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

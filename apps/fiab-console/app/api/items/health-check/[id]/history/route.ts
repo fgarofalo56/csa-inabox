@@ -12,13 +12,14 @@ import { loadOwnedItem } from '../../../_lib/item-crud';
 import { getActivatorHistory, type MonitorRuleRecord } from '@/lib/azure/activator-monitor';
 import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-client';
 import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'health-check';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 const monitorGateBodies: MonitorGateBodies = {
   notConfigured: (missing) => ({ error: `Azure Monitor not configured: set ${missing?.join(' / ') || 'LOOM_SUBSCRIPTION_ID'}.`,

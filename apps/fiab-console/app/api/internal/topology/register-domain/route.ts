@@ -27,6 +27,7 @@ import {
   type DomainBindingInput,
   type DomainStatus,
 } from '@/lib/azure/domain-registry';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -87,6 +88,6 @@ export async function POST(req: NextRequest) {
     const domain = await upsertDomainBinding(tenantId, 'dlz-attach', input);
     return NextResponse.json({ ok: true, domain }, { status: 200 });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

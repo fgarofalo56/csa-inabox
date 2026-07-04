@@ -27,6 +27,7 @@ import { getSession } from '@/lib/auth/session';
 import {
   searchDataProducts, buildFacetFilter, dataProductsSearchGate,
 } from '@/lib/azure/loom-data-products-search';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -91,6 +92,6 @@ export async function POST(req: NextRequest) {
       searchResponse: out.raw,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -16,6 +16,7 @@ import { getSession } from '@/lib/auth/session';
 import { isTenantAdminTier, TENANT_ADMIN_TIER_REMEDIATION, TENANT_ADMIN_BOOTSTRAP_ENV } from '@/lib/auth/domain-role';
 import { getPolicy, deletePolicy } from '@/lib/azure/protection-policy-client';
 import { computeReconcile } from '@/lib/azure/protection-policy-reconciler';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest, { params }: { params: { id: string }
     const preview = computeReconcile(policy, []);
     return NextResponse.json({ ok: true, policy, preview, dryRun: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -47,6 +48,6 @@ export async function DELETE(req: NextRequest, { params }: { params: { id: strin
     await deletePolicy(params.id, resourceId);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

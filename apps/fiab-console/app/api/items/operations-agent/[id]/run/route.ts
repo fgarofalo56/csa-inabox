@@ -45,6 +45,7 @@ import {
 } from '@/lib/azure/foundry-agent-client';
 import { loadKustoItem, resolveDatabase, defaultDatabase } from '@/lib/azure/kusto-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -112,7 +113,7 @@ export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string
   try {
     item = await loadOwnedItem(id, ITEM_TYPE, session.claims.oid);
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'cosmos error' }, { status: 500 });
+    return apiServerError(e, 'cosmos error');
   }
   if (!item) return NextResponse.json({ ok: false, error: 'operations-agent item not found' }, { status: 404 });
 

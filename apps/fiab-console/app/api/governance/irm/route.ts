@@ -22,6 +22,7 @@ import {
   IRM_INDICATORS,
   type IrmThresholds,
 } from '@/lib/azure/irm-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,7 +36,7 @@ export async function GET(req: NextRequest) {
     const report = await computeIrmIndicators({ tenantId, days });
     return NextResponse.json({ ok: true, ...report, indicators: IRM_INDICATORS });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -71,6 +72,6 @@ export async function POST(req: NextRequest) {
     const thresholds = await writeIrmThresholds(tenantId, patch);
     return NextResponse.json({ ok: true, thresholds });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

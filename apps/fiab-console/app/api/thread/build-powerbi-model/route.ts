@@ -31,6 +31,7 @@ import { pushColumnsFromCatalog, inferPushColumnsFromResult, coerceRow, bracket 
 import { readOnlySelect } from '@/lib/thread/sql-guard';
 import type { PushColumn } from '@/lib/azure/powerbi-client';
 import { recordThreadEdge } from '@/lib/thread/thread-edges';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -154,7 +155,7 @@ export async function POST(req: NextRequest) {
     if (!cols.length) return NextResponse.json({ ok: false, error: `Table ${schema}.${name} has no readable columns.` }, { status: 400 });
     ({ pushColumns, selectNames } = pushColumnsFromCatalog(cols));
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: `Could not read schema for ${schema}.${name}: ${e?.message || String(e)}` }, { status: 500 });
+    return apiServerError(e, `Could not read schema for ${schema}.${name}`);
   }
   pushTableName = name;
   sourceLabel = `${schema}.${name}`;

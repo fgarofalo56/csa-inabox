@@ -20,6 +20,7 @@ import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { resolveAoaiTarget } from '@/lib/azure/copilot-orchestrator';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import { aoaiChatStream, NoAoaiDeploymentError } from '@/lib/azure/aoai-chat-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -69,7 +70,7 @@ export async function POST(req: NextRequest) {
     await resolveAoaiTarget(tenantConfig);
   } catch (e) {
     if (e instanceof NoAoaiDeploymentError) return noAoaiDeployment(e.message);
-    return NextResponse.json({ ok: false, error: (e as any)?.message || String(e), code: 'unexpected' }, { status: 500 });
+    return apiServerError(e, 'internal error', 'unexpected');
   }
 
   // Compact the chart JSON so it fits comfortably in the grounding context.

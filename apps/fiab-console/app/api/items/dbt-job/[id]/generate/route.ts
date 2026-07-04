@@ -13,6 +13,7 @@ import { getSession } from '@/lib/auth/session';
 import { jerr, loadOwnedItem } from '../../../_lib/item-crud';
 import { generateProject, findDanglingRefs } from '@/lib/dbt/dbt-codegen';
 import type { DbtProjectGraph } from '@/lib/dbt/dbt-project-model';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,6 +39,6 @@ export async function GET(_req: NextRequest, ctx: { params: Promise<{ id: string
     const dangling = findDanglingRefs(project);
     return NextResponse.json({ ok: true, files, dangling });
   } catch (e: any) {
-    return jerr(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

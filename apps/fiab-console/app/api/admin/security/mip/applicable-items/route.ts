@@ -14,6 +14,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -51,6 +52,6 @@ export async function GET() {
 
     return NextResponse.json({ ok: true, items: mapped, total: mapped.length });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || 'Failed to list items', code: 'cosmos_error' }, { status: 500 });
+    return apiServerError(e, 'Failed to list items', 'cosmos_error');
   }
 }

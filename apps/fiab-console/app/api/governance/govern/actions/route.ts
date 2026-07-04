@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { recommendedActionsAdminContainer } from '@/lib/azure/cosmos-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -38,6 +39,6 @@ export async function GET() {
   } catch (e: any) {
     // A missing doc is a 404 from Cosmos — treat as empty, not an error.
     if (e?.code === 404) return NextResponse.json({ ok: true, actions: [] });
-    return NextResponse.json({ ok: false, error: e?.message || String(e), code: 'unexpected' }, { status: 500 });
+    return apiServerError(e, 'internal error', 'unexpected');
   }
 }

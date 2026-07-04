@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { runDqRules, dqRunConfigGate, type DqRunBackend } from '@/lib/azure/data-quality-client';
 import { appendDqRun, type DqRunRecord } from '@/lib/azure/dq-run-store';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -68,6 +69,6 @@ export async function POST(req: NextRequest) {
     const history = await appendDqRun(tenantId, rec);
     return NextResponse.json({ ok: true, run: rec, history });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

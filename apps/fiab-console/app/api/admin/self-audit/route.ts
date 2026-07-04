@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
 import { runSelfAudit, applyFix } from '@/lib/admin/self-audit';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,7 +27,7 @@ export async function GET() {
     const report = await runSelfAudit(new Date().toISOString());
     return NextResponse.json({ ok: true, report, isAdmin: isTenantAdmin(session) });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 

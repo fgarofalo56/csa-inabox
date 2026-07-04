@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { dbListTaskFlows, dbCreateTaskFlow } from '@/lib/clients/taskflow-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -35,7 +36,7 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     const flows = await dbListTaskFlows(params.id);
     return NextResponse.json({ ok: true, flows });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -56,6 +57,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
     );
     return NextResponse.json({ ok: true, flow }, { status: 201 });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

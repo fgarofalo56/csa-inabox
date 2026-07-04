@@ -18,12 +18,13 @@ import { workspacesContainer } from '@/lib/azure/cosmos-client';
 import { upsertLoomDoc, docForWorkspace } from '@/lib/azure/loom-search';
 import { assignWorkspaceToCapacity, FabricError } from '@/lib/azure/fabric-client';
 import type { Workspace, WorkspaceLicenseMode } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, code }, { status });
+  return apiError(error, status, code === undefined ? undefined : { code });
 }
 
 const VALID_LICENSE_MODES: WorkspaceLicenseMode[] = [

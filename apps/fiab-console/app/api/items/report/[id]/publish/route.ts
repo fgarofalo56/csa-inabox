@@ -66,6 +66,7 @@ import {
   cosmosIdFromLoomId,
   loadContentBackedItem,
 } from '../../../_lib/pbi-content-fallback';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,7 +78,7 @@ const BI_BACKEND = (process.env.NEXT_PUBLIC_LOOM_BI_BACKEND || process.env.LOOM_
 const PBI_OPT_IN = BI_BACKEND === 'powerbi';
 
 function jerr(error: string, status: number) {
-  return NextResponse.json({ ok: false, error }, { status });
+  return apiError(error, status);
 }
 
 function jgate(gate: { reason: string; remediation: string; link?: string }, status = 412) {

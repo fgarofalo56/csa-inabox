@@ -19,6 +19,7 @@ import {
   AcaArmError,
   AcaNotConfiguredError,
 } from '@/lib/azure/container-apps-arm-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,7 +60,7 @@ export async function GET(req: NextRequest) {
         { status: e.status || 502 },
       );
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 
   // Refresh the stored deployment snapshot (best-effort) when we have the doc.

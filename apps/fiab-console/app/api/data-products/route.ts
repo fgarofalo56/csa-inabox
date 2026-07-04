@@ -50,6 +50,7 @@ import {
   DATA_PRODUCT_AUDIENCE_VALUES,
   isValidDataProductType,
 } from '@/lib/catalog/data-product-enums';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -200,7 +201,7 @@ export async function GET(req: NextRequest) {
         duplicate: dup ? { id: dup.id, displayName: dup.displayName } : null,
       });
     } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 
@@ -231,7 +232,7 @@ export async function GET(req: NextRequest) {
     }));
     return NextResponse.json({ ok: true, dataProducts, products });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -267,7 +268,7 @@ export async function POST(req: NextRequest) {
       try { await upsertDataProductDoc(docForDataProduct(res.item!, session.claims.oid)); } catch { /* index is derived */ }
       return NextResponse.json({ ok: true, product: res.item });
     } catch (e: any) {
-      return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+      return apiServerError(e);
     }
   }
 

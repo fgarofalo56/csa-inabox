@@ -17,12 +17,13 @@ import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { listUcSchemas, listUcTables } from '@/lib/azure/databricks-client';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

@@ -32,6 +32,7 @@ import { MonitorNotConfiguredError, MonitorError } from '@/lib/azure/monitor-cli
 import { monitorGate, type MonitorGateBodies } from '@/lib/azure/monitor-gate';
 import { buildEntityChangeQuery } from '@/lib/editors/_family-utils';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -39,7 +40,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'ontology';
 
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 /** Honest Azure infra-gate (NOT a Fabric gate) for Monitor errors. */

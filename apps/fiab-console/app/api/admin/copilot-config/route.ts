@@ -17,7 +17,7 @@
  * See .claude/rules/no-vaporware.md.
  */
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
@@ -90,7 +90,7 @@ export async function GET() {
     };
     return NextResponse.json({ ok: true, config, accounts, defaultAccount, envDefaults, accountsError });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -130,6 +130,6 @@ export async function PUT(req: NextRequest) {
     const { id: _i, tenantId: _t, updatedAt, updatedBy, ...config } = doc;
     return NextResponse.json({ ok: true, config, updatedAt, updatedBy });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

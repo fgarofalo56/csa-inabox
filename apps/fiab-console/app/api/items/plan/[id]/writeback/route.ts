@@ -20,6 +20,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem } from '../../../_lib/item-crud';
 import { resolvePlanBacking, writebackCells, readPlanCells, type WritebackCell } from '@/lib/azure/plan-backing-store';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -28,7 +29,7 @@ const ITEM_TYPE = 'plan';
 const MAX_CELLS = 5000;
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 /**

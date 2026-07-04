@@ -6,6 +6,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listModels, upsertModel, deleteModel, normalizeModel } from '@/lib/azure/mdm-store';
 import { SURVIVORSHIP_STRATEGIES, MATCH_TYPES } from '@/lib/azure/mdm-match-merge';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,7 +18,7 @@ export async function GET() {
     const models = await listModels(s.claims.oid);
     return NextResponse.json({ ok: true, models, enums: { survivorship: SURVIVORSHIP_STRATEGIES, matchTypes: MATCH_TYPES } });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
     const models = await upsertModel(s.claims.oid, model);
     return NextResponse.json({ ok: true, model, models });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -44,6 +45,6 @@ export async function DELETE(req: NextRequest) {
     const models = await deleteModel(s.claims.oid, id);
     return NextResponse.json({ ok: true, models });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

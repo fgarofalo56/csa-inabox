@@ -9,12 +9,13 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import { generateSlateBundle, type SlateWidget } from '@/lib/editors/_palantir-codegen';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'slate-app';
 function err(error: string, status: number, code?: string) {
-  return NextResponse.json({ ok: false, error, ...(code ? { code } : {}) }, { status });
+  return apiError(error, status, code ? { code } : undefined);
 }
 
 export async function POST(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {

@@ -6,6 +6,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { listDqRuns } from '@/lib/azure/dq-run-store';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,6 +18,6 @@ export async function GET() {
     const runs = await listDqRuns(s.claims.oid);
     return NextResponse.json({ ok: true, runs });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

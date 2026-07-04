@@ -15,7 +15,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { auditLogContainer } from '@/lib/azure/cosmos-client';
@@ -133,7 +133,7 @@ export async function POST(req: NextRequest) {
     await audit(tenantId, who, 'loom-dashboard.create', { id: dashboard.id, name: dashboard.name, tileCount: dashboard.tileCount, blobCopied: dashboard.blobCopied });
     return NextResponse.json({ ok: true, dashboard, ...(dashboard.blobCopied ? {} : { blobGate: BLOB_GATE }) });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }
 
@@ -173,6 +173,6 @@ export async function DELETE(req: NextRequest) {
     await audit(tenantId, who, 'loom-dashboard.delete', { id });
     return NextResponse.json({ ok: true });
   } catch (e: any) {
-    return apiError(e?.message || String(e), 500);
+    return apiServerError(e);
   }
 }

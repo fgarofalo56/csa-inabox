@@ -19,7 +19,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
 import { getTemplate, getTemplateFiles, getClone } from '@/lib/coe-library/coe-library-client';
@@ -54,7 +54,7 @@ async function resolveTemplate(req: NextRequest, tenantId: string): Promise<Reso
       if (!clone) return apiError(`unknown clone: ${cloneId}`, 404);
       return { resolvedTemplateId: clone.templateId, published: !!clone.published, displayName: clone.displayName };
     } catch (e: any) {
-      return apiError(e?.message || String(e), 500);
+      return apiServerError(e);
     }
   }
   if (!templateId) return apiError('templateId or cloneId is required', 400);

@@ -29,6 +29,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { loadOwnedItem, updateOwnedItem } from '../../../_lib/item-crud';
 import { resolveApprovalConfig, postApprovalTrigger } from '@/lib/azure/plan-approval-client';
+import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,7 +37,7 @@ export const dynamic = 'force-dynamic';
 const ITEM_TYPE = 'plan';
 
 function err(error: string, status: number, extra?: Record<string, unknown>) {
-  return NextResponse.json({ ok: false, error, ...(extra || {}) }, { status });
+  return apiError(error, status, extra);
 }
 
 /** Absolute base URL of the Console (for the callBackUri the Logic App POSTs to). */

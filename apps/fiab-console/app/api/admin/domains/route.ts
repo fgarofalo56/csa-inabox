@@ -59,6 +59,7 @@ import {
   domainGroupProvisioningEnabled,
   DomainGroupError,
 } from '@/lib/azure/domain-groups';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -146,7 +147,7 @@ export async function GET() {
       imageStorageConfigured: !!process.env.LOOM_DOMAIN_IMAGE_STORAGE,
     });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -275,7 +276,7 @@ export async function POST(req: NextRequest) {
     await c.item(docId, tenantId).replace(doc);
     return NextResponse.json({ ok: true, domain: newItem, domains: doc.items, mirror, groupProvisioning });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -428,7 +429,7 @@ export async function PATCH(req: NextRequest) {
     if (mirror) applyMirrorIds(domain, mirror);
     return NextResponse.json({ ok: true, domain, mirror, moved });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }
 
@@ -463,6 +464,6 @@ export async function DELETE(req: NextRequest) {
     await c.item(docId, tenantId).replace(doc);
     return NextResponse.json({ ok: true, domains: doc.items, mirror });
   } catch (e: any) {
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 }

@@ -25,6 +25,7 @@ import {
   AcaNotConfiguredError,
 } from '@/lib/azure/container-apps-arm-client';
 import { deleteKeyVaultSecret } from '@/lib/azure/kv-secrets-client';
+import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -64,7 +65,7 @@ export async function DELETE(req: NextRequest) {
         { status: e.status || 502 },
       );
     }
-    return NextResponse.json({ ok: false, error: e?.message || String(e) }, { status: 500 });
+    return apiServerError(e);
   }
 
   // 2. Delete the per-field Key Vault secrets (best-effort; names only persisted).
