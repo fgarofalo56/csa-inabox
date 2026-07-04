@@ -21,7 +21,22 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-07-03/04 (public-release Wave 3 LANDED + live-verified)
+## Current Session — 2026-07-04 (public-release Wave 4 LANDED + live-verified)
+
+**Focus:** Wave-4 UI polish + a11y + refactor hygiene (rel-T55–T70), 2-round fan-out + 2 hotfixes.
+
+**Merged (~11 PRs), rolled to live centralus (revision loom-console--0000198, image 34a16190):**
+- Round 1: #1637 unsaved-guard + autosave (T70) · #1638 color-mix/emoji/EmptyState (T55/T58/T59) · #1639 axe-core a11y + README truth (T68/B18) · #1640 per-file editor imports + lazy content-bundles (T62/T63) · #1642 delete 10 dead + shared-styles (T67) · #1643 split 4 god-routes (T64)
+- Round 2: #1644 client sweeps — 631 px→tokens + 1373 fetch→clientFetch + 13 ConfirmDialog + guards (T56/T61/T69) · #1645 server sweeps — SQL quoting + 323 raw-500-leaks fixed + guards (T65/T66)
+- Hotfixes: #1646 err-helper type (`object`→Record) — only Docker build caught it; #1647 apiHonestError for T66-over-genericized honest gate/permission messages
+
+**Live smoke PASS:** /api/me, /api/onelake/catalog, /api/workspaces, /api/admin/copilot-usage, /api/apps-catalog all 200 (T63 lazy bundles render catalog without payloads).
+
+**4 BUILD/ROLL GOTCHAS (see memory csa_loom_wave4_landed_2026_07_04):** (1) phantom build — a SIGKILLed build produces no image but echoes "BUILT"; verify the image ID prints before pushing/rolling, else ACA rolls to a dead tag and the live console goes down (rollback: update --image :<last-good-sha>). (2) CI next-build passed a TS error the Docker build failed on — local docker build is the roll's real gate. (3) T66-class sweeps over-genericize honest gate errors → apiHonestError. (4) CI-green-on-merge-ref ≠ combined-main-green; check `gh run list --branch main` after big sweeps. T60 deferred; T57 already done.
+
+---
+
+## Session — 2026-07-03/04 (public-release Wave 3 LANDED + live-verified)
 
 **Focus:** Wave-3 IA / navigation consolidation (rel-T45–T54), 2-round fan-out.
 
