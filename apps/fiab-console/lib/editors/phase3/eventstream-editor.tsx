@@ -1415,7 +1415,7 @@ function EventstreamSqlOperatorTab({
               {(sink.kind === 'eventhub' || sink.kind === 'reflex') && (
                 <div style={{ display: 'flex', gap: tokens.spacingVerticalS}}>
                   <Field label="Namespace" style={{ flex: 1 }}>
-                    <Input value={sink.namespace || ''} onChange={(_: unknown, d: any) => updateSink(idx, { namespace: d.value })} placeholder="(or LOOM_EVENTHUBS_NAMESPACE)" />
+                    <Input value={sink.namespace || ''} onChange={(_: unknown, d: any) => updateSink(idx, { namespace: d.value })} placeholder="(or LOOM_EVENTHUB_NAMESPACE)" />
                   </Field>
                   <Field label="Event hub" style={{ flex: 1 }}>
                     <Input value={sink.eventHubName || ''} onChange={(_: unknown, d: any) => updateSink(idx, { eventHubName: d.value })} placeholder="processed-events" />

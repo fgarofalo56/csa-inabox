@@ -244,7 +244,7 @@ describe('readReceipts tool', () => {
       provisioning: {
         found: true,
         status: 'remediation',
-        gate: { reason: 'Event Hubs namespace not set', remediation: 'Set LOOM_EVENTHUBS_NAMESPACE', link: 'https://x' },
+        gate: { reason: 'Event Hubs namespace not set', remediation: 'Set LOOM_EVENTHUB_NAMESPACE', link: 'https://x' },
       },
       audit: [{ action: 'install', summary: 'created', at: '2026-06-10T00:00:00Z' }],
     });
@@ -253,7 +253,7 @@ describe('readReceipts tool', () => {
     expect(t).toBeTruthy();
     const { result, citations } = await t.handler({ source: 'all' });
     expect((result as any).provisioning.status).toBe('remediation');
-    expect((result as any).provisioning.gate.remediation).toContain('LOOM_EVENTHUBS_NAMESPACE');
+    expect((result as any).provisioning.gate.remediation).toContain('LOOM_EVENTHUB_NAMESPACE');
     expect(citations!.some((c) => c.id === 'receipt:provisioning:itm-1')).toBe(true);
     expect(cs.some((c) => c.id.startsWith('receipt:'))).toBe(true);
     // gatherReceipts called with the scoped item id

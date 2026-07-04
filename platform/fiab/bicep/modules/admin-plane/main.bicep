@@ -1126,6 +1126,36 @@ var loomPipelineBackend = loomBackends.?pipeline ?? 'synapse'
 // to 'powerbi' when no AAS — a no-fabric-dependency.md violation (B12/rel-T04).
 var effectiveBiBackend = (!empty(existingAasServerName) || aasEnabled) ? 'aas' : (loomBackends.?bi ?? '')
 
+// ── Deterministic AAS env values (rel-T31/B7) ────────────────────────────────
+// The Console env used to emit LOOM_AAS_SERVER / _MODEL / _DATABASE / _REGION /
+// _RG (and LOOM_ARM_ENDPOINT, LOOM_RTI_EXPORT_ADLS) from SEVERAL sites with
+// conflicting values — Azure keeps the LAST env entry, so the winning value
+// depended on array order (non-deterministic on redeploy). These effective-*
+// vars collapse each to ONE value emitted EXACTLY ONCE below.
+// aasServer (aas-server.bicep) is the single owner of the shared AAS server.
+var aasDeployed = aasEnabled && empty(existingAasServerName)
+// Prefer a BYO connection string (loomAasServer); else the Loom-deployed server's
+// region-qualified full name; else '' → the SemanticModel editor honest-gates.
+var effectiveAasServer = !empty(loomAasServer) ? loomAasServer : (aasDeployed ? aasServer!.outputs.serverFullName : '')
+// Composite model DB is 'LoomComposite' on the Loom-deployed server; a BYO
+// server uses the operator-supplied loomAasDatabase.
+var effectiveAasDatabase = empty(effectiveAasServer) ? '' : (aasDeployed ? 'LoomComposite' : loomAasDatabase)
+var effectiveAasModel = empty(effectiveAasServer) ? '' : loomAasModel
+// LOOM_AAS_ENDPOINT is the Loom-deployed composite server's full name (the
+// former `aas.outputs.serverFullName`); empty for BYO / disabled.
+var effectiveAasEndpoint = aasDeployed ? aasServer!.outputs.serverFullName : ''
+// LOOM_AAS_REGION: reused-server region wins; else the deployed server's region;
+// else the BYO connection-string region (loomAasRegion) when a BYO server is set.
+var effectiveAasRegion = !empty(existingAasServerName)
+  ? (!empty(existingAasServerRegion) ? existingAasServerRegion : location)
+  : (aasDeployed ? aasServer!.outputs.serverRegion : (empty(loomAasServer) ? '' : loomAasRegion))
+// LOOM_AAS_RG: explicit AAS resource group wins; else the DLZ RG fallback.
+var effectiveAasRg = !empty(loomAasResourceGroup) ? loomAasResourceGroup : loomDlzRg
+// LOOM_ARM_ENDPOINT: explicit override wins; else derived from the sovereign cloud.
+var effectiveArmEndpoint = !empty(loomArmEndpoint) ? loomArmEndpoint : ((boundary == 'GCC-High' || boundary == 'IL5') ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com')
+// LOOM_RTI_EXPORT_ADLS: explicit export account wins; else the lake account.
+var effectiveRtiExportAdls = !empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount
+
 
 
 
@@ -1381,9 +1411,9 @@ param loomAasResourceGroup string = ''
 @description('Service-principal client id (appId) made an AAS server admin for data-plane XMLA (RLS/OLS role authoring via LOOM_AAS_CLIENT_ID/SECRET). Empty = the Console UAMI is the sole AAS admin (composite-model path). Store the SPN secret in Key Vault and wire LOOM_AAS_CLIENT_SECRET as a secretRef.')
 param aasSpnClientId string = ''
 
-@description('Azure Analysis Services SKU for the composite-model server. Standard tier only — S0 is the smallest/cheapest Standard SKU and is broadly available across regions. The Developer (D1) and Basic (B1/B2) tiers are NOT offered in many regions (e.g. centralus exposes only S0, S1, S2, S4, S8v2, S9v2), so they are no longer selectable here to avoid SkuNotAvailable on a day-one deploy. S8v2 / S9v2 are the v2 high-QPU SKUs.')
-@allowed(['S0', 'S1', 'S2', 'S4', 'S8v2', 'S9v2'])
-param aasSku string = 'S0'
+// (The former `aasSku` param — the composite `aas` module's SKU — was retired
+// with that module: the single AAS server is now sized solely by aasSkuName
+// via aas-server.bicep, giving a deterministic single SKU on redeploy. rel-T31/B7.)
 
 
 
@@ -1936,40 +1966,19 @@ module contentSafety '../deploy-planner/cognitive-account.bicep' = if (contentSa
 }
 
 // =====================================================================
-// 8a-bis. Azure Analysis Services (opt-in composite-model host)
-// Hosts a COMPOSITE tabular model mixing Import / DirectQuery / Dual
-// storage modes. Off by default — the semantic-model item's default is the
-// Loom-native tabular layer (no AAS required). See analysis-services.bicep.
+// 8a-bis. Azure Analysis Services composite-model host
+// A COMPOSITE tabular model (Import / DirectQuery / Dual per-table storage
+// modes) is hosted on the SAME single AAS server the `aasServer` module
+// (aas-server.bicep) owns — the former standalone composite `aas` module was
+// consolidated into that single owner for a deterministic redeploy (both
+// declared the identical `aasloom${uniqueString}` server with DIFFERENT SKUs
+// → non-deterministic last-writer-wins on redeploy, rel-T31/B7). The optional
+// dedicated RLS/OLS SPN admin (aasSpnClientId) is now passed to aasServer.
+// The composite-model apply path (TMSL over XMLA) uses the Console UAMI's
+// server-admin membership, which aasServer grants. See aas-server.bicep.
 // =====================================================================
 
-module aas 'analysis-services.bicep' = if (aasEnabled) {
-  name: 'aas'
-  params: {
-    location: location
-    serverName: 'aasloom${uniqueString(resourceGroup().id)}'
-    skuName: aasSku
-    // All selectable aasSku values are Standard-tier (D1/B1/B2 removed — not
-    // available in many regions, e.g. centralus). AAS rejects a server whose
-    // sku.tier does not match the sku.name family, so this is always 'Standard'.
-    skuTier: 'Standard'
-    aasDatabase: 'LoomComposite'
-    consolePrincipalId: identity.outputs.uamiConsolePrincipalId
-    // RLS/OLS Security tab: when an operator supplies a dedicated SPN it becomes
-    // the AAS data-plane admin (LOOM_AAS_CLIENT_ID authors roles over XMLA).
-    // Otherwise the Console UAMI is the sole admin (composite-model path).
-    aasAdminUpn: !empty(aasSpnClientId) ? 'app:${aasSpnClientId}@${tenant().tenantId}' : 'app:${identity.outputs.uamiConsoleClientId}@${tenant().tenantId}'
-    // IMPORTANT: this `aas` (composite-model) module and the `aasServer`
-    // (import-mode) module below BOTH resolve to the SAME physical AAS server —
-    // both use server name `aasloom${uniqueString(resourceGroup().id)}`. If both
-    // were allowed to grant the Console UAMI Reader, Azure would dedupe on
-    // (principal,role,scope) and fail the second with RoleAssignmentExists
-    // (pass-6 centralus deploy 2026-06-17). aas-server.bicep is the SINGLE owner
-    // of the Reader grant on this shared server, so force-skip the grant here.
-    // (The server-admin XMLA membership is data-plane, set independently below.)
-    skipRoleGrants: true
-    tags: complianceTags
-  }
-}
+
 // Dedicated AIServices account + loom-agents project + chat/embedding
 // model deployments. Backs LOOM_FOUNDRY_PROJECT_ENDPOINT + LOOM_AOAI_* for
 // the Agent Service. Mirrors the live Commercial deployment one-for-one.
@@ -2155,6 +2164,10 @@ module aasServer 'aas-server.bicep' = if (aasEnabled && empty(existingAasServerN
     consolePrincipalClientId: identity.outputs.uamiConsoleClientId
     consolePrincipalId: identity.outputs.uamiConsolePrincipalId
     tenantId: tenant().tenantId
+    // Optional dedicated RLS/OLS SPN admin (LOOM_AAS_CLIENT_ID authoring over
+    // XMLA). Preserves the former composite `aas` module's SPN-admin option now
+    // that this module is the single owner of the shared AAS server (rel-T31/B7).
+    spnAdminClientId: aasSpnClientId
   }
 }
 
@@ -2502,7 +2515,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // AAS resource group for the datamart-migration server (aas.bicep
             // deploys it into the DLZ RG). The migrate route falls back to
             // LOOM_DLZ_RG / LOOM_ADMIN_RG when unset.
-            { name: 'LOOM_AAS_RG', value: loomDlzRg }
+            { name: 'LOOM_AAS_RG', value: effectiveAasRg }
             // Default ADLS Gen2 account for the Azure-native lakehouse + shortcut
             // example targets ({{ADLS_ACCOUNT}} token). Without this the lakehouse
             // shortcut examples resolve to a non-existent host (ENOTFOUND).
@@ -2510,7 +2523,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // ADLS Gen2 account for ADX continuous-export (Delta / OneLake-style
             // availability). When unset, the eventhouse Export dialog shows an
             // honest gate. Defaults to the lake account (same MI grant).
-            { name: 'LOOM_RTI_EXPORT_ADLS', value: !empty(loomRtiExportAdls) ? loomRtiExportAdls : loomStorageAccount }
+            { name: 'LOOM_RTI_EXPORT_ADLS', value: effectiveRtiExportAdls }
             // /monitor observability surface — Log Analytics workspace GUID
             // (customerId) for the Logs (KQL) tab. The UAMI needs
             // "Log Analytics Reader" on this workspace + "Monitoring Reader"
@@ -2547,9 +2560,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Cloud-aware ARM management endpoint. Commercial/GCC use the public
             // host; GCC-High / IL5 (Azure Government) use management.usgovcloudapi.net.
             // Read by monitor-client.ts (inventory/health/metrics/activity/alerts +
-            // Activator run-history Microsoft.AlertsManagement/alerts). Mirrors the
-            // sovereign-cloud selection already used by adf-client.ts.
-            { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
+            // Activator run-history Microsoft.AlertsManagement/alerts) and the
+            // eventhubs / eventhouse / adf / azure-sql clients. Emitted EXACTLY
+            // ONCE from effectiveArmEndpoint (was previously set from four sites
+            // with conflicting values — a redeploy-order race, rel-T31/B7).
+            // An explicit loomArmEndpoint override wins; else derived from cloud.
+            { name: 'LOOM_ARM_ENDPOINT', value: effectiveArmEndpoint }
             { name: 'LOOM_SYNAPSE_WORKSPACE', value: effSynapseWorkspace }
             { name: 'LOOM_SYNAPSE_RG', value: byoSynapseRg }
             { name: 'LOOM_SYNAPSE_SUB', value: byoSynapseSub }
@@ -2671,8 +2687,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // semantic-model "Get data" (Power Query M) ingest refresh phase.
             // Empty values honestly gate the AAS phase (Delta still lands; query
             // via Synapse Serverless). Unavailable in Government clouds.
-            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
-            { name: 'LOOM_AAS_MODEL', value: loomAasModel }
+            // LOOM_AAS_* are emitted EXACTLY ONCE (here) from effective-* vars —
+            // aasServer (aas-server.bicep) is the single AAS server owner and the
+            // former duplicate/conflicting emissions collapsed here (rel-T31/B7).
+            { name: 'LOOM_AAS_SERVER', value: effectiveAasServer }
+            { name: 'LOOM_AAS_ENDPOINT', value: effectiveAasEndpoint }
+            { name: 'LOOM_AAS_MODEL', value: effectiveAasModel }
+            { name: 'LOOM_AAS_DATABASE', value: effectiveAasDatabase }
             // Opt-in ADF CDC mirroring (no-Fabric Delta sink). When BOTH are set
             // and LOOM_ADF_NAME is present, a mirrored-database Start provisions a
             // real ADF ChangeDataCapture resource → ADLS Bronze Delta. Unset = the
@@ -2687,8 +2708,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // opts into an Azure Analysis Services XMLA backend (loomAasServer
             // required; Commercial/GCC only — AAS is not in Azure Government).
             { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
-            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
-            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Approval activity (F25) - Consumption Logic App + O365 approval
             // email backing the pipeline editor's Approval activity. Empty name
             // -> the approval-logicapp route returns an honest 503 naming the
@@ -2754,10 +2773,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Defaults to the deployment location so Gov (usgov*) deployments do
             // NOT fall back to the Commercial 'eastus' default in monitor-client.ts.
             { name: 'LOOM_ALERT_LOCATION', value: location }
-            // ARM endpoint / scope overrides for sovereign clouds (GCC-High / IL5).
-            // Empty on Commercial → monitor-client.ts falls back to
-            // https://management.azure.com. Set both for Azure Government.
-            { name: 'LOOM_ARM_ENDPOINT', value: loomArmEndpoint }
+            // ARM scope override for sovereign clouds (GCC-High / IL5). The ARM
+            // endpoint itself is emitted once above (effectiveArmEndpoint).
             { name: 'LOOM_ARM_SCOPE', value: loomArmScope }
             // Stream Analytics — defaults to LOOM_DLZ_RG / LOOM_SUBSCRIPTION_ID
             // when blank (see lib/azure/stream-analytics-client.ts). Override
@@ -2819,10 +2836,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // feed). An explicit workspaceMonitorEventHubNamespaceId override wins;
             // otherwise derived from the navigator namespace/RG/sub (DLZ fallback).
             { name: 'LOOM_EVENTHUB_NAMESPACE_RESOURCE_ID', value: !empty(workspaceMonitorEventHubNamespaceId) ? workspaceMonitorEventHubNamespaceId : (empty(effEventHubNamespace) ? '' : '/subscriptions/${byoEventHubSub}/resourceGroups/${effEventHubRg}/providers/Microsoft.EventHub/namespaces/${effEventHubNamespace}') }
-            // Cloud-aware ARM base. Commercial → management.azure.com (default);
-            // GCC-High / IL5 → management.usgovcloudapi.net. Read by eventhubs-
-            // client, the eventhouse ingest/preview routes, adf/azure-sql clients.
-            { name: 'LOOM_ARM_ENDPOINT', value: boundary == 'GCC-High' || boundary == 'IL5' ? 'https://management.usgovcloudapi.net' : 'https://management.azure.com' }
+            // (LOOM_ARM_ENDPOINT for eventhubs-client / eventhouse ingest+preview /
+            // adf / azure-sql is emitted once above from effectiveArmEndpoint.)
             // ----------------------------------------------------------------
             // Service-navigator control-plane wiring (parity program #209).
             // Each editor's left-pane navigator (ADF Studio-style) reads these
@@ -2928,7 +2943,7 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Empty when neither → editor shows the honest config-gate.
             // ----------------------------------------------------------------
             { name: 'LOOM_AAS_SERVER_NAME', value: !empty(existingAasServerName) ? existingAasServerName : (aasEnabled ? aasServer!.outputs.serverName : '') }
-            { name: 'LOOM_AAS_REGION', value: !empty(existingAasServerName) ? (!empty(existingAasServerRegion) ? existingAasServerRegion : location) : (aasEnabled ? aasServer!.outputs.serverRegion : '') }
+            { name: 'LOOM_AAS_REGION', value: effectiveAasRegion }
             // (LOOM_BI_BACKEND / NEXT_PUBLIC_LOOM_BI_BACKEND are emitted ONCE
             // below from effectiveBiBackend — the prior duplicate pair here
             // defaulted to 'powerbi' when no AAS, a no-fabric-dependency
@@ -2941,19 +2956,15 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // set once above — shared with the eventhouse ingest route; the
             // workspaceMonitorEventHubNamespaceId param overrides it when provided.)
             // RTI — continuous-export destination. Points at the same DLZ ADLS
-            // account as LOOM_ADLS_ACCOUNT. Empty → the export-to-ADLS wizard
-            // shows a Fluent MessageBar naming LOOM_RTI_EXPORT_ADLS (no-vaporware.md).
-            { name: 'LOOM_RTI_EXPORT_ADLS',    value: loomStorageAccount }
+            // account as LOOM_ADLS_ACCOUNT. (LOOM_RTI_EXPORT_ADLS is emitted once
+            // above from effectiveRtiExportAdls — was duplicated here, rel-T31/B7.)
             // RTI — queued / one-click ingestion endpoint (Get Data wizard). For a
             // provisioned cluster this is the ARM dataIngestionUri; for a reused
             // cluster the ingest-<name> host is reconciled post-deploy alongside
             // LOOM_KUSTO_CLUSTER_URI by patch-navigator-env.sh. Empty when ADX off.
             { name: 'LOOM_KUSTO_DATA_INGESTION_URI', value: !empty(existingAdxClusterName) ? 'https://ingest-${existingAdxClusterName}.${location}.${kustoSuffix}' : (adxEnabled ? adxCluster!.outputs.clusterDataIngestionUri : '') }
-            // Sovereign-cloud ARM endpoint for Azure Monitor metrics calls (e.g.
-            // the Eventhouse Capacity/throttle panel). Empty = public cloud
-            // (https://management.azure.com). Operators in GCC-High / IL5 set
-            // 'https://management.usgovcloudapi.net'. Read by monitor-client.ts.
-            { name: 'LOOM_ARM_ENDPOINT',       value: '' }
+            // (LOOM_ARM_ENDPOINT for Azure Monitor metrics — Eventhouse Capacity/
+            // throttle panel — is emitted once above from effectiveArmEndpoint.)
             // AI Search navigator + the loom-items grounding index + help copilot.
             // RG/sub fall back to LOOM_AI_SEARCH_RG / LOOM_SUBSCRIPTION_ID.
             { name: 'LOOM_AI_SEARCH_SERVICE',  value: !empty(existingAiSearchService) ? existingAiSearchService : (aiSearchEnabled ? aiSearch!.outputs.searchName : '') }
@@ -3100,21 +3111,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DASHBOARD_BACKEND', value: loomBackends.dashboard }
             { name: 'LOOM_MIRROR_BACKEND', value: loomMirrorBackend }
             { name: 'LOOM_LAKEHOUSE_BACKEND', value: loomBackends.lakehouse }
-            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
-            // Azure Analysis Services DAX backend (dashboard Q&A / pinned-DAX
-            // tiles + DirectQuery source binder for semantic-model) — Azure-native,
-            // active when LOOM_SEMANTIC_BACKEND=analysis-services. Empty server
-            // honest-gates the DirectQuery source tab and the dashboard tile-query
-            // route; no Fabric / Power BI dependency on the default path.
-            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
-            { name: 'LOOM_AAS_REGION', value: empty(loomAasServer) ? '' : loomAasRegion }
-            { name: 'LOOM_AAS_MODEL', value: empty(loomAasServer) ? '' : loomAasModel }
+            // (LOOM_SEMANTIC_BACKEND + LOOM_AAS_SERVER / _REGION / _MODEL / _DATABASE
+            // are emitted once each above from the effective-* vars — rel-T31/B7.)
             // Analysis Services XMLA endpoint (semantic-model column metadata, PR #984).
             { name: 'LOOM_AAS_SERVER_URL', value: !empty(loomAasServerUrl) ? loomAasServerUrl : (deployAas ? analysisServices.outputs.aasServerUrl : '') }
-            // AAS XMLA measure persistence (loomSemanticBackend=analysis-services
-            // reads these). Empty string = unconfigured → aas-client surfaces an
-            // honest infra-gate and DAX validation still works on every backend.
-            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             { name: 'LOOM_DATAFLOW_BACKEND', value: loomBackends.dataflow }
             // BI backend for the semantic-model / report / dashboard / scorecard
             // editors + refresh routes. effectiveBiBackend = 'aas' when an AAS
@@ -3125,8 +3125,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // round-trip. Emitted ONCE. (no-fabric-dependency.md, B12/rel-T04)
             { name: 'LOOM_BI_BACKEND', value: effectiveBiBackend }
             { name: 'NEXT_PUBLIC_LOOM_BI_BACKEND', value: effectiveBiBackend }
-            { name: 'LOOM_AAS_SERVER', value: loomAasServer }
-            { name: 'LOOM_AAS_DATABASE', value: loomAasDatabase }
             // Data-products store backend (Wave 4 — Data Marketplace / F22).
             // Empty | 'cosmos' → the Azure-native Cosmos DataProductStore (no
             // Microsoft Fabric / Purview-unified-catalog dependency). Set to
@@ -3163,16 +3161,8 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           !empty(loomAasXmlaEndpoint) ? [
             { name: 'LOOM_AAS_XMLA_ENDPOINT', value: loomAasXmlaEndpoint }
           ] : [],
-          // Azure Analysis Services — opt-in semantic backend for writing
-          // calculation groups + field parameters to a LIVE model over XMLA.
-          // LOOM_AAS_SERVER / LOOM_AAS_DATABASE are emitted unconditionally
-          // above (shared with the Loom-native report renderer); only the
-          // resource group (ARM server picker) is conditional here. Absence
-          // keeps the AAS path honest-gated while the loom-native default
-          // (Cosmos + TMSL) still works.
-          !empty(loomAasResourceGroup) ? [
-            { name: 'LOOM_AAS_RG', value: loomAasResourceGroup }
-          ] : [],
+          // (LOOM_AAS_RG is emitted once above from effectiveAasRg — explicit
+          // loomAasResourceGroup wins, else the DLZ RG fallback. rel-T31/B7.)
           // Azure Maps subscription key — exposed to SPA as NEXT_PUBLIC_
           // so the MapEditor can use the static-map URL. AAD-auth path
           // doesn't need this. Only set when the maps account is wired.
@@ -3226,12 +3216,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_BILLING_SCOPE', value: subscription().id }
           ],
           // Analysis Services — RLS/OLS Security tab backend (Azure-native).
-          // LOOM_AAS_SERVER is the asazure://… data-plane name emitted by the
-          // AAS module. LOOM_AAS_CLIENT_ID is the SPN appId (not secret). The
-          // SPN secret is wired separately as the KV secretRef 'loom-aas-client-secret'
-          // → LOOM_AAS_CLIENT_SECRET (operator step, see v3-tenant-bootstrap.md).
+          // LOOM_AAS_SERVER (the asazure://… data-plane name) is emitted once
+          // above from effectiveAasServer. LOOM_AAS_CLIENT_ID is the SPN appId
+          // (not secret); the SPN secret is wired separately as the KV secretRef
+          // 'loom-aas-client-secret' → LOOM_AAS_CLIENT_SECRET (operator step,
+          // see v3-tenant-bootstrap.md). Only the SPN identity is conditional here.
           aasEnabled ? [
-            { name: 'LOOM_AAS_SERVER', value: aas.outputs.serverFullName }
             { name: 'LOOM_AAS_TENANT_ID', value: tenant().tenantId }
             { name: 'LOOM_AAS_CLIENT_ID', value: aasSpnClientId }
           ] : [],
@@ -3434,13 +3424,13 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_MIP_ENABLED', value: 'true' }
           ] : [],
           // SCC labels sidecar wiring — enables label/policy CRUD (create/edit/
-          // delete) + policy reads. Endpoint + host key come from the deployed
-          // scc-labels Function (only present when loomMipAdminEnabled). When
-          // unset the Console renders the honest mip_admin_not_configured gate.
+          // delete) + policy reads. The MIP and DLP admin surfaces share the
+          // SAME scc-labels Function endpoint + host key, so those two env vars
+          // are emitted EXACTLY ONCE below under a combined gate; the per-surface
+          // flags stay separate. When neither admin is enabled the Console
+          // renders the honest *_admin_not_configured gate. (rel-T31/B7.)
           loomMipAdminEnabled ? [
             { name: 'LOOM_MIP_ADMIN_ENABLED', value: 'true' }
-            { name: 'LOOM_SCC_LABELS_ENDPOINT', value: sccLabels.outputs.endpoint }
-            { name: 'LOOM_SCC_LABELS_KEY', value: sccLabels.outputs.functionKey }
           ] : [],
           // Sovereign Graph base for MIP — GCC-High / IL5 use graph.microsoft.us.
           // mip-graph-client reads LOOM_MIP_GRAPH_BASE (defaults to graph.microsoft.com).
@@ -3464,18 +3454,21 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_DLP_ENABLED', value: 'true' }
           ] : [],
           // DLP policy CRUD via the SCC PowerShell sidecar (Graph has no DLP
-          // write API). Reuses the same scc-labels Function app endpoint+key as
-          // label CRUD; when loomMipAdminEnabled already wired them, only the
-          // LOOM_DLP_ADMIN_ENABLED flag is added to avoid duplicate env keys.
-          // When unset the Console renders the honest dlp_admin_not_configured
-          // gate while DLP reads / alerts / Restrict-access keep working.
-          loomDlpAdminEnabled ? concat(
-            [ { name: 'LOOM_DLP_ADMIN_ENABLED', value: 'true' } ],
-            loomMipAdminEnabled ? [] : [
-              { name: 'LOOM_SCC_LABELS_ENDPOINT', value: sccLabels.outputs.endpoint }
-              { name: 'LOOM_SCC_LABELS_KEY', value: sccLabels.outputs.functionKey }
-            ]
-          ) : [],
+          // write API). Reuses the same scc-labels Function endpoint+key as label
+          // CRUD (emitted once below under the combined gate). Only the
+          // LOOM_DLP_ADMIN_ENABLED flag is surface-specific here. When unset the
+          // Console renders the honest dlp_admin_not_configured gate while DLP
+          // reads / alerts / Restrict-access keep working.
+          loomDlpAdminEnabled ? [
+            { name: 'LOOM_DLP_ADMIN_ENABLED', value: 'true' }
+          ] : [],
+          // SCC labels Function endpoint + host key — shared by the MIP and DLP
+          // admin surfaces. Emitted EXACTLY ONCE when either admin is enabled so
+          // a redeploy can never duplicate these env keys (rel-T31/B7).
+          (loomMipAdminEnabled || loomDlpAdminEnabled) ? [
+            { name: 'LOOM_SCC_LABELS_ENDPOINT', value: sccLabels.outputs.endpoint }
+            { name: 'LOOM_SCC_LABELS_KEY', value: sccLabels.outputs.functionKey }
+          ] : [],
           // Govern → Admin view (F2) "View more" embedded report env. The
           // embed BFF gates honestly when LOOM_REPORT_KIND is empty; when set,
           // the matching report/dashboard env vars must also be present.
@@ -3487,7 +3480,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_GOVERN_PBI_REPORT_ID', value: loomGovernPbiReportId }
           ] : [],
           (loomReportKind == 'grafana' && managedGrafanaEnabled) ? [
-            { name: 'LOOM_GRAFANA_ENDPOINT', value: grafana.properties.endpoint }
             { name: 'LOOM_GRAFANA_DASHBOARD_UID', value: loomGrafanaDashboardUid }
           ] : (loomReportKind == 'grafana' && !empty(loomGrafanaDashboardUid) ? [
             { name: 'LOOM_GRAFANA_DASHBOARD_UID', value: loomGrafanaDashboardUid }
@@ -3507,10 +3499,11 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           (loomUsageReportKind == 'grafana' && !empty(loomGrafanaUsageDashboardUid)) ? [
             { name: 'LOOM_GRAFANA_USAGE_DASHBOARD_UID', value: loomGrafanaUsageDashboardUid }
           ] : [],
-          // Ensure LOOM_GRAFANA_ENDPOINT is wired for the Usage grafana embed
-          // even when the Govern report doesn't also use grafana (avoid a
-          // duplicate env name when both do).
-          (loomUsageReportKind == 'grafana' && managedGrafanaEnabled && loomReportKind != 'grafana') ? [
+          // LOOM_GRAFANA_ENDPOINT is emitted EXACTLY ONCE here for whichever
+          // grafana embed (Govern report and/or Usage analytics) is active — a
+          // single combined gate so a redeploy can never duplicate the env key
+          // regardless of which surface uses grafana (rel-T31/B7).
+          (managedGrafanaEnabled && (loomReportKind == 'grafana' || loomUsageReportKind == 'grafana')) ? [
             { name: 'LOOM_GRAFANA_ENDPOINT', value: grafana.properties.endpoint }
           ] : [],
           // F6 item-level permissions: the Fabric /share mirror is strictly
@@ -3535,13 +3528,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           loomPowerBiAdminLabels ? [
             { name: 'LOOM_POWERBI_ADMIN_LABELS', value: 'true' }
           ] : [],
-          // XMLA endpoint for semantic-model authoring that needs the XMLA write
-          // surface (Automatic aggregations). Azure-native default = Azure
-          // Analysis Services; Premium/Fabric XMLA is opt-in by URL. Empty →
-          // the Aggregations tab renders but honest-gates (no Fabric dependency).
-          !empty(loomPowerbiXmlaEndpoint) ? [
-            { name: 'LOOM_POWERBI_XMLA_ENDPOINT', value: loomPowerbiXmlaEndpoint }
-          ] : [],
+          // (LOOM_POWERBI_XMLA_ENDPOINT — the opt-in Premium/Fabric XMLA write
+          // surface for semantic-model authoring / Automatic aggregations — is
+          // emitted once above under the same !empty(loomPowerbiXmlaEndpoint)
+          // gate; the duplicate emission here was a redeploy-order race. rel-T31/B7.)
           // Identity Picker (Entra user/group/SPN search + transitive nested
           // groups) — gated on the Console UAMI's Graph User.Read.All +
           // Group.Read.All + Application.Read.All grants. When false the BFF
@@ -3691,13 +3681,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
             { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
             { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
-            // Semantic-model backend + opt-in Azure Analysis Services composite
-            // host. The semantic-model item defaults to the Loom-native tabular
-            // layer (no AAS needed); these only populate when aasEnabled. The
-            // per-table storage-mode picker builds composite TMSL regardless.
-            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
-            { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
-            { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
+            // (LOOM_SEMANTIC_BACKEND / LOOM_AAS_ENDPOINT / LOOM_AAS_DATABASE are
+            // emitted once each in the base env above from the effective-* vars —
+            // the single AAS server owner is aas-server.bicep. rel-T31/B7.)
             // Dataverse auth — UAMIs can't be Dataverse Application Users
             // (Microsoft platform restriction), so re-use the MSAL Web App
             // SP credentials. The SP must be registered as a Dataverse
@@ -3872,9 +3858,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // synapse.bicep loomOnelakeSecurityEnabled). Fabric sync is opt-in.
             { name: 'LOOM_ONELAKE_SECURITY_ACL', value: string(loomOnelakeSecurityEnabled) }
             { name: 'LOOM_FABRIC_SECURITY_ENABLED', value: string(loomFabricSecurityEnabled) }
-            { name: 'LOOM_SEMANTIC_BACKEND', value: loomSemanticBackend }
-            { name: 'LOOM_AAS_ENDPOINT', value: aasEnabled ? aas!.outputs.serverFullName : '' }
-            { name: 'LOOM_AAS_DATABASE', value: aasEnabled ? aas!.outputs.database : '' }
+            // (LOOM_SEMANTIC_BACKEND / LOOM_AAS_ENDPOINT / LOOM_AAS_DATABASE are
+            // emitted once each in the base env above from the effective-* vars —
+            // the single AAS server owner is aas-server.bicep. rel-T31/B7.)
             // Fabric IQ unified MCP tool surface (/api/iq/mcp). Off → the
             // token (external-agent) path is rejected; Console-session callers
             // always work. On → Agent 365 / Foundry can ground on ontology +
@@ -4089,7 +4075,9 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
           { name: 'COSMOS_ENDPOINT', value: loomCosmosEndpointVal }
           { name: 'COSMOS_DATABASE', value: 'direct-lake-config' }
           { name: 'COSMOS_CONTAINER', value: 'refresh-policies' }
-          { name: 'AZURE_CLIENT_ID', value: identity.outputs.uamiDirectLakeClientId }
+          // (AZURE_CLIENT_ID is emitted once by app-deployments.bicep's common
+          // set as app.uamiClientId = uamiDirectLakeClientId — the shim's own
+          // duplicate emission was removed to keep the env deterministic. rel-T31/B7.)
           // Service Bus queue the Event Grid system topic delivers _delta_log
           // BlobCreated events to. Empty when the shim is disabled → the
           // BackgroundService idles (honest, see DeltaLogEventHandler).
