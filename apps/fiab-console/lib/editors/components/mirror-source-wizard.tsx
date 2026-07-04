@@ -36,6 +36,7 @@ import {
 } from '@fluentui/react-icons';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
+import { useSharedEditorStyles } from '../shared-styles';
 
 export interface MirrorTableSpec { schema: string; table: string }
 
@@ -94,10 +95,8 @@ const SOURCE_SYNC_NOTE: Record<string, string> = {
   GenericMirror: 'Open mirroring — your producer pushes Parquet to the landing zone; a Spark job merges it into managed Delta.',
 };
 
-const useStyles = makeStyles({
-  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
+const useLocalStyles = makeStyles({
   tableLoading: { display: 'flex', alignItems: 'center', padding: tokens.spacingVerticalM, marginTop: tokens.spacingVerticalS },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   sourceGrid: { marginTop: tokens.spacingVerticalS },
   card: {
     position: 'relative',
@@ -140,6 +139,12 @@ const useStyles = makeStyles({
   },
   syncBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS, flexGrow: 1, minWidth: 0 },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 function toB64(s: string): string {
   return typeof window === 'undefined' ? Buffer.from(s, 'utf-8').toString('base64')

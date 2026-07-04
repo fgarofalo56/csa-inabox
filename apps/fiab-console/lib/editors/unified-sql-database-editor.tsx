@@ -65,6 +65,7 @@ import { SqlPerformanceDashboard } from '@/lib/editors/components/sql-performanc
 import { EmptyState } from '@/lib/components/empty-state';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
+import { useSharedEditorStyles } from './shared-styles';
 
 // ── Real Azure database option sets (parity with the portal create blades) ──
 const AZURE_REGIONS = [
@@ -129,13 +130,12 @@ const PG_SKUS = [
 //    (10k cap, Messages tab, multi-result-set, Copy/Download incl. XLSX,
 //    in-grid search) — shared by the Query and Schema tabs below. ──
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   resultBox: { borderTop: `1px solid ${tokens.colorNeutralStroke2}`, paddingTop: tokens.spacingVerticalM, minHeight: '160px' },
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS, flexWrap: 'wrap' },
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   treePad: { padding: tokens.spacingVerticalS, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   formRow: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   formGrid: { display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: tokens.spacingHorizontalM },
@@ -212,6 +212,12 @@ const useStyles = makeStyles({
   connCode: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase100, whiteSpace: 'pre-wrap', wordBreak: 'break-all', margin: 0, color: tokens.colorNeutralForeground1 },
   connCopyBtn: { position: 'absolute', top: tokens.spacingVerticalXS, right: tokens.spacingHorizontalXS },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // ---- content-type guarded fetch ----------------------------------------
 async function fetchJson(input: string, init?: RequestInit): Promise<any> {

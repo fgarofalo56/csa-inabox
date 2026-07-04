@@ -68,8 +68,9 @@ import {
 } from '../databricks-notebook-source';
 import { QueryParamsBar, substituteDbx, type QueryParam } from '../components/query-params';
 import { ResultVisualize } from '../components/result-visualize';
+import { useSharedEditorStyles } from '../shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0, flex: 1 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', flexWrap: 'wrap' },
   editor: {
@@ -83,7 +84,6 @@ const useStyles = makeStyles({
   resultMeta: { display: 'flex', gap: tokens.spacingHorizontalM, alignItems: 'center', marginBottom: tokens.spacingVerticalS },
   resultActions: { marginLeft: 'auto', display: 'flex', gap: tokens.spacingHorizontalXS },
   tableWrap: { overflow: 'auto', maxHeight: '360px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
-  cell: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'nowrap' },
   treePad: { padding: tokens.spacingHorizontalS },
   treeRow: {
     display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, padding: `3px ${tokens.spacingHorizontalXS}`, borderRadius: tokens.borderRadiusMedium,
@@ -141,6 +141,12 @@ const useStyles = makeStyles({
     overflow: 'hidden', clip: 'rect(0,0,0,0)', whiteSpace: 'nowrap', border: 0,
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 interface QueryResponse {
   ok: boolean;

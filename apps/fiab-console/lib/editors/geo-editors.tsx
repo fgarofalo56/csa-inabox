@@ -41,6 +41,7 @@ import { MonacoTextarea } from '@/lib/components/editor/monaco-textarea';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { splitAdlsPath, joinAdlsPath, computeGeoBbox, bboxToZoom, bboxLabel, geoFeaturesFromInspectRows } from './_family-utils';
 import { GeoJsonMap } from '@/lib/components/graph/geojson-map';
+import { useSharedEditorStyles } from './shared-styles';
 
 /**
  * v3.28 — Phase 4.5 fix: GeoMap / GeoDataset / GeoPipeline used to render
@@ -141,8 +142,7 @@ function GeoSaveBar({ saving, dirty, savedAt, error, onSave }: {
   );
 }
 
-const useStyles = makeStyles({
-  pad: { padding: tokens.spacingVerticalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+const useLocalStyles = makeStyles({
   treePad: { padding: tokens.spacingHorizontalM, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalS },
   field: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
   codeBlock: {
@@ -197,6 +197,12 @@ const useStyles = makeStyles({
     fontFamily: 'Consolas, monospace', wordBreak: 'break-all', overflowWrap: 'anywhere',
   },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 const SAMPLE_GEO_KQL = `// Geoanalytics — KQL with built-in geo functions
 // Find points within 10km of a center; resolve to H3 cell at resolution 7.

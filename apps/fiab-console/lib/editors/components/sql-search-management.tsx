@@ -24,12 +24,12 @@ import {
   Add20Regular, Delete20Regular, ArrowSync20Regular, DocumentSearch20Regular,
   Sparkle20Regular, Play20Regular,
 } from '@fluentui/react-icons';
+import { useSharedEditorStyles } from '../shared-styles';
 
-const useStyles = makeStyles({
+const useLocalStyles = makeStyles({
   panel: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, minHeight: 0 },
   toolbar: { display: 'flex', gap: tokens.spacingHorizontalS, alignItems: 'center', flexWrap: 'wrap' },
   spacer: { marginLeft: 'auto' },
-  tableWrap: { overflow: 'auto', maxHeight: '320px', border: `1px solid ${tokens.colorNeutralStroke2}`, borderRadius: tokens.borderRadiusMedium },
   code: { fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200 },
   ddlPreview: {
     fontFamily: 'Consolas, monospace', fontSize: tokens.fontSizeBase200, whiteSpace: 'pre-wrap',
@@ -45,6 +45,12 @@ const useStyles = makeStyles({
   dialogWide: { maxWidth: '640px', width: '92vw' },
   dialogMed: { maxWidth: '560px', width: '92vw' },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 // Common LCIDs for the FTS column-language dropdown (grounded in sys.fulltext_languages).
 const FTS_LANGUAGES = [

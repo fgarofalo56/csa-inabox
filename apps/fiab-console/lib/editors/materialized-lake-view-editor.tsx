@@ -52,9 +52,9 @@ import {
   MLV_CONTAINERS, buildCreateMlvSql, deriveSources, validateMlvSpec,
   type MlvSpec, type MlvLanguage, type MlvContainer, type MlvConstraint,
 } from '@/lib/azure/materialized-lake-view-model';
+import { useSharedEditorStyles } from './shared-styles';
 
-const useStyles = makeStyles({
-  tabBar: { padding: `${tokens.spacingVerticalS} ${tokens.spacingHorizontalL} 0`, borderBottom: `1px solid ${tokens.colorNeutralStroke2}` },
+const useLocalStyles = makeStyles({
   tabBody: { padding: tokens.spacingVerticalXXL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM, maxWidth: '1000px', minWidth: 0 },
   row: { display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap' },
   field: { flex: 1, minWidth: '180px', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS },
@@ -72,6 +72,12 @@ const useStyles = makeStyles({
   chip: { padding: `${tokens.spacingVerticalXXS} ${tokens.spacingHorizontalS}`, borderRadius: tokens.borderRadiusCircular, backgroundColor: tokens.colorNeutralBackground3, fontSize: tokens.fontSizeBase200, overflowWrap: 'anywhere', minWidth: 0, maxWidth: '100%' },
   statusBar: { overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 },
 });
+
+function useStyles() {
+  const shared = useSharedEditorStyles();
+  const local = useLocalStyles();
+  return useMemo(() => ({ ...shared, ...local }), [shared, local]);
+}
 
 const ACTIVE_STATES = new Set(['starting', 'running', 'busy', 'not_started', 'recovering']);
 
