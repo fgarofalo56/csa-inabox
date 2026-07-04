@@ -21,7 +21,21 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-07-03 (public-release Wave 2 LANDED + live-verified)
+## Current Session — 2026-07-03/04 (public-release Wave 3 LANDED + live-verified)
+
+**Focus:** Wave-3 IA / navigation consolidation (rel-T45–T54), 2-round fan-out.
+
+**Merged (7 PRs), rolled to live centralus (revision loom-console--0000194, image a9a3b3f4):**
+- Round 1: #1629 RTI→one tabbed hub + orphan/404 fixes (T46/T51) · #1630 single rail catalog + governed-inventory rename (T47) · #1632 lineage unified on LineageCanvas + scope switch + label fix (T48) · #1633 workspace switcher + breadcrumb + "+Create" (T49/T50) · #1631 single shell admin probe + hide Admin/Setup/cross-plane for non-admins (T53/T54)
+- Round 2: #1635 rail grouped 21-flat → 7 labeled sections + demote thin pages + "Warp"→"Orchestration (Warp)" (T45/T52)
+
+**Live receipts PASS (HTTP redirect probes):** /activator + /activator-hub → 307 /realtime-hub?tab=activator; /experience* → 307 real home (no bare 404); /new, /realtime-hub, /onelake → 200. Grouped-rail visual + admin-gating are client-rendered (passed next-build + vitest CI; browser walk = quick operator confirm, MCP disconnected this session).
+
+**KEY:** NAV_ITEMS is single-source (rail + Copilot navigate allow-list + command palette) — restructuring into NAV_SECTIONS kept a flat derived export so nothing drifts. Merge-train: all 5 Round-1 PRs touched nav-items.ts/governance-shell/left-nav/app-shell — sequenced with refresh + UNION conflict resolution.
+
+---
+
+## Session — 2026-07-03 (public-release Wave 2 LANDED + live-verified)
 
 **Focus:** Wave-2 deployment-truth + product-truth (rel-T31–T44) of the public-release PRP.
 
