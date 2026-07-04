@@ -21,7 +21,24 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-07-03 (public-release Wave 1 + 1b LANDED + live-verified)
+## Current Session — 2026-07-03 (public-release Wave 2 LANDED + live-verified)
+
+**Focus:** Wave-2 deployment-truth + product-truth (rel-T31–T44) of the public-release PRP.
+
+**Merged (5 PRs), rolled to live centralus (revision loom-console--0000193, image 2037aa5b):**
+- #1623 teardown purges soft-deletes + Gov private-DNS zones + scoped KV-flip (T35/T36/T38, B9/B10)
+- #1624 truthed DR posture + Cosmos PITR runbook + self-update compat manifest / `LOOM_INFRA_VERSION` (T40/T41, B14/B15)
+- #1625 setup-wizard quota preflight + deploy-progress persistence (T42/T43)
+- #1626 Gov post-deploy bootstrap (`workflow_call` + `boundary` + `az cloud set`) + deploy→bootstrap chaining + honest two-phase from-scratch path (T32/T34/T37, B8)
+- #1627 single AAS owner + branch-aware dup-env guard (13 dups fixed) + bicep-sync prune + eventstream env-name (T31/T33/T39/T44, B7)
+
+**Live receipts PASS:** T41 `/api/admin/updates/apply` → real preflight honest-gate (`images-not-published`); T42 `/api/setup/quota-preflight` → real Microsoft.Compute usages. Deploy-time items (AAS/teardown/GovDNS/bootstrap) = bicep-build + guards-green; real proof on operator teardown→redeploy + Gov deploy.
+
+**KEY:** AAS was double-declared (S0+S1, non-deterministic) → single owner. Dup-env guard must be branch-aware. T37: honest two-phase path documented (a single fresh-ACR deploy can't come up — not a bug). ONE admin-plane bicep redeploy now validates most W1+W2 deploy-time items at once (WAF, per-service tokens, seed secrets, AAS-single-owner, Gov DNS, purge-protection boundary, LOOM_INFRA_VERSION).
+
+---
+
+## Session — 2026-07-03 (public-release Wave 1 + 1b LANDED + live-verified)
 
 **Focus:** Close Wave-1 (security + access-control) + Wave-1b (testing/CI) of `PRPs/active/public-release/PRP.md`.
 

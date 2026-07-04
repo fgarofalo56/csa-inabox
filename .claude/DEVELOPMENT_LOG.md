@@ -1354,3 +1354,9 @@ Bicep modules (flagged as "most critical infrastructure gap").
 - Rolled centralus loom-console rev 0000192 (image 6bef2e21); live receipts PASS (two-user ACL, feedback throttle, T12 params on wire).
 - Branch protection: guardrails + vitest(node 20) now required checks + 1 review.
 - Owed: admin-plane bicep redeploy (B3 verify + T10 WAF activation), tid backfill, tenant purge --apply.
+
+## 2026-07-03 — Public-release Wave 2 (deployment-truth) landed + live-verified
+
+- Merged 5 PRs (#1623-#1627): T31-T44 deployment-truth. AAS single-owner (was double-declared S0+S1), branch-aware dup-env guard (13 fixed), teardown soft-delete purges, Gov private-DNS zones, Gov bootstrap workflow_call, truthed DR + Cosmos PITR runbook, compat-manifest update gate, setup quota preflight + progress persistence.
+- Rolled centralus rev 0000193 (image 2037aa5b); T41 updates gate + T42 quota preflight live-verified.
+- ONE admin-plane bicep redeploy pending validates most W1+W2 deploy-time items (WAF, tokens, AAS-single-owner, Gov DNS, LOOM_INFRA_VERSION).
