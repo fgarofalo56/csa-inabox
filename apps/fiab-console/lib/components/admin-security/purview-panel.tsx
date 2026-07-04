@@ -209,12 +209,10 @@ function PurviewStatusBanner() {
 
 export function PurviewPanel() {
   const s = useStyles();
-  const { confirm, dialog: confirmDialog } = useConfirm();
   const [tab, setTab] = useState<SubTab>('sources');
 
   return (
     <div>
-      {confirmDialog}
       <PurviewStatusBanner />
       <TabList
         className={s.subTabs}
@@ -255,6 +253,7 @@ interface SourcesPayload {
 
 function DataSourcesSection() {
   const s = useStyles();
+  const { confirm, dialog: confirmDialog } = useConfirm();
   const [state, setState] = useState<ApiState<SourcesPayload>>(emptyState());
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -307,6 +306,7 @@ function DataSourcesSection() {
 
   return (
     <div className={s.section}>
+      {confirmDialog}
       <div className={s.toolbar}>
         <Subtitle2 className={s.grow}>Registered data sources</Subtitle2>
         <Input
