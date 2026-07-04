@@ -4397,7 +4397,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
 
   return (
     <>
-      <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+      <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty}
         leftPanel={leftPanel} main={main} rightPanel={rightPanel} rightPanelLabel="Build" />
 
       {/* Data source picker (semantic-model default · direct-query · AAS) */}

@@ -39,10 +39,10 @@ describe('use-case "Install live example" wiring', () => {
     expect(APPID_USE_CASES.length).toBeGreaterThan(0);
   });
 
-  it('every authored appId resolves in BOTH the bundle REGISTRY and CATALOG_META', () => {
+  it('every authored appId resolves in BOTH the bundle REGISTRY and CATALOG_META', async () => {
     for (const u of APPID_USE_CASES) {
       const appId = u.appId!;
-      const bundle = getBundle(appId);
+      const bundle = await getBundle(appId);
       expect(
         bundle,
         `use case "${u.id}" names appId "${appId}" but no bundle is registered in content-bundles/index.ts — the Install button would silently vanish (no-vaporware)`,

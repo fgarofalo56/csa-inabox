@@ -201,6 +201,7 @@ export function SourceTab({ activity, datasets, linkedServices, gateError, param
               onChange={(_, d) => setAddl(addl.map((c, j) => j === i ? { ...c, value: d.value } : c))} />
           </Field>
           <Button appearance="subtle" icon={<Delete20Regular />}
+            aria-label={col.name ? `Remove additional column ${col.name}` : 'Remove additional column'}
             onClick={() => setAddl(addl.filter((_, j) => j !== i))} />
         </div>
       ))}

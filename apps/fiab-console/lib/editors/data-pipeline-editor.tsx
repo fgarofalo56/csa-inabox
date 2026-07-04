@@ -1195,7 +1195,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   }
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty}
       rightPanelLabel="Copilot"
       rightPanel={
         // A12 — docked Pipeline Copilot. ItemEditorChrome renders this in a

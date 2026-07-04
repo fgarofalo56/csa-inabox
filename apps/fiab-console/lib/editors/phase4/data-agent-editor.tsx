@@ -32,6 +32,7 @@ import {
   Cube20Regular, Calculator20Regular, Ruler20Regular, Layer20Regular,
   ChevronRight16Regular, ChevronDown16Regular, ChevronLeft16Regular,
   Add16Regular, Edit16Regular, CheckmarkCircle20Regular, ArrowUndo16Regular,
+  Wrench16Regular,
 } from '@fluentui/react-icons';
 import { useQuery } from '@tanstack/react-query';
 import { getItem } from '@/lib/api/workspaces';
@@ -799,7 +800,7 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                     {m.role === 'assistant' && !m.error && tools.length > 0 && (
                       <details style={{ marginTop: tokens.spacingVerticalXXS }} open={tools.length > 1}>
                         <summary style={{ cursor: 'pointer', fontSize: tokens.fontSizeBase200, color: tokens.colorNeutralForeground2 }}>
-                          🛠 Tools used ({tools.length})
+                          <Wrench16Regular style={{ verticalAlign: 'text-bottom' }} /> Tools used ({tools.length})
                         </summary>
                         {tools.map((t, ti) => (
                           <div key={ti} style={{ marginTop: tokens.spacingVerticalXS }}>

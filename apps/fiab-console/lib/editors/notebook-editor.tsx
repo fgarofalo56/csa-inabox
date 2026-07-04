@@ -40,6 +40,7 @@ import {
 } from '@/lib/api/workspaces';
 import { buildTree, countDescendants, type FolderNode, type TreeItemSort } from '@/lib/panes/folders';
 import { ItemEditorChrome } from './item-editor-chrome';
+import { useAutosave, AutosaveIndicator } from './use-autosave';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { CodeCell } from '@/lib/components/notebook/code-cell';
@@ -1015,6 +1016,16 @@ export function NotebookEditor({ item, id }: Props) {
     } finally { setSaving(false); }
   }, [workspaceId, notebookId, cells, defaultLang, attachedSources, attachedAmlEnv, customLibraries]);
 
+  // Debounced autosave (rel-T70): once the notebook is loaded and the user has
+  // made an edit (dirty), persist via the EXISTING save() after ~2.5s of quiet.
+  // Guarded to a real, loaded notebook with at least one cell so an empty/
+  // unmodified draft is never autosaved.
+  const autosaveStatus = useAutosave({
+    dirty,
+    enabled: !!notebookId && !!workspaceId && cells.length > 0,
+    onSave: save,
+  });
+
   // Ctrl+S / Cmd+S to save when there are unsaved changes.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1934,7 +1945,7 @@ export function NotebookEditor({ item, id }: Props) {
   ]);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={ribbon}
+    <ItemEditorChrome item={item} id={id} ribbon={ribbon} dirty={dirty}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 className={s.sectionHeader} style={{ marginBottom: tokens.spacingVerticalS }}>
@@ -2728,6 +2739,7 @@ export function NotebookEditor({ item, id }: Props) {
             <>
               <div style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingVerticalS }}>
                 {dirty && <Badge appearance="outline" color="warning">unsaved</Badge>}
+                <AutosaveIndicator status={autosaveStatus} />
                 <Caption1>{cells.length} cell{cells.length === 1 ? '' : 's'} · default lang <code>{defaultLang}</code></Caption1>
                 <div style={{ flex: 1 }} />
                 <Select size="small" value={defaultLang} onChange={(_, d) => { setDefaultLang(d.value as NotebookCellLang); setDirty(true); }} aria-label="Default cell language">

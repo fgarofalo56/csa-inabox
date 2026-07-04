@@ -45,7 +45,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
-  return NextResponse.json({ ok: true, notebooks: listNotebookImports() });
+  return NextResponse.json({ ok: true, notebooks: await listNotebookImports() });
 }
 
 export async function POST(req: NextRequest) {
@@ -73,13 +73,13 @@ export async function POST(req: NextRequest) {
     throw e;
   }
 
-  const bundle = getBundle(bundleId);
+  const bundle = await getBundle(bundleId);
   if (!bundle) return NextResponse.json({ ok: false, error: `bundle '${bundleId}' not found` }, { status: 404 });
 
   // Resolve the exact prebuilt notebook (no first-of-type fallback — the
   // wizard always passes the displayName when a bundle has more than one).
-  const candidates = getBundleNotebooks(bundleId, notebookDisplayName);
-  const chosen = candidates[0] || getBundleNotebooks(bundleId)[0];
+  const candidates = await getBundleNotebooks(bundleId, notebookDisplayName);
+  const chosen = candidates[0] || (await getBundleNotebooks(bundleId))[0];
   if (!chosen) {
     return NextResponse.json(
       { ok: false, error: `bundle '${bundleId}' has no prebuilt notebook` },
@@ -123,7 +123,7 @@ export async function POST(req: NextRequest) {
   //    Gen2 container (no Fabric). Without sample data, only the notebook is
   //    provisioned — nothing touches ADLS.
   if (withSampleData) {
-    for (const lh of getSampleDataLakehouses(bundleId)) {
+    for (const lh of await getSampleDataLakehouses(bundleId)) {
       const created = await createOwnedItem(s, lh.itemType, {
         workspaceId,
         displayName: lh.displayName,

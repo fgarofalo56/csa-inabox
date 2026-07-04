@@ -38,6 +38,7 @@ import {
   Play20Regular, Add20Regular,
 } from '@fluentui/react-icons';
 import { ItemEditorChrome } from '../item-editor-chrome';
+import { useAutosave, AutosaveIndicator } from '../use-autosave';
 import { PowerBIEmbedFrame } from '@/lib/components/embed/powerbi-embed';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -202,6 +203,15 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
     finally { setSaving(false); }
   }, [id, workspaceId, dashId, loomTiles, layout]);
 
+  // Debounced autosave (rel-T70): persist the Loom overlay (tiles + grid layout)
+  // via the EXISTING saveOverlay() after ~2.5s of quiet once the canvas is dirty.
+  // Guarded to a canvas that actually has tiles so an empty overlay isn't saved.
+  const autosaveStatus = useAutosave({
+    dirty,
+    enabled: (loomTiles.length + tiles.length) > 0,
+    onSave: saveOverlay,
+  });
+
   const addLoomTile = useCallback((tile: LoomTile) => {
     setLoomTiles((prev) => [...prev, tile]);
     setDirty(true);
@@ -261,7 +271,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const fsTile = loomTiles.find((t) => t.id === fullscreenTile);
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={dashRibbon}
+    <ItemEditorChrome item={item} id={id} ribbon={dashRibbon} dirty={dirty}
       leftPanel={
         <div className={s.treePad}>
           <Subtitle2 style={{ marginBottom: tokens.spacingVerticalS}}>Power BI dashboards</Subtitle2>
@@ -291,6 +301,8 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
                 </div>
               </Tooltip>
             )}
+            <div style={{ flex: 1 }} />
+            <AutosaveIndicator status={autosaveStatus} />
           </div>
           {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
           {saveErr && <MessageBar intent="error"><MessageBarBody><MessageBarTitle>Save failed</MessageBarTitle>{saveErr}</MessageBarBody></MessageBar>}

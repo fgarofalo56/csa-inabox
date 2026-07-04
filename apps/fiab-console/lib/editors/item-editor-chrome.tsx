@@ -22,6 +22,7 @@ import { ThreadMenu } from '@/lib/components/thread/thread-menu';
 import { BundleContentBar } from '@/lib/components/bundle-content-bar';
 import { ShareItemDialog } from '@/lib/dialogs/share-item-dialog';
 import { EndorsementControl } from '@/lib/editors/endorsement-control';
+import { useUnsavedChangesGuard } from '@/lib/editors/use-unsaved-changes-guard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 
 const useStyles = makeStyles({
@@ -103,10 +104,21 @@ interface Props {
    * pass e.g. "Properties" for an attribute/details rail.
    */
   rightPanelLabel?: string;
+  /**
+   * Whether the editor has unsaved in-memory changes. When true, ItemEditorChrome
+   * arms the shared unsaved-changes guard (native beforeunload prompt on hard
+   * navigation + a confirm dialog on internal App Router link clicks) so work is
+   * never silently lost (rel-T70). Editors that persist incrementally (no draft
+   * state) can omit it.
+   */
+  dirty?: boolean;
 }
 
-export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot' }: Props) {
+export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false }: Props) {
   const styles = useStyles();
+  // Shared unsaved-changes guard — one wiring covers every editor that threads
+  // a `dirty` signal. Returns the confirm dialog (or null) to render below.
+  const unsavedGuard = useUnsavedChangesGuard(dirty);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   // Share dialog (Fabric "Grant people access") — reachable from EVERY editor's
   // header, not just the standalone Manage-permissions page.
@@ -204,6 +216,9 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
       <div className={styles.layout}>
         <Ribbon tabs={ribbon} />
         <BundleContentBar itemType={item.slug} itemId={id} />
+        {/* Unsaved-changes confirm dialog (rel-T70) — rendered when a guarded
+            internal navigation is attempted while the editor is dirty. */}
+        {unsavedGuard}
         {!isNew && (
           <ShareItemDialog
             open={shareOpen}

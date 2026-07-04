@@ -28,7 +28,7 @@ import {
   Badge, Caption1, Body1, Subtitle2, Spinner,
   makeStyles, tokens,
 } from '@fluentui/react-components';
-import { Send24Regular, Sparkle20Regular, PlugConnected20Regular } from '@fluentui/react-icons';
+import { Send24Regular, Sparkle20Regular, PlugConnected20Regular, Warning16Regular, Checkmark16Regular, Comment16Regular } from '@fluentui/react-icons';
 import type { PipelineSpec } from '@/lib/components/pipeline/types';
 
 interface CopilotUsage { promptTokens: number; completionTokens: number; totalTokens: number; aoaiCalls: number; toolCalls: number; }
@@ -247,11 +247,11 @@ export function PipelineCopilotPane({ apiBase, bound, onApplySpec }: PipelineCop
               if (step.kind === 'tool_call') return <div key={j} className={s.stepRow}>↪ calling <strong>{step.name}</strong>…</div>;
               if (step.kind === 'tool_result') return (
                 <div key={j} className={s.stepRow}>
-                  {step.error ? '⚠' : '✓'} {step.name} <span>({step.durationMs}ms)</span>
+                  {step.error ? <Warning16Regular style={{ verticalAlign: 'text-bottom', color: tokens.colorPaletteRedForeground1 }} /> : <Checkmark16Regular style={{ verticalAlign: 'text-bottom', color: tokens.colorPaletteGreenForeground1 }} />} {step.name} <span>({step.durationMs}ms)</span>
                   {step.error && <span style={{ color: tokens.colorPaletteRedForeground1 }}> — {step.error}</span>}
                 </div>
               );
-              if (step.kind === 'thought') return <div key={j} className={s.stepRow}>💭 {step.content.slice(0, 120)}</div>;
+              if (step.kind === 'thought') return <div key={j} className={s.stepRow}><Comment16Regular style={{ verticalAlign: 'text-bottom' }} /> {step.content.slice(0, 120)}</div>;
               return null;
             })}
             {m.streaming && !m.text && (<div className={s.stepRow}><Spinner size="extra-tiny" /> Thinking…</div>)}

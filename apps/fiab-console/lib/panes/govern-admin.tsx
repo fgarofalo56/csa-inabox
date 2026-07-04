@@ -238,7 +238,7 @@ function PostureCopilotBar({ chartData }: { chartData: unknown }) {
   return (
     <div className={s.copilotBar}>
       <div className={s.copilotRow}>
-        <span className={s.chip} style={{ backgroundColor: 'var(--loom-accent-violet, #8b5cf6)1f' }} aria-hidden>
+        <span className={s.chip} style={{ backgroundColor: 'color-mix(in srgb, var(--loom-accent-violet, #8b5cf6) 12%, transparent)' }} aria-hidden>
           <Sparkle20Regular style={{ width: 20, height: 20, color: 'var(--loom-accent-violet, #8b5cf6)' }} />
         </span>
         <Textarea

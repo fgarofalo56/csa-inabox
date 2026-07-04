@@ -23,7 +23,7 @@
  */
 import { describe, it, expect } from 'vitest';
 
-import { listBundleIds, getBundle } from '@/lib/apps/content-bundles';
+import { listBundleIds, getBundle, hasBundle } from '@/lib/apps/content-bundles';
 import { CATALOG_META } from '@/lib/apps/content-bundles/catalog-meta';
 
 describe('apps-catalog seed invariants', () => {
@@ -49,13 +49,13 @@ describe('apps-catalog seed invariants', () => {
 
   it('every CATALOG_META entry resolves to a registered bundle (no orphan tiles)', () => {
     for (const id of Object.keys(CATALOG_META)) {
-      expect(getBundle(id), `CATALOG_META has "${id}" but no bundle is registered — install would 404`).toBeTruthy();
+      expect(hasBundle(id), `CATALOG_META has "${id}" but no bundle is registered — install would 404`).toBe(true);
     }
   });
 
-  it('every registered bundle ships at least one item so Install is never disabled', () => {
+  it('every registered bundle ships at least one item so Install is never disabled', async () => {
     for (const id of ids) {
-      const bundle = getBundle(id);
+      const bundle = await getBundle(id);
       expect(bundle, `getBundle("${id}") returned undefined`).toBeTruthy();
       expect(
         (bundle?.items?.length ?? 0),

@@ -21,7 +21,7 @@
  */
 
 import { findItemType, FABRIC_ITEM_TYPES, type WorkloadCategory } from '@/lib/catalog/fabric-item-types';
-import { getBundle } from '@/lib/apps/content-bundles';
+import { hasBundle } from '@/lib/apps/content-bundles';
 import { CATALOG_META } from '@/lib/apps/content-bundles/catalog-meta';
 
 export interface LearnEntry {
@@ -903,7 +903,7 @@ export function getLearnCatalog(): LearnTopic[] {
   // bundle is registered (in both the REGISTRY and CATALOG_META) the card also
   // offers a one-click "Install app" link to the internal /apps/<id> route.
   for (const u of USE_CASES) {
-    const appInstallable = !!u.appId && !!getBundle(u.appId) && !!CATALOG_META[u.appId];
+    const appInstallable = !!u.appId && hasBundle(u.appId) && !!CATALOG_META[u.appId];
     topics.push({
       id: `usecase:${u.id}`, title: u.title, summary: u.summary,
       section: 'Use cases', category: u.category, visualType: u.visualType,
