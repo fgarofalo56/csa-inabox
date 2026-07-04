@@ -28,7 +28,7 @@ import { apiServerError, apiError } from '@/lib/api/respond';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-function err(error: string, status: number, extra?: object) {
+function err(error: string, status: number, extra?: Record<string, unknown>) {
   return apiError(error, status, extra);
 }
 
