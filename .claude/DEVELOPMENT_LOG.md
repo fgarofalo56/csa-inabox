@@ -1366,3 +1366,9 @@ Bicep modules (flagged as "most critical infrastructure gap").
 - Merged 7 PRs (#1629-#1635): T45-T54. Rail 24→7 grouped sections; RTI consolidated to one tabbed hub; single rail catalog; lineage unified on LineageCanvas; workspace switcher + Create entry; single shell admin probe hides Admin/Setup for non-admins; plain-language labels.
 - Rolled centralus rev 0000194 (image a9a3b3f4); server-side redirects live-verified (/activator, /experience → 307; /new, /realtime-hub, /onelake → 200).
 - NAV_ITEMS single-source-of-truth preserved via flat derived export (Copilot navigate + command palette can't drift).
+
+## 2026-07-04 — Public-release Wave 4 (UI polish/a11y/refactor) landed + live-verified
+
+- Merged ~11 PRs (#1637-#1647): T55-T70 (T57 pre-done, T60 deferred). a11y axe-core (B18), unsaved-guard+autosave, px→tokens, fetch→clientFetch, ConfirmDialog, SQL-quoting, error-envelope, god-route splits, dead-code, lazy bundles + 5 ratchet CI guards.
+- Rolled centralus rev 0000198 (image 34a16190); 5-endpoint live smoke PASS.
+- Burned 4 build/roll gotchas (phantom build, CI-vs-docker tsconfig gap, T66 honest-error over-genericization, CI-green-on-merge-ref-but-main-red) — see memory.
