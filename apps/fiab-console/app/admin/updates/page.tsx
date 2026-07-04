@@ -198,10 +198,12 @@ interface AppApplyResult {
 
 interface PreflightGate {
   ok: false;
-  reason: 'already-up-to-date' | 'no-upstream-release' | 'images-not-published' | 'arm-not-configured';
+  reason: 'already-up-to-date' | 'no-upstream-release' | 'images-not-published' | 'arm-not-configured' | 'requires-infra-redeploy';
   message: string;
   missingImages?: { app: string; ref: string; exists: boolean; status: number }[];
   missingEnv?: string[];
+  missingRequiredEnv?: { name: string; reason: string; remediation: string }[];
+  infraTooOld?: { required: string; actual: string };
 }
 
 const useStyles = makeStyles({
@@ -424,7 +426,11 @@ export default function UpdatesPage() {
             {applyGate && (
               <MessageBar intent="warning" className={a.messageBar}>
                 <MessageBarBody>
-                  <MessageBarTitle>Update not available yet</MessageBarTitle>
+                  <MessageBarTitle>
+                    {applyGate.reason === 'requires-infra-redeploy'
+                      ? 'Infrastructure re-deploy required first'
+                      : 'Update not available yet'}
+                  </MessageBarTitle>
                   {applyGate.message}
                   {applyGate.missingImages && applyGate.missingImages.length > 0 && (
                     <ul className={s.dialogList}>
@@ -435,6 +441,23 @@ export default function UpdatesPage() {
                   )}
                   {applyGate.missingEnv && applyGate.missingEnv.length > 0 && (
                     <div>Set: <code className={s.codeWrap}>{applyGate.missingEnv.join(', ')}</code></div>
+                  )}
+                  {applyGate.missingRequiredEnv && applyGate.missingRequiredEnv.length > 0 && (
+                    <ul className={s.dialogList}>
+                      {applyGate.missingRequiredEnv.map((e) => (
+                        <li key={e.name}>
+                          <code className={s.codeWrap}>{e.name}</code> — {e.reason}{' '}
+                          <em>{e.remediation}</em>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {applyGate.infraTooOld && (
+                    <div>
+                      Running infra version <code className={s.codeWrap}>{applyGate.infraTooOld.actual}</code>;
+                      this release needs <code className={s.codeWrap}>{applyGate.infraTooOld.required}</code>.
+                      Re-deploy <code className={s.codeWrap}>platform/fiab/bicep</code> first.
+                    </div>
                   )}
                 </MessageBarBody>
               </MessageBar>

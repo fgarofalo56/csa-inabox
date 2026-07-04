@@ -1769,6 +1769,7 @@ nav:
               - Clean tenant — purge test/tutorial debris: fiab/operations/clean-tenant.md
           - Runbooks:
               - Deploy Failure: fiab/runbooks/deploy-failure.md
+              - Cosmos PITR Restore (metadata DR): fiab/runbooks/cosmos-pitr-restore.md
               - First Deploy (operator playbook): fiab/runbooks/first-deploy.md
               - Deploy Iteration Log (live): fiab/runbooks/deploy-iteration-log.md
               - Direct-Lake-Shim Stuck: fiab/runbooks/direct-lake-shim-stuck.md

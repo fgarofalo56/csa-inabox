@@ -27,6 +27,8 @@
  * without hitting Azure or the network.
  */
 
+import { checkCompat, type RequiredEnv } from './compat-manifest';
+
 /** The Loom deployable apps, in the order they should be rolled.
  *
  * `acaName`  — the Microsoft.App/containerApps resource name (bicep `app.name`).
@@ -119,7 +121,8 @@ export type GateReason =
   | 'already-up-to-date'
   | 'no-upstream-release'
   | 'images-not-published'
-  | 'arm-not-configured';
+  | 'arm-not-configured'
+  | 'requires-infra-redeploy';
 
 export interface PreflightGate {
   ok: false;
@@ -129,6 +132,13 @@ export interface PreflightGate {
   missingImages?: ImageProbe[];
   /** For 'arm-not-configured': the env vars to set. */
   missingEnv?: string[];
+  /**
+   * For 'requires-infra-redeploy': the newly-required env vars the running
+   * deployment is missing (each with why + the exact bicep remediation).
+   */
+  missingRequiredEnv?: RequiredEnv[];
+  /** For 'requires-infra-redeploy': running infra version is older than required. */
+  infraTooOld?: { required: string; actual: string };
 }
 
 export interface PreflightOk {
@@ -155,6 +165,15 @@ export interface UpdateDeps {
   armConfig: () => { configured: boolean; missing: string[] };
   /** The currently-running version (bare or tagged). */
   currentVersion: string;
+  /**
+   * True when a LOOM_* env var is present (non-empty) on the running console.
+   * Used to compare the compat manifest's newly-required env against what bicep
+   * actually deployed (process.env). Optional so existing callers/tests keep
+   * working — when absent, the compat gate is skipped.
+   */
+  envPresent?: (name: string) => boolean;
+  /** LOOM_INFRA_VERSION — the version the platform bicep last deployed at ('' if unknown). */
+  infraVersion?: string;
 }
 
 /**
@@ -197,6 +216,46 @@ export async function preflight(deps: UpdateDeps, owner = DEFAULT_GHCR_OWNER): P
   }
 
   const imageVersion = tagToImageVersion(target.tag_name);
+
+  // (b2) Compatibility manifest: an image roll only changes the container image
+  // (it re-sends the existing env + does NOT re-run bicep), so it cannot supply
+  // a newly-required env var, role, or resource. If the target (or any release
+  // skipped over to reach it) newly requires env the running deployment doesn't
+  // have — or the running infra predates the required bicep version — BLOCK with
+  // the exact remediation instead of rolling into a half-broken state. Only
+  // enforced when the route wired the running-deployment facts (envPresent).
+  if (deps.envPresent) {
+    const compat = checkCompat(
+      { envPresent: deps.envPresent, infraVersion: deps.infraVersion ?? '' },
+      deps.currentVersion,
+      target.tag_name,
+    );
+    if (!compat.ok) {
+      const envList = compat.missingEnv.map((e) => e.name).join(', ');
+      const parts: string[] = [];
+      if (compat.missingEnv.length > 0) {
+        parts.push(
+          `it newly requires ${compat.missingEnv.length} env var(s) not set on this deployment (${envList})`,
+        );
+      }
+      if (compat.infraTooOld) {
+        parts.push(
+          `its infrastructure predates the required bicep version (running ${compat.infraTooOld.actual}, needs ${compat.infraTooOld.required})`,
+        );
+      }
+      return {
+        ok: false,
+        reason: 'requires-infra-redeploy',
+        message:
+          `Update to ${target.tag_name} needs an infrastructure re-deploy first: ${parts.join('; ')}. ` +
+          'The in-product image roll only changes the app image — it cannot add env vars, grant roles, or ' +
+          'provision resources. Re-deploy platform/fiab/bicep (az deployment sub create) to apply the new ' +
+          'requirements, then retry this update.',
+        missingRequiredEnv: compat.missingEnv,
+        infraTooOld: compat.infraTooOld,
+      };
+    }
+  }
 
   // (c) HEAD every app's target image — refuse if any are missing.
   const probes: ImageProbe[] = [];

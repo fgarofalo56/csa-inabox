@@ -115,7 +115,22 @@ function armConfig(): { configured: boolean; missing: string[] } {
 }
 
 function deps(): UpdateDeps {
-  return { listReleases, headImage, armConfig, currentVersion: CURRENT_VERSION };
+  return {
+    listReleases,
+    headImage,
+    armConfig,
+    currentVersion: CURRENT_VERSION,
+    // Compat manifest inputs (rel-T41): compare the release's newly-required env
+    // against what bicep actually deployed. LOOM_INFRA_VERSION is stamped by the
+    // platform bicep and is NOT changed by an image roll, so it reflects the last
+    // real `az deployment` (the running LOOM_VERSION can be ahead of it after a
+    // roll — that mismatch is exactly what the compat gate catches).
+    envPresent: (name: string) => {
+      const v = process.env[name];
+      return v !== undefined && v !== '';
+    },
+    infraVersion: process.env.LOOM_INFRA_VERSION || '',
+  };
 }
 
 async function audit(tenantId: string, who: string, kind: string, fields: Record<string, unknown>) {
