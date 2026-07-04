@@ -17,7 +17,8 @@ import {
   Table, TableHeader, TableRow, TableHeaderCell, TableBody, TableCell,
   MessageBar, MessageBarBody, makeStyles, tokens,
 } from '@fluentui/react-components';
-import { ArrowSync20Regular, Connector20Regular, Database20Regular } from '@fluentui/react-icons';
+import { ArrowSync20Regular, Connector20Regular, Database20Regular, Connector24Regular, Database24Regular } from '@fluentui/react-icons';
+import { EmptyState } from '@/lib/components/empty-state';
 
 const useStyles = makeStyles({
   pad: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalL, minHeight: 0, flex: 1 },
@@ -69,7 +70,13 @@ export function MyAccess() {
       <div className={s.row}><Connector20Regular /><Subtitle2>API subscriptions</Subtitle2></div>
       {subNote && <MessageBar intent="warning"><MessageBarBody>{subNote}</MessageBarBody></MessageBar>}
       {subs === null && <Spinner size="tiny" />}
-      {subs && subs.length === 0 && !subNote && <div className={s.empty}>No API subscriptions yet — subscribe from the APIs tab.</div>}
+      {subs && subs.length === 0 && !subNote && (
+        <EmptyState
+          icon={<Connector24Regular />}
+          title="No API subscriptions yet"
+          body="Subscribe to an API from the APIs tab to see your keys, scope, and subscription state here."
+        />
+      )}
       {subs && subs.length > 0 && (
         <Table>
           <TableHeader><TableRow>
@@ -100,7 +107,13 @@ export function MyAccess() {
       </Caption1>
       {reqErr && <MessageBar intent="error"><MessageBarBody>{reqErr}</MessageBarBody></MessageBar>}
       {reqs === null && <Spinner size="tiny" />}
-      {reqs && reqs.length === 0 && !reqErr && <div className={s.empty}>No data-product access requests recorded.</div>}
+      {reqs && reqs.length === 0 && !reqErr && (
+        <EmptyState
+          icon={<Database24Regular />}
+          title="No access requests yet"
+          body="Request access to a data product from Discover; your requests and their approval status appear here."
+        />
+      )}
       {reqs && reqs.length > 0 && (
         <Table>
           <TableHeader><TableRow>
