@@ -13,16 +13,21 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ReactNode } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
+import { useIsTenantAdmin } from '@/lib/components/session-context';
 import { makeStyles, mergeClasses, tokens, Subtitle2, Title3, Badge } from '@fluentui/react-components';
 
-const SECTIONS = [
+// adminOnly sections live in the Admin portal (/admin/*). They are hidden for
+// non-admins (rel-T53) — reusing the single shell admin probe — leaving the
+// read-only governance views (Overview, Govern, catalog, lineage, scans,
+// policies, insights, …) so a non-admin is never dumped into a per-page 403.
+const SECTIONS: { href: string; label: string; desc: string; adminOnly?: boolean }[] = [
   { href: '/governance',                  label: 'Overview',           desc: 'Governance posture, coverage scores, recent activity.' },
   { href: '/governance/govern',           label: 'Govern',             desc: 'My-items posture for data owners — label coverage, curation, recommended actions.' },
-  { href: '/admin/domains',               label: 'Domains',            desc: 'Business domains and subdomains, workspace assignment, delegated settings (Admin portal).' },
+  { href: '/admin/domains',               label: 'Domains',            desc: 'Business domains and subdomains, workspace assignment, delegated settings (Admin portal).', adminOnly: true },
   { href: '/governance/catalog',          label: 'Governed inventory', desc: 'Governed data-asset inventory with endorsement, sensitivity, and access requests across OneLake, Synapse, Databricks, ADLS, on-prem.' },
   { href: '/governance/lineage',          label: 'Lineage',            desc: 'End-to-end lineage across items, pipelines, notebooks, dataflows, and models — Governed / Mesh / Federated scopes; Purview edges merge in when bound.' },
-  { href: '/admin/classifications',       label: 'Classifications',    desc: 'Sensitive-info types, custom regex classifiers, scan rule sets (Admin portal).' },
-  { href: '/admin/sensitivity-labels',    label: 'Sensitivity labels', desc: 'Define and auto-apply labels; enforce encryption and access policies (Admin portal).' },
+  { href: '/admin/classifications',       label: 'Classifications',    desc: 'Sensitive-info types, custom regex classifiers, scan rule sets (Admin portal).', adminOnly: true },
+  { href: '/admin/sensitivity-labels',    label: 'Sensitivity labels', desc: 'Define and auto-apply labels; enforce encryption and access policies (Admin portal).', adminOnly: true },
   { href: '/governance/scans',            label: 'Scans & sources',    desc: 'Register data sources, schedule scans, monitor scan history.' },
   { href: '/governance/policies',         label: 'Access policies',    desc: 'DLP, masking, RLS/CLS, Purview access policies.' },
   { href: '/governance/data-quality',     label: 'Data quality',       desc: 'Author rules, run on Kusto/Databricks/Synapse, results + Delta/Lakehouse monitors.' },
@@ -87,6 +92,8 @@ const useStyles = makeStyles({
 export function GovernanceShell({ sectionTitle, sectionBadge, children }: { sectionTitle?: string; sectionBadge?: string; children: ReactNode }) {
   const s = useStyles();
   const pathname = usePathname();
+  const isTenantAdmin = useIsTenantAdmin();
+  const sections = SECTIONS.filter((sec) => !sec.adminOnly || isTenantAdmin);
   return (
     <PageShell
       title="Governance"
@@ -94,7 +101,7 @@ export function GovernanceShell({ sectionTitle, sectionBadge, children }: { sect
     >
       <div className={s.layout}>
         <nav className={s.sidebar} aria-label="Governance sections">
-          {SECTIONS.map((sec) => {
+          {sections.map((sec) => {
             const active = pathname === sec.href || (sec.href !== '/governance' && pathname?.startsWith(sec.href));
             return (
               <Link key={sec.href} href={sec.href} className={mergeClasses(s.item, active && s.itemActive)}>
