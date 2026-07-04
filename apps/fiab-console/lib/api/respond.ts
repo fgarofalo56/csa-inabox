@@ -62,3 +62,26 @@ export function apiServerError(
   console.error('[api] server error:', detail)
   return apiError(publicMessage, 500, { code })
 }
+
+/**
+ * Surface an HONEST, user-actionable error message to the client — an infra
+ * gate / permission / not-configured / cloud-availability message the user
+ * MUST act on (e.g. "grant Log Analytics Reader", "Microsoft Fabric has no
+ * GCC-High endpoint"). Per no-vaporware.md these honest gates are REQUIRED to
+ * surface verbatim.
+ *
+ * Unlike {@link apiServerError} this DELIBERATELY passes the message through, so
+ * use it ONLY for errors your own code throws as documented honest gates
+ * (`assertFabricFamilyAvailable`, typed gate/permission classes such as
+ * `MonitorError`, `*NotConfiguredError`) — NEVER for raw driver / unexpected
+ * exceptions (those go through {@link apiServerError}, which genericizes + logs
+ * so stack traces / SQL / connection strings never reach the client). Still
+ * logs server-side for traceability. Default status 500 mirrors the pre-sweep
+ * behaviour; pass an explicit status for a permission (403) / gate (503) code.
+ */
+export function apiHonestError(err: unknown, status = 500, publicMessage?: string) {
+  const msg = publicMessage ?? (err instanceof Error ? err.message : String(err))
+  // eslint-disable-next-line no-console
+  console.error('[api] honest-gate error:', msg)
+  return apiError(msg, status)
+}
