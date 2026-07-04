@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WarehouseEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -140,7 +141,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   }, []);
   const cacheColumns = useCallback(async (schemaName: string, tbl: string) => {
     try {
-      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/schema?table=${encodeURIComponent(`${schemaName}.${tbl}`)}`);
+      const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/schema?table=${encodeURIComponent(`${schemaName}.${tbl}`)}`);
       const j = (await r.json()) as WHSchemaResp;
       if (j.ok && j.columns) schemaCacheRef.current.columns.set(`${schemaName}.${tbl}`, j.columns);
     } catch { /* best-effort */ }
@@ -176,7 +177,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     // (was returning 409 on the walkthrough validator). Skip until saved.
     if (!id || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/schema`);
+      const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/schema`);
       const j = (await r.json()) as WHSchemaResp;
       setSchema(j);
       if (j.ok) schemaCacheRef.current.catalogs = Object.keys(j.schemas || {});
@@ -196,7 +197,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     try {
       // Rewrite {{name}} → @name; values bound via req.input() — injection-safe.
       const statement = substituteSynapse(sqlToRun, queryParams);
-      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: statement, parameters: queryParams, queryId, database: database || undefined }),
       });
@@ -216,7 +217,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
     if (!qid) return;
     setCanceling(true);
     try {
-      await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/cancel`, {
+      await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/cancel`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ queryId: qid }),
       });
@@ -294,7 +295,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
         throw new Error('CTAS requires the current query to start with SELECT.');
       }
       const ddl = `CREATE TABLE [${ctasSchema.replace(/]/g, '')}].[${ctasTable.replace(/]/g, '')}] AS\n${cleaned};`;
-      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: ddl }),
       });
@@ -309,7 +310,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   const openInExcel = useCallback(async () => {
     if (!sqlText.trim()) return;
     try {
-      const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/iqy`, {
+      const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/iqy`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: sqlText }),
       });

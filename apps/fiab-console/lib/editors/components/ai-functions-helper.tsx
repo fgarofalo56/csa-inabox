@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AiFunctionsHelper — bring Fabric's "AI functions" (sentiment · classify ·
  * translate · summarize · extract) to a SQL editor, Azure-native and with NO
@@ -154,7 +155,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
     setProbeError(null);
     (async () => {
       try {
-        const r = await fetch(
+        const r = await clientFetch(
           `/api/items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}/ai-function?probe=1`,
         );
         const j = await r.json();
@@ -231,7 +232,7 @@ export function AiFunctionsHelper(props: AiFunctionsHelperProps) {
     }
     setRunning(true);
     try {
-      const r = await fetch(`/api/items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}/ai-function`, {
+      const r = await clientFetch(`/api/items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}/ai-function`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

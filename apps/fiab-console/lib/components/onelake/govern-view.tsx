@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * OneLake catalog — Govern tab.
  *
@@ -316,7 +317,7 @@ export function GovernView() {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/onelake/governance')
+    clientFetch('/api/onelake/governance')
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: GovernanceData) => {
         if (cancelled) return;

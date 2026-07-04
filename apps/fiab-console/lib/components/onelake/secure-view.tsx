@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SecureView — OneLake catalog **Secure** tab (access matrix).
  *
@@ -259,7 +260,7 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
   // ── discover the container list (knownContainers) once ──
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/onelake/security', { cache: 'no-store' })
+    clientFetch('/api/onelake/security', { cache: 'no-store' })
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
@@ -279,7 +280,7 @@ export function SecureView({ workspaces, items }: { workspaces: Workspace[]; ite
     try {
       const qs = new URLSearchParams({ container });
       if (workspaceId) qs.set('workspaceId', workspaceId);
-      const res = await fetch(`/api/onelake/security?${qs.toString()}`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/onelake/security?${qs.toString()}`, { cache: 'no-store' });
       const json = await res.json();
       if (res.status === 503 && json?.gate) {
         setGate({ surface: json.surface || 'OneLake access', missing: json.missing, hint: json.hint });
@@ -604,7 +605,7 @@ function GrantDialog({
     const handle = setTimeout(async () => {
       setSearching(true); setSearchGate(null);
       try {
-        const res = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${kind}`, { cache: 'no-store' });
+        const res = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${kind}`, { cache: 'no-store' });
         const json = await res.json();
         if (!res.ok || !json.ok) {
           setSearchGate(json?.error || `Graph ${res.status}`);
@@ -625,7 +626,7 @@ function GrantDialog({
     if (!selected) return;
     setSaving(true); setError(null);
     try {
-      const res = await fetch('/api/onelake/security', {
+      const res = await clientFetch('/api/onelake/security', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

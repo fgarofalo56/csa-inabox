@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * FoundryAgentsPanel — the flagship "Agents" surface of the new Microsoft
  * Foundry portal, rebuilt in CSA Loom with full functionality + real backend.
@@ -143,7 +144,7 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const loadAgents = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch('/api/foundry/agents');
+      const res = await clientFetch('/api/foundry/agents');
       const j = await readJson(res);
       if (res.status === 501 || j?.code === 'not_configured') {
         setGate({ msg: j?.error || 'Foundry Agent Service not configured.', hint: j?.hint });
@@ -223,7 +224,7 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
         tools: buildTools(),
       };
       if (fDescription.trim()) payload.description = fDescription.trim();
-      const res = await fetch('/api/foundry/agents', {
+      const res = await clientFetch('/api/foundry/agents', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -248,7 +249,7 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
   const del = useCallback(async (name: string) => {
     setSaving(true); setSaveMsg(null);
     try {
-      const res = await fetch(`/api/foundry/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const res = await clientFetch(`/api/foundry/agents/${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await readJson(res);
       if (res.status === 501 || j?.code === 'not_configured') {
         setGate({ msg: j?.error || 'Foundry Agent Service not configured.', hint: j?.hint });
@@ -271,7 +272,7 @@ export function FoundryAgentsPanel({ active, nonce = 0, acct = null }: { active:
     if (!agent || !q || pgRunning) return;
     setPgRunning(true); setPgResult(null); setPgGate(null); setPgError(null);
     try {
-      const res = await fetch('/api/foundry/agents/run', {
+      const res = await clientFetch('/api/foundry/agents/run', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ agent, question: q }),
       });

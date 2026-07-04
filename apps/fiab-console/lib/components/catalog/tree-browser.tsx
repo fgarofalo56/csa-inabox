@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * TreeBrowser — generic lazy-loaded tree rooted at a single source. Each
  * node click expands by hitting /api/catalog/browse with the path so far.
@@ -153,7 +154,7 @@ export function TreeBrowser({ source, onSelect }: Props) {
   const fetchPath = useCallback(async (path: string[]): Promise<TreeNode[]> => {
     const params = new URLSearchParams({ source });
     if (path.length) params.set('path', path.join('|'));
-    const r = await fetch(`/api/catalog/browse?${params.toString()}`);
+    const r = await clientFetch(`/api/catalog/browse?${params.toString()}`);
     const j = await r.json();
     if (!j.ok) {
       const err = new Error(j.error || 'browse failed');

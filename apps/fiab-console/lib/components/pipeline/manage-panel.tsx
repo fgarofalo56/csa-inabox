@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ManagePanel — the ADF "Manage" hub surfaced as a dialog from the data
  * pipeline editor ribbon (ADF only).
@@ -387,7 +388,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
   const loadShir = useCallback(async () => {
     setShirError(null);
     try {
-      const res = await fetch('/api/loom/shir');
+      const res = await clientFetch('/api/loom/shir');
       const body = await readJson(res);
       if (body?.code === 'not_configured') { setShirGate(body.error || 'SHIR not deployed'); setShir(null); return; }
       if (!body.ok) { setShirError(body.error || 'failed to read SHIR'); setShir(null); return; }
@@ -399,7 +400,7 @@ export function ManagePanel({ open, onOpenChange, backend = 'adf' }: { open: boo
   const scaleShir = useCallback(async (capacity: number) => {
     setShirBusy(true); setShirError(null);
     try {
-      const res = await fetch('/api/loom/shir', {
+      const res = await clientFetch('/api/loom/shir', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ capacity }),
       });

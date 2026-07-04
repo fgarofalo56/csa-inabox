@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * APIM editors — wired live to Azure API Management (apim-csa-loom-eastus2)
  * via the BFF (/api/items/apim-*). No mock data.
@@ -308,7 +309,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (isNew) return;
     setApi({ loading: true, data: null });
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) { setApi({ loading: false, data: null, error: j.error || 'Failed to load' }); return; }
       setApi({ loading: false, data: j.api });
@@ -327,7 +328,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (isNew) return;
     setOps({ loading: true, data: null });
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations`);
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations`);
       const j = await r.json();
       if (!j.ok) { setOps({ loading: false, data: [], error: j.error }); return; }
       setOps({ loading: false, data: j.operations });
@@ -340,7 +341,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (isNew) return;
     setSpec({ loading: true, data: null });
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/spec?format=openapi%2Bjson`);
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}/spec?format=openapi%2Bjson`);
       const j = await r.json();
       if (!j.ok) { setSpec({ loading: false, data: null, error: j.error }); return; }
       setSpec({ loading: false, data: { format: j.format, value: j.value } });
@@ -368,7 +369,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     // always references the snapshot we actually transmitted.
     const body = { displayName, path, protocols: [...protocols], subscriptionRequired, serviceUrl: serviceUrl || undefined };
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -419,7 +420,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       // Validate JSON client-side before round-tripping to APIM.
       try { JSON.parse(specDraft); }
       catch (e: any) { throw new Error(`OpenAPI document is not valid JSON: ${e?.message || String(e)}`); }
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -461,7 +462,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       try { JSON.parse(importValue); } catch (e: any) { setImportErr(`Inline OpenAPI is not valid JSON: ${e?.message}`); setImportBusy(false); return; }
     }
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           displayName, path, protocols: [...protocols], subscriptionRequired,
@@ -506,7 +507,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     }
     setOasBusy(true); setOasErr(null); setOasGate(null);
     try {
-      const r = await fetch('/api/apim/import', {
+      const r = await clientFetch('/api/apim/import', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -542,7 +543,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
       } catch { /* ignore */ }
     }
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/test-call`, {
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}/test-call`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ method: testMethod, urlTemplate: testTemplate, headers, body: testBody || undefined }),
       });
@@ -574,7 +575,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     setOpDraft({ ...EMPTY_OP_DRAFT, isNew: false, operationId: operationName });
     setOpDialogOpen(true);
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations?operationId=${encodeURIComponent(operationName)}`);
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations?operationId=${encodeURIComponent(operationName)}`);
       const j = await r.json();
       if (!j.ok) { setOpErr(j.error || `HTTP ${r.status}`); return; }
       const o: ApimOperation = j.operation;
@@ -613,7 +614,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     };
     try {
       // POST creates (server slugs the id); PUT replaces an existing op.
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations`, {
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations`, {
         method: opDraft.isNew ? 'POST' : 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -631,7 +632,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (typeof window !== 'undefined' && !window.confirm(`Delete operation "${label}"? This cannot be undone.`)) return;
     setOpBusy(true); setOpMsg(null);
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations?operationId=${encodeURIComponent(operationName)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}/operations?operationId=${encodeURIComponent(operationName)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setOpMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
       setOpMsg({ intent: 'success', text: `Deleted operation ${label}.` });
@@ -651,7 +652,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (isNew) return;
     setRevs({ loading: true, data: null });
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/revisions`);
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}/revisions`);
       const j = await r.json();
       if (!j.ok) { setRevs({ loading: false, data: null, error: j.error }); return; }
       setRevs({ loading: false, data: { revisions: j.revisions || [], releases: j.releases || [] } });
@@ -664,7 +665,7 @@ export function ApimApiEditor({ item, id }: { item: FabricItemType; id: string }
     if (!newRev.trim()) { setRevMsg({ intent: 'error', text: 'Enter a revision number (e.g. 2).' }); return; }
     setRevBusy(true); setRevMsg(null);
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(id)}/revisions`, {
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(id)}/revisions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ apiRevision: newRev.trim(), description: newRevDesc || undefined, release: newRevRelease, notes: newRevDesc || undefined }),
       });
@@ -1234,7 +1235,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (subKeys[sid]) { setSubKeys((cur) => { const n = { ...cur }; delete n[sid]; return n; }); return; }
     setSubKeyBusy(sid); setSubKeyErr(null);
     try {
-      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
+      const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) { setSubKeyErr({ sid, msg: j.error || `HTTP ${r.status}` }); return; }
       setSubKeys((cur) => ({ ...cur, [sid]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
@@ -1247,7 +1248,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const changeSubState = useCallback(async (sid: string, newState: 'active' | 'suspended' | 'cancelled') => {
     setSubStateBusy(sid); setSubStateErr(null);
     try {
-      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}`, {
+      const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: newState }),
@@ -1268,7 +1269,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const regenKey = useCallback(async (sid: string, which: 'primary' | 'secondary') => {
     setSubRegenBusy({ sid, which }); setSubKeyErr(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys/regenerate?which=${which}`,
         { method: 'POST' },
       );
@@ -1284,7 +1285,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (isNew) return;
     setApis({ loading: true, data: null });
     try {
-      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis`);
+      const r = await clientFetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis`);
       const j = await r.json();
       if (!j.ok) { setApis({ loading: false, data: null, error: j.error }); return; }
       setApis({ loading: false, data: { productApis: j.productApis || [], allApis: j.allApis || [] } });
@@ -1296,7 +1297,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     setSubs({ loading: true, data: null });
     setSubKeys({}); setSubKeyErr(null); // re-conceal keys on every reload
     try {
-      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/subscriptions`);
+      const r = await clientFetch(`/api/items/apim-product/${encodeURIComponent(id)}/subscriptions`);
       const j = await r.json();
       if (!j.ok) { setSubs({ loading: false, data: null, error: j.error }); return; }
       setSubs({ loading: false, data: j.subscriptions || [] });
@@ -1309,7 +1310,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (!addApiId) return;
     setApiBusy(true); setApiMsg(null);
     try {
-      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis`, {
+      const r = await clientFetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ apiId: addApiId }),
       });
       const j = await r.json();
@@ -1324,7 +1325,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
   const removeApi = useCallback(async (apiName: string) => {
     setApiBusy(true); setApiMsg(null);
     try {
-      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis?apiId=${encodeURIComponent(apiName)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/apim-product/${encodeURIComponent(id)}/apis?apiId=${encodeURIComponent(apiName)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setApiMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
       setApis((cur) => ({ loading: false, data: { productApis: j.productApis || [], allApis: cur.data?.allApis || [] } }));
@@ -1337,7 +1338,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (isNew) return;
     setProduct({ loading: true, data: null });
     try {
-      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/apim-product/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) { setProduct({ loading: false, data: null, error: j.error || 'Failed to load' }); return; }
       setProduct({ loading: false, data: j.product });
@@ -1361,7 +1362,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     // without the request landing on bytes that differ from what we sent.
     const body = { displayName, description, state, subscriptionRequired, approvalRequired };
     try {
-      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/apim-product/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -1399,7 +1400,7 @@ export function ApimProductEditor({ item, id }: { item: FabricItemType; id: stri
     // takes the override.
     setStatus({ kind: 'saving' });
     try {
-      const r = await fetch(`/api/items/apim-product/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/apim-product/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName, description, state: next, subscriptionRequired, approvalRequired }),
@@ -1792,7 +1793,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
   const load = useCallback(async () => {
     setLoadState({ loading: true, data: null });
     try {
-      const r = await fetch(`/api/items/apim-policy/${encodeURIComponent(id)}?${scopeQuery}`);
+      const r = await clientFetch(`/api/items/apim-policy/${encodeURIComponent(id)}?${scopeQuery}`);
       const j = await r.json();
       if (!j.ok) { setLoadState({ loading: false, data: null, error: j.error }); return; }
       setLoadState({ loading: false, data: { value: j.value, format: j.format } });
@@ -1827,7 +1828,7 @@ export function ApimPolicyEditor({ item, id }: { item: FabricItemType; id: strin
     if (scopeKind === 'operation' && (!apiId || !operationId)) { setStatus({ kind: 'err', msg: 'apiId and operationId are required for operation scope' }); return; }
     setStatus({ kind: 'saving' });
     try {
-      const r = await fetch(`/api/items/apim-policy/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/apim-policy/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ scope: scopeKind, apiId, productId, operationId, value: snapshot }),
@@ -2131,7 +2132,7 @@ function useDataProductWorkspaces() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/loom/workspaces');
+        const r = await clientFetch('/api/loom/workspaces');
         const j = await r.json();
         setWorkspaces(j.ok ? (j.workspaces || []) : []);
       } catch { setWorkspaces([]); }
@@ -2152,7 +2153,7 @@ function useGovernanceDomains() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/catalog/domains');
+        const r = await clientFetch('/api/catalog/domains');
         const j = await r.json();
         if (r.status === 501) { setNotConfigured(true); setDomains([]); }
         else if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setDomains([]); }
@@ -2337,7 +2338,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   // taxonomy is empty the form shows an honest deep-link to the admin page.
   const [classTypes, setClassTypes] = useState<string[]>([]);
   useEffect(() => {
-    fetch('/api/governance/classification-types')
+    clientFetch('/api/governance/classification-types')
       .then((r) => r.json())
       .then((j) => { if (j?.ok) setClassTypes((j.types || []).map((t: any) => t.name).filter(Boolean)); })
       .catch(() => {});
@@ -2405,7 +2406,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`);
         const j = await r.json();
         if (cancelled) return;
         // /api/cosmos-items/[type]/[id] returns the bare WorkspaceItem record
@@ -2444,7 +2445,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         // Create a real Cosmos item, then navigate to the persisted editor
         // where Register-with-Purview / Publish-to-APIM act on a real id.
         if (!workspaceId) { setStatus({ kind: 'err', msg: 'Select a workspace before saving.' }); return; }
-        const r = await fetch(`/api/cosmos-items/data-product`, {
+        const r = await clientFetch(`/api/cosmos-items/data-product`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ workspaceId, displayName, state: snapshot }),
         });
@@ -2454,7 +2455,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
         router.push(`/items/data-product/${encodeURIComponent(j.item.id)}`);
         return;
       }
-      const r = await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: snapshot, displayName }),
@@ -2476,7 +2477,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     // Snapshot to avoid stale closure of state.displayName/description.
     const snapshot: DataProductState = stateRef.current;
     try {
-      const r = await fetch(`/api/items/apim-product`, {
+      const r = await clientFetch(`/api/items/apim-product`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -2494,7 +2495,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
       // editing while Published (Purview parity). Persist it durably to Cosmos.
       setState((prev) => ({ ...prev, apimPublished: true }));
       try {
-        await fetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
+        await clientFetch(`/api/cosmos-items/data-product/${encodeURIComponent(id)}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ state: { ...snapshot, apimPublished: true } }),
@@ -2515,7 +2516,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     // Snapshot so the request body uses the freshest name/description.
     const snapshot: DataProductState = stateRef.current;
     try {
-      const r = await fetch(`/api/items/data-product/${encodeURIComponent(id)}/publish-api`, {
+      const r = await clientFetch(`/api/items/data-product/${encodeURIComponent(id)}/publish-api`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           serviceUrl: publishApiServiceUrl.trim(),
@@ -2556,7 +2557,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     setStatus({ kind: 'saving' });
     setPurviewHint(null);
     try {
-      const r = await fetch(`/api/items/data-product/${encodeURIComponent(id)}/register-purview`, {
+      const r = await clientFetch(`/api/items/data-product/${encodeURIComponent(id)}/register-purview`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
       });
@@ -2600,7 +2601,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const handleSetStatus = useCallback(async (next: 'PUBLISHED' | 'DRAFT' | 'EXPIRED') => {
     setLifecycleBusy(true); setLifecycleMsg(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/status`, {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/status`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ status: next }),
@@ -2633,7 +2634,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     const classifications = dsClass.map((c) => c.trim()).filter(Boolean);
     try {
       // register-via-Atlas through the existing cross-source register route.
-      const r = await fetch('/api/catalog/register', {
+      const r = await clientFetch('/api/catalog/register', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           source: dsType.startsWith('databricks') ? 'unity-catalog' : 'onelake',
@@ -2666,7 +2667,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (!glName.trim()) { setGlMsg({ intent: 'error', text: 'Term name is required.' }); return; }
     setGlBusy(true); setGlMsg(null);
     try {
-      const r = await fetch('/api/catalog/glossary', {
+      const r = await clientFetch('/api/catalog/glossary', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           term: { name: glName.trim(), longDescription: glDesc || undefined },
@@ -2706,7 +2707,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (id === 'new') { setAssets([]); return; }
     setAssetsLoading(true); setAssetsErr(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/assets`);
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/assets`);
       const j = await r.json();
       if (!j.ok) { setAssetsErr(j.error || `HTTP ${r.status}`); return; }
       const list: DataAssetWithFlags[] = j.assets || [];
@@ -2729,7 +2730,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
   const removeAsset = useCallback(async (guid: string, force = false) => {
     setRemovingGuid(guid); setAssetMsg(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/data-products/${encodeURIComponent(id)}/assets?guid=${encodeURIComponent(guid)}${force ? '&force=1' : ''}`,
         { method: 'DELETE' },
       );
@@ -2754,7 +2755,7 @@ export function DataProductEditor({ item, id }: { item: FabricItemType; id: stri
     if (!guid) { setLineageErr('Register a dataset (or the data product with Purview) first — lineage is centered on a Purview entity GUID.'); return; }
     setLineageBusy(true); setLineageErr(null); setLineage(null);
     try {
-      const r = await fetch(`/api/catalog/lineage?source=purview&id=${encodeURIComponent(guid)}`);
+      const r = await clientFetch(`/api/catalog/lineage?source=purview&id=${encodeURIComponent(guid)}`);
       const j = await r.json();
       if (r.status === 501) { setLineageErr('Purview not provisioned — lineage requires LOOM_PURVIEW_ACCOUNT.'); return; }
       if (!j.ok) { setLineageErr(j.error || `HTTP ${r.status}`); return; }

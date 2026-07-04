@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Databricks Notebook editor — extracted verbatim from
  * databricks-editors.tsx (behavior-preserving split — zero logic change).
@@ -105,7 +106,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   // ---- Load tree + clusters on mount ----
   const loadDir = useCallback(async (path: string) => {
     try {
-      const r = await fetch(`/api/items/databricks-notebook/list?path=${encodeURIComponent(path)}`);
+      const r = await clientFetch(`/api/items/databricks-notebook/list?path=${encodeURIComponent(path)}`);
       const j = await r.json();
       if (!j.ok) { setTreeError(j.error || `HTTP ${r.status}`); return; }
       setTreeError(null);
@@ -117,7 +118,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
 
   const loadClusters = useCallback(async () => {
     try {
-      const r = await fetch('/api/items/databricks-cluster');
+      const r = await clientFetch('/api/items/databricks-cluster');
       const j = await r.json();
       if (!j.ok) { setClustersError(j.error || `HTTP ${r.status}`); return; }
       setClustersError(null);
@@ -152,7 +153,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/cosmos-items/databricks-notebook/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/cosmos-items/databricks-notebook/${encodeURIComponent(id)}`);
         if (!r.ok) return;
         const item = await r.json();
         if (cancelled) return;
@@ -195,7 +196,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     setLoadingFile(true);
     setCellResults({});
     try {
-      const r = await fetch(`/api/items/databricks-notebook/${id}?path=${encodeURIComponent(path)}`);
+      const r = await clientFetch(`/api/items/databricks-notebook/${id}?path=${encodeURIComponent(path)}`);
       const j = await r.json();
       if (!j.ok) { setFileError(j.error || `HTTP ${r.status}`); return; }
       const base = detectBase(lang || j.language);
@@ -219,7 +220,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     setFileMessage(null);
     const snapshot = serializeCells(cells, baseLanguage);
     try {
-      const r = await fetch(`/api/items/databricks-notebook/${id}`, {
+      const r = await clientFetch(`/api/items/databricks-notebook/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path: selectedPath, language: baseLanguage, content: snapshot }),
@@ -258,7 +259,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     const starter = [emptyCell('code', 'python')];
     const src = serializeCells(starter, 'PYTHON');
     try {
-      const r = await fetch(`/api/items/databricks-notebook/${id}`, {
+      const r = await clientFetch(`/api/items/databricks-notebook/${id}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ path, language: 'PYTHON', content: src }),
       });
@@ -274,7 +275,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     if (!window.confirm(`Delete ${path}${isDir ? ' (and contents)' : ''}?`)) return;
     try {
       const qs = `path=${encodeURIComponent(path)}${isDir ? '&recursive=true' : ''}`;
-      const r = await fetch(`/api/items/databricks-notebook/${id}?${qs}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/databricks-notebook/${id}?${qs}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setTreeError(j.error || `HTTP ${r.status}`); return; }
       if (selectedPath === path) { setSelectedPath(null); setCells([emptyCell('code', 'python')]); }
@@ -342,7 +343,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
     const t0 = Date.now();
     setCellResults((r) => ({ ...r, [cell.id]: { status: 'running' } }));
     try {
-      const res = await fetch(`/api/items/databricks-notebook/${id}/command`, {
+      const res = await clientFetch(`/api/items/databricks-notebook/${id}/command`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -403,7 +404,7 @@ export function DatabricksNotebookEditor({ item, id }: { item: FabricItemType; i
   // ---- Runs history (jobs runs/list) ----
   const [runs, setRuns] = useState<RunRow[]>([]);
   const loadRuns = useCallback(async () => {
-    const r = await fetch(`/api/items/databricks-notebook/${id}/runs`);
+    const r = await clientFetch(`/api/items/databricks-notebook/${id}/runs`);
     const j = await r.json();
     if (j.ok) setRuns(j.runs || []);
   }, [id]);

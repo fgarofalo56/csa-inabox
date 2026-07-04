@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * RtiHubView — Real-Time Intelligence hub UNIFIED stream catalog.
  *
@@ -158,7 +159,7 @@ export function RtiHubView() {
 
   function load() {
     setData(null); setGate(null); setLoadErr(null);
-    fetch('/api/rti-hub').then(async (r) => {
+    clientFetch('/api/rti-hub').then(async (r) => {
       if (r.status === 401) { setUnauth(true); setData({ ok: false }); return; }
       const j: RtiHubResponse = await r.json().catch(() => ({ ok: false, error: 'Bad response' }));
       if (r.status === 503 || j.code === 'not_configured') { setGate(j); setData(j); return; }
@@ -169,7 +170,7 @@ export function RtiHubView() {
   useEffect(load, []);
 
   useEffect(() => {
-    fetch('/api/loom/workspaces').then(async (r) => {
+    clientFetch('/api/loom/workspaces').then(async (r) => {
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setLoomWorkspaces((j.workspaces || []).map((w: any) => ({ id: w.id, name: w.name })));
     }).catch(() => { /* dialog falls back to an empty workspace list */ });
@@ -208,7 +209,7 @@ export function RtiHubView() {
       return;
     }
     try {
-      const res = await fetch(`/api/items/activator?workspaceId=${encodeURIComponent(wsId)}`, {
+      const res = await clientFetch(`/api/items/activator?workspaceId=${encodeURIComponent(wsId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           displayName: `${row.name}-activator`,
@@ -248,7 +249,7 @@ export function RtiHubView() {
     if (typeof window !== 'undefined' &&
       !window.confirm(`Delete eventstream "${row.name}"? This removes the Loom eventstream item.`)) return;
     try {
-      const res = await fetch(`/api/items/eventstream/${encodeURIComponent(row.id)}`, { method: 'DELETE' });
+      const res = await clientFetch(`/api/items/eventstream/${encodeURIComponent(row.id)}`, { method: 'DELETE' });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || j?.ok === false) {
         dispatchToast(

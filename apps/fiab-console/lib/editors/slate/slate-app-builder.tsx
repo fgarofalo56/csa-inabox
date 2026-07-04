@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Slate app builder — the real, live dashboard/app builder surface for the
  * Fabric IQ `slate-app` item (Palantir Foundry Slate parity). Replaces the old
@@ -214,7 +215,7 @@ async function runSlateQuery(
   body: { queryId?: string; query?: Partial<SlateQueryDef>; parameters?: Array<{ name: string; value: string }> },
 ): Promise<RunResult> {
   try {
-    const r = await fetch(`/api/items/slate-app/${encodeURIComponent(id)}/query/run`, {
+    const r = await clientFetch(`/api/items/slate-app/${encodeURIComponent(id)}/query/run`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
     });
     const j = await r.json().catch(() => ({}));

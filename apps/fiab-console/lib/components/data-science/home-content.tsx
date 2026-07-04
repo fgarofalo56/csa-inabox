@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataScienceHomeContent — the shared body of the Data Science experience
  * landing surface. Rendered both by the top-level experience page
@@ -148,7 +149,7 @@ export function DataScienceHomeContent() {
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    fetch('/api/items/data-science/home')
+    clientFetch('/api/items/data-science/home')
       .then(async (r) => {
         if (r.status === 401 || r.status === 403) { if (alive) setUnauth(true); return null; }
         const ct = r.headers.get('content-type') || '';

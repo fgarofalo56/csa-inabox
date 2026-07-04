@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Foundry hub editor — fully wired to Azure AI Foundry workspace
  * (Microsoft.MachineLearningServices/workspaces kind=Hub) AND the sibling
@@ -323,7 +324,7 @@ function DeployModelDialog({ open, onClose, onDeployed, acct }: { open: boolean;
   const submit = async () => {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/foundry/model-deployments', {
+      const r = await clientFetch('/api/foundry/model-deployments', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ modelName, deploymentName, skuName, capacity: Number(capacity) || 10, ...acctBody(acct) }),
       });
@@ -526,7 +527,7 @@ function QuotaPanel({ active, nonce, acct }: { active: boolean; nonce: number; a
   const deployMini = async () => {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/foundry/quota', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelName: 'gpt-4o-mini', ...acctBody(acct) }) });
+      const r = await clientFetch('/api/foundry/quota', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelName: 'gpt-4o-mini', ...acctBody(acct) }) });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
       setMsg({ intent: 'success', text: j.message || `Deploying gpt-4o-mini (${j.deployment?.provisioningState})` });
@@ -589,7 +590,7 @@ function NetworkingPanel({ active, nonce, acct }: { active: boolean; nonce: numb
   const toggle = async (next: boolean) => {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/foundry/networking', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publicAccess: next, ...acctBody(acct) }) });
+      const r = await clientFetch('/api/foundry/networking', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ publicAccess: next, ...acctBody(acct) }) });
       const j = await r.json();
       if (!j.ok) { setMsg(j.error); return; }
       setMsg(`Public network access set to ${next ? 'Enabled' : 'Disabled'}`);
@@ -956,7 +957,7 @@ function CreateEvalDialog({ open, onClose, onCreated, acct }: { open: boolean; o
     const testingCriteria = rows.map(toTestingCriterion);
     const dataSourceConfig = { type: 'custom', item_schema: { type: 'object', properties: { input: { type: 'string' }, expected: { type: 'string' } } }, include_sample_schema: true };
     try {
-      const r = await fetch('/api/foundry/evaluations', {
+      const r = await clientFetch('/api/foundry/evaluations', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), testingCriteria, dataSourceConfig, ...acctBody(acct) }),
       });
@@ -1058,7 +1059,7 @@ function StartRunDialog({ open, onClose, onStarted, evalItem, acct }: {
       const ab = acctBody(acct);
       if (ab.account) form.append('account', ab.account);
       if (ab.rg) form.append('rg', ab.rg);
-      const r = await fetch('/api/foundry/evaluations/files', { method: 'POST', body: form });
+      const r = await clientFetch('/api/foundry/evaluations/files', { method: 'POST', body: form });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
       setFileId(j.file?.id || ''); setFileName(f.name);
@@ -1071,7 +1072,7 @@ function StartRunDialog({ open, onClose, onStarted, evalItem, acct }: {
     if (!evalItem || !fileId || !model) return;
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/foundry/evaluations', {
+      const r = await clientFetch('/api/foundry/evaluations', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'start_run', evalId: evalItem.id, fileId, model, name: runName.trim() || undefined, ...acctBody(acct) }),
       });
@@ -1571,7 +1572,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
       const ab = acctBody(acct);
       if (ab.account) form.append('account', ab.account);
       if (ab.rg) form.append('rg', ab.rg);
-      const r = await fetch('/api/foundry/fine-tuning/files', { method: 'POST', body: form });
+      const r = await clientFetch('/api/foundry/fine-tuning/files', { method: 'POST', body: form });
       const j = await r.json();
       if (!j.ok) { setMsg({ intent: j.notDeployed ? 'warning' : 'error', text: j.error, hint: j.hint }); return; }
       setMsg({ intent: 'success', text: `Uploaded ${f.name} → ${j.file?.id}` });
@@ -1589,7 +1590,7 @@ function FineTuningPanel({ active, nonce, acct }: { active: boolean; nonce: numb
     if (batchSize.trim()) hyperparameters.batch_size = Number(batchSize) || batchSize;
     if (lrMult.trim()) hyperparameters.learning_rate_multiplier = Number(lrMult) || lrMult;
     try {
-      const r = await fetch('/api/foundry/fine-tuning', {
+      const r = await clientFetch('/api/foundry/fine-tuning', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           model, trainingFileId,

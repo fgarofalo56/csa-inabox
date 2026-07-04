@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * FullNetworkTopologyCanvas — interactive resource-graph visual of the ENTIRE
  * CSA Loom network estate, rendered from REAL Azure Resource Graph data served
@@ -589,7 +590,7 @@ export function FullNetworkTopologyCanvas(): React.ReactElement {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/admin/network/topology');
+        const r = await clientFetch('/api/admin/network/topology');
         const j = (await r.json()) as ApiResp;
         if (alive) setData(j);
       } catch (e: any) {

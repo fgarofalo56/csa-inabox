@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * OneLakeSecurityTab (F7) — data-access roles for Lakehouse / Mirrored-Database
  * / Mirrored-Catalog items, with the Azure-native ADLS Gen2 ACL backend.
@@ -172,7 +173,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
     try {
       const out: PathEntry[] = [];
       for (const prefix of ['Tables', 'Files']) {
-        const r = await fetch(`/api/lakehouse/paths?container=${encodeURIComponent(effContainer)}&prefix=${prefix}`);
+        const r = await clientFetch(`/api/lakehouse/paths?container=${encodeURIComponent(effContainer)}&prefix=${prefix}`);
         const j = await r.json();
         if (j.ok && Array.isArray(j.paths)) {
           for (const p of j.paths) if (p.isDirectory) out.push({ name: `/${p.name}`, isDirectory: true });
@@ -207,7 +208,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
     const h = setTimeout(async () => {
       setPbusy(true); setPGate(null);
       try {
-        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${pkind}`);
+        const r = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${pkind}`);
         const j = await r.json();
         if (!j.ok && j.remediation) { setPGate(j.remediation); setPres([]); return; }
         setPres((j.results || []).map((p: any) => ({ id: p.id, type: p.type, displayName: p.displayName, upn: p.upn })));
@@ -344,7 +345,7 @@ export function OneLakeSecurityTab({ itemId, itemType, container, workspaceId, f
     const h = setTimeout(async () => {
       setPrevSearchBusy(true);
       try {
-        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${prevKind}`);
+        const r = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${prevKind}`);
         const j = await r.json();
         setPrevHits((j.results || []).map((p: any) => ({ id: p.id, type: p.type, displayName: p.displayName, upn: p.upn })));
       } catch { setPrevHits([]); }

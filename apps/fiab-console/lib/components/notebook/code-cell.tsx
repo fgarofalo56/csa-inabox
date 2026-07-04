@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Badge, Button, Caption1, Input, MessageBar, MessageBarBody, Popover,
@@ -370,7 +371,7 @@ export function CodeCell({ cell, active, onFocus, onChange, onRun, onStop, onDel
       const errorText = mode === 'fix'
         ? [cell.output?.ename, cell.output?.evalue, ...(cell.output?.traceback ?? [])].filter(Boolean).join('\n')
         : '';
-      const res = await fetch(`/api/notebook/${encodeURIComponent(notebookId)}/assist`, {
+      const res = await clientFetch(`/api/notebook/${encodeURIComponent(notebookId)}/assist`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({

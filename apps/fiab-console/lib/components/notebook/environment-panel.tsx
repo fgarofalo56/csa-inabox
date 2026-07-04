@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * EnvironmentPanel — Library & Environment management for a Loom notebook.
  *
@@ -119,7 +120,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
   const loadEnvs = useCallback(async () => {
     setLoading(true); setLoadErr(null); setLoadHint(null); setNotDeployed(false);
     try {
-      const r = await fetch('/api/aml/environments');
+      const r = await clientFetch('/api/aml/environments');
       const j = await r.json();
       if (!j.ok) {
         setEnvs([]);
@@ -141,7 +142,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
     try {
       const qs = new URLSearchParams({ name });
       if (version) qs.set('version', version);
-      const r = await fetch(`/api/aml/environments?${qs.toString()}`);
+      const r = await clientFetch(`/api/aml/environments?${qs.toString()}`);
       const j = await r.json();
       if (j.ok && j.environment) setDetail(j.environment);
       else setDetail(null);
@@ -159,7 +160,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
     const env = (envs || []).find((e) => e.name === selectedEnv);
     setAttachBusy(true); setStatusMsg('Attaching environment…');
     try {
-      const r = await fetch('/api/aml/environments?action=attach', {
+      const r = await clientFetch('/api/aml/environments?action=attach', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ notebookId, workspaceId, envName: selectedEnv, envVersion: env?.latestVersion }),
@@ -177,7 +178,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
   const detach = useCallback(async () => {
     setAttachBusy(true); setStatusMsg('Detaching…');
     try {
-      const r = await fetch('/api/aml/environments?action=detach', {
+      const r = await clientFetch('/api/aml/environments?action=detach', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ notebookId, workspaceId }),
@@ -195,7 +196,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
     try {
       const condaPackages = cConda.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
       const pipPackages = cPip.split(/[\n,]/).map((x) => x.trim()).filter(Boolean);
-      const r = await fetch('/api/aml/environments', {
+      const r = await clientFetch('/api/aml/environments', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: cName.trim(), image: cImage, description: cDesc.trim(), condaPackages, pipPackages }),
@@ -224,7 +225,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
     if (!jar) return;
     setJarBusy(true);
     try {
-      const r = await fetch('/api/aml/environments?action=attach-jar', {
+      const r = await clientFetch('/api/aml/environments?action=attach-jar', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ notebookId, workspaceId, jar }),
@@ -239,7 +240,7 @@ export function EnvironmentPanel(props: EnvironmentPanelProps) {
   const removeJar = useCallback(async (jar: string) => {
     setJarBusy(true);
     try {
-      const r = await fetch('/api/aml/environments?action=detach-jar', {
+      const r = await clientFetch('/api/aml/environments?action=detach-jar', {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ notebookId, workspaceId, jar }),

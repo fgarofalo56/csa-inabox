@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * F22 — Embed codes pane.
  *
@@ -64,7 +65,7 @@ export function EmbedCodesPane() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setGate(null);
     try {
-      const r = await fetch('/api/admin/embed-codes');
+      const r = await clientFetch('/api/admin/embed-codes');
       const j = await r.json();
       if (r.status === 503 && j.code === 'not-configured') { setGate(j.hint || {}); setCodes([]); return; }
       if (!j.ok) { setError(j.error || 'failed'); return; }
@@ -87,7 +88,7 @@ export function EmbedCodesPane() {
     if (!newReport.trim()) { setActionErr('Report name is required'); return; }
     setCreating(true); setActionErr(null);
     try {
-      const r = await fetch('/api/admin/embed-codes', {
+      const r = await clientFetch('/api/admin/embed-codes', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ report: newReport.trim() }),
       });
@@ -105,7 +106,7 @@ export function EmbedCodesPane() {
     if (!confirm('Revoke this embed code? The signed URL will stop working immediately.')) return;
     setActionErr(null);
     try {
-      const r = await fetch(`/api/admin/embed-codes?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/embed-codes?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       await load();

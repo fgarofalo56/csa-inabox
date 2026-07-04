@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataPipelineEditor — Fabric Data Pipeline parity rebuild.
  *
@@ -258,7 +259,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/loom/workspaces');
+      const r = await clientFetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
@@ -505,7 +506,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null); setListHint(null);
     try {
-      const r = await fetch(`/api/items/data-pipeline?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/data-pipeline?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setPipelines([]); setListErr(j.error); setListHint(j.hint); return; }
       setPipelines(j.pipelines || []);
@@ -516,7 +517,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   const loadDetail = useCallback(async (wsId: string, pId: string) => {
     setDetailErr(null);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
       // The detail route returns `definition` as the raw ADF pipeline JSON
@@ -552,7 +553,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
 
   const loadTriggers = useCallback(async (wsId: string, pId: string) => {
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pId)}/triggers?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pId)}/triggers?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (j.ok) {
         setTriggers(j.triggers || []);
@@ -570,7 +571,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     let alive = true;
     (async () => {
       try {
-        const r = await fetch(`/api/cosmos-items/data-pipeline/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/cosmos-items/data-pipeline/${encodeURIComponent(id)}`);
         const j = await r.json().catch(() => ({}));
         if (alive && j?.workspaceId) { setWorkspaceId(j.workspaceId); setPipelineId(id); }
       } catch { /* fall back to manual workspace pick */ }
@@ -695,7 +696,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
           properties: spec.properties,
         },
       };
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -729,7 +730,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     if (!workspaceId || !pipelineId) return;
     setValidating(true); setValidation(null);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/validate?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/validate?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ definition: { properties: spec.properties } }),
@@ -757,7 +758,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   // true on success so Run/Debug can publish-then-retry transparently.
   const publishToAdf = useCallback(async (): Promise<boolean> => {
     if (!workspaceId || !pipelineId) return false;
-    const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/publish?workspaceId=${encodeURIComponent(workspaceId)}`, {
+    const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/publish?workspaceId=${encodeURIComponent(workspaceId)}`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ definition: { name: spec.name, properties: spec.properties } }),
     });
@@ -832,7 +833,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
           payloadType: 'InlineBase64' as const,
         }],
       };
-      const r = await fetch(`/api/items/data-pipeline?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/data-pipeline?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: createName.trim(), definition }),
       });
@@ -847,7 +848,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   const del = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     if (!confirm('Delete this pipeline? This cannot be undone.')) return;
-    await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+    await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
     setPipelineId('');
     await loadList(workspaceId);
   }, [workspaceId, pipelineId, loadList]);
@@ -871,7 +872,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     }
     setSeeding(true);
     try {
-      const r = await fetch('/api/items/data-pipeline/practice-seed', {
+      const r = await clientFetch('/api/items/data-pipeline/practice-seed', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId }),
@@ -900,7 +901,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
   const exportPipeline = useCallback(async () => {
     if (!workspaceId || !pipelineId) return;
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/export?workspaceId=${encodeURIComponent(workspaceId)}`,
       );
       if (!r.ok) {
@@ -930,7 +931,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     const form = new FormData();
     form.append('file', file);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/data-pipeline/import?workspaceId=${encodeURIComponent(workspaceId)}&displayName=${encodeURIComponent(file.name.replace(/\.zip$/i, ''))}`,
         { method: 'POST', body: form },
       );
@@ -1006,7 +1007,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
     if (!workspaceId || !pipelineId || !name.trim()) return;
     setTriggerBusy(true); setTriggerErr(null);
     try {
-      const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), properties, parameterBindings: paramBindings }),
@@ -1021,7 +1022,7 @@ export function DataPipelineEditor({ item, id, runtimePreset, templateId }: Prop
 
   const startStopTrigger = useCallback(async (name: string, action: 'start' | 'stop') => {
     if (!workspaceId || !pipelineId) return;
-    const r = await fetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}&triggerName=${encodeURIComponent(name)}&action=${action}`, {
+    const r = await clientFetch(`/api/items/data-pipeline/${encodeURIComponent(pipelineId)}/triggers?workspaceId=${encodeURIComponent(workspaceId)}&triggerName=${encodeURIComponent(name)}&action=${action}`, {
       method: 'PUT',
     });
     const j = await r.json();

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * warehouse-editor — the Warehouse Copilot bridge for the SQL Warehouse editor.
  *
@@ -122,7 +123,7 @@ export function useWarehouseCopilot(
       setView('loading');
       setError(null);
       try {
-        const r = await fetch(`/api/items/warehouse/${encodeURIComponent(id)}/assist`, {
+        const r = await clientFetch(`/api/items/warehouse/${encodeURIComponent(id)}/assist`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({

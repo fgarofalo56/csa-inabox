@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Shared core for the ADF + Synapse pipeline editors (the Integrate experience).
  *
@@ -276,7 +277,7 @@ export function PipelineEditorCore({
     (async () => {
       setCreateWsLoading(true); setCreateWsError(null);
       try {
-        const r = await fetch('/api/loom/workspaces');
+        const r = await clientFetch('/api/loom/workspaces');
         const j = await r.json();
         if (cancelled) return;
         if (!j.ok) { setCreateWsError(j.error || `HTTP ${r.status}`); setCreateWorkspaces([]); }
@@ -344,7 +345,7 @@ export function PipelineEditorCore({
     if (!name || !target || !location) return;
     setFactoryCreateBusy(true); setFactoryCreateError(null);
     try {
-      const res = await fetch('/api/adf/factories/create', {
+      const res = await clientFetch('/api/adf/factories/create', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name,

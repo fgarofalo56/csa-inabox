@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SqlConstraintBuilder — the inline keys & constraints **designer** for a single
  * Azure SQL / Fabric SQL database table. A Fluent v9 dialog with four tabs
@@ -198,7 +199,7 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
   useEffect(() => {
     if (!open || tab !== 'FK' || tables !== null) return;
     setTables('loading');
-    fetch(`/api/sqldb/tables?${q}`).then(readJson).then((b) => {
+    clientFetch(`/api/sqldb/tables?${q}`).then(readJson).then((b) => {
       if (b.ok) setTables((b.tables || []).map((t: any) => ({ objectId: t.objectId, schema: t.schema, name: t.name, fullName: t.fullName })));
       else { setTables([]); setError(b.error || 'failed to load tables'); }
     }).catch((e) => { setTables([]); setError(e?.message || String(e)); });
@@ -208,7 +209,7 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
   useEffect(() => {
     if (refTableId == null) { setRefColumns(null); return; }
     setRefColumns('loading'); setRefCols([]);
-    fetch(`/api/sqldb/columns?${q}&objectId=${refTableId}`).then(readJson).then((b) => {
+    clientFetch(`/api/sqldb/columns?${q}&objectId=${refTableId}`).then(readJson).then((b) => {
       if (b.ok) setRefColumns(b.columns || []);
       else { setRefColumns([]); setError(b.error || 'failed to load referenced columns'); }
     }).catch((e) => { setRefColumns([]); setError(e?.message || String(e)); });
@@ -250,7 +251,7 @@ export function SqlConstraintBuilder(props: SqlConstraintBuilderProps) {
     }
     setBusy(true);
     try {
-      const body = await fetch(`/api/sqldb/constraints?${q}`, {
+      const body = await clientFetch(`/api/sqldb/constraints?${q}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ tableObjectId, spec }),

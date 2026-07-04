@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SlateAppEditor (Slate) — custom HTML/JS app published to Azure Static Web Apps.
  *
@@ -99,7 +100,7 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
   const generate = useCallback(async () => {
     setGenBusy(true); setGenErr(null);
     try {
-      const r = await fetch(`/api/items/slate-app/${encodeURIComponent(id)}/generate`, {
+      const r = await clientFetch(`/api/items/slate-app/${encodeURIComponent(id)}/generate`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ apiBaseUrl: state.apiBaseUrl || '/api', widgets: widgetsForCodegen }),
       });
@@ -116,7 +117,7 @@ export function SlateAppEditor({ item, id }: { item: FabricItemType; id: string 
     try {
       // Persist the latest queries/widgets first so Publish deploys the current app.
       if (dirty) await save();
-      const r = await fetch(`/api/items/slate-app/${encodeURIComponent(id)}/publish`, {
+      const r = await clientFetch(`/api/items/slate-app/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
       });
       const j = await r.json().catch(() => ({}));

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MappingDataFlowDesigner — the visual ADF / Synapse SPARK-based MAPPING DATA
  * FLOW designer.
@@ -1125,7 +1126,7 @@ function DesignerInner({
       if (onSave) {
         await onSave(props);
       } else {
-        const r = await fetch(`/api/adf/dataflows/${encodeURIComponent(name)}`, {
+        const r = await clientFetch(`/api/adf/dataflows/${encodeURIComponent(name)}`, {
           method: 'PUT',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ properties: props }),

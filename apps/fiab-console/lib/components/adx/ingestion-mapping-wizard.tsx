@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * IngestionMappingWizardDialog — the ADX / Fabric Eventhouse "Create ingestion
  * mapping" wizard with sample-file auto-detect.
@@ -193,7 +194,7 @@ export function IngestionMappingWizardDialog({
     const mapping = serializeMapping(rows, format);
     setSubmitting(true);
     try {
-      const res = await fetch(`/api/adx/ingestion-mappings?id=${encodeURIComponent(itemId)}`, {
+      const res = await clientFetch(`/api/adx/ingestion-mappings?id=${encodeURIComponent(itemId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: name.trim(), kind, table, mapping }),

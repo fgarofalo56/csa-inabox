@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * McpCatalogPanel — admin "Deploy from catalog" surface for vetted MCP servers.
  *
@@ -147,7 +148,7 @@ export function McpCatalogPanel({
   const load = useCallback(async () => {
     setLoading(true); setLoadError(null);
     try {
-      const r = await fetch('/api/admin/mcp-catalog');
+      const r = await clientFetch('/api/admin/mcp-catalog');
       const j = await r.json();
       if (!j.ok) { setLoadError(j.error || `HTTP ${r.status}`); return; }
       setCatalog(Array.isArray(j.catalog) ? j.catalog : []);
@@ -196,7 +197,7 @@ export function McpCatalogPanel({
     if (!selected) return;
     setDeploying(true); setDeployError(null);
     try {
-      const r = await fetch('/api/admin/mcp-catalog/deploy', {
+      const r = await clientFetch('/api/admin/mcp-catalog/deploy', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -221,7 +222,7 @@ export function McpCatalogPanel({
   const refreshStatus = useCallback(async (server: McpServerConfigDoc) => {
     setBusyId(server.serverId);
     try {
-      const r = await fetch(`/api/admin/mcp-catalog/status?id=${encodeURIComponent(server.serverId)}`);
+      const r = await clientFetch(`/api/admin/mcp-catalog/status?id=${encodeURIComponent(server.serverId)}`);
       const j = await r.json();
       if (j.ok && j.status) {
         setStatuses((prev) => ({ ...prev, [server.serverId]: j.status }));
@@ -233,7 +234,7 @@ export function McpCatalogPanel({
     if (!confirm(`Delete the deployed MCP server "${server.name}"? This removes the Azure Container App.`)) return;
     setBusyId(server.serverId);
     try {
-      const r = await fetch(`/api/admin/mcp-catalog/delete?id=${encodeURIComponent(server.serverId)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/mcp-catalog/delete?id=${encodeURIComponent(server.serverId)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { alert(`Delete failed: ${j.gate ? j.gate.message : (j.error || `HTTP ${r.status}`)}`); return; }
       onChanged();

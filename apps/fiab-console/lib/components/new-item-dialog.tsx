@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * NewItemDialog — Fabric `+ New item` modal. Two-pane layout:
  *  - left: workload category list
@@ -411,7 +412,7 @@ export function NewItemDialog({ defaultCategory, workspaceId, open: openProp, on
         setCreating(true);
         setError(null);
         try {
-          const r = await fetch(
+          const r = await clientFetch(
             `/api/app-templates/${encodeURIComponent(appTplId)}/instantiate`,
             {
               method: 'POST',

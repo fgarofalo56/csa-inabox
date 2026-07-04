@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * RefreshSummaryPane (F20) — scheduled-refresh overview.
  *
@@ -127,7 +128,7 @@ export function RefreshSummaryPane() {
     const params = new URLSearchParams({ days });
     if (status !== '(All)') params.set('status', status);
     if (workspace !== '(All)') params.set('workspace', workspace);
-    fetch(`/api/admin/refresh-summary?${params.toString()}`)
+    clientFetch(`/api/admin/refresh-summary?${params.toString()}`)
       .then(async (r) => {
         if (!alive) return;
         if (r.status === 401 || r.status === 403) { setUnauth(true); setData({ ok: false }); return; }

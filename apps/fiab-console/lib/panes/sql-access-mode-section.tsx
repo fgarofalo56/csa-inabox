@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SQL endpoint data-access mode section (F10).
  *
@@ -60,8 +61,8 @@ export function SqlAccessModeSection({ itemId, itemType }: Props) {
   useEffect(() => {
     let cancelled = false;
     Promise.all([
-      fetch(`/api/items/${itemType}/${itemId}`).then((r) => r.json()).catch(() => null),
-      fetch('/api/me').then((r) => r.json()).catch(() => null),
+      clientFetch(`/api/items/${itemType}/${itemId}`).then((r) => r.json()).catch(() => null),
+      clientFetch('/api/me').then((r) => r.json()).catch(() => null),
     ]).then(([item, me]) => {
       if (cancelled) return;
       const m = (item?.state?.accessMode === 'user' ? 'user' : 'service') as SqlAccessMode;
@@ -76,7 +77,7 @@ export function SqlAccessModeSection({ itemId, itemType }: Props) {
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/items/${itemType}/${itemId}/access-mode`, {
+      const res = await clientFetch(`/api/items/${itemType}/${itemId}/access-mode`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ accessMode: m }),

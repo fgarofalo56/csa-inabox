@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ConnectionBuilder — a reusable dialog to create OR edit a Key Vault-backed
  * Loom Connection. Mounted by the Connections page, the mirrored-database
@@ -145,7 +146,7 @@ export function ConnectionBuilder({
         // PATCH — only send fields that changed; never send an empty secret (would wipe KV).
         const body: Record<string, unknown> = { name, host, database, username, spnTenantId, spnClientId, authMethod };
         if (needsSecret && secret) body.secret = secret;
-        const r = await fetch(`/api/connections/${encodeURIComponent(editConnection.id)}`, {
+        const r = await clientFetch(`/api/connections/${encodeURIComponent(editConnection.id)}`, {
           method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify(body),
         });
@@ -155,7 +156,7 @@ export function ConnectionBuilder({
         onClose();
       } else {
         // POST — create new connection.
-        const r = await fetch('/api/connections', {
+        const r = await clientFetch('/api/connections', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ name, type, authMethod, host, database, username, spnTenantId, spnClientId, secret: needsSecret ? secret : undefined }),
         });

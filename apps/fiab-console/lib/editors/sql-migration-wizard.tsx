@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * sql-migration-wizard.tsx — the SQL DB migration assistant surface.
  *
@@ -235,7 +236,7 @@ export function SqlMigrationWizard() {
     try {
       const fd = new FormData();
       fd.append('file', file);
-      const r = await fetch('/api/items/warehouse/migrate/scan', { method: 'POST', body: fd });
+      const r = await clientFetch('/api/items/warehouse/migrate/scan', { method: 'POST', body: fd });
       const j = (await r.json()) as ScanResponse;
       if (!j.ok) { setScanError(j.error || 'Compatibility scan failed.'); return; }
       setScan(j);
@@ -274,7 +275,7 @@ export function SqlMigrationWizard() {
       const kinds = availableKinds.filter((k) => selectedKinds.has(k));
       const fd = new FormData();
       fd.append('file', file);
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/warehouse/migrate/import?kinds=${encodeURIComponent(kinds.join(','))}`,
         { method: 'POST', body: fd },
       );

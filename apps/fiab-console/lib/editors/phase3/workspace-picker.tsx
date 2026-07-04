@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Workspace pickers — shared by the Power BI / Fabric family editors
  * (Eventstream, Semantic Model, Report, Dashboard, …). Extracted from
@@ -40,7 +41,7 @@ export function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/loom/workspaces');
+      const r = await clientFetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed to list workspaces'); setHint(j.hint || null); setWorkspaces([]); }
       else { setWorkspaces(j.workspaces || []); }
@@ -81,7 +82,7 @@ export function usePowerBiWorkspaces(enabled: boolean = true) {
     if (!enabled) { setWorkspaces([]); setLoading(false); setError(null); setHint(null); return; }
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/powerbi/workspaces');
+      const r = await clientFetch('/api/powerbi/workspaces');
       const j = await r.json();
       if (!j.ok) {
         setError(j.error || 'failed to list Power BI workspaces');

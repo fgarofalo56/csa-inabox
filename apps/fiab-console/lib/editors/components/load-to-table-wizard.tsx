@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * LoadToTableWizard — no-code, multi-step wizard to load a CSV / Parquet /
  * JSON (and ORC / Avro / text) file from a Lakehouse container into a managed
@@ -126,7 +127,7 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch('/api/loom/compute-targets');
+        const r = await clientFetch('/api/loom/compute-targets');
         const j = await r.json();
         if (cancelled) return;
         if (!j.ok) { setPoolsError(j.error || `HTTP ${r.status}`); setPools([]); return; }
@@ -146,7 +147,7 @@ export function LoadToTableWizard(props: LoadToTableWizardProps) {
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const r = await fetch('/api/lakehouse/load-to-table', {
+      const r = await clientFetch('/api/lakehouse/load-to-table', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ container, path, tableName, writeMode, poolName, format }),

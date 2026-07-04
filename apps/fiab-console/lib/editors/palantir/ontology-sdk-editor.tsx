@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * OntologySdkEditor (OSDK) — typed SDK over an ontology (Data API Builder).
  *
@@ -87,7 +88,7 @@ function OsdkTryIt({ id, objectTypes, serviceUrl, onServiceUrl }: {
       const body = mode === 'graphql'
         ? { mode, graphql: gql }
         : { mode, objectType, first: Number(first) || 25, filter: filter.trim() || undefined };
-      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
@@ -217,7 +218,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
   const generate = useCallback(async () => {
     setGenBusy(true); setGenErr(null);
     try {
-      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/generate`, {
+      const r = await clientFetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/generate`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ selectedObjectTypes: [...selObj], selectedLinkTypes: [...selLink], selectedActionTypes: [...selAct] }),
       });
@@ -236,7 +237,7 @@ export function OntologySdkEditor({ item, id }: { item: FabricItemType; id: stri
   const publish = useCallback(async () => {
     setPubBusy(true); setPubMsg(null);
     try {
-      const r = await fetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/publish`, {
+      const r = await clientFetch(`/api/items/ontology-sdk/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
       });
       const j = await r.json().catch(() => ({}));

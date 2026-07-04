@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Data product editors — Template gallery + Instance detail.
  *
@@ -80,7 +81,7 @@ function useWorkspaces() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/loom/workspaces');
+        const r = await clientFetch('/api/loom/workspaces');
         const j = await r.json();
         if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setWorkspaces([]); }
         else { setWorkspaces(j.workspaces || []); }
@@ -113,7 +114,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const r = await fetch(`/api/items/data-product-template`);
+      const r = await clientFetch(`/api/items/data-product-template`);
       const j = await r.json();
       if (j.ok) {
         const curated: Template[] = j.curated || [];
@@ -141,7 +142,7 @@ export function DataProductTemplateEditor({ item, id }: { item: FabricItemType; 
       const components = selected.components
         .map((c, i) => excluded.has(i) ? null : { slug: c.slug, label: c.label, renameTo: renames[i] })
         .filter(Boolean);
-      const r = await fetch(`/api/items/data-product-template/${selected.slug}/instantiate`, {
+      const r = await clientFetch(`/api/items/data-product-template/${selected.slug}/instantiate`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, displayName, components, provision: deploy }),
       });
@@ -334,7 +335,7 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
   const loadInstance = useCallback(async () => {
     if (!id || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/data-product-instance/${id}`);
+      const r = await clientFetch(`/api/items/data-product-instance/${id}`);
       const j = await r.json();
       if (j.ok) { setInstance(j.item); setErr(null); }
       else setErr(j.error);
@@ -352,7 +353,7 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
     const next: Record<string, ComponentHealth> = {};
     await Promise.all(components.map(async (c) => {
       try {
-        const r = await fetch(`/api/cosmos-items/${encodeURIComponent(c.slug)}/${encodeURIComponent(c.itemId)}`);
+        const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(c.slug)}/${encodeURIComponent(c.itemId)}`);
         if (r.status === 404) { next[c.itemId] = { status: 'missing', detail: 'item not found in Cosmos' }; return; }
         const j = await r.json();
         next[c.itemId] = j.ok ? classifyHealth(j.item?.updatedAt) : { status: 'unknown', detail: j.error };
@@ -365,7 +366,7 @@ export function DataProductInstanceEditor({ item, id }: { item: FabricItemType; 
     if (id === 'new') return;
     setProvisioning(true); setProvMsg(null);
     try {
-      const r = await fetch(`/api/items/data-product-instance/${id}/provision`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/data-product-instance/${id}/provision`, { method: 'POST' });
       const j = await r.json();
       setProvMsg(j.ok ? `Provision ${j.report?.outcome || 'done'} — ${(j.report?.steps || []).length} component(s).` : (j.error || 'failed'));
       await loadInstance();

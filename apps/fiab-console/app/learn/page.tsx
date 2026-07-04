@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * /learn — the CSA Loom Learning Hub.
  *
@@ -202,7 +203,7 @@ export default function LearnPage(): React.ReactElement {
   const [notebooks, setNotebooks] = React.useState<NotebookSample[] | null>(null);
   const [nbErr, setNbErr] = React.useState<string | null>(null);
   React.useEffect(() => {
-    fetch('/api/learn/notebook-import')
+    clientFetch('/api/learn/notebook-import')
       .then((r) => r.json())
       .then((d: any) => {
         if (d?.ok) setNotebooks(d.notebooks || []);

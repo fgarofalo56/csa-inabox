@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AllItemsExplorer — the "everything in Loom" view for /browse. Lists every
  * workspace item across the tenant (real data: /api/items/by-type over all known
@@ -71,8 +72,8 @@ export function AllItemsExplorer() {
       try {
         const qs = ALL_TYPES.map((t) => `type=${encodeURIComponent(t)}`).join('&');
         const [ir, wr] = await Promise.all([
-          fetch(`/api/items/by-type?${qs}`).then((r) => r.json()).catch(() => ({})),
-          fetch('/api/workspaces').then((r) => r.json()).catch(() => ({})),
+          clientFetch(`/api/items/by-type?${qs}`).then((r) => r.json()).catch(() => ({})),
+          clientFetch('/api/workspaces').then((r) => r.json()).catch(() => ({})),
         ]);
         if (!alive) return;
         setItems(Array.isArray(ir?.items) ? ir.items : (ir?.value || []));

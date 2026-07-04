@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DatastoreExplorer — the AML notebook path's "Data" sidebar.
  *
@@ -61,7 +62,7 @@ export function DatastoreExplorer({ onInsertPath }: Props) {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/aml/datastores');
+      const r = await clientFetch('/api/aml/datastores');
       const j = await r.json();
       if (j.ok) {
         setStores(j.datastores || []);

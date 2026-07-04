@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ReportDesigner — the Loom-native interactive REPORT DESIGNER.
  *
@@ -2241,7 +2242,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     }
     setLoading(true); setLoadErr(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) { setLoadErr(j.error || `HTTP ${r.status}`); return; }
       setReportName(j.report?.name || '');
@@ -2251,7 +2252,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       // AAS binding so already-saved reports keep working unchanged.
       let ds: ReportDataSource | null = null;
       try {
-        const dr = await fetch(`/api/items/report/${encodeURIComponent(id)}/data-source`);
+        const dr = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/data-source`);
         if (dr.ok) { const dj = await dr.json(); if (dj?.ok) ds = parseDataSource(dj.dataSource); }
       } catch { /* route may not be present yet — fall through to legacy below */ }
       if (!ds) ds = fromLegacyState({ aasServer: j.aasServer ?? undefined, aasDatabase: j.aasDatabase ?? undefined });
@@ -2410,7 +2411,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     }
     setFieldsLoading(true); setFieldsErr(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/fields`);
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/fields`);
       const j = await r.json();
       if (j.ok) { setTables(j.tables || []); }
       else { setTables([]); setFieldsErr(j.error || `HTTP ${r.status}`); }
@@ -2527,7 +2528,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       // the SELECT — REAL Synapse rows for the drilled sub-level / scaled measure.
       const dr = drillByVisualRef.current[v.id];
       const wif = whatIfBindings(whatIfsRef.current);
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           visual: queryVisual(v), filters: wireFilters(applicable), dataSource,
@@ -2793,7 +2794,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
         ? `${first.table ? `'${first.table.replace(/'/g, "''")}'` : ''}[${first.column}]`
         : undefined;
     const visual = { type: spec.type, field, wells: { category: cat, values: vals, legend: leg } };
-    const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
+    const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ visual, filters: adHocFilters ?? [], dataSource }),
     });
@@ -3349,7 +3350,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     }
     setSaveBusy(true); setSaveMsg(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/definition`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/definition`, {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(buildDefinitionBody()),
       });
       const j = await r.json();
@@ -3366,7 +3367,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     if (!createOpen || workspaces !== null) return;
     (async () => {
       try {
-        const r = await fetch('/api/loom/workspaces');
+        const r = await clientFetch('/api/loom/workspaces');
         const j = await r.json();
         if (j.ok) {
           const list = (j.workspaces || []) as { id: string; name: string }[];
@@ -3383,7 +3384,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     setCreateBusy(true); setCreateErr(null);
     try {
       // 1. Mint the real Cosmos `report` item (generic create route).
-      const cr = await fetch('/api/cosmos-items/report', {
+      const cr = await clientFetch('/api/cosmos-items/report', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId: createWsId, displayName: name }),
       });
@@ -3392,7 +3393,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       const newId: string = cj.item.id;
 
       // 2. Persist the designed pages/visuals/filters against the new id.
-      const dr = await fetch(`/api/items/report/${encodeURIComponent(newId)}/definition`, {
+      const dr = await clientFetch(`/api/items/report/${encodeURIComponent(newId)}/definition`, {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(buildDefinitionBody()),
       });
       const dj = await dr.json().catch(() => ({} as any));
@@ -3402,7 +3403,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
       //    a validation reject shouldn't strand the created report — the live
       //    editor will show its honest "pick a data source" gate.
       if (isBound(dataSource) && dataSource) {
-        await fetch(`/api/items/report/${encodeURIComponent(newId)}/data-source`, {
+        await clientFetch(`/api/items/report/${encodeURIComponent(newId)}/data-source`, {
           method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dataSource }),
         }).catch(() => { /* swallow — re-pickable in the live editor */ });
       }
@@ -3431,7 +3432,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
     }
     setDsSaving(true); setDsNote(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/data-source`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/data-source`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dataSource: ds }),
       });
@@ -3459,7 +3460,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const doPublish = useCallback(async () => {
     setPublishBusy(true); setPublishMsg(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/publish`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ target: publishTarget }),
       });
@@ -3513,7 +3514,7 @@ export function ReportDesigner({ item, id }: { item: FabricItemType; id: string 
   const onServerExport = useCallback(async (format: ExportFormat, scope: ExportScope) => {
     setExportMsg(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/export`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/export`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mode: 'loom-native', format, scope }),
       });

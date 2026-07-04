@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AdxRbacPanel — Azure Data Explorer / Fabric Eventhouse RBAC principal manager.
  *
@@ -174,7 +175,7 @@ export function AdxRbacPanel({ itemId, database, tables }: AdxRbacPanelProps) {
         principalValue: overrides?.principalValue ?? fValue.trim(),
         action,
       };
-      const res = await fetch(`/api/adx/principals?id=${encodeURIComponent(itemId)}`, {
+      const res = await clientFetch(`/api/adx/principals?id=${encodeURIComponent(itemId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
       const body = await readJson(res);

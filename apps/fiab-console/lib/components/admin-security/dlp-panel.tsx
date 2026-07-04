@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DlpPanel — DLP tab for /admin/security.
  *
@@ -424,19 +425,19 @@ function RestrictSection() {
 
   const loadHistory = useCallback(async () => {
     try {
-      const j = await fetch('/api/governance/dlp/meta').then((r) => r.json());
+      const j = await clientFetch('/api/governance/dlp/meta').then((r) => r.json());
       setHistory(Array.isArray(j?.restrictions) ? j.restrictions : []);
     } catch { /* best-effort */ } finally { setHistoryLoaded(true); }
   }, []);
 
   useEffect(() => {
     setContainersLoading(true);
-    fetch('/api/lakehouse/containers').then((r) => r.json())
+    clientFetch('/api/lakehouse/containers').then((r) => r.json())
       .then((d) => setContainers((d?.containers || []).map((c: any) => c.name).filter(Boolean)))
       .catch(() => {})
       .finally(() => setContainersLoading(false));
     setKqlLoading(true);
-    fetch('/api/items/by-type?types=kql-database').then((r) => r.json())
+    clientFetch('/api/items/by-type?types=kql-database').then((r) => r.json())
       .then((d) => setKqlDbs((d?.items || []).map((x: any) => ({ id: x.id, name: x.displayName || x.id }))))
       .catch(() => {})
       .finally(() => setKqlLoading(false));
@@ -448,7 +449,7 @@ function RestrictSection() {
     if (scope !== 'warehouse-schema') return;
     setSchemaGate(null);
     setSchemasLoading(true);
-    fetch('/api/governance/dlp/schemas').then(async (r) => {
+    clientFetch('/api/governance/dlp/schemas').then(async (r) => {
       const j = await r.json();
       if (r.status === 503 || j?.code === 'warehouse_not_configured') {
         setSchemas([]); setSchemaGate(j?.error || 'The Azure-native warehouse is not configured.');
@@ -472,7 +473,7 @@ function RestrictSection() {
     if (!principal) { setErr('Select a principal to restrict.'); return; }
     setRunning(true); setErr(null); setResult(null);
     try {
-      const r = await fetch('/api/governance/dlp/restrict', {
+      const r = await clientFetch('/api/governance/dlp/restrict', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -656,7 +657,7 @@ function SimulateSection() {
   const run = async () => {
     setRunning(true); setErr(null); setResult(null);
     try {
-      const r = await fetch('/api/admin/security/dlp/simulate', {
+      const r = await clientFetch('/api/admin/security/dlp/simulate', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ content }),

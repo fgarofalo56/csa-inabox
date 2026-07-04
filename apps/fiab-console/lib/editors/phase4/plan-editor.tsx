@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Plan editor (Cosmos-backed planning sheets, EPM cube model, formulas).
  *
@@ -182,7 +183,7 @@ function PlanApprovalPanel({
     if (!id || id === 'new') { setMsg({ intent: 'error', text: 'Save the plan before requesting approval.' }); return; }
     setBusy('request'); setMsg(null);
     try {
-      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/approval`, {
+      const r = await clientFetch(`/api/items/plan/${encodeURIComponent(id)}/approval`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ approverEmail: approver.trim(), linkedSemanticModelId: linkedModel.trim() || undefined }),
@@ -203,7 +204,7 @@ function PlanApprovalPanel({
   const refreshStatus = useCallback(async () => {
     if (!id || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/approval?action=status`);
+      const r = await clientFetch(`/api/items/plan/${encodeURIComponent(id)}/approval?action=status`);
       const j = await r.json().catch(() => ({}));
       if (r.ok && j?.ok) {
         setState((prev) => ({
@@ -219,7 +220,7 @@ function PlanApprovalPanel({
     if (!linkId) { setMsg({ intent: 'warning', text: 'Link a semantic model item id to push plan metrics into it.' }); return; }
     setBusy('push'); setMsg(null);
     try {
-      const r = await fetch(`/api/items/semantic-model/${encodeURIComponent(linkId)}/model`, {
+      const r = await clientFetch(`/api/items/semantic-model/${encodeURIComponent(linkId)}/model`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ planMetrics: { tasks, approvalStatus: status } }),
@@ -400,7 +401,7 @@ function PlanSettingsFlyout({
   useEffect(() => {
     if (!open || !id || id === 'new') return;
     setLoading(true); setMsg(null);
-    fetch(`/api/items/plan/${encodeURIComponent(id)}/binding`)
+    clientFetch(`/api/items/plan/${encodeURIComponent(id)}/binding`)
       .then((r) => r.json().catch(() => ({})))
       .then((j) => {
         if (j?.ok) { setModels(arr(j.semanticModels)); setBacking(j.backing || null); }
@@ -419,7 +420,7 @@ function PlanSettingsFlyout({
     if (!id || id === 'new') { setMsg({ intent: 'error', text: 'Save the plan first.' }); return; }
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/binding`, {
+      const r = await clientFetch(`/api/items/plan/${encodeURIComponent(id)}/binding`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action: 'provision' }),
       });
       const j = await r.json().catch(() => ({}));
@@ -655,7 +656,7 @@ function PlanningSheetPanel({
     setBusy(true); setMsg(null);
     try {
       await save(); // persist to Cosmos first (the always-works default)
-      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`, {
+      const r = await clientFetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sheetId: sheet.id, cells }),
       });
       const j = await r.json().catch(() => ({}));
@@ -1277,7 +1278,7 @@ function PlanPowerTablePanel({
           return { lineItemId, periodId, scenarioId, value };
         });
         if (cells.length === 0) continue;
-        const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`, {
+        const r = await clientFetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`, {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sheetId: sheet.id, cells }),
         });
         const j = await r.json().catch(() => ({}));
@@ -1296,7 +1297,7 @@ function PlanPowerTablePanel({
     if (!id || id === 'new') { setMsg({ intent: 'warning', text: 'Save the plan first.' }); return; }
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`);
+      const r = await clientFetch(`/api/items/plan/${encodeURIComponent(id)}/writeback`);
       const j = await r.json().catch(() => ({}));
       if (r.status === 503 && j?.gate) { setMsg({ intent: 'warning', text: `${j.gate.reason} Set ${j.gate.missing}. PowerTable is bound to the in-editor (Cosmos) cells.` }); return; }
       if (!r.ok || !j?.ok) { setMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
@@ -1570,7 +1571,7 @@ function PlanInfoBridgePanel({
   const loadSources = useCallback(async () => {
     for (const type of ['warehouse', 'lakehouse', 'semantic-model']) {
       try {
-        const r = await fetch(`/api/items/by-type?types=${encodeURIComponent(type)}`);
+        const r = await clientFetch(`/api/items/by-type?types=${encodeURIComponent(type)}`);
         const j = await r.json().catch(() => ({}));
         const items = (j.items || []).map((it: any) => ({ id: it.id, name: it.displayName || it.id }));
         setSources((prev) => ({ ...prev, [type]: items }));
@@ -2055,7 +2056,7 @@ function PlanModelPanel({
     }
     try {
       await save(); // persist what we're validating
-      const r = await fetch(`/api/items/plan/${encodeURIComponent(id)}/model`, {
+      const r = await clientFetch(`/api/items/plan/${encodeURIComponent(id)}/model`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ model, sheets }),
       });
       const j = await r.json().catch(() => ({}));
@@ -2394,7 +2395,7 @@ function PlanVersionsPanel({
   // Best-effort author stamp from the signed-in session (same /api/me the shell uses).
   useEffect(() => {
     let alive = true;
-    fetch('/api/me')
+    clientFetch('/api/me')
       .then((r) => r.json())
       .then((d: { user?: { name?: string; upn?: string } | null }) => {
         if (alive && (d?.user?.name || d?.user?.upn)) setAuthor(d.user!.name || d.user!.upn);

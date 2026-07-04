@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ML Experiment editor — full MLflow tracking surface over Azure Machine
  * Learning's MLflow-compatible tracking server (no Fabric / Power BI dependency).
@@ -215,7 +216,7 @@ function ArtifactTree({ runId }: { runId: string }) {
     setLoading((l) => ({ ...l, [path]: true }));
     try {
       const qs = path ? `?path=${encodeURIComponent(path)}` : '';
-      const r = await fetch(`/api/aml/runs/${encodeURIComponent(runId)}/artifacts${qs}`);
+      const r = await clientFetch(`/api/aml/runs/${encodeURIComponent(runId)}/artifacts${qs}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); return; }
       if (j.configured === false) { setConfigured(false); setHint(j.hint || null); return; }
@@ -367,7 +368,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs?runViewType=${lifecycle}`);
+      const r = await clientFetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs?runViewType=${lifecycle}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setLoading(false); return; }
       if (j.configured === false) { setConfigured(false); setHint(j.hint || null); setRuns([]); setLoading(false); return; }
@@ -389,7 +390,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
       try {
         const params = new URLSearchParams({ runViewType: lifecycle });
         if (serverFilter) params.set('filter', serverFilter);
-        const r = await fetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs?${params.toString()}`);
+        const r = await clientFetch(`/api/items/ml-experiment/${encodeURIComponent(id)}/runs?${params.toString()}`);
         const j = await r.json();
         if (j.ok && j.configured !== false) setRuns(Array.isArray(j.runs) ? j.runs : []);
         else if (j.configured === false) { setConfigured(false); setHint(j.hint || null); }
@@ -400,7 +401,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
     setApplying(true);
     try {
       const orderBy = buildOrderBy(sortCol, sortDir);
-      const r = await fetch('/api/aml/runs', {
+      const r = await clientFetch('/api/aml/runs', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           experimentIds: [experiment.experimentId],
@@ -431,7 +432,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
     if (!detailRunId || !detailMetric) { setDetailHistory([]); return; }
     setDetailMetricLoading(true);
     try {
-      const r = await fetch(`/api/aml/runs/${encodeURIComponent(detailRunId)}/metrics?metricKey=${encodeURIComponent(detailMetric)}`);
+      const r = await clientFetch(`/api/aml/runs/${encodeURIComponent(detailRunId)}/metrics?metricKey=${encodeURIComponent(detailMetric)}`);
       const j = await r.json();
       if (j.ok && j.configured !== false) {
         const hist = (Array.isArray(j.history) ? j.history : []).map((m: any, i: number) => ({ x: m.step ?? i, y: m.value }));
@@ -456,7 +457,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
     setCompareLoading(true);
     try {
       const series = await Promise.all(checkedRuns.map(async (run, idx) => {
-        const r = await fetch(`/api/aml/runs/${encodeURIComponent(run.runId)}/metrics?metricKey=${encodeURIComponent(compareMetric)}`);
+        const r = await clientFetch(`/api/aml/runs/${encodeURIComponent(run.runId)}/metrics?metricKey=${encodeURIComponent(compareMetric)}`);
         const j = await r.json();
         const pts = (j.ok && Array.isArray(j.history) ? j.history : []).map((m: any, i: number) => ({ x: m.step ?? i, y: m.value }));
         return { runId: run.runId, label: run.runName || run.runId, color: compareColor(idx), points: pts } as ChartSeries;
@@ -502,7 +503,7 @@ function MlExperimentEditorBody({ item, id }: { item: FabricItemType; id: string
   const runAction = useCallback(async (runId: string, action: 'delete' | 'clone' | 'archive' | 'restore') => {
     setActionBusy(`${action}:${runId}`); setActionMsg(null);
     try {
-      const r = await fetch(`/api/aml/runs/${encodeURIComponent(runId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) });
+      const r = await clientFetch(`/api/aml/runs/${encodeURIComponent(runId)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ action }) });
       const j = await r.json();
       if (!j.ok) { setActionMsg({ intent: 'error', text: j.error || `HTTP ${r.status}` }); return; }
       if (j.configured === false) { setActionMsg({ intent: 'error', text: j.hint || 'MLflow not configured' }); return; }

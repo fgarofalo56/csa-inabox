@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Runtime configuration pane — /admin/env-config.
  *
@@ -91,7 +92,7 @@ export function EnvConfigPane() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setForbidden(null);
     try {
-      const r = await fetch('/api/admin/env-config', { cache: 'no-store' });
+      const r = await clientFetch('/api/admin/env-config', { cache: 'no-store' });
       const j = await r.json();
       if (r.status === 401) { setForbidden('Sign in as a tenant admin to manage runtime configuration.'); return; }
       if (r.status === 403) { setForbidden(j?.remediation || 'Access denied — tenant admin required.'); return; }
@@ -141,7 +142,7 @@ export function EnvConfigPane() {
     const values: Record<string, string> = {};
     for (const k of dirtyKeys) values[k] = edits[k];
     try {
-      const r = await fetch('/api/admin/env-config', {
+      const r = await clientFetch('/api/admin/env-config', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ values }),
       });

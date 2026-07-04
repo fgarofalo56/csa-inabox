@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CmkPane — Customer-Managed Keys (F14) admin surface.
  *
@@ -89,7 +90,7 @@ export function CmkPane({ workspaceId }: { workspaceId: string }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk`);
+      const res = await clientFetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk`);
       const j: StatusResponse = await res.json();
       if (j?.gate) {
         setGate({ missing: j.missing, hint: j.hint, bicepModule: j.bicepModule });
@@ -116,7 +117,7 @@ export function CmkPane({ workspaceId }: { workspaceId: string }) {
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk`, { method: 'DELETE' });
+      const res = await clientFetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk`, { method: 'DELETE' });
       const j = await res.json();
       if (j?.gate) { setGate({ missing: j.missing, hint: j.hint, bicepModule: j.bicepModule }); return; }
       if (!res.ok || !j?.ok) { setError(j?.error || `HTTP ${res.status}`); return; }
@@ -280,7 +281,7 @@ function BindWizard({
       try {
         const qs = new URLSearchParams({ list: 'keys' });
         if (vaultUri) qs.set('vaultUri', vaultUri);
-        const res = await fetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk?${qs}`);
+        const res = await clientFetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk?${qs}`);
         const j = await res.json();
         if (cancelled) return;
         if (j?.gate) { setError(j.hint || 'Key Vault role missing'); setKeys([]); }
@@ -304,7 +305,7 @@ function BindWizard({
       try {
         const qs = new URLSearchParams({ keyName });
         if (vaultUri) qs.set('vaultUri', vaultUri);
-        const res = await fetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk?${qs}`);
+        const res = await clientFetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk?${qs}`);
         const j = await res.json();
         if (cancelled) return;
         if (j?.ok) setVersions(j.versions || []);
@@ -323,7 +324,7 @@ function BindWizard({
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk`, {
+      const res = await clientFetch(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/cmk`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ vaultUri, keyName, keyVersion, bindCosmos }),

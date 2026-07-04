@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * PurviewGate — honest, well-designed infra gate for every governance /
  * unified-catalog surface that needs Microsoft Purview.
@@ -87,7 +88,7 @@ export function usePurviewStatus(): { status: PurviewStatus; reload: () => void 
   const reload = useCallback(async () => {
     setStatus({ configured: false, reason: 'loading' });
     try {
-      const r = await fetch('/api/governance/purview/status');
+      const r = await clientFetch('/api/governance/purview/status');
       const j = await r.json().catch(() => null);
       if (j && typeof j.configured === 'boolean') {
         setStatus(j as PurviewStatus);

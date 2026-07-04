@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * PermissionMatrix — Loom-native role grant UI for Unity Catalog +
  * Fabric/OneLake. The user picks (source, securable, principal, role) and
@@ -124,7 +125,7 @@ export function PermissionMatrix() {
       body.workspaceId = workspaceId; body.principalType = principalType;
     }
     try {
-      const r = await fetch('/api/catalog/permissions', {
+      const r = await clientFetch('/api/catalog/permissions', {
         method: action,
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),

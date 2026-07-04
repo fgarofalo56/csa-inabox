@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Shared KQL results / visualization / conditional-formatting cluster —
  * extracted from phase3-editors.tsx (byte-for-byte move).
@@ -530,7 +531,7 @@ export function KqlResultsPanel({ result, loading, itemId, itemType }: { result:
     if (!itemId || !itemType) return undefined;
     return async (): Promise<{ blocked: boolean; reason?: string }> => {
       try {
-        const r = await fetch(`/api/items/${itemType}/${itemId}/export-check`, {
+        const r = await clientFetch(`/api/items/${itemType}/${itemId}/export-check`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ format: 'csv' }),

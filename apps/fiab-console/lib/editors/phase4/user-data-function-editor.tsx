@@ -203,7 +203,7 @@ export function UserDataFunctionEditor({ item, id }: { item: FabricItemType; id:
       else parameters[p.name] = raw;
     }
     try {
-      const r = await fetch(`/api/items/user-data-function/${encodeURIComponent(id)}/invoke`, {
+      const r = await clientFetch(`/api/items/user-data-function/${encodeURIComponent(id)}/invoke`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ functionName: selectedFn.name, parameters }),
       });

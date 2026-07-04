@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AppShell — v3 topbar (Fabric parity). Order:
  *   Brand | AppLauncher | TabStrip | SavedStatus | TopbarSearch | actions
@@ -147,7 +148,7 @@ export function AppShell({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch('/api/me').then((r) => r.json()).then((d: MeResponse) => {
+    clientFetch('/api/me').then((r) => r.json()).then((d: MeResponse) => {
       if (!cancelled) setMe(d);
     }).catch(() => {/* unauthenticated */});
     return () => { cancelled = true; };

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ClassificationPane — item-level data-classification flyout, one-for-one with
  * the Microsoft Purview "Classifications" picker on a Data Map asset (Learn:
@@ -109,7 +110,7 @@ export function ClassificationPane({ type, id }: Props) {
   const loadTags = async () => {
     setTagsLoading(true); setTagsMsg(null);
     try {
-      const res = await fetch(`/api/items/${type}/${id}/business-metadata`);
+      const res = await clientFetch(`/api/items/${type}/${id}/business-metadata`);
       const data = await res.json().catch(() => ({}));
       setTagsConfigured(!!data?.configured);
       setTagsHasAsset(!!data?.hasAsset);
@@ -148,7 +149,7 @@ export function ClassificationPane({ type, id }: Props) {
   const saveTags = async () => {
     setTagsBusy(true); setTagsMsg(null);
     try {
-      const res = await fetch(`/api/items/${type}/${id}/business-metadata`, {
+      const res = await clientFetch(`/api/items/${type}/${id}/business-metadata`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ attributes: tagsFromRows() }),
@@ -173,7 +174,7 @@ export function ClassificationPane({ type, id }: Props) {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/items/${type}/${id}/classifications`);
+      const res = await clientFetch(`/api/items/${type}/${id}/classifications`);
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data?.ok) {
         setError(data?.error || `Failed to load classifications (${res.status})`);
@@ -190,12 +191,12 @@ export function ClassificationPane({ type, id }: Props) {
       // item's Atlas entity GUID, resolved from the item record below.
       if (data.purviewConfigured) {
         try {
-          const gr = await fetch('/api/catalog/glossary');
+          const gr = await clientFetch('/api/catalog/glossary');
           const gj = await gr.json().catch(() => ({}));
           setGlossaryTerms(gr.ok && gj?.ok ? (gj.terms || []) : []);
         } catch { setGlossaryTerms([]); }
         try {
-          const ir = await fetch(`/api/items/${type}/${id}`);
+          const ir = await clientFetch(`/api/items/${type}/${id}`);
           const ij = await ir.json().catch(() => ({}));
           setAssetGuid(ir.ok ? (ij?.state?.purviewAssetGuid || ij?.state?.purviewGuid || null) : null);
         } catch { /* leave assetGuid null → honest gate on apply */ }
@@ -216,7 +217,7 @@ export function ClassificationPane({ type, id }: Props) {
   const save = async () => {
     setBusy(true); setError(null); setOk(null);
     try {
-      const res = await fetch(`/api/items/${type}/${id}/classifications`, {
+      const res = await clientFetch(`/api/items/${type}/${id}/classifications`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ classifications: selected }),
@@ -256,7 +257,7 @@ export function ClassificationPane({ type, id }: Props) {
       for (const t of chosen) {
         // Reuse the existing glossary BFF route: create-or-resolve the term by
         // name (idempotent) and apply it to this asset's Atlas entity.
-        const res = await fetch('/api/catalog/glossary', {
+        const res = await clientFetch('/api/catalog/glossary', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ term: { name: t.name, glossaryGuid: t.glossaryGuid }, applyTo: { entityGuid: assetGuid } }),

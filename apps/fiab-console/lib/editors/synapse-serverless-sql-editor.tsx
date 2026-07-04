@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Synapse Serverless SQL editor — dedicated SQL-script surface for the
  * `synapse-serverless-sql-pool` item (the lakehouse-paired SQL analytics
@@ -169,7 +170,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
   // ── Connect-to database list (master + user DBs) ──
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/items/synapse-serverless-sql-pool/${id}/schema`)
+    clientFetch(`/api/items/synapse-serverless-sql-pool/${id}/schema`)
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
@@ -185,7 +186,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
   const loadObjects = useCallback(async () => {
     setObjectsLoading(true);
     try {
-      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/objects?database=${encodeURIComponent(database)}`);
+      const r = await clientFetch(`/api/items/synapse-serverless-sql-pool/${id}/objects?database=${encodeURIComponent(database)}`);
       const j = (await r.json()) as ObjectsResponse;
       setObjects(j);
       if (j?.gated) setConfigured(false);
@@ -205,7 +206,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
     setLoading(true);
     setResult(null);
     try {
-      const res = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/query`, {
+      const res = await clientFetch(`/api/items/synapse-serverless-sql-pool/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: sqlToRun, database }),
@@ -236,7 +237,7 @@ export function SynapseServerlessSqlEditor({ item, id }: { item: FabricItemType;
     const sqlToRun = sqlText.trim();
     if (!sqlToRun) return;
     try {
-      const r = await fetch(`/api/items/synapse-serverless-sql-pool/${id}/iqy`, {
+      const r = await clientFetch(`/api/items/synapse-serverless-sql-pool/${id}/iqy`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sql: sqlToRun, database }),

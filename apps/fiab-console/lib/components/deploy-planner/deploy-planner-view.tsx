@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DeploymentPlannerView — visually plan a CSA Loom / Fabric-in-a-Box rollout
  * across multiple subscriptions and domains, then generate the bicepparam the
@@ -357,7 +358,7 @@ function PlannerInner() {
     (async () => {
       setLoading(true); setErr(null);
       try {
-        const r = await fetch('/api/admin/deploy-plan');
+        const r = await clientFetch('/api/admin/deploy-plan');
         const j = await r.json();
         if (!j.ok) { setErr(j.error || 'failed to load plan'); return; }
         setSubs(j.plan?.subscriptions || []);
@@ -540,7 +541,7 @@ function PlannerInner() {
   const save = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch('/api/admin/deploy-plan', {
+      const r = await clientFetch('/api/admin/deploy-plan', {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ subscriptions: subs }),
       });
@@ -557,7 +558,7 @@ function PlannerInner() {
     const region = opts?.region ?? costRegion;
     setCostSub(sub); setCostOpen(true); setCostBusy(true); setCostErr(null); setCostSummary(null);
     try {
-      const r = await fetch('/api/admin/deploy-plan/cost-estimate', {
+      const r = await clientFetch('/api/admin/deploy-plan/cost-estimate', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ subscription: sub, currencyCode, region: region || undefined }),
       });

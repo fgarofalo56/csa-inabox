@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Phase 4 editors — SHARED module.
  *
@@ -437,7 +438,7 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
     }
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/${slug}/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return; }
       const doc = j as ItemDoc;
@@ -466,7 +467,7 @@ function useItemState<T extends Record<string, unknown>>(slug: string, id: strin
     }
     try {
       const payload = next ?? state;
-      const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/${slug}/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: payload }),

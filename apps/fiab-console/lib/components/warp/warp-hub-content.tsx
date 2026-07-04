@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * WarpHubContent — the shared body of the Warp experience: CSA Loom's unified
  * visual + code transform / pipeline builder.
@@ -188,8 +189,8 @@ export function WarpHubContent() {
   useEffect(() => {
     let alive = true;
     Promise.all([
-      fetch('/api/experience/warp/transforms').then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch('/api/workspaces').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      clientFetch('/api/experience/warp/transforms').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      clientFetch('/api/workspaces').then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]).then(([t, ws]) => {
       if (!alive) return;
       const targets: WarpRunTarget[] = t?.ok && Array.isArray(t.targets) ? t.targets : [];
@@ -204,7 +205,7 @@ export function WarpHubContent() {
   useEffect(() => {
     let alive = true;
     setLoading(true);
-    fetch('/api/experience/warp/home')
+    clientFetch('/api/experience/warp/home')
       .then(async (r) => {
         if (r.status === 401 || r.status === 403) { if (alive) setUnauth(true); return null; }
         const ct = r.headers.get('content-type') || '';

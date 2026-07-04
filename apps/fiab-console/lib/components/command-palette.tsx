@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CommandPalette — Ctrl+K (or Cmd+K on Mac) opens a fuzzy-search modal
  * over every navigable surface and every Fabric item type. Per Phase 6
@@ -121,7 +122,7 @@ export function CommandPalette() {
     debounceRef.current = setTimeout(async () => {
       setSearching(true);
       try {
-        const res = await fetch('/api/search/items', {
+        const res = await clientFetch('/api/search/items', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ q: qq, top: 12 }),

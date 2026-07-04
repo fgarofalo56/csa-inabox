@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Databricks Cluster editor — extracted verbatim from
  * databricks-editors.tsx (behavior-preserving split — zero logic change).
@@ -151,7 +152,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
 
   const loadClusters = useCallback(async () => {
     try {
-      const r = await fetch('/api/items/databricks-cluster');
+      const r = await clientFetch('/api/items/databricks-cluster');
       const j = await r.json();
       if (!j.ok) { setListError(j.error || `HTTP ${r.status}`); return; }
       setClusters(j.clusters || []);
@@ -161,7 +162,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
   useEffect(() => {
     void loadClusters();
     void (async () => {
-      const r = await fetch('/api/items/databricks-cluster/options');
+      const r = await clientFetch('/api/items/databricks-cluster/options');
       const j = await r.json();
       if (j.ok) {
         setNodeTypes(j.nodeTypes || []);
@@ -179,7 +180,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     setStateError(null);
     setSaveMessage(null);
     try {
-      const r = await fetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(cid)}`);
+      const r = await clientFetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(cid)}`);
       const j = await r.json();
       if (!j.ok) { setSaveError(j.error || `HTTP ${r.status}`); return; }
       const c = j.cluster as Cluster;
@@ -209,13 +210,13 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         return { kind: 'workspace' as const, dest: sc.workspace?.destination || '' };
       }));
       // events
-      const er = await fetch(`/api/items/databricks-cluster/${id}/events?clusterId=${encodeURIComponent(cid)}&limit=50`);
+      const er = await clientFetch(`/api/items/databricks-cluster/${id}/events?clusterId=${encodeURIComponent(cid)}&limit=50`);
       const ej = await er.json();
       if (ej.ok) setEvents(ej.events || []);
       // v3.4 — libraries (read-only). Renders in the Libraries tab.
       setLibrariesErr(null);
       try {
-        const lr = await fetch(`/api/items/databricks-cluster/${id}/libraries?clusterId=${encodeURIComponent(cid)}`);
+        const lr = await clientFetch(`/api/items/databricks-cluster/${id}/libraries?clusterId=${encodeURIComponent(cid)}`);
         const lj = await lr.json();
         if (lj.ok) setLibraries(lj.libraries || []);
         else { setLibraries([]); setLibrariesErr(lj.error || `HTTP ${lr.status}`); }
@@ -259,7 +260,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     const spec = buildSpec();
     try {
       if (!clusterId) {
-        const r = await fetch('/api/items/databricks-cluster', {
+        const r = await clientFetch('/api/items/databricks-cluster', {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ spec }),
         });
@@ -304,7 +305,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
         // Edit an existing cluster via POST /api/2.0/clusters/edit. Databricks
         // only allows edit while the cluster is RUNNING or TERMINATED; any
         // other state returns 400 INVALID_STATE, which we surface verbatim.
-        const r = await fetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(clusterId)}`, {
+        const r = await clientFetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(clusterId)}`, {
           method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ spec }),
         });
@@ -336,7 +337,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
 
   const refreshLibraries = useCallback(async (cid: string) => {
     try {
-      const lr = await fetch(`/api/items/databricks-cluster/${id}/libraries?clusterId=${encodeURIComponent(cid)}`);
+      const lr = await clientFetch(`/api/items/databricks-cluster/${id}/libraries?clusterId=${encodeURIComponent(cid)}`);
       const lj = await lr.json();
       if (lj.ok) { setLibraries(lj.libraries || []); setLibrariesErr(null); }
       else setLibrariesErr(lj.error || `HTTP ${lr.status}`);
@@ -359,7 +360,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     const lib = libSpecFromForm(); if (!lib) return;
     setLibBusy(true); setLibErr(null);
     try {
-      const r = await fetch(`/api/items/databricks-cluster/${id}/libraries`, {
+      const r = await clientFetch(`/api/items/databricks-cluster/${id}/libraries`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ clusterId, libraries: [lib] }),
       });
@@ -374,7 +375,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     if (!clusterId) return;
     setLibBusy(true); setLibErr(null);
     try {
-      const r = await fetch(`/api/items/databricks-cluster/${id}/libraries`, {
+      const r = await clientFetch(`/api/items/databricks-cluster/${id}/libraries`, {
         method: 'DELETE', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ clusterId, libraries: [lib] }),
       });
@@ -389,7 +390,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
     setStateBusy(true);
     setStateError(null);
     try {
-      const r = await fetch(`/api/items/databricks-cluster/${id}/state?clusterId=${encodeURIComponent(clusterId)}`, {
+      const r = await clientFetch(`/api/items/databricks-cluster/${id}/state?clusterId=${encodeURIComponent(clusterId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),
       });
@@ -407,7 +408,7 @@ export function DatabricksClusterEditor({ item, id }: { item: FabricItemType; id
   const del = useCallback(async () => {
     if (!clusterId) return;
     if (!window.confirm(`Permanently delete cluster ${clusterId}?`)) return;
-    await fetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(clusterId)}&permanent=true`, { method: 'DELETE' });
+    await clientFetch(`/api/items/databricks-cluster/${id}?clusterId=${encodeURIComponent(clusterId)}&permanent=true`, { method: 'DELETE' });
     setClusterId(null);
     setCluster(null);
     await loadClusters();

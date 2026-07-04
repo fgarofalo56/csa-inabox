@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Spark environment editor (F18) — full lifecycle parity with the Synapse
  * Studio "Packages + configuration" surface and Fabric's Environment item,
@@ -191,7 +192,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
     if (!id || id === 'new') return;
     setLoading(true); setLoadErr(null);
     try {
-      const r = await fetch(`/api/items/spark-environment/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/spark-environment/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'load failed');
       if (!dirty) applyState(j.item?.state || {});
@@ -206,7 +207,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/items/synapse-spark-pool/list');
+        const r = await clientFetch('/api/items/synapse-spark-pool/list');
         const j = await r.json();
         if (j.ok) setPools(j.pools || []);
       } catch { /* surfaced via publish action */ }
@@ -234,7 +235,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
   const save = useCallback(async (): Promise<boolean> => {
     setBusy(true); setErr(null); setMsg('Saving…');
     try {
-      const r = await fetch(`/api/items/spark-environment/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/spark-environment/${encodeURIComponent(id)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: buildState() }),
       });
@@ -271,7 +272,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
       const fd = new FormData();
       fd.append('file', file);
       fd.append('type', file.name.toLowerCase().endsWith('.jar') ? 'jar' : 'whl');
-      const r = await fetch(`/api/spark-environment/${encodeURIComponent(id)}/libraries`, { method: 'POST', body: fd });
+      const r = await clientFetch(`/api/spark-environment/${encodeURIComponent(id)}/libraries`, { method: 'POST', body: fd });
       const j = await r.json();
       if (!j.ok) { setErr(j.hint ? `${j.error} — ${j.hint}` : (j.error || 'upload failed')); return; }
       setCustomLibraries(j.customLibraries || []);
@@ -282,7 +283,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
   const deleteLib = async (name: string) => {
     setUploading(true); setErr(null);
     try {
-      const r = await fetch(`/api/spark-environment/${encodeURIComponent(id)}/libraries?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/spark-environment/${encodeURIComponent(id)}/libraries?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'delete failed'); return; }
       setCustomLibraries(j.customLibraries || []);
@@ -296,7 +297,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
     setBusy(true); setErr(null); setMsg(null);
     try {
       if (dirty) { const ok = await save(); if (!ok) return; }
-      const r = await fetch(`/api/spark-environment/${encodeURIComponent(id)}/publish`, {
+      const r = await clientFetch(`/api/spark-environment/${encodeURIComponent(id)}/publish`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ poolName: targetPool, applyCompute }),
       });
@@ -317,7 +318,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
     setValidateStatus('starting session…');
     try {
       if (dirty) { const ok = await save(); if (!ok) { setValidateBusy(false); return; } }
-      const r = await fetch(`/api/spark-environment/${encodeURIComponent(id)}/validate`, {
+      const r = await clientFetch(`/api/spark-environment/${encodeURIComponent(id)}/validate`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ poolName: targetPool }),
       });
@@ -329,7 +330,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
       // eslint-disable-next-line no-constant-condition
       while (Date.now() < deadline) {
         await new Promise((res) => setTimeout(res, 4000));
-        const pr = await fetch(`/api/spark-environment/${encodeURIComponent(id)}/validate?runId=${encodeURIComponent(runId)}`);
+        const pr = await clientFetch(`/api/spark-environment/${encodeURIComponent(id)}/validate?runId=${encodeURIComponent(runId)}`);
         const pj = await pr.json();
         if (!pj.ok) { setErr(pj.error || 'poll failed'); break; }
         if (pj.runId) runId = pj.runId;
@@ -353,7 +354,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
   const loadCandidates = useCallback(async () => {
     setErr(null);
     try {
-      const r = await fetch(`/api/spark-environment/${encodeURIComponent(id)}/attach`);
+      const r = await clientFetch(`/api/spark-environment/${encodeURIComponent(id)}/attach`);
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'load candidates failed'); return; }
       setCandidates(j.candidates || []);
@@ -363,7 +364,7 @@ export function SparkEnvironmentEditor({ item, id }: { item: FabricItemType; id:
   const toggleAttach = async (c: AttachCandidate) => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/spark-environment/${encodeURIComponent(id)}/attach`, {
+      const r = await clientFetch(`/api/spark-environment/${encodeURIComponent(id)}/attach`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ targetType: c.itemType, targetId: c.id, attach: !c.attached }),
       });

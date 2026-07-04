@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * FederatedSearch — single search box across Purview + UC + OneLake.
  *
@@ -322,7 +323,7 @@ export function FederatedSearch() {
       if (sourceFilter.size) params.set('source', Array.from(sourceFilter).join(','));
       if (classification) params.set('classification', classification);
       if (term) params.set('term', term);
-      const r = await fetch(`/api/catalog/search?${params.toString()}`);
+      const r = await clientFetch(`/api/catalog/search?${params.toString()}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setHits(j.hits || []);

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ReportEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -189,7 +190,7 @@ function ReportCopilotPanel({ reportId, reportName }: { reportId: string; report
     if (!pending || !reportId) return;
     setApplyBusy(true); setApplyMsg(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/visual`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/visual`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ visual: pending }),
       });
@@ -403,7 +404,7 @@ function ReportLikeEditor({
     if (!workspaceId || !reportId) return;
     setRefreshBusy(true); setRefreshMsg(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/refresh`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/refresh`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId }),
       });
@@ -424,7 +425,7 @@ function ReportLikeEditor({
     const paginated = kind === 'paginated';
     setExportBusy(format); setExportErr(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/export`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/export`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, format, paginated }),
       });
@@ -451,7 +452,7 @@ function ReportLikeEditor({
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/pages?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/pages?workspaceId=${encodeURIComponent(workspaceId)}`);
         const j = await r.json();
         if (cancelled) return;
         if (j.ok) { setPages(j.pages || []); setActivePage((j.pages?.[0]?.name) || ''); }
@@ -669,7 +670,7 @@ function ReportLikeEditor({
       (async () => {
         setEmbedErr(null);
         try {
-          const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/paginated-embed-token`, {
+          const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/paginated-embed-token`, {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ workspaceId, datasetIds: report?.datasetId ? [report.datasetId] : [] }),
@@ -687,7 +688,7 @@ function ReportLikeEditor({
     (async () => {
       setEmbedErr(null);
       try {
-        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/embed-token`, {
+        const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/embed-token`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ workspaceId, accessLevel: editMode ? 'Edit' : 'View' }),
@@ -1156,7 +1157,7 @@ function _LoomNativeReportViewer_legacy({ item, id }: { item: FabricItemType; id
   const loadDetail = useCallback(async () => {
     setLoading(true); setDetailErr(null); setVisualRows({});
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (j.ok) {
         setDetail({ report: j.report, aasServer: j.aasServer ?? null, aasDatabase: j.aasDatabase ?? null, pages: j.pages || [] });
@@ -1176,7 +1177,7 @@ function _LoomNativeReportViewer_legacy({ item, id }: { item: FabricItemType; id
     if (!visual.field) { setVisualRows((p) => ({ ...p, [key]: { rows: [], loading: false, err: 'visual has no field binding' } })); return; }
     setVisualRows((p) => ({ ...p, [key]: { rows: p[key]?.rows || [], loading: true, err: null } }));
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ visual: { type: visual.type, field: visual.field } }),
       });

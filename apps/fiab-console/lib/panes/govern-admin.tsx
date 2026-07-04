@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * GovernAdminPane — the Govern → Admin view (F2), one-for-one with the
  * Microsoft Purview / Fabric admin "Govern" monitoring experience, Loom-themed.
@@ -282,7 +283,7 @@ function ViewMorePanel() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const res = await fetch('/api/governance/govern/embed');
+      const res = await clientFetch('/api/governance/govern/embed');
       const j: EmbedResponse = await res.json();
       setData(j);
       if (!j.ok && !j.hint) setError(j.error || `Embed failed (${res.status})`);
@@ -393,7 +394,7 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/governance/govern/trigger-scan');
+        const res = await clientFetch('/api/governance/govern/trigger-scan');
         const j = await res.json();
         if (j.ok && Array.isArray(j.sources)) setSources(j.sources.map((x: any) => ({ name: x.name })));
         else if (j.code === 'purview_not_configured' && j.hint) setScanGate(j.hint);
@@ -405,7 +406,7 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
   const onPickSource = useCallback(async (name: string) => {
     setSelSource(name); setSelScan(''); setScans([]);
     try {
-      const res = await fetch(`/api/governance/govern/trigger-scan?source=${encodeURIComponent(name)}`);
+      const res = await clientFetch(`/api/governance/govern/trigger-scan?source=${encodeURIComponent(name)}`);
       const j = await res.json();
       if (j.ok && Array.isArray(j.scans)) setScans(j.scans.map((x: any) => ({ name: x.name })));
     } catch { /* leave empty */ }
@@ -415,7 +416,7 @@ function ProtectSecureComplyTab({ posture, gates }: { posture: PostureDoc; gates
     if (!selSource || !selScan || scanBusy) return;
     setScanBusy(true); setScanMsg(null);
     try {
-      const res = await fetch('/api/governance/govern/trigger-scan', {
+      const res = await clientFetch('/api/governance/govern/trigger-scan', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ source: selSource, scan: selScan }),
       });
@@ -512,7 +513,7 @@ function DiscoverTrustReuseTab({ posture }: { posture: PostureDoc }) {
   useEffect(() => {
     (async () => {
       try {
-        const res = await fetch('/api/governance/govern/actions');
+        const res = await clientFetch('/api/governance/govern/actions');
         const j = await res.json();
         setActions(j.ok && Array.isArray(j.actions) ? j.actions : []);
       } catch { setActions([]); }
@@ -580,7 +581,7 @@ export function GovernAdminPane() {
     reqOnce.current = true;
     (async () => {
       try {
-        const res = await fetch('/api/governance/govern/posture');
+        const res = await clientFetch('/api/governance/govern/posture');
         const j: PostureResponse = await res.json();
         setResp(j);
       } catch (e: any) {

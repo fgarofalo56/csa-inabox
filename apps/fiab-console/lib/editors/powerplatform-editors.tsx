@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * v3 — Power Platform editors (real REST, no mocks).
  *
@@ -289,7 +290,7 @@ async function pollLifecycle(operationUrl: string, onTick: (op: LifecycleOp) => 
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 4000));
     try {
-      const r = await fetch(`/api/powerplatform/environments/operation?url=${encodeURIComponent(operationUrl)}`);
+      const r = await clientFetch(`/api/powerplatform/environments/operation?url=${encodeURIComponent(operationUrl)}`);
       const { json: j } = await readJsonSafe(r);
       if (j?.ok && j.operation) {
         onTick(j.operation);
@@ -337,7 +338,7 @@ function EnvironmentLifecycleBar({
     if (!nName.trim()) { setOpMsg({ kind: 'error', text: 'Display name is required.' }); return; }
     setBusy(true); setOpMsg({ kind: 'info', text: `Creating environment "${nName}"…` });
     try {
-      const r = await fetch('/api/powerplatform/environments', {
+      const r = await clientFetch('/api/powerplatform/environments', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           displayName: nName.trim(), environmentSku: nSku, location: nLoc,
@@ -370,7 +371,7 @@ function EnvironmentLifecycleBar({
     if (!current) return;
     setBusy(true); setOpMsg({ kind: 'info', text: 'Saving…' });
     try {
-      const r = await fetch('/api/powerplatform/environments', {
+      const r = await clientFetch('/api/powerplatform/environments', {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ id: current.name, displayName: eName.trim() || undefined, description: eDesc.trim() || undefined }),
       });
@@ -388,7 +389,7 @@ function EnvironmentLifecycleBar({
     if (!current) return;
     setBusy(true); setOpMsg({ kind: 'info', text: `Deleting "${current.displayName}"…` });
     try {
-      const r = await fetch(`/api/powerplatform/environments?id=${encodeURIComponent(current.name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/powerplatform/environments?id=${encodeURIComponent(current.name)}`, { method: 'DELETE' });
       const { json: j } = await readJsonSafe(r);
       if (!j?.ok) { setOpMsg({ kind: 'error', text: `Delete failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
       setDelOpen(false);
@@ -748,7 +749,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
     }
     setTblBusy(true); setTblMsg(null);
     try {
-      const r = await fetch(`/api/powerplatform/tables?envId=${encodeURIComponent(env.selected)}`, {
+      const r = await clientFetch(`/api/powerplatform/tables?envId=${encodeURIComponent(env.selected)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           schemaName: tblSchema.trim(),
@@ -849,7 +850,7 @@ export function DataverseTableEditor({ item, id }: { item: FabricItemType; id: s
       };
       if (colType === 'String' || colType === 'Memo') payload.maxLength = Number(colMaxLen) || undefined;
       if (colType === 'Decimal' || colType === 'Money') payload.precision = Number(colPrecision) || undefined;
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/dataverse-table/${tableEnc}/columns?envId=${encodeURIComponent(env.selected)}`,
         { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) },
       );
@@ -1455,7 +1456,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
     if (!env.selected) return;
     setActionBusy(true); setActionMsg(null);
     try {
-      const r = await fetch(`/api/items/power-app/${encodeURIComponent(id)}/state`, {
+      const r = await clientFetch(`/api/items/power-app/${encodeURIComponent(id)}/state`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ envId: env.selected, appId, appType }),
       });
@@ -1474,7 +1475,7 @@ export function PowerAppEditor({ item, id }: { item: FabricItemType; id: string 
     try {
       const explicit = pick && env.selected
         ? `?envId=${encodeURIComponent(env.selected)}&appId=${encodeURIComponent(pick.appId)}` : '';
-      const r = await fetch(`/api/items/power-app/${encodeURIComponent(id)}/publish${explicit}`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/power-app/${encodeURIComponent(id)}/publish${explicit}`, { method: 'POST' });
       const { json: j } = await readJsonSafe(r);
       if (!j?.ok) { setActionMsg({ kind: 'error', text: `Publish failed: ${j?.error || r.status}${j?.hint ? ` — ${j.hint}` : ''}` }); return; }
       setActionMsg({ kind: 'success', text: 'Latest revision published.' });
@@ -1800,7 +1801,7 @@ export function PowerAutomateFlowEditor({ item, id }: { item: FabricItemType; id
     if (!env.selected || !selected) return;
     setRunBusy(true); setRunMsg(null);
     try {
-      const r = await fetch(`/api/items/power-automate-flow/${encodeURIComponent(selected)}/run?envId=${encodeURIComponent(env.selected)}`, {
+      const r = await clientFetch(`/api/items/power-automate-flow/${encodeURIComponent(selected)}/run?envId=${encodeURIComponent(env.selected)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({}),
       });
       const j = await r.json();
@@ -2179,7 +2180,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
     if (!env.selected || !selected) return;
     setBusy(kind); setActionMsg(null);
     try {
-      const r = await fetch(`/api/items/ai-builder-model/${encodeURIComponent(selected)}/${kind}?envId=${encodeURIComponent(env.selected)}`, {
+      const r = await clientFetch(`/api/items/ai-builder-model/${encodeURIComponent(selected)}/${kind}?envId=${encodeURIComponent(env.selected)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ envId: env.selected }),
       });
       const j = await r.json();
@@ -2193,7 +2194,7 @@ export function AiBuilderModelEditor({ item, id }: { item: FabricItemType; id: s
     if (!env.selected || !selected) return;
     setBusy('predict'); setActionMsg(null); setPredictResult(null);
     try {
-      const r = await fetch(`/api/items/ai-builder-model/${encodeURIComponent(selected)}/predict`, {
+      const r = await clientFetch(`/api/items/ai-builder-model/${encodeURIComponent(selected)}/predict`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ envId: env.selected, requestJson: predictJson }),
       });

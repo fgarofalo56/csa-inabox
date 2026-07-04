@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * v2.5 — Azure AI Foundry sub-editors
  *
@@ -263,7 +264,7 @@ export function ProjectEditor({ item, id }: { item: FabricItemType; id: string }
   const save = async () => {
     if (!newName || !newDisplay) { setSaveMsg('Name and display name required.'); return; }
     setCreating(true); setSaveMsg(null);
-    const r = await fetch('/api/items/ai-foundry-project', {
+    const r = await clientFetch('/api/items/ai-foundry-project', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ name: newName, displayName: newDisplay, description: newDesc }),
     });
@@ -464,7 +465,7 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
     if (!project || !newFlowName) { setSaveMsg({ intent: 'error', text: 'Pick a project and enter a flow name.' }); return; }
     setCreating(true); setSaveMsg(null);
     try {
-      const r = await fetch('/api/items/prompt-flow', {
+      const r = await clientFetch('/api/items/prompt-flow', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ project, flowName: newFlowName, flowType: 'standard', flowDefinition: serializeFlowDag(dag) }),
       });
@@ -484,7 +485,7 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
     if (!project || !selected) return;
     setSaving(true); setSaveMsg(null);
     try {
-      const r = await fetch(`/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}`, {
+      const r = await clientFetch(`/api/items/prompt-flow/${encodeURIComponent(selected)}?project=${encodeURIComponent(project)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ flowDefinition: serializeFlowDag(dag) }),
       });
@@ -499,7 +500,7 @@ export function PromptFlowEditor({ item, id }: { item: FabricItemType; id: strin
     if (!project || !selected) { setSaveMsg({ intent: 'info', text: 'Save the flow first — runs execute the persisted flow.dag.yaml.' }); return; }
     setRunning(true); setRunResult(null);
     try {
-      const r = await fetch(`/api/items/prompt-flow/${encodeURIComponent(selected)}/run`, {
+      const r = await clientFetch(`/api/items/prompt-flow/${encodeURIComponent(selected)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ project, inputs: runInputs }),
       });
@@ -645,7 +646,7 @@ export function EvaluationEditor({ item, id }: { item: FabricItemType; id: strin
   const create = async () => {
     if (!project) { setMsg('Pick a project first.'); return; }
     setBusy(true); setMsg(null);
-    const r = await fetch('/api/items/evaluation', {
+    const r = await clientFetch('/api/items/evaluation', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         project,
@@ -795,7 +796,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
     const body: any = { kind };
     if (kind === 'text') body.text = text;
     else body.imageBase64 = imgB64;
-    const r = await fetch('/api/items/content-safety', {
+    const r = await clientFetch('/api/items/content-safety', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
@@ -848,7 +849,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
 
   const deletePolicy = async (name: string) => {
     setPolBusy(true); setPolMsg(null);
-    const r = await fetch(`/api/items/content-safety/rai-policies?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const r = await clientFetch(`/api/items/content-safety/rai-policies?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
     const j = await r.json();
     setPolBusy(false);
     if (j.ok) { setPolMsg({ ok: `Deleted policy "${name}".` }); reloadPolicies(); }
@@ -857,7 +858,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
 
   const loadItems = useCallback(async (name: string) => {
     setItems({ loading: true, rows: [] });
-    const r = await fetch(`/api/items/content-safety/blocklists/items?name=${encodeURIComponent(name)}`);
+    const r = await clientFetch(`/api/items/content-safety/blocklists/items?name=${encodeURIComponent(name)}`);
     const j = await r.json();
     if (j.ok) setItems({ loading: false, rows: j.items || [] });
     else setItems({ loading: false, rows: [], error: j.error });
@@ -876,7 +877,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
 
   const deleteBlocklist = async (name: string) => {
     setBlBusy(true); setBlMsg(null);
-    const r = await fetch(`/api/items/content-safety/blocklists?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const r = await clientFetch(`/api/items/content-safety/blocklists?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
     const j = await r.json();
     setBlBusy(false);
     if (j.ok) { setBlMsg({ ok: `Deleted blocklist "${name}".` }); if (selectedBl === name) setSelectedBl(null); reloadBlocklists(); }
@@ -897,7 +898,7 @@ export function ContentSafetyEditor({ item, id }: { item: FabricItemType; id: st
   const removeItem = async (itemId: string) => {
     if (!selectedBl) return;
     setBlBusy(true); setBlMsg(null);
-    const r = await fetch(`/api/items/content-safety/blocklists/items?name=${encodeURIComponent(selectedBl)}&id=${encodeURIComponent(itemId)}`, { method: 'DELETE' });
+    const r = await clientFetch(`/api/items/content-safety/blocklists/items?name=${encodeURIComponent(selectedBl)}&id=${encodeURIComponent(itemId)}`, { method: 'DELETE' });
     const j = await r.json();
     setBlBusy(false);
     if (j.ok) loadItems(selectedBl);
@@ -1160,7 +1161,7 @@ export function TracingEditor({ item, id }: { item: FabricItemType; id: string }
   const loadDetail = useCallback(async (tid: string) => {
     setDetail({ loading: true, spans: [] });
     try {
-      const r = await fetch(`/api/items/tracing/${encodeURIComponent(tid)}`);
+      const r = await clientFetch(`/api/items/tracing/${encodeURIComponent(tid)}`);
       const j = await r.json();
       if (!j.ok) { setDetail({ loading: false, spans: [], error: j.error, hint: j.hint, notDeployed: j.notDeployed }); return; }
       setDetail({ loading: false, spans: Array.isArray(j.spans) ? j.spans : [] });
@@ -2568,7 +2569,7 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
 
   const create = async () => {
     setBusy(true); setMsg(null);
-    const r = await fetch('/api/items/compute', {
+    const r = await clientFetch('/api/items/compute', {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(form),
     });
     const j = await r.json();
@@ -2577,7 +2578,7 @@ export function ComputeEditor({ item, id }: { item: FabricItemType; id: string }
   };
 
   const power = async (action: 'start' | 'stop', name: string) => {
-    const r = await fetch(`/api/items/compute/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
+    const r = await clientFetch(`/api/items/compute/${encodeURIComponent(name)}/${action}`, { method: 'POST' });
     const j = await r.json();
     if (!j.ok) setMsg(j.error); else { setMsg(`${action} requested`); reload(); reloadDetail(); }
   };
@@ -2726,7 +2727,7 @@ function AdlsBrowseDialog({ open, onClose, onPick }: {
     if (!open) return;
     setContainer(''); setPrefix(''); setEntries([]); setErr(null); setGate(null);
     (async () => {
-      const r = await fetch('/api/lakehouse/containers');
+      const r = await clientFetch('/api/lakehouse/containers');
       const j = await r.json();
       if (j.gate) { setGate(j.gate.remediation || j.gate.reason); setContainers([]); return; }
       const cs = j.containers || [];
@@ -2737,7 +2738,7 @@ function AdlsBrowseDialog({ open, onClose, onPick }: {
 
   const loadPaths = useCallback(async (c: string, p: string) => {
     setLoading(true); setErr(null);
-    const r = await fetch(`/api/lakehouse/paths?container=${encodeURIComponent(c)}&prefix=${encodeURIComponent(p)}`);
+    const r = await clientFetch(`/api/lakehouse/paths?container=${encodeURIComponent(c)}&prefix=${encodeURIComponent(p)}`);
     const j = await r.json();
     if (!j.ok) setErr(j.error || 'List failed'); else setEntries(j.paths || []);
     setLoading(false);
@@ -2835,7 +2836,7 @@ function DatasetPreviewPanel({ uri }: { uri: string | undefined }) {
     setPv({ loading: true, cols: [], rows: [], total: 0 });
     const qs = new URLSearchParams({ container: parsed.container, path: parsed.path });
     if (!known) qs.set('account', parsed.account);
-    const r = await fetch(`/api/lakehouse/preview?${qs.toString()}`);
+    const r = await clientFetch(`/api/lakehouse/preview?${qs.toString()}`);
     const j = await r.json();
     if (!j.ok) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.error || 'Preview failed' }); return; }
     if (j.previewable === false) { setPv({ loading: false, cols: [], rows: [], total: 0, error: j.message || 'Not tabular — not previewable.' }); return; }
@@ -2849,12 +2850,12 @@ function DatasetPreviewPanel({ uri }: { uri: string | undefined }) {
     if (!parsed || !known) return;
     setStatsLoading(true); setStatsError(null); setStats(null);
     let qs = new URLSearchParams({ container: parsed.container, path: parsed.path });
-    let r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`);
+    let r = await clientFetch(`/api/lakehouse/table-stats?${qs.toString()}`);
     let j = await r.json();
     for (let i = 0; i < 40 && j.ok && j.status !== 'available'; i++) {
       await new Promise((res) => setTimeout(res, 3000));
       qs = new URLSearchParams({ jobId: j.jobId, container: parsed.container, path: parsed.path });
-      r = await fetch(`/api/lakehouse/table-stats?${qs.toString()}`); j = await r.json();
+      r = await clientFetch(`/api/lakehouse/table-stats?${qs.toString()}`); j = await r.json();
     }
     if (j.ok && j.status === 'available') setStats(j.stats || {});
     else setStatsError(j.error || 'Profiler timed out.');
@@ -2907,7 +2908,7 @@ export function DatasetEditor({ item, id }: { item: FabricItemType; id: string }
 
   const create = async () => {
     setMsg(null);
-    const r = await fetch('/api/items/dataset', {
+    const r = await clientFetch('/api/items/dataset', {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ...form, project: project || undefined }),
     });

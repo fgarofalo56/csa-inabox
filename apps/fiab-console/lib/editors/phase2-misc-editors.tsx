@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Phase 2 misc editors — Spark Job Definition, Environment, Copy Job, dbt Job.
  *
@@ -138,7 +139,7 @@ function usePoolList() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/items/synapse-spark-pool/list');
+        const r = await clientFetch('/api/items/synapse-spark-pool/list');
         const j = await r.json();
         if (j.ok) setPools(j.pools || []);
       } catch { /* surface via individual editors */ }
@@ -165,7 +166,7 @@ function useLinkedServices() {
   const reload = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/adf/linked-services');
+      const r = await clientFetch('/api/adf/linked-services');
       const j = await r.json();
       if (!j.ok) {
         setError(j.error || `HTTP ${r.status}`);
@@ -199,7 +200,7 @@ function useItem(itemType: string, id: string) {
     if (!id || id === 'new') return;
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/${itemType}/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/${itemType}/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || 'load failed');
       setItem(j.item);
@@ -212,7 +213,7 @@ function useItem(itemType: string, id: string) {
 }
 
 async function saveItem(itemType: string, id: string, state: Record<string, any>): Promise<void> {
-  const r = await fetch(`/api/items/${itemType}/${encodeURIComponent(id)}`, {
+  const r = await clientFetch(`/api/items/${itemType}/${encodeURIComponent(id)}`, {
     method: 'PUT', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ state }),
   });
@@ -291,7 +292,7 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
     try {
       const state = buildState();
       // Fetch current pool, merge librarySpec, PUT back.
-      const cur = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(targetPool)}`).then((r) => r.json());
+      const cur = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(targetPool)}`).then((r) => r.json());
       if (!cur.ok) throw new Error(cur.error || 'failed to read pool');
       const pool = cur.pool || {};
       const properties = { ...(pool.properties || {}) };
@@ -306,7 +307,7 @@ export function EnvironmentEditor({ item, id }: { item: FabricItemType; id: stri
       properties.customLibraries = state.jars.map((path) => ({ name: path.split('/').pop(), path, type: 'jar' }));
       properties.sessionLevelPackagesEnabled = true;
 
-      const r = await fetch(`/api/items/synapse-spark-pool/${encodeURIComponent(targetPool)}`, {
+      const r = await clientFetch(`/api/items/synapse-spark-pool/${encodeURIComponent(targetPool)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ location: pool.location, properties }),
       });
@@ -457,7 +458,7 @@ function useDatabricksWorkspace() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/databricks/workspace');
+        const r = await clientFetch('/api/databricks/workspace');
         const j = await r.json();
         if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setHint(j.hint || null); }
         else { setWorkspace(j.workspace || null); }
@@ -553,7 +554,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
   const loadRuns = useCallback(async () => {
     if (id === 'new') return;
     try {
-      const r = await fetch(`/api/items/dbt-job/${encodeURIComponent(id)}/runs`);
+      const r = await clientFetch(`/api/items/dbt-job/${encodeURIComponent(id)}/runs`);
       const j = await r.json();
       if (j.ok) { setRuns(j.runs || []); if (j.databricksJobId) setDatabricksJobId(j.databricksJobId); }
       else if (j.error) setErr(j.error);
@@ -587,7 +588,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
       // Persist first so the BFF generates from the same graph the user sees.
       await saveItem('dbt-job', id, buildState());
       setDirty(false);
-      const r = await fetch(`/api/items/dbt-job/${encodeURIComponent(id)}/generate`);
+      const r = await clientFetch(`/api/items/dbt-job/${encodeURIComponent(id)}/generate`);
       const j = await r.json();
       if (!j.ok) { setGenErr(j.error || 'generate failed'); return; }
       setGenFiles(j.files || []);
@@ -613,7 +614,7 @@ export function DbtJobEditor({ item, id }: { item: FabricItemType; id: string })
     try {
       await saveItem('dbt-job', id, buildState());
       setDirty(false);
-      const r = await fetch(`/api/items/dbt-job/${encodeURIComponent(id)}/run`, {
+      const r = await clientFetch(`/api/items/dbt-job/${encodeURIComponent(id)}/run`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       });
       const j = await r.json();

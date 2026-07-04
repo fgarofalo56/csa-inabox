@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * TenantThemeBridge — fetches /api/tenant-theme on first paint and applies
  * the tenant's brand overrides (accent + brand name) to :root CSS vars.
@@ -17,7 +18,7 @@ import { useEffect } from 'react';
 export function TenantThemeBridge() {
   useEffect(() => {
     let aborted = false;
-    fetch('/api/tenant-theme').then(r => r.json()).then(d => {
+    clientFetch('/api/tenant-theme').then(r => r.json()).then(d => {
       if (aborted || !d?.theme) return;
       const root = document.documentElement;
       const { accent, brandName } = d.theme;

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * CopilotAgentsConfig — admin tenant-wide "Copilot & Agents" config card.
  *
@@ -138,7 +139,7 @@ export function CopilotAgentsConfig() {
     const params = new URLSearchParams({ account });
     if (accountRg) params.set('rg', accountRg);
     if (accountSub) params.set('sub', accountSub);
-    fetch(`/api/foundry/model-deployments?${params.toString()}`)
+    clientFetch(`/api/foundry/model-deployments?${params.toString()}`)
       .then(async (r) => {
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;
@@ -163,7 +164,7 @@ export function CopilotAgentsConfig() {
     if (!groundingService) { setIndexes([]); return; }
     let cancelled = false;
     const params = new URLSearchParams({ service: groundingService });
-    fetch(`/api/ai-search/indexes?${params.toString()}`)
+    clientFetch(`/api/ai-search/indexes?${params.toString()}`)
       .then(async (r) => {
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;

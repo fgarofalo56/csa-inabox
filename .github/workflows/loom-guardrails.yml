@@ -35,6 +35,8 @@ jobs:
         run: node scripts/ci/check-no-freeform.mjs
       - name: no-raw-px (raw-px inline styles vs Loom tokens, ratchet)
         run: node scripts/ci/check-no-raw-px.mjs
+      - name: no-bare-client-fetch (client /api fetch must use clientFetch)
+        run: node scripts/ci/check-no-bare-client-fetch.mjs
       - name: bicep-sync (orphan modules + env-sync core)
         run: node scripts/ci/check-bicep-sync.mjs
       - name: duplicate-env (env name emitted more than once per app)

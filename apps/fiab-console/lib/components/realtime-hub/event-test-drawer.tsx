@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * EventTestDrawer — Fabric Real-Time hub "Preview data" for a live event source
  * (Event Hub entity or a Loom eventstream's provisioned ingest endpoint). Lets
@@ -95,12 +96,12 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
   async function sendFetch(): Promise<Response> {
     const body = { message, ts: new Date().toISOString(), source: 'rti-hub-test' };
     if (target!.kind === 'eventhub') {
-      return fetch('/api/eventhubs/data-explorer', {
+      return clientFetch('/api/eventhubs/data-explorer', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ op: 'send', hub: target!.hub, events: [{ body }] }),
       });
     }
-    return fetch(`/api/items/eventstream/${encodeURIComponent((target as any).id)}/events`, {
+    return clientFetch(`/api/items/eventstream/${encodeURIComponent((target as any).id)}/events`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ nodeIdx: (target as any).nodeIdx ?? 0, events: [{ body }] }),
     });
@@ -123,7 +124,7 @@ export function EventTestDrawer({ open, onClose, title, target }: EventTestDrawe
     if (!target || target.kind !== 'eventstream') return;
     setProvisionBusy(true); setError(null); setProvisioned(null);
     try {
-      const res = await fetch(`/api/items/eventstream/${encodeURIComponent(target.id)}/source`, {
+      const res = await clientFetch(`/api/items/eventstream/${encodeURIComponent(target.id)}/source`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ nodeIdx: target.nodeIdx ?? 0, fromSaved: true }),
       });

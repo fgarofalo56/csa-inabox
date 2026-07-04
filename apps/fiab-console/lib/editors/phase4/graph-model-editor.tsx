@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Graph Model editor (Cosmos config + real ADX materialize).
  *
@@ -342,7 +343,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     const q = typeof queryText === 'string' ? queryText : gql;
     setQRunning(true); setQResult(null);
     try {
-      const r = await fetch(`/api/items/graph-model/${encodeURIComponent(id)}/query`, {
+      const r = await clientFetch(`/api/items/graph-model/${encodeURIComponent(id)}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           database: state.database, gql: q,
@@ -528,7 +529,7 @@ export function GraphModelEditor({ item, id }: { item: FabricItemType; id: strin
     const ok = await save();
     if (!ok) { setMaterializing(false); return; }
     try {
-      const r = await fetch(`/api/items/graph-model/${encodeURIComponent(id)}/materialize`, {
+      const r = await clientFetch(`/api/items/graph-model/${encodeURIComponent(id)}/materialize`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ database: state.database, nodes: arr(state.nodes), edges: arr(state.edges) }),

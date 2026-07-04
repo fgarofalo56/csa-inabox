@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ComputePicker — shared dropdown + lifecycle controls for any editor that
  * executes against an Azure compute target.
@@ -64,7 +65,7 @@ function fetchComputesShared(force = false): Promise<ComputeTarget[]> {
     return Promise.resolve(_computesCache.data);
   }
   if (_computesInFlight) return _computesInFlight;
-  _computesInFlight = fetch('/api/loom/compute-targets')
+  _computesInFlight = clientFetch('/api/loom/compute-targets')
     .then(r => r.json())
     .then(j => {
       if (!j.ok) throw new Error(j.error || 'failed');
@@ -209,7 +210,7 @@ function NewClusterDialog({
   useEffect(() => {
     if (!open) return;
     setLoadingOpts(true); setOptError(null);
-    fetch('/api/loom/compute-targets/databricks-options')
+    clientFetch('/api/loom/compute-targets/databricks-options')
       .then(r => r.json())
       .then(j => {
         if (!j.ok) { setOptError(j.error || 'Databricks not configured'); return; }
@@ -230,7 +231,7 @@ function NewClusterDialog({
     setCreating(true); setCreateError(null);
     try {
       const minW = Number(minWorkers), maxW = Number(maxWorkers);
-      const r = await fetch('/api/loom/compute-targets', {
+      const r = await clientFetch('/api/loom/compute-targets', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -415,7 +416,7 @@ export function ComputePicker({ value, onChange, filter, label, showLifecycle = 
     if (!selected) return;
     setActionBusy(verb); setActionMsg(null);
     try {
-      const r = await fetch(`/api/loom/compute-targets/${encodeURIComponent(selected.id)}/${verb}`, { method: 'POST' });
+      const r = await clientFetch(`/api/loom/compute-targets/${encodeURIComponent(selected.id)}/${verb}`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) setActionMsg(j.error || `${verb} failed`);
       else { setActionMsg(`${verb} requested — state will update shortly`); reload(); }

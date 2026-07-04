@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Databricks SQL Warehouse editor — extracted verbatim from
  * databricks-editors.tsx (behavior-preserving split — zero logic change).
@@ -229,7 +230,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/warehouses`);
+        const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/warehouses`);
         const j = await r.json();
         if (cancelled) return;
         if (typeof j.gov === 'boolean') setGov(j.gov);
@@ -251,7 +252,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   // ---- State + catalogs whenever warehouse changes ----
   const refreshState = useCallback(async (): Promise<WarehouseState | null> => {
     if (!warehouseId) return null;
-    const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/state?warehouseId=${encodeURIComponent(warehouseId)}`);
+    const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/state?warehouseId=${encodeURIComponent(warehouseId)}`);
     const j = (await r.json()) as WarehouseState;
     setWarehouseState(j);
     return j;
@@ -259,7 +260,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
 
   const refreshCatalogs = useCallback(async () => {
     if (!warehouseId) return;
-    const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}`);
+    const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}`);
     const j = (await r.json()) as SchemaResponse;
     if (j.ok) {
       setCatalogs(j.catalogs || []);
@@ -289,7 +290,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setViews([]);
     setFunctions([]);
     setModels([]);
-    const r = await fetch(
+    const r = await clientFetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}`,
     );
     const j = (await r.json()) as SchemaResponse;
@@ -306,7 +307,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setViews([]);
     setFunctions([]);
     setModels([]);
-    const r = await fetch(
+    const r = await clientFetch(
       `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
     );
     const j = (await r.json()) as SchemaResponse;
@@ -320,7 +321,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     // models REST is a separate UC surface from the schema browse and is honest-
     // gated on Gov, so a miss never blocks the rest of the tree.
     try {
-      const mr = await fetch(
+      const mr = await clientFetch(
         `/api/databricks/unity-catalog/models?catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}`,
       );
       const mj = await mr.json();
@@ -333,7 +334,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const cacheColumns = useCallback(async (cat: string, sch: string, tbl: string) => {
     if (!warehouseId) return;
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/databricks-sql-warehouse/${id}/schema?warehouseId=${encodeURIComponent(warehouseId)}&catalog=${encodeURIComponent(cat)}&schema=${encodeURIComponent(sch)}&table=${encodeURIComponent(tbl)}`,
       );
       const j = (await r.json()) as SchemaResponse & { columns?: string[] };
@@ -346,7 +347,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     try {
       const p = new URLSearchParams({ catalog: cat, schema: sch, table: tbl });
       if (warehouseId) p.set('warehouseId', warehouseId);
-      const r = await fetch(`/api/databricks/unity-catalog/tags?${p.toString()}`);
+      const r = await clientFetch(`/api/databricks/unity-catalog/tags?${p.toString()}`);
       const j = await r.json();
       if (j.ok && Array.isArray(j.tableTags)) {
         const pairs = j.tableTags.map((t: any) => ({ key: String(t.tag_name), value: String(t.tag_value ?? '') }));
@@ -362,7 +363,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!warehouseId) { setResult({ ok: false, error: 'No warehouse selected.' }); return; }
     const params = new URLSearchParams({ warehouseId, catalog: cat, schema: sch, name, type, mode });
     try {
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/script-out?${params.toString()}`);
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/script-out?${params.toString()}`);
       const j = await r.json();
       if (j.ok && typeof j.script === 'string') { setSqlText(j.script); setResult(null); }
       else setResult({ ok: false, error: j.error || `HTTP ${r.status}` });
@@ -375,7 +376,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const dbxCountRows = useCallback(async (cat: string, sch: string, name: string): Promise<number | null> => {
     if (!warehouseId) return null;
     try {
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           sql: `SELECT COUNT(*) AS c FROM \`${cat}\`.\`${sch}\`.\`${name}\``,
@@ -405,7 +406,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!warehouseId) return;
     setStarting(true);
     try {
-      await fetch(`/api/items/databricks-sql-warehouse/${id}/start?warehouseId=${encodeURIComponent(warehouseId)}`, { method: 'POST' });
+      await clientFetch(`/api/items/databricks-sql-warehouse/${id}/start?warehouseId=${encodeURIComponent(warehouseId)}`, { method: 'POST' });
       startPolling();
     } catch (e: any) {
       setResult({ ok: false, error: e?.message || String(e) });
@@ -415,7 +416,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
 
   const stop = useCallback(async () => {
     if (!warehouseId) return;
-    await fetch(`/api/items/databricks-sql-warehouse/${id}/state?warehouseId=${encodeURIComponent(warehouseId)}`, {
+    await clientFetch(`/api/items/databricks-sql-warehouse/${id}/state?warehouseId=${encodeURIComponent(warehouseId)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action: 'stop' }),
@@ -430,7 +431,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     // Pull current size/scaling/type/serverless so the dialog starts from
     // the real warehouse config (state route surfaces these).
     try {
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/state?warehouseId=${encodeURIComponent(warehouseId)}`);
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/state?warehouseId=${encodeURIComponent(warehouseId)}`);
       const j = (await r.json()) as WarehouseState;
       if (j.ok) {
         if (j.cluster_size) setEditSize(j.cluster_size);
@@ -449,7 +450,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setEditBusy(true);
     setEditError(null);
     try {
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/edit?warehouseId=${encodeURIComponent(warehouseId)}`, {
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/edit?warehouseId=${encodeURIComponent(warehouseId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -505,7 +506,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
         }
         if (Object.keys(tags).length > 0) payload.tags = tags;
       }
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/create`, {
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/create`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
@@ -534,7 +535,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setDeleteBusy(true);
     setDeleteError(null);
     try {
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/delete`, {
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/delete`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ warehouseId, force }),
@@ -578,7 +579,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       // Rewrite {{name}} → :name and pass values out-of-band in parameters[]
       // (Databricks binds them — never concatenated, so injection-safe).
       const statement = substituteDbx(sqlToRun, queryParams);
-      const res = await fetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
+      const res = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -611,7 +612,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!qid) return;
     setCanceling(true);
     try {
-      await fetch(`/api/items/databricks-sql-warehouse/${id}/cancel`, {
+      await clientFetch(`/api/items/databricks-sql-warehouse/${id}/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ clientQueryId: qid }),
@@ -625,7 +626,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
   const openInExcel = useCallback(async () => {
     if (!warehouseId || !sqlText.trim()) return;
     try {
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/iqy`, {
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/iqy`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -725,7 +726,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     setProfileError(null);
     setProfileData(null);
     try {
-      const r = await fetch(
+      const r = await clientFetch(
         `/api/items/databricks-sql-warehouse/${id}/query-profile?queryId=${encodeURIComponent(queryId)}`,
       );
       const j = await r.json();
@@ -742,7 +743,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
       if (warehouseId) params.set('warehouseId', warehouseId);
       params.set('maxResults', '50');
       if (pageToken) params.set('pageToken', pageToken);
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/query-history?${params.toString()}`);
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/query-history?${params.toString()}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setQhEntries((prev) => append ? [...prev, ...(j.entries || [])] : (j.entries || []));
@@ -809,7 +810,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     }
     setCtasBusy(true); setCtasError(null);
     try {
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/ctas`, {
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/ctas`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ warehouseId, sql: cleaned, catalog: ctasCatalog.trim(), schema: ctasSchema.trim(), tableName: ctasName.trim() }),
       });
@@ -837,7 +838,7 @@ export function DatabricksSqlWarehouseEditor({ item, id }: { item: FabricItemTyp
     if (!cloneSource.trim() || !cloneTarget.trim()) { setCloneError('source and target are required'); return; }
     setCloneBusy(true); setCloneError(null);
     try {
-      const r = await fetch(`/api/items/databricks-sql-warehouse/${id}/clone`, {
+      const r = await clientFetch(`/api/items/databricks-sql-warehouse/${id}/clone`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ warehouseId, source: cloneSource.trim(), target: cloneTarget.trim(), cloneType: cloneKind, replace: cloneReplace }),
       });

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * RichDisplay — the interactive grid + chart-recommendation surface that
  * renders when a notebook cell calls display(df). Parity with Synapse Studio /
@@ -380,7 +381,7 @@ function ChartCard({ chart, index, total, payload, full, onPatch, onRemove, onDu
     setAggState('running'); setAggMsg('Submitting Spark job…');
     try {
       const code = buildAggCode(chart, payload.dfVarName);
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ compute: computeId, cellId: `agg-${chart.id}`, source: code, lang: 'pyspark' }),
       });
@@ -390,7 +391,7 @@ function ChartCard({ chart, index, total, payload, full, onPatch, onRemove, onDu
       const start = Date.now(); const MAX = 12 * 60 * 1000;
       while (Date.now() - start < MAX) {
         await new Promise((res) => setTimeout(res, 1500));
-        const pr = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const pr = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pr.json();
         if (!p.ok) { setAggState('error'); setAggMsg(p.error || 'poll failed'); return; }
         if (p.runId && p.runId !== runId) runId = p.runId;

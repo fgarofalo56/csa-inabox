@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AppLauncher — waffle button in the top bar. Opens a drawer listing apps
  * from /api/apps-catalog (curated CSA apps under tenant=session.claims.oid;
@@ -72,7 +73,7 @@ export function AppLauncher() {
   useEffect(() => {
     if (!open || apps !== null) return;
     let cancelled = false;
-    fetch('/api/apps-catalog').then(r => r.json()).then(d => {
+    clientFetch('/api/apps-catalog').then(r => r.json()).then(d => {
       if (!cancelled) setApps(Array.isArray(d?.apps) ? d.apps : []);
     }).catch(() => { if (!cancelled) setApps([]); });
     return () => { cancelled = true; };

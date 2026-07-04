@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * PinnedSection — renders user's pinned items (workspaces, items, pages).
  * Reads /api/user-prefs?key=pinnedItems (Cosmos user-prefs container) on
@@ -65,7 +66,7 @@ export function PinnedSection() {
   const [items, setItems] = useState<PinnedItem[] | null>(null);
 
   const load = useCallback(() => {
-    fetch('/api/user-prefs?key=pinnedItems').then(r => r.json()).then(d => {
+    clientFetch('/api/user-prefs?key=pinnedItems').then(r => r.json()).then(d => {
       const arr = Array.isArray(d?.value) ? d.value : [];
       setItems(arr);
     }).catch(() => setItems([]));
@@ -85,7 +86,7 @@ export function PinnedSection() {
         const next = exists
           ? cur.filter(p => p.id !== detail.id)
           : [...cur, { id: detail.id, label: detail.label, href: detail.href, type: detail.type }];
-        fetch('/api/user-prefs', {
+        clientFetch('/api/user-prefs', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ key: 'pinnedItems', value: next }),
@@ -104,7 +105,7 @@ export function PinnedSection() {
   const unpin = (id: string) => {
     setItems(prev => {
       const next = (prev ?? []).filter(p => p.id !== id);
-      fetch('/api/user-prefs', {
+      clientFetch('/api/user-prefs', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ key: 'pinnedItems', value: next }),

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ScaleManagePanel — Admin → Capacity & compute "Scale & manage".
  *
@@ -106,7 +107,7 @@ export function ScaleManagePanel() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/admin/scaling/compute', { cache: 'no-store' });
+      const r = await clientFetch('/api/admin/scaling/compute', { cache: 'no-store' });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setItems([]); return; }
       setItems(j.resources || []);
@@ -118,7 +119,7 @@ export function ScaleManagePanel() {
   const act = useCallback(async (it: Scalable, body: Record<string, unknown>) => {
     setBusy(it.kind + it.name); setMsg(null);
     try {
-      const r = await fetch('/api/admin/scaling/compute', {
+      const r = await clientFetch('/api/admin/scaling/compute', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: it.kind, ...body }),
       });
@@ -136,7 +137,7 @@ export function ScaleManagePanel() {
     const id = it.kind + it.name;
     setBusy(id); setMsg(null);
     try {
-      const r = await fetch('/api/admin/scaling/compute/register-purview-shir', {
+      const r = await clientFetch('/api/admin/scaling/compute/register-purview-shir', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
       });
       const j = await r.json();
@@ -304,7 +305,7 @@ function PurviewManagedVnetSection() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/admin/scaling/compute/purview-managed-vnet', { cache: 'no-store' });
+      const r = await clientFetch('/api/admin/scaling/compute/purview-managed-vnet', { cache: 'no-store' });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setData(null); return; }
       setData(j as MvnetState);
@@ -315,7 +316,7 @@ function PurviewManagedVnetSection() {
   const post = useCallback(async (key: string, body: Record<string, unknown>) => {
     setBusy(key); setMsg(null);
     try {
-      const r = await fetch('/api/admin/scaling/compute/purview-managed-vnet', {
+      const r = await clientFetch('/api/admin/scaling/compute/purview-managed-vnet', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();

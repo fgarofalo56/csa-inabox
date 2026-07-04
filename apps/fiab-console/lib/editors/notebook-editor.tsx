@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * NotebookEditor — Azure-native notebook editor (no Microsoft Fabric required).
  *
@@ -152,7 +153,7 @@ function useWorkspaces() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch('/api/loom/workspaces');
+      const r = await clientFetch('/api/loom/workspaces');
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); setHint(j.hint || null); setWorkspaces([]); }
       else setWorkspaces(j.workspaces || []);
@@ -218,7 +219,7 @@ function useComputes() {
   const [error, setError] = useState<string | null>(null);
   const refresh = useCallback(async () => {
     try {
-      const j = await (await fetch('/api/loom/compute-targets')).json();
+      const j = await (await clientFetch('/api/loom/compute-targets')).json();
       if (j.ok) setComputes(j.computes || []);
       else setError(j.error || 'failed to list compute');
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -272,7 +273,7 @@ function useAmlConfigured() {
     let cancelled = false;
     (async () => {
       try {
-        const j = await (await fetch('/api/aml/compute-instances')).json();
+        const j = await (await clientFetch('/api/aml/compute-instances')).json();
         if (!cancelled) {
           setConfigured(j.ok === true || j.configured === true);
           setDefaultCompute(typeof j.defaultCompute === 'string' && j.defaultCompute ? j.defaultCompute : null);
@@ -300,7 +301,7 @@ function useMyCi() {
   const [state, setState] = useState<MyCiState>({ loading: true, enabled: true, myName: null, mine: null, policy: null, quota: null });
   const refresh = useCallback(async () => {
     try {
-      const j = await (await fetch('/api/aml/compute-instances/mine')).json();
+      const j = await (await clientFetch('/api/aml/compute-instances/mine')).json();
       setState({
         loading: false,
         enabled: j?.enabled !== false,
@@ -479,7 +480,7 @@ export function NotebookEditor({ item, id }: Props) {
   const prewarmSession = useCallback(async (cId: string) => {
     if (!workspaceId || !notebookId || !cId.startsWith('spark:')) return;
     try {
-      await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ compute: cId, cellId: '__prewarm__' }),
@@ -527,7 +528,7 @@ export function NotebookEditor({ item, id }: Props) {
     let cancelled = false;
     const load = async () => {
       try {
-        const r = await fetch('/api/spark/session-pool');
+        const r = await clientFetch('/api/spark/session-pool');
         const j = await r.json();
         if (cancelled || !j?.ok) return;
         const st = j.status;
@@ -580,7 +581,7 @@ export function NotebookEditor({ item, id }: Props) {
     const ciName = computeId.slice('aml-ci:'.length);
     setStoppingCompute(true); setRunMsg('Stopping compute…');
     try {
-      const r = await fetch(`/api/aml/compute-instances/${encodeURIComponent(ciName)}/stop`, { method: 'POST' });
+      const r = await clientFetch(`/api/aml/compute-instances/${encodeURIComponent(ciName)}/stop`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || j?.ok === false) {
         setRunMsg(`Could not stop compute: ${j?.error || j?.hint || `HTTP ${r.status}`}`);
@@ -609,7 +610,7 @@ export function NotebookEditor({ item, id }: Props) {
     const ciName = computeId.slice('aml-ci:'.length);
     setConfigCiBusy(true); setConfigCiErr(null);
     try {
-      const r = await fetch(`/api/aml/compute-instances/${encodeURIComponent(ciName)}/idle-shutdown`, {
+      const r = await clientFetch(`/api/aml/compute-instances/${encodeURIComponent(ciName)}/idle-shutdown`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ idleTtl: configCiTtl }),
@@ -640,7 +641,7 @@ export function NotebookEditor({ item, id }: Props) {
     if (!name) return;
     setNewCiBusy(true); setNewCiErr(null);
     try {
-      const r = await fetch('/api/aml/compute-instances', {
+      const r = await clientFetch('/api/aml/compute-instances', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name, vmSize: newCiVmSize, idleTtl: newCiTtl }),
@@ -671,7 +672,7 @@ export function NotebookEditor({ item, id }: Props) {
   const provisionMyCi = useCallback(async () => {
     setProvisioningMyCi(true); setMyCiErr(null); setRunMsg('Provisioning your compute instance…');
     try {
-      const r = await fetch('/api/aml/compute-instances/mine', {
+      const r = await clientFetch('/api/aml/compute-instances/mine', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({}),
@@ -720,7 +721,7 @@ export function NotebookEditor({ item, id }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/cosmos-items/notebook/${encodeURIComponent(id)}`);
+        const r = await clientFetch(`/api/cosmos-items/notebook/${encodeURIComponent(id)}`);
         if (!r.ok) return;
         const j = await r.json();
         if (cancelled) return;
@@ -753,7 +754,7 @@ export function NotebookEditor({ item, id }: Props) {
   const loadList = useCallback(async (wsId: string) => {
     setListErr(null); setListHint(null);
     try {
-      const r = await fetch(`/api/items/notebook?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/notebook?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setNotebooks([]); setListErr(j.error); setListHint(j.hint); return; }
       setNotebooks(j.notebooks || []);
@@ -764,7 +765,7 @@ export function NotebookEditor({ item, id }: Props) {
   const loadDetail = useCallback(async (wsId: string, nbId: string) => {
     setDetailErr(null); setRunMsg(null);
     try {
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(nbId)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(nbId)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDetailErr(j.error); return; }
       // v3.26: cell-based shape. Falls back through legacy `code` then Fabric `parts[]`.
@@ -796,7 +797,7 @@ export function NotebookEditor({ item, id }: Props) {
 
   const loadJobs = useCallback(async (wsId: string, nbId: string) => {
     try {
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(nbId)}/jobs?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(nbId)}/jobs?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (j.ok) setJobs(j.jobs || []);
     } catch { /* keep last */ }
@@ -961,7 +962,7 @@ export function NotebookEditor({ item, id }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/notebook/${encodeURIComponent(notebookId)}/lsp`);
+        const r = await clientFetch(`/api/notebook/${encodeURIComponent(notebookId)}/lsp`);
         const j = await r.json().catch(() => null);
         if (cancelled || !j?.ok) return;
         setLspWsUrl(j.lspAvailable && j.wsUrl ? j.wsUrl : null);
@@ -978,7 +979,7 @@ export function NotebookEditor({ item, id }: Props) {
   // the selector shows "No environment attached" and the Manage panel explains.
   const loadAmlEnvs = useCallback(async () => {
     try {
-      const r = await fetch('/api/aml/environments');
+      const r = await clientFetch('/api/aml/environments');
       const j = await r.json();
       if (j.ok && Array.isArray(j.environments)) setAmlEnvs(j.environments);
     } catch { /* selector stays empty; Manage panel surfaces the error */ }
@@ -997,7 +998,7 @@ export function NotebookEditor({ item, id }: Props) {
         ...c,
         output: undefined,
       }));
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources, attachedAmlEnv, customLibraries } }),
@@ -1042,7 +1043,7 @@ export function NotebookEditor({ item, id }: Props) {
   const loadLakehouses = useCallback(async () => {
     if (!workspaceId) return;
     try {
-      const r = await fetch(`/api/items/lakehouse?workspaceId=${encodeURIComponent(workspaceId)}`);
+      const r = await clientFetch(`/api/items/lakehouse?workspaceId=${encodeURIComponent(workspaceId)}`);
       const j = await r.json();
       if (j.ok && Array.isArray(j.items)) {
         setAvailableLakehouses(j.items.map((x: any) => ({ id: x.id, displayName: x.displayName, description: x.description })));
@@ -1071,7 +1072,7 @@ export function NotebookEditor({ item, id }: Props) {
       for (const lh of lakehouses) {
         if (resolvedPaths[lh.id]) continue; // already resolved this id
         try {
-          const r = await fetch(`/api/items/lakehouse/${encodeURIComponent(lh.id)}/abfss?workspaceId=${encodeURIComponent(workspaceId)}`);
+          const r = await clientFetch(`/api/items/lakehouse/${encodeURIComponent(lh.id)}/abfss?workspaceId=${encodeURIComponent(workspaceId)}`);
           const j = await r.json().catch(() => ({}));
           if (cancelled) return;
           if (j?.ok && j.resolved && j.abfss) {
@@ -1097,7 +1098,7 @@ export function NotebookEditor({ item, id }: Props) {
     if (!workspaceId || !notebookId) return;
     try {
       const cellsForSave = cells.map(c => ({ ...c, output: undefined }));
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ definition: { cells: cellsForSave, defaultLang, attachedSources: next } }),
@@ -1150,7 +1151,7 @@ export function NotebookEditor({ item, id }: Props) {
     if (sessionConfigEquals(next, sessionCfg)) return;
     setCfgSaving(true);
     try {
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ definition: { sessionConfig: next } }),
@@ -1177,7 +1178,7 @@ export function NotebookEditor({ item, id }: Props) {
     setSessionStatus('Running');
     setRunMsg('Submitting run…');
     try {
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ compute: computeId, sessionConfig: toConfigureOptions(sessionCfg) }),
@@ -1205,7 +1206,7 @@ export function NotebookEditor({ item, id }: Props) {
       let pollInterval = 600; // responsive first poll for warm sessions
       while (Date.now() - start < MAX_MS) {
         await new Promise(res => setTimeout(res, pollInterval));
-        const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const pollRes = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
         if (!p.ok) { setRunMsg(`Poll error: ${p.error || pollRes.status}`); break; }
         if (p.runId && p.runId !== runId) runId = p.runId; // promotion when statement is submitted
@@ -1258,7 +1259,7 @@ export function NotebookEditor({ item, id }: Props) {
       const seedRuntime: ClusterRuntime = aml ? 'azure-ml' : clusterRuntime;
       const code = starterCellFor(seedRuntime, lang);
       const definition = { code, lang };
-      const r = await fetch(`/api/items/notebook?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/notebook?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: createName.trim(), definition }),
@@ -1290,7 +1291,7 @@ export function NotebookEditor({ item, id }: Props) {
         binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
       }
       const contentBase64 = btoa(binary);
-      const r = await fetch('/api/items/notebook/import', {
+      const r = await clientFetch('/api/items/notebook/import', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, filename: file.name, contentBase64 }),
@@ -1323,7 +1324,7 @@ export function NotebookEditor({ item, id }: Props) {
   const del = useCallback(async () => {
     if (!workspaceId || !notebookId) return;
     if (!confirm('Delete this notebook? This cannot be undone.')) return;
-    await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
+    await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}?workspaceId=${encodeURIComponent(workspaceId)}`, { method: 'DELETE' });
     setNotebookId('');
     await loadList(workspaceId);
   }, [workspaceId, notebookId, loadList]);
@@ -1547,7 +1548,7 @@ export function NotebookEditor({ item, id }: Props) {
     setRunMsg(`Running %%pyspark cell ${cell.id.slice(0, 6)} on Spark…`);
     const prevExec = cell.executionCount || 0;
     try {
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/execute-spark?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/execute-spark?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ source: cell.source, cellId: cell.id }),
@@ -1565,7 +1566,7 @@ export function NotebookEditor({ item, id }: Props) {
       while (Date.now() - start < MAX_MS) {
         if (cancelRef.current.has(cell.id)) { cancelRef.current.delete(cell.id); return; }
         await new Promise(res => setTimeout(res, pollInterval));
-        const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/execute-spark?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`);
+        const pollRes = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/execute-spark?workspaceId=${encodeURIComponent(workspaceId)}&runId=${encodeURIComponent(runId)}`);
         const p = await pollRes.json();
         if (!p.ok) { patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } }); break; }
         if (p.runId && p.runId !== runId) runId = p.runId;
@@ -1648,7 +1649,7 @@ export function NotebookEditor({ item, id }: Props) {
     setRunMsg(`Running cell ${cell.id.slice(0, 6)}…`);
     const prevExec = cell.executionCount || 0;
     try {
-      const r = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ compute: computeId, cellId: cell.id, source: cell.source, lang: cell.lang || defaultLang, sessionConfig: toConfigureOptions(sessionCfg) }),
@@ -1668,7 +1669,7 @@ export function NotebookEditor({ item, id }: Props) {
       while (Date.now() - start < MAX_MS) {
         if (cancelRef.current.has(cell.id)) { cancelRef.current.delete(cell.id); return; }
         await new Promise(res => setTimeout(res, pollInterval));
-        const pollRes = await fetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const pollRes = await clientFetch(`/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const p = await pollRes.json();
         if (!p.ok) {
           patchCell(cell.id, { output: { status: 'error', ename: 'PollError', evalue: p.error || String(pollRes.status) } });
@@ -1764,7 +1765,7 @@ export function NotebookEditor({ item, id }: Props) {
       'del __loom_j__, __loom_v__, __loom_skip__',
     ].join('\n');
 
-    const r = await fetch(
+    const r = await clientFetch(
       `/api/items/notebook/${encodeURIComponent(notebookId)}/run?workspaceId=${encodeURIComponent(workspaceId)}`,
       {
         method: 'POST',
@@ -1780,7 +1781,7 @@ export function NotebookEditor({ item, id }: Props) {
     let pollInterval = 600;
     while (Date.now() - start < MAX_MS) {
       await new Promise(res => setTimeout(res, pollInterval));
-      const pollRes = await fetch(
+      const pollRes = await clientFetch(
         `/api/items/notebook/${encodeURIComponent(notebookId)}/runs/${encodeURIComponent(runId)}?workspaceId=${encodeURIComponent(workspaceId)}`,
       );
       const p = await pollRes.json();
@@ -1832,7 +1833,7 @@ export function NotebookEditor({ item, id }: Props) {
     if (!workspaceId || !notebookId) return;
     if (!envName) {
       try {
-        await fetch('/api/aml/environments?action=detach', {
+        await clientFetch('/api/aml/environments?action=detach', {
           method: 'PATCH', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ notebookId, workspaceId }),
         });
@@ -1843,7 +1844,7 @@ export function NotebookEditor({ item, id }: Props) {
     const env = amlEnvs.find(e => e.name === envName);
     setRunMsg(`Attaching environment ${envName}…`);
     try {
-      const r = await fetch('/api/aml/environments?action=attach', {
+      const r = await clientFetch('/api/aml/environments?action=attach', {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ notebookId, workspaceId, envName, envVersion: env?.latestVersion }),
       });

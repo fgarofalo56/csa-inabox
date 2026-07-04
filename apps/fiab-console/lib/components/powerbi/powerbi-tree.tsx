@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * PowerBiTree — the Power BI **workspace navigator** (parity wave 9).
  *
@@ -115,7 +116,7 @@ export function PowerBiTree({
   const loadPipelines = useCallback(async () => {
     if (pipelines !== null) return; // load once
     try {
-      const j = await fetch('/api/powerbi/pipelines').then(readJson);
+      const j = await clientFetch('/api/powerbi/pipelines').then(readJson);
       if (j.ok) { setPipelines(j.pipelines || []); setPipelinesErr(null); }
       else { setPipelines([]); setPipelinesErr(j.error || j.hint || 'could not load pipelines'); }
     } catch (e: any) { setPipelines([]); setPipelinesErr(e?.message || String(e)); }
@@ -123,7 +124,7 @@ export function PowerBiTree({
   const deployStage = useCallback(async (pipelineId: string, sourceStageOrder: number, label: string) => {
     setBusy(true); setActionMsg(null);
     try {
-      const j = await fetch('/api/powerbi/pipelines', {
+      const j = await clientFetch('/api/powerbi/pipelines', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pipelineId, sourceStageOrder }),
       }).then(readJson);

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ItemsByTypePane — generic top-level surface that lists every item of
  * one or more types owned by the caller's tenant. Used by /activator,
@@ -66,7 +67,7 @@ export function ItemsByTypePane({ types, emptyHint, defaultCategoryForNew }: Pro
     // poisoned subsequent requests on the page (logo, /api/me, etc.).
     // BFF accepts both forms — see app/api/items/by-type/route.ts.
     const qs = `types=${encodeURIComponent(types.join(','))}`;
-    fetch(`/api/items/by-type?${qs}`).then(r => {
+    clientFetch(`/api/items/by-type?${qs}`).then(r => {
       if (r.status === 401 || r.status === 403) { setUnauth(true); setItems([]); return null; }
       return r.json();
     }).then(d => {

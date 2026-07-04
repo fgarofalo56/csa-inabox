@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ReportSubscriptionsPanel — schedule + manage recurring report deliveries
  * (Azure-native parity with Fabric / Power BI "Subscribe to report").
@@ -120,7 +121,7 @@ export function ReportSubscriptionsPanel({
     if (!reportId) return;
     setLoading(true); setErr(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions`);
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions`);
       const j = await r.json();
       if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); setSubs([]); return; }
       setSubs(j.subscriptions || []);
@@ -159,7 +160,7 @@ export function ReportSubscriptionsPanel({
       if (presetId === PRESET_CUSTOM) body.cron = customCron.trim();
       else body.presetId = presetId;
 
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -173,7 +174,7 @@ export function ReportSubscriptionsPanel({
 
   const toggleEnabled = useCallback(async (sub: Subscription) => {
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions/${encodeURIComponent(sub.id)}`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions/${encodeURIComponent(sub.id)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enabled: !sub.enabled }),
       });
@@ -185,7 +186,7 @@ export function ReportSubscriptionsPanel({
 
   const cancelSub = useCallback(async (sub: Subscription) => {
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions/${encodeURIComponent(sub.id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions/${encodeURIComponent(sub.id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); return; }
       if (openLogsFor === sub.id) { setOpenLogsFor(null); setLogs(null); }
@@ -197,7 +198,7 @@ export function ReportSubscriptionsPanel({
     if (openLogsFor === sub.id) { setOpenLogsFor(null); setLogs(null); return; }
     setOpenLogsFor(sub.id); setLogs(null); setLogsErr(null);
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions/${encodeURIComponent(sub.id)}/logs`);
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/subscriptions/${encodeURIComponent(sub.id)}/logs`);
       const j = await r.json();
       if (!j.ok) { setLogsErr(j.error || `HTTP ${r.status}`); setLogs([]); return; }
       setLogs(j.logs || []);

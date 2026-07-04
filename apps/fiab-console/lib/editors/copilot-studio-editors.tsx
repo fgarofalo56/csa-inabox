@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Copilot Studio editors — v3.
  *
@@ -1023,7 +1024,7 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     if (!envId) return;
     setFlowGate(null);
     try {
-      const r = await fetch(`/api/powerplatform/flows?envId=${encodeURIComponent(envId)}`);
+      const r = await clientFetch(`/api/powerplatform/flows?envId=${encodeURIComponent(envId)}`);
       const j = await r.json();
       if (!j.ok) { setFlowGate(j.error || 'Failed to load Power Automate flows'); setFlows([]); return; }
       setFlows(j.flows || []);
@@ -1034,7 +1035,7 @@ function ActionsPanel({ envId, agentId }: { envId: string; agentId: string }) {
     if (!envId) return;
     setConnectorGate(null);
     try {
-      const r = await fetch(`/api/powerplatform/connectors?envId=${encodeURIComponent(envId)}`);
+      const r = await clientFetch(`/api/powerplatform/connectors?envId=${encodeURIComponent(envId)}`);
       const j = await r.json();
       if (!j.ok) { setConnectorGate(j.error || 'Failed to load connectors'); setConnectors([]); return; }
       setConnectors(j.connectors || []);

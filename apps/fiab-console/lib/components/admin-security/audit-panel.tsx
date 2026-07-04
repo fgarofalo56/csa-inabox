@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AuditPanel — expanded audit log surface for /admin/security.
  *
@@ -79,7 +80,7 @@ export function AuditPanel() {
       params.set('top', '500');
       if (q.trim()) params.set('q', q.trim());
       if (kind) params.set('type', kind);
-      const r = await fetch(`/api/admin/audit-logs?${params.toString()}`);
+      const r = await clientFetch(`/api/admin/audit-logs?${params.toString()}`);
       const j = await r.json();
       if (!r.ok) setError(j?.error || `HTTP ${r.status}`);
       else setData(j);

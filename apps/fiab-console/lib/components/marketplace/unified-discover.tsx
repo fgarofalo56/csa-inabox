@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * UnifiedDiscover — the hero "Discover" tab of the Loom Marketplace.
  *
@@ -88,7 +89,7 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
 
     // Data products + models/reports (same index; split by productType).
     try {
-      const r = await fetch('/api/data-products/search', {
+      const r = await clientFetch('/api/data-products/search', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ q: query, selectedFacets: {}, top: 50 }),
       });
@@ -115,7 +116,7 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
 
     // APIs (APIM).
     try {
-      const r = await fetch('/api/marketplace/catalog');
+      const r = await clientFetch('/api/marketplace/catalog');
       const j = await r.json();
       if (r.status === 503 && j?.gated) {
         info.push('APIs: API Management not provisioned (set LOOM_APIM_NAME + LOOM_SUBSCRIPTION_ID).');
@@ -133,7 +134,7 @@ export function UnifiedDiscover({ onGoTab }: { onGoTab?: (tab: string) => void }
 
     // Data shares (inbound Delta Sharing providers + their shares).
     try {
-      const r = await fetch('/api/marketplace/sharing/providers?withShares=true');
+      const r = await clientFetch('/api/marketplace/sharing/providers?withShares=true');
       const j = await r.json();
       if (r.status === 501 && j?.gated) {
         info.push('Data shares: no Databricks workspace bound (Delta Sharing optional).');

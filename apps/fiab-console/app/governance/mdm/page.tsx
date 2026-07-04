@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Governance → Master data management (MDM + reference data).
  *
@@ -67,7 +68,7 @@ export default function GovernanceMdmPage() {
   const [modelsLoading, setModelsLoading] = useState(true);
   const loadModels = useCallback(async () => {
     setModelsLoading(true);
-    try { const r = await fetch('/api/mdm/models'); const j = await r.json(); if (j.ok) setModels(j.models || []); }
+    try { const r = await clientFetch('/api/mdm/models'); const j = await r.json(); if (j.ok) setModels(j.models || []); }
     catch { /* */ } finally { setModelsLoading(false); }
   }, []);
   useEffect(() => { loadModels(); }, [loadModels]);
@@ -114,13 +115,13 @@ function ModelsTab({ models, loading, reload }: { models: MdmModel[]; loading: b
     setBusy(true); setErrs(null);
     const payload = { ...m, ...(editing ? { id: editing.id } : {}) };
     try {
-      const r = await fetch('/api/mdm/models', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      const r = await clientFetch('/api/mdm/models', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const j = await r.json();
       if (!j.ok) { setErrs(Array.isArray(j.errors) ? j.errors : [j.error || 'Error']); return; }
       setOpen(false); reload();
     } catch (e: any) { setErrs([e?.message || String(e)]); } finally { setBusy(false); }
   }
-  async function del(id: string) { await fetch(`/api/mdm/models?id=${encodeURIComponent(id)}`, { method: 'DELETE' }); reload(); }
+  async function del(id: string) { await clientFetch(`/api/mdm/models?id=${encodeURIComponent(id)}`, { method: 'DELETE' }); reload(); }
 
   const cols: LoomColumn<MdmModel>[] = [
     { key: 'name', label: 'Model', sortable: true, filterable: true, getValue: (x) => x.name, render: (x) => <Body1><strong>{x.name}</strong></Body1> },
@@ -228,7 +229,7 @@ function RefDataTab() {
 
   const load = useCallback(async () => {
     setError(null);
-    try { const r = await fetch('/api/mdm/reference-data'); const j = await r.json(); if (!j.ok) { setError(j.error || 'Failed'); return; } setSets(j.sets || []); }
+    try { const r = await clientFetch('/api/mdm/reference-data'); const j = await r.json(); if (!j.ok) { setError(j.error || 'Failed'); return; } setSets(j.sets || []); }
     catch (e: any) { setError(e?.message || String(e)); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -243,10 +244,10 @@ function RefDataTab() {
     const entries = entriesText.split('\n').map((line) => { const [code, ...rest] = line.split(','); return { code: (code || '').trim(), label: rest.join(',').trim() || (code || '').trim() }; }).filter((e) => e.code);
     const payload: any = { name: name.trim(), domain: domain.trim(), description: desc.trim() || undefined, entries };
     if (editing) payload.id = editing.id;
-    try { const r = await fetch('/api/mdm/reference-data', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }); const j = await r.json(); if (j.ok) { setOpen(false); load(); } else setError(Array.isArray(j.errors) ? j.errors.join('; ') : j.error); }
+    try { const r = await clientFetch('/api/mdm/reference-data', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) }); const j = await r.json(); if (j.ok) { setOpen(false); load(); } else setError(Array.isArray(j.errors) ? j.errors.join('; ') : j.error); }
     catch (e: any) { setError(e?.message || String(e)); } finally { setBusy(false); }
   }
-  async function del(id: string) { await fetch(`/api/mdm/reference-data?id=${encodeURIComponent(id)}`, { method: 'DELETE' }); load(); }
+  async function del(id: string) { await clientFetch(`/api/mdm/reference-data?id=${encodeURIComponent(id)}`, { method: 'DELETE' }); load(); }
 
   const cols: LoomColumn<RefSet>[] = [
     { key: 'name', label: 'Set', sortable: true, filterable: true, getValue: (x) => x.name, render: (x) => <Body1><strong>{x.name}</strong></Body1> },
@@ -313,7 +314,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
   const loadApproved = useCallback(async (id: string) => {
     if (!id) { setApproved(new Set()); return; }
     try {
-      const r = await fetch(`/api/mdm/match/approve?modelId=${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/mdm/match/approve?modelId=${encodeURIComponent(id)}`);
       const j = await r.json();
       if (j.ok) setApproved(new Set((j.pairs || []).map((p: any) => pairKey(String(p.idA), String(p.idB)))));
     } catch { /* */ }
@@ -323,7 +324,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
   async function run() {
     setBusy(true); setError(null); setGate(null); setCandidates(null);
     try {
-      const r = await fetch('/api/mdm/match', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId, minScore: parseInt(minScore, 10) }) });
+      const r = await clientFetch('/api/mdm/match', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId, minScore: parseInt(minScore, 10) }) });
       const j = await r.json();
       if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
       if (!j.ok) { setError(j.error || 'Match failed'); return; }
@@ -335,7 +336,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
     const key = pairKey(c.idA, c.idB);
     setApproved((prev) => new Set(prev).add(key)); // optimistic
     try {
-      const r = await fetch('/api/mdm/match/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId, pairs: [{ idA: c.idA, idB: c.idB }] }) });
+      const r = await clientFetch('/api/mdm/match/approve', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId, pairs: [{ idA: c.idA, idB: c.idB }] }) });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'Approve failed'); setApproved((prev) => { const n = new Set(prev); n.delete(key); return n; }); }
     } catch (e: any) { setError(e?.message || String(e)); setApproved((prev) => { const n = new Set(prev); n.delete(key); return n; }); }
@@ -344,7 +345,7 @@ function MatchTab({ models }: { models: MdmModel[] }) {
     const key = pairKey(c.idA, c.idB);
     setApproved((prev) => { const n = new Set(prev); n.delete(key); return n; }); // optimistic
     try {
-      await fetch(`/api/mdm/match/approve?modelId=${encodeURIComponent(modelId)}&idA=${encodeURIComponent(c.idA)}&idB=${encodeURIComponent(c.idB)}`, { method: 'DELETE' });
+      await clientFetch(`/api/mdm/match/approve?modelId=${encodeURIComponent(modelId)}&idA=${encodeURIComponent(c.idA)}&idB=${encodeURIComponent(c.idB)}`, { method: 'DELETE' });
     } catch (e: any) { setError(e?.message || String(e)); }
   }
 
@@ -402,7 +403,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
     if (!modelId) return;
     setBusy(true); setError(null); setGate(null); setData(null);
     try {
-      const r = await fetch(`/api/mdm/golden-records?modelId=${encodeURIComponent(modelId)}&limit=200`); const j = await r.json();
+      const r = await clientFetch(`/api/mdm/golden-records?modelId=${encodeURIComponent(modelId)}&limit=200`); const j = await r.json();
       if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
       if (!j.ok) { setError(`${j.error || 'Failed'}${j.hint ? ` — ${j.hint}` : ''}`); return; }
       setData({ columns: j.columns || [], rows: j.rows || [], goldenTable: j.goldenTable });
@@ -412,7 +413,7 @@ function GoldenTab({ models }: { models: MdmModel[] }) {
     if (!modelId) return;
     setMerging(true); setError(null); setGate(null); setInfo(null);
     try {
-      const r = await fetch('/api/mdm/merge', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId }) });
+      const r = await clientFetch('/api/mdm/merge', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ modelId }) });
       const j = await r.json();
       if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
       if (!j.ok) { setError(j.error || 'Merge failed'); return; }
@@ -459,7 +460,7 @@ function RunsTab() {
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     setError(null);
-    try { const r = await fetch('/api/mdm/golden-records'); const j = await r.json(); if (!j.ok) { setError(j.error || 'Failed'); return; } setRuns(j.runs || []); }
+    try { const r = await clientFetch('/api/mdm/golden-records'); const j = await r.json(); if (!j.ok) { setError(j.error || 'Failed'); return; } setRuns(j.runs || []); }
     catch (e: any) { setError(e?.message || String(e)); }
   }, []);
   useEffect(() => { load(); }, [load]);

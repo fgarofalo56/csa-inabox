@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ApiMarketplace — the consumer/catalog view over the tenant's Azure API
  * Management instance. The Loom equivalent of the APIM developer portal /
@@ -192,7 +193,7 @@ export function ApiMarketplace() {
     try {
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         try {
-          const r = await fetch('/api/marketplace/catalog', { cache: 'no-store' });
+          const r = await clientFetch('/api/marketplace/catalog', { cache: 'no-store' });
           const ct = r.headers.get('content-type') || '';
           const j = ct.includes('application/json') ? await r.json() : null;
           if (r.status === 503 && j?.gated) { setGate({ msg: j.error, hint: j.hint, bicep: j.bicepModule }); return; }
@@ -221,7 +222,7 @@ export function ApiMarketplace() {
   const loadSubscriptions = useCallback(async () => {
     setSubs((p) => ({ ...p, loading: true, error: undefined }));
     try {
-      const r = await fetch('/api/marketplace/subscriptions', { cache: 'no-store' });
+      const r = await clientFetch('/api/marketplace/subscriptions', { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (r.status === 503 && j?.gated) { setSubs({ loading: false, data: [], error: j.error }); return; }
       if (!j?.ok) { setSubs({ loading: false, data: [], error: j?.error || `HTTP ${r.status}` }); return; }
@@ -238,7 +239,7 @@ export function ApiMarketplace() {
   const loadOps = useCallback(async (apiId: string) => {
     setOps({ loading: true, data: [] });
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(apiId)}/operations`, { cache: 'no-store' });
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(apiId)}/operations`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setOps({ loading: false, data: [], error: j?.error || `HTTP ${r.status}` }); return; }
       setOps({ loading: false, data: j.operations || [] });
@@ -248,7 +249,7 @@ export function ApiMarketplace() {
   const loadSpec = useCallback(async (apiId: string) => {
     setSpec({ loading: true });
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(apiId)}/spec?format=openapi+json`, { cache: 'no-store' });
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(apiId)}/spec?format=openapi+json`, { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setSpec({ loading: false, error: j?.error || `HTTP ${r.status}` }); return; }
       setSpec({ loading: false, value: j.value, format: j.format });
@@ -279,7 +280,7 @@ export function ApiMarketplace() {
       const i = l.indexOf(':'); if (i > 0) headers[l.slice(0, i).trim()] = l.slice(i + 1).trim();
     });
     try {
-      const r = await fetch(`/api/items/apim-api/${encodeURIComponent(selApi.name || selApi.id)}/test-call`, {
+      const r = await clientFetch(`/api/items/apim-api/${encodeURIComponent(selApi.name || selApi.id)}/test-call`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           method: tMethod, urlTemplate: tTemplate, headers,
@@ -312,7 +313,7 @@ export function ApiMarketplace() {
         ? { product: subTarget.id, displayName: subTarget.name }
         : { api: subTarget.id, displayName: subTarget.name };
       if (wantActive) body.state = 'active';
-      const r = await fetch('/api/marketplace/subscriptions', {
+      const r = await clientFetch('/api/marketplace/subscriptions', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json().catch(() => ({}));
@@ -331,7 +332,7 @@ export function ApiMarketplace() {
 
   const revealKeys = useCallback(async (sid: string) => {
     try {
-      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
+      const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setKeyCache((p) => ({ ...p, [sid]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
       else setKeyCache((p) => ({ ...p, [sid]: { primaryKey: `(error: ${j?.error || r.status})` } }));
@@ -344,7 +345,7 @@ export function ApiMarketplace() {
     const cached = keyCache[sid]?.primaryKey;
     if (cached && !cached.startsWith('(error')) return cached;
     try {
-      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
+      const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sid)}/keys`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (j?.ok) {
         setKeyCache((p) => ({ ...p, [sid]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
@@ -359,7 +360,7 @@ export function ApiMarketplace() {
     if (!renameTarget || !renameValue.trim()) return;
     setSubActionMsg(null);
     try {
-      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(renameTarget.name)}`, {
+      const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(renameTarget.name)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: renameValue.trim() }),
       });
@@ -372,7 +373,7 @@ export function ApiMarketplace() {
   const setSubState = useCallback(async (sub: SubscriptionSummary, state: 'active' | 'suspended' | 'cancelled') => {
     setSubActionMsg(null);
     try {
-      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}`, {
+      const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ state }),
       });
       const j = await r.json().catch(() => ({}));
@@ -385,7 +386,7 @@ export function ApiMarketplace() {
     if (!confirm(`Delete subscription "${sub.displayName || sub.name}"? This revokes its keys and cannot be undone.`)) return;
     setSubActionMsg(null);
     try {
-      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setSubActionMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
       setSubActionMsg({ intent: 'success', text: 'Subscription deleted.' }); loadSubscriptions();
@@ -395,7 +396,7 @@ export function ApiMarketplace() {
   const regenKey = useCallback(async (sub: SubscriptionSummary, which: 'primary' | 'secondary') => {
     setSubActionMsg(null);
     try {
-      const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}/keys/regenerate?which=${which}`, { method: 'POST' });
+      const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}/keys/regenerate?which=${which}`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) { setSubActionMsg({ intent: 'error', text: j?.error || `HTTP ${r.status}` }); return; }
       setKeyCache((p) => ({ ...p, [sub.name]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } }));
@@ -410,13 +411,13 @@ export function ApiMarketplace() {
     setMiniName(`${sub.displayName || sub.name} mini-app`);
     if (!keyCache[sub.name]) {
       try {
-        const r = await fetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}/keys`, { method: 'POST' });
+        const r = await clientFetch(`/api/marketplace/subscriptions/${encodeURIComponent(sub.name)}/keys`, { method: 'POST' });
         const j = await r.json().catch(() => ({}));
         if (j?.ok) { setUseKeys({ primaryKey: j.primaryKey, secondaryKey: j.secondaryKey }); setKeyCache((p) => ({ ...p, [sub.name]: { primaryKey: j.primaryKey, secondaryKey: j.secondaryKey } })); }
       } catch { /* keys optional in the drawer */ }
     }
     try {
-      const r = await fetch('/api/loom/workspaces', { cache: 'no-store' });
+      const r = await clientFetch('/api/loom/workspaces', { cache: 'no-store' });
       const j = await r.json().catch(() => ({}));
       if (j?.ok) { setWorkspaces(j.workspaces || []); if ((j.workspaces || []).length) setMiniWs(j.workspaces[0].id); }
     } catch { /* workspace list optional */ }
@@ -463,7 +464,7 @@ export function ApiMarketplace() {
     if (!subApi || !miniWs) return;
     setMiniBusy(true); setMiniMsg(null);
     try {
-      const r = await fetch('/api/marketplace/mini-app', {
+      const r = await clientFetch('/api/marketplace/mini-app', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           workspaceId: miniWs, apiId: subApi.name || subApi.id, apiName: subApi.displayName || subApi.name,

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Network & Private DNS pane — the developer-facing view of CSA Loom's
  * private-endpoint topology. Reads live from ARM (/api/network/private-endpoints)
@@ -132,7 +133,7 @@ function VnetGatewayCard() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/network/vnet-data-gateway');
+        const r = await clientFetch('/api/network/vnet-data-gateway');
         const j = (await r.json()) as GwApiResp;
         if (alive) setGw(j);
       } catch (e: any) {
@@ -255,7 +256,7 @@ function VpnAccessCard() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/network/vpn-profile');
+        const r = await clientFetch('/api/network/vpn-profile');
         const j = await r.json();
         if (alive) setGw(j?.gateway ?? { found: false, ready: false });
       } catch { if (alive) setGw({ found: false, ready: false }); }
@@ -267,7 +268,7 @@ function VpnAccessCard() {
   const download = useCallback(async () => {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch('/api/network/vpn-profile', { method: 'POST' });
+      const r = await clientFetch('/api/network/vpn-profile', { method: 'POST' });
       const j = await r.json();
       if (j?.ok && j.profileUrl) {
         window.open(j.profileUrl, '_blank', 'noopener');
@@ -359,7 +360,7 @@ export function NetworkPane() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/network/private-endpoints');
+        const r = await clientFetch('/api/network/private-endpoints');
         const j = (await r.json()) as ApiResp;
         if (alive) setData(j);
       } catch (e: any) {

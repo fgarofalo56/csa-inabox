@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * F23 — Organizational visuals pane.
  *
@@ -102,7 +103,7 @@ export function OrgVisualsPane() {
   const load = useCallback(async () => {
     setLoading(true); setError(null); setGate(null);
     try {
-      const r = await fetch('/api/admin/org-visuals');
+      const r = await clientFetch('/api/admin/org-visuals');
       const j = await r.json();
       if (r.status === 503 && j.code === 'not-configured') { setGate(j.hint || {}); setVisuals([]); return; }
       if (!j.ok) { setError(j.error || 'failed'); return; }
@@ -130,7 +131,7 @@ export function OrgVisualsPane() {
       fd.append('version', version.trim());
       if (description.trim()) fd.append('description', description.trim());
       if (icon) fd.append('icon', icon);
-      const r = await fetch('/api/admin/org-visuals', { method: 'POST', body: fd });
+      const r = await clientFetch('/api/admin/org-visuals', { method: 'POST', body: fd });
       const j = await r.json();
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       setOkMsg(`Uploaded “${j.visual.name}” (${fmtSize(j.visual.size)}). Enable it to make it available tenant-wide.`);
@@ -145,7 +146,7 @@ export function OrgVisualsPane() {
   async function toggle(v: OrgVisual, enabled: boolean) {
     setBusyId(v.id); setActionErr(null);
     try {
-      const r = await fetch(`/api/admin/org-visuals?id=${encodeURIComponent(v.id)}`, {
+      const r = await clientFetch(`/api/admin/org-visuals?id=${encodeURIComponent(v.id)}`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ enabled }),
       });
@@ -160,7 +161,7 @@ export function OrgVisualsPane() {
     if (!confirm(`Delete “${v.name}”? The bundle is removed and it will no longer be available tenant-wide.`)) return;
     setBusyId(v.id); setActionErr(null);
     try {
-      const r = await fetch(`/api/admin/org-visuals?id=${encodeURIComponent(v.id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/admin/org-visuals?id=${encodeURIComponent(v.id)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setActionErr(j.error || `HTTP ${r.status}`); return; }
       await load();

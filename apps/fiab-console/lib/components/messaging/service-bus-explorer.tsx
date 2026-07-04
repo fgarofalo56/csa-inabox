@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ServiceBusExplorer — the Send + Peek surface for the Service Bus namespace
  * editor (parity with the Azure portal's Service Bus Explorer). Wires the
@@ -93,7 +94,7 @@ export function ServiceBusExplorer({ queues, topics }: Props) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(peekTopic)}&subscriptions=1`);
+        const r = await clientFetch(`/api/items/service-bus-namespace?topic=${encodeURIComponent(peekTopic)}&subscriptions=1`);
         const j = await r.json();
         if (!cancelled) setSubs(j.ok ? (j.subscriptions || []) : []);
       } catch { if (!cancelled) setSubs([]); }
@@ -110,7 +111,7 @@ export function ServiceBusExplorer({ queues, topics }: Props) {
     try { payload = JSON.parse(raw); } catch { /* send verbatim string */ }
     setSending(true); setSendMsg(null);
     try {
-      const r = await fetch('/api/items/service-bus-namespace/data-explorer', {
+      const r = await clientFetch('/api/items/service-bus-namespace/data-explorer', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ op: 'send', entity: target, body: payload, label: label.trim() || undefined, sessionId: sessionId.trim() || undefined }),
       });
@@ -132,7 +133,7 @@ export function ServiceBusExplorer({ queues, topics }: Props) {
       payload.topic = peekTopic; payload.subscription = peekSub;
     }
     try {
-      const r = await fetch('/api/items/service-bus-namespace/data-explorer', {
+      const r = await clientFetch('/api/items/service-bus-namespace/data-explorer', {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
       });
       const j = await r.json();

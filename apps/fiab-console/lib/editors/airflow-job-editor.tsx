@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AirflowJobEditor — Apache Airflow Job (Fabric) focused editor.
  *
@@ -134,7 +135,7 @@ export function AirflowJobEditor({ item, id }: Props) {
   const [logTaskId, setLogTaskId] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch('/api/loom/workspaces').then(r => r.json()).then(j => {
+    clientFetch('/api/loom/workspaces').then(r => r.json()).then(j => {
       if (j.ok) setWorkspaces(j.workspaces || []);
       else setWorkspaces([]);
     }).catch(() => setWorkspaces([]));
@@ -142,7 +143,7 @@ export function AirflowJobEditor({ item, id }: Props) {
 
   const loadList = useCallback(async (wsId: string) => {
     try {
-      const r = await fetch(`/api/items/airflow-job?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/airflow-job?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setJobs([]); return; }
       setJobs(j.jobs || []);
@@ -152,7 +153,7 @@ export function AirflowJobEditor({ item, id }: Props) {
 
   const loadDetail = useCallback(async (wsId: string, jid: string) => {
     try {
-      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jid)}?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jid)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setActive(null); return; }
       setActive(j.job);
@@ -164,7 +165,7 @@ export function AirflowJobEditor({ item, id }: Props) {
   const loadDags = useCallback(async (wsId: string, jid: string) => {
     setDags(null); setDagsErr(null);
     try {
-      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jid)}/dags?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jid)}/dags?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDagsErr({ error: j.error, code: j.code, hint: j.hint }); setDags([]); return; }
       setDags(j.dags || []);
@@ -174,7 +175,7 @@ export function AirflowJobEditor({ item, id }: Props) {
   const loadRuns = useCallback(async (wsId: string, jid: string, dagId: string) => {
     setRuns(null); setRunsErr(null); setRunsLoading(true);
     try {
-      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jid)}/dag-runs?workspaceId=${encodeURIComponent(wsId)}&dagId=${encodeURIComponent(dagId)}`);
+      const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jid)}/dag-runs?workspaceId=${encodeURIComponent(wsId)}&dagId=${encodeURIComponent(dagId)}`);
       const j = await r.json();
       if (!j.ok) { setRunsErr({ error: j.error, code: j.code, hint: j.hint }); setRuns([]); return; }
       setRuns(j.runs || []);
@@ -201,7 +202,7 @@ export function AirflowJobEditor({ item, id }: Props) {
     if (!workspaceId || !cName.trim()) return;
     setCBusy(true); setCErr(null);
     try {
-      const r = await fetch(`/api/items/airflow-job?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/airflow-job?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           displayName: cName.trim(),
@@ -222,7 +223,7 @@ export function AirflowJobEditor({ item, id }: Props) {
     if (!workspaceId || !jobId || !editUrl.trim()) return;
     setSettingsBusy(true); setSettingsErr(null); setSettingsMsg(null);
     try {
-      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/connection?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/connection?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ webserverUrl: editUrl.trim(), gitRepo: editGit.trim() || undefined }),
       });
@@ -239,7 +240,7 @@ export function AirflowJobEditor({ item, id }: Props) {
     if (!workspaceId || !jobId) return;
     setBusyDag(dagId); setActionMsg(null);
     try {
-      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/dag-runs?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/dag-runs?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dagId }),
       });
@@ -255,7 +256,7 @@ export function AirflowJobEditor({ item, id }: Props) {
     if (!workspaceId || !jobId) return;
     setBusyDag(dagId); setActionMsg(null);
     try {
-      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/dags?workspaceId=${encodeURIComponent(workspaceId)}`, {
+      const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/dags?workspaceId=${encodeURIComponent(workspaceId)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ dagId, isPaused }),
       });
@@ -271,7 +272,7 @@ export function AirflowJobEditor({ item, id }: Props) {
     if (!workspaceId || !jobId || !runsDagId) return;
     setLogsOpen(true); setLogsRun(run); setLogsTasks(null); setLogsErr(null); setLogText(null); setLogTaskId(null);
     try {
-      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/task-logs?workspaceId=${encodeURIComponent(workspaceId)}&dagId=${encodeURIComponent(runsDagId)}&runId=${encodeURIComponent(run.dag_run_id)}`);
+      const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/task-logs?workspaceId=${encodeURIComponent(workspaceId)}&dagId=${encodeURIComponent(runsDagId)}&runId=${encodeURIComponent(run.dag_run_id)}`);
       const j = await r.json();
       if (!j.ok) { setLogsErr(j.error || 'failed to load task instances'); setLogsTasks([]); return; }
       setLogsTasks(j.tasks || []);
@@ -282,7 +283,7 @@ export function AirflowJobEditor({ item, id }: Props) {
     if (!workspaceId || !jobId || !runsDagId || !logsRun) return;
     setLogTaskId(taskId); setLogText(null);
     try {
-      const r = await fetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/task-logs?workspaceId=${encodeURIComponent(workspaceId)}&dagId=${encodeURIComponent(runsDagId)}&runId=${encodeURIComponent(logsRun.dag_run_id)}&taskId=${encodeURIComponent(taskId)}&tryNumber=${encodeURIComponent(String(tryNumber || 1))}`);
+      const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jobId)}/task-logs?workspaceId=${encodeURIComponent(workspaceId)}&dagId=${encodeURIComponent(runsDagId)}&runId=${encodeURIComponent(logsRun.dag_run_id)}&taskId=${encodeURIComponent(taskId)}&tryNumber=${encodeURIComponent(String(tryNumber || 1))}`);
       const j = await r.json();
       setLogText(j.ok ? (j.log || '(empty log)') : (j.error || 'failed to load log'));
     } catch (e: any) { setLogText(e?.message || String(e)); }

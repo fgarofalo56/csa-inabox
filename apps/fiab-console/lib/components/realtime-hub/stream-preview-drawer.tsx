@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * StreamPreviewDrawer — Fabric Real-Time hub "Preview data" / "Explore data in
  * motion" for a KQL table (Eventhouse / KQL database). Reads the most recent
@@ -100,7 +101,7 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
   async function loadDatabases() {
     setDbLoading(true); setPickerErr(null); setPickerGate(null);
     try {
-      const res = await fetch(`/api/realtime-hub/databases?_=1${clusterQs}`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/realtime-hub/databases?_=1${clusterQs}`, { cache: 'no-store' });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) { setPickerErr(j.error || `Could not list databases (HTTP ${res.status}).`); return; }
       if (j.configured === false && j.gate) { setPickerGate(j.gate); return; }
@@ -115,7 +116,7 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
     if (!target) return;
     setTablesLoading(true); setPickerErr(null);
     try {
-      const res = await fetch(`/api/realtime-hub/databases?database=${encodeURIComponent(target)}${clusterQs}`, { cache: 'no-store' });
+      const res = await clientFetch(`/api/realtime-hub/databases?database=${encodeURIComponent(target)}${clusterQs}`, { cache: 'no-store' });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) { setPickerErr(j.error || `Could not list tables (HTTP ${res.status}).`); return; }
       setTables(Array.isArray(j.tables) ? j.tables.map((t: any) => t.name).filter(Boolean) : []);
@@ -143,7 +144,7 @@ export function StreamPreviewDrawer({ open, onClose, title, defaultDb, defaultTa
   async function run() {
     setBusy(true); setErr(null); setResult(null);
     try {
-      const res = await fetch('/api/realtime-hub/preview', {
+      const res = await clientFetch('/api/realtime-hub/preview', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ database: db.trim() || undefined, table: table.trim(), limit: 50, clusterUri: clusterUri || undefined }),
       });

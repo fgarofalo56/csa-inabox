@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Palantir-class editors — SHARED module.
  *
@@ -244,7 +245,7 @@ export function useItemState<T extends Record<string, unknown>>(slug: string, id
     if (!id || id === 'new') { setLoading(false); return; }
     setLoading(true); setError(null);
     try {
-      const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/items/${slug}/${encodeURIComponent(id)}`);
       const j = await r.json();
       if (!r.ok) { setError(j?.error || `HTTP ${r.status}`); return; }
       const doc = j as ItemDoc;
@@ -265,7 +266,7 @@ export function useItemState<T extends Record<string, unknown>>(slug: string, id
     setSaving(true); setError(null);
     if (!id || id === 'new') { setError('Save the item first (no id yet).'); setSaving(false); return false; }
     try {
-      const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/${slug}/${encodeURIComponent(id)}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ state: next ?? state }),
       });
@@ -339,7 +340,7 @@ export function useOntologyBinding(slug: string, id: string) {
 
   const reload = useCallback(async () => {
     try {
-      const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}/bind-ontology`);
+      const r = await clientFetch(`/api/items/${slug}/${encodeURIComponent(id)}/bind-ontology`);
       const ct = r.headers.get('content-type') || '';
       if (!ct.includes('application/json')) { setLoaded(true); return; }
       const j = await r.json();
@@ -357,7 +358,7 @@ export function useOntologyBinding(slug: string, id: string) {
     if (!ontologyId) { setMsg({ intent: 'error', text: 'Pick an ontology.' }); return; }
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch(`/api/items/${slug}/${encodeURIComponent(id)}/bind-ontology`, {
+      const r = await clientFetch(`/api/items/${slug}/${encodeURIComponent(id)}/bind-ontology`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ontologyId }),
       });
       const j = await r.json().catch(() => ({}));

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * UcLineagePanel — the Lineage tab body for the Databricks SQL Warehouse editor.
  *
@@ -54,7 +55,7 @@ export function UcLineagePanel({ fullName }: UcLineagePanelProps) {
     if (!fullName) return;
     setLoading(true); setError(null); setHint(null);
     try {
-      const r = await fetch(`/api/databricks/unity-catalog/lineage?full_name=${encodeURIComponent(fullName)}`);
+      const r = await clientFetch(`/api/databricks/unity-catalog/lineage?full_name=${encodeURIComponent(fullName)}`);
       const j = await r.json();
       if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setHint(j.hint || null); setNodes([]); setEdges([]); return; }
       setNodes(j.nodes || []);

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * MyAccess — unified "what do I have / what did I request" view across the
  * marketplace product kinds. All real backends:
@@ -44,13 +45,13 @@ export function MyAccess() {
   const load = async () => {
     setSubNote(null); setReqErr(null);
     try {
-      const r = await fetch('/api/marketplace/subscriptions');
+      const r = await clientFetch('/api/marketplace/subscriptions');
       const j = await r.json();
       if (r.status === 503 && j?.gated) { setSubNote(j.hint || j.error || 'API Management not configured.'); setSubs([]); }
       else setSubs(j.ok ? (j.subscriptions || []) : []);
     } catch { setSubs([]); }
     try {
-      const r = await fetch('/api/data-products/my-access-requests');
+      const r = await clientFetch('/api/data-products/my-access-requests');
       const j = await r.json();
       if (!j.ok) { setReqErr(j.error || `HTTP ${r.status}`); setReqs([]); }
       else setReqs(j.requests || []);

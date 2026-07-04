@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * BundleContentBar — when an item was created by an app install (state.sourceApp
  * set + state.content populated by lib/apps/content-bundles), surfaces the
@@ -82,7 +83,7 @@ export function BundleContentBar({ itemType, itemId }: Props) {
     let cancel = false;
     (async () => {
       try {
-        const r = await fetch(`/api/cosmos-items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}`);
+        const r = await clientFetch(`/api/cosmos-items/${encodeURIComponent(itemType)}/${encodeURIComponent(itemId)}`);
         if (!r.ok) return;
         const j = await r.json();
         if (!cancel && j?.state?.content) setItem(j as CosmosItem);

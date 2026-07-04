@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ReleaseEnvironmentEditor (Apollo → Shuttle) — promotion pipeline + ARM deploy history.
  *
@@ -166,7 +167,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
 
   const loadPromotions = useCallback(async () => {
     try {
-      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/promote`);
+      const r = await clientFetch(`/api/items/release-environment/${encodeURIComponent(id)}/promote`);
       const j = await r.json().catch(() => ({}));
       if (j?.ok) { setPromotions(Array.isArray(j.promotions) ? j.promotions : []); setDevCenter(!!j.devCenterConfigured); }
     } catch { /* ignore */ }
@@ -176,7 +177,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
   const loadArm = useCallback(async () => {
     setArmBusy(true); setArmGate(null);
     try {
-      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/arm`);
+      const r = await clientFetch(`/api/items/release-environment/${encodeURIComponent(id)}/arm`);
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setArm(Array.isArray(j.deployments) ? j.deployments : []);
       else if (j?.gate) setArmGate(j.gate.remediation || j.gate.reason || 'Azure Resource Manager not configured.');
@@ -245,7 +246,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
     if (!fromStage || !toStage) { setPromoMsg({ intent: 'error', text: 'Pick both environments.' }); return; }
     setPromoBusy(true); setPromoMsg(null);
     try {
-      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/promote`, {
+      const r = await clientFetch(`/api/items/release-environment/${encodeURIComponent(id)}/promote`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fromStage, toStage, version: promoVersion.trim() || undefined, note: promoNote.trim() || undefined, environmentDefinition: envDef.trim() || undefined }),
       });
@@ -273,7 +274,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
   const decide = useCallback(async (promotionId: string, decision: 'approve' | 'reject') => {
     setApprBusy(true); setApprMsg(null);
     try {
-      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/approve`, {
+      const r = await clientFetch(`/api/items/release-environment/${encodeURIComponent(id)}/approve`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ promotionId, decision, comment: (apprComment[promotionId] || '').trim() || undefined }),
       });
@@ -296,7 +297,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
     if (!env?.resourceGroup || !env?.site) { setSwapMsg({ intent: 'warning', text: 'Selected environment needs a resource group and App Service site.' }); return; }
     setSwapBusy(true);
     try {
-      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/swap?resourceGroup=${encodeURIComponent(env.resourceGroup)}&site=${encodeURIComponent(env.site)}`);
+      const r = await clientFetch(`/api/items/release-environment/${encodeURIComponent(id)}/swap?resourceGroup=${encodeURIComponent(env.resourceGroup)}&site=${encodeURIComponent(env.site)}`);
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setSlots(Array.isArray(j.slots) ? j.slots : []);
       else if (j?.gate) setSwapGate(j.gate.remediation || j.gate.reason);
@@ -311,7 +312,7 @@ export function ReleaseEnvironmentEditor({ item, id }: { item: FabricItemType; i
     if (!swapTarget.trim()) { setSwapMsg({ intent: 'warning', text: 'Pick a target slot.' }); return; }
     setSwapBusy(true); setSwapMsg(null); setSwapGate(null);
     try {
-      const r = await fetch(`/api/items/release-environment/${encodeURIComponent(id)}/swap`, {
+      const r = await clientFetch(`/api/items/release-environment/${encodeURIComponent(id)}/swap`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ resourceGroup: env.resourceGroup, site: env.site, sourceSlot: swapSource.trim() || undefined, targetSlot: swapTarget.trim(), action: swapAction }),
       });

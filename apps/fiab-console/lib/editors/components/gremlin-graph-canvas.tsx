@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * gremlin-graph-canvas — a real, interactive graph explorer for the Cosmos DB
  * Gremlin (Apache TinkerPop) API. Parity target: the Azure portal "Data
@@ -222,7 +223,7 @@ export function GremlinGraphCanvas({ itemId }: GremlinGraphCanvasProps) {
   const run = useCallback(async (gremlin: string): Promise<any> => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/items/cosmos-db/${encodeURIComponent(itemId)}/gremlin`, {
+      const r = await clientFetch(`/api/items/cosmos-db/${encodeURIComponent(itemId)}/gremlin`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query: gremlin }),
       });

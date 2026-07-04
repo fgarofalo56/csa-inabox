@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ShortcutWizard + ShortcutListGrid + ShortcutsPanel — internal
  * (lakehouse-to-lakehouse) shortcut parity with Microsoft Fabric OneLake
@@ -940,7 +941,7 @@ export function ExternalCredsForm({ sourceType, lakehouseId, shortcutName, value
       secretValue = dvPath.trim();
     }
     try {
-      const r = await fetch('/api/lakehouse/shortcuts/credentials', {
+      const r = await clientFetch('/api/lakehouse/shortcuts/credentials', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ lakehouseId, name: shortcutName || sourceType, sourceType, secretValue }),
       });
@@ -1140,7 +1141,7 @@ export function RemoteBrowseTree(props: RemoteBrowseTreeProps) {
       if (account) qs.set('account', account);
       if (container) qs.set('container', container);
       if (kvSecret) qs.set('kvSecret', kvSecret);
-      const r = await fetch(`/api/lakehouse/shortcuts/browse?${qs.toString()}`);
+      const r = await clientFetch(`/api/lakehouse/shortcuts/browse?${qs.toString()}`);
       const j = await r.json().catch(() => ({}));
       if (!j?.ok) throw new Error(j?.error || j?.hint || `HTTP ${r.status}`);
       setChildrenByPrefix((c) => ({ ...c, [prefix]: (j.data?.entries || []) as RemoteEntryUi[] }));

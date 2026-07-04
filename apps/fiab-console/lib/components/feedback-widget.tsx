@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * FeedbackWidget — dialog opened by the topbar 'Send feedback' icon
  * AND the 'Send feedback' button pinned at the bottom of the left
@@ -74,7 +75,7 @@ export function FeedbackWidget() {
       loomVersion: LOOM_VERSION,
     });
     try {
-      const r = await fetch('/api/feedback', {
+      const r = await clientFetch('/api/feedback', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DeploymentPipelinesPane — the CSA Loom Deployment surface, one-for-one with
  * the Fabric Deployment Pipelines experience plus the platform's own ARM /
@@ -245,7 +246,7 @@ export function DeploymentPipelinesPane() {
 function useLoomWorkspaces(): WorkspaceOpt[] | null {
   const [list, setList] = useState<WorkspaceOpt[] | null>(null);
   useEffect(() => {
-    fetch('/api/workspaces').then(async (r) => {
+    clientFetch('/api/workspaces').then(async (r) => {
       const j = await r.json().catch(() => null);
       if (Array.isArray(j)) setList(j.map((w: any) => ({ id: w.id, name: w.name })));
       else setList([]);
@@ -271,7 +272,7 @@ function useFabricWorkspacesState(): { list: WorkspaceOpt[] | null; gate: Gate |
   const [list, setList] = useState<WorkspaceOpt[] | null>(null);
   const [gate, setGate] = useState<Gate | null>(null);
   useEffect(() => {
-    fetch('/api/fabric/workspaces').then(async (r) => {
+    clientFetch('/api/fabric/workspaces').then(async (r) => {
       const j = await r.json().catch(() => ({}));
       if (j?.gate) { setGate(j.gate as Gate); setList([]); return; }
       if (j?.ok && Array.isArray(j.workspaces)) {
@@ -299,7 +300,7 @@ function PipelinesTab({ onUnauth }: { onUnauth: () => void }) {
 
   useEffect(() => {
     setPipelines(null); setGate(null); setErr(null);
-    fetch('/api/deployment-pipelines').then(async (r) => {
+    clientFetch('/api/deployment-pipelines').then(async (r) => {
       if (r.status === 401 || r.status === 403) { onUnauth(); setPipelines([]); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); setPipelines([]); return; }
@@ -361,7 +362,7 @@ function PipelineDetail({ pipeline }: { pipeline: Pipeline }) {
   // stages
   useEffect(() => {
     setStages(null); setStageItems({}); setErr(null);
-    fetch(`/api/deployment-pipelines/${pipeline.id}/stages`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/${pipeline.id}/stages`).then(async (r) => {
       const j = await r.json();
       if (j.gate) { setErr(j.gate.message); setStages([]); return; }
       if (!j.ok) { setErr(j.error || 'Failed to load stages'); setStages([]); return; }
@@ -370,7 +371,7 @@ function PipelineDetail({ pipeline }: { pipeline: Pipeline }) {
       // fetch items per stage that has a workspace
       s.forEach((st) => {
         if (!st.workspaceId) return;
-        fetch(`/api/deployment-pipelines/${pipeline.id}/stages/${st.id}/items`).then(async (ri) => {
+        clientFetch(`/api/deployment-pipelines/${pipeline.id}/stages/${st.id}/items`).then(async (ri) => {
           const ji = await ri.json();
           if (ji.ok) setStageItems((prev) => ({ ...prev, [st.id]: ji.data.items || [] }));
         }).catch(() => {});
@@ -381,7 +382,7 @@ function PipelineDetail({ pipeline }: { pipeline: Pipeline }) {
   // history
   useEffect(() => {
     setOperations(null);
-    fetch(`/api/deployment-pipelines/${pipeline.id}/operations`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/${pipeline.id}/operations`).then(async (r) => {
       const j = await r.json();
       if (j.ok) setOperations(j.data.operations || []);
       else setOperations([]);
@@ -592,7 +593,7 @@ function DeployDialog({
         }
         body.createdWorkspaceDetails = { name: newWorkspaceName.trim() };
       }
-      const r = await fetch(`/api/deployment-pipelines/${pipelineId}/deploy`, {
+      const r = await clientFetch(`/api/deployment-pipelines/${pipelineId}/deploy`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
@@ -743,7 +744,7 @@ function CreatePipelineDialog({ onCreated }: { onCreated: (id: string) => void }
       const cleanStages = stages.map((s) => ({ displayName: s.displayName.trim(), isPublic: s.isPublic })).filter((s) => s.displayName);
       if (!name.trim()) { setMsg({ kind: 'error', text: 'Pipeline name is required.' }); setBusy(false); return; }
       if (cleanStages.length < 2) { setMsg({ kind: 'error', text: 'At least 2 named stages are required.' }); setBusy(false); return; }
-      const r = await fetch('/api/deployment-pipelines/create', {
+      const r = await clientFetch('/api/deployment-pipelines/create', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: name.trim(), description: description.trim() || undefined, stages: cleanStages }),
       });
@@ -817,7 +818,7 @@ function AssignWorkspaceInline({ pipelineId, stage, onChanged }: { pipelineId: s
     if (!selected) return;
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/deployment-pipelines/${pipelineId}/stages/${stage.id}/workspace`, {
+      const r = await clientFetch(`/api/deployment-pipelines/${pipelineId}/stages/${stage.id}/workspace`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ workspaceId: selected }),
       });
       const j = await r.json();
@@ -864,7 +865,7 @@ function UnassignWorkspaceButton({ pipelineId, stage, onChanged }: { pipelineId:
   const unassign = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/deployment-pipelines/${pipelineId}/stages/${stage.id}/workspace`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/deployment-pipelines/${pipelineId}/stages/${stage.id}/workspace`, { method: 'DELETE' });
       const j = await r.json();
       if (j.gate) { setErr(j.gate.message); return; }
       if (!j.ok) { setErr(j.error || 'Unassign failed'); return; }
@@ -963,7 +964,7 @@ function StageCompare({ pipelineId, stages, tick }: { pipelineId: string; stages
   useEffect(() => {
     if (!source || !target) { setResult(null); return; }
     setLoading(true); setErr(null); setGate(null); setResult(null);
-    fetch(`/api/deployment-pipelines/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
+    clientFetch(`/api/deployment-pipelines/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
       .then(async (r) => {
         const j = await r.json();
         if (j.gate) { setGate(j.gate); return; }
@@ -1127,7 +1128,7 @@ function GitWorkspacePanel({ workspaceId, onUnauth }: { workspaceId: string; onU
 
   useEffect(() => {
     setConnection(null); setGate(null); setErr(null);
-    fetch(`/api/deployment-pipelines/git/${workspaceId}/connection`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/git/${workspaceId}/connection`).then(async (r) => {
       if (r.status === 401) { onUnauth(); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); return; }
@@ -1190,7 +1191,7 @@ function GitConnectForm({ workspaceId, onConnected }: { workspaceId: string; onC
       const body: any = { provider, branchName: f.branchName, directoryName: f.directoryName, repositoryName: f.repositoryName, connectionId: f.connectionId };
       if (provider === 'AzureDevOps') { body.organizationName = f.organizationName; body.projectName = f.projectName; }
       else { body.ownerName = f.ownerName; body.customDomainName = f.customDomainName; }
-      const r = await fetch(`/api/deployment-pipelines/git/${workspaceId}/connection`, {
+      const r = await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/connection`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
@@ -1239,7 +1240,7 @@ function InitializeButton({ workspaceId, onDone }: { workspaceId: string; onDone
   const init = useCallback(async () => {
     setBusy(true);
     try {
-      await fetch(`/api/deployment-pipelines/git/${workspaceId}/initialize`, { method: 'POST' });
+      await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/initialize`, { method: 'POST' });
       onDone();
     } finally { setBusy(false); }
   }, [workspaceId, onDone]);
@@ -1251,7 +1252,7 @@ function DisconnectButton({ workspaceId, onDone }: { workspaceId: string; onDone
   const disconnect = useCallback(async () => {
     setBusy(true);
     try {
-      await fetch(`/api/deployment-pipelines/git/${workspaceId}/connection`, { method: 'DELETE' });
+      await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/connection`, { method: 'DELETE' });
       onDone();
     } finally { setBusy(false); }
   }, [workspaceId, onDone]);
@@ -1274,7 +1275,7 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
 
   useEffect(() => {
     setStatus(null); setPending(false); setNotConnected(false); setErr(null);
-    fetch(`/api/deployment-pipelines/git/${workspaceId}/status`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/git/${workspaceId}/status`).then(async (r) => {
       const j = await r.json();
       if (j.gate) { setErr(j.gate.message); return; }
       if (!j.ok) { setErr(j.error || 'Failed to load Git status'); return; }
@@ -1291,7 +1292,7 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
         ? (status?.changes || []).filter((c) => chosen[idOf(c)] && c.workspaceChange).map((c) => c.itemMetadata.itemIdentifier)
         : undefined;
       if (mode === 'Selective' && (!items || items.length === 0)) { setMsg({ kind: 'error', text: 'Select at least one workspace-changed item to commit.' }); setBusy(null); return; }
-      const r = await fetch(`/api/deployment-pipelines/git/${workspaceId}/commit`, {
+      const r = await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/commit`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ mode, comment: comment.trim() || undefined, workspaceHead: status?.workspaceHead, items }),
       });
@@ -1306,7 +1307,7 @@ function GitStatusPanel({ workspaceId, tick, onChanged }: { workspaceId: string;
   const update = useCallback(async () => {
     setBusy('update'); setMsg(null);
     try {
-      const r = await fetch(`/api/deployment-pipelines/git/${workspaceId}/update`, {
+      const r = await clientFetch(`/api/deployment-pipelines/git/${workspaceId}/update`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceHead: status?.workspaceHead, remoteCommitHash: status?.remoteCommitHash, allowOverrideItems: true }),
       });
@@ -1414,7 +1415,7 @@ function InfraTab({ onUnauth }: { onUnauth: () => void }) {
 
   useEffect(() => {
     setDeployments(null); setGate(null); setErr(null);
-    fetch('/api/deployment-pipelines/arm').then(async (r) => {
+    clientFetch('/api/deployment-pipelines/arm').then(async (r) => {
       if (r.status === 401 || r.status === 403) { onUnauth(); setDeployments([]); return; }
       const j = await r.json();
       if (j.gate) { setGate(j.gate); setDeployments([]); return; }
@@ -1597,7 +1598,7 @@ function LoomPipelinesTab() {
 
   useEffect(() => {
     setPipelines(null); setErr(null);
-    fetch('/api/deployment-pipelines/loom').then(async (r) => {
+    clientFetch('/api/deployment-pipelines/loom').then(async (r) => {
       if (r.status === 401) { setErr('Sign in to manage deployment pipelines.'); setPipelines([]); return; }
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'Failed to load pipelines'); setPipelines([]); return; }
@@ -1691,7 +1692,7 @@ function LoomCreatePipelineDialog({ onCreated }: { onCreated: (id: string) => vo
         setMsg({ kind: 'error', text: 'Each stage needs its own workspace — content is promoted between stages, so two stages can’t share one workspace.' });
         setBusy(false); return;
       }
-      const r = await fetch('/api/deployment-pipelines/loom', {
+      const r = await clientFetch('/api/deployment-pipelines/loom', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ displayName: name.trim(), description: description.trim() || undefined, stages: clean }),
       });
@@ -1839,7 +1840,7 @@ function DeletePipelineButton({ pipelineId, name, onDeleted }: { pipelineId: str
   const del = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/deployment-pipelines/loom/${pipelineId}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setErr(j.error || 'Delete failed'); return; }
       setOpen(false); onDeleted();
@@ -1884,7 +1885,7 @@ function LoomStageCompare({ pipelineId, stages, tick }: { pipelineId: string; st
   useEffect(() => {
     if (!source || !target) { setResult(null); return; }
     setLoading(true); setErr(null); setResult(null);
-    fetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
       .then(async (r) => {
         const j = await r.json();
         if (!j.ok) { setErr(j.error || 'Compare failed'); return; }
@@ -1974,7 +1975,7 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
   useEffect(() => {
     if (!open) return;
     setPairs(null); setLoadErr(null); setReceipt(null); setMsg(null);
-    fetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/compare?source=${encodeURIComponent(source.id)}&target=${encodeURIComponent(target.id)}`)
       .then(async (r) => {
         const j = await r.json();
         if (!j.ok) { setLoadErr(j.error || 'Failed to load source items'); setPairs([]); return; }
@@ -1997,7 +1998,7 @@ function LoomDeployDialog({ pipelineId, source, target, onDeployed }: { pipeline
         if (chosenList.length === 0) { setMsg({ kind: 'error', text: 'Select at least one item, or switch off selective deploy.' }); setBusy(false); return; }
         body.items = chosenList;
       }
-      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}/deploy`, {
+      const r = await clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/deploy`, {
         method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body),
       });
       const j = await r.json();
@@ -2080,7 +2081,7 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
   useEffect(() => {
     if (!open) return;
     setRules(null); setMsg(null);
-    fetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`).then(async (r) => {
       const j = await r.json();
       if (!j.ok) { setMsg({ kind: 'error', text: j.error || 'Failed to load rules' }); setRules([]); return; }
       setRules(j.data.rules || []);
@@ -2105,7 +2106,7 @@ function LoomRulesDialog({ pipelineId, stage }: { pipelineId: string; stage: Loo
     try {
       const clean = (rules || []).map((r) => ({ ...r, value: (r.value || '').trim(), itemDisplayName: r.itemDisplayName?.trim() || undefined }));
       if (clean.some((r) => !r.value)) { setMsg({ kind: 'error', text: 'Every rule needs a value.' }); setBusy(false); return; }
-      const r = await fetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`, {
+      const r = await clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/stages/${stage.id}/rules`, {
         method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ rules: clean }),
       });
       const j = await r.json();
@@ -2199,7 +2200,7 @@ function LoomHistoryPanel({ pipelineId, stages, tick }: { pipelineId: string; st
   const [records, setRecords] = useState<LoomHistoryRecord[] | null>(null);
   useEffect(() => {
     setRecords(null);
-    fetch(`/api/deployment-pipelines/loom/${pipelineId}/history`).then(async (r) => {
+    clientFetch(`/api/deployment-pipelines/loom/${pipelineId}/history`).then(async (r) => {
       const j = await r.json();
       setRecords(j.ok ? (j.data.records || []) : []);
     }).catch(() => setRecords([]));

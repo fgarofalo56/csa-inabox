@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * IqMcpPanel — admin "Fabric IQ — published MCP surface" discovery card.
  *
@@ -106,7 +107,7 @@ export function IqMcpPanel() {
   const load = useCallback(async () => {
     setLoading(true); setLoadError(null);
     try {
-      const r = await fetch('/api/iq/mcp', { method: 'GET' });
+      const r = await clientFetch('/api/iq/mcp', { method: 'GET' });
       const j = (await r.json()) as IqDiscoveryDoc;
       if (!j?.ok) { setLoadError(`HTTP ${r.status}`); return; }
       setDoc(j);

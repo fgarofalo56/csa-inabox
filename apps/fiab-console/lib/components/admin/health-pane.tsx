@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Loom Health — self-audit / self-review pane.
  *
@@ -90,7 +91,7 @@ export function HealthPane() {
   const load = useCallback(async () => {
     setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/admin/self-audit', { cache: 'no-store' });
+      const r = await clientFetch('/api/admin/self-audit', { cache: 'no-store' });
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'audit failed'); return; }
       setReport(j.report); setIsAdmin(!!j.isAdmin);
@@ -103,7 +104,7 @@ export function HealthPane() {
   const heal = useCallback(async (fixId: string, dryRun = false) => {
     setHealing(fixId); setHealMsg(null);
     try {
-      const r = await fetch('/api/admin/self-audit', {
+      const r = await clientFetch('/api/admin/self-audit', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ fixId, dryRun }),
       });

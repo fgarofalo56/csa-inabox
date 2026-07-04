@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * BusinessEventsView — Activator structured-signals / "business events"
  * publishing surface, Azure-native (Event Grid custom topics + Event Hubs).
@@ -115,8 +116,8 @@ export function BusinessEventsView() {
     setBusy(true);
     try {
       const [tRes, cRes] = await Promise.all([
-        fetch('/api/business-events/types', { cache: 'no-store' }),
-        fetch('/api/business-events/channels', { cache: 'no-store' }),
+        clientFetch('/api/business-events/types', { cache: 'no-store' }),
+        clientFetch('/api/business-events/channels', { cache: 'no-store' }),
       ]);
       if (tRes.status === 401 || cRes.status === 401) { setUnauth(true); return; }
       const t = await tRes.json().catch(() => ({}));
@@ -211,7 +212,7 @@ export function BusinessEventsView() {
                         icon={<Delete20Regular />} appearance="subtle" size="small"
                         onClick={async () => {
                           if (!confirm(`Delete governed type "${t.displayName}"?`)) return;
-                          await fetch(`/api/business-events/types?id=${encodeURIComponent(t.id)}`, { method: 'DELETE' });
+                          await clientFetch(`/api/business-events/types?id=${encodeURIComponent(t.id)}`, { method: 'DELETE' });
                           load();
                         }}
                       />
@@ -326,7 +327,7 @@ function RegisterTypeDialog({
     if (chEventGrid) channels.push('eventgrid');
     if (chEventHub) channels.push('eventhub');
     try {
-      const res = await fetch('/api/business-events/types', {
+      const res = await clientFetch('/api/business-events/types', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           eventType, displayName, category, description: description || undefined, owner: owner || undefined,
@@ -485,7 +486,7 @@ function PublishDialog({ type, onPublished }: { type: EventType; onPublished: ()
       if (v !== undefined) data[f.name] = v;
     }
     try {
-      const res = await fetch('/api/business-events/publish', {
+      const res = await clientFetch('/api/business-events/publish', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ typeId: type.id, subject, data }),
       });
@@ -634,7 +635,7 @@ function DeleteTopicButton({ name, onDeleted }: { name: string; onDeleted: () =>
     if (!confirm(`Delete Event Grid custom topic "${name}"? Active subscribers will stop receiving events.`)) return;
     setBusy(true);
     try {
-      const res = await fetch(`/api/business-events/topics?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const res = await clientFetch(`/api/business-events/topics?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j?.ok) alert(j?.error || `Delete failed (${res.status})`);
       onDeleted();
@@ -666,7 +667,7 @@ function CreateTopicDialog({ onCreated, disabled }: { onCreated: () => void; dis
   const create = async () => {
     setCreating(true); setErr(null);
     try {
-      const res = await fetch('/api/business-events/topics', {
+      const res = await clientFetch('/api/business-events/topics', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name, inputSchema: schema }),
       });

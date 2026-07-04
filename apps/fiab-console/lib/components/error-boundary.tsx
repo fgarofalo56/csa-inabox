@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * GlobalErrorBoundary — class component that catches React render
  * errors AND wires window.onerror + unhandledrejection so any browser-
@@ -34,7 +35,7 @@ export async function autoReport(err: Error | { name?: string; message?: string;
   SEEN.add(fp);
   reportCount += 1;
   try {
-    await fetch('/api/feedback', {
+    await clientFetch('/api/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

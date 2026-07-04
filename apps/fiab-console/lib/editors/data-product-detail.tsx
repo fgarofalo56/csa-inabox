@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Data product details page + Data Observability surfaces (F3 / F15 / F19 / F20).
  *
@@ -112,7 +113,7 @@ export function useObservability(id: string) {
     if (!id || id === 'new') return;
     setLoading(true); setErr(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/observability`);
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/observability`);
       const j = (await r.json()) as ObservabilityData;
       if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); setData(j); return; }
       setData(j);
@@ -211,7 +212,7 @@ function DataProductTryItPanel({ id }: { id: string }) {
   const run = useCallback(async () => {
     setLoading(true); setErr(null); setGate(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/preview`, { method: 'POST' });
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/preview`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (j.ok) setResult({ table: j.table, kql: j.kql, columns: j.columns || [], rows: j.rows || [], executionMs: j.executionMs });
       else if (j.gate) setGate(j.gate);
@@ -255,7 +256,7 @@ function TriggerScanCard({ id }: { id: string }) {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/governance/scans');
+        const r = await clientFetch('/api/governance/scans');
         const j = await r.json();
         if (j.ok) setSources((j.sources || []).map((x: any) => x.name).filter(Boolean));
         else { setSources([]); if (r.status === 503) setMsg({ intent: 'warning', text: 'Purview not provisioned — set LOOM_PURVIEW_ACCOUNT to enable on-demand scans.' }); }
@@ -266,7 +267,7 @@ function TriggerScanCard({ id }: { id: string }) {
   const pickSource = useCallback(async (name: string) => {
     setSource(name); setScan(''); setScans([]);
     try {
-      const r = await fetch(`/api/governance/scans?source=${encodeURIComponent(name)}`);
+      const r = await clientFetch(`/api/governance/scans?source=${encodeURIComponent(name)}`);
       const j = await r.json();
       if (j.ok) setScans((j.scans || []).map((x: any) => x.name).filter(Boolean));
     } catch { /* leave empty */ }
@@ -276,7 +277,7 @@ function TriggerScanCard({ id }: { id: string }) {
     if (!source || !scan) { setMsg({ intent: 'error', text: 'Pick a source and a scan.' }); return; }
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/health-actions`, {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/health-actions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'trigger-scan', source, scan }),
       });
@@ -326,7 +327,7 @@ function ActionCard({
   const run = useCallback(async () => {
     setBusy(true); setMsg(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/health-actions`, {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/health-actions`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action }),
       });
@@ -667,7 +668,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
     setLoading(true);
     setLoadErr(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}`);
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}`);
       const j = (await r.json()) as DataProductDetailResponse;
       if (!j.ok) { setLoadErr(j.error || `HTTP ${r.status}`); return; }
       hydrate(j);
@@ -684,7 +685,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
     setSavingLabels(true);
     setLabelMsg(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ ownerLabels: labels }),
@@ -707,7 +708,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
   const loadSubscribers = useCallback(async (page: number) => {
     setSubBusy(true);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(id)}/subscribers?page=${page}&pageSize=${SUB_PAGE_SIZE}`);
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(id)}/subscribers?page=${page}&pageSize=${SUB_PAGE_SIZE}`);
       const j = (await r.json()) as { ok: boolean; subscribers?: SubscriberRow[] };
       if (j.ok) { setSubs(j.subscribers ?? []); setSubPage(page); }
     } catch {
@@ -1086,7 +1087,7 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
 
   const loadMyRequests = useCallback(async () => {
     try {
-      const r = await fetch(`/api/data-products/${id}/access-requests`);
+      const r = await clientFetch(`/api/data-products/${id}/access-requests`);
       const j = await r.json();
       if (j.ok) setMyRequests(j.requests ?? []);
     } catch { /* non-fatal; the request panel just stays empty */ }
@@ -1098,7 +1099,7 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
     setTryItGate(null);
     setTryItResult(null);
     try {
-      const r = await fetch(`/api/data-products/${id}/preview`, { method: 'POST' });
+      const r = await clientFetch(`/api/data-products/${id}/preview`, { method: 'POST' });
       const j = await r.json();
       if (j.ok) {
         setTryItResult(j);
@@ -1117,7 +1118,7 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
   useEffect(() => {
     let live = true;
     setLoading(true);
-    fetch(`/api/data-products/${id}`)
+    clientFetch(`/api/data-products/${id}`)
       .then((r) => r.json())
       .then((j) => {
         if (!live) return;

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Trusted workspace access — storage resource-instance rules on the shared
  * admin Network page (Fabric-parity Phase 4 G6).
@@ -111,7 +112,7 @@ export function TrustedWorkspaceAccessCard() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/workspaces');
+        const r = await clientFetch('/api/workspaces');
         const j = await r.json();
         const list: WsLite[] = Array.isArray(j) ? j : (j?.workspaces || []);
         if (!alive) return;
@@ -127,7 +128,7 @@ export function TrustedWorkspaceAccessCard() {
     let alive = true;
     (async () => {
       try {
-        const r = await fetch('/api/storage/accounts');
+        const r = await clientFetch('/api/storage/accounts');
         const j = await r.json();
         if (!alive) return;
         if (j?.ok) setAccounts(Array.isArray(j.accounts) ? j.accounts : []);

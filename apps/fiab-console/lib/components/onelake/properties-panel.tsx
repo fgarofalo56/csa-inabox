@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * PropertiesPanel — the OneLake item "Properties" surface, one-for-one with
  * the Microsoft Fabric item Properties pane (Paths + Connect), themed in
@@ -215,7 +216,7 @@ export function PropertiesPanel({
     const qs = new URLSearchParams({ container, itemPath });
     if (workspaceGuid) qs.set('workspaceGuid', workspaceGuid);
     if (itemGuid) qs.set('itemGuid', itemGuid);
-    fetch(`/api/onelake/paths?${qs.toString()}`)
+    clientFetch(`/api/onelake/paths?${qs.toString()}`)
       .then((r) => r.json().then((j) => ({ status: r.status, j })))
       .then(({ j }) => { if (!cancelled) { setData(j as PathsResponse); setLoading(false); } })
       .catch((e) => { if (!cancelled) { setData({ ok: false, error: e?.message || 'request failed' }); setLoading(false); } });

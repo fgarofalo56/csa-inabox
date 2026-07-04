@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * ItemSidePanel — four Fabric-style item utility buttons rendered in the
  * editor chrome action row. Each opens a Drawer backed by a real BFF
@@ -68,7 +69,7 @@ export function ItemSidePanel({ type, id }: Props) {
         return;
       }
     }
-    fetch(`/api/user-prefs?key=learnDismissed:${type}`).then(r => r.json()).then(d => {
+    clientFetch(`/api/user-prefs?key=learnDismissed:${type}`).then(r => r.json()).then(d => {
       if (!d?.value) {
         const learn = getLearn(type);
         if (learn) setOpen('learn');
@@ -137,7 +138,7 @@ function CommentsPane({ type, id }: Props) {
   const [draft, setDraft] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const load = () => fetch(`/api/items/${type}/${id}/comments`)
+  const load = () => clientFetch(`/api/items/${type}/${id}/comments`)
     .then(r => r.json()).then(d => setItems(d?.comments ?? []))
     .catch(() => setItems([]));
 
@@ -146,7 +147,7 @@ function CommentsPane({ type, id }: Props) {
   const submit = async () => {
     if (!draft.trim()) return;
     setBusy(true);
-    await fetch(`/api/items/${type}/${id}/comments`, {
+    await clientFetch(`/api/items/${type}/${id}/comments`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ body: draft.trim() }),
     });
@@ -180,7 +181,7 @@ function HistoryPane({ type, id }: Props) {
   const styles = useStyles();
   const [items, setItems] = useState<AuditEntry[] | null>(null);
   useEffect(() => {
-    fetch(`/api/items/${type}/${id}/audit`).then(r => r.json())
+    clientFetch(`/api/items/${type}/${id}/audit`).then(r => r.json())
       .then(d => setItems(d?.entries ?? []))
       .catch(() => setItems([]));
   }, [type, id]);
@@ -207,13 +208,13 @@ function SharePane({ type, id }: Props) {
   const [hours, setHours] = useState('24');
   const [busy, setBusy] = useState(false);
 
-  const load = () => fetch(`/api/items/${type}/${id}/share`).then(r => r.json())
+  const load = () => clientFetch(`/api/items/${type}/${id}/share`).then(r => r.json())
     .then(d => setItems(d?.shares ?? [])).catch(() => setItems([]));
   useEffect(() => { load(); }, [type, id]);
 
   const create = async () => {
     setBusy(true);
-    await fetch(`/api/items/${type}/${id}/share`, {
+    await clientFetch(`/api/items/${type}/${id}/share`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ expiresInHours: Number(hours) || 24 }),
     });
@@ -221,7 +222,7 @@ function SharePane({ type, id }: Props) {
   };
 
   const revoke = async (token: string) => {
-    await fetch(`/api/items/${type}/${id}/share?token=${encodeURIComponent(token)}`, { method: 'DELETE' });
+    await clientFetch(`/api/items/${type}/${id}/share?token=${encodeURIComponent(token)}`, { method: 'DELETE' });
     load();
   };
 
@@ -266,7 +267,7 @@ function LearnPane({ type, id, onClose }: { type: string; id?: string; onClose: 
   const [activeStep, setActiveStep] = useState(0);
   const save = async () => {
     if (dismiss) {
-      await fetch('/api/user-prefs', {
+      await clientFetch('/api/user-prefs', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ key: `learnDismissed:${type}`, value: true }),
       }).catch(() => {});

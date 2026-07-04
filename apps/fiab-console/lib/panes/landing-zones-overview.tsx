@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Data Landing Zone overview & management (item-3).
  *
@@ -104,7 +105,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
     setGranting(true);
     setGrant(null);
     try {
-      const res = await fetch('/api/setup/landing-zones/grant', {
+      const res = await clientFetch('/api/setup/landing-zones/grant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subscriptionId: zone.subscriptionId, resourceGroup: zone.rg }),
@@ -121,7 +122,7 @@ export function LandingZonesOverviewPane({ onAttach }: { onAttach?: () => void }
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/setup/landing-zones');
+      const res = await clientFetch('/api/setup/landing-zones');
       const j = (await res.json().catch(() => ({}))) as Overview;
       setData(res.ok ? j : { ...j, ok: false });
     } catch (e) {

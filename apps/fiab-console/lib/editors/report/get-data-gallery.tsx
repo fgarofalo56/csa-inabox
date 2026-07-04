@@ -674,7 +674,7 @@ function BindStep({
       form.append('container', UPLOAD_CONTAINER);
       form.append('path', `report-uploads/${reportId || 'adhoc'}/${file.name}`);
       form.append('file', file);
-      const r = await fetch('/api/lakehouse/upload', { method: 'POST', credentials: 'include', body: form });
+      const r = await clientFetch('/api/lakehouse/upload', { method: 'POST', credentials: 'include', body: form });
       const j = await r.json().catch(() => ({}));
       if (!r.ok || !j?.ok) { setUploadErr(j?.error || `HTTP ${r.status}`); return; }
       const fmt = String(j?.sparkFormat?.format || '').toLowerCase();

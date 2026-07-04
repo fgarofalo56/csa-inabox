@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Variable Library editor (Cosmos, typed key/value with value sets).
  *
@@ -185,7 +186,7 @@ export function VariableLibraryEditor({ item, id }: { item: FabricItemType; id: 
     if (id === 'new') { setResolveErr('Save the library before resolving.'); return; }
     setResolveBusy(true); setResolveErr(null);
     try {
-      const r = await fetch(`/api/items/variable-library/${encodeURIComponent(id)}/resolve`, {
+      const r = await clientFetch(`/api/items/variable-library/${encodeURIComponent(id)}/resolve`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ valueSet: tab, text: expandText }),
       });

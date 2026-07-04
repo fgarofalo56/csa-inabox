@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * map-visual — the Power BI "Map" / "Filled map" visual for the Loom-native
  * Report Designer (report-designer wave 5, chunk C).
@@ -398,7 +399,7 @@ async function geocodeName(name: string, auth: MapAuth, reportId: string): Promi
     // the BFF route so a long geocode pass never uses an expired token.
     let tok = auth.token, cid = auth.clientId;
     try {
-      const t = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/map-token`).then((r) => r.json());
+      const t = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/map-token`).then((r) => r.json());
       if (t?.ok && t.token) { tok = String(t.token); cid = String(t.clientId || cid); }
     } catch { /* fall back to the init token */ }
     headers['Authorization'] = `Bearer ${tok}`;
@@ -460,7 +461,7 @@ export function MapVisual(props: MapVisualProps): ReactElement {
     setToken({ kind: 'loading' });
     (async () => {
       try {
-        const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/map-token`);
+        const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/map-token`);
         let j: any = {};
         try { j = await r.json(); } catch { j = {}; }
         if (!alive) return;
@@ -496,7 +497,7 @@ export function MapVisual(props: MapVisualProps): ReactElement {
               authType: 'anonymous',
               clientId: auth.clientId,
               getToken: (resolve: (t: string) => void, reject: (e?: any) => void) => {
-                fetch(`/api/items/report/${encodeURIComponent(reportId)}/map-token`)
+                clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/map-token`)
                   .then((r) => r.json())
                   .then((j) => (j?.ok && j.token ? resolve(String(j.token)) : reject(new Error('no token'))))
                   .catch(reject);

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataShares — the "Data shares" surface of the unified Loom Marketplace.
  *
@@ -241,7 +242,7 @@ function InboundPanel({
               <Button size="small" appearance="subtle" icon={<Delete20Regular />}
                 onClick={async () => {
                   setBusy(true);
-                  await fetch(`/api/marketplace/sharing/providers/${encodeURIComponent(p.name)}`, { method: 'DELETE' });
+                  await clientFetch(`/api/marketplace/sharing/providers/${encodeURIComponent(p.name)}`, { method: 'DELETE' });
                   setBusy(false); onChange();
                 }}>Remove</Button>
             </div>
@@ -359,7 +360,7 @@ function MountShareButton({
             {!msg && (
               <Button appearance="primary" disabled={busy || !catalog} onClick={async () => {
                 setBusy(true);
-                const r = await fetch(`/api/marketplace/sharing/providers/${encodeURIComponent(provider)}`, {
+                const r = await clientFetch(`/api/marketplace/sharing/providers/${encodeURIComponent(provider)}`, {
                   method: 'POST', headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({ action: 'mount', share_name: share, catalog_name: catalog }),
                 });
@@ -473,7 +474,7 @@ function AddProviderDialog({ open, setOpen, onDone }: { open: boolean; setOpen: 
                 endpoint: endpoint.trim(),
                 bearerToken: bearerToken.trim(),
               });
-              const r = await fetch('/api/marketplace/sharing/providers', {
+              const r = await clientFetch('/api/marketplace/sharing/providers', {
                 method: 'POST', headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ name, recipient_profile_str: profile, comment }),
               });
@@ -573,7 +574,7 @@ function OutboundPanel({
                   <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Delete recipient"
                     onClick={async () => {
                       setBusy(true);
-                      await fetch(`/api/marketplace/sharing/recipients/${encodeURIComponent(r.name)}`, { method: 'DELETE' });
+                      await clientFetch(`/api/marketplace/sharing/recipients/${encodeURIComponent(r.name)}`, { method: 'DELETE' });
                       setBusy(false); onChange();
                     }} />
                 </TableCell>
@@ -615,7 +616,7 @@ function ShareCard({
           </Select>
           <Button size="small" disabled={!grant || busy} onClick={async () => {
             setBusy(true);
-            await fetch(`/api/marketplace/sharing/shares/${encodeURIComponent(share.name)}`, {
+            await clientFetch(`/api/marketplace/sharing/shares/${encodeURIComponent(share.name)}`, {
               method: 'PATCH', headers: { 'content-type': 'application/json' },
               body: JSON.stringify({ grant: [grant] }),
             });
@@ -625,7 +626,7 @@ function ShareCard({
         <Button size="small" appearance="subtle" icon={<Delete20Regular />} aria-label="Delete share"
           onClick={async () => {
             setBusy(true);
-            await fetch(`/api/marketplace/sharing/shares/${encodeURIComponent(share.name)}`, { method: 'DELETE' });
+            await clientFetch(`/api/marketplace/sharing/shares/${encodeURIComponent(share.name)}`, { method: 'DELETE' });
             setBusy(false); onChange();
           }} />
       </div>
@@ -687,7 +688,7 @@ function AddObjectDialog({
           <DialogActions>
             <Button appearance="primary" disabled={busy || !tbl} onClick={async () => {
               setBusy(true); setErr(null);
-              const r = await fetch(`/api/marketplace/sharing/shares/${encodeURIComponent(shareName)}`, {
+              const r = await clientFetch(`/api/marketplace/sharing/shares/${encodeURIComponent(shareName)}`, {
                 method: 'PATCH', headers: { 'content-type': 'application/json' },
                 body: JSON.stringify({ addObjects: [{ name: tbl, data_object_type: 'TABLE', ...(sharedAs ? { shared_as: sharedAs } : {}) }] }),
               });
@@ -719,7 +720,7 @@ function NewShareDialog({ open, setOpen, onDone }: { open: boolean; setOpen: (b:
           <DialogActions>
             <Button appearance="primary" disabled={busy || !name} onClick={async () => {
               setBusy(true); setErr(null);
-              const r = await fetch('/api/marketplace/sharing/shares', {
+              const r = await clientFetch('/api/marketplace/sharing/shares', {
                 method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name, comment }),
               });
               const j = await r.json(); setBusy(false);
@@ -777,7 +778,7 @@ function NewRecipientDialog({ open, setOpen, onDone }: { open: boolean; setOpen:
             {!activation && (
               <Button appearance="primary" disabled={busy || !name || (auth === 'DATABRICKS' && !gmid)} onClick={async () => {
                 setBusy(true); setErr(null);
-                const r = await fetch('/api/marketplace/sharing/recipients', {
+                const r = await clientFetch('/api/marketplace/sharing/recipients', {
                   method: 'POST', headers: { 'content-type': 'application/json' },
                   body: JSON.stringify({ name, authentication_type: auth, comment, ...(auth === 'DATABRICKS' ? { data_recipient_global_metastore_id: gmid } : {}) }),
                 });

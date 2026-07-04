@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DomainSettingsPane — the domain "Domain settings" side pane, one-for-one with
  * Fabric's 6-tab settings pane (General / Image / Admins / Contributors /
@@ -185,7 +186,7 @@ export function DomainSettingsPane({ domain, isTenantAdmin, onClose, onSaved }: 
 // ============================================================
 
 async function patchDomain(id: string, patch: Record<string, unknown>): Promise<DomainRecord> {
-  const r = await fetch(`/api/admin/domains?id=${encodeURIComponent(id)}`, {
+  const r = await clientFetch(`/api/admin/domains?id=${encodeURIComponent(id)}`, {
     method: 'PATCH', headers: { 'content-type': 'application/json' },
     body: JSON.stringify(patch),
   });
@@ -488,7 +489,7 @@ function DelegatedTab({ domain, onSaved }: { domain: DomainRecord; onSaved: (d: 
   // Load MIP labels (and Loom-native labels as a fallback) on mount.
   const loadLabels = useCallback(() => {
     setMip({ status: 'loading', labels: [] });
-    fetch('/api/admin/security/mip/labels')
+    clientFetch('/api/admin/security/mip/labels')
       .then(async (r) => {
         const j = await r.json();
         if (r.ok && j.ok) {
@@ -501,7 +502,7 @@ function DelegatedTab({ domain, onSaved }: { domain: DomainRecord; onSaved: (d: 
       })
       .catch((e) => setMip({ status: 'error', labels: [], hint: String(e) }));
     // Loom-native labels (always Cosmos-backed) — offered as a fallback source.
-    fetch('/api/admin/sensitivity-labels')
+    clientFetch('/api/admin/sensitivity-labels')
       .then((r) => r.json())
       .then((j) => { if (j.ok) setLoomLabels((j.labels || []).map((l: any) => ({ id: l.id, name: l.name, color: l.color }))); })
       .catch(() => {});
@@ -674,7 +675,7 @@ function GroupPicker({ label, value, onChange, disabled }: {
     const t = setTimeout(async () => {
       setSearching(true); setGate(null);
       try {
-        const r = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(term)}&kind=group`);
+        const r = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(term)}&kind=group`);
         const j = await r.json();
         if (r.status === 503 || j?.ok === false) {
           setGate(j?.remediation || j?.error || 'Microsoft Graph group search is not configured.');
@@ -767,7 +768,7 @@ function TopologyTab({ domain, isTenantAdmin, onSaved }: {
   const loadInventory = useCallback(async () => {
     setInvLoading(true); setInvGate(null);
     try {
-      const r = await fetch(`/api/admin/domains/${encodeURIComponent(domain.id)}/inventory`);
+      const r = await clientFetch(`/api/admin/domains/${encodeURIComponent(domain.id)}/inventory`);
       const j = await r.json();
       if (!j.ok) { setInvGate(j.remediation || j.hint || j.error || `HTTP ${r.status}`); setInv([]); return; }
       setInvBound(j.bound !== false);

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Managed private endpoints — self-service create + approval tracking on the
  * shared admin Network page (Fabric-parity Phase 4 G5).
@@ -145,7 +146,7 @@ function CreateDialog({ onCreated }: { onCreated: (msg: string) => void }) {
   const loadConnectables = useCallback(async () => {
     setCLoading(true); setCErr(undefined);
     try {
-      const r = await fetch('/api/azure/connectables');
+      const r = await clientFetch('/api/azure/connectables');
       const j = await r.json();
       if (j.ok) setConnectables(Array.isArray(j.resources) ? j.resources : []);
       else setCErr(j.error || 'Could not enumerate connectable resources.');

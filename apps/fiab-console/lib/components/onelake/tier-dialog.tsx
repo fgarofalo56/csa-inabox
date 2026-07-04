@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * TierDialog — change the OneLake / ADLS Gen2 access tier of a single blob.
  *
@@ -78,7 +79,7 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
     setLoadError(null);
     setResult(null);
     setLoading(true);
-    fetch(`/api/onelake/tier?container=${encodeURIComponent(container)}&path=${encodeURIComponent(path)}`)
+    clientFetch(`/api/onelake/tier?container=${encodeURIComponent(container)}&path=${encodeURIComponent(path)}`)
       .then((r) => r.json())
       .then((j) => {
         if (j.ok && j.tier) {
@@ -102,7 +103,7 @@ export function TierDialog({ open, onOpenChange, container, path, onTierChanged 
     setBusy(true);
     setResult(null);
     try {
-      const r = await fetch('/api/onelake/tier', {
+      const r = await clientFetch('/api/onelake/tier', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ container, path, tier: selectedTier }),

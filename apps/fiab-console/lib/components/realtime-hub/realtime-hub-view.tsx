@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * RealTimeHubView — Fabric Real-Time Hub parity surface.
  *
@@ -190,7 +191,7 @@ export function RealTimeHubView() {
 
   function load() {
     setData(null); setLoadErr(null);
-    fetch('/api/realtime-hub/streams').then(async (r) => {
+    clientFetch('/api/realtime-hub/streams').then(async (r) => {
       if (r.status === 401 || r.status === 403) {
         const j = await r.json().catch(() => ({}));
         if (r.status === 401 && !j?.hint) { setUnauth(true); setData({ ok: false, streams: [] }); return; }
@@ -220,7 +221,7 @@ export function RealTimeHubView() {
   // Loom workspaces for the Connect-source dialog (Azure-native default) — so a
   // source can be connected even before any eventstream exists.
   useEffect(() => {
-    fetch('/api/loom/workspaces').then(async (r) => {
+    clientFetch('/api/loom/workspaces').then(async (r) => {
       const j = await r.json().catch(() => ({}));
       if (j?.ok) setLoomWorkspaces((j.workspaces || []).map((w: any) => ({ id: w.id, name: w.name })));
     }).catch(() => { /* dialog falls back to stream-derived workspaces */ });
@@ -256,7 +257,7 @@ export function RealTimeHubView() {
       !window.confirm(`Delete eventstream "${s.name}"? This removes the Loom eventstream item.`)) return;
     setDeleting(s.id);
     try {
-      const r = await fetch(`/api/items/eventstream/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/eventstream/${encodeURIComponent(s.id)}`, { method: 'DELETE' });
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         if (typeof window !== 'undefined') window.alert(`Delete failed: ${j?.error || r.status}`);

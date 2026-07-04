@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Azure SQL family editors — Server, Database, Managed Instance, and SQL
  * Server 2025 Vector Index. Pattern mirrors `synapse-sql-editors.tsx` so
@@ -345,7 +346,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     if (!selected) return;
     setFwBusy(true); setFwError(null);
     try {
-      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall?server=${encodeURIComponent(selected.name)}`);
+      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall?server=${encodeURIComponent(selected.name)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setFwRules(j.rules || []);
@@ -357,7 +358,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     if (!selected || !newRuleName.trim() || !newRuleStart.trim() || !newRuleEnd.trim()) return;
     setFwBusy(true); setFwError(null);
     try {
-      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall`, {
+      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ server: selected.name, name: newRuleName.trim(), startIpAddress: newRuleStart.trim(), endIpAddress: newRuleEnd.trim() }),
       });
@@ -373,7 +374,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     if (!selected) return;
     setFwBusy(true); setFwError(null);
     try {
-      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall?server=${encodeURIComponent(selected.name)}&rule=${encodeURIComponent(ruleName)}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/firewall?server=${encodeURIComponent(selected.name)}&rule=${encodeURIComponent(ruleName)}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       await loadFirewall();
@@ -390,7 +391,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     if (!selected) return;
     setAadBusy(true); setAadError(null);
     try {
-      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin?server=${encodeURIComponent(selected.name)}`);
+      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin?server=${encodeURIComponent(selected.name)}`);
       const j = await r.json();
       if (!j.ok) throw new Error(j.error || `HTTP ${r.status}`);
       setAadCurrent(j.admin || null);
@@ -412,7 +413,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     if (!selected || !aadLogin.trim() || !aadSid.trim()) return;
     setAadBusy(true); setAadError(null);
     try {
-      const r = await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin`, {
+      const r = await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/aad-admin`, {
         method: 'PUT', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ server: selected.name, login: aadLogin.trim(), sid: aadSid.trim(), tenantId: aadTenantId.trim() || undefined }),
       });
@@ -425,7 +426,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
 
   const refresh = useCallback(() => {
     setLoading(true); setError(null);
-    fetch(`/api/items/azure-sql-server`)
+    clientFetch(`/api/items/azure-sql-server`)
       .then((r) => r.json())
       .then((j) => {
         if (j.ok) setServers(j.servers || []);
@@ -442,7 +443,7 @@ export function AzureSqlServerEditor({ item, id }: { item: FabricItemType; id: s
     setDatabases([]);
     setSelectedDb(null);
     try {
-      const r = await fetch(`/api/items/azure-sql-server/${id}/databases?server=${encodeURIComponent(sv.name)}`);
+      const r = await clientFetch(`/api/items/azure-sql-server/${id}/databases?server=${encodeURIComponent(sv.name)}`);
       const j = await r.json();
       if (j.ok) setDatabases(j.databases || []);
       else setError(j.error);
@@ -871,7 +872,7 @@ function useSqlServers() {
   useEffect(() => {
     (async () => {
       try {
-        const r = await fetch('/api/items/azure-sql-server');
+        const r = await clientFetch('/api/items/azure-sql-server');
         const j = await r.json();
         if (!j.ok) {
           setError(j.error || `HTTP ${r.status}`);
@@ -902,7 +903,7 @@ function useSqlDatabases(server: string) {
         // The /api/items/azure-sql-server/[id]/databases route only reads
         // the ?server= query param, not the [id] path segment — use a
         // stable "current" placeholder so the route is satisfied.
-        const r = await fetch(`/api/items/azure-sql-server/current/databases?server=${encodeURIComponent(server)}`);
+        const r = await clientFetch(`/api/items/azure-sql-server/current/databases?server=${encodeURIComponent(server)}`);
         if (cancelled) return;
         const j = await r.json();
         if (!j.ok) { setError(j.error || `HTTP ${r.status}`); setDatabases([]); }
@@ -962,7 +963,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
     if (!replicaServer || !replicaLocation) { setGeoError('replica server + location required'); return; }
     setGeoBusy(true); setGeoError(null); setGeoOk(null);
     try {
-      const r = await fetch(`/api/items/azure-sql-database/${id}/replication`, {
+      const r = await clientFetch(`/api/items/azure-sql-database/${id}/replication`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           server, database,
@@ -1010,7 +1011,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   const cancelQuery = useCallback(async () => {
     if (!activeRequestId) return;
     try {
-      await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
+      await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ requestId: activeRequestId }),
@@ -1032,7 +1033,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   }, [jobs, activeJobId]);
 
   const toggleMirror = useCallback(async () => {
-    const r = await fetch(`/api/items/azure-sql-database/${id}/mirroring`, {
+    const r = await clientFetch(`/api/items/azure-sql-database/${id}/mirroring`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ server, database }),
     });
@@ -1041,7 +1042,7 @@ export function AzureSqlDatabaseEditor({ item, id }: { item: FabricItemType; id:
   }, [id, server, database]);
 
   const probe2025 = useCallback(async () => {
-    const r = await fetch(`/api/items/azure-sql-database/${id}/sql2025-features`, {
+    const r = await clientFetch(`/api/items/azure-sql-database/${id}/sql2025-features`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ server, database }),
     });
@@ -1399,7 +1400,7 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
 
   const refresh = useCallback(() => {
     setLoading(true); setErr(null);
-    fetch(`/api/items/azure-sql-managed-instance`)
+    clientFetch(`/api/items/azure-sql-managed-instance`)
       .then((r) => r.json())
       .then((j) => { if (j.ok) setInstances(j.instances || []); else setErr(j.error); })
       .catch((e) => setErr(String(e)))
@@ -1448,7 +1449,7 @@ export function SqlManagedInstanceEditor({ item, id }: { item: FabricItemType; i
   const cancelQuery = useCallback(async () => {
     if (!activeRequestId) return;
     try {
-      await fetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
+      await clientFetch(`/api/items/azure-sql-database/${encodeURIComponent(id)}/query/cancel`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ requestId: activeRequestId }),
@@ -1690,7 +1691,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
   const runDdl = useCallback(async () => {
     if (!server || !database) { setResult({ ok: false, error: 'server + database required' }); return; }
     setLoading(true); setResult(null);
-    const r = await fetch(`/api/items/azure-sql-database/${id}/query`, {
+    const r = await clientFetch(`/api/items/azure-sql-database/${id}/query`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ server, database, sql: ddl }),
     });
@@ -1709,7 +1710,7 @@ export function SqlServer2025VectorIndexEditor({ item, id }: { item: FabricItemT
       + `       VECTOR_DISTANCE('${metric.toLowerCase()}', ${column}, @q) AS distance\n`
       + `FROM dbo.${table}\n`
       + `ORDER BY distance ASC;`;
-    const r = await fetch(`/api/items/azure-sql-database/${id}/query`, {
+    const r = await clientFetch(`/api/items/azure-sql-database/${id}/query`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ server, database, sql: probe }),
     });

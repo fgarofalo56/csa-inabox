@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Databricks editors — Unity Catalog governance dialogs.
  *
@@ -225,7 +226,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
         // Standard managed catalog — storage root applies here only.
         payload.storage_root = catStorage.trim() || undefined;
       }
-      const r = await fetch('/api/databricks/unity-catalog/catalogs', {
+      const r = await clientFetch('/api/databricks/unity-catalog/catalogs', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(payload),
       });
@@ -252,7 +253,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     if (!schCatalog || !schName.trim()) return;
     setSchBusy(true); setSchErr(null);
     try {
-      const r = await fetch('/api/databricks/unity-catalog/schemas', {
+      const r = await clientFetch('/api/databricks/unity-catalog/schemas', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ name: schName.trim(), catalog_name: schCatalog, comment: schComment.trim() || undefined, properties: kvToMap(schTags) }),
       });
@@ -298,7 +299,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/databricks/unity-catalog/tables?catalog=${encodeURIComponent(tblCatalog)}&schema=${encodeURIComponent(tblSchema)}`);
+        const r = await clientFetch(`/api/databricks/unity-catalog/tables?catalog=${encodeURIComponent(tblCatalog)}&schema=${encodeURIComponent(tblSchema)}`);
         const j = await r.json();
         if (cancelled) return;
         const vols = (j.volumes || []).map((v: any) => `${tblCatalog}.${tblSchema}.${v.name}`);
@@ -336,7 +337,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     if (!warehouseId) { setTblErr('No SQL Warehouse bound — schema inference needs a running warehouse.'); return; }
     setTblBusy(true); setTblErr(null); setTblFileMsg(null);
     try {
-      const r = await fetch('/api/databricks/unity-catalog/tables', {
+      const r = await clientFetch('/api/databricks/unity-catalog/tables', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           mode: 'from_file',
@@ -365,7 +366,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     if (tblType === 'EXTERNAL' && !tblStorage.trim()) { setTblErr('EXTERNAL tables require a storage location (abfss://…).'); return; }
     setTblBusy(true); setTblErr(null);
     try {
-      const r = await fetch('/api/databricks/unity-catalog/tables', {
+      const r = await clientFetch('/api/databricks/unity-catalog/tables', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: tblName.trim(), catalog_name: tblCatalog, schema_name: tblSchema,
@@ -405,7 +406,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     const t = setTimeout(async () => {
       setGrPrincBusy(true); setGrPrincNote(null);
       try {
-        const r = await fetch(`/api/databricks/unity-catalog/principals?q=${encodeURIComponent(q)}`);
+        const r = await clientFetch(`/api/databricks/unity-catalog/principals?q=${encodeURIComponent(q)}`);
         const j = await r.json();
         if (cancelled) return;
         if (j.ok) setGrPrincOpts((j.principals || []).map((p: any) => ({ value: p.value, label: p.label || p.value })));
@@ -430,7 +431,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
       const body: Record<string, unknown> = { owner: grOwner.trim() };
       if (grSecurable === 'CATALOG') body.name = grFullName.trim();
       else body.full_name = grFullName.trim();
-      const r = await fetch(`/api/databricks/unity-catalog/${route}`, {
+      const r = await clientFetch(`/api/databricks/unity-catalog/${route}`, {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify(body),
       });
@@ -464,7 +465,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     try {
       const params = new URLSearchParams({ securable_type: grSecurable, full_name: grFullName.trim() });
       if (grEffective) params.set('effective', 'true');
-      const r = await fetch(`/api/databricks/unity-catalog/grants?${params.toString()}`);
+      const r = await clientFetch(`/api/databricks/unity-catalog/grants?${params.toString()}`);
       const j = await r.json();
       if (!j.ok) { setGrErr(j.error || `HTTP ${r.status}`); return; }
       // effective shape differs (privileges is array of objects) — normalize for display.
@@ -486,7 +487,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
       const change = mode === 'add'
         ? { principal: grPrincipal.trim(), add: [...grPrivs] }
         : { principal: grPrincipal.trim(), remove: [...grPrivs] };
-      const r = await fetch('/api/databricks/unity-catalog/grants', {
+      const r = await clientFetch('/api/databricks/unity-catalog/grants', {
         method: 'PATCH', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ securable_type: grSecurable, full_name: grFullName.trim(), changes: [change] }),
       });
@@ -520,7 +521,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
     if (volType === 'EXTERNAL' && !volStorage.trim()) { setVolErr('EXTERNAL volumes require a storage location (abfss://…).'); return; }
     setVolBusy(true); setVolErr(null);
     try {
-      const r = await fetch('/api/databricks/unity-catalog/volumes', {
+      const r = await clientFetch('/api/databricks/unity-catalog/volumes', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           name: volName.trim(), catalog_name: volCatalog, schema_name: volSchema,
@@ -565,7 +566,7 @@ function UnityCatalogWriteDialogs(props: UcWriteDialogsProps) {
       const qs = new URLSearchParams();
       if (dropKind === 'CATALOG') qs.set('name', name); else qs.set('full_name', name);
       if ((dropKind === 'CATALOG' || dropKind === 'SCHEMA') && dropForce) qs.set('force', 'true');
-      const r = await fetch(`/api/databricks/unity-catalog/${route}?${qs.toString()}`, { method: 'DELETE' });
+      const r = await clientFetch(`/api/databricks/unity-catalog/${route}?${qs.toString()}`, { method: 'DELETE' });
       const j = await r.json();
       if (!j.ok) { setDropErr(j.error || `HTTP ${r.status}`); return; }
       setDropOpen(false); setDropName('');
@@ -1098,7 +1099,7 @@ function UcTagsDialog({ open, onOpenChange, target, warehouseId, onChanged }: {
   const loadColumns = useCallback(async () => {
     if (!target) return;
     try {
-      const r = await fetch(`/api/databricks/unity-catalog/tables?full_name=${encodeURIComponent(`${target.catalog}.${target.schema}.${target.table}`)}`);
+      const r = await clientFetch(`/api/databricks/unity-catalog/tables?full_name=${encodeURIComponent(`${target.catalog}.${target.schema}.${target.table}`)}`);
       const j = await r.json();
       if (j.ok && j.table?.columns) setColumns(j.table.columns.map((c: any) => String(c.name)));
     } catch { /* best-effort */ }
@@ -1597,7 +1598,7 @@ function ConnectionsDialog({ open, onOpenChange, warehouseId }: {
   const loadConnectables = useCallback(async () => {
     if (connectables.length) return;
     try {
-      const r = await fetch('/api/azure/connectables');
+      const r = await clientFetch('/api/azure/connectables');
       const j = await r.json();
       if (j.ok && Array.isArray(j.resources)) {
         setConnectables(j.resources.filter((x: any) => CONNECTABLE_TO_FED[x.connType]));
@@ -2048,7 +2049,7 @@ function AuditSystemDialog({ open, onOpenChange, warehouseId, catalog, schema }:
   const tryEnable = async (sch: string) => {
     setBusy(true); setErr(null);
     try {
-      const r = await fetch('/api/databricks/unity-catalog/system-tables', {
+      const r = await clientFetch('/api/databricks/unity-catalog/system-tables', {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'enable-schema', schema: sch }),
       });
@@ -2189,7 +2190,7 @@ function ModelVersionsDialog({ open, onOpenChange, fullName, onGrants }: {
     if (!fullName) return;
     setLoading(true); setErr(null); setGate(null); setModel(null); setVersions([]);
     try {
-      const r = await fetch(`/api/databricks/unity-catalog/models?full_name=${encodeURIComponent(fullName)}&versions=true`);
+      const r = await clientFetch(`/api/databricks/unity-catalog/models?full_name=${encodeURIComponent(fullName)}&versions=true`);
       const j = await r.json();
       if (j.gated) { setGate(j.error); return; }
       if (!j.ok) { setErr(j.error || 'failed to load model'); return; }
@@ -2317,7 +2318,7 @@ function MarketplaceDialog({ open, onOpenChange }: { open: boolean; onOpenChange
     setLoading(true); setErr(null); setGate(null);
     try {
       if (tab === 'installed') {
-        const r = await fetch('/api/databricks/unity-catalog/marketplace?installations=true');
+        const r = await clientFetch('/api/databricks/unity-catalog/marketplace?installations=true');
         const j = await r.json();
         if (j.gated) { setGate(j.error); return; }
         if (!j.ok) { setErr(j.error || 'failed to list installations'); return; }
@@ -2327,7 +2328,7 @@ function MarketplaceDialog({ open, onOpenChange }: { open: boolean; onOpenChange
         if (q.trim()) p.set('q', q.trim());
         if (onlyFree) p.set('is_free', 'true');
         if (onlyStaffPick) p.set('is_staff_pick', 'true');
-        const r = await fetch(`/api/databricks/unity-catalog/marketplace?${p.toString()}`);
+        const r = await clientFetch(`/api/databricks/unity-catalog/marketplace?${p.toString()}`);
         const j = await r.json();
         if (j.gated) { setGate(j.error); return; }
         if (!j.ok) { setErr(j.error || 'failed to list listings'); return; }
@@ -2483,7 +2484,7 @@ function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const loadList = useCallback(async () => {
     setLoading(true); setErr(null); setGate(null); setDetail(null); setAssets([]); setSelected(null);
     try {
-      const r = await fetch('/api/databricks/unity-catalog/clean-rooms');
+      const r = await clientFetch('/api/databricks/unity-catalog/clean-rooms');
       const j = await r.json();
       if (j.gated) { setGate(j.error); return; }
       if (!j.ok) { setErr(j.error || 'failed to list clean rooms'); return; }
@@ -2496,7 +2497,7 @@ function CleanRoomsDialog({ open, onOpenChange }: { open: boolean; onOpenChange:
   const openRoom = useCallback(async (name: string) => {
     setSelected(name); setDetailLoading(true); setDetail(null); setAssets([]); setErr(null);
     try {
-      const r = await fetch(`/api/databricks/unity-catalog/clean-rooms?name=${encodeURIComponent(name)}&assets=true`);
+      const r = await clientFetch(`/api/databricks/unity-catalog/clean-rooms?name=${encodeURIComponent(name)}&assets=true`);
       const j = await r.json();
       if (j.gated) { setGate(j.error); return; }
       if (!j.ok) { setErr(j.error || 'failed to load clean room'); return; }

@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * script-visual — the Power BI "Python visual" / "R visual" surface for the
  * Loom-native Report Designer (report-designer wave 4).
@@ -327,7 +328,7 @@ export function ScriptVisual({
     if (script.trim().length === 0) return;
     setRun({ kind: 'running' });
     try {
-      const r = await fetch(`/api/items/report/${encodeURIComponent(reportId)}/script-visual`, {
+      const r = await clientFetch(`/api/items/report/${encodeURIComponent(reportId)}/script-visual`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ visualId, language, script, rows }),

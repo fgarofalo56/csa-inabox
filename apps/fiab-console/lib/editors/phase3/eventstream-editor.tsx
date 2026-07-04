@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * EventstreamEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -393,7 +394,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     // editor renders its default DEFAULT_ES_CFG until the user saves.
     if (!id || id === 'new') return;
     try {
-      const r = await fetch(`/api/items/eventstream/${id}`);
+      const r = await clientFetch(`/api/items/eventstream/${id}`);
       const j = (await r.json()) as EventstreamState & { fabricEventstreamId?: string | null };
       setState(j);
       if (j.fabricEventstreamId) setPublishedId(j.fabricEventstreamId);
@@ -423,7 +424,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     }
     setSaving(true); setSaveMsg('Saving…');
     try {
-      const r = await fetch(`/api/items/eventstream/${id}`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ config: parsed }),
@@ -463,7 +464,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     setPublishBusy(true); setPublishErr(null); setPublishHint(null); setPublishMsg(null);
     try {
       if (dirty) { await save(); }
-      const r = await fetch(`/api/items/eventstream/${id}/publish?fabricWorkspaceId=${encodeURIComponent(fabricWsId.trim())}`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/publish?fabricWorkspaceId=${encodeURIComponent(fabricWsId.trim())}`, {
         method: 'POST',
       });
       const j = await r.json();
@@ -494,7 +495,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     setPullBusy(true); setSaveErr(null); setSaveMsg('Pulling live topology from Fabric…');
     try {
       const qs = fabricWsId.trim() ? `?fabricWorkspaceId=${encodeURIComponent(fabricWsId.trim())}` : '';
-      const r = await fetch(`/api/items/eventstream/${id}/definition${qs}`);
+      const r = await clientFetch(`/api/items/eventstream/${id}/definition${qs}`);
       const j = await r.json();
       if (!j.ok) {
         setSaveErr(j.error || `HTTP ${r.status}`);
@@ -521,7 +522,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     setAsaSyncBusy(true); setAsaSyncErr(null); setAsaSyncHint(null); setAsaSyncMsg(null);
     try {
       if (dirty) { await save(); }
-      const r = await fetch(`/api/items/eventstream/${id}/asa-sync`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/asa-sync`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ asaJobName: asaJobName.trim() }),
@@ -556,7 +557,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     try {
       // Persist the current canvas first so the route reads the latest topology.
       await save();
-      const r = await fetch(`/api/items/eventstream/${id}/provision`, { method: 'POST' });
+      const r = await clientFetch(`/api/items/eventstream/${id}/provision`, { method: 'POST' });
       const j = await r.json();
       if (!j.ok) {
         setProvisionErr(j.error || `HTTP ${r.status}`);
@@ -583,7 +584,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
     try {
       if (dirty) { await save(); }
       const action = alertEmail.trim() ? { target: alertEmail.trim() } : undefined;
-      const r = await fetch(`/api/items/eventstream/${id}/activator`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/activator`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -1152,7 +1153,7 @@ function EventstreamSqlOperatorTab({
     if (!id || id === 'new') { setLoading(false); return; }
     setLoading(true);
     try {
-      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`);
+      const r = await clientFetch(`/api/items/eventstream/${id}/sql-operator`);
       const j = await r.json();
       if (j.ok && j.sqlOperator) {
         setQuery(j.sqlOperator.query || DEFAULT_SQL_QUERY);
@@ -1197,7 +1198,7 @@ function EventstreamSqlOperatorTab({
   const doSave = useCallback(async () => {
     setSaving(true); setSaveMsg(null); setSaveErr(null); setSaveHint(null);
     try {
-      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/sql-operator`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'save', query, sinks, asaJobName: asaJobName.trim() || undefined }),
       });
@@ -1215,7 +1216,7 @@ function EventstreamSqlOperatorTab({
   const doCompile = useCallback(async () => {
     setCompiling(true); setCompileResult(null); setCompileErr(null); setCompileHint(null);
     try {
-      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/sql-operator`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'compile', query }),
       });
@@ -1232,7 +1233,7 @@ function EventstreamSqlOperatorTab({
     if (!sinks.length) { setApplyErr('Add at least one named sink.'); return; }
     setApplyBusy(true); setApplyMsg(null); setApplyErr(null); setApplyHint(null);
     try {
-      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/sql-operator`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'apply-sinks', asaJobName: asaJobName.trim(), sinks }),
       });
@@ -1257,7 +1258,7 @@ function EventstreamSqlOperatorTab({
     }
     setTestBusy(true); setTestResult(null); setTestErr(null); setTestHint(null);
     try {
-      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/sql-operator`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'test', query, outputAlias: testAlias.trim(), asaJobName: asaJobName.trim() || undefined, sampleInput }),
       });
@@ -1580,7 +1581,7 @@ function EventstreamOperatorsTab({
   const doValidate = useCallback(async () => {
     setValidating(true); setValidateResult(null); setValidateErr(null); setValidateHint(null);
     try {
-      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/sql-operator`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'compile', query: compiledSaql }),
       });
@@ -1596,7 +1597,7 @@ function EventstreamOperatorsTab({
     if (!asaJobName.trim()) { setApplyErr('Enter an ASA job name first.'); setApplyHint(null); return; }
     setApplyBusy(true); setApplyMsg(null); setApplyErr(null); setApplyHint(null);
     try {
-      const r = await fetch(`/api/items/eventstream/${id}/sql-operator`, {
+      const r = await clientFetch(`/api/items/eventstream/${id}/sql-operator`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ action: 'save', query: compiledSaql, asaJobName: asaJobName.trim() }),
       });

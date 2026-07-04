@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Governance → Data quality (run + results + monitors).
  *
@@ -103,7 +104,7 @@ function RulesTab() {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const r = await fetch('/api/dq/rules'); const j = await r.json();
+      const r = await clientFetch('/api/dq/rules'); const j = await r.json();
       if (!j.ok) { setError(j.error || 'Failed to load'); return; }
       setRules(j.rules || []);
     } catch (e: any) { setError(e?.message || String(e)); }
@@ -128,14 +129,14 @@ function RulesTab() {
     if (check === 'range') { payload.min = parseInt(min, 10); payload.max = parseInt(max, 10); }
     if (editing) payload.id = editing.id;
     try {
-      const r = await fetch('/api/dq/rules', { method: editing ? 'PUT' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
+      const r = await clientFetch('/api/dq/rules', { method: editing ? 'PUT' : 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload) });
       const j = await r.json();
       if (!j.ok) { setDlgErr(Array.isArray(j.errors) ? j.errors : [j.error || 'Error']); return; }
       setRules(j.rules || []); setOpen(false); reset();
     } catch (e: any) { setDlgErr([e?.message || String(e)]); } finally { setBusy(false); }
   }
   async function del(id: string) {
-    const r = await fetch(`/api/dq/rules?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    const r = await clientFetch(`/api/dq/rules?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
     const j = await r.json(); if (j.ok) setRules(j.rules || []); else setError(j.error || 'Delete failed');
   }
 
@@ -232,7 +233,7 @@ function RunTab() {
     const t = tables.split(',').map((x) => x.trim()).filter(Boolean);
     if (t.length) body.tableNames = t;
     try {
-      const r = await fetch('/api/dq/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+      const r = await clientFetch('/api/dq/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
       const j = await r.json();
       if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
       if (!j.ok) { setError(j.error || 'Run failed'); return; }
@@ -293,7 +294,7 @@ function ResultsTab() {
   const [error, setError] = useState<string | null>(null);
   const load = useCallback(async () => {
     setError(null);
-    try { const r = await fetch('/api/dq/results'); const j = await r.json(); if (!j.ok) { setError(j.error || 'Failed'); return; } setRuns(j.runs || []); }
+    try { const r = await clientFetch('/api/dq/results'); const j = await r.json(); if (!j.ok) { setError(j.error || 'Failed'); return; } setRuns(j.runs || []); }
     catch (e: any) { setError(e?.message || String(e)); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -328,7 +329,7 @@ function MonitorsTab() {
   const [ruleId, setRuleId] = useState('');
   const [outputSchema, setOutputSchema] = useState(''); const [assetsDir, setAssetsDir] = useState('');
 
-  useEffect(() => { fetch('/api/dq/rules').then((r) => r.json()).then((j) => { if (j.ok) setRules(j.rules || []); }).catch(() => {}); }, []);
+  useEffect(() => { clientFetch('/api/dq/rules').then((r) => r.json()).then((j) => { if (j.ok) setRules(j.rules || []); }).catch(() => {}); }, []);
 
   async function load() {
     if (!table.trim()) return;
@@ -337,7 +338,7 @@ function MonitorsTab() {
     if (catalog.trim()) qs.set('catalog', catalog.trim());
     if (schema.trim()) qs.set('schema', schema.trim());
     try {
-      const r = await fetch(`/api/dq/monitors?${qs}`); const j = await r.json();
+      const r = await clientFetch(`/api/dq/monitors?${qs}`); const j = await r.json();
       if (r.status === 503 && j.code === 'not_configured') { setGate({ missing: j.missing, error: j.error }); return; }
       if (!j.ok) { setError(j.error || 'Failed'); return; }
       setData(j);
@@ -346,7 +347,7 @@ function MonitorsTab() {
   async function action(payload: any) {
     setBusy(true); setError(null);
     try {
-      const r = await fetch('/api/dq/monitors', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ table: table.trim(), catalog: catalog.trim() || undefined, schema: schema.trim() || undefined, ...payload }) });
+      const r = await clientFetch('/api/dq/monitors', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ table: table.trim(), catalog: catalog.trim() || undefined, schema: schema.trim() || undefined, ...payload }) });
       const j = await r.json();
       if (!j.ok && j.error) setError(j.error);
       await load();

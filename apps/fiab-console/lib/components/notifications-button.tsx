@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * NotificationsButton — bell icon with unread badge. Reads /api/notifications
  * (Cosmos notifications container, partitioned by userId). PATCH marks read.
@@ -75,7 +76,7 @@ export function NotificationsButton() {
   const [unread, setUnread] = useState(0);
 
   const load = () => {
-    fetch('/api/notifications').then(r => r.json()).then(d => {
+    clientFetch('/api/notifications').then(r => r.json()).then(d => {
       if (Array.isArray(d?.notifications)) {
         setItems(d.notifications);
         setUnread(Number(d.unreadCount) || 0);
@@ -92,7 +93,7 @@ export function NotificationsButton() {
   const markAllRead = async () => {
     const ids = items.filter(i => !i.read).map(i => i.id);
     if (!ids.length) return;
-    await fetch('/api/notifications', {
+    await clientFetch('/api/notifications', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ids }),
@@ -104,7 +105,7 @@ export function NotificationsButton() {
   const markOneRead = async (id: string) => {
     const target = items.find(i => i.id === id);
     if (!target || target.read) return;
-    await fetch('/api/notifications', {
+    await clientFetch('/api/notifications', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ ids: [id] }),

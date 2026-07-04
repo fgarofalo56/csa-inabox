@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * AddDataAssetsPanel — F9 "Add data assets" modal for the Data Product editor.
  *
@@ -91,7 +92,7 @@ export function AddDataAssetsPanel({
     try {
       const params = new URLSearchParams({ search: '1', q, offset: String(nextOffset), limit: String(LIMIT) });
       if (typeFilter !== 'All') params.set('type', typeFilter);
-      const r = await fetch(`/api/data-products/${encodeURIComponent(productId)}/assets?${params.toString()}`);
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(productId)}/assets?${params.toString()}`);
       const j = await r.json();
       if (r.status === 501) { setHint((j.hint as PurviewHint) || {}); setResults([]); setHasMore(false); return; }
       if (!j.ok) { setErr(j.error || `HTTP ${r.status}`); setResults([]); setHasMore(false); return; }
@@ -139,7 +140,7 @@ export function AddDataAssetsPanel({
     if (toAdd.length === 0) return;
     setAdding(true); setAddResult(null);
     try {
-      const r = await fetch(`/api/data-products/${encodeURIComponent(productId)}/assets`, {
+      const r = await clientFetch(`/api/data-products/${encodeURIComponent(productId)}/assets`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ assets: toAdd }),

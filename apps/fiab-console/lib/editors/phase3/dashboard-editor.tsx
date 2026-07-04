@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DashboardEditor — extracted from phase3-editors.tsx (byte-for-byte move).
  *
@@ -92,7 +93,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const loadList = useCallback(async (wsId: string) => {
     setErr(null);
     try {
-      const r = await fetch(`/api/items/dashboard?workspaceId=${encodeURIComponent(wsId)}`);
+      const r = await clientFetch(`/api/items/dashboard?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setDashboards([]); setErr(j.error); return; }
       setDashboards(j.dashboards || []);
@@ -104,7 +105,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const loadOverlay = useCallback(async (wsId: string, dId: string) => {
     try {
       const qs = wsId ? `?workspaceId=${encodeURIComponent(wsId)}` : '';
-      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dId || id)}${qs}`);
+      const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(dId || id)}${qs}`);
       const j = await r.json();
       if (j.ok) {
         if (wsId && dId) setTiles(j.tiles || []);
@@ -131,7 +132,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
     (async () => {
       setEmbedErr(null);
       try {
-        const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashId)}/embed-token`, {
+        const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(dashId)}/embed-token`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ workspaceId }),
@@ -151,7 +152,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const runLoomTile = useCallback(async (tile: LoomTile) => {
     setLoomResults((prev) => ({ ...prev, [tile.id]: { ok: true, rows: prev[tile.id]?.rows, columns: prev[tile.id]?.columns } as KqlResult }));
     try {
-      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(id)}/tile-query`, {
+      const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(id)}/tile-query`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
@@ -191,7 +192,7 @@ export function DashboardEditor({ item, id }: { item: FabricItemType; id: string
   const saveOverlay = useCallback(async () => {
     setSaving(true); setSaveErr(null);
     try {
-      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(id)}`, {
+      const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(id)}`, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pbiWorkspaceId: workspaceId, pbiDashboardId: dashId, loomTiles, layout }),
@@ -511,7 +512,7 @@ function PinnedPbiTile({ workspaceId, dashboardId, tile }: { workspaceId: string
     let cancelled = false;
     (async () => {
       try {
-        const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardId)}/tile-embed-token`, {
+        const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(dashboardId)}/tile-embed-token`, {
           method: 'POST', headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ workspaceId, tileId: tile.id }),
         });
@@ -542,7 +543,7 @@ function PinTileDialog({ dashboardItemId, workspaceId, dashboards, selectedDashW
     if (!workspaceId || !sourceDash) { setSrcTiles([]); return; }
     (async () => {
       try {
-        const r = await fetch(`/api/items/dashboard/${encodeURIComponent(sourceDash)}?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(sourceDash)}?workspaceId=${encodeURIComponent(workspaceId)}`);
         const j = await r.json();
         setSrcTiles(j.ok ? (j.tiles || []) : []);
       } catch { setSrcTiles([]); }
@@ -552,7 +553,7 @@ function PinTileDialog({ dashboardItemId, workspaceId, dashboards, selectedDashW
     if (!workspaceId || !sourceDash || !tileId) return;
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/pin`, {
+      const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/pin`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ workspaceId, sourceDashboardId: sourceDash, tileId }),
       });
@@ -625,7 +626,7 @@ function QaTileDialog({ dashboardItemId, workspaceId, onClose, onAdd }: {
     if (aasMode || !workspaceId) return;
     (async () => {
       try {
-        const r = await fetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(workspaceId)}`);
+        const r = await clientFetch(`/api/items/semantic-model?workspaceId=${encodeURIComponent(workspaceId)}`);
         const j = await r.json();
         if (j.ok) setDatasets((j.datasets || []).filter((d: any) => d.id && d.name).map((d: any) => ({ id: d.id, name: d.name })));
       } catch { /* honest gate shown on run */ }
@@ -636,7 +637,7 @@ function QaTileDialog({ dashboardItemId, workspaceId, onClose, onAdd }: {
     if (!nl.trim()) return;
     setBusy(true); setErr(null); setResult(null);
     try {
-      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
+      const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: 'dax', nlPrompt: nl, workspaceId, datasetId: aasMode ? undefined : datasetId }),
       });
@@ -652,7 +653,7 @@ function QaTileDialog({ dashboardItemId, workspaceId, onClose, onAdd }: {
     if (!dax.trim()) return;
     setBusy(true); setErr(null);
     try {
-      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
+      const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: 'dax', query: dax, workspaceId, datasetId: aasMode ? undefined : datasetId }),
       });
@@ -745,7 +746,7 @@ function StreamingTileDialog({ dashboardItemId, onClose, onAdd }: {
     if (!kql.trim()) return;
     setBusy(true); setErr(null); setResult(null);
     try {
-      const r = await fetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
+      const r = await clientFetch(`/api/items/dashboard/${encodeURIComponent(dashboardItemId)}/tile-query`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ kind: 'streaming-adx', query: kql, database }),
       });

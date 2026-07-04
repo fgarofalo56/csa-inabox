@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Add Data Landing Zone — dlz-attach ONLY wizard (audit-t157)
  *
@@ -215,7 +216,7 @@ export function AddLandingZoneWizardPane() {
     setGranting(true);
     setGrant(null);
     try {
-      const res = await fetch('/api/setup/landing-zones/grant', {
+      const res = await clientFetch('/api/setup/landing-zones/grant', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ subscriptionId: targetSubscriptionId, resourceGroup: dlzResourceGroup }),
@@ -233,7 +234,7 @@ export function AddLandingZoneWizardPane() {
     setHubLoading(true);
     setHubError(undefined);
     try {
-      const res = await fetch('/api/setup/tenant-topology');
+      const res = await clientFetch('/api/setup/tenant-topology');
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) {
         setHubError(j.error || j.hint || `Could not read tenant topology (HTTP ${res.status}).`);
@@ -254,7 +255,7 @@ export function AddLandingZoneWizardPane() {
     setSubsLoading(true);
     setSubsError(undefined);
     try {
-      const res = await fetch('/api/setup/subscriptions');
+      const res = await clientFetch('/api/setup/subscriptions');
       const j = await res.json().catch(() => ({}));
       if (!res.ok || !j.ok) {
         setSubsError(j.error || j.hint || `Could not list subscriptions (HTTP ${res.status}).`);
@@ -275,7 +276,7 @@ export function AddLandingZoneWizardPane() {
 
   const loadExisting = useCallback(async () => {
     try {
-      const res = await fetch('/api/setup/existing-dlzs');
+      const res = await clientFetch('/api/setup/existing-dlzs');
       const j = await res.json().catch(() => ({}));
       if (res.ok && j.ok) setExisting(j.dlzs || []);
     } catch {
@@ -313,7 +314,7 @@ export function AddLandingZoneWizardPane() {
     setDeployProgress(0);
     setDeployStage('Submitting attach request…');
     try {
-      const res = await fetch('/api/setup/deploy', {
+      const res = await clientFetch('/api/setup/deploy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

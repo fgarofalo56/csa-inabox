@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * SemanticModelWorkspacePane — workspace-level deploy surface for the
  * /semantic-model page.
@@ -137,13 +138,13 @@ const useStyles = makeStyles({
 });
 
 async function fetchPane(): Promise<PaneResponse> {
-  const res = await fetch('/api/items/semantic-model/workspace-pane', { cache: 'no-store' });
+  const res = await clientFetch('/api/items/semantic-model/workspace-pane', { cache: 'no-store' });
   const json = await res.json().catch(() => ({}));
   return { ...json, status: res.status };
 }
 
 async function deployModel(body: { modelId: string; database: string }): Promise<DeployResult> {
-  const res = await fetch('/api/items/semantic-model/workspace-pane', {
+  const res = await clientFetch('/api/items/semantic-model/workspace-pane', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ action: 'deploy', ...body }),

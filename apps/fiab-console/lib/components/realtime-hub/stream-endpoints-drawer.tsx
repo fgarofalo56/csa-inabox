@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * StreamEndpointsDrawer — Fabric Real-Time hub eventstream "Endpoints" / source
  * & destination connection details. Pulls the live connection endpoints from
@@ -46,7 +47,7 @@ export function StreamEndpointsDrawer({ open, onClose, name, workspaceId, events
     if (!open || !eventstreamId) return;
     let cancelled = false;
     setBusy(true); setErr(null); setEndpoints(null);
-    fetch(`/api/realtime-hub/endpoints?workspaceId=${encodeURIComponent(workspaceId)}&eventstreamId=${encodeURIComponent(eventstreamId)}`)
+    clientFetch(`/api/realtime-hub/endpoints?workspaceId=${encodeURIComponent(workspaceId)}&eventstreamId=${encodeURIComponent(eventstreamId)}`)
       .then(async (r) => {
         const j = await r.json().catch(() => ({}));
         if (cancelled) return;

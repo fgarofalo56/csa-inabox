@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * DomainImageGallery — the domain Image-tab picker, one-for-one with Fabric's
  * "photo gallery" that pops up when you choose Image > Select an image for a
@@ -94,7 +95,7 @@ export function DomainImageGallery({ value, onChange }: DomainImageGalleryProps)
 
   useEffect(() => {
     let alive = true;
-    fetch('/api/admin/domains/images')
+    clientFetch('/api/admin/domains/images')
       .then((r) => r.json())
       .then((j) => {
         if (!alive) return;

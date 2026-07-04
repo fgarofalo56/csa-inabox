@@ -1,5 +1,6 @@
 'use client';
 
+import { clientFetch } from '@/lib/client-fetch';
 /**
  * Grant dialog — pick an Entra principal (user or group via Graph
  * search) and a role; POSTs to /api/admin/permissions/grants.
@@ -61,7 +62,7 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${kind}`, { cache: 'no-store' });
+        const res = await clientFetch(`/api/admin/permissions/principals?q=${encodeURIComponent(q)}&kind=${kind}`, { cache: 'no-store' });
         const json = await res.json();
         if (!res.ok) {
           setError({ message: json?.error || `Graph ${res.status}`, remediation: json?.remediation });
@@ -83,7 +84,7 @@ export function GrantDialog({ open, capabilityId, capabilityName, onClose, onGra
     setSaving(true);
     setError(null);
     try {
-      const res = await fetch('/api/admin/permissions/grants', {
+      const res = await clientFetch('/api/admin/permissions/grants', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
