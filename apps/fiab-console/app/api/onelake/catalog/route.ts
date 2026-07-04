@@ -49,7 +49,7 @@ import {
 } from '@/lib/azure/onelake-catalog-client';
 import { assertFabricFamilyAvailable } from '@/lib/azure/cloud-endpoints';
 import { getDomainsStore } from '@/lib/azure/domains-client';
-import { apiServerError } from '@/lib/api/respond';
+import { apiServerError, apiHonestError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -198,8 +198,13 @@ export async function GET(request: Request) {
     // ── Path C: Fabric REST (OPT-IN only) ────────────────────────────────────
     if (backend === 'fabric') {
       // Throws an honest, actionable error in GCC-High/IL5/DoD (never a silent
-      // 401 against a Commercial host).
-      assertFabricFamilyAvailable('fabric');
+      // 401 against a Commercial host). Surface it VERBATIM — this is a required
+      // honest gate (no-vaporware.md), not an internal exception to genericize.
+      try {
+        assertFabricFamilyAvailable('fabric');
+      } catch (gateErr) {
+        return apiHonestError(gateErr, 500);
+      }
       const ws = await listOneLakeWorkspaces();
       const allItems = await listAllOneLakeItems(ws);
       const ql = q.toLowerCase();

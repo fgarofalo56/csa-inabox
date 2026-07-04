@@ -36,6 +36,17 @@
  *   guards. For RULE 2, a genuinely bespoke multi-field helper that cannot yet
  *   delegate may be added to ALLOWLIST_HELPERS with a reason — but prefer
  *   migrating it to apiError.
+ *
+ * HONEST-GATE PASSTHROUGH (not a leak): some thrown errors are documented,
+ *   user-actionable honest gates that no-vaporware.md REQUIRES surfacing
+ *   verbatim — a permission message ("caller lacks Log Analytics Reader"), a
+ *   cloud-availability gate ("Microsoft Fabric has no GCC-High endpoint"), a
+ *   *NotConfiguredError. Route these through `apiHonestError(err, status)` from
+ *   lib/api/respond.ts (only for errors your OWN code throws as honest gates —
+ *   typed gate/permission classes, assertFabricFamilyAvailable — never raw
+ *   driver exceptions). This guard does NOT flag apiHonestError: it is the
+ *   sanctioned, reviewed passthrough. Raw `.message` on a literal-500 is still
+ *   forbidden (RULE 1) — the distinction is intent + the deliberate helper.
  */
 
 import fs from 'node:fs';

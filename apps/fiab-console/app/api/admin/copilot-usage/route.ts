@@ -19,8 +19,8 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
-import { queryLogs, MonitorNotConfiguredError, type LogQueryResult } from '@/lib/azure/monitor-client';
-import { apiServerError } from '@/lib/api/respond';
+import { queryLogs, MonitorError, MonitorNotConfiguredError, type LogQueryResult } from '@/lib/azure/monitor-client';
+import { apiServerError, apiHonestError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -152,6 +152,13 @@ union isfuzzy=true (AppEvents | where Name == "copilot.usage")
       /Failed to resolve|could not be found|SemanticError|does not refer to any known|Unknown (?:function|table)/i.test(msg);
     if (isMissingTable) {
       return NextResponse.json({ ok: true, data: null, noEvents: true });
+    }
+    // A real Azure Monitor API error (permission / throttle / bad query) is an
+    // honest, user-actionable signal ("caller lacks Log Analytics Reader") —
+    // surface its message, don't genericize it. Unknown exceptions still get the
+    // safe generic 500 via apiServerError.
+    if (e instanceof MonitorError) {
+      return apiHonestError(e, 500);
     }
     return apiServerError(e);
   }
