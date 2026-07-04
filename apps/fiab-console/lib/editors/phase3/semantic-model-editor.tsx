@@ -243,6 +243,11 @@ function AasSemanticModelPanel({ item, id }: { item: FabricItemType; id: string 
   ], [refreshing, dbName, refreshNow]);
 
   return (
+    // Unsaved-changes guard (rel-T70): this editor persists incrementally —
+    // each measure/relationship change is committed to the model immediately via
+    // TMSL createOrReplace — so there is no in-memory draft `dirty` state to
+    // thread. If it ever gains a batched draft mode, pass `dirty={...}` here
+    // exactly like notebook/dashboard/pipeline/report-designer do.
     <ItemEditorChrome item={item} id={id} ribbon={ribbon}
       main={
         <div className={s.pad}>
