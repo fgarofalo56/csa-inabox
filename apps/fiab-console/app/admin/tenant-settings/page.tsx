@@ -22,6 +22,7 @@ import { Section } from '@/lib/components/ui/section';
 import { EmptyState } from '@/lib/components/empty-state';
 import { useAdminTabStyles } from '@/lib/components/ui/admin-tab-styles';
 import { CopilotAgentsConfig } from '@/lib/components/admin/copilot-agents-config';
+import { FeedbackForwardingConfig } from '@/lib/components/admin/feedback-forwarding-config';
 import { ToggleScopePicker } from '@/lib/components/admin/toggle-scope-picker';
 import type { AppliesToConfig } from '@/lib/types/tenant-settings';
 
@@ -371,6 +372,9 @@ export default function TenantSettingsPage() {
 
       {/* Tenant-wide Copilot & Agents config (Foundry account + model deployments). */}
       <CopilotAgentsConfig />
+
+      {/* Deployment-wide auto-error forwarding switch (rel-T79). */}
+      <FeedbackForwardingConfig />
 
       {/* Data-product store backend indicator (read-only; env-driven routing). */}
       {dpBackend && (
