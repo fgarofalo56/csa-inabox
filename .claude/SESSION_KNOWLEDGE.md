@@ -21,7 +21,25 @@ the close of each session.
 
 ---
 
-## Current Session — 2026-07-04 (public-release Wave 4 LANDED + live-verified)
+## Current Session — 2026-07-05 (public-release Wave 5 LANDED + live-verified)
+
+**Focus:** Wave-5 docs / help / release-engineering (rel-T71–T80), 4-agent fan-out.
+
+**Merged (5 PRs + 1 hotfix), rolled to live centralus (revision loom-console--0000199, image 656d1c19):**
+- #1649 workloads docs currency-sweep — zero Fabric-REST-dependency language; lakehouse shortcuts/OneLake-security relabeled ADLS-native (were mislabeled Fabric-gated) (T75)
+- #1651 license CI gate (copyleft-viral hard-block) + THIRD-PARTY-NOTICES + data-disclosure doc + feedback-forwarding toggle (tenant-keyed singleton) + self-update runbook (T78/T79/T80)
+- #1652 clean public nav — diary docs excluded, GitHub release notes, "Administer" group, deploy-button DELETED as vaporware (T71/T72/T73/T77)
+- #1653 LearnPopover/SectionExplainer on 40 admin/gov/catalog pages + Learning Hub thumb-gating + count 90→117 + usql-job removed (T74/T76)
+
+**Live smoke PASS:** /api/me, /api/admin/feedback-forwarding, /learn, /onelake, /api/version all 200.
+
+**GOTCHA:** license gate pinned `license-checker@0.6.3` (nonexistent on npm) → fixed to 25.0.1. Verify npm package versions before pinning CI tools.
+
+**Operator-owed:** T80 live self-update rehearsal (tag → publish-ghcr → flip packages public → in-product roll → verify /api/version); runbook shipped. temp/audit/*.py checked into repo (minor cleanup).
+
+---
+
+## Session — 2026-07-04 (public-release Wave 4 LANDED + live-verified)
 
 **Focus:** Wave-4 UI polish + a11y + refactor hygiene (rel-T55–T70), 2-round fan-out + 2 hotfixes.
 
