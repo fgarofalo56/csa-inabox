@@ -25,6 +25,24 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.55.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.54.0...csa-inabox-v0.55.0) (2026-07-05)
+
+
+### Features
+
+* **loom,release-eng:** THIRD-PARTY-NOTICES + license gate + data-disclosure toggle + self-update runbook (rel-T78/T79/T80) ([#1651](https://github.com/fgarofalo56/csa-inabox/issues/1651)) ([06544ae](https://github.com/fgarofalo56/csa-inabox/commit/06544ae35faebd41e0420b6352b1d23b8a2fea09))
+
+
+### Bug Fixes
+
+* **loom,help:** extend LearnPopover/SectionExplainer coverage + fix Learning Hub metadata drift (rel-T74/T76) ([#1653](https://github.com/fgarofalo56/csa-inabox/issues/1653)) ([656d1c1](https://github.com/fgarofalo56/csa-inabox/commit/656d1c194fc600a525ba21ac55be86703a3a3e70))
+
+
+### Documentation
+
+* **loom:** clean public nav — archive diary docs, GitHub release notes, Administer group, delete vaporware deploy-button (rel-T71/T72/T73/T77) ([#1652](https://github.com/fgarofalo56/csa-inabox/issues/1652)) ([1c287ac](https://github.com/fgarofalo56/csa-inabox/commit/1c287ac22615b96429745d07489eb59851293769))
+* **loom:** currency-sweep workloads docs — remove Fabric-REST-dependency language, banner superseded guides (rel-T75) ([#1649](https://github.com/fgarofalo56/csa-inabox/issues/1649)) ([fc03d05](https://github.com/fgarofalo56/csa-inabox/commit/fc03d05c7e71d55baa4502c0bcfcf29347b56a4a))
+
 ## [0.54.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.53.0...csa-inabox-v0.54.0) (2026-07-04)
 
 
