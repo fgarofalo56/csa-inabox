@@ -1372,3 +1372,9 @@ Bicep modules (flagged as "most critical infrastructure gap").
 - Merged ~11 PRs (#1637-#1647): T55-T70 (T57 pre-done, T60 deferred). a11y axe-core (B18), unsaved-guard+autosave, px→tokens, fetch→clientFetch, ConfirmDialog, SQL-quoting, error-envelope, god-route splits, dead-code, lazy bundles + 5 ratchet CI guards.
 - Rolled centralus rev 0000198 (image 34a16190); 5-endpoint live smoke PASS.
 - Burned 4 build/roll gotchas (phantom build, CI-vs-docker tsconfig gap, T66 honest-error over-genericization, CI-green-on-merge-ref-but-main-red) — see memory.
+
+## 2026-07-05 — Public-release Wave 5 (docs/help/release-eng) landed + live-verified
+
+- Merged 5 PRs (#1649-#1653): T71-T80. License CI gate (GPL/AGPL hard-block) + THIRD-PARTY-NOTICES; 40-page LearnPopover/SectionExplainer; nav cleanup + deploy-button deleted (vaporware); workloads Fabric-dependency-language purge; feedback-forwarding toggle + disclosure; self-update runbook.
+- Rolled centralus rev 0000199 (image 656d1c19); 5-endpoint live smoke PASS.
+- GOTCHA: license-checker@0.6.3 nonexistent on npm → 25.0.1. Operator-owed: T80 live rehearsal.
