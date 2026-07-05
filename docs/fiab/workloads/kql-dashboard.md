@@ -1,5 +1,10 @@
 # KQL Dashboard editor
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [KQL Dashboard tutorial](../tutorials/editor-kql-dashboard.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 A **KQL Dashboard** is a multi-tile dashboard backed by KQL queries. Each
 tile pins one query + a viz type (table, line, bar) and is re-runnable via
 the dashboard's Re-run-all button.

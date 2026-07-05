@@ -1,5 +1,10 @@
 # Copy Job — workload reference
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Copy Job tutorial](../tutorials/editor-copy-job.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 > **Family:** Data Engineering
 > **Loom slug:** `copy-job`
 > **Editor file:** `apps/fiab-console/lib/editors/phase2-misc-editors.tsx`

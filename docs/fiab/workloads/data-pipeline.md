@@ -1,5 +1,10 @@
 # Data Pipeline parity
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Data Pipeline tutorial](../tutorials/editor-data-pipeline.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

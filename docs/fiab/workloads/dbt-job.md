@@ -1,5 +1,10 @@
 # dbt Job — workload reference
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [dbt Job tutorial](../tutorials/editor-dbt-job.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 > **Family:** Data Engineering
 > **Loom slug:** `dbt-job`
 > **Editor file:** `apps/fiab-console/lib/editors/phase2-misc-editors.tsx`
