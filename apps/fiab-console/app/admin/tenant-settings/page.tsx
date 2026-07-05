@@ -296,7 +296,18 @@ export default function TenantSettingsPage() {
   }, [groups, settings, original]);
 
   return (
-    <AdminShell sectionTitle="Tenant settings">
+    <AdminShell
+      sectionTitle="Tenant settings"
+      learn={{
+        title: 'Tenant settings',
+        content: 'Per-area feature switches that govern what is enabled tenant-wide across Power BI, Fabric, OneLake, Real-Time, AI, Mirroring, and Git. Every toggle persists to Cosmos with a per-toggle audit trail, so you can see who changed what and when. Filter by name, key, or description to find a switch fast.',
+        tips: [
+          'Changes are staged until you save — the toolbar shows an unsaved-change count; save with Ctrl+S.',
+          'Every toggle write is recorded with a per-setting audit trail in Cosmos.',
+          'Use Discard to revert all pending edits back to the last saved state.',
+        ],
+      }}
+    >
       <div className={s.intro}>
         <div className={s.introIcon} aria-hidden><Settings24Regular /></div>
         <div className={s.introText}>

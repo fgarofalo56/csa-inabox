@@ -88,7 +88,18 @@ function LandingZonesFallback() {
 
 export default function LandingZonesPage() {
   return (
-    <AdminShell sectionTitle="Setup & landing zones">
+    <AdminShell
+      sectionTitle="Setup & landing zones"
+      learn={{
+        title: 'Setup & landing zones',
+        content: 'See, visualize, and manage every Data Landing Zone attached to your hub, and attach new ones via dlz-attach. A newly attached landing zone inherits the hub boundary, region, and coordinates, so the estate stays consistent. This is the setup surface for extending Loom across subscriptions — a second Console cannot be deployed from here.',
+        tips: [
+          'Attaching a landing zone (dlz-attach) is cross-subscription and requires Contributor on the target sub.',
+          'Attached zones inherit the hub region and network boundary — no separate boundary to configure.',
+          'Use the map view to confirm reachability before running workloads against a new landing zone.',
+        ],
+      }}
+    >
       <Suspense fallback={<LandingZonesFallback />}>
         <LandingZonesShell />
       </Suspense>

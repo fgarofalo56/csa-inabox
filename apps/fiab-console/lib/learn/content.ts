@@ -5,8 +5,10 @@
  * SOURCE OF TRUTH: the authoritative per-item Learn content now lives on
  * each catalog entry's `learnContent` field in
  * `lib/catalog/fabric-item-types.ts` (overview + titled getting-started
- * steps + docsUrl). `getLearn()` reads that first so every one of the 90
- * catalog item types renders real guidance (A+ docs criterion).
+ * steps + docsUrl). `getLearn()` reads that first so every one of the 117
+ * catalog item types (the full `FABRIC_ITEM_TYPES` set — keep this count in
+ * sync with `FABRIC_ITEM_TYPES.length`) renders real guidance (A+ docs
+ * criterion).
  *
  * This REGISTRY remains for one reason: the legacy entries below carry a
  * `tip` callout that the catalog shape doesn't model. When both exist, the
@@ -72,14 +74,23 @@ export function loomDocUrl(relPath: string): string {
   return `${LOOM_DOCS_BASE}/${clean}/`;
 }
 
-/** Build the published tutorial thumbnail URL for an editor slug, or undefined. */
+/**
+ * Build the published tutorial thumbnail URL for an editor slug, or undefined.
+ *
+ * Gated on `EDITOR_THUMB_SLUGS` — the slugs whose `editor-<slug>-1.png`
+ * screenshot has ACTUALLY been captured under `docs/fiab/tutorials/img/`.
+ * A slug that has a Loom doc (`EDITOR_DOC_SLUGS`) but no captured screenshot
+ * returns `undefined` so the Learning Hub card falls back to its generated
+ * placeholder tile instead of rendering a broken-image icon. Never widen this
+ * to `EDITOR_DOC_SLUGS` — that emits URLs for screenshots that don't exist.
+ */
 export function loomThumbUrl(slug: string): string | undefined {
-  if (!EDITOR_DOC_SLUGS.has(slug)) return undefined;
+  if (!EDITOR_THUMB_SLUGS.has(slug)) return undefined;
   return `${LOOM_DOCS_BASE}/fiab/tutorials/img/editor-${slug}-1.png`;
 }
 
 /**
- * The 118 item-type slugs that have a real per-editor Loom doc at
+ * The 117 item-type slugs that have a real per-editor Loom doc at
  * `docs/fiab/tutorials/editor-<slug>.md` (served at
  * `<base>/fiab/tutorials/editor-<slug>/`). Kept in sync with the mkdocs.yml
  * "Editor Tutorials (per-item)" nav block. A slug NOT in this set has no Loom
@@ -105,7 +116,7 @@ export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
   'report', 'scorecard', 'semantic-model', 'spark-job-definition',
   'sql-server-2025-vector-index', 'synapse-dedicated-sql-pool', 'synapse-pipeline',
   'synapse-serverless-sql-pool', 'synapse-spark-pool', 'tracing', 'user-data-function',
-  'usql-job', 'variable-library', 'vector-store', 'warehouse',
+  'variable-library', 'vector-store', 'warehouse',
   // Fabric IQ (Palantir Foundry parity) — authored wave 9
   'workshop-app', 'slate-app', 'ontology-sdk', 'aip-logic', 'release-environment',
   'health-check',
@@ -119,6 +130,39 @@ export const EDITOR_DOC_SLUGS: ReadonlySet<string> = new Set([
   'mirrored-databricks', 'mounted-adf', 'postgres-flexible-server', 'rayfin-app',
   'spark-environment', 'sql-analytics-endpoint', 'sql-database',
   'stream-analytics-job', 'synapse-notebook', 'tapestry', 'workspace-monitor',
+]);
+
+/**
+ * The subset of `EDITOR_DOC_SLUGS` whose tutorial screenshot
+ * (`docs/fiab/tutorials/img/editor-<slug>-1.png`) has ACTUALLY been captured
+ * and published. `loomThumbUrl()` gates on THIS set — not every doc-slug has a
+ * screenshot, so emitting a thumbnail URL for a doc-only slug would render a
+ * broken-image icon in the Learning Hub. Derived from the on-disk image
+ * manifest; add a slug here only when its `editor-<slug>-1.png` exists. The
+ * wave-9 Fabric IQ / RTI additions and the audit-#2 backlog-drain slugs are
+ * intentionally ABSENT (docs authored, screenshots not yet captured) so their
+ * cards fall back to the generated placeholder tile.
+ */
+export const EDITOR_THUMB_SLUGS: ReadonlySet<string> = new Set([
+  'activator', 'adf-dataset', 'adf-pipeline', 'adf-trigger', 'ai-builder-model',
+  'ai-foundry-hub', 'ai-foundry-project', 'ai-search-index', 'apim-api', 'apim-policy',
+  'apim-product', 'azure-sql-database', 'azure-sql-managed-instance', 'azure-sql-server',
+  'compute', 'content-safety', 'copilot-studio-action', 'copilot-studio-agent',
+  'copilot-studio-analytics', 'copilot-studio-channel', 'copilot-studio-knowledge',
+  'copilot-studio-topic', 'copilot-template-library', 'copy-job', 'cosmos-gremlin-graph',
+  'cross-item-copilot', 'cypher-graph', 'dashboard', 'data-agent', 'data-pipeline',
+  'data-product', 'data-product-instance', 'data-product-template', 'databricks-cluster',
+  'databricks-job', 'databricks-notebook', 'databricks-sql-warehouse', 'dataflow',
+  'dataset', 'dataverse-table', 'dbt-job', 'environment', 'evaluation', 'eventhouse',
+  'eventstream', 'geo-dataset', 'geo-map', 'geo-pipeline', 'geo-query', 'gql-graph',
+  'graph-model', 'graphql-api', 'kql-dashboard', 'kql-database', 'kql-queryset',
+  'lakehouse', 'map', 'mirrored-database', 'ml-experiment', 'ml-model', 'notebook',
+  'ontology', 'operations-agent', 'paginated-report', 'plan', 'power-app',
+  'power-automate-flow', 'power-page', 'powerplatform-environment', 'prompt-flow',
+  'report', 'scorecard', 'semantic-model', 'spark-job-definition',
+  'sql-server-2025-vector-index', 'synapse-dedicated-sql-pool', 'synapse-pipeline',
+  'synapse-serverless-sql-pool', 'synapse-spark-pool', 'tracing', 'user-data-function',
+  'variable-library', 'vector-store', 'warehouse',
 ]);
 
 const REGISTRY: Record<string, LearnEntry> = {
@@ -636,10 +680,6 @@ const REGISTRY: Record<string, LearnEntry> = {
   'tracing': {
     title: 'Tracing',
     summary: 'Application Insights / OpenTelemetry trace surface for Loom-orchestrated runs. Drill from a failed pipeline into the actual span.',
-  },
-  'usql-job': {
-    title: 'U-SQL job',
-    summary: 'Legacy Azure Data Lake Analytics U-SQL job (compatibility surface). Recommend migrating to Spark or Databricks for new workloads.',
   },
   'variable-library': {
     title: 'Variable library',

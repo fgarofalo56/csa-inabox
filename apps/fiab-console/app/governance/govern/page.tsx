@@ -21,6 +21,7 @@ import { useSearchParams } from 'next/navigation';
 import { Button } from '@fluentui/react-components';
 import { Open16Regular } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 import { GovernAdminPane } from '@/lib/panes/govern-admin';
 import { GovernOwnerPane } from '@/lib/panes/govern-owner';
 
@@ -36,6 +37,13 @@ function GovernAdminView() {
         </Button>
       }
     >
+      <SectionExplainer>
+        The Govern tab is the data-owner and administrator control center for your estate. The admin
+        view rolls up live posture across three lenses &mdash; manage the estate, protect and comply,
+        and discover, trust, and reuse &mdash; with real posture tiles, a governance Copilot, and an
+        embedded report, all computed from your tenant with no fake numbers. Switch to the My-items
+        view for a data owner&rsquo;s own label coverage, curation, and recommended actions.
+      </SectionExplainer>
       <GovernAdminPane />
     </PageShell>
   );

@@ -390,7 +390,18 @@ export default function UsagePage() {
   ], [s.typeCell, s.muted, s.openLink]);
 
   return (
-    <AdminShell sectionTitle="Usage metrics">
+    <AdminShell
+      sectionTitle="Usage metrics"
+      learn={{
+        title: 'Usage metrics',
+        content: 'Feature usage and adoption reporting plus a live tenant inventory. It combines Cosmos workspaces, items, and audit-log data with Log Analytics request telemetry to show active users, feature adoption, and per-item traffic, with a drill-through filter bar to slice by time window, feature, and item.',
+        tips: [
+          'Use the Window buttons to change the reporting period and the Feature dropdown to focus on one capability.',
+          'Active-user and adoption numbers come from Log Analytics request telemetry — an honest gate shows if it is not wired.',
+          'Drill into item traffic to see which specific assets drive the most activity.',
+        ],
+      }}
+    >
       <Body1 className={s.intro}>
         Rolling activity, active-user telemetry, and live tenant inventory. Cosmos workspaces / items / audit-log
         plus Log Analytics request telemetry (active users, feature adoption, item traffic).

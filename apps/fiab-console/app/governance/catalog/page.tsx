@@ -273,7 +273,19 @@ export default function GovernanceCatalogPage() {
   ], [s.classChips, s.classChip, openAsset]);
 
   return (
-    <GovernanceShell sectionTitle="Governed inventory">
+    <GovernanceShell
+      sectionTitle="Governed inventory"
+      explainer={
+        <>
+          The governed inventory is the searchable catalog of every data asset across your
+          tenant &mdash; lakehouses, warehouses, datasets, notebooks, and models spanning OneLake,
+          Synapse, Databricks, ADLS, and on-prem sources. Filter by type, domain, endorsement, and
+          sensitivity using live facet counts; endorsed items you cannot yet open still appear with a
+          Request-access action. Inventory is served from the <code>loom-governance-items</code>
+          &nbsp;Azure AI Search index when bound, and from Cosmos otherwise.
+        </>
+      }
+    >
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Single inventory across every Lakehouse, Warehouse, Semantic Model, KQL DB, Mirrored DB, Data Product, and Vector Store in your tenant.
         {source && (

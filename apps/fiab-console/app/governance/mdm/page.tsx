@@ -74,7 +74,21 @@ export default function GovernanceMdmPage() {
   useEffect(() => { loadModels(); }, [loadModels]);
 
   return (
-    <GovernanceShell sectionTitle="Master data management" sectionBadge="Azure-native">
+    <GovernanceShell
+      sectionTitle="Master data management"
+      sectionBadge="Azure-native"
+      explainer={
+        <>
+          Master data management builds golden records from duplicate-prone source data using an
+          Azure-native match-merge engine &mdash; no Microsoft Fabric and no partner MDM SaaS. Define
+          entity match attributes and survivorship rules under <strong>Models</strong>, manage
+          versioned code lists under <strong>Reference data</strong>, run scored candidate matching
+          for steward review under <strong>Match</strong>, and browse the survived output with source
+          lineage under <strong>Golden records</strong>. Match and merge execute real Spark SQL on the
+          workspace&rsquo;s Azure Databricks SQL Warehouse.
+        </>
+      }
+    >
       <Caption1 className={s.intro}>
         Define golden-record match + survivorship models, manage reference-data code lists, run match/merge on your workspace
         Databricks SQL Warehouse, and steward the resulting golden records. Self-built on Azure — no Microsoft Fabric, no partner MDM SaaS.

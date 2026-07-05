@@ -68,7 +68,20 @@ export default function GovernanceDataQualityPage() {
   const s = useStyles();
   const [tab, setTab] = useState<'rules' | 'run' | 'results' | 'monitors'>('rules');
   return (
-    <GovernanceShell sectionTitle="Data quality" sectionBadge="Azure-native">
+    <GovernanceShell
+      sectionTitle="Data quality"
+      sectionBadge="Azure-native"
+      explainer={
+        <>
+          Author data-quality rules &mdash; not-null, unique, range, regex, and freshness checks
+          &mdash; in the Loom-native rule store, then run the rule set against Azure Data Explorer
+          (Kusto), Databricks SQL, or Synapse SQL to get a composite score with a per-rule breakdown.
+          The Results tab keeps run history with pass-rate bars, and Monitors surfaces Delta enforced
+          constraints and Databricks Lakehouse Monitoring &mdash; all Azure-native, no Microsoft
+          Fabric dependency.
+        </>
+      }
+    >
       <Caption1 className={s.intro}>
         Define data-quality rules, run them on your workspace engine (Kusto, Databricks SQL, or Synapse SQL), review results over time,
         and enforce always-on quality with Delta constraints + Databricks Lakehouse Monitoring. No Microsoft Fabric dependency.

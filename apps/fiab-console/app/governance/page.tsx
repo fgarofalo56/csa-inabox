@@ -36,6 +36,7 @@ import {
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { EmptyState } from '@/lib/components/empty-state';
+import { SectionExplainer } from '@/lib/components/ui/learn-popover';
 import { ActivityFeedPane } from '@/lib/components/activity-feed-pane';
 import { PurviewGate, usePurviewStatus } from '@/lib/components/purview-gate';
 import { Section, Toolbar } from '@/lib/components/ui/section';
@@ -355,6 +356,16 @@ export default function GovernancePage() {
       title="Governance"
       subtitle="Catalog, classify, label, scan, and enforce policy across every Azure data source — the Microsoft Purview governance framework, woven into Loom. Real posture from your tenant; no fake numbers."
     >
+      <div style={{ marginBottom: tokens.spacingVerticalL }}>
+        <SectionExplainer>
+          Governance is your single place to catalog, classify, label, scan, and enforce policy
+          across every Azure data source &mdash; the Microsoft Purview governance framework woven into
+          Loom, with Azure-native backends so nothing depends on Microsoft Fabric. This overview shows
+          live posture from your tenant &mdash; coverage KPIs, per-type coverage, and Purview
+          connection status &mdash; and links to every governance surface: catalog, lineage, scans,
+          policies, data quality, master data, and insights.
+        </SectionExplainer>
+      </div>
       {/* Purview connection status (live chip or honest gate). */}
       <PurviewGate status={purview} surface="Governance" reload={reloadStatus} />
 

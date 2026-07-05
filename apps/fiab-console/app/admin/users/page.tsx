@@ -307,7 +307,19 @@ export default function UsersPage() {
   }, [subscribedSkus]);
 
   return (
-    <AdminShell sectionTitle="Users, roles & licenses">
+    <AdminShell
+      sectionTitle="Users, roles & licenses"
+      learn={{
+        title: 'Users, roles & licenses',
+        content: 'A tenant-wide inventory of every user with a Power BI / Fabric license or a Loom role assignment, sourced from Microsoft Graph and the Loom permission store. Use it to review who has access, what license SKU they consume, and which Loom feature roles they hold.',
+        tips: [
+          'Filter by license SKU or role to spot over-provisioned or unlicensed users.',
+          'Role changes here fan out to the same RBAC store the Feature permissions page manages.',
+          'License assignment requires the Console UAMI to hold the Graph directory permissions granted at bootstrap.',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/power-bi/enterprise/service-admin-licensing-organization',
+      }}
+    >
       <Body1 className={s.intro}>
         Users with access to this tenant&apos;s workspaces. Derived from Cosmos workspaces + items + workspace-permissions,
         enriched with Microsoft Graph identity, license assignments, and the F5 workspace-roles store.

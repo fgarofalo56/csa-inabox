@@ -245,7 +245,18 @@ export default function AttributeGroupsPage() {
   ], [domainName, s.attrMeta, atab]);
 
   return (
-    <AdminShell sectionTitle="Custom attributes">
+    <AdminShell
+      sectionTitle="Custom attributes"
+      learn={{
+        title: 'Custom attributes',
+        content: "Define attribute groups — governed metadata schemas that attach extra fields to the items people create. Each attribute has a field type (text, single/multiple choice, date, boolean, integer, double, or rich text), an optional required flag, and (for choice types) allowed values. Groups persist to Cosmos and appear on the Create wizard and item Edit dialogs. This is Loom's Azure-native equivalent of Purview Unified Catalog custom metadata — no Purview account required.",
+        tips: [
+          'Scope a group to one or more domains, or leave the scope empty to apply it to every domain.',
+          'Required attributes surface on the Create wizard step and block completion until they have a value.',
+          'Choice-type attributes let you enforce a controlled vocabulary instead of free text.',
+        ],
+      }}
+    >
       <Section title="About custom attributes">
         <SectionExplainer>
           Define <strong>attribute groups</strong> that attach extra, governed metadata to the items people create.

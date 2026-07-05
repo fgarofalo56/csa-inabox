@@ -88,7 +88,20 @@ export default function PurviewPage() {
   const portal = purview.purviewPortal || 'https://purview.microsoft.com/';
 
   return (
-    <GovernanceShell sectionTitle="Microsoft Purview" sectionBadge="Connection">
+    <GovernanceShell
+      sectionTitle="Microsoft Purview"
+      sectionBadge="Connection"
+      explainer={
+        <>
+          This page reports the live Microsoft Purview connection for your deployment and deep-links
+          into the full Purview portal. When Purview is bound, Loom confirms the connection through a
+          real status probe and lists the native governance surfaces &mdash; catalog, glossary,
+          classifications, lineage, scans, and access policies &mdash; that now run against it.
+          Purview is strictly optional: when it is not wired (or is cross-cloud), the honest gate
+          explains the one-time fix and every Azure-native governance surface keeps working.
+        </>
+      }
+    >
       <Body1 className={s.intro}>
         Loom&apos;s governance surfaces run natively against your Microsoft Purview account&apos;s data plane —
         Unified Catalog, Data Map, glossary, lineage, classifications, and policies. For the workflows Loom

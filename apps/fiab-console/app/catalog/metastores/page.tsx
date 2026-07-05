@@ -304,7 +304,19 @@ export default function MetastoresPage() {
   ];
 
   return (
-    <CatalogShell sectionTitle="Metastores & accounts">
+    <CatalogShell
+      sectionTitle="Metastores & accounts"
+      explainer={
+        <>
+          Manage the catalog back-ends Loom federates over. Register a Databricks workspace, attach it to a
+          Unity Catalog metastore, and optionally catalog it in Microsoft Purview by registering it as a
+          source and running a scan &mdash; all persisted across Console reloads, no bicep redeploy. Unity
+          Catalog and Purview are the Azure-native defaults; Fabric OneLake appears as an optional,
+          read-only mirror that gates nothing. Where an action needs a Databricks account admin or a
+          missing env var, an honest warning names the exact role or setting to grant.
+        </>
+      }
+    >
       {error && (
         <MessageBar intent="error" className={s.mb}>
           <MessageBarBody><MessageBarTitle>Couldn&apos;t load metastores</MessageBarTitle>{error}</MessageBarBody>

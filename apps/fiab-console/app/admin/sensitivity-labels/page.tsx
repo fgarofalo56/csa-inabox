@@ -109,7 +109,18 @@ export default function SensitivityLabelsPage() {
   ], [s]);
 
   return (
-    <AdminShell sectionTitle='Sensitivity labels'>
+    <AdminShell
+      sectionTitle='Sensitivity labels'
+      learn={{
+        title: 'Sensitivity labels',
+        content: 'Define Loom-native sensitivity tags (distinct from Microsoft Purview Information Protection labels) used to classify assets by handling level — Restricted, Confidential, Internal, Public. Each label carries a name, a color for visual distinction, and an optional protection note describing DLP rules or handling requirements. Labels persist to Cosmos and are applied to assets through the item editors.',
+        tips: [
+          'Give each label a distinct color so sensitivity is obvious at a glance across the catalog.',
+          'Use the protection note to record the DLP or handling policy the label implies.',
+          'Labels are applied during the next catalog scan or via the item editors — creating one here does not retro-tag existing assets.',
+        ],
+      }}
+    >
       <Section title='About sensitivity labels'>
         <SectionExplainer>
           Sensitivity labels are Loom-native tags (distinct from Microsoft Purview Information Protection labels). Each label carries a <strong>name</strong>, a <strong>color</strong> for visual distinction, and an optional <strong>protection note</strong> describing DLP rules or handling requirements. Use these to classify assets by sensitivity level: Restricted, Confidential, Internal, Public.

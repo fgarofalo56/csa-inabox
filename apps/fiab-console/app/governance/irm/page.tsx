@@ -150,7 +150,20 @@ export default function IrmPage() {
     setDraft((d) => (d ? { ...d, enabled: { ...d.enabled, [id]: v } } : d));
 
   return (
-    <GovernanceShell sectionTitle="Insider risk" sectionBadge="IRM">
+    <GovernanceShell
+      sectionTitle="Insider risk"
+      sectionBadge="IRM"
+      explainer={
+        <>
+          Insider-risk management surfaces behavioral indicators &mdash; unusual data volume,
+          off-hours access, and privileged-access activity &mdash; computed live over the Cosmos
+          audit log and Azure Monitor logs, with no Microsoft Fabric or Purview-IRM dependency.
+          Review scored top actors and per-indicator findings, and tune sensitivity through
+          structured toggles, thresholds, and a timezone selector &mdash; mirroring the Purview
+          Activity explorer under the Loom theme.
+        </>
+      }
+    >
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Insider-risk indicators computed live over your lakehouse audit log and Azure Monitor — unusual data
         volume (cumulative exfiltration), off-hours / weekend access, and privileged-access anomalies. No

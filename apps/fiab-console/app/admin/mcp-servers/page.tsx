@@ -73,7 +73,18 @@ const useStyles = makeStyles({
 export default function McpServersPage() {
   const styles = useStyles();
   return (
-    <AdminShell sectionTitle="MCP Servers">
+    <AdminShell
+      sectionTitle="MCP Servers"
+      learn={{
+        title: 'MCP Servers',
+        content: 'The single home for Model Context Protocol tools Loom Copilot can call. Browse the curated, gov-safe catalog and deploy a server with a guided wizard (internal Azure Container App + per-field Key Vault secretRef + auto registration), manage deployed servers with live status and teardown, and register external MCP endpoints. Includes the Microsoft MCP + agent-skills family and publishes Loom itself as one MCP endpoint.',
+        tips: [
+          'Deploy secrets go to Key Vault as secretRefs — never plaintext in the form.',
+          'Microsoft Learn (learn.microsoft.com/api/mcp) is the only default-on server; every other server is strictly opt-in.',
+          'Fabric / Power BI MCP servers never sit on a default path — they connect only when explicitly opted in.',
+        ],
+      }}
+    >
       {/* Page intro — names the Microsoft MCP + agent-skills family so the page
           title/intro copy reflects what the panel surfaces (web3-ui Loom tokens,
           no-fabric-dependency: Learn is the only default-on entry). */}

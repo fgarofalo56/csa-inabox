@@ -15,7 +15,18 @@ export default function CatalogBrowsePage() {
   // Fabric OneLake is opt-in. Unity Catalog + Purview stay as additional sources.
   const [source, setSource] = useState<'purview' | 'unity-catalog' | 'onelake'>('onelake');
   return (
-    <CatalogShell sectionTitle="Browse">
+    <CatalogShell
+      sectionTitle="Browse"
+      explainer={
+        <>
+          Browse your governed estate as a tree &mdash; drill from a source (Purview, Unity Catalog,
+          OneLake, Synapse, Databricks, ADLS) down through workspace, schema or domain, to the
+          individual asset. Selecting an asset opens its detail view with endorsement, sensitivity,
+          lineage, and access-request actions. Use Browse when you know roughly where an asset lives;
+          use Search for keyword discovery across every source at once.
+        </>
+      }
+    >
       <TabList
         className={s.tabs}
         selectedValue={source}

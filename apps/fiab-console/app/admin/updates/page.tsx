@@ -332,7 +332,18 @@ export default function UpdatesPage() {
   ];
 
   return (
-    <AdminShell sectionTitle="Updates & version sync">
+    <AdminShell
+      sectionTitle="Updates & version sync"
+      learn={{
+        title: 'Updates & version sync',
+        content: 'Loom is open source and continuously updated. This page shows your running build, the latest version published upstream on GitHub, and the release notes in between. When an update is available you can apply it in place — Loom rolls your Container Apps onto the new release public images directly, with no repo clone or CI run required.',
+        tips: [
+          'Re-check pulls the latest upstream tag from GitHub; an honest note shows if GitHub is unreachable.',
+          'Applying an update rolls your Container Apps to the published images — no rebuild needed.',
+          'Review the release notes between your version and upstream before applying, especially across major versions.',
+        ],
+      }}
+    >
       <Body1 className={s.intro}>
         Loom is open source and continuously updated. This page shows your running build,
         the latest version published upstream, and any release notes between them. When an

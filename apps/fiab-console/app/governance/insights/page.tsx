@@ -170,7 +170,18 @@ export default function InsightsPage() {
   };
 
   return (
-    <GovernanceShell sectionTitle="Insights">
+    <GovernanceShell
+      sectionTitle="Insights"
+      explainer={
+        <>
+          Insights roll up your governance posture into a compliance score and coverage KPIs
+          &mdash; sensitivity, classification, ownership, and endorsement coverage &mdash; computed
+          live across every catalogued item. Drill into per-type coverage, the most-classified
+          assets, and the active policy set, with a 30-day audit-event count from the Loom governance
+          store. Use it to see where labelling, ownership, or curation gaps remain.
+        </>
+      }
+    >
       <Body1 className={s.intro}>
         Tenant-wide governance KPIs derived live from your Cosmos catalog + audit log.
       </Body1>

@@ -455,7 +455,19 @@ export default function PoliciesPage() {
   ];
 
   return (
-    <GovernanceShell sectionTitle="Policies">
+    <GovernanceShell
+      sectionTitle="Policies"
+      explainer={
+        <>
+          Access policies define and enforce how data is protected &mdash; DLP, dynamic data masking,
+          row- and column-level security, retention, and access grants &mdash; scoped to items,
+          workspaces, or sources. Enforceable policies call the real Azure control plane (for example,
+          an Access policy provisions a Storage RBAC role assignment), and DLP surfaces live
+          Microsoft Purview DLP violations with a restrict-access action. An honest MessageBar names
+          the exact remediation when a backend isn&rsquo;t wired.
+        </>
+      }
+    >
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         DLP, dynamic data masking, row-level security, retention, and access policies. Stored per tenant
         in Cosmos and visible to downstream enforcement code (Synapse SQL, Lakehouse query gate, etc.).

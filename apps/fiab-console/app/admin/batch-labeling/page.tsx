@@ -218,7 +218,18 @@ export default function BatchLabelingPage() {
   ], [a]);
 
   return (
-    <AdminShell sectionTitle="Batch labeling">
+    <AdminShell
+      sectionTitle="Batch labeling"
+      learn={{
+        title: 'Batch labeling',
+        content: 'Select many catalog items, pick a sensitivity label, and apply it in one action. The Cosmos label assignment is always written immediately to each item; when Microsoft Purview is configured the label is also stamped as an asset classification, and MIP labels can propagate to linked Power BI artifacts via the Admin InformationProtection.setLabels API. The results grid shows the real per-item write outcome for Cosmos, Purview, and Power BI.',
+        tips: [
+          'MIP-label propagation to Power BI requires LOOM_MIP_ENABLED=true and the Console UAMI holding the InformationProtectionPolicy.Read.All Graph AppRole.',
+          'Purview asset classification requires LOOM_PURVIEW_ACCOUNT plus the Data Map roles on the Console UAMI.',
+          'Even without Purview or MIP, the Loom-native Cosmos label is still applied to every selected item.',
+        ],
+      }}
+    >
       <Section title="About batch labeling">
         <SectionExplainer>
           Select multiple catalog items, pick a sensitivity label, and apply it in one action. The Cosmos

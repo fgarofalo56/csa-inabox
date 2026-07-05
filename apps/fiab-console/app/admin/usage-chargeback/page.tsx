@@ -224,7 +224,18 @@ export default function UsageChargebackPage() {
   const ccy = model?.currency || 'USD';
 
   return (
-    <AdminShell sectionTitle="Usage & chargeback">
+    <AdminShell
+      sectionTitle="Usage & chargeback"
+      learn={{
+        title: 'Usage & chargeback',
+        content: 'Unified capacity and chargeback across every engine, combining real Azure Cost Management spend with Azure Monitor utilization, normalized to one Loom Capacity Unit (LCU) with a throttle/surge gauge. This is the Azure-native 1:1 of the Fabric Capacity Metrics app — actual dollars and real utilization, not estimates.',
+        tips: [
+          'Change the timeframe dropdown to move between billing windows; Refresh re-pulls live spend and utilization.',
+          'The dashboard needs the Console UAMI to hold Cost Management Reader on the billing scope — an honest gate names it when missing.',
+          'LCU normalization lets you compare cost and load across engines that bill in different units.',
+        ],
+      }}
+    >
       {unauth && <SignInRequired subject="the usage & chargeback dashboard" />}
       {!unauth && (
         <>
