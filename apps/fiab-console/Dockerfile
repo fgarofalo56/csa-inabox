@@ -35,6 +35,15 @@ ENV NODE_OPTIONS=--max-old-space-size=6144
 RUN npm install -g pnpm@9 && \
     pnpm build
 
+# Third-party attribution shipped IN the image (rel-T78). Best-effort so a
+# registry/network blip never breaks the deploy-critical build (|| true). Emits
+# a machine-readable attribution of the PRODUCTION dependency tree, served at
+# /third-party-licenses.json. The human-readable THIRD-PARTY-NOTICES.md + the
+# viral-copyleft (GPL/AGPL) allowlist GATE are enforced in CI
+# (.github/workflows/license-scan.yml → scripts/ci/check-licenses.mjs).
+RUN npx --yes license-checker@0.6.3 --production --json \
+      --out /app/public/third-party-licenses.json || true
+
 # ============================================================
 # Stage 3 — runner (production)
 # ============================================================

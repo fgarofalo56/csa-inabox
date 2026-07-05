@@ -1,5 +1,10 @@
 # Eventstream editor
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Eventstream tutorial](../tutorials/editor-eventstream.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 The **Eventstream** editor is the visual pipeline designer for Real-Time
 Intelligence ingestion. v2.x ships a **configuration-only** editor — the
 pipeline metadata is persisted to Cosmos and validated against a JSON

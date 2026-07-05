@@ -1,5 +1,10 @@
 # KQL Database editor
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [KQL Database tutorial](../tutorials/editor-kql-database.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 The **KQL Database** editor is a Monaco-backed query surface targeting a
 single ADX database. Both queries and management commands run through the
 same editor; commands starting with `.` are routed to the Kusto management
