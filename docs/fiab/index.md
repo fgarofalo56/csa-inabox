@@ -16,7 +16,7 @@
     an **MCP server catalog**, and **Copilot throughout**. Everything is
     **Azure-native by default, with no hard Microsoft Fabric dependency**,
     across Azure Commercial and Government.
-    [Recent release notes →](releases/2026-05-27-apps-bundles-and-wiring-sweep.md) ·
+    [Recent release notes →](https://github.com/fgarofalo56/csa-inabox/releases) ·
     [UAT coverage matrix →](uat-coverage.md) ·
     [Walk a test script →](TEST_SCRIPT_2026_05_27.md)
 
@@ -45,9 +45,9 @@ one-for-one when Fabric reaches your audit boundary.
 
 -   :material-rocket-launch: **Push-button deploy**
 
-    `azd up` or the "Deploy to Azure" button stands the whole platform
-    up in your tenant in 60–100 minutes. A conversational Setup Wizard
-    guides you through capacity sizing, networking, and identity.
+    `azd up` or a single `az deployment sub create` stands the whole
+    platform up in your tenant in 60–100 minutes. A conversational Setup
+    Wizard guides you through capacity sizing, networking, and identity.
 
 -   :material-shield-account: **Built for sovereignty**
 

@@ -36,9 +36,8 @@ v1 deployment options:
 
 - [Quick Start (60 minutes)](quickstart.md)
 - [azd CLI deployment](azd-cli.md)
-- [Deploy to Azure button](deploy-button.md)
 
-All three deploy CSA Loom into your own Azure subscription. You pay
+Both deploy CSA Loom into your own Azure subscription. You pay
 only for Azure consumption underneath; Loom IP is **free in v1**.
 
 ## When Marketplace work resumes

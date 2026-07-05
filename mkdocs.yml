@@ -72,6 +72,16 @@ exclude_docs: |
   fiab/no-cuts-sweep-v2.md
   fiab/loom-feature-backlog.md
   fiab/fabric-parity-tasks.json
+  # Engineering-diary / backlog / version-handoff artifacts dropped from the
+  # public product nav (2026-07-05 rel-T71). Internal planning + running logs
+  # with no place on the customer-facing site; kept in-repo for history.
+  fiab/loom-csa-alignment-and-v2-backlog.md
+  fiab/parity-progress.md
+  fiab/v3-security-hardening.md
+  fiab/v3-ui-parity-chunked-plan.md
+  # Stale singleton release note — the site now points at GitHub Releases
+  # (2026-07-05 rel-T72). release-please tags are the canonical changelog.
+  fiab/releases/
 
 plugins:
   # The search index for this site previously ballooned to ~27 MB because
@@ -1442,7 +1452,6 @@ nav:
           - Index: fiab/deployment/index.md
           - Quick Start (60 minutes): fiab/deployment/quickstart.md
           - From azd CLI: fiab/deployment/azd-cli.md
-          - From Deploy-to-Azure button: fiab/deployment/deploy-button.md
           - Continuous-deployment pipelines:
               - GitHub Actions: fiab/deployment/pipelines/github-actions.md
               - Azure DevOps Pipelines: fiab/deployment/pipelines/azure-devops.md
@@ -1728,7 +1737,10 @@ nav:
       # ------------------------------------------------------------
       # 7. Administration
       # ------------------------------------------------------------
-      - Administration:
+      - Administer:
+          - Deploy the platform (see Deployment): fiab/deployment/index.md
+          - Post-deploy bootstrap (tenant config): fiab/v3-tenant-bootstrap.md
+          - Tenant-admin walkthroughs: fiab/tenant-admin-walkthroughs.md
           - Security & Governance:
               - Overview: fiab/admin/security/index.md
               - Purview tab: fiab/admin/security/purview.md
@@ -1905,22 +1917,14 @@ nav:
           - Hybrid Fabric Commercial + CSA Loom Gov: fiab/use-cases/hybrid-topology.md
 
       # ------------------------------------------------------------
-      # 13. Audits, Inventories & Version History
+      # 13. Audits, Inventories & Parity
       # ------------------------------------------------------------
-      - Audits, Inventories & Version History:
-          - Audits & Inventories:
-              - Fabric Feature Inventory: fiab/fabric-feature-inventory.md
-              - Fabric UI Parity Action Plan: fiab/fabric-ui-parity-action-plan.md
-              - UAT Coverage Matrix: fiab/uat-coverage.md
-              - CSA-in-a-Box Alignment + v2 Backlog: fiab/loom-csa-alignment-and-v2-backlog.md
-              - Parity Progress (running log): fiab/parity-progress.md
-              - Parity Rollup — Every Surface: fiab/parity-rollup.md
-              - UAT Report (Iteration 1): fiab/uat-report.md
-          - Releases:
-              - "2026-05-27: App bundles + console wiring sweep": fiab/releases/2026-05-27-apps-bundles-and-wiring-sweep.md
-          - Handoffs & Version State:
-              - "v3 Security Hardening": fiab/v3-security-hardening.md
-              - "v3 UI Parity — Chunked Execution Plan": fiab/v3-ui-parity-chunked-plan.md
+      - Audits, Inventories & Parity:
+          - Fabric Feature Inventory: fiab/fabric-feature-inventory.md
+          - Fabric UI Parity Action Plan: fiab/fabric-ui-parity-action-plan.md
+          - Parity Rollup — Every Surface: fiab/parity-rollup.md
+          - UAT Coverage Matrix: fiab/uat-coverage.md
+          - UAT Report (Iteration 1): fiab/uat-report.md
 
   # ============================================================
   # 6. OPERATE — Day-2 ops, runbooks, compliance, migrations
