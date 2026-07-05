@@ -1,5 +1,10 @@
 # KQL Queryset editor
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [KQL Queryset tutorial](../tutorials/editor-kql-queryset.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 A **KQL Queryset** is a named collection of saved KQL queries (think
 "queries.json" file in a Fabric workspace). The Loom editor stores the
 queries on the parent Cosmos item record (`state.queries`) and executes

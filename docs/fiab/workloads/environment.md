@@ -1,5 +1,10 @@
 # Environment — workload reference
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Environment tutorial](../tutorials/editor-environment.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 > **Family:** Data Engineering
 > **Loom slug:** `environment`
 > **Editor file:** `apps/fiab-console/lib/editors/phase2-misc-editors.tsx`

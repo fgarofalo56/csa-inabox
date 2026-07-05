@@ -1,5 +1,10 @@
 # Data Warehouse parity
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Warehouse tutorial](../tutorials/editor-warehouse.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 ## What Fabric does
 
 Fabric Warehouse runs on the Polaris distributed SQL engine —

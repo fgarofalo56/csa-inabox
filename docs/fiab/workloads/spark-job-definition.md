@@ -1,5 +1,10 @@
 # Spark Job Definition — workload reference
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Spark Job Definition tutorial](../tutorials/editor-spark-job-definition.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 > **Family:** Data Engineering
 > **Loom slug:** `spark-job-definition`
 > **Editor file:** `apps/fiab-console/lib/editors/phase2-misc-editors.tsx`

@@ -1,5 +1,10 @@
 # Dataflow Gen2 — workload reference
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Dataflow tutorial](../tutorials/editor-dataflow.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 > **Family:** Data Engineering
 > **Loom slug:** `dataflow`
 > **Editor file:** `apps/fiab-console/lib/editors/dataflow-gen2-editor.tsx`

@@ -1,8 +1,15 @@
 # Eventhouse editor
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Eventhouse tutorial](../tutorials/editor-eventhouse.md) (UAT-dated). See
+    that guide for the current step-by-step.
+
 The **Eventhouse** editor is the entry point for Real-Time Intelligence in
 CSA Loom. An Eventhouse is a logical container that owns one or more KQL
-databases on the shared ADX cluster.
+databases on the shared **Azure Data Explorer (ADX)** cluster — Azure-native by
+default, no Microsoft Fabric required (per
+`.claude/rules/no-fabric-dependency.md`).
 
 ## Backend
 
@@ -28,7 +35,7 @@ databases on the shared ADX cluster.
 
 | Feature | Gate / reason |
 |---|---|
-| **OneLake availability mirror** | Requires Fabric-managed eventhouse, not stand-alone ADX. Set `LOOM_KUSTO_FABRIC_MANAGED=true` once the cluster is migrated. |
+| **OneLake availability mirror** | Fabric opt-in only — the ADX-native default does not mirror to OneLake. Set `LOOM_KUSTO_FABRIC_MANAGED=true` to surface the flag when running against a Fabric-managed cluster. |
 | **New dashboard from Eventhouse** | Use the KQL Dashboard editor directly. |
 
 ## Bicep
