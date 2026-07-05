@@ -1,5 +1,10 @@
 # Notebook — workload reference
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Notebook tutorial](../tutorials/editor-notebook.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 > **Family:** Data Engineering
 > **Loom slug:** `notebook`
 > **Editor file:** `apps/fiab-console/lib/editors/notebook-editor.tsx`

@@ -1,5 +1,10 @@
 # Mirrored Database — workload reference
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Mirrored Database tutorial](../tutorials/editor-mirrored-database.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 !!! info "Comparative positioning note"
     This document is written from the
     perspective of Microsoft Azure, Cloud Scale Analytics, and CSA Loom. Any

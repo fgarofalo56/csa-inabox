@@ -1,0 +1,73 @@
+name: license-scan
+
+# CSA Loom — third-party license gate + THIRD-PARTY-NOTICES generation (rel-T78).
+#
+# The shipped Console (root LICENSE = MIT) must never take on a viral-copyleft
+# transitive dependency (GPL / AGPL) that would contaminate the distribution.
+# This job installs the console's PRODUCTION dependency tree and runs
+# scripts/ci/check-licenses.mjs, which FAILS the PR if any package's license is
+# outside the reviewed allowlist (see that script). It also regenerates
+# THIRD-PARTY-NOTICES.md and uploads it as a build artifact.
+#
+# Unlike the static guardrails in loom-guardrails.yml, this one MUST install
+# node_modules (license-checker inspects installed packages), so it lives in its
+# own workflow and only runs when dependencies could have changed.
+
+on:
+  pull_request:
+    paths:
+      - 'apps/fiab-console/package.json'
+      - 'apps/fiab-console/pnpm-lock.yaml'
+      - 'scripts/ci/check-licenses.mjs'
+      - '.github/workflows/license-scan.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/fiab-console/package.json'
+      - 'apps/fiab-console/pnpm-lock.yaml'
+      - 'scripts/ci/check-licenses.mjs'
+  # Also run on every release tag so the published NOTICES reflect the release.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: license-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  license-scan:
+    name: license gate + THIRD-PARTY-NOTICES
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@9
+
+      - name: Install console production dependencies
+        working-directory: apps/fiab-console
+        # --prod so devDependencies don't inflate the attribution set; matches
+        # what ships in the image. --no-frozen-lockfile mirrors the Dockerfile.
+        run: pnpm install --prod --no-frozen-lockfile
+
+      - name: License allowlist gate + generate THIRD-PARTY-NOTICES
+        # Exits non-zero if any production dependency's license is outside the
+        # allowlist in scripts/ci/check-licenses.mjs (GPL/AGPL/unknown → fail).
+        run: node scripts/ci/check-licenses.mjs --write THIRD-PARTY-NOTICES.md
+
+      - name: Upload THIRD-PARTY-NOTICES
+        if: always()
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: third-party-notices
+          path: THIRD-PARTY-NOTICES.md
+          if-no-files-found: warn

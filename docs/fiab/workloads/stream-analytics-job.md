@@ -1,5 +1,10 @@
 # Stream Analytics Job — workload reference
 
+!!! note "Superseded by the hands-on tutorial"
+    This workload overview is superseded by the hands-on
+    [Stream Analytics Job tutorial](../tutorials/editor-stream-analytics-job.md) (UAT-dated). See that
+    guide for the current step-by-step.
+
 > **Family:** Data Engineering
 > **Loom slug:** `stream-analytics-job`
 > **Editor file:** `apps/fiab-console/lib/editors/stream-analytics-editor.tsx`
