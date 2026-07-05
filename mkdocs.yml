@@ -1767,6 +1767,8 @@ nav:
               - Forward Migration to Microsoft Fabric: fiab/operations/forward-to-fabric.md
               - App Install — Phase 2 live-service provisioning: fiab/operations/app-install-provisioning.md
               - Clean tenant — purge test/tutorial debris: fiab/operations/clean-tenant.md
+              - In-product update path (no clone): fiab/in-product-update-path.md
+              - Self-update rehearsal (operator-run): fiab/operations/self-update-rehearsal.md
           - Runbooks:
               - Deploy Failure: fiab/runbooks/deploy-failure.md
               - Cosmos PITR Restore (metadata DR): fiab/runbooks/cosmos-pitr-restore.md
@@ -1801,6 +1803,7 @@ nav:
               - Multi-Cloud Data Virtualization: fiab/governance/multi-cloud-virtualization.md
           - Compliance:
               - Index: fiab/compliance/index.md
+              - Data Disclosure — what leaves your tenant: fiab/data-disclosure.md
               - Commercial baseline: fiab/compliance/commercial.md
               - GCC: fiab/compliance/gcc.md
               - GCC-High / IL4: fiab/compliance/gcc-high.md

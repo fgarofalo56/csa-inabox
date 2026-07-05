@@ -26,6 +26,12 @@
  *  - If LOOM_FEEDBACK_GITHUB_TOKEN is not configured, the endpoint
  *    accepts the report and logs a short summary (no upstream forward).
  *    Customers running fully air-gapped Loom can leave it unset.
+ *  - Auto-error forwarding is tenant-admin controllable (rel-T79). A tenant
+ *    admin can turn OFF forwarding of auto-captured errors at
+ *    /admin/tenant-settings; this route reads that deployment-wide singleton
+ *    (lib/feedback/forwarding-config.ts) and, when disabled, accepts the
+ *    auto-error locally without forwarding. User-initiated bug/feature reports
+ *    are a deliberate action and always forward. See docs/fiab/data-disclosure.md.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -34,6 +40,7 @@ import { redact, redactStack, scrubEnv } from '@/lib/feedback/redaction';
 import { getSession } from '@/lib/auth/session';
 import { enforceRateLimit, enforceRateLimitForKey, clientIp } from '@/lib/azure/rate-limiter';
 import { seenRecently } from '@/lib/azure/rate-limit-store';
+import { getAutoErrorForwarding } from '@/lib/feedback/forwarding-config';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -113,6 +120,18 @@ export async function POST(req: NextRequest) {
     const seen = await seenRecently(`fb:${fingerprint}`, 24 * 3600);
     if (seen === true) {
       return NextResponse.json({ status: 'accepted-duplicate', forwarded: false });
+    }
+  }
+
+  // Tenant-admin auto-error forwarding switch (rel-T79). A tenant admin can turn
+  // OFF forwarding of auto-captured errors; when disabled we accept the report
+  // locally and never forward. User-initiated bug/feature reports are exempt —
+  // they are a deliberate, consented action.
+  if (body.kind === 'auto-error') {
+    const forwardingOn = await getAutoErrorForwarding();
+    if (!forwardingOn) {
+      console.log(`[feedback] auto-error forwarding disabled by tenant admin; accepted locally tenant=${tenantHash()}`);
+      return NextResponse.json({ status: 'accepted-local', forwarded: false, reason: 'auto-error-forwarding-disabled' });
     }
   }
 
