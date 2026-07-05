@@ -346,7 +346,19 @@ function LineageInner() {
   const activeHint = SCOPES.find((x) => x.value === scope)?.hint;
 
   return (
-    <GovernanceShell sectionTitle="Lineage">
+    <GovernanceShell
+      sectionTitle="Lineage"
+      explainer={
+        <>
+          Lineage traces how data flows across items, pipelines, notebooks, dataflows, and models on
+          one shared canvas. Switch scope between <strong>Governed</strong> (every item in your
+          tenant, edges derived from typed references in each item&rsquo;s state),
+          &nbsp;<strong>Mesh</strong> (your Weave / Thread integration graph), and
+          &nbsp;<strong>Federated</strong> (cross-source lineage for a single resolved asset). When a
+          Microsoft Purview account is bound its lineage edges merge in, but Purview is never required.
+        </>
+      }
+    >
       <TabList
         selectedValue={scope}
         onTabSelect={(_e: SelectTabEvent, d: SelectTabData) => setScope(d.value as Scope)}

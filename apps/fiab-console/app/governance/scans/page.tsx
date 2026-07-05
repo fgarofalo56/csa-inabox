@@ -165,7 +165,20 @@ export default function GovernanceScansPage() {
   ];
 
   return (
-    <GovernanceShell sectionTitle="Scans & sources" sectionBadge="Data Map">
+    <GovernanceShell
+      sectionTitle="Scans & sources"
+      sectionBadge="Data Map"
+      explainer={
+        <>
+          Register the data sources you want catalogued &mdash; ADLS Gen2, Azure SQL, Synapse,
+          Blob, Cosmos DB, Data Explorer, Power BI, Snowflake, Databricks, and more &mdash; then
+          schedule and trigger scans that discover assets and populate the catalog. Open a source to
+          manage its scans and review the last runs with their status. Every control calls the real
+          Microsoft Purview Data Map scan plane; when Purview isn&rsquo;t wired the full surface still
+          renders and the honest gate explains the one-time fix.
+        </>
+      }
+    >
       <Body1 style={{ color: tokens.colorNeutralForeground3, marginBottom: tokens.spacingVerticalM }}>
         Register data sources, schedule scans, and monitor scan history — Azure SQL, ADLS, Synapse,
         Databricks, Power BI, Snowflake, on-prem Oracle/SAP. One-for-one with the Microsoft Purview Data Map.

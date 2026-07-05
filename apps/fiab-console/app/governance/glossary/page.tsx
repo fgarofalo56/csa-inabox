@@ -111,7 +111,18 @@ export default function GlossaryPage() {
   ], []);
 
   return (
-    <GovernanceShell sectionTitle='Glossary'>
+    <GovernanceShell
+      sectionTitle='Glossary'
+      explainer={
+        <>
+          The business glossary defines your organization&rsquo;s shared vocabulary &mdash; terms,
+          definitions, acronyms, and their owners &mdash; so assets across the catalog carry
+          consistent meaning. Create and edit terms here, link them to data assets, and organize
+          them by domain; entries persist to Microsoft Purview&rsquo;s glossary when a Purview
+          account is bound, and to the Loom store otherwise.
+        </>
+      }
+    >
       <Body1 className={s.intro}>
         Business-glossary terms in Microsoft Purview (Apache Atlas). Define standardized terms here, then
         attach them to data assets from each item's Classifications panel.

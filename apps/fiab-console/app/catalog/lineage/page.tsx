@@ -23,7 +23,21 @@ export default function CatalogLineagePage() {
   const [committed, setCommitted] = useState<{ source: any; id: string; host?: string } | null>(null);
 
   return (
-    <CatalogShell sectionTitle="Lineage" sectionBadge="Federated">
+    <CatalogShell
+      sectionTitle="Lineage"
+      sectionBadge="Federated"
+      explainer={
+        <>
+          Trace how data flows into and out of any asset across sources. Enter a Microsoft Purview entity
+          GUID, a Databricks Unity Catalog table full name, or a Fabric OneLake workspace ID; Loom queries
+          the matching back-end and overlays the upstream/downstream subgraph &mdash; rolling Purview,
+          Unity Catalog, and Fabric edges into one federated graph. Nodes are clickable so you can pivot
+          from a table to its producers and consumers, then jump to any asset&apos;s detail view. Use
+          Lineage for impact analysis before a schema change and for root-cause tracing when a downstream
+          report looks wrong.
+        </>
+      }
+    >
       <Body1 style={{ marginBottom: tokens.spacingVerticalM }}>
         Enter a Purview asset GUID, a Unity Catalog table full name, or a Fabric workspace ID. Loom hits the right back-end and overlays the lineage subgraph below.
       </Body1>

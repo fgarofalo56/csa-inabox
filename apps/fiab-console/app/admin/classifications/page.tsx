@@ -221,7 +221,18 @@ export default function ClassificationsPage() {
   const purviewKnown = purview !== null || systemConfigured !== null;
 
   return (
-    <AdminShell sectionTitle='Classifications'>
+    <AdminShell
+      sectionTitle='Classifications'
+      learn={{
+        title: 'Classifications',
+        content: 'Author classification rules that detect sensitive-info types and stamp classifications (PII, PHI, PCI, Confidential, and so on) onto catalog items when a scan runs. Each rule is pushed to Microsoft Purview as a custom classification rule and rolled into a custom scan rule set, then applied by running a scan. Rules are always saved to the Loom catalog first, so they persist even before Purview sync.',
+        tips: [
+          'Pick a match strategy per rule: column-name regex, data-value regex, or a comma-separated dictionary word list.',
+          'Purview sync requires LOOM_PURVIEW_ACCOUNT plus Data Source Administrator on the root collection for the Console UAMI.',
+          'Use Run scan now to apply new rules — existing classifications on already-scanned assets are not removed retroactively.',
+        ],
+      }}
+    >
       <Section title='About classification rules'>
         <SectionExplainer>
           Classification rules detect sensitive-info types and apply classifications (PII, PHI, PCI, Confidential, etc.) to catalog items on scan. Each rule is pushed to Microsoft Purview as a <strong>custom classification rule</strong> and rolled into a <strong>custom scan rule set</strong>, so it actually classifies data when a scan runs. Choose a <strong>match strategy</strong>:

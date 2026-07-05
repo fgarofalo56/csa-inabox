@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ReactNode, useState, useEffect } from 'react';
 import { PageShell } from '@/lib/components/page-shell';
+import { LearnPopover, type LearnPopoverProps } from '@/lib/components/ui/learn-popover';
 import {
   makeStyles, mergeClasses, tokens, Title3, Tooltip, Button,
 } from '@fluentui/react-components';
@@ -88,11 +89,18 @@ const useStyles = makeStyles({
   // The content region clips/scrolls its OWN overflow so a wide table gets a
   // local horizontal scrollbar instead of widening the page.
   body: { minWidth: 0, maxWidth: '100%', overflowX: 'auto' },
+  // Section-title row: the H2 + an optional contextual-help LearnPopover.
+  sectionHead: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: tokens.spacingHorizontalXS,
+    marginBottom: tokens.spacingVerticalL,
+  },
 });
 
 const STORAGE_KEY = 'loom-admin-nav-collapsed';
 
-export function AdminShell({ sectionTitle, children }: { sectionTitle?: string; children: ReactNode }) {
+export function AdminShell({ sectionTitle, learn, children }: { sectionTitle?: string; learn?: LearnPopoverProps; children: ReactNode }) {
   const styles = useStyles();
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
@@ -155,7 +163,12 @@ export function AdminShell({ sectionTitle, children }: { sectionTitle?: string; 
           })}
         </nav>
         <div className={styles.body}>
-          {sectionTitle && <Title3 as="h2" style={{ marginBottom: tokens.spacingVerticalL }}>{sectionTitle}</Title3>}
+          {sectionTitle && (
+            <div className={styles.sectionHead}>
+              <Title3 as="h2">{sectionTitle}</Title3>
+              {learn && <LearnPopover {...learn} />}
+            </div>
+          )}
           {children}
         </div>
       </div>

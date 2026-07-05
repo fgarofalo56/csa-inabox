@@ -47,7 +47,20 @@ export default function AssetDetailPage() {
   }, [source, id, host, workspaceId]);
 
   return (
-    <CatalogShell sectionTitle={id} sectionBadge={source}>
+    <CatalogShell
+      sectionTitle={id}
+      sectionBadge={source}
+      explainer={
+        <>
+          The full detail view for a single catalog asset, resolved live from its source &mdash; Microsoft
+          Purview, Databricks Unity Catalog, or Fabric OneLake. The Overview tab shows the asset&apos;s
+          metadata (schema and column types for a UC table, classifications for a Purview entity, item
+          properties and shortcuts for a OneLake item) with a link out to the upstream tool; the Lineage
+          tab overlays its upstream/downstream graph. Cross-source actions let you register, describe, or
+          act on the asset without leaving Loom.
+        </>
+      }
+    >
       {loading && <Spinner label="Loading asset…" />}
       {error && (
         <MessageBar intent="warning">

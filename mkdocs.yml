@@ -1579,7 +1579,6 @@ nav:
               - Synapse Spark Pool: fiab/synapse-spark-pool-parity-spec.md
               - Tracing: fiab/tracing-parity-spec.md
               - User Data Function: fiab/user-data-function-parity-spec.md
-              - "U-SQL Job": fiab/usql-job-parity-spec.md
               - Variable Library: fiab/variable-library-parity-spec.md
               - Vector Store: fiab/vector-store-parity-spec.md
               - Warehouse: fiab/warehouse-parity-spec.md
@@ -1670,7 +1669,6 @@ nav:
               - Synapse Spark Pool: fiab/tutorials/editor-synapse-spark-pool.md
               - Tracing: fiab/tutorials/editor-tracing.md
               - User Data Function: fiab/tutorials/editor-user-data-function.md
-              - "U-SQL Job": fiab/tutorials/editor-usql-job.md
               - Variable Library: fiab/tutorials/editor-variable-library.md
               - Vector Store: fiab/tutorials/editor-vector-store.md
               - Warehouse: fiab/tutorials/editor-warehouse.md

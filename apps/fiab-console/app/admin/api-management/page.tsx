@@ -134,7 +134,19 @@ export default function ApiManagementPage() {
   }
 
   return (
-    <AdminShell sectionTitle="API Management">
+    <AdminShell
+      sectionTitle="API Management"
+      learn={{
+        title: 'API Management',
+        content: 'Full administration of the Azure API Management service that fronts the Loom API marketplace: define APIs and operations, bundle them into products, manage consumer subscriptions and keys, author global/product/API policies, and configure named values and backends. Every tab drives the real APIM management plane over ARM.',
+        tips: [
+          'Products group APIs and set the subscription + approval model consumers see in the marketplace.',
+          'Named values hold reusable secrets and settings that policies reference — store credentials here, not inline.',
+          'If APIM is not provisioned the page shows an honest gate naming the LOOM_APIM_NAME / resource-group / subscription env to set.',
+        ],
+        learnMoreHref: 'https://learn.microsoft.com/azure/api-management/api-management-key-concepts',
+      }}
+    >
       <div className={styles.lede}>
         <span className={styles.ledeIcon}><Globe24Regular /></span>
         <div className={styles.ledeText}>

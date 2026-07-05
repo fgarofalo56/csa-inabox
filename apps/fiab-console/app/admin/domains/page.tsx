@@ -289,7 +289,18 @@ export default function DomainsPage() {
   ], [s, a, purviewNames, nameById, isTenantAdmin]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <AdminShell sectionTitle="Domains">
+    <AdminShell
+      sectionTitle="Domains"
+      learn={{
+        title: 'Domains',
+        content: 'Organize the tenant data estate into governance-scoped business domains and subdomains — Finance, Operations, Mission-Ops. Each domain carries admins, contributors, a description, an image, and delegated settings, and workspaces tag themselves to it via their domain field. This is the same concept Microsoft Purview calls a business domain and Fabric calls a domain, mirrored to Purview when configured.',
+        tips: [
+          'Assign domain admins and contributors to delegate governance without granting tenant-wide admin.',
+          'Create subdomains to model a hierarchy, and assign workspaces to keep the estate organized.',
+          'Purview business-domain mirroring is an honest gate — domains still work in Loom when it is off.',
+        ],
+      }}
+    >
       <Section title="What is a domain?">
         <SectionExplainer>
           A domain is a governance-scoped, labeled grouping of data products and workspaces —

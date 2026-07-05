@@ -181,7 +181,18 @@ export default function AdminWorkspacesPage() {
   ], [s]);
 
   return (
-    <AdminShell sectionTitle="Workspaces (tenant-wide)">
+    <AdminShell
+      sectionTitle="Workspaces (tenant-wide)"
+      learn={{
+        title: 'Workspaces (tenant-wide)',
+        content: 'A tenant-wide inventory of every workspace regardless of owner, with item counts and last-activity computed live from Cosmos. Review who owns what, which domain and capacity a workspace maps to, and its current state; open a row to manage its settings or create a new workspace from here.',
+        tips: [
+          'Item counts and last activity are computed live from Cosmos, so the list reflects real current state.',
+          'Search by name, owner, domain, or capacity to find a workspace across the whole tenant.',
+          'Create a new workspace with New workspace (or F7); click a row to open its settings.',
+        ],
+      }}
+    >
       <Body1 className={s.intro}>
         Every workspace in your tenant, regardless of owner. Item counts and last activity computed live from Cosmos.
       </Body1>
