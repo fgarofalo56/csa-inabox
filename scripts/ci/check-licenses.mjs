@@ -98,7 +98,7 @@ function runLicenseChecker() {
   // Requires node_modules present. Uses npx so the checker need not be a dep.
   const out = execFileSync(
     process.platform === 'win32' ? 'npx.cmd' : 'npx',
-    ['--yes', 'license-checker@0.6.3', '--production', '--json', '--start', APP_DIR],
+    ['--yes', 'license-checker@25.0.1', '--production', '--json', '--start', APP_DIR],
     { cwd: REPO_ROOT, encoding: 'utf-8', maxBuffer: 64 * 1024 * 1024 },
   );
   return JSON.parse(out);
