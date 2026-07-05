@@ -1179,7 +1179,7 @@ handshake). Deployable Microsoft entries appear automatically in the existing
 
 ### Rule posture (read first)
 
-Per [`no-fabric-dependency.md`](../../.claude/rules/no-fabric-dependency.md):
+Per `.claude/rules/no-fabric-dependency.md`:
 **Microsoft Learn is the SOLE default-on server** — Microsoft-hosted, GA, **no
 auth, zero config**, zero Fabric/Power BI dependency — so a clean deploy ships
 live MCP tools day-one. **Every other server is strictly opt-in** and is never
@@ -1189,7 +1189,7 @@ present only as explicit Fabric-family opt-ins in the deployable catalog
 `defaultRecommended:false`) — `api.fabric.microsoft.com` / `api.powerbi.com` are
 touched **only** when one of those is explicitly enabled.
 
-Per [`no-vaporware.md`](../../.claude/rules/no-vaporware.md): each opt-in server
+Per `.claude/rules/no-vaporware.md`: each opt-in server
 is gated on **both** its `*Enabled` toggle **and** a confirmed endpoint. Where a
 Microsoft remote host is not yet GA the `defaultEndpoint` is empty, so the
 Console renders the honest Fluent `MessageBar` gate (naming the exact env var /

@@ -1,6 +1,6 @@
 # CSA Loom — Deployment
 
-![Push-button deploy — azd up or Deploy-to-Azure button, 60-100 minutes from empty sub to working Console](../../assets/images/hero/fiab/deployment.svg){ .architecture-hero loading="eager" }
+![Push-button deploy — azd up or az deployment sub create, 60-100 minutes from empty sub to working Console](../../assets/images/hero/fiab/deployment.svg){ .architecture-hero loading="eager" }
 
 Deploying CSA Loom takes about 60-100 minutes from start to a working
 Loom Console URL in your tenant. The platform is shipped as
@@ -21,12 +21,6 @@ subscription via one of two paths.
 
     Power-user path with full Bicep visibility. Best for platform
     engineers + production deploys.
-
--   :material-mouse: [**"Deploy to Azure" button**](deploy-button.md)
-
-    Click the button in the README; the Azure portal opens with a
-    pre-rendered ARM template. Best for evaluators who prefer the
-    portal.
 
 </div>
 
