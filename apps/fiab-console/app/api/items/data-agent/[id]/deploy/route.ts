@@ -1,23 +1,21 @@
 /**
  * POST /api/items/data-agent/[id]/deploy
  *
- * Phase 1 — deploy stub with 501-gate.
+ * Publishes the data-agent as a REAL Azure AI Foundry Agent Service agent.
  *
  * Loads the data-agent Cosmos item (state.systemPrompt + state.model +
  * state.sources / sqlEndpoints / kqlDatabases / lakehousePaths +
  * state.examples), builds an Azure AI Foundry Agent Service payload, and
- * calls createOrUpdateAgent.
+ * calls createOrUpdateAgent — an actual create/update against the project,
+ * not a stub.
  *
  *  - Missing LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_FOUNDRY_PROJECT_ID →
- *    501 { ok: false, deferred: true, error, hint } so the editor can
- *    surface an honest MessageBar (see .claude/rules/no-vaporware.md).
+ *    501 { ok: false, deferred: true, error, hint } — the honest infra-gate so
+ *    the editor surfaces a MessageBar naming the env vars to set (see
+ *    .claude/rules/no-vaporware.md), never a fake success.
  *
  *  - On success → persists state.foundryAgentId + state.lastDeployedAt back
  *    to the Cosmos item.
- *
- * Phase 2+ replaces the invented Model / Synapse-Serverless fields with the
- * typed five-source picker from the parity spec and wires the test-chat pane
- * via Assistants `threads.messages.create` + `runs.create`.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';

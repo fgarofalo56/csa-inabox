@@ -5,13 +5,47 @@ import { upsertLoomDoc, docForItem } from '@/lib/azure/loom-search';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import { resolveWorkspaceAccessByOid } from '@/lib/auth/workspace-access';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
-import { apiError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
+}
+
+/**
+ * Shape a raw item doc for the LIST response (rel-T97). Flattens the governance
+ * fields the browse surfaces (folders pane, object explorer, task flows) read —
+ * endorsement / sensitivity / owner — as top-level fields, then DROPS the heavy
+ * `state` blob (notebook cells, semantic-model BIM, report definitions, cached
+ * query results, …). A workspace with large items no longer ships megabytes on
+ * every list call; editors load the full `state` from the per-item detail route
+ * (GET /api/cosmos-items/[type]/[id]), never from the list.
+ */
+function shapeForList(it: WorkspaceItem) {
+  const st = (it.state ?? {}) as Record<string, unknown>;
+  const endorsement =
+    (typeof st.endorsement === 'string' && st.endorsement) ||
+    (st.certified ? 'Certified' : undefined) || undefined;
+  const sensitivity =
+    (typeof st.sensitivityLabel === 'string' && st.sensitivityLabel) || undefined;
+  const owner =
+    (typeof st.ownerUpn === 'string' && st.ownerUpn) ||
+    (typeof st.contact === 'string' && st.contact) ||
+    (typeof st.steward === 'string' && st.steward) || undefined;
+  // sqlEndpointFor is the auto-paired-warehouse back-reference — keep it as a
+  // light top-level flag (some surfaces group/hide the paired endpoint) without
+  // dragging the whole state along.
+  const sqlEndpointFor = typeof st.sqlEndpointFor === 'string' ? st.sqlEndpointFor : undefined;
+  const { state: _state, ...rest } = it;
+  return {
+    ...rest,
+    ...(endorsement ? { endorsement } : {}),
+    ...(sensitivity ? { sensitivity } : {}),
+    ...(owner ? { owner } : {}),
+    ...(sqlEndpointFor ? { sqlEndpointFor } : {}),
+  };
 }
 
 /**
@@ -29,7 +63,7 @@ async function loadWorkspace(id: string, session: SessionPayload, opts: { write?
   return access.workspace;
 }
 
-export async function GET(_req: NextRequest, props: { params: Promise<{ id: string }> }) {
+export async function GET(req: NextRequest, props: { params: Promise<{ id: string }> }) {
   const params = await props.params;
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
@@ -37,34 +71,42 @@ export async function GET(_req: NextRequest, props: { params: Promise<{ id: stri
     const ws = await loadWorkspace(params.id, session);
     if (!ws) return err('Workspace not found', 404, 'not_found');
     const items = await itemsContainer();
+    const spec = {
+      query: 'SELECT * FROM c WHERE c.workspaceId = @w ORDER BY c.createdAt DESC',
+      parameters: [{ name: '@w', value: ws.id }],
+    };
+
+    // ADDITIVE pagination (rel-T97): opt-in via `?paginate=1` (or by passing a
+    // `?continuation=<token>`). Returns `{ items, continuationToken }` so a huge
+    // workspace can be paged with Cosmos continuation tokens instead of buffering
+    // every item into one response. WITHOUT these params the response stays the
+    // historical BARE ARRAY that existing callers (listItems, object-explorer,
+    // task-flows) depend on — the shape contract is unchanged for them.
+    const sp = req.nextUrl.searchParams;
+    const wantPaged = sp.get('paginate') === '1' || sp.has('continuation');
+    if (wantPaged) {
+      const limit = Math.min(Math.max(Number(sp.get('limit')) || 100, 1), 500);
+      const continuationToken = sp.get('continuation') || undefined;
+      const iterator = items.items.query<WorkspaceItem>(spec, {
+        partitionKey: ws.id,
+        maxItemCount: limit,
+        continuationToken,
+      });
+      const page = await iterator.fetchNext();
+      return NextResponse.json({
+        items: (page.resources ?? []).map(shapeForList),
+        continuationToken: page.continuationToken ?? null,
+      });
+    }
+
     const { resources } = await items.items
-      .query<WorkspaceItem>({
-        query: 'SELECT * FROM c WHERE c.workspaceId = @w ORDER BY c.createdAt DESC',
-        parameters: [{ name: '@w', value: ws.id }],
-      }, { partitionKey: ws.id })
+      .query<WorkspaceItem>(spec, { partitionKey: ws.id })
       .fetchAll();
-    // ADDITIVE: surface governance state as top-level fields so browse surfaces
-    // (workspace Items list view, catalog) can sort/filter on them without
-    // digging into `state`. `state.endorsement` is the canonical key (with the
-    // legacy `state.certified` boolean fallback); `state.sensitivityLabel` is
-    // the MIP-style sensitivity label. Response shape is otherwise unchanged
-    // (still a bare array of the full item docs).
-    const shaped = resources.map((it) => {
-      const st = (it.state ?? {}) as Record<string, unknown>;
-      const endorsement =
-        (typeof st.endorsement === 'string' && st.endorsement) ||
-        (st.certified ? 'Certified' : undefined) || undefined;
-      const sensitivity =
-        (typeof st.sensitivityLabel === 'string' && st.sensitivityLabel) || undefined;
-      return {
-        ...it,
-        ...(endorsement ? { endorsement } : {}),
-        ...(sensitivity ? { sensitivity } : {}),
-      };
-    });
-    return NextResponse.json(shaped);
+    // Bare array (existing contract) — governance fields flattened, heavy
+    // `state` projected out per shapeForList.
+    return NextResponse.json(resources.map(shapeForList));
   } catch (e: any) {
-    return err(e?.message || 'Failed to list items', 500, 'cosmos_error');
+    return apiServerError(e, 'Failed to list items', 'cosmos_error');
   }
 }
 
@@ -138,6 +180,6 @@ export async function POST(req: NextRequest, props: { params: Promise<{ id: stri
 
     return NextResponse.json(resource, { status: 201 });
   } catch (e: any) {
-    return err(e?.message || 'Failed to create item', 500, 'cosmos_error');
+    return apiServerError(e, 'Failed to create item', 'cosmos_error');
   }
 }

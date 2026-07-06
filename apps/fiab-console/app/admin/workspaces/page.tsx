@@ -49,6 +49,9 @@ export default function AdminWorkspacesPage() {
   const [workspaces, setWorkspaces] = useState<Workspace[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // rel-T108: best-effort enrichment (item counts / owner roles) fell back to
+  // defaults on this load — item counts shown may be understated, not truth.
+  const [degradedReasons, setDegradedReasons] = useState<string[] | null>(null);
   const [q, setQ] = useState('');
   const [wizardOpen, setWizardOpen] = useState(false);
   const [settingsTarget, setSettingsTarget] = useState<Workspace | null>(null);
@@ -61,6 +64,7 @@ export default function AdminWorkspacesPage() {
       const j = await r.json();
       if (!j.ok) { setError(j.error || 'failed'); return; }
       setWorkspaces(j.workspaces || []);
+      setDegradedReasons(j.degraded && Array.isArray(j.degradedReasons) ? j.degradedReasons : null);
     } catch (e: any) {
       setError(e?.message || String(e));
     } finally { setLoading(false); }
@@ -202,6 +206,21 @@ export default function AdminWorkspacesPage() {
           <MessageBarBody className={s.errorText}>
             <MessageBarTitle>Could not load workspaces</MessageBarTitle>
             {error}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {!error && degradedReasons && (
+        <MessageBar intent="warning" className={a.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Some columns may be stale</MessageBarTitle>
+            {degradedReasons.includes('item-counts')
+              ? 'Live item counts / last-activity could not be read this load (the store was briefly unreachable), so counts may show 0 where items actually exist. '
+              : ''}
+            {degradedReasons.includes('owner-roles')
+              ? 'The owner-role lookup fell back to the workspace creator only. '
+              : ''}
+            Refresh to retry.
           </MessageBarBody>
         </MessageBar>
       )}

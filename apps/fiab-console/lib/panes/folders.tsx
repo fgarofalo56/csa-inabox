@@ -75,6 +75,12 @@ const useStyles = makeStyles({
     color: tokens.colorBrandForeground1,
   },
   itemRow: { display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS, minWidth: 0, overflowWrap: 'anywhere', wordBreak: 'break-word' },
+  // rel-T97: dependency-free windowing for large workspaces. `content-visibility`
+  // lets the browser skip layout/paint for off-screen item rows (auto-rendering
+  // any row that scrolls into view or receives focus), and `contain-intrinsic-size`
+  // reserves the row's approximate height so the scrollbar stays stable. Degrades
+  // to a no-op on browsers without support — never clips content.
+  itemRowWindowed: { contentVisibility: 'auto', containIntrinsicSize: 'auto 28px' },
   badge: { marginLeft: '6px' },
   empty: {
     padding: tokens.spacingVerticalXXL, textAlign: 'center', color: tokens.colorNeutralForeground3,
@@ -221,8 +227,13 @@ function writeItemsView(v: ItemsView) {
 }
 
 // ── Governance fields (real Cosmos item state, flattened by the items route) ──
-/** Items route additively flattens `state.endorsement` / `state.sensitivityLabel`. */
-type GovWorkspaceItem = WorkspaceItem & { endorsement?: string; sensitivity?: string };
+/**
+ * The list route (GET /api/workspaces/[id]/items) flattens the governance
+ * fields to the top level and DROPS the heavy `state` blob (rel-T97). We read
+ * the flattened `endorsement` / `sensitivity` / `owner` first and keep the
+ * `state.*` fallback only for any legacy caller that still hydrates full state.
+ */
+type GovWorkspaceItem = WorkspaceItem & { endorsement?: string; sensitivity?: string; owner?: string };
 
 function itemEndorsement(it: GovWorkspaceItem): string | undefined {
   const st = (it.state ?? {}) as Record<string, unknown>;
@@ -237,7 +248,7 @@ function itemSensitivity(it: GovWorkspaceItem): string | undefined {
 }
 function itemOwner(it: GovWorkspaceItem): string {
   const st = (it.state ?? {}) as Record<string, unknown>;
-  return String(st.ownerUpn || st.contact || st.steward || it.createdBy || '');
+  return String(it.owner || st.ownerUpn || st.contact || st.steward || it.createdBy || '');
 }
 /** Mirrors the OneLake catalog's sensitivity badge (lib/panes/onelake-catalog.tsx). */
 function sensitivityBadge(v?: string) {
@@ -458,7 +469,7 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
               onClick={() => router.push(`/items/${it.itemType}/${it.id}`)}
               {...{ draggable: true, onDragStart: (e: React.DragEvent) => onItemDragStart(e, it.id) } as any}
             >
-              <span className={s.itemRow}>
+              <span className={mergeClasses(s.itemRow, s.itemRowWindowed)}>
                 <Checkbox
                   checked={selected.has(it.id)}
                   onClick={(e) => e.stopPropagation()}

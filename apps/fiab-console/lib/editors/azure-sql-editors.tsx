@@ -293,9 +293,11 @@ function ResultsPanel({ result, loading }: { result: QueryResponse | null; loadi
 // ============================================================
 // Server editor
 // ============================================================
-// Refresh list is wired to the inline refresh handler; Firewall + AAD
-// admin render as disabled with reason (ARM mutation BFF deferred). See
-// no-vaporware.md for the gate-with-reason pattern.
+// Full server management, all wired to real ARM: Refresh list, the
+// server→database→schema/table browser (live sys.* over TDS), the Firewall
+// dialog (list/add/delete firewall rules), and the Microsoft Entra (AAD) admin
+// dialog (get/set the server's Entra administrator). Every control calls the
+// azure-sql-database BFF, which issues the real ARM mutation.
 
 interface ServerInfo {
   id: string; name: string; location: string; fqdn: string;

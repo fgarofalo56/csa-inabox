@@ -1,22 +1,20 @@
 /**
  * POST /api/items/operations-agent/[id]/deploy
  *
- * Phase 1 — deploy stub with 501-gate.
+ * Publishes the operations-agent as a REAL Azure AI Foundry Agent Service agent.
  *
  * Loads the operations-agent Cosmos item (state.systemPrompt + state.model +
  * state.tools + state.eventhouse + state.ontology), builds an Azure AI
- * Foundry Agent Service payload, and calls createOrUpdateAgent.
+ * Foundry Agent Service payload, and calls createOrUpdateAgent — an actual
+ * create/update against the project, not a stub.
  *
  *  - Missing LOOM_FOUNDRY_PROJECT_ENDPOINT / LOOM_FOUNDRY_PROJECT_ID →
- *    501 { ok: false, deferred: true, error, hint } so the editor can
- *    surface an honest MessageBar instead of pretending to deploy
+ *    501 { ok: false, deferred: true, error, hint } — the honest infra-gate so
+ *    the editor surfaces a MessageBar instead of pretending to deploy
  *    (see .claude/rules/no-vaporware.md).
  *
  *  - On success → persists state.foundryAgentId + state.lastDeployedAt back
  *    to the Cosmos item and returns the agent shape.
- *
- * No catalog edits, no bicep edits — Phase 2+ wires runtime invocation,
- * playbook generation, and Activator handshake.
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';

@@ -5,16 +5,22 @@
  * Cosmos is PE-locked from the outside, so the bash equivalent at
  * scripts/csa-loom/seed-catalogs.sh only works from inside the VNet.
  * This route runs from inside the container app where the data-plane
- * is reachable. Auth gate: session must exist (any signed-in user can
- * trigger — the seed is benign and idempotent).
+ * is reachable. Auth gate: tenant-admin only (requireTenantAdmin) — the
+ * seed writes tenant-GLOBAL catalog docs, so it is not open to any
+ * signed-in user.
+ *
+ * The response counts ONLY successful upserts and returns `ok:false` with a
+ * per-doc `errors[]` when any write fails, so a Cosmos RBAC/throttle failure
+ * can never masquerade as a completed seed (rel-T96).
  *
  * After this is called once per environment, the per-tenant copy on
  * first /api/apps-catalog GET = [] handles new tenants automatically.
  */
 
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { requireTenantAdmin } from '@/lib/auth/feature-gate';
+import { apiOk, apiError, apiUnauthorized } from '@/lib/api/respond';
 import { appsCatalogContainer, workloadsCatalogContainer } from '@/lib/azure/cosmos-client';
 import { ensureDataProductsIndex } from '@/lib/azure/loom-data-products-search';
 import { listBundleIds, getBundleItemTypes } from '@/lib/apps/content-bundles';
@@ -107,25 +113,39 @@ const WORKLOADS = [
 
 export async function POST(_req: NextRequest) {
   const s = getSession();
-  if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
+  if (!s) return apiUnauthorized();
   const denied = requireTenantAdmin(s);
   if (denied) return denied;
 
   const now = new Date().toISOString();
   const stamp = { tenantId: TENANT, createdBy: 'bootstrap-catalogs', createdAt: now, updatedAt: now };
 
+  // Count ONLY successful upserts — a Cosmos RBAC / throttle / connectivity
+  // failure must NOT masquerade as a completed seed (rel-T96). Each failed
+  // write is captured (id + message) so the admin sees exactly what didn't land
+  // and the response `ok` reflects the truth.
   const apps = await appsCatalogContainer();
-  let appCount = 0;
+  let appsSeeded = 0;
+  const appFailures: string[] = [];
   for (const a of APPS) {
-    await apps.items.upsert({ ...a, ...stamp, installedBy: [] }).catch(() => {});
-    appCount++;
+    try {
+      await apps.items.upsert({ ...a, ...stamp, installedBy: [] });
+      appsSeeded++;
+    } catch (e: any) {
+      appFailures.push(`app:${a.id}: ${e?.message || String(e)}`);
+    }
   }
 
   const wls = await workloadsCatalogContainer();
-  let wlCount = 0;
+  let workloadsSeeded = 0;
+  const wlFailures: string[] = [];
   for (const w of WORKLOADS) {
-    await wls.items.upsert({ ...w, ...stamp, publisher: 'CSA', iconUrl: null }).catch(() => {});
-    wlCount++;
+    try {
+      await wls.items.upsert({ ...w, ...stamp, publisher: 'CSA', iconUrl: null });
+      workloadsSeeded++;
+    } catch (e: any) {
+      wlFailures.push(`workload:${w.id}: ${e?.message || String(e)}`);
+    }
   }
 
   // Provision the consumer-discovery AI Search index for the Data Marketplace.
@@ -135,5 +155,29 @@ export async function POST(_req: NextRequest) {
     created: false, ok: false, error: e?.message || String(e),
   }));
 
-  return NextResponse.json({ ok: true, tenant: TENANT, appsSeeded: appCount, workloadsSeeded: wlCount, dataProductsIndex });
+  const seeded = appsSeeded + workloadsSeeded;
+  const failed = appFailures.length + wlFailures.length;
+  const summary = {
+    tenant: TENANT,
+    seeded,
+    failed,
+    appsSeeded,
+    appsTotal: APPS.length,
+    workloadsSeeded,
+    workloadsTotal: WORKLOADS.length,
+    dataProductsIndex,
+    ...(failed ? { errors: [...appFailures, ...wlFailures].slice(0, 25) } : {}),
+  };
+
+  // Partial or total write failure → ok:false so callers never treat a
+  // half-seeded catalog as done (HTTP 200: the route itself ran; the failures
+  // are reported in the body, mirroring the health-degraded convention).
+  if (failed > 0) {
+    return apiError(
+      `Catalog seed incomplete — ${seeded} seeded, ${failed} write(s) failed`,
+      200,
+      summary,
+    );
+  }
+  return apiOk(summary);
 }
