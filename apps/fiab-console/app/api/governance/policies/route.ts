@@ -5,62 +5,19 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { tenantSettingsContainer, CosmosNotConfiguredError } from '@/lib/azure/cosmos-client';
+import { tenantSettingsContainer } from '@/lib/azure/cosmos-client';
 import {
   enforceAccessGrant, revokeAccessGrant, revokeStructuredGrant,
   type AccessPermission, type AccessScopeType, type PrincipalType,
 } from '@/lib/azure/access-policy-client';
 import { apiServerError } from '@/lib/api/respond';
+import {
+  loadOrSeedPolicies, CosmosNotConfiguredError,
+  type Policy, type DlpPolicyRule,
+} from '@/lib/governance/policy-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-
-interface PolicyEnforcement {
-  status: 'active' | 'pending' | 'error';
-  roleName?: string;
-  roleAssignmentId?: string;
-  detail?: string;
-}
-
-interface Policy {
-  id: string;
-  name: string;
-  kind: 'DLP' | 'Masking' | 'RLS' | 'Retention' | 'Access';
-  scope: string;
-  rule: string;
-  enabled: boolean;
-  createdAt: string;
-  createdBy: string;
-  // Access-kind structured fields (enable real RBAC enforcement).
-  principalId?: string;
-  principalName?: string;
-  principalType?: PrincipalType;
-  scopeType?: AccessScopeType;
-  scopeRef?: string;
-  permission?: AccessPermission;
-  /** Result of the real RBAC grant for Access policies. */
-  enforcement?: PolicyEnforcement;
-}
-
-interface PoliciesDoc {
-  id: string; tenantId: string; kind: 'policies';
-  items: Policy[];
-  updatedAt: string;
-}
-
-async function loadOrSeed(tenantId: string): Promise<PoliciesDoc> {
-  const c = await tenantSettingsContainer();
-  const docId = `policies:${tenantId}`;
-  try {
-    const { resource } = await c.item(docId, tenantId).read<PoliciesDoc>();
-    if (resource) return resource;
-  } catch (e: any) { if (e?.code !== 404) throw e; }
-  const seed: PoliciesDoc = {
-    id: docId, tenantId, kind: 'policies', items: [], updatedAt: new Date().toISOString(),
-  } as any;
-  await c.items.create(seed);
-  return seed;
-}
 
 function cosmosGateResponse() {
   return NextResponse.json({
@@ -79,7 +36,7 @@ export async function GET() {
   const s = getSession();
   if (!s) return NextResponse.json({ ok: false, error: 'unauthenticated' }, { status: 401 });
   try {
-    const doc = await loadOrSeed(s.claims.oid);
+    const doc = await loadOrSeedPolicies(s.claims.oid);
     return NextResponse.json({ ok: true, policies: doc.items, updatedAt: doc.updatedAt });
   } catch (e: any) {
     if (e instanceof CosmosNotConfiguredError) return cosmosGateResponse();
@@ -99,7 +56,7 @@ export async function POST(req: NextRequest) {
   try {
     const tenantId = s.claims.oid;
     const c = await tenantSettingsContainer();
-    const doc = await loadOrSeed(tenantId);
+    const doc = await loadOrSeedPolicies(tenantId);
     const policy: Policy = {
       id: crypto.randomUUID(),
       name, kind: kind as any,
@@ -139,6 +96,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // DLP policies carry a real rule shape (sensitive-info types + action +
+    // condition) — persist it so downstream enforcement + the editor read the
+    // structured rule, not just the human string. Preset-enabled policies also
+    // stamp their provenance (`source`) + compliance category.
+    if (kind === 'DLP' && body?.dlp && typeof body.dlp === 'object') {
+      const sits = Array.isArray(body.dlp.sensitiveInfoTypes)
+        ? body.dlp.sensitiveInfoTypes.map((x: unknown) => String(x)).slice(0, 64) : [];
+      const action = ['Audit', 'Block', 'Notify', 'Quarantine'].includes(body.dlp.action) ? body.dlp.action : 'Audit';
+      const sharedWith = body.dlp.sharedWith === 'any' ? 'any' : 'external';
+      policy.dlp = { sensitiveInfoTypes: sits, action, sharedWith } as DlpPolicyRule;
+    }
+    if (typeof body?.source === 'string') policy.source = body.source;
+    if (typeof body?.category === 'string') policy.category = body.category as any;
+
     doc.items.push(policy);
     doc.updatedAt = new Date().toISOString();
     await c.item(doc.id, tenantId).replace(doc);
@@ -158,7 +129,7 @@ export async function PUT(req: NextRequest) {
   try {
     const tenantId = s.claims.oid;
     const c = await tenantSettingsContainer();
-    const doc = await loadOrSeed(tenantId);
+    const doc = await loadOrSeedPolicies(tenantId);
     const ix = doc.items.findIndex((p) => p.id === id);
     if (ix < 0) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     doc.items[ix] = { ...doc.items[ix], ...body, id };
@@ -179,7 +150,7 @@ export async function DELETE(req: NextRequest) {
   try {
     const tenantId = s.claims.oid;
     const c = await tenantSettingsContainer();
-    const doc = await loadOrSeed(tenantId);
+    const doc = await loadOrSeedPolicies(tenantId);
     const target = doc.items.find((p) => p.id === id);
     if (!target) return NextResponse.json({ ok: false, error: 'not found' }, { status: 404 });
     // Revoke the real grant first (best-effort; never blocks the delete).

@@ -140,12 +140,24 @@ function notConfiguredHint(missing: string): DlpNotConfiguredHint {
         reason: 'Required to surface recent DLP alerts under the Alerts tab.',
       },
     ],
-    followUp: 'Operator action: (1) set LOOM_DLP_ENABLED=true on the loom-console Container App, (2) run scripts/csa-loom/grant-graph-approles.sh — it grants both AppRoles to the Console UAMI in one shot, (3) Tenant Admin issues admin consent at https://portal.azure.com → Entra ID → Enterprise applications → Console UAMI → Permissions. Note: the policy simulation endpoint is /beta-only and may return 404 in tenants that haven\'t opted into the Graph DLP preview — the BFF route surfaces that gap explicitly instead of faking results.',
+    followUp: 'DLP is ON by default (admin opt-out via LOOM_DLP_ENABLED=false). To surface live Purview DLP reads/violations: (1) run scripts/csa-loom/grant-graph-approles.sh — it grants both AppRoles to the Console UAMI in one shot, (2) Tenant Admin issues admin consent at https://portal.azure.com → Entra ID → Enterprise applications → Console UAMI → Permissions. The Loom-native policy library + best-practice default policy author + save regardless of Graph consent. Note: the policy simulation endpoint is /beta-only and may return 404 in tenants that haven\'t opted into the Graph DLP preview — the BFF route surfaces that gap explicitly instead of faking results.',
   };
 }
 
+/**
+ * DLP is ON by default (best practice) — the console ships with the DLP data
+ * plane wired and the Loom-native policy library authoring regardless. This is
+ * an admin OPT-OUT, not an opt-in: only an explicit `LOOM_DLP_ENABLED=false`
+ * disables the live Graph DLP reads. When enabled-by-default but the Graph
+ * Security AppRoles aren't consented yet, the live call returns 403 and we
+ * surface the honest AppRole gate (graphSecurityRoleHint) — not this env gate.
+ */
+export function dlpEnabled(): boolean {
+  return process.env.LOOM_DLP_ENABLED !== 'false';
+}
+
 function assertEnabled() {
-  if (process.env.LOOM_DLP_ENABLED !== 'true') {
+  if (!dlpEnabled()) {
     throw new DlpNotConfiguredError(notConfiguredHint('LOOM_DLP_ENABLED'));
   }
 }

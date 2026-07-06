@@ -11,6 +11,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { graphDlpPolicyApiAvailable, cloudBoundaryLabel } from '@/lib/azure/cloud-endpoints';
+import { dlpEnabled } from '@/lib/azure/dlp-graph-client';
 import { loadDlpMeta } from '../_lib/meta';
 
 export const runtime = 'nodejs';
@@ -32,7 +33,7 @@ export async function GET() {
     ok: true,
     boundary: cloudBoundaryLabel(),
     dlpPolicyApiAvailable: graphDlpPolicyApiAvailable(),
-    enabled: process.env.LOOM_DLP_ENABLED === 'true',
+    enabled: dlpEnabled(),
     lastScannedAt,
     scanTriggeredAt,
     restrictions,
