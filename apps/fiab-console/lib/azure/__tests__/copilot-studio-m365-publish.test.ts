@@ -44,7 +44,7 @@ function makeFetch(recorded: Recorded[], opts: { existingAgent?: boolean; existi
     }
     // create agent
     if (method === 'POST' && url.endsWith('/msdyn_copilots')) {
-      return json({ msdyn_copilotid: 'agent-1', msdyn_name: body?.msdyn_name, statecode: 0 });
+      return json({ msdyn_copilotid: 'agent-1', msdyn_name: body?.msdyn_name, msdyn_schemaname: 'cr123_myagent', statecode: 0 });
     }
     // update agent
     if (method === 'PATCH' && url.includes('/msdyn_copilots(')) {
@@ -97,6 +97,14 @@ describe('publishToM365Copilot', () => {
     expect(res.agentId).toBe('agent-1');
     expect(res.channelId).toBe('ch-1');
     expect(res.m365CopilotEnabled).toBe(true);
+
+    // Real, navigable follow-up deep links are surfaced (never a fabricated
+    // teams.microsoft.com/l/chat bot link): the Copilot Studio Channels tab is
+    // built from envId + the agent's Dataverse schema name, and the M365 admin
+    // center approval URL is always present.
+    expect(res.copilotStudioUrl).toBe(`https://copilotstudio.microsoft.com/environments/${ENV_ID}/bots/cr123_myagent/channels`);
+    expect(res.adminCenterUrl).toBe('https://admin.microsoft.com/');
+    expect(res.copilotStudioUrl).not.toContain('l/chat');
 
     // agent was created (no existing), published, and the channel created with M365 flag.
     expect(recorded.some((r) => r.method === 'POST' && r.url.endsWith('/msdyn_copilots'))).toBe(true);

@@ -1095,6 +1095,33 @@ export function resolvePublishEnvId(envId?: string): string | null {
   return v || null;
 }
 
+// Cloud-aware deep-link bases. Commercial defaults; Gov / other clouds override
+// via env (admin center is admin.microsoft.us in GCC-High, and the Copilot
+// Studio maker portal host differs). These are the two REAL, navigable links a
+// maker/admin follows after a publish — we never fabricate a Teams
+// `l/chat/0/0?users=28:<botId>` deep link because the Teams app / bot id is not
+// obtainable from Dataverse until a tenant admin approves the agent.
+const COPILOT_STUDIO_PORTAL_BASE =
+  (process.env.LOOM_COPILOT_STUDIO_PORTAL_URL || 'https://copilotstudio.microsoft.com').replace(/\/+$/, '');
+const M365_ADMIN_CENTER_URL =
+  (process.env.LOOM_M365_ADMIN_CENTER_URL || 'https://admin.microsoft.com').replace(/\/+$/, '');
+
+/**
+ * Deep link into the Copilot Studio maker portal, on the agent's Channels tab —
+ * where the maker completes availability options / grabs the "open in Teams"
+ * link once an admin approves. Requires the agent's Dataverse schema name; when
+ * absent (older orgs that don't expose msdyn_schemaname) the caller omits it.
+ */
+export function copilotStudioAgentUrl(envId: string, schemaName?: string): string | undefined {
+  if (!schemaName) return undefined;
+  return `${COPILOT_STUDIO_PORTAL_BASE}/environments/${encodeURIComponent(envId)}/bots/${encodeURIComponent(schemaName)}/channels`;
+}
+
+/** The Microsoft 365 admin center (Copilot Control System) where the pending agent request is approved. */
+export function m365AdminCenterUrl(): string {
+  return `${M365_ADMIN_CENTER_URL}/`;
+}
+
 /** Find an existing Copilot Studio agent by exact display name (idempotent upsert support). */
 export async function findAgentByName(envId: string, name: string): Promise<CopilotAgent | null> {
   const host = await envHost(envId);
@@ -1134,6 +1161,14 @@ export interface M365PublishResult {
   m365CopilotEnabled: boolean;
   /** Deep link into the M365 Copilot / Teams app once an admin approves the agent. */
   shareUrl?: string;
+  /**
+   * Copilot Studio maker-portal deep link (agent → Channels tab). Real, navigable
+   * link where the maker completes Teams/M365 availability options. Undefined when
+   * the org doesn't expose the agent's Dataverse schema name.
+   */
+  copilotStudioUrl?: string;
+  /** Microsoft 365 admin center (Copilot Control System) where the pending request is approved. */
+  adminCenterUrl: string;
 }
 
 export interface M365PublishInput {
@@ -1215,6 +1250,11 @@ export async function publishToM365Copilot(envId: string, input: M365PublishInpu
     channelEnabled: channel.enabled,
     m365CopilotEnabled: availableInM365Copilot,
     shareUrl: channel.embedUrl,
+    // Real, navigable follow-up links: the Copilot Studio Channels tab (maker
+    // completes availability + grabs the Teams share link post-approval) and the
+    // M365 admin center where a tenant admin approves the pending request.
+    copilotStudioUrl: copilotStudioAgentUrl(envId, agent.schemaName),
+    adminCenterUrl: m365AdminCenterUrl(),
   };
 }
 
