@@ -984,6 +984,25 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                       <div style={{ marginTop: tokens.spacingVerticalXS }}>
                         Copilot Studio agent <strong>{m365Result.agentName}</strong> ({m365Result.agentState || 'published'}) is now on the
                         Teams + Microsoft 365 Copilot channel{m365Result.m365CopilotEnabled ? ' with M365 Copilot enabled' : ' (Teams only)'}.
+                        {(m365Result.copilotStudioUrl || m365Result.adminCenterUrl || m365Result.shareUrl) && (
+                          <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', marginTop: tokens.spacingVerticalSNudge }}>
+                            {m365Result.copilotStudioUrl && (
+                              <a href={m365Result.copilotStudioUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorBrandForegroundLink }}>
+                                <Bot24Regular style={{ fontSize: 16 }} /> Open in Copilot Studio (Channels)
+                              </a>
+                            )}
+                            {m365Result.shareUrl && (
+                              <a href={m365Result.shareUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorBrandForegroundLink }}>
+                                <Link20Regular style={{ fontSize: 16 }} /> Teams share link
+                              </a>
+                            )}
+                            {m365Result.adminCenterUrl && (
+                              <a href={m365Result.adminCenterUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorBrandForegroundLink }}>
+                                <ShieldCheckmark20Regular style={{ fontSize: 16 }} /> Approve in M365 admin center
+                              </a>
+                            )}
+                          </div>
+                        )}
                       </div>
                     )}
                     {m365Result.error && <div>{m365Result.error}</div>}
