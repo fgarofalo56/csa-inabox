@@ -89,6 +89,10 @@ const GUARD_SIGNAL_RE = new RegExp(
     // loadKustoItem / resolveOwnedItemDatabase thread the caller tenant into
     // the item read the same way loadOwnedItem does.
     'guardAdxRequest', 'loadKustoItem', 'resolveOwnedItemDatabase',
+    // Item-level ACL resolver (rel-T87): resolveItemAccessByOid chains owner →
+    // workspace ACL → per-item grant under the tid boundary (lib/auth/item-access.ts),
+    // so a route threading it is fully authorized (not a bare session).
+    'resolveItemAccessByOid', 'resolveWorkspaceAccessByOid',
     'claims\\.oid', 'claims\\.tid', 'claims\\.tenantId',
   ].join('|'),
 );

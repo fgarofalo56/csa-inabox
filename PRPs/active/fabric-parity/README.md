@@ -151,7 +151,7 @@ parity-gap · **D** = stubbed/broken · **❌** = missing.
 | **Data Science** notebooks, AutoML, experiments | Synapse Spark + AML/OSS MLflow | **B** | — |
 | PREDICT batch scoring (ML model) | SynapseML MLFlowTransformer Spark job | **B** | P5 |
 | Real-time endpoint test/lifecycle/auto-sleep | AML managed online endpoint / ACA scale-0 | **D** | P5 |
-| AI Functions (9) + Text Analytics / Translator | AOAI + Azure AI Language/Translator (+OSS) | **C** (5/9) | P5 |
+| AI Functions (9) + Text Analytics / Translator | AOAI (chat + embeddings) + Azure AI Language/Translator (+OSS) | **B** (9/9 AI functions ✅; Text Analytics/Translator still P5) | P5 |
 | **Real-Time Intelligence** Eventhouse/KQL DB | Azure Data Explorer (ADX) | **A** | — |
 | **Activator (Reflex) runtime** | Logic App Standard → ADX Run-KQL → actions | **D** broken | **P0** |
 | RTI Hub day-one discovery + live preview | Resource Graph + ADX sink / EH Capture | **D** gated | **P0** |

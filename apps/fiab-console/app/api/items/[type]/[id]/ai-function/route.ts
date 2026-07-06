@@ -41,6 +41,7 @@ import {
 } from '@/lib/azure/databricks-client';
 import {
   callAiFn,
+  emitAiFnUsage,
   NoAoaiDeploymentError,
   isAiFn,
   AI_FN_NAMES,
@@ -68,8 +69,14 @@ function quoteIdent(raw: string): string {
   return `\`${t}\``;
 }
 
-/** Map a Loom AiFn → the Databricks built-in AI SQL expression over a column. */
-const DBX_FN: Record<AiFn, (col: string, o: AiFnOptions) => string> = {
+/**
+ * Map a Loom AiFn → the Databricks built-in AI SQL expression over a column.
+ * PARTIAL: only the functions with a direct `ai_*` SQL builtin are in-database.
+ * `embed` / `similarity` have no simple column builtin, so they always take the
+ * AOAI-direct path (below) — `DBX_FN[fn]` is undefined for them and the caller
+ * falls through.
+ */
+const DBX_FN: Partial<Record<AiFn, (col: string, o: AiFnOptions) => string>> = {
   sentiment: (col) => `ai_analyze_sentiment(${col})`,
   summarize: (col) => `ai_summarize(${col})`,
   classify: (col, o) =>
@@ -82,6 +89,8 @@ const DBX_FN: Record<AiFn, (col: string, o: AiFnOptions) => string> = {
     `ai_extract(${col}, ARRAY(${(o.fields && o.fields.length ? o.fields : ['entity'])
       .map((f) => `'${escapeSqlLiteral(String(f))}'`)
       .join(', ')}))`,
+  fix_grammar: (col) => `ai_fix_grammar(${col})`,
+  generate_response: (col) => `ai_gen(${col})`,
 };
 
 function parseOptions(o: unknown): AiFnOptions {
@@ -92,6 +101,9 @@ function parseOptions(o: unknown): AiFnOptions {
     if (Array.isArray(obj.fields)) opts.fields = obj.fields.map((x) => String(x)).filter(Boolean);
     if (typeof obj.targetLang === 'string' && obj.targetLang.trim()) opts.targetLang = obj.targetLang.trim();
     if (typeof obj.maxTokens === 'number' && obj.maxTokens > 0) opts.maxTokens = obj.maxTokens;
+    if (typeof obj.compareTo === 'string' && obj.compareTo.trim()) opts.compareTo = obj.compareTo.trim();
+    if (typeof obj.embeddingDeployment === 'string' && obj.embeddingDeployment.trim())
+      opts.embeddingDeployment = obj.embeddingDeployment.trim();
   }
   return opts;
 }
@@ -160,7 +172,10 @@ export async function POST(
   const limit = Number.isFinite(body?.limit) && body.limit > 0 ? Math.min(Math.floor(body.limit), 1000) : 50;
 
   // ---------- Commercial / GCC + Databricks SQL warehouse: in-database ----------
-  if (!govPath && warehouseId && databricksConfigGate() === null) {
+  // Only functions with a direct `ai_*` SQL builtin run in-database; embed /
+  // similarity have no column builtin and fall through to the AOAI path below.
+  const dbxExpr = DBX_FN[fn];
+  if (!govPath && warehouseId && dbxExpr && databricksConfigGate() === null) {
     if (!IDENT_RE.test(column) || (table && !IDENT_RE.test(table))) {
       return NextResponse.json(
         { ok: false, error: 'column / table must be plain SQL identifiers (no spaces or punctuation other than "." and backticks).' },
@@ -180,7 +195,7 @@ export async function POST(
     }
     const colExpr = quoteIdent(column);
     const tableExpr = table.includes('`') || table.includes('.') ? table : quoteIdent(table);
-    const sql = `SELECT ${colExpr}, ${DBX_FN[fn](colExpr, opts)} AS ai_result FROM ${tableExpr} LIMIT ${limit}`;
+    const sql = `SELECT ${colExpr}, ${dbxExpr(colExpr, opts)} AS ai_result FROM ${tableExpr} LIMIT ${limit}`;
     try {
       const result = await executeStatement(warehouseId, sql, catalog, schema);
       return NextResponse.json({ ok: true, engine: 'databricks', fn, column, sql, ...result });
@@ -221,8 +236,12 @@ export async function POST(
     // even when the LOOM_AOAI_* env vars are unset. Forwarded to
     // resolveAoaiTarget by callAiFn via opts.tenantConfig.
     opts.tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
-    const { result, model, usage } = await callAiFn(fn, input, opts);
-    return NextResponse.json({ ok: true, engine: 'aoai', fn, column, input, result, model, usage });
+    const { result, model, usage, vector, similarity } = await callAiFn(fn, input, opts);
+    // Per-call token/cost receipt → App Insights (persona `ai-function`) so the
+    // usage-chargeback + copilot-usage admin panels meter it. Awaited so the
+    // event flushes before the serverless invocation can freeze; never throws.
+    await emitAiFnUsage(fn, usage, model, session.claims.oid);
+    return NextResponse.json({ ok: true, engine: 'aoai', fn, column, input, result, model, usage, vector, similarity });
   } catch (e: any) {
     if (e instanceof NoAoaiDeploymentError) {
       return NextResponse.json(
