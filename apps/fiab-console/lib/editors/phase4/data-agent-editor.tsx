@@ -988,17 +988,17 @@ export function DataAgentEditor({ item, id }: { item: FabricItemType; id: string
                           <div style={{ display: 'flex', gap: tokens.spacingHorizontalM, flexWrap: 'wrap', marginTop: tokens.spacingVerticalSNudge }}>
                             {m365Result.copilotStudioUrl && (
                               <a href={m365Result.copilotStudioUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorBrandForegroundLink }}>
-                                <Bot24Regular style={{ fontSize: 16 }} /> Open in Copilot Studio (Channels)
+                                <Bot24Regular style={{ fontSize: tokens.fontSizeBase400 }} /> Open in Copilot Studio (Channels)
                               </a>
                             )}
                             {m365Result.shareUrl && (
                               <a href={m365Result.shareUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorBrandForegroundLink }}>
-                                <Link20Regular style={{ fontSize: 16 }} /> Teams share link
+                                <Link20Regular style={{ fontSize: tokens.fontSizeBase400 }} /> Teams share link
                               </a>
                             )}
                             {m365Result.adminCenterUrl && (
                               <a href={m365Result.adminCenterUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: tokens.spacingHorizontalXXS, color: tokens.colorBrandForegroundLink }}>
-                                <ShieldCheckmark20Regular style={{ fontSize: 16 }} /> Approve in M365 admin center
+                                <ShieldCheckmark20Regular style={{ fontSize: tokens.fontSizeBase400 }} /> Approve in M365 admin center
                               </a>
                             )}
                           </div>
