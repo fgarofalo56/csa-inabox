@@ -58,6 +58,7 @@ import { redactReceiptSecrets } from '@/lib/spark/config-presets';
 import { CopilotChatPane } from '@/lib/components/notebook/copilot-chat-pane';
 import { setCopilotContext } from '@/lib/components/copilot-pane';
 import { VariablesPane, type VarRow } from '@/lib/components/notebook/variables-pane';
+import { DataWranglerPanel } from '@/lib/components/notebook/data-wrangler-panel';
 import { type NotebookCell, type NotebookCellLang, emptyCell, migrateLegacyState } from '@/lib/types/notebook-cell';
 import { registerBridge } from '@/lib/copilot/apply-change';
 import { runtimeFromComputeKind, starterCellFor, RUNTIME_LABEL, type ClusterRuntime } from '@/lib/components/editor/cluster-runtime';
@@ -387,6 +388,9 @@ export function NotebookEditor({ item, id }: Props) {
   const [copilotOpen, setCopilotOpen] = useState(false);
   // Variable explorer (Synapse/Fabric "Variables" View-pane parity)
   const [variablesOpen, setVariablesOpen] = useState(false);
+  // Data Wrangler panel (Fabric "Data Wrangler" 1:1) — visual data-prep over a
+  // pandas host; exports pandas/PySpark code back into a notebook cell.
+  const [wranglerOpen, setWranglerOpen] = useState(false);
   // Import-from-file (desktop .ipynb / .py / .sql / .scala / .r → Loom notebook)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [importing, setImporting] = useState(false);
@@ -1342,6 +1346,19 @@ export function NotebookEditor({ item, id }: Props) {
     setDirty(true);
   }, []);
 
+  // Data Wrangler "Add code to notebook" — append a code cell carrying the
+  // generated pandas / PySpark code at the end of the notebook, select it, and
+  // mark dirty so Ctrl+S persists (the generated cell runs on the user's full
+  // DataFrame, per Fabric's export-to-cell contract). No auto-run.
+  const insertWranglerCell = useCallback((source: string, lang: 'pyspark' | 'python') => {
+    const fresh = { ...emptyCell('code', lang as NotebookCellLang), source };
+    setCells(prev => [...prev, fresh]);
+    setActiveCellId(fresh.id);
+    setDirty(true);
+    setWranglerOpen(false);
+    setRunMsg('Inserted Data Wrangler code cell — review and Run to apply on your full DataFrame.');
+  }, []);
+
   // Register an editor-mutation bridge per code cell so a Copilot-proposed
   // change (orchestrator `proposed_change` step → CopilotDiff Keep) mutates the
   // REAL cell via applyChange('notebook-cell:<id>', after). The bridge clears
@@ -1892,6 +1909,7 @@ export function NotebookEditor({ item, id }: Props) {
         ]},
         { label: 'Data', actions: [
           { label: 'Attach Lakehouse', onClick: workspaceId ? openAttach : undefined, disabled: !workspaceId },
+          { label: 'Data Wrangler', onClick: () => setWranglerOpen(true) },
         ]},
       ]},
       { id: 'view', label: 'View', groups: [
@@ -1899,6 +1917,7 @@ export function NotebookEditor({ item, id }: Props) {
           { label: 'Run history', onClick: canHistory ? () => setHistoryOpen(true) : undefined, disabled: !canHistory },
           { label: copilotOpen ? 'Hide Copilot' : 'Copilot', onClick: () => setCopilotOpen(v => !v) },
           { label: 'Variables', onClick: notebookId ? () => setVariablesOpen(true) : undefined, disabled: !notebookId },
+          { label: 'Data Wrangler', onClick: () => setWranglerOpen(true) },
         ]},
       ]},
       { id: 'edit', label: 'Edit', groups: [
@@ -2519,6 +2538,7 @@ export function NotebookEditor({ item, id }: Props) {
               >Open in VS Code for Web</Button>
             )}
             <Button appearance="outline" icon={<BracesVariable20Regular />} disabled={!notebookId} onClick={() => setVariablesOpen(true)}>Variables</Button>
+            <Button appearance="outline" icon={<Flash16Regular />} onClick={() => setWranglerOpen(true)}>Data Wrangler</Button>
             <Button appearance="subtle" icon={<Delete20Regular />} disabled={!notebookId} onClick={del}>Delete</Button>
           </div>
           )}
@@ -2563,6 +2583,16 @@ export function NotebookEditor({ item, id }: Props) {
             onOpenChange={setVariablesOpen}
             onInspect={inspectVariables}
             defaultLang={defaultLang}
+          />
+
+          {/* Data Wrangler — right-side OverlayDrawer; visual data-prep over a
+              real pandas host (Fabric "Data Wrangler" 1:1). Exports pandas /
+              PySpark code back into a notebook cell. */}
+          <DataWranglerPanel
+            open={wranglerOpen}
+            onOpenChange={setWranglerOpen}
+            onInsertCell={insertWranglerCell}
+            dfVar="df"
           />
 
           {/* Phase 2: Attach Lakehouse modal */}

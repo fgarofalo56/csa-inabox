@@ -248,6 +248,11 @@ param appImageTags object = {
   // user's Power BI-parity R/Python visual code in a resource-limited subprocess
   // and returns a static PNG. Pinned image version.
   scriptRunner: 'v0.1'
+  // loom-wrangler-host — Data Wrangler pandas host (wave-6 / rel-T83). Real ACA
+  // app (integration/wrangler.bicep) that applies a closed gallery of transform
+  // steps to a data sample and returns the preview + generated pandas/PySpark
+  // code (Microsoft Fabric "Data Wrangler" 1:1 on Azure). Pinned image version.
+  wrangler: 'v0.1'
 }
 
 @description('Deploy the browser-driven Setup Orchestrator Container App (loom-setup-orchestrator) so the Setup Wizard\'s Deploy submits the real subscription-scoped ARM deployment (templateLink to main.json). On by default — the activation gate `setupOrchestratorActive` additionally requires containerPlatform==containerApps + deployAppsEnabled, so it is a safe no-op on AKS boundaries (GCC-High / IL5), which deploy the orchestrator via the cluster GitOps path instead. The loom-setup-orchestrator image is built by the standard release matrix; if setupTemplateUri is unset the orchestrator honestly fails the Deploy with the publish remediation rather than faking success. Set false to skip the Container App + its cross-sub Contributor grants. The Setup Orchestrator UAMI (the Console UAMI) is granted Contributor per target subscription by main.bicep\'s setup-orchestrator-rbac module.')
@@ -343,6 +348,22 @@ var scriptRunnerEnabled = true
 // (Commercial / GCC) when explicitly enabled + apps deploy (it needs the
 // loom-script-runner image in ACR). On AKS boundaries it is a no-op here.
 var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// ── Data Wrangler pandas host (wave-6 / rel-T83) — deploy toggle ───────────────
+// wranglerEnabled (var, default true): deploys the loom-wrangler-host ACA app
+// (integration/wrangler.bicep) that backs the notebook editor's Data Wrangler
+// panel (Microsoft Fabric "Data Wrangler" 1:1 on Azure). Real FastAPI + pandas
+// service that applies a closed gallery of transform steps to a data sample and
+// returns the preview grid + generated pandas/PySpark code. Container Apps only;
+// an honest no-op on AKS boundaries (GCC-High / IL5), where the workload deploys
+// via the cluster GitOps path instead. Implemented as a `var` rather than a
+// `param` for the SAME reason as scriptRunnerEnabled / loomConsoleTelemetryEnabled
+// above: admin-plane/main.bicep is at the hard ARM 256-parameter cap, so a new
+// top-level toggle param would push the template to 257 params and fail. When the
+// loom-wrangler-host image isn't in ACR yet the /api/notebook/wrangler BFF
+// honest-gates on LOOM_WRANGLER_ENDPOINT — the panel still renders.
+var wranglerEnabled = true
+var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')
 param loomVersion string = '0.45.0'
@@ -2885,6 +2906,10 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // unaffected. Azure-native (ACA + the existing Synapse /query path);
             // no Fabric / Power BI service is required.
             { name: 'LOOM_SCRIPT_RUNNER_URL', value: scriptRunnerActive ? 'https://${scriptRunner!.outputs.fqdn}' : '' }
+            // Data Wrangler pandas host (rel-T83). Internal FQDN of the
+            // loom-wrangler-host Container App; the /api/notebook/wrangler BFF
+            // honest-gates on this when unset (the panel still renders).
+            { name: 'LOOM_WRANGLER_ENDPOINT', value: wranglerActive ? 'https://${wrangler!.outputs.fqdn}' : '' }
             // Governance → Data quality (run/results/monitors) and Master data
             // management (match/merge → golden records) REUSE the Databricks /
             // Synapse / Kusto bindings above (LOOM_DATABRICKS_SQL_WAREHOUSE_ID,
@@ -4247,6 +4272,65 @@ module scriptRunner 'script-runner-app.bicep' = if (scriptRunnerActive) {
     complianceTags: complianceTags
   }
 }
+
+// =====================================================================
+// Data Wrangler pandas host (rel-T83) — loom-wrangler-host Container App.
+// Backs LOOM_WRANGLER_ENDPOINT for the notebook editor's Data Wrangler panel
+// (Microsoft Fabric "Data Wrangler" 1:1 on Azure). Real FastAPI + pandas app
+// (integration/wrangler.bicep) that applies a CLOSED gallery of transform steps
+// to a data sample and returns the preview grid + generated pandas/PySpark code.
+// The BFF /api/notebook/wrangler POSTs the sample + steps here; when absent it
+// honest-gates on LOOM_WRANGLER_ENDPOINT (the panel still renders). Internal
+// ingress only, scales to zero. Azure-native (Container Apps); no Fabric.
+//
+// LEAST-PRIVILEGE identity (mirrors script-runner): a dedicated
+// uami-loom-wrangler holding AcrPull ONLY, zero data-plane roles. The app runs
+// no arbitrary code and touches no data plane, so an IMDS-minted token can do
+// nothing but pull an image.
+// =====================================================================
+resource wranglerUami 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = if (wranglerActive) {
+  name: 'uami-loom-wrangler-${location}'
+  location: location
+  tags: complianceTags
+}
+
+// AcrPull (7f951dda-4ed3-4680-a7ca-43fe172d538d) on the admin-plane ACR — the
+// wrangler identity's ONE and ONLY role. Recomputes the registry module's
+// deterministic name (same convention as scriptRunnerAcrPull) so the scope is
+// calculable at deployment start; dependsOn the registry module keeps ordering.
+// guid()-named ⇒ idempotent; gated on !skipRoleGrants so reconcile redeploys
+// (or deployers lacking User Access Administrator) are a no-op.
+resource acrForWrangler 'Microsoft.ContainerRegistry/registries@2025-04-01' existing = {
+  name: take('acrloom${uniqueString(resourceGroup().id)}', 50)
+}
+
+resource wranglerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (wranglerActive && !skipRoleGrants) {
+  scope: acrForWrangler
+  name: guid(acrForWrangler.id, wranglerUami!.id, '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+  properties: {
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+    principalId: wranglerUami!.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+  dependsOn: [
+    registry
+  ]
+}
+
+module wrangler '../integration/wrangler.bicep' = if (wranglerActive) {
+  name: 'wrangler-host'
+  params: {
+    name: 'loom-wrangler-host'
+    location: location
+    environmentId: containerPlatformModule.outputs.caeId
+    wranglerUamiId: wranglerUami.id
+    acrLoginServer: registry.outputs.acrLoginServer
+    image: '${registry.outputs.acrLoginServer}/loom-wrangler-host:${appImageTags.wrangler}'
+    targetPort: 8080
+    complianceTags: complianceTags
+  }
+}
+
 
 // Setup Orchestrator Container App (loom-setup-orchestrator) — submits the real
 // subscription-scoped ARM deployment of main.json (templateLink) for the Setup
