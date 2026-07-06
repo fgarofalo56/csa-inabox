@@ -290,7 +290,7 @@ export interface AoaiEmbedOptions {
   /** One text or a batch of texts to embed (the AOAI `input` field). */
   input: string | readonly string[];
   /**
-   * Embeddings deployment name. Defaults to `LOOM_AOAI_EMBEDDING_DEPLOYMENT`,
+   * Embeddings deployment name. Defaults to `LOOM_AOAI_EMBED_DEPLOYMENT`,
    * then `text-embedding-3-large`. This is distinct from the CHAT deployment —
    * the endpoint + api-version are shared (resolved via {@link resolveAoaiTarget}),
    * only the deployment segment differs.
@@ -323,12 +323,12 @@ export interface AoaiEmbedResult {
  * No-vaporware: a missing chat/embeddings deployment still surfaces the honest
  * gate — {@link resolveAoaiTarget} throws {@link NoAoaiDeploymentError} when AOAI
  * is unconfigured, and a 404 (embeddings model not deployed) throws an error that
- * names `LOOM_AOAI_EMBEDDING_DEPLOYMENT` as the exact remediation.
+ * names `LOOM_AOAI_EMBED_DEPLOYMENT` as the exact remediation.
  */
 export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult> {
   const base = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
   const deployment = (
-    opts.deployment || process.env.LOOM_AOAI_EMBEDDING_DEPLOYMENT || 'text-embedding-3-large'
+    opts.deployment || process.env.LOOM_AOAI_EMBED_DEPLOYMENT || 'text-embedding-3-large'
   ).trim();
   const url = `${base.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/embeddings?api-version=${base.apiVersion}`;
   const token = await aoaiToken();
@@ -345,7 +345,7 @@ export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult
     const t = await res.text().catch(() => '');
     throw new Error(
       `Azure OpenAI embeddings deployment "${deployment}" not found. Deploy a text-embedding model ` +
-        `(e.g. text-embedding-3-large) on the Foundry hub and set LOOM_AOAI_EMBEDDING_DEPLOYMENT. ${t.slice(0, 200)}`,
+        `(e.g. text-embedding-3-large) on the Foundry hub and set LOOM_AOAI_EMBED_DEPLOYMENT. ${t.slice(0, 200)}`,
     );
   }
   if (!res.ok) {

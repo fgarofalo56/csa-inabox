@@ -44,7 +44,7 @@ dashboard.
 | 3 | Per-function options | built ✅ | classify labels, extract fields, translate language, **similarity "compare to"** — surfaced conditionally |
 | 4 | In-database execution (Comm/GCC) | built ✅ | route builds `SELECT col, ai_analyze_sentiment/ai_classify/ai_fix_grammar/ai_gen(col)…` and runs it on the live Databricks SQL Warehouse via `executeStatement()`; embed/similarity have no column builtin → AOAI path |
 | 4b | AOAI substitute (Gov / no warehouse) | built ✅ | `callAiFn()` runs the seven chat functions against the gpt-4o-class AOAI deployment; boundary-detected by `isGovCloud()` |
-| 4c | **Embeddings (embed / similarity)** | built ✅ | `callAiFn('embed'/'similarity')` → unified client `aoaiEmbed()` (Azure OpenAI embeddings data-plane, `text-embedding-3-large` / `LOOM_AOAI_EMBEDDING_DEPLOYMENT`); similarity = server cosine over two embeddings |
+| 4c | **Embeddings (embed / similarity)** | built ✅ | `callAiFn('embed'/'similarity')` → unified client `aoaiEmbed()` (Azure OpenAI embeddings data-plane, `text-embedding-3-large` / `LOOM_AOAI_EMBED_DEPLOYMENT`); similarity = server cosine over two embeddings |
 | 5 | Insert the call | built ✅ | **Insert SQL** drops the generated `ai_*` SELECT into the query editor (`onInsert`) |
 | 6 | Result preview / receipt | built ✅ | Databricks path → rows `DataGrid`; AOAI chat → enriched value + model + tokens; embed → dimension + vector preview; similarity → cosine score |
 | 7 | Managed-LLM backing | built ✅ / honest-gate ⚠️ | works on a configured AOAI/Databricks endpoint; if AOAI is absent on a Gov boundary the dialog shows a `MessageBar intent="warning"` naming `LOOM_AOAI_ENDPOINT` + the role — never a crash |
@@ -59,7 +59,7 @@ Zero ❌. No stub banners. **9 of 9 Fabric AI functions built.**
 | Boundary probe | `GET /api/items/[type]/[id]/ai-function?probe=1` → `{ govPath, dbxAvailable, gated }` (server-side `isGovCloud()` + `databricksConfigGate()`) |
 | Run (Comm/GCC) | `POST …/ai-function` → `executeStatement(warehouseId, "SELECT col, ai_*(col) FROM table LIMIT n")` over the Databricks SQL Warehouse |
 | Run chat (Gov / no warehouse) | `POST …/ai-function` → `callAiFn(fn, input, opts)` → live Azure OpenAI chat-completions (sovereign endpoint via `getOpenAiSuffix()`, audience via `cogScope()`) |
-| Run embed / similarity | `callAiFn('embed'/'similarity')` → unified `aoaiEmbed()` → Azure OpenAI `/embeddings` (deployment `LOOM_AOAI_EMBEDDING_DEPLOYMENT` ?? `text-embedding-3-large`); similarity computes cosine server-side |
+| Run embed / similarity | `callAiFn('embed'/'similarity')` → unified `aoaiEmbed()` → Azure OpenAI `/embeddings` (deployment `LOOM_AOAI_EMBED_DEPLOYMENT` ?? `text-embedding-3-large`); similarity computes cosine server-side |
 | Usage receipt | `emitAiFnUsage()` → `emitCopilotUsage(..., persona:'ai-function')` → App Insights `copilot.usage` event; read by `/api/admin/copilot-usage` (KQL) and surfaced in the usage-chargeback + copilot-usage admin panels with an estimated cost |
 | Insert SQL | client-side codegen of the `ai_*` call; no backend |
 

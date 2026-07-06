@@ -90,7 +90,7 @@ export interface AiFnOptions {
   compareTo?: string;
   /**
    * Embeddings deployment override for `embed` / `similarity`. Defaults to
-   * `LOOM_AOAI_EMBEDDING_DEPLOYMENT` then `text-embedding-3-large`.
+   * `LOOM_AOAI_EMBED_DEPLOYMENT` then `text-embedding-3-large`.
    */
   embeddingDeployment?: string;
   /**
