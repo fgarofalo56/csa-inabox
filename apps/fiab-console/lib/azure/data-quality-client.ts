@@ -33,6 +33,7 @@ import {
   dedicatedTarget,
   type SynapseTarget,
 } from './synapse-sql-client';
+import type { QualityExpectation, QualitySeverity } from '@/lib/dataproducts/contract';
 
 /** Re-export of the ADX (Kusto) config gate under the observability vocabulary. */
 export { kustoConfigGate as adxConfigGate };
@@ -244,6 +245,239 @@ export async function computeDqScore(
   const score = scored.length ? Math.round((scored.reduce((a, b) => a + b, 0) / scored.length) * 10) / 10 : null;
   const passingRules = breakdown.filter((b) => b.passed).length;
   return { score, ruleCount: breakdown.length, passingRules, breakdown, computedAt };
+}
+
+// ==================================================================
+// Data-contract quality-expectation ENFORCEMENT (C8).
+//
+// A data product's `state.contract.quality[]` (authored in the Contract tab —
+// lib/dataproducts/contract.ts `QualityExpectation`) is a set of commitments the
+// product makes: not-null / unique / primary-key / accepted-values / min / max /
+// range / regex / freshness / row-count, each bound to a column (or the whole
+// table) with an error|warning severity. These are DECLARED + persisted today;
+// the function below EXECUTES them against the product's live ADX table using the
+// SAME `executeQuery` KQL path as computeDqScore — so a contract is enforced, not
+// just written down. Azure-native, no Fabric/Power BI dependency.
+//
+// KQL is built safely: identifiers via `qName`/`colRef` (bracket-quoted), string
+// literals via `kqlLiteral` (double-quote + backslash escaped), numbers coerced
+// with `Number()` and range-checked. No caller string is concatenated raw.
+// ==================================================================
+
+/** An expectation is met only when EVERY row satisfies it (100%, float-safe). */
+const CONTRACT_PASS_THRESHOLD = 100 - 1e-9;
+
+/** Quote an arbitrary value as a KQL double-quoted string literal. */
+function kqlLiteral(v: string): string {
+  return `"${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+/** Validate a KQL timespan literal (e.g. `24h`, `7d`, `30m`), else null. */
+function contractTimespan(v: string): string | null {
+  const t = (v || '').trim().toLowerCase();
+  return /^\d+[smhd]$/.test(t) ? t : null;
+}
+
+export interface ContractExpectationResult {
+  expectationId: string;
+  /** '' = table-level expectation, else the bound column. */
+  column: string;
+  /** The contract rule value (not_null / unique / primary_key / …). */
+  rule: string;
+  severity: QualitySeverity;
+  /** 0–100 measured pass percentage from the live KQL, or null when it couldn't run. */
+  percentage: number | null;
+  /** True when the expectation is fully met (percentage ≥ 100). */
+  pass: boolean;
+  detail: string;
+  /** The KQL executed (surfaced in the UI for transparency), when one ran. */
+  kql?: string;
+}
+
+export interface ContractQualityRunResult {
+  results: ContractExpectationResult[];
+  /** Expectations fully met. */
+  passed: number;
+  /** error-severity expectations that ran and were NOT met (hard failures). */
+  failed: number;
+  /** warning-severity expectations that ran and were NOT met (soft failures). */
+  warnings: number;
+  /** Expectations that could not run (malformed / no timestamp / backend error). */
+  errored: number;
+  /** Expectations that produced a measured percentage. */
+  evaluated: number;
+  /** Severity-weighted mean of measured percentages (errors ×1, warnings ×0.5); null when none ran. */
+  score: number | null;
+  computedAt: string;
+}
+
+/**
+ * Compile ONE contract quality expectation into a KQL aggregate over `table`
+ * and run it via {@link executeQuery}, returning a 0–100 pass percentage. Reuses
+ * the not-null / unique / range / regex / freshness builders from
+ * {@link scoreRule}; adds accepted-values, min, max, row-count; maps primary_key
+ * → not-null AND unique (the weaker of the two drives the percentage). Returns
+ * `percentage: null` + an honest detail when the expectation is malformed for
+ * its rule (e.g. a column-scoped rule with no column). Throws KustoError on a
+ * real backend error so the caller records a per-expectation detail.
+ */
+async function scoreContractExpectation(
+  database: string,
+  table: string,
+  exp: QualityExpectation,
+): Promise<{ percentage: number | null; detail: string; kql?: string }> {
+  const T = qName(table);
+  const column = (exp.column || '').trim();
+  const C = column ? colRef(column) : '';
+  const value = (exp.value || '').trim();
+
+  // Rules that operate on a single column require a column scope.
+  const columnRules = new Set(['not_null', 'unique', 'primary_key', 'accepted_values', 'min', 'max', 'range', 'regex']);
+  if (columnRules.has(exp.rule) && !column) {
+    return { percentage: null, detail: `${exp.rule} expectation needs a column (it is bound table-level)` };
+  }
+
+  switch (exp.rule) {
+    case 'not_null': {
+      const kql = `${T} | summarize total=count(), bad=countif(isnull(${C})) | project pct=iff(total==0, 100.0, todouble(total-bad)/total*100)`;
+      const r = await executeQuery(database, kql);
+      const pct = firstNumber(r.columns, r.rows, 'pct');
+      return { percentage: pct, detail: pct == null ? 'no rows' : `${pct.toFixed(1)}% non-null`, kql };
+    }
+    case 'unique': {
+      const kql = `${T} | summarize total=count(), distinctCount=dcount(${C}) | project pct=iff(total==0, 100.0, todouble(distinctCount)/total*100)`;
+      const r = await executeQuery(database, kql);
+      const pct = firstNumber(r.columns, r.rows, 'pct');
+      return { percentage: pct, detail: pct == null ? 'no rows' : `${pct.toFixed(1)}% distinct`, kql };
+    }
+    case 'primary_key': {
+      // Primary key = not-null AND unique — BOTH must hold; the weaker % drives pass.
+      const kql = `${T} | summarize total=count(), nn=countif(isnotnull(${C})), distinctCount=dcount(${C}) | project nnPct=iff(total==0, 100.0, todouble(nn)/total*100), uqPct=iff(total==0, 100.0, todouble(distinctCount)/total*100)`;
+      const r = await executeQuery(database, kql);
+      const nnPct = firstNumber(r.columns, r.rows, 'nnPct');
+      const uqPct = firstNumber(r.columns, r.rows, 'uqPct');
+      if (nnPct == null || uqPct == null) return { percentage: null, detail: 'no rows', kql };
+      return { percentage: Math.min(nnPct, uqPct), detail: `${nnPct.toFixed(1)}% non-null · ${uqPct.toFixed(1)}% distinct`, kql };
+    }
+    case 'accepted_values': {
+      const values = value.split(',').map((v) => v.trim()).filter(Boolean);
+      if (!values.length) return { percentage: null, detail: 'accepted-values expectation needs a comma-separated list' };
+      const list = values.map(kqlLiteral).join(', ');
+      const kql = `${T} | summarize total=count(), good=countif(tostring(${C}) in (${list})) | project pct=iff(total==0, 100.0, todouble(good)/total*100)`;
+      const r = await executeQuery(database, kql);
+      const pct = firstNumber(r.columns, r.rows, 'pct');
+      return { percentage: pct, detail: pct == null ? 'no rows' : `${pct.toFixed(1)}% in {${values.join(', ')}}`, kql };
+    }
+    case 'min':
+    case 'max': {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return { percentage: null, detail: `${exp.rule} expectation needs a numeric value` };
+      const cmp = exp.rule === 'min' ? `${C} >= ${n}` : `${C} <= ${n}`;
+      const kql = `${T} | summarize total=count(), good=countif(${cmp}) | project pct=iff(total==0, 100.0, todouble(good)/total*100)`;
+      const r = await executeQuery(database, kql);
+      const pct = firstNumber(r.columns, r.rows, 'pct');
+      return { percentage: pct, detail: pct == null ? 'no rows' : `${pct.toFixed(1)}% ${exp.rule === 'min' ? '≥' : '≤'} ${n}`, kql };
+    }
+    case 'range': {
+      const parts = value.split('..').map((v) => v.trim());
+      const lo = Number(parts[0]);
+      const hi = Number(parts[1]);
+      if (parts.length !== 2 || !Number.isFinite(lo) || !Number.isFinite(hi)) {
+        return { percentage: null, detail: 'range expectation needs a "min..max" numeric value' };
+      }
+      const kql = `${T} | summarize total=count(), good=countif(${C} >= ${lo} and ${C} <= ${hi}) | project pct=iff(total==0, 100.0, todouble(good)/total*100)`;
+      const r = await executeQuery(database, kql);
+      const pct = firstNumber(r.columns, r.rows, 'pct');
+      return { percentage: pct, detail: pct == null ? 'no rows' : `${pct.toFixed(1)}% within [${lo}, ${hi}]`, kql };
+    }
+    case 'regex': {
+      if (!value) return { percentage: null, detail: 'regex expectation needs a pattern value' };
+      const kql = `${T} | summarize total=count(), good=countif(tostring(${C}) matches regex ${kqlLiteral(value)}) | project pct=iff(total==0, 100.0, todouble(good)/total*100)`;
+      const r = await executeQuery(database, kql);
+      const pct = firstNumber(r.columns, r.rows, 'pct');
+      return { percentage: pct, detail: pct == null ? 'no rows' : `${pct.toFixed(1)}% match /${value}/`, kql };
+    }
+    case 'freshness': {
+      // A column-scoped freshness uses that timestamp column; table-level uses ingestion_time().
+      const ts = contractTimespan(value) || (value ? null : '1d');
+      if (!ts) return { percentage: null, detail: 'freshness expectation needs a max-age like 24h or 7d' };
+      const latestExpr = column ? `max(${C})` : 'max(ingestion_time())';
+      const kql = `${T} | summarize latest=${latestExpr} | extend fresh=(latest >= ago(${ts})), ageHours=datetime_diff('hour', now(), latest) | project pct=iff(fresh, 100.0, 0.0), ageHours`;
+      const r = await executeQuery(database, kql);
+      const pct = firstNumber(r.columns, r.rows, 'pct');
+      const age = firstNumber(r.columns, r.rows, 'ageHours');
+      return {
+        percentage: pct,
+        detail: pct == null ? 'no timestamp' : pct >= CONTRACT_PASS_THRESHOLD ? `fresh (${age ?? '?'}h old, limit ${ts})` : `stale (${age ?? '?'}h old, limit ${ts})`,
+        kql,
+      };
+    }
+    case 'row_count': {
+      const minRows = Number(value);
+      if (!Number.isFinite(minRows)) return { percentage: null, detail: 'row-count expectation needs a numeric minimum' };
+      const floor = Math.floor(minRows);
+      const kql = `${T} | summarize total=count() | project pct=iff(total >= ${floor}, 100.0, 0.0), total`;
+      const r = await executeQuery(database, kql);
+      const pct = firstNumber(r.columns, r.rows, 'pct');
+      const total = firstNumber(r.columns, r.rows, 'total');
+      return {
+        percentage: pct,
+        detail: pct == null ? 'no rows' : pct >= CONTRACT_PASS_THRESHOLD ? `${total ?? '?'} rows (≥ ${floor})` : `${total ?? 0} rows (< ${floor})`,
+        kql,
+      };
+    }
+    default:
+      return { percentage: null, detail: `unknown expectation rule "${exp.rule}"` };
+  }
+}
+
+/**
+ * Execute a data product's declared contract quality expectations against its
+ * bound ADX table and return the per-expectation results + a composite score.
+ * Each expectation is scored with {@link scoreContractExpectation}; an
+ * expectation passes only when 100% of rows satisfy it. Severity is respected:
+ * a not-met error-severity expectation is a hard `failed`, a warning-severity
+ * one a soft `warning`, and the composite score weights errors twice as heavily
+ * as warnings. Real ADX every time — no mocks. The caller (BFF) persists the run
+ * into the `dq-runs:<tenantId>` history.
+ */
+export async function runContractQuality(
+  database: string,
+  tableName: string,
+  expectations: QualityExpectation[],
+): Promise<ContractQualityRunResult> {
+  const computedAt = new Date().toISOString();
+  const results: ContractExpectationResult[] = [];
+
+  for (const exp of expectations) {
+    try {
+      const { percentage, detail, kql } = await scoreContractExpectation(database, tableName, exp);
+      const pass = percentage != null && percentage >= CONTRACT_PASS_THRESHOLD;
+      results.push({ expectationId: exp.id, column: exp.column || '', rule: exp.rule, severity: exp.severity, percentage, pass, detail, kql });
+    } catch (e: any) {
+      const msg = e instanceof KustoError ? e.message : (e?.message || String(e));
+      results.push({ expectationId: exp.id, column: exp.column || '', rule: exp.rule, severity: exp.severity, percentage: null, pass: false, detail: `error: ${msg}` });
+    }
+  }
+
+  const evaluated = results.filter((r) => r.percentage != null);
+  const passed = results.filter((r) => r.pass).length;
+  const failed = results.filter((r) => !r.pass && r.percentage != null && r.severity === 'error').length;
+  const warnings = results.filter((r) => !r.pass && r.percentage != null && r.severity === 'warning').length;
+  const errored = results.filter((r) => r.percentage == null).length;
+
+  // Severity-weighted composite: a failing warning dents the score, but a broken
+  // error-severity commitment weighs twice as much.
+  let weightSum = 0;
+  let acc = 0;
+  for (const r of evaluated) {
+    const w = r.severity === 'error' ? 1 : 0.5;
+    acc += (r.percentage as number) * w;
+    weightSum += w;
+  }
+  const score = weightSum ? Math.round((acc / weightSum) * 10) / 10 : null;
+
+  return { results, passed, failed, warnings, errored, evaluated: evaluated.length, score, computedAt };
 }
 
 /**
