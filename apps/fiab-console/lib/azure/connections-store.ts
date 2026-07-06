@@ -13,7 +13,7 @@
  * KV REST) or the create fails with the exact gate (missing vault / role).
  */
 import crypto from 'node:crypto';
-import { connectionsContainer } from './cosmos-client';
+import { connectionsContainer, itemsContainer } from './cosmos-client';
 import { putKeyVaultSecret, deleteKeyVaultSecret, kvSecretsConfigGate } from './kv-secrets-client';
 import type { SessionPayload } from '@/lib/auth/session';
 
@@ -249,6 +249,17 @@ export async function registerConnectionInPurview(
 
 export async function deleteConnection(session: SessionPayload, id: string): Promise<void> {
   const tenantId = session.claims.oid;
+
+  // Referential integrity: never orphan an item that still binds this connection
+  // (and never silently drop its Key Vault secret out from under it). If any
+  // item references it, refuse with a 409 + the dependents list so the caller
+  // can show "remove these references first" (rel-T99).
+  const dependents = await findConnectionDependents(tenantId, id);
+  if (dependents.length > 0) {
+    const err = new ConnectionInUseError(dependents);
+    throw err;
+  }
+
   const c = await connectionsContainer();
   try {
     const { resource } = await c.item(id, tenantId).read<LoomConnection>();
@@ -258,6 +269,54 @@ export async function deleteConnection(session: SessionPayload, id: string): Pro
     if (e?.code === 404) return;
     throw e;
   }
+}
+
+/** An item that references a connection — enough to name it in a "still in use" gate. */
+export interface ConnectionDependent {
+  id: string;
+  itemType: string;
+  displayName: string;
+  workspaceId?: string;
+}
+
+/** Thrown by {@link deleteConnection} when items still reference the connection. */
+export class ConnectionInUseError extends Error {
+  readonly status = 409;
+  readonly dependents: ConnectionDependent[];
+  constructor(dependents: ConnectionDependent[]) {
+    const names = dependents.slice(0, 5).map((d) => d.displayName || d.id).join(', ');
+    const more = dependents.length > 5 ? ` and ${dependents.length - 5} more` : '';
+    super(`This connection is still used by ${dependents.length} item${dependents.length !== 1 ? 's' : ''}: ${names}${more}. Remove those references before deleting it.`);
+    this.name = 'ConnectionInUseError';
+    this.dependents = dependents;
+  }
+}
+
+/**
+ * Find every workspace item that binds this connection. Connections are referenced
+ * from two persisted shapes today:
+ *   • `state.connectionId`             — mirrored-database source binding
+ *   • `state.dataSource.connectionId`  — report "Get Data" (Loom Connection) source
+ * A connection id is a tenant-unique UUID, so a cross-partition match is safe to
+ * attribute to the caller's tenant without a per-item tenant join.
+ */
+export async function findConnectionDependents(tenantId: string, id: string): Promise<ConnectionDependent[]> {
+  if (!id) return [];
+  const items = await itemsContainer();
+  const { resources } = await items.items
+    .query<{ id: string; itemType: string; displayName?: string; workspaceId?: string }>({
+      query:
+        'SELECT c.id, c.itemType, c.displayName, c.workspaceId FROM c ' +
+        'WHERE c.state.connectionId = @id OR c.state.dataSource.connectionId = @id',
+      parameters: [{ name: '@id', value: id }],
+    })
+    .fetchAll();
+  return (resources || []).map((r) => ({
+    id: r.id,
+    itemType: r.itemType || 'item',
+    displayName: r.displayName || r.id,
+    workspaceId: r.workspaceId,
+  }));
 }
 
 /** Internal: resolve a connection's full record (incl. secretRef) for server-side use. */

@@ -17,7 +17,7 @@ import { useState, useCallback, useEffect } from 'react';
 import {
   Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   Field, Input, Dropdown, Option, Button, MessageBar, MessageBarBody,
-  Caption1, makeStyles, tokens,
+  Caption1, Spinner, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   DatabasePlugConnected20Regular, Key20Regular, ShieldKeyhole20Regular, Edit20Regular,
@@ -109,6 +109,10 @@ export function ConnectionBuilder({
   const [secret, setSecret] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // "Test connection" state — a real reachability probe via POST /api/connections/test.
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ reachable: boolean; detail: string } | null>(null);
+  const [testError, setTestError] = useState<{ error: string; hint?: string } | null>(null);
 
   // Prefill from editConnection when the dialog opens in edit mode.
   useEffect(() => {
@@ -138,6 +142,38 @@ export function ConnectionBuilder({
 
   // In create mode, secret is required. In edit mode it is optional (blank = keep existing).
   const secretRequired = needsSecret && !isEdit;
+  // Every source type except a bare connection string reaches a host/namespace/
+  // account — require it (matches Azure/Fabric, which block save without a server).
+  const hostRequired = authMethod !== 'connection-string';
+
+  // A stale "Test" result must never linger after the coordinates change — clear
+  // it whenever any probed field changes so the badge always reflects the form.
+  useEffect(() => {
+    setTestResult(null);
+    setTestError(null);
+  }, [type, authMethod, host, database, username, secret]);
+
+  const runTest = useCallback(async () => {
+    setTesting(true); setTestResult(null); setTestError(null);
+    try {
+      const r = await clientFetch('/api/connections/test', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          type, authMethod, host, database, username,
+          secret: needsSecret && secret ? secret : undefined,
+          id: isEdit ? editConnection?.id : undefined,
+        }),
+      });
+      const j = await r.json();
+      if (!r.ok || !j.ok) { setTestError({ error: j?.error || `HTTP ${r.status}`, hint: j?.hint }); return; }
+      setTestResult({ reachable: !!j.reachable, detail: j.detail || '' });
+    } catch (e: any) {
+      setTestError({ error: e?.message || String(e) });
+    } finally { setTesting(false); }
+  }, [type, authMethod, host, database, username, secret, needsSecret, isEdit, editConnection]);
+
+  const canTest = !testing && !busy && !(hostRequired && !host.trim())
+    && !(secretRequired && !secret);
 
   const submit = useCallback(async () => {
     setBusy(true); setErr(null);
@@ -207,7 +243,7 @@ export function ConnectionBuilder({
 
               {authMethod !== 'connection-string' && (
                 <>
-                  <Field label={hostLabel(type)}>
+                  <Field label={hostLabel(type)} required={hostRequired}>
                     <Input value={host} placeholder={hostPlaceholder(type)} onChange={(_, d) => setHost(d.value)} />
                   </Field>
                   {!HOSTLESS_DB_TYPES.has(type) && (
@@ -251,15 +287,35 @@ export function ConnectionBuilder({
                 </Caption1>
               )}
 
+              {testResult && (
+                <MessageBar intent={testResult.reachable ? 'success' : 'info'}>
+                  <MessageBarBody>{testResult.detail}</MessageBarBody>
+                </MessageBar>
+              )}
+              {testError && (
+                <MessageBar intent="error">
+                  <MessageBarBody>
+                    {testError.error}{testError.hint ? ` — ${testError.hint}` : ''}
+                  </MessageBarBody>
+                </MessageBar>
+              )}
+
               {err && <MessageBar intent="error"><MessageBarBody>{err}</MessageBarBody></MessageBar>}
             </div>
           </DialogContent>
           <DialogActions>
+            <Button
+              appearance="secondary"
+              icon={testing ? <Spinner size="tiny" /> : <DatabasePlugConnected20Regular />}
+              disabled={!canTest}
+              onClick={runTest}>
+              {testing ? 'Testing…' : 'Test connection'}
+            </Button>
             <Button appearance="secondary" onClick={onClose}>Cancel</Button>
             <Button
               appearance="primary"
               icon={isEdit ? <Edit20Regular /> : <Key20Regular />}
-              disabled={busy || !name.trim() || (secretRequired && !secret)}
+              disabled={busy || !name.trim() || (secretRequired && !secret) || (hostRequired && !host.trim())}
               onClick={submit}>
               {busy ? 'Saving…' : (isEdit ? 'Save changes' : 'Create connection')}
             </Button>

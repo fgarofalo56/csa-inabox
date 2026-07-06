@@ -14,7 +14,7 @@ import {
   listConnections, createConnection, deleteConnection, authNeedsSecret,
   type ConnectionType, type AuthMethod,
 } from '@/lib/azure/connections-store';
-import { apiServerError } from '@/lib/api/respond';
+import { apiError, apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -71,6 +71,8 @@ export async function DELETE(req: NextRequest) {
     await deleteConnection(session, id);
     return NextResponse.json({ ok: true });
   } catch (e: any) {
+    // Referential-integrity gate: item(s) still bind this connection (409).
+    if (e?.status === 409) return apiError(e.message, 409, { dependents: e.dependents });
     return apiServerError(e);
   }
 }

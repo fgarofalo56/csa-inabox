@@ -16,7 +16,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Caption1, Badge, Button, Spinner, MessageBar, MessageBarBody,
   MessageBarTitle, Menu, MenuTrigger, MenuPopover, MenuList, MenuItem,
-  makeStyles, tokens,
+  Text, makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   PlugConnected24Regular, Add20Regular, Delete20Regular, Key16Regular, ShieldKeyhole16Regular,
@@ -30,10 +30,14 @@ import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { ItemTile } from '@/lib/components/ui/item-tile';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 import { ConnectionBuilder, type ConnectionView } from '@/lib/components/connections/connection-builder';
 import { AddExistingConnectionWizard } from '@/lib/components/connections/add-existing-wizard';
 
 const LS_VIEW = 'loom.connections.viewMode.v1';
+
+/** An item that still binds a connection (from GET /api/connections/[id]/dependents). */
+interface ConnectionDependent { id: string; itemType: string; displayName: string; workspaceId?: string }
 
 const useStyles = makeStyles({
   loadingBox: {
@@ -53,6 +57,8 @@ const useStyles = makeStyles({
     display: 'inline-block',
   },
   typeIcon: { fontSize: tokens.fontSizeBase400 },
+  confirmBody: { display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalM },
+  depList: { margin: 0, paddingLeft: tokens.spacingHorizontalL, display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS },
 });
 
 const TYPE_LABEL: Record<string, string> = {
@@ -85,11 +91,11 @@ const CONN_TILE_TYPE: Record<string, string> = {
 
 export default function ConnectionsPage() {
   const s = useStyles();
+  const { confirm, dialog } = useConfirm();
   const [conns, setConns] = useState<ConnectionView[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [builderOpen, setBuilderOpen] = useState(false);
   const [addExistingOpen, setAddExistingOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
   const [view, setView] = useState<LoomView>('tile');
 
   // Hydrate + persist the view choice (SSR-safe; ignore quota / private mode).
@@ -114,14 +120,56 @@ export default function ConnectionsPage() {
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  const remove = useCallback(async (id: string, name: string) => {
-    if (!confirm(`Delete connection "${name}"? Its Key Vault secret is also removed.`)) return;
-    setBusy(true);
+  const remove = useCallback(async (c: ConnectionView) => {
+    // Pre-fetch dependents so the themed confirm dialog can LIST what still binds
+    // this connection (Azure-parity "in use" disclosure). The DELETE route also
+    // enforces a 409 server-side, so this is disclosure + a friendlier gate — the
+    // server stays authoritative even if this check races.
+    let dependents: ConnectionDependent[] = [];
     try {
-      await clientFetch(`/api/connections?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
-      await load();
-    } finally { setBusy(false); }
-  }, [load]);
+      const r = await clientFetch(`/api/connections/${encodeURIComponent(c.id)}/dependents`);
+      const j = await r.json();
+      if (r.ok && j?.ok) dependents = Array.isArray(j.dependents) ? j.dependents : [];
+    } catch { /* fall through — the DELETE 409 guard is authoritative */ }
+
+    const inUse = dependents.length > 0;
+    const body = inUse ? (
+      <div className={s.confirmBody}>
+        <Text>
+          <strong>{c.name}</strong> is still used by {dependents.length} item{dependents.length !== 1 ? 's' : ''}.
+          Remove these references first — deleting it would orphan them and drop its Key Vault secret.
+        </Text>
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <ul className={s.depList}>
+              {dependents.map((d) => (
+                <li key={d.id}>{d.displayName} <Caption1>({d.itemType})</Caption1></li>
+              ))}
+            </ul>
+          </MessageBarBody>
+        </MessageBar>
+      </div>
+    ) : (
+      <Text>Delete connection <strong>{c.name}</strong>? Its Key Vault secret is also removed. This can’t be undone.</Text>
+    );
+
+    await confirm({
+      title: inUse ? 'Connection in use' : 'Delete connection?',
+      body,
+      danger: true,
+      confirmLabel: 'Delete',
+      onConfirm: async () => {
+        const r = await clientFetch(`/api/connections?id=${encodeURIComponent(c.id)}`, { method: 'DELETE' });
+        const j = await r.json().catch(() => ({} as any));
+        if (!r.ok || j?.ok === false) {
+          // Surface the server's honest message (incl. the referential-integrity
+          // 409) inline in the dialog — never a silent failure.
+          throw new Error(j?.error || `Delete failed (HTTP ${r.status}).`);
+        }
+        await load();
+      },
+    });
+  }, [confirm, load, s]);
 
   const columns: LoomColumn<ConnectionView>[] = [
     { key: 'name', label: 'Name', sortable: true, filterable: true, getValue: (c) => c.name, render: (c) => <strong>{c.name}</strong> },
@@ -151,7 +199,7 @@ export default function ConnectionsPage() {
     { key: 'database', label: 'Database', sortable: true, filterable: true, getValue: (c) => c.database || '—', render: (c) => c.database || '—' },
     {
       key: 'actions', label: '', sortable: false, filterable: false, width: 90,
-      render: (c) => <Button size="small" appearance="subtle" icon={<Delete20Regular />} disabled={busy} onClick={() => remove(c.id, c.name)} aria-label={`Delete ${c.name}`} />,
+      render: (c) => <Button size="small" appearance="subtle" icon={<Delete20Regular />} onClick={() => remove(c)} aria-label={`Delete ${c.name}`} />,
     },
   ];
 
@@ -213,7 +261,7 @@ export default function ConnectionsPage() {
                     </MenuTrigger>
                     <MenuPopover>
                       <MenuList>
-                        <MenuItem icon={<Delete20Regular />} disabled={busy} onClick={() => remove(c.id, c.name)}>Delete</MenuItem>
+                        <MenuItem icon={<Delete20Regular />} onClick={() => remove(c)}>Delete</MenuItem>
                       </MenuList>
                     </MenuPopover>
                   </Menu>
@@ -240,6 +288,7 @@ export default function ConnectionsPage() {
 
       <ConnectionBuilder open={builderOpen} onClose={() => setBuilderOpen(false)} onCreated={() => void load()} />
       <AddExistingConnectionWizard open={addExistingOpen} onClose={() => setAddExistingOpen(false)} onImported={() => void load()} />
+      {dialog}
     </PageShell>
   );
 }
