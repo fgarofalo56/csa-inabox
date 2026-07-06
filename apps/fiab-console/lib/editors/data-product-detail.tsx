@@ -50,6 +50,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { RequestAccessDialog } from './components/request-access-dialog';
+import { DataContractSummary } from './components/data-contract-designer';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import { findItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
@@ -628,7 +629,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
   const [loading, setLoading] = useState(id !== 'new');
   const [loadErr, setLoadErr] = useState<string | null>(null);
 
-  const [tab, setTab] = useState<'details' | 'observability' | 'tryit'>('details');
+  const [tab, setTab] = useState<'details' | 'contract' | 'observability' | 'tryit'>('details');
   const [showEmpty, setShowEmpty] = useState(false);
 
   // Owner contact-label editing (persisted via PATCH).
@@ -795,8 +796,9 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
           </div>
         </div>
 
-        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'details' | 'observability' | 'tryit')}>
+        <TabList selectedValue={tab} onTabSelect={(_, d) => setTab(d.value as 'details' | 'contract' | 'observability' | 'tryit')}>
           <Tab value="details">Details</Tab>
+          <Tab value="contract" icon={<DocumentText20Regular />}>Contract</Tab>
           <Tab value="observability">Data Observability</Tab>
           <Tab value="tryit" icon={<Play20Regular />}>Try it</Tab>
         </TabList>
@@ -972,6 +974,15 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
           </div>
         )}
 
+        {tab === 'contract' && (
+          <div className={s.body} style={{ marginTop: tokens.spacingVerticalM }}>
+            <Card className={s.card}>
+              <CardHeader header={<Subtitle2>Data contract</Subtitle2>} />
+              <DataContractSummary contract={product.contract} />
+            </Card>
+          </div>
+        )}
+
         {tab === 'observability' && (
           <div style={{ marginTop: tokens.spacingVerticalM }}>
             <ObservabilityTabContent
@@ -1022,6 +1033,7 @@ interface DataProductState {
   glossaryLinks?: DataProductGlossaryLink[];
   purviewDataProductId?: string;
   lastRegisteredAt?: string;
+  contract?: import('@/lib/dataproducts/contract').DataContract;
 }
 
 const useConsumerStyles = makeStyles({
@@ -1171,6 +1183,7 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
 
       <TabList selectedValue={activeTab} onTabSelect={(_, d) => setActiveTab(d.value as string)}>
         <Tab value="overview" icon={<BookRegular />}>Overview</Tab>
+        <Tab value="contract" icon={<DocumentText20Regular />}>Contract</Tab>
         <Tab value="datasets" icon={<DatabaseRegular />}>Datasets</Tab>
         <Tab value="glossary" icon={<BookRegular />}>Glossary</Tab>
         <Tab value="tryit" icon={<Play20Regular />}>Try it</Tab>
@@ -1197,6 +1210,13 @@ export function ConsumerDataProductDetail({ id }: { id: string }) {
                 ? <>Registered <code>{state.purviewDataProductId}</code></>
                 : <span className={s.empty}>Not registered with the unified catalog</span>}</Body1>
             </div>
+          </Card>
+        )}
+
+        {activeTab === 'contract' && (
+          <Card className={s.card}>
+            <Text className={s.sectionTitle}><DocumentText20Regular /> Data contract</Text>
+            <DataContractSummary contract={state.contract} />
           </Card>
         )}
 
