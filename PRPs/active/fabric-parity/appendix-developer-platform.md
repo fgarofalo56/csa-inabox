@@ -491,3 +491,15 @@ deployment where: a UDF runs, a DAB GraphQL query returns rows, a schedule fires
 into the Monitoring Hub, workspace monitoring tiles render, and an Event Grid
 subscription delivers an ItemCreated event — all without any Fabric/Power BI
 host being contacted.
+
+---
+
+## 8. Roadmap: Loom SDK + Terraform provider (P7, not yet shipped)
+
+The language SDKs (`packages/loom-sdk-*`) and the Terraform provider
+(`terraform-provider-loom`) do not exist yet — they are scoped, sequenced, and
+disclosed as roadmap in
+[`docs/fiab/roadmap/loom-sdk-terraform.md`](../../../docs/fiab/roadmap/loom-sdk-terraform.md).
+They build on the shipped foundation (the Loom REST/BFF API + the `loom` CLI in
+`apps/loom-cli`); the parity ledger row stays **❌ (roadmap)** until they pass the
+P7 acceptance test.
