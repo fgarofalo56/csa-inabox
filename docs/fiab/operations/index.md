@@ -8,6 +8,12 @@ production using this section + the [runbooks](../runbooks/deploy-failure.md).
 
 <div class="grid cards" markdown>
 
+-   :material-shield-check: [**Support boundaries (v1)**](support-boundaries.md)
+
+    What v1 supports along language and availability: English (en-US)
+    only (no i18n), single-region with in-region zone redundancy, and
+    redeploy-from-Git DR.
+
 -   :material-speedometer: [**Capacity management**](capacity-management.md)
 
     The CU-equivalent model + per-service scaling. Pause/resume

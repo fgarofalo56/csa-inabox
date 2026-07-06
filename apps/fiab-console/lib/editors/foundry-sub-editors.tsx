@@ -2221,12 +2221,20 @@ export function AiSearchIndexEditor({ item, id }: { item: FabricItemType; id: st
               {/* Semantic configuration designer — visual builder for index.semantic.configurations[]. */}
               <SemanticConfigDesigner idx={idx} indexBase={indexBase} onSaved={() => { reloadDetail(); setTreeRefresh((n) => n + 1); }} />
 
-              {/* Advanced fallback: full definition JSON (vectorSearch / semantic /
-                  scoringProfiles / analyzers authored here, round-trips with the grid). */}
+              {/* rel-T107 — PARITY JSON VIEW (allowed). This is NOT a raw item-config
+                  blob: the typed Fields designer above (name / type / key / searchable /
+                  filterable / sortable / facetable / retrievable / analyzer / vector) is the
+                  PRIMARY authoring surface and grounds 1:1 in the real Azure AI Search field
+                  attributes (Learn: search-what-is-an-index#schema-of-a-search-index). This
+                  secondary "full definition (JSON)" mirrors the portal's code-based index
+                  definition for the parts a grid can't express — vectorSearch algorithms/
+                  profiles, semantic configurations, scoringProfiles and custom analyzers —
+                  and round-trips with the grid (same PUT /indexes/{name}). Portal itself
+                  recommends a code approach for these advanced sections. */}
               <div className={s.card}>
                 <Subtitle2>Advanced — full definition (JSON)</Subtitle2>
-                <Caption1>The complete index definition, including vectorSearch profiles/algorithms, semantic configurations, scoring profiles and custom analyzers. Save issues a real PUT /indexes/{idx.name}.</Caption1>
-                <MonacoTextarea value={schemaText} onChange={(v) => { setSchemaText(v); setSchemaDirty(true); }} language="json" minHeight={260} />
+                <Caption1>The complete index definition, including vectorSearch profiles/algorithms, semantic configurations, scoring profiles and custom analyzers. The Fields designer above is the primary editor; this JSON view reflects the same definition. Save issues a real PUT /indexes/{idx.name}.</Caption1>
+                <MonacoTextarea value={schemaText} onChange={(v) => { setSchemaText(v); setSchemaDirty(true); }} language="json" minHeight={260} ariaLabel="Index definition JSON" />
                 <div className={s.toolbar} style={{ marginTop: tokens.spacingVerticalS }}>
                   <Button appearance="primary" disabled={savingSchema || !schemaDirty} onClick={saveSchema}>{savingSchema ? 'Saving…' : 'Save definition'}</Button>
                   <Button onClick={() => { setSchemaText(JSON.stringify(idx, null, 2)); setSchemaDirty(false); setSchemaMsg(null); }} disabled={!schemaDirty}>Revert</Button>

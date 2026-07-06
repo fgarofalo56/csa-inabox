@@ -1768,6 +1768,7 @@ nav:
       - Operations & Runbooks:
           - Operations:
               - Index: fiab/operations/index.md
+              - Support Boundaries (v1): fiab/operations/support-boundaries.md
               - Capacity Management: fiab/operations/capacity-management.md
               - Monitoring & Observability: fiab/operations/monitoring.md
               - Cost Management: fiab/operations/cost.md

@@ -586,6 +586,12 @@ export function MapEditor({ item, id }: { item: FabricItemType; id: string }) {
         {tab === 'json' && (
           <>
             <Subtitle2>GeoJSON ({featureCount} feature{featureCount === 1 ? '' : 's'})</Subtitle2>
+            {/* rel-T107 — PARITY JSON VIEW (allowed). GeoJSON DATA PAYLOAD, not an item-config
+                blob: the visual layer designer (Point / Heatmap / Cluster / Choropleth) +
+                address geocoding on the other tabs are the PRIMARY authoring surfaces; this
+                tab exposes the underlying FeatureCollection document (1:1 with editing GeoJSON
+                for an Azure Maps overlay). The map below renders it through the configured
+                layers; validated on change; can also be populated by Run binding. */}
             <Caption1>Edited directly, or populated by Run binding. The map below renders it through the configured layers.</Caption1>
             <MonacoTextarea value={state.geojson} onChange={(v) => setState((p) => ({ ...p, geojson: v }))} language="json" height={280} minHeight={200} ariaLabel="GeoJSON" />
             {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid JSON: {parseErr}</MessageBarBody></MessageBar>}

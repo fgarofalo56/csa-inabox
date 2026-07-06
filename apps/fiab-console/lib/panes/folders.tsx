@@ -383,6 +383,9 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
   const [bulkMoveTarget, setBulkMoveTarget] = useState<string>('');
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkBusy, setBulkBusy] = useState(false);
+  // Per-item outcome of the last bulk delete — a continue-on-error report so a
+  // single failure no longer aborts the whole batch or hides partial deletion.
+  const [bulkResult, setBulkResult] = useState<{ deleted: number; failed: { id: string; name: string; error: string }[] } | null>(null);
   const toggleSel = useCallback((id: string) => setSelected((prev) => {
     const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next;
   }), []);
@@ -396,12 +399,28 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
     } catch (e: any) { setError(e?.message || String(e)); } finally { setBulkBusy(false); }
   }, [selected, bulkMoveTarget, workspaceId, clearSel, refresh]);
   const bulkDelete = useCallback(async () => {
-    setBulkBusy(true); setError(null);
-    try {
-      for (const id of selected) await deleteWorkspaceItem(workspaceId, id);
-      setBulkDeleteOpen(false); clearSel(); refresh();
-    } catch (e: any) { setError(e?.message || String(e)); } finally { setBulkBusy(false); }
-  }, [selected, workspaceId, clearSel, refresh]);
+    setBulkBusy(true); setError(null); setBulkResult(null);
+    // Continue-on-error: attempt every selected item, collecting per-item
+    // outcomes. One failure no longer aborts the loop (which previously left an
+    // unreported partial deletion) — the failures are reported and stay selected
+    // for retry, the successes are cleared.
+    const failed: { id: string; name: string; error: string }[] = [];
+    let deleted = 0;
+    for (const id of selected) {
+      try {
+        await deleteWorkspaceItem(workspaceId, id);
+        deleted += 1;
+      } catch (e: any) {
+        const name = items.find((i) => i.id === id)?.displayName ?? id;
+        failed.push({ id, name, error: e?.message || String(e) });
+      }
+    }
+    setBulkResult({ deleted, failed });
+    setSelected(new Set(failed.map((f) => f.id)));
+    if (failed.length === 0) setBulkDeleteOpen(false);
+    refresh();
+    setBulkBusy(false);
+  }, [selected, workspaceId, items, refresh]);
   const openSelected = useCallback(() => {
     for (const id of selected) {
       const it = items.find((x) => x.id === id);
@@ -615,6 +634,11 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
         <MessageBar intent="warning"><MessageBarBody>Folders unavailable: {(foldersQ.error as Error).message}</MessageBarBody></MessageBar>
       )}
       {error && <MessageBar intent="error"><MessageBarBody>{error}</MessageBarBody></MessageBar>}
+      {bulkResult && bulkResult.failed.length === 0 && !bulkDeleteOpen && (
+        <MessageBar intent="success">
+          <MessageBarBody>Deleted {bulkResult.deleted} item{bulkResult.deleted === 1 ? '' : 's'}.</MessageBarBody>
+        </MessageBar>
+      )}
 
       {!loading && totalItems === 0 && folders.length === 0 && (
         <div className={s.empty}>
@@ -760,16 +784,39 @@ export function FoldersPane({ workspaceId }: FoldersPaneProps): React.JSX.Elemen
           </Dialog>
 
           {/* Bulk delete */}
-          <Dialog open={bulkDeleteOpen} onOpenChange={(_e, d) => { if (!d.open) setBulkDeleteOpen(false); }}>
+          <Dialog open={bulkDeleteOpen} onOpenChange={(_e, d) => { if (!d.open) { setBulkDeleteOpen(false); setBulkResult(null); } }}>
             <DialogSurface>
               <DialogBody>
                 <DialogTitle>Delete {selected.size} item{selected.size === 1 ? '' : 's'}?</DialogTitle>
                 <DialogContent>
-                  <Body1>This permanently deletes the selected items and their backing artifacts. This cannot be undone.</Body1>
+                  <Body1>
+                    This removes the selected item{selected.size === 1 ? '' : 's'} from the workspace
+                    catalog. Linked back-end resources are not affected. This cannot be undone.
+                  </Body1>
+                  {bulkResult && bulkResult.failed.length > 0 && (
+                    <MessageBar intent="warning" style={{ marginTop: tokens.spacingVerticalM }}>
+                      <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+                        Deleted {bulkResult.deleted}. {bulkResult.failed.length} failed and{' '}
+                        {bulkResult.failed.length === 1 ? 'remains' : 'remain'} selected for retry:
+                        <ul style={{ margin: `${tokens.spacingVerticalXS} 0 0`, paddingLeft: tokens.spacingHorizontalXL }}>
+                          {bulkResult.failed.slice(0, 20).map((f) => (
+                            <li key={f.id}>{f.name} — {f.error}</li>
+                          ))}
+                        </ul>
+                        {bulkResult.failed.length > 20 && (
+                          <Caption1>…and {bulkResult.failed.length - 20} more.</Caption1>
+                        )}
+                      </MessageBarBody>
+                    </MessageBar>
+                  )}
                 </DialogContent>
                 <DialogActions>
-                  <Button appearance="secondary" onClick={() => setBulkDeleteOpen(false)} disabled={bulkBusy}>Cancel</Button>
-                  <Button appearance="primary" onClick={bulkDelete} disabled={bulkBusy}>{bulkBusy ? 'Deleting…' : `Delete ${selected.size}`}</Button>
+                  <Button appearance="secondary" onClick={() => { setBulkDeleteOpen(false); setBulkResult(null); }} disabled={bulkBusy}>
+                    {bulkResult && bulkResult.failed.length > 0 ? 'Close' : 'Cancel'}
+                  </Button>
+                  <Button appearance="primary" onClick={bulkDelete} disabled={bulkBusy || selected.size === 0}>
+                    {bulkBusy ? 'Deleting…' : bulkResult && bulkResult.failed.length > 0 ? `Retry ${selected.size}` : `Delete ${selected.size}`}
+                  </Button>
                 </DialogActions>
               </DialogBody>
             </DialogSurface>

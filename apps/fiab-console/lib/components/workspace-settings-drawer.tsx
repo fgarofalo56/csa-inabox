@@ -19,12 +19,12 @@ import { clientFetch } from '@/lib/client-fetch';
 
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Drawer, DrawerHeader, DrawerHeaderTitle, DrawerBody,
   Tab, TabList,
   Button, Tooltip, Field, Input, Textarea, Dropdown, Option,
-  MessageBar, MessageBarBody, Spinner, Divider, Subtitle2,
+  MessageBar, MessageBarBody, Spinner, Divider, Subtitle2, Caption1, Text,
   Dialog, DialogTrigger, DialogSurface, DialogBody, DialogTitle,
   DialogContent, DialogActions,
   Badge, Checkbox,
@@ -34,7 +34,7 @@ import {
   Settings24Regular, Dismiss24Regular, Delete24Regular,
   Copy16Regular,
 } from '@fluentui/react-icons';
-import { updateWorkspace, deleteWorkspace, type Workspace } from '@/lib/api/workspaces';
+import { updateWorkspace, deleteWorkspace, listItems, type Workspace, type WorkspaceItem } from '@/lib/api/workspaces';
 import { ManageAccessPane } from '@/lib/panes/manage-access-pane';
 import { NetworkingPane } from '@/lib/panes/networking';
 import { GitIntegrationPane } from '@/lib/panes/git-integration';
@@ -71,6 +71,53 @@ const useStyles = makeStyles({
 });
 
 type TabId = 'general' | 'permissions' | 'networking' | 'git' | 'onelake' | 'encryption' | 'spark' | 'sensitivity' | 'danger';
+
+// ---------------------------------------------------------------------------
+// Orphaned-resource disclosure (rel-T101)
+//
+// Deleting a workspace/item only removes Loom catalog records — the Azure
+// resources items provisioned are NOT deleted. These helpers name what stays
+// behind, sourced from real item state (never fabricated), so the delete
+// confirm can show an honest orphaned-resource receipt.
+// ---------------------------------------------------------------------------
+
+// High-signal state keys an item editor persists when it provisions a real
+// Azure backend. Only a non-empty string value is surfaced — no guessing.
+const BACKING_STATE_KEYS = [
+  'resourceId', 'armId', 'endpoint', 'clusterUri', 'clusterUrl', 'kustoUri',
+  'sqlPoolName', 'dedicatedPoolName', 'sqlEndpoint', 'kqlDatabase', 'database',
+  'eventhubNamespace', 'namespace', 'containerName', 'container', 'storageAccount',
+  'accountName', 'abfssPath', 'path', 'url',
+] as const;
+
+/** Best-effort backing-resource reference for an item, from its real state. */
+export function backingResourceHint(item: WorkspaceItem): string | null {
+  const st = (item.state ?? {}) as Record<string, unknown>;
+  for (const k of BACKING_STATE_KEYS) {
+    const v = st[k];
+    if (typeof v === 'string' && v.trim()) {
+      const val = v.trim();
+      return `${k}=${val.length > 80 ? `${val.slice(0, 77)}…` : val}`;
+    }
+  }
+  return null;
+}
+
+/** Plain-text orphaned-resource receipt for clipboard / audit. */
+export function buildOrphanReceipt(workspaceName: string, items: WorkspaceItem[]): string {
+  const lines = [
+    `Orphaned-resource receipt — workspace "${workspaceName}"`,
+    `Generated ${new Date().toISOString()}`,
+    `Deleting the workspace removes ${items.length} Loom catalog item(s). Provisioned Azure`,
+    `resources below are RETAINED and must be removed separately in the Azure portal:`,
+    '',
+  ];
+  for (const it of items) {
+    const hint = backingResourceHint(it);
+    lines.push(`- ${it.displayName} (${it.itemType})${hint ? ` — retained: ${hint}` : ' — catalog entry only'}`);
+  }
+  return lines.join('\n');
+}
 
 export function WorkspaceSettingsDrawer({ workspace, open: openProp, onOpenChange, hideTrigger }: Props) {
   const styles = useStyles();
@@ -181,18 +228,87 @@ function GeneralSection({ workspace, onSaved }: { workspace: Workspace; onSaved:
 function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDeleted: () => void }) {
   const styles = useStyles();
   const [confirmName, setConfirmName] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  // Deleting a workspace removes only the Loom catalog records (the workspace +
+  // its item entries). Any Azure resources those items PROVISIONED (ADLS
+  // containers, Synapse SQL pools, ADX databases, Event Hubs, etc.) are NOT
+  // deleted by this action — they remain in the subscription. We load the item
+  // list so the confirm can name what will be left behind (the orphaned-resource
+  // receipt) instead of silently overstating the delete's reach.
+  const itemsQ = useQuery<WorkspaceItem[]>({
+    queryKey: ['items', workspace.id, 'danger'],
+    queryFn: () => listItems(workspace.id),
+  });
+  const items = itemsQ.data ?? [];
+  const backed = useMemo(
+    () => items.map((it) => ({ item: it, hint: backingResourceHint(it) })),
+    [items],
+  );
+
   const mut = useMutation({
     mutationFn: () => deleteWorkspace(workspace.id),
     onSuccess: onDeleted,
   });
+
+  const copyReceipt = () => {
+    void navigator.clipboard?.writeText(buildOrphanReceipt(workspace.name, items));
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 2500);
+  };
+
   return (
     <div className={styles.section}>
       <MessageBar intent="warning">
         <MessageBarBody>
-          Deleting the workspace removes all items, comments, and shares under it.
-          Cosmos audit records are kept for compliance. This cannot be undone.
+          Deleting this workspace removes the workspace and all of its item entries from the Loom
+          catalog. Comments, shares, and lineage under it are removed too. Audit records are retained
+          for compliance. This can&apos;t be undone.
         </MessageBarBody>
       </MessageBar>
+
+      <MessageBar intent="info">
+        <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+          <strong>Provisioned Azure resources are NOT deleted.</strong> Any storage containers,
+          Synapse SQL pools, ADX databases, Event Hubs, and other Azure resources these items created
+          remain in your subscription and continue to incur cost. Remove them separately in the Azure
+          portal to avoid orphaned resources.
+        </MessageBarBody>
+      </MessageBar>
+
+      {itemsQ.isLoading && <Spinner size="tiny" label="Loading items…" />}
+      {itemsQ.error && (
+        <MessageBar intent="warning">
+          <MessageBarBody>Could not enumerate items: {(itemsQ.error as Error).message}</MessageBarBody>
+        </MessageBar>
+      )}
+      {!itemsQ.isLoading && items.length > 0 && (
+        <div className={styles.section}>
+          <Subtitle2>{items.length} item{items.length === 1 ? '' : 's'} will be de-cataloged</Subtitle2>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Items marked with a resource reference provisioned Azure backing that will be retained.
+          </Caption1>
+          <div style={{ maxHeight: 180, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXXS }}>
+            {backed.slice(0, 100).map(({ item, hint }) => (
+              <div key={item.id} className={styles.row} style={{ justifyContent: 'space-between' }}>
+                <Text size={200}>{item.displayName} <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>({item.itemType})</Caption1></Text>
+                {hint ? (
+                  <Badge appearance="tint" color="warning" size="small">retained: {hint}</Badge>
+                ) : (
+                  <Badge appearance="outline" color="subtle" size="small">catalog entry</Badge>
+                )}
+              </div>
+            ))}
+            {items.length > 100 && <Caption1>…and {items.length - 100} more.</Caption1>}
+          </div>
+          <div className={styles.row}>
+            <Button appearance="secondary" size="small" icon={<Copy16Regular />} onClick={copyReceipt}>
+              {copied ? 'Copied' : 'Copy orphaned-resource receipt'}
+            </Button>
+          </div>
+        </div>
+      )}
+
       <Field label={`Type "${workspace.name}" to confirm`}>
         <Input value={confirmName} onChange={(_, d) => setConfirmName(d.value)} />
       </Field>
@@ -209,12 +325,18 @@ function DangerSection({ workspace, onDeleted }: { workspace: Workspace; onDelet
         <DialogSurface>
           <DialogBody>
             <DialogTitle>Delete {workspace.name}?</DialogTitle>
-            <DialogContent>This is irreversible.</DialogContent>
+            <DialogContent>
+              Removes the workspace and its {items.length} item{items.length === 1 ? '' : 's'} from the
+              Loom catalog. Provisioned Azure resources are retained (see the list above) and are not
+              deleted. This can&apos;t be undone.
+            </DialogContent>
             <DialogActions>
               <DialogTrigger disableButtonEnhancement>
                 <Button appearance="secondary">Cancel</Button>
               </DialogTrigger>
-              <Button appearance="primary" onClick={() => mut.mutate()}>Delete</Button>
+              <Button appearance="primary" onClick={() => mut.mutate()} disabled={mut.isPending}>
+                {mut.isPending ? 'Deleting…' : 'Delete'}
+              </Button>
             </DialogActions>
           </DialogBody>
         </DialogSurface>
