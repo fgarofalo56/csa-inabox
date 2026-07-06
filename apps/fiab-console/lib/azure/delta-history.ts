@@ -45,7 +45,13 @@ export function isKnownContainer(c: string): boolean {
 
 /** Reject path traversal + leading/trailing slashes; returns null if invalid. */
 export function cleanTablePath(p: string): string | null {
-  const t = (p || '').trim().replace(/^\/+|\/+$/g, '');
+  // Linear slash-trim (no regex backtracking — avoids polynomial ReDoS on
+  // adversarial inputs like many repeated '/').
+  const raw = (p || '').trim();
+  let a = 0, b = raw.length;
+  while (a < b && raw.charCodeAt(a) === 47 /* '/' */) a++;
+  while (b > a && raw.charCodeAt(b - 1) === 47) b--;
+  const t = raw.slice(a, b);
   if (!t) return null;
   if (t.includes('..')) return null;
   return t;
