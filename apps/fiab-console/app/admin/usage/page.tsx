@@ -273,12 +273,21 @@ function StatCard({
   );
 }
 
-export default function UsagePage() {
+/**
+ * UsageMetricsPane — the full Usage-metrics surface WITHOUT the AdminShell
+ * chrome, so it can be embedded both in the Admin page (below) and in the
+ * top-level Reports hub (/org-reports) where a tenant admin can view usage
+ * outside the Admin portal. Every panel reads live: Cosmos inventory + audit
+ * (always on) and Log Analytics DAU / feature adoption (honest gate when
+ * unconfigured). A non-admin who reaches the API gets a 403 → honest gate.
+ */
+export function UsageMetricsPane() {
   const s = useStyles();
   const a = useAdminTabStyles();
   const [data, setData] = useState<Usage | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [denied, setDenied] = useState<string | null>(null);
   const [days, setDays] = useState<number>(30);
   const [featureFilter, setFeatureFilter] = useState<string | null>(null);
 
@@ -286,7 +295,7 @@ export default function UsagePage() {
   const [embed, setEmbed] = useState<Embed | null>(null);
 
   const load = useCallback(async (d: number, feat: string | null) => {
-    setLoading(true); setError(null);
+    setLoading(true); setError(null); setDenied(null);
     try {
       const qs = new URLSearchParams({ days: String(d) });
       if (feat) qs.set('feature', feat);
@@ -294,8 +303,9 @@ export default function UsagePage() {
       // can run past the 6s page-load default — give it a longer (still bounded)
       // budget so a real query isn't aborted with a cryptic AbortError.
       const r = await clientFetch(`/api/admin/usage?${qs.toString()}`, undefined, USAGE_FETCH_TIMEOUT_MS);
-      const j = await r.json();
-      if (!j.ok) { setError(j.error || 'failed'); return; }
+      const j = await r.json().catch(() => null);
+      if (r.status === 403) { setDenied(j?.reason || 'Usage metrics roll up org-wide activity and are restricted to tenant admins.'); return; }
+      if (!j || !j.ok) { setError(j?.error || 'failed'); return; }
       setData(j);
     } catch (e: unknown) {
       // clientFetch relabels a timeout to ClientFetchTimeoutError with a clear
@@ -390,22 +400,20 @@ export default function UsagePage() {
   ], [s.typeCell, s.muted, s.openLink]);
 
   return (
-    <AdminShell
-      sectionTitle="Usage metrics"
-      learn={{
-        title: 'Usage metrics',
-        content: 'Feature usage and adoption reporting plus a live tenant inventory. It combines Cosmos workspaces, items, and audit-log data with Log Analytics request telemetry to show active users, feature adoption, and per-item traffic, with a drill-through filter bar to slice by time window, feature, and item.',
-        tips: [
-          'Use the Window buttons to change the reporting period and the Feature dropdown to focus on one capability.',
-          'Active-user and adoption numbers come from Log Analytics request telemetry — an honest gate shows if it is not wired.',
-          'Drill into item traffic to see which specific assets drive the most activity.',
-        ],
-      }}
-    >
+    <>
       <Body1 className={s.intro}>
         Rolling activity, active-user telemetry, and live tenant inventory. Cosmos workspaces / items / audit-log
         plus Log Analytics request telemetry (active users, feature adoption, item traffic).
       </Body1>
+
+      {denied && (
+        <MessageBar intent="warning" className={a.messageBar}>
+          <MessageBarBody>
+            <MessageBarTitle>Tenant-admin access required</MessageBarTitle>
+            {denied}
+          </MessageBarBody>
+        </MessageBar>
+      )}
 
       {error && (
         <MessageBar intent="error" className={a.messageBar}>
@@ -688,6 +696,25 @@ export default function UsagePage() {
           )}
         </>
       )}
+    </>
+  );
+}
+
+export default function UsagePage() {
+  return (
+    <AdminShell
+      sectionTitle="Usage metrics"
+      learn={{
+        title: 'Usage metrics',
+        content: 'Feature usage and adoption reporting plus a live tenant inventory. It combines Cosmos workspaces, items, and audit-log data with Log Analytics request telemetry to show active users, feature adoption, and per-item traffic, with a drill-through filter bar to slice by time window, feature, and item.',
+        tips: [
+          'Use the Window buttons to change the reporting period and the Feature dropdown to focus on one capability.',
+          'Active-user and adoption numbers come from Log Analytics request telemetry — an honest gate shows if it is not wired.',
+          'Drill into item traffic to see which specific assets drive the most activity.',
+        ],
+      }}
+    >
+      <UsageMetricsPane />
     </AdminShell>
   );
 }
