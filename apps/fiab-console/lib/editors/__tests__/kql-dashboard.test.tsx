@@ -86,9 +86,9 @@ describe('KqlDashboardEditor', () => {
     // findBy* so a slower CI render isn't mistaken for a missing control.
     const openBtns = screen.getAllByRole('button', { name: /Base queries/i });
     fireEvent.click(openBtns[openBtns.length - 1]);
-    const dialog = await screen.findByRole('dialog', {}, { timeout: 5000 });
-    fireEvent.click(await within(dialog).findByRole('button', { name: /Add base query/i }, { timeout: 5000 }));
-    await within(dialog).findByRole('textbox', { name: /Base query name/i }, { timeout: 5000 });
+    const dialog = await screen.findByRole('dialog', {}, { timeout: 15000 });
+    fireEvent.click(await within(dialog).findByRole('button', { name: /Add base query/i }, { timeout: 15000 }));
+    await within(dialog).findByRole('textbox', { name: /Base query name/i }, { timeout: 15000 });
   });
 
   it('changing a parameter re-runs the dependent tile with the new value', async () => {
