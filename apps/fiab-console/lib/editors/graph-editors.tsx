@@ -1094,6 +1094,12 @@ export function VectorStoreEditor({ item, id }: { item: FabricItemType; id: stri
                   <Subtitle2>Add documents (mergeOrUpload)</Subtitle2>
                 </div>
                 <Caption1>Paste a JSON array of documents. Each must carry the index key (<code>id</code>) and the vector field (<code>{vectorField}</code>: number[{dim}]).</Caption1>
+                {/* rel-T107 — PARITY JSON VIEW (allowed). This is a DOCUMENT DATA PAYLOAD, not
+                    an item-config blob: a JSON array of documents pushed to the vector index
+                    via the real Documents - Index (mergeOrUpload) data-plane call — 1:1 with
+                    Azure AI Search's "Add documents" import. Document content is free-form
+                    per-index data, so it has no fixed typed form; the index SCHEMA itself is
+                    authored through the typed Fields grid on the Index tab. */}
                 <MonacoTextarea value={docsText} onChange={setDocsText} language="json" height={220} minHeight={160} ariaLabel="Documents JSON" />
                 <div className={s.toolbar}>
                   <Button appearance="primary" icon={uploading ? <Spinner size="tiny" /> : <Add20Regular />} onClick={uploadDocs} disabled={uploading}>{uploading ? 'Uploading…' : 'Upload documents'}</Button>
