@@ -1170,9 +1170,17 @@ export default function WorkspacesPage() {
             <DialogContent>
               <div className={styles.formCol}>
                 <Body1>
-                  This permanently deletes the selected workspaces and every item inside them
-                  (lakehouses, notebooks, reports, etc.) from Cosmos. This cannot be undone.
+                  This permanently removes the selected workspaces and every item inside them
+                  (lakehouses, notebooks, reports, etc.) from the Loom catalog. This cannot be undone.
                 </Body1>
+                <MessageBar intent="info">
+                  <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+                    <strong>Provisioned Azure resources are not deleted.</strong> Storage containers,
+                    Synapse SQL pools, ADX databases, Event Hubs, and other Azure resources these
+                    items created remain in your subscription and keep incurring cost — remove them
+                    separately in the Azure portal to avoid orphaned resources.
+                  </MessageBarBody>
+                </MessageBar>
                 <div className={styles.confirmScroll}>
                   <ul className={styles.confirmList}>
                     {Array.from(selected).slice(0, 50).map(id => (
