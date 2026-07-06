@@ -365,6 +365,25 @@ var scriptRunnerActive = scriptRunnerEnabled && containerPlatform == 'containerA
 var wranglerEnabled = true
 var wranglerActive = wranglerEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
 
+// ── Day-one OSS Apache Airflow host (rel-T86) — deploy toggle ──────────────────
+// airflowHostEnabled (var, default true — same 256-param-cap rationale as
+// scriptRunnerEnabled above): deploys the loom-airflow ACA host + its Postgres
+// metadata DB + DAG/logs file shares (admin-plane/airflow.bicep) so the
+// airflow-job item works out-of-box with NO Fabric capacity / ADF WOM env. When
+// off (or on an AKS boundary, or before apps deploy) the airflow-job editor
+// still renders + honest-gates on LOOM_AIRFLOW_ENDPOINT. A per-item BYO webserver
+// URL remains an opt-in override regardless.
+var airflowHostEnabled = true
+var airflowHostActive = airflowHostEnabled && containerPlatform == 'containerApps' && deployAppsEnabled
+
+// Airflow admin (+ Postgres + REST Basic-auth) password. UNPREDICTABLE — derived
+// from loomGeneratedSecretSeed (newGuid()), NEVER guid(rg.id, <public-const>),
+// which would be offline-derivable. Character set [A-Za-z0-9!] keeps it URL-safe
+// in the SQLAlchemy DSN. The SAME value is passed to the airflow module (@secure())
+// AND injected to the Console as the ACA secret `loom-airflow-admin-password`.
+var airflowAdminPassword = 'Af7${uniqueString(loomGeneratedSecretSeed, 'loom-airflow-admin-v1')}!Qz'
+var airflowWebserverSecretKey = uniqueString(loomGeneratedSecretSeed, 'loom-airflow-wsk-v1')
+
 @description('Loom version label shown in the UI (/admin/updates) + /api/version. Wired to LOOM_VERSION / NEXT_PUBLIC_LOOM_VERSION. NOTE (#1468): /api/version now reads the authoritative version from the image\'s package.json (release-please-synced), so this env is a fallback override only. Default tracks the release-please manifest (.release-please-manifest.json); the top-level main.bicep passes its own loomVersion. Kept in sync so a clean default deploy never shows a stale label.')
 param loomVersion string = '0.45.0'
 
@@ -2894,6 +2913,18 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Container App. Empty → the editor surfaces an honest gate naming
             // this var; the Databricks target still works.
             { name: 'LOOM_DBT_RUNNER_URL', value: dbtRunnerActive ? dbtRunner!.outputs.dbtRunnerInternalEndpoint : '' }
+            // Day-one OSS Apache Airflow host (rel-T86). The airflow-job item
+            // drives the Airflow REST API (list/trigger DAGs, runs, task logs)
+            // against this managed host by default — NO Fabric capacity / ADF
+            // WOM environment. LOOM_AIRFLOW_ENDPOINT is the internal-ingress
+            // webserver URL; _USERNAME/_PASSWORD are the Basic-auth credentials
+            // (password via the loom-airflow-admin-password ACA secret below).
+            // Empty endpoint → the editor renders + honest-gates naming this var
+            // + admin-plane/airflow.bicep. A per-item BYO webserver URL overrides
+            // this host (opt-in alternative). Provisioned by the `airflow` module.
+            { name: 'LOOM_AIRFLOW_ENDPOINT', value: airflowHostActive ? airflow!.outputs.airflowInternalEndpoint : '' }
+            { name: 'LOOM_AIRFLOW_USERNAME', value: airflowHostActive ? 'loom' : '' }
+            { name: 'LOOM_AIRFLOW_PASSWORD', secretRef: 'loom-airflow-admin-password' }
             // Report-designer R/Python script visual (wave-4) — the sandboxed
             // executor the /api/report/script-visual BFF route POSTs the user's
             // R/Python code + dataset.csv to, getting back a static PNG (Power BI
@@ -3951,6 +3982,12 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // Synapse Spark → LA shared key (LOOM_SPARK_LA_KEY secretRef). Always
             // present — sourced from the always-deployed monitoring LAW's listKeys.
             { name: 'spark-la-key', value: monitoring.outputs.lawSharedKey }
+            // Airflow REST Basic-auth password (rel-T86). ALWAYS present — the
+            // console env references LOOM_AIRFLOW_PASSWORD unconditionally. Same
+            // UNPREDICTABLE seed-derived value the airflow module gives the host,
+            // so the Console authenticates the managed webserver. Unused when the
+            // host is off (LOOM_AIRFLOW_ENDPOINT is '' → the editor honest-gates).
+            { name: 'loom-airflow-admin-password', value: airflowAdminPassword }
           ],
           !empty(effectiveMsalClientId) ? [
             // MSAL client secret — KV-backed when the entra-app-registration
@@ -4183,6 +4220,30 @@ module dbtRunner '../integration/dbt-runner.bicep' = if (dbtRunnerActive) {
     imageTag: appImageTags.console
     uamiId: identity.outputs.uamiConsoleId
     uamiClientId: identity.outputs.uamiConsoleClientId
+    appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
+    complianceTags: complianceTags
+  }
+}
+
+// =====================================================================
+// Day-one OSS Apache Airflow host (rel-T86) — loom-airflow Container App
+// (webserver + scheduler) + Postgres Flexible Server metadata DB + DAG/logs
+// Azure Files shares. Gives the airflow-job item a managed Apache Airflow
+// experience with NO Fabric capacity / ADF WOM environment (no-fabric-
+// dependency.md). The Console reaches the internal-ingress webserver over the
+// CAE VNet and drives the Airflow REST API (Basic auth). When absent the
+// editor renders + honest-gates on LOOM_AIRFLOW_ENDPOINT; a per-item BYO
+// webserver URL is always an opt-in override.
+// =====================================================================
+module airflow 'airflow.bicep' = if (airflowHostActive) {
+  name: 'airflow-host'
+  params: {
+    location: location
+    caeId: containerPlatformModule.outputs.caeId
+    uamiId: identity.outputs.uamiConsoleId
+    uamiClientId: identity.outputs.uamiConsoleClientId
+    adminPassword: airflowAdminPassword
+    webserverSecretKey: airflowWebserverSecretKey
     appInsightsConnectionString: monitoring.outputs.appInsightsConnectionString
     complianceTags: complianceTags
   }

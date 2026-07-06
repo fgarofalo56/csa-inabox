@@ -1,16 +1,16 @@
 /**
  * GET /api/items/airflow-job/[id]/dags?workspaceId=...
  *
- * Calls the Airflow webserver REST `/api/v1/dags`. If no webserver URL is
- * configured for this item, returns { ok: false, code: 'NO_WEBSERVER' } so
- * the editor can render the documented MessageBar.
+ * Calls the Airflow webserver REST `/api/v1/dags`. The webserver is resolved by
+ * resolveAirflowConn: the day-one managed host (LOOM_AIRFLOW_ENDPOINT, the
+ * Azure-native default) OR a per-item BYO webserver URL (opt-in override). When
+ * neither is available returns { ok: false, code: 'NO_WEBSERVER' } so the editor
+ * renders the documented MessageBar.
  *
- * Auth: forwards the optional bearer token configured via env
- * LOOM_AIRFLOW_BEARER. Many self-hosted Airflows deployed alongside Fabric
- * use AAD-protected ingress — in that case the UAMI must have the relevant
- * app role and the deployment scripts (scripts/csa-loom/airflow-bootstrap.sh)
- * mint the token. Until that script runs the call returns 401 from the
- * webserver and Loom surfaces it verbatim.
+ * Auth (airflowAuthHeaders): Basic (LOOM_AIRFLOW_USERNAME/_PASSWORD) for the
+ * managed host — WOM/Fabric "Basic authentication" mode — or Bearer
+ * (LOOM_AIRFLOW_BEARER) for a BYO webserver behind AAD ingress.
+ * Azure-native managed Apache Airflow — no Fabric (no-fabric-dependency.md).
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
@@ -18,6 +18,7 @@ import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiServerError, apiError } from '@/lib/api/respond';
+import { resolveAirflowConn, airflowAuthHeaders, AIRFLOW_NO_WEBSERVER_HINT } from '@/lib/airflow/endpoint';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -36,23 +37,18 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'airflow-job') return err('airflow job not found', 404);
-    const webserverUrl: string | null = ((resource.state || {}) as any).webserverUrl || null;
-    if (!webserverUrl) {
-      return err(
-        'Airflow webserver URL not configured for this item',
-        503,
-        {
-          code: 'NO_WEBSERVER',
-          hint: 'In the Settings tab, paste the Airflow webserver URL (e.g. https://airflow.contoso.com). See docs/fiab/v3-tenant-bootstrap.md for the AAD role-assignment + bearer-token mint steps.',
-        },
-      );
+    const conn = resolveAirflowConn(resource.state as Record<string, unknown> | undefined);
+    if (!conn) {
+      return err('No Airflow webserver available for this item', 503, {
+        code: 'NO_WEBSERVER',
+        hint: AIRFLOW_NO_WEBSERVER_HINT,
+      });
     }
 
-    const headers: Record<string, string> = { accept: 'application/json' };
-    if (process.env.LOOM_AIRFLOW_BEARER) headers.authorization = `Bearer ${process.env.LOOM_AIRFLOW_BEARER}`;
+    const headers = airflowAuthHeaders(conn);
 
     let url: URL;
-    try { url = new URL('/api/v1/dags', webserverUrl); }
+    try { url = new URL('/api/v1/dags', conn.webserverUrl); }
     catch { return err('webserverUrl invalid on stored item', 400); }
 
     const r = await fetch(url.toString(), { headers, cache: 'no-store' });
@@ -62,13 +58,14 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
 
     if (!r.ok) {
       return err(`Airflow ${r.status}: ${body?.title || body?.detail || text.slice(0, 240)}`, r.status, {
-        webserverUrl,
+        webserverUrl: conn.webserverUrl,
       });
     }
 
     return NextResponse.json({
       ok: true,
-      webserverUrl,
+      webserverUrl: conn.webserverUrl,
+      managed: conn.managed,
       total: body?.total_entries ?? (body?.dags || []).length,
       dags: (body?.dags || []).map((d: any) => ({
         dag_id: d.dag_id,
@@ -106,19 +103,18 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const items = await itemsContainer();
     const { resource } = await items.item((await ctx.params).id, workspaceId).read<WorkspaceItem>();
     if (!resource || resource.itemType !== 'airflow-job') return err('airflow job not found', 404);
-    const webserverUrl: string | null = ((resource.state || {}) as any).webserverUrl || null;
-    if (!webserverUrl) {
-      return err('Airflow webserver URL not configured for this item', 503, {
+    const conn = resolveAirflowConn(resource.state as Record<string, unknown> | undefined);
+    if (!conn) {
+      return err('No Airflow webserver available for this item', 503, {
         code: 'NO_WEBSERVER',
-        hint: 'In the Settings tab, paste the Airflow webserver URL. See docs/fiab/v3-tenant-bootstrap.md for the AAD role + bearer-token mint steps.',
+        hint: AIRFLOW_NO_WEBSERVER_HINT,
       });
     }
-    const headers: Record<string, string> = { accept: 'application/json', 'content-type': 'application/json' };
-    if (process.env.LOOM_AIRFLOW_BEARER) headers.authorization = `Bearer ${process.env.LOOM_AIRFLOW_BEARER}`;
+    const headers = airflowAuthHeaders(conn, { 'content-type': 'application/json' });
 
     let url: URL;
     try {
-      url = new URL(`/api/v1/dags/${encodeURIComponent(dagId)}`, webserverUrl);
+      url = new URL(`/api/v1/dags/${encodeURIComponent(dagId)}`, conn.webserverUrl);
       url.searchParams.set('update_mask', 'is_paused');
     } catch { return err('webserverUrl invalid on stored item', 400); }
 
@@ -129,7 +125,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     let resp: any = null;
     try { resp = text ? JSON.parse(text) : null; } catch { /* leave as text */ }
     if (!r.ok) {
-      return err(`Airflow ${r.status}: ${resp?.title || resp?.detail || text.slice(0, 240)}`, r.status, { webserverUrl });
+      return err(`Airflow ${r.status}: ${resp?.title || resp?.detail || text.slice(0, 240)}`, r.status, { webserverUrl: conn.webserverUrl });
     }
     return NextResponse.json({ ok: true, dagId, is_paused: resp?.is_paused ?? body.isPaused });
   } catch (e: any) {
