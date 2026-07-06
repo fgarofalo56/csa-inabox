@@ -166,7 +166,7 @@ export function CronWizard({ value, onChange }: CronWizardProps) {
             onOptionSelect={(_, d) => d.optionValue && setDayOfMonth(Number(d.optionValue))}
             aria-label="Day of month"
           >
-            {range(31, 1).map((dnum) => <Option key={dnum} value={String(dnum)}>{dnum}</Option>)}
+            {range(31, 1).map((dnum) => <Option key={dnum} value={String(dnum)}>{String(dnum)}</Option>)}
           </Dropdown>
         </Field>
       )}
