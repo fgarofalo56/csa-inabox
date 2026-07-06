@@ -35,6 +35,7 @@ interface PersonaRow {
   completionTokens: number;
   totalTokens: number;
   calls: number;
+  estCostUsd?: number;
 }
 interface DayRow {
   day: string;
@@ -44,6 +45,7 @@ interface DayRow {
   completionTokens: number;
   totalTokens: number;
   calls: number;
+  estCostUsd?: number;
 }
 interface UserRow {
   userHash: string;
@@ -51,6 +53,7 @@ interface UserRow {
   completionTokens: number;
   totalTokens: number;
   calls: number;
+  estCostUsd?: number;
 }
 interface ModelRow {
   model: string;
@@ -58,12 +61,13 @@ interface ModelRow {
   completionTokens: number;
   totalTokens: number;
   calls: number;
+  estCostUsd: number;
 }
 interface UsageSummary {
   byPersona: PersonaRow[];
   byDay: DayRow[];
   byUser: UserRow[];
-  totals: { promptTokens: number; completionTokens: number; totalTokens: number; calls: number };
+  totals: { promptTokens: number; completionTokens: number; totalTokens: number; calls: number; estCostUsd?: number };
   models: string[];
   days: number;
 }
@@ -80,12 +84,16 @@ interface ApiResp {
 const PERSONA_LABELS: Record<string, string> = {
   'cross-item': 'Cross-item Copilot',
   'help-chat': 'Help chat widget',
+  'ai-function': 'AI functions',
+  'data-agent': 'Data agent',
   notebook: 'Notebook Copilot',
   unknown: 'Other',
 };
 const personaLabel = (p: string) => PERSONA_LABELS[p] || p;
 
 const fmt = (n: number) => n.toLocaleString();
+const money = (n: number) =>
+  new Intl.NumberFormat(undefined, { style: 'currency', currency: 'USD', maximumFractionDigits: n < 1 ? 4 : 2 }).format(n || 0);
 
 const useStyles = makeStyles({
   intro: {
@@ -230,11 +238,12 @@ function modelTotals(byDay: DayRow[]): ModelRow[] {
   const m = new Map<string, ModelRow>();
   for (const d of byDay) {
     const key = d.model || '(unspecified)';
-    const cur = m.get(key) || { model: key, promptTokens: 0, completionTokens: 0, totalTokens: 0, calls: 0 };
+    const cur = m.get(key) || { model: key, promptTokens: 0, completionTokens: 0, totalTokens: 0, calls: 0, estCostUsd: 0 };
     cur.promptTokens += d.promptTokens;
     cur.completionTokens += d.completionTokens;
     cur.totalTokens += d.totalTokens;
     cur.calls += d.calls;
+    cur.estCostUsd += d.estCostUsd || 0;
     m.set(key, cur);
   }
   return Array.from(m.values()).sort((a, b) => b.totalTokens - a.totalTokens);
@@ -273,6 +282,10 @@ function KpiCards({ totals }: { totals: UsageSummary['totals'] }) {
         <div className={s.statVal}>{fmt(totals.calls)}</div>
         <div className={s.statLabel}>copilot calls</div>
       </div>
+      <div className={s.statCard}>
+        <div className={s.statVal}>{money(totals.estCostUsd || 0)}</div>
+        <div className={s.statLabel}>estimated cost (list price)</div>
+      </div>
     </div>
   );
 }
@@ -295,6 +308,7 @@ export function CopilotUsagePane({ days = 30 }: { days?: number }) {
     { key: 'promptTokens', label: 'Prompt', width: 140, getValue: (r) => r.promptTokens, render: (r) => fmt(r.promptTokens) },
     { key: 'completionTokens', label: 'Completion', width: 140, getValue: (r) => r.completionTokens, render: (r) => fmt(r.completionTokens) },
     { key: 'totalTokens', label: 'Total', width: 140, getValue: (r) => r.totalTokens, render: (r) => <strong>{fmt(r.totalTokens)}</strong> },
+    { key: 'estCostUsd', label: 'Est. cost', width: 130, getValue: (r) => r.estCostUsd, render: (r) => money(r.estCostUsd) },
   ], []);
 
   const userColumns = useMemo<LoomColumn<UserRow>[]>(() => [
@@ -303,6 +317,7 @@ export function CopilotUsagePane({ days = 30 }: { days?: number }) {
     { key: 'promptTokens', label: 'Prompt', width: 140, getValue: (r) => r.promptTokens, render: (r) => fmt(r.promptTokens) },
     { key: 'completionTokens', label: 'Completion', width: 140, getValue: (r) => r.completionTokens, render: (r) => fmt(r.completionTokens) },
     { key: 'totalTokens', label: 'Total', width: 140, getValue: (r) => r.totalTokens, render: (r) => <strong>{fmt(r.totalTokens)}</strong> },
+    { key: 'estCostUsd', label: 'Est. cost', width: 130, getValue: (r) => r.estCostUsd ?? 0, render: (r) => money(r.estCostUsd ?? 0) },
   ], []);
 
   return (
@@ -350,6 +365,9 @@ export function CopilotUsagePane({ days = 30 }: { days?: number }) {
                   </div>
                   <span className={s.barCount}>{fmt(p.totalTokens)}</span>
                   <Badge appearance="outline" size="small">{fmt(p.calls)} calls</Badge>
+                  {p.estCostUsd != null && (
+                    <Badge appearance="tint" color="brand" size="small">{money(p.estCostUsd)}</Badge>
+                  )}
                 </div>
               ))}
             </div>

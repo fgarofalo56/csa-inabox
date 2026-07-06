@@ -118,7 +118,7 @@ Legend: ✅ built (real backend) · ⚠️ partial / honest-gate · ❌ missing 
 | D2 **PREDICT guided wizard** | — (no model item-page "apply in wizard") | — | ❌ **missing** |
 | D3 Real-time endpoints | ml-model Deploy tab: create online endpoint + blue deployment | AML managed online endpoint (ARM) | ⚠️ partial (deploy only; **no test/query console, no auto-sleep toggle, no activate/deactivate, no per-version mgmt**) |
 | D4 Direct Lake consume | report/semantic-model Direct-Lake-equivalent surfaces | Synapse/ADLS | ✅ built (sibling domain) |
-| E1 **AI Functions (full set)** | `ai-functions-helper.tsx` + `ai-functions-client.ts`: 5 of 9 (sentiment/classify/translate/summarize/extract) | Databricks `ai_query` / AOAI | ⚠️ partial (**missing embed, similarity, fix_grammar, generate_response**; SQL-only entry, no pandas/PySpark notebook affordance) |
+| E1 **AI Functions (full set)** | `ai-functions-helper.tsx` + `ai-functions-client.ts`: **9 of 9** (sentiment/classify/translate/summarize/extract/fix_grammar/generate_response/embed/similarity) + per-call token/cost metering into usage-chargeback | Databricks `ai_query`/`ai_*` (chat) · AOAI `aoaiEmbed` (embed/similarity) | ✅ built (rel-T85; pandas/PySpark notebook affordance still via `loom-ai-functions` lib) |
 | E2 Azure OpenAI in Fabric | foundry-playground + AOAI orchestrator | AOAI | ✅ built |
 | E3 **Text Analytics prebuilt** | — (no language-detect / key-phrase / PII / NER / entity-linking surface) | — | ❌ **missing** |
 | E4 **Translator prebuilt** | — (no translate/transliterate surface; translate exists only inside AI Functions) | — | ⚠️ partial |
@@ -298,11 +298,19 @@ score → deactivate → status Inactive → reactivate. Receipt: `/invoke` resp
 
 ### GAP 4 — AI Functions full set + prebuilt Text Analytics / Translator (P1, partial) — `ai-models` surface + notebook affordance
 
-**Goal:** (a) complete the 9 Fabric AI Functions (add **embed, similarity, fix_grammar,
-generate_response**); (b) expose them in **pandas/PySpark notebook** affordance (not only the
-SQL editor); (c) add a dedicated **Prebuilt AI models** surface for **Text Analytics**
-(language detection, key-phrase, PII recognition+redaction, NER, entity linking) and
-**Translator** (translate + transliterate).
+**Status (rel-T85):** (a) **DONE** — the 9 Fabric AI Functions are complete
+(`embed`, `similarity`, `fix_grammar`, `generate_response` added; `embed`/
+`similarity` on the unified client's `aoaiEmbed`; per-call token/cost metering
+into usage-chargeback). (b)/(c) still open: pandas/PySpark notebook affordance
+beyond the `loom-ai-functions` lib, and the dedicated **Prebuilt AI models**
+(Text Analytics / Translator) surface.
+
+**Goal:** (a) ✅ complete the 9 Fabric AI Functions (added **embed, similarity,
+fix_grammar, generate_response**); (b) expose them in **pandas/PySpark notebook**
+affordance (not only the SQL editor); (c) add a dedicated **Prebuilt AI models**
+surface for **Text Analytics** (language detection, key-phrase, PII
+recognition+redaction, NER, entity linking) and **Translator** (translate +
+transliterate).
 
 **Architecture (Azure-native):**
 - AI Functions: extend `ai-functions-client.ts` `AiFn` union + handlers. Default backend:

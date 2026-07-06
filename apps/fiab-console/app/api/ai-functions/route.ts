@@ -8,10 +8,12 @@
  * dependency — pure Azure OpenAI (per .claude/rules/no-fabric-dependency.md).
  *
  *   POST /api/ai-functions
- *     body { fn: 'summarize'|'classify'|'sentiment'|'extract'|'translate',
+ *     body { fn: one of AI_FN_NAMES (summarize|classify|sentiment|extract|
+ *              translate|fix_grammar|generate_response|embed|similarity),
  *            input: string,
- *            options?: { maxTokens?, labels?, fields?, targetLang? } }
- *     → 200 { ok: true, result, model, usage }
+ *            options?: { maxTokens?, labels?, fields?, targetLang?, compareTo?,
+ *                        embeddingDeployment? } }
+ *     → 200 { ok: true, result, model, usage, vector?, similarity? }
  *     → 501 { ok: false, code: 'not_configured', ... }  (no AOAI model deployed)
  *     → 4xx/502 on validation / upstream errors
  */
@@ -20,6 +22,7 @@ import { getSession } from '@/lib/auth/session';
 import { loadTenantCopilotConfig } from '@/lib/azure/copilot-config-store';
 import {
   callAiFn,
+  emitAiFnUsage,
   NoAoaiDeploymentError,
   AI_FN_NAMES,
   isAiFn,
@@ -56,6 +59,8 @@ export async function POST(req: NextRequest) {
     if (Array.isArray(o.labels)) opts.labels = o.labels.map((x: unknown) => String(x)).filter(Boolean);
     if (Array.isArray(o.fields)) opts.fields = o.fields.map((x: unknown) => String(x)).filter(Boolean);
     if (typeof o.targetLang === 'string' && o.targetLang.trim()) opts.targetLang = o.targetLang.trim();
+    if (typeof o.compareTo === 'string' && o.compareTo.trim()) opts.compareTo = o.compareTo.trim();
+    if (typeof o.embeddingDeployment === 'string' && o.embeddingDeployment.trim()) opts.embeddingDeployment = o.embeddingDeployment.trim();
   }
 
   try {
@@ -64,8 +69,12 @@ export async function POST(req: NextRequest) {
     // target as the cross-item Copilot — works even when LOOM_AOAI_ENDPOINT is
     // unset but a tenant chat model is configured. Azure-native, no Fabric.
     opts.tenantConfig = await loadTenantCopilotConfig(session.claims.oid).catch(() => null);
-    const { result, model, usage } = await callAiFn(fn, input, opts);
-    return NextResponse.json({ ok: true, result, model, usage });
+    const { result, model, usage, vector, similarity } = await callAiFn(fn, input, opts);
+    // Per-call token/cost receipt → App Insights (persona `ai-function`); the
+    // usage-chargeback + copilot-usage admin panels meter it. Awaited so the
+    // event flushes before the serverless invocation can freeze; never throws.
+    await emitAiFnUsage(fn, usage, model, session.claims.oid);
+    return NextResponse.json({ ok: true, result, model, usage, vector, similarity });
   } catch (e: any) {
     if (e instanceof NoAoaiDeploymentError) {
       return NextResponse.json(

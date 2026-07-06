@@ -57,6 +57,22 @@ function mockFetchOnce(content: string) {
   }));
 }
 
+/** Stub the embeddings data-plane: one vector per `input` entry. */
+function mockEmbedOnce(vectors: number[][]) {
+  lastBody = null;
+  vi.stubGlobal('fetch', vi.fn(async (_url: string, init: any) => {
+    lastBody = JSON.parse(init.body);
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({
+        data: vectors.map((embedding, index) => ({ embedding, index })),
+        usage: { prompt_tokens: 4, total_tokens: 4 },
+      }),
+    } as any;
+  }));
+}
+
 function systemPrompt(): string {
   return lastBody?.messages?.find((m: any) => m.role === 'system')?.content || '';
 }
@@ -67,12 +83,14 @@ beforeEach(() => {
 });
 
 describe('isAiFn / AI_FN_NAMES', () => {
-  it('accepts the five valid names and rejects others', () => {
+  it('accepts the nine valid names and rejects others', () => {
     expect([...AI_FN_NAMES].sort()).toEqual(
-      ['classify', 'extract', 'sentiment', 'summarize', 'translate'].sort(),
+      ['classify', 'embed', 'extract', 'fix_grammar', 'generate_response', 'sentiment', 'similarity', 'summarize', 'translate'].sort(),
     );
     for (const n of AI_FN_NAMES) expect(isAiFn(n)).toBe(true);
-    expect(isAiFn('embed')).toBe(false);
+    expect(isAiFn('embed')).toBe(true);
+    expect(isAiFn('similarity')).toBe(true);
+    expect(isAiFn('nope')).toBe(false);
     expect(isAiFn('')).toBe(false);
     expect(isAiFn(42)).toBe(false);
   });
@@ -119,6 +137,49 @@ describe('callAiFn system prompts', () => {
     const sp = systemPrompt().toLowerCase();
     expect(sp).toContain('translate');
     expect(sp).toContain('spanish');
+  });
+
+  it('fix_grammar → uses a grammar-correction prompt', async () => {
+    mockFetchOnce('This sentence is correct.');
+    const r = await callAiFn('fix_grammar', 'this sentance are wrong');
+    expect(systemPrompt().toLowerCase()).toContain('grammar');
+    expect(r.result).toBe('This sentence is correct.');
+  });
+
+  it('generate_response → uses a response-generation prompt', async () => {
+    mockFetchOnce('Thanks for reaching out!');
+    const r = await callAiFn('generate_response', 'How do I reset my password?');
+    expect(systemPrompt().toLowerCase()).toContain('response');
+    expect(r.result).toBe('Thanks for reaching out!');
+  });
+});
+
+describe('callAiFn embeddings functions', () => {
+  it('embed → returns the vector and dimension summary', async () => {
+    mockEmbedOnce([[0.1, 0.2, 0.3, 0.4]]);
+    const r = await callAiFn('embed', 'some text');
+    expect(r.vector).toEqual([0.1, 0.2, 0.3, 0.4]);
+    expect(r.result).toContain('4');
+    expect(lastBody.input).toBe('some text');
+  });
+
+  it('similarity → cosine of two embeddings; identical vectors → 1', async () => {
+    mockEmbedOnce([[1, 0, 0], [1, 0, 0]]);
+    const r = await callAiFn('similarity', 'a', { compareTo: 'b' });
+    expect(r.similarity).toBeCloseTo(1, 5);
+    expect(r.result).toBe('1.0000');
+    expect(lastBody.input).toEqual(['a', 'b']);
+  });
+
+  it('similarity → orthogonal vectors → 0', async () => {
+    mockEmbedOnce([[1, 0], [0, 1]]);
+    const r = await callAiFn('similarity', 'a', { compareTo: 'b' });
+    expect(r.similarity).toBeCloseTo(0, 5);
+  });
+
+  it('similarity → throws without a second text', async () => {
+    mockEmbedOnce([[1, 0]]);
+    await expect(callAiFn('similarity', 'a')).rejects.toThrow(/compareTo/);
   });
 });
 

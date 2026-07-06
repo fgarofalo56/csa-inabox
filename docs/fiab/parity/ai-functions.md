@@ -1,48 +1,56 @@
-# ai-functions — parity with Fabric "AI functions" (sentiment · classify · translate · summarize · extract)
+# ai-functions — parity with Fabric "AI functions" (full 9-function set)
 
 Source UI:
 - Fabric AI functions overview: https://learn.microsoft.com/fabric/data-science/ai-functions/overview
+- Fabric's full set: `ai.similarity`, `ai.fix_grammar`, `ai.generate_response`,
+  `ai.extract`, `ai.classify`, `ai.analyze_sentiment`, `ai.summarize`,
+  `ai.translate`, `ai.embed` (embeddings).
 - Fabric AI functions in T-SQL / SQL surfaces (the `ai_*` family): the Fabric
   data-science "AI functions" exposed over notebooks + the SQL `AI` functions.
 - Databricks AI SQL functions (the Azure-native engine for the in-database path):
   https://learn.microsoft.com/azure/databricks/large-language-models/ai-functions
   (`ai_analyze_sentiment`, `ai_classify`, `ai_summarize`, `ai_translate`,
-  `ai_extract`, `ai_query`).
-- Azure OpenAI chat completions (the sovereign substitute):
+  `ai_extract`, `ai_fix_grammar`, `ai_gen`, `ai_query`).
+- Azure OpenAI chat completions + embeddings (the sovereign substitute):
   https://learn.microsoft.com/azure/ai-services/openai/reference
 
-Fabric's "AI functions" let an analyst enrich a text column — sentiment,
-classification, translation, summarization, field extraction — from the data
-surface, backed by a managed LLM. This brings the same five enrichments to the
-Loom SQL editor, Azure-native and with **no Microsoft Fabric / Power BI
-dependency**.
+Fabric's "AI functions" let an analyst enrich text — sentiment, classification,
+translation, summarization, field extraction, grammar-fix, response generation,
+embeddings, and text similarity — from the data surface, backed by a managed
+LLM. Loom brings **all nine** to the SQL editor, Azure-native and with **no
+Microsoft Fabric / Power BI dependency**. Every call is metered (real
+prompt/completion tokens + an estimated cost) into the admin usage-chargeback
+dashboard.
 
 ## Source feature inventory
 
 | # | Capability | Source behaviour |
 |---|------------|------------------|
-| 1 | **Pick an AI function** | sentiment / classify / translate / summarize / extract |
+| 1 | **Pick an AI function** | the 9 Fabric functions: sentiment / classify / translate / summarize / extract / fix_grammar / generate_response / embed / similarity |
 | 2 | **Pick the text column** to enrich | dropdown over the table's columns |
-| 3 | **Per-function options** | classify labels, extract fields, translate target language |
+| 3 | **Per-function options** | classify labels, extract fields, translate target language, similarity second-text |
 | 4 | **In-database execution** | the function runs over the warehouse/lakehouse, returning enriched rows next to the source column |
 | 5 | **Insert / author the call** | drop the generated function call into the query/notebook |
-| 6 | **Result preview** | the enriched rows (source column + AI result) |
+| 6 | **Result preview** | the enriched rows (source column + AI result / vector / similarity score) |
 | 7 | **Managed-LLM backing** | no model wiring required by the analyst beyond a configured endpoint |
+| 8 | **Usage metering** | token consumption + cost visible to the workspace admin |
 
 ## Loom coverage
 
 | # | Capability | Status | Notes |
 |---|------------|--------|-------|
-| 1 | Pick a function | built ✅ | `Dropdown` over the five `AI_FN_NAMES` in `ai-functions-helper.tsx` |
+| 1 | Pick a function | built ✅ | `Dropdown` over the nine `AI_FN_NAMES` in `ai-functions-helper.tsx` |
 | 2 | Pick the column | built ✅ | `Dropdown` when `columns` supplied, else `Input`; table context captured from the UC tree click |
-| 3 | Per-function options | built ✅ | classify labels, extract fields, translate language — surfaced conditionally |
-| 4 | In-database execution (Comm/GCC) | built ✅ | route builds `SELECT col, ai_analyze_sentiment(col)/ai_classify/…` and runs it on the live Databricks SQL Warehouse via `executeStatement()` |
-| 4b | AOAI substitute (Gov / no warehouse) | built ✅ | `callAiFn()` runs the same five enrichments against the gpt-4o-class AOAI deployment; boundary-detected by `isGovCloud()` |
+| 3 | Per-function options | built ✅ | classify labels, extract fields, translate language, **similarity "compare to"** — surfaced conditionally |
+| 4 | In-database execution (Comm/GCC) | built ✅ | route builds `SELECT col, ai_analyze_sentiment/ai_classify/ai_fix_grammar/ai_gen(col)…` and runs it on the live Databricks SQL Warehouse via `executeStatement()`; embed/similarity have no column builtin → AOAI path |
+| 4b | AOAI substitute (Gov / no warehouse) | built ✅ | `callAiFn()` runs the seven chat functions against the gpt-4o-class AOAI deployment; boundary-detected by `isGovCloud()` |
+| 4c | **Embeddings (embed / similarity)** | built ✅ | `callAiFn('embed'/'similarity')` → unified client `aoaiEmbed()` (Azure OpenAI embeddings data-plane, `text-embedding-3-large` / `LOOM_AOAI_EMBEDDING_DEPLOYMENT`); similarity = server cosine over two embeddings |
 | 5 | Insert the call | built ✅ | **Insert SQL** drops the generated `ai_*` SELECT into the query editor (`onInsert`) |
-| 6 | Result preview / receipt | built ✅ | Databricks path → rows `DataGrid`; AOAI path → enriched value + model + token usage |
+| 6 | Result preview / receipt | built ✅ | Databricks path → rows `DataGrid`; AOAI chat → enriched value + model + tokens; embed → dimension + vector preview; similarity → cosine score |
 | 7 | Managed-LLM backing | built ✅ / honest-gate ⚠️ | works on a configured AOAI/Databricks endpoint; if AOAI is absent on a Gov boundary the dialog shows a `MessageBar intent="warning"` naming `LOOM_AOAI_ENDPOINT` + the role — never a crash |
+| 8 | **Per-call token/cost metering** | built ✅ | every call emits a `copilot.usage` App Insights event (persona `ai-function`) with real prompt/completion tokens; the admin **usage-chargeback** + **copilot-usage** panels surface per-surface tokens + estimated cost (real tokens × published list price) |
 
-Zero ❌. No stub banners.
+Zero ❌. No stub banners. **9 of 9 Fabric AI functions built.**
 
 ## Backend per control
 
@@ -50,7 +58,9 @@ Zero ❌. No stub banners.
 |---------|---------|
 | Boundary probe | `GET /api/items/[type]/[id]/ai-function?probe=1` → `{ govPath, dbxAvailable, gated }` (server-side `isGovCloud()` + `databricksConfigGate()`) |
 | Run (Comm/GCC) | `POST …/ai-function` → `executeStatement(warehouseId, "SELECT col, ai_*(col) FROM table LIMIT n")` over the Databricks SQL Warehouse |
-| Run (Gov / no warehouse) | `POST …/ai-function` → `callAiFn(fn, input, opts)` → live Azure OpenAI chat-completions (sovereign endpoint via `getOpenAiSuffix()`, audience via `cogScope()`) |
+| Run chat (Gov / no warehouse) | `POST …/ai-function` → `callAiFn(fn, input, opts)` → live Azure OpenAI chat-completions (sovereign endpoint via `getOpenAiSuffix()`, audience via `cogScope()`) |
+| Run embed / similarity | `callAiFn('embed'/'similarity')` → unified `aoaiEmbed()` → Azure OpenAI `/embeddings` (deployment `LOOM_AOAI_EMBEDDING_DEPLOYMENT` ?? `text-embedding-3-large`); similarity computes cosine server-side |
+| Usage receipt | `emitAiFnUsage()` → `emitCopilotUsage(..., persona:'ai-function')` → App Insights `copilot.usage` event; read by `/api/admin/copilot-usage` (KQL) and surfaced in the usage-chargeback + copilot-usage admin panels with an estimated cost |
 | Insert SQL | client-side codegen of the `ai_*` call; no backend |
 
 ## Azure-native default

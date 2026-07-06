@@ -9,13 +9,18 @@
  * caller surfaces an honest gate (NoAoaiDeploymentError), exactly like the
  * data-agent run-steps route.
  *
- * Five functions mirror Fabric's AI Functions DataFrame APIs:
- *   summarize · classify · sentiment · extract · translate
+ * Nine functions mirror Fabric's full AI Functions set:
+ *   summarize · classify · sentiment · extract · translate       (chat)
+ *   fix_grammar · generate_response                              (chat)
+ *   embed · similarity                                           (embeddings)
  *
- * Each maps a single system prompt + a user message that wraps `input`, runs
- * one chat-completions round-trip (with the reasoning-model temperature
- * fallback copied from data-agent-client.ts), and returns the model text plus
- * the deployment + token usage.
+ * The seven chat functions map a single system prompt + a user message that
+ * wraps `input`, run one chat-completions round-trip (with the reasoning-model
+ * temperature fallback copied from data-agent-client.ts), and return the model
+ * text plus the deployment + token usage. The two embeddings functions call the
+ * SAME unified client's `aoaiEmbed` (Azure OpenAI embeddings data-plane):
+ * `embed` returns the vector; `similarity` returns the cosine of two embeddings.
+ * No Microsoft Fabric / Power BI dependency — pure Azure OpenAI.
  */
 import { fetchWithTimeout, LLM_FETCH_TIMEOUT_MS } from '@/lib/azure/fetch-with-timeout';
 import {
@@ -25,6 +30,7 @@ import {
 } from '@azure/identity';
 import { AcaManagedIdentityCredential } from '@/lib/azure/aca-managed-identity';
 import { resolveAoaiTarget, NoAoaiDeploymentError } from './copilot-orchestrator';
+import { aoaiEmbed } from './aoai-chat-client';
 import { buildAoaiBody } from './aoai-model-contract';
 import { cogScope } from './cloud-endpoints';
 import type { TenantCopilotConfig } from '@/lib/types/copilot-config';
@@ -41,7 +47,16 @@ const credential: ChainedTokenCredential | DefaultAzureCredential = uamiClientId
 // Re-export so the BFF route imports the gate error from one place.
 export { NoAoaiDeploymentError };
 
-export type AiFn = 'summarize' | 'classify' | 'sentiment' | 'extract' | 'translate';
+export type AiFn =
+  | 'summarize'
+  | 'classify'
+  | 'sentiment'
+  | 'extract'
+  | 'translate'
+  | 'fix_grammar'
+  | 'generate_response'
+  | 'embed'
+  | 'similarity';
 
 export const AI_FN_NAMES: readonly AiFn[] = [
   'summarize',
@@ -49,6 +64,10 @@ export const AI_FN_NAMES: readonly AiFn[] = [
   'sentiment',
   'extract',
   'translate',
+  'fix_grammar',
+  'generate_response',
+  'embed',
+  'similarity',
 ] as const;
 
 export function isAiFn(v: unknown): v is AiFn {
@@ -64,6 +83,16 @@ export interface AiFnOptions {
   fields?: string[];
   /** Target language for `translate` (e.g. "Spanish", "fr-FR"). */
   targetLang?: string;
+  /**
+   * Second text for `similarity` — the cosine is computed between `input` and
+   * this value's embeddings. Required for `similarity`.
+   */
+  compareTo?: string;
+  /**
+   * Embeddings deployment override for `embed` / `similarity`. Defaults to
+   * `LOOM_AOAI_EMBEDDING_DEPLOYMENT` then `text-embedding-3-large`.
+   */
+  embeddingDeployment?: string;
   /**
    * Admin-picked tenant Copilot config (Admin → Tenant settings → Copilot &
    * Agents). When supplied it is forwarded to `resolveAoaiTarget` so an
@@ -85,6 +114,10 @@ export interface AiFnResult {
   result: string;
   model: string;
   usage?: AiFnUsage;
+  /** Populated by `embed`: the embedding vector for `input`. */
+  vector?: number[];
+  /** Populated by `similarity`: cosine similarity in [-1, 1]. */
+  similarity?: number;
 }
 
 async function aoaiToken(): Promise<string> {
@@ -120,8 +153,13 @@ function systemPromptFor(fn: AiFn, options: AiFnOptions): string {
       const lang = options.targetLang?.trim() || 'English';
       return `Translate the following text to ${lang}. Return only the translation, no quotes and no commentary.`;
     }
+    case 'fix_grammar':
+      return 'Correct the spelling, grammar, and punctuation of the following text. Preserve the original meaning and tone. Return only the corrected text — no quotes, no commentary, and no explanation of the changes.';
+    case 'generate_response':
+      return 'You are a helpful assistant. Generate a clear, professional response to the following message or prompt. Return only the response text, with no preamble.';
     default:
-      // Exhaustiveness guard — never reached for a valid AiFn.
+      // Exhaustiveness guard — never reached for a valid AiFn (embed/similarity
+      // are handled before the chat path and never call systemPromptFor).
       return 'Process the following text and return the result.';
   }
 }
@@ -138,17 +176,74 @@ function stripFences(text: string): string {
 }
 
 /**
+ * Cosine similarity of two equal-length vectors, in [-1, 1]. Returns 0 when
+ * either vector has zero magnitude. Used by the `similarity` AI function.
+ */
+function cosine(a: number[], b: number[]): number {
+  const n = Math.min(a.length, b.length);
+  let dot = 0, na = 0, nb = 0;
+  for (let i = 0; i < n; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+/**
  * Run one AI function against the live AOAI deployment.
  *
  * Throws NoAoaiDeploymentError when no model is deployed (the route surfaces an
  * honest `{ok:false, code:'not_configured'}` gate). No Microsoft Fabric or
  * Power BI dependency — pure Azure OpenAI.
+ *
+ * `embed` / `similarity` use the unified client's `aoaiEmbed` (Azure OpenAI
+ * embeddings data-plane); the other seven are single chat-completions calls.
  */
 export async function callAiFn(
   fn: AiFn,
   input: string,
   options: AiFnOptions = {},
 ): Promise<AiFnResult> {
+  // ── Embeddings-backed functions (no chat round-trip) ──────────────────────
+  if (fn === 'embed') {
+    const { vectors, model, usage } = await aoaiEmbed({
+      input,
+      deployment: options.embeddingDeployment,
+      cfg: options.tenantConfig ?? null,
+    });
+    const vec = vectors[0] || [];
+    return {
+      result: `${vec.length}-dimension embedding`,
+      model,
+      vector: vec,
+      usage: usage
+        ? { promptTokens: usage.promptTokens, completionTokens: 0, totalTokens: usage.totalTokens }
+        : undefined,
+    };
+  }
+  if (fn === 'similarity') {
+    const other = (options.compareTo || '').trim();
+    if (!other) throw new Error('similarity requires a second text (options.compareTo).');
+    const { vectors, model, usage } = await aoaiEmbed({
+      input: [input, other],
+      deployment: options.embeddingDeployment,
+      cfg: options.tenantConfig ?? null,
+    });
+    if (vectors.length < 2) throw new Error('embeddings did not return two vectors for similarity.');
+    const score = cosine(vectors[0], vectors[1]);
+    return {
+      result: score.toFixed(4),
+      model,
+      similarity: score,
+      usage: usage
+        ? { promptTokens: usage.promptTokens, completionTokens: 0, totalTokens: usage.totalTokens }
+        : undefined,
+    };
+  }
+
+  // ── Chat-completions functions ────────────────────────────────────────────
   const target = await resolveAoaiTarget(options.tenantConfig ?? false);
   const token = await aoaiToken();
   const url = `${target.endpoint}/openai/deployments/${encodeURIComponent(target.deployment)}/chat/completions?api-version=${target.apiVersion}`;
@@ -201,4 +296,46 @@ export async function callAiFn(
         }
       : undefined,
   };
+}
+
+/** Persona tag used for AI-function usage receipts in App Insights / the
+ *  usage-chargeback + copilot-usage admin panels. */
+export const AI_FN_PERSONA = 'ai-function';
+
+/**
+ * Fire-and-forget usage receipt for one AI-function call. Emits a
+ * `copilot.usage` App Insights event (persona `ai-function`) carrying the REAL
+ * prompt/completion tokens from the AOAI response, so the admin usage-chargeback
+ * + copilot-usage panels meter AI-function consumption alongside the Copilot
+ * personas. Never awaited on the hot path; never throws. No-op when App Insights
+ * is unconfigured (honest gate inside emitCopilotUsage).
+ *
+ * `emitCopilotUsage` is imported lazily to keep this module's import graph light
+ * for the callers that only need `callAiFn`.
+ */
+export async function emitAiFnUsage(
+  fn: AiFn,
+  usage: AiFnUsage | undefined,
+  model: string,
+  userOid: string,
+): Promise<void> {
+  if (!usage || usage.totalTokens <= 0) return;
+  try {
+    const { emitCopilotUsage } = await import('./copilot-orchestrator');
+    await emitCopilotUsage(
+      {
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+        totalTokens: usage.totalTokens,
+        aoaiCalls: fn === 'similarity' ? 2 : 1,
+        toolCalls: 0,
+      },
+      model,
+      `ai-function:${fn}`,
+      userOid,
+      AI_FN_PERSONA,
+    );
+  } catch {
+    // Metering must never break the AI-function response.
+  }
 }
