@@ -362,11 +362,16 @@ const SHARED_BACKEND_ITEM_ROUTES = [
   'apps/fiab-console/app/api/items/vector-store/[id]/index/route.ts',
   'apps/fiab-console/app/api/items/vector-store/[id]/search/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/cancel/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/clone/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/copy-into/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/iqy/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/query/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/query-acceleration/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/restore-points/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/schema/route.ts',
   'apps/fiab-console/app/api/items/warehouse/[id]/script-out/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/snapshots/route.ts',
+  'apps/fiab-console/app/api/items/warehouse/[id]/time-travel/route.ts',
 ];
 // ── Routes that USED to be allowlisted as "shared backend / no ownership to
 // scope" but actually read/write a per-tenant Cosmos item by a caller-supplied

@@ -28,12 +28,14 @@ import {
   Database20Regular, DocumentTable20Regular, Play20Regular, Folder20Regular,
   Stop20Regular, MathFormula20Regular, Flowchart20Regular,
   DataBarVertical20Regular, ArrowImport20Regular, Eye20Regular, Form20Regular,
+  History20Regular,
 } from '@fluentui/react-icons';
 import { ModelViewPanel } from '../components/model-view-canvas';
 import { ItemEditorChrome } from '../item-editor-chrome';
 import { OpenInPbiDesktopButton } from '../components/open-in-pbi-desktop-button';
 import { EmptyState } from '@/lib/components/empty-state';
 import { WarehouseMonitoringTab } from '../components/warehouse-monitoring';
+import { WarehouseTimeTravelTab } from '../components/warehouse-time-travel';
 import { StatsMaintenanceDialog } from '../components/stats-maintenance-dialog';
 import { SqlObjectScriptMenu, SqlRowCountBadge } from '@/lib/components/sql-object-script-menu';
 import { sqlRowCount, loadSqlScript } from '../sql-explorer-helpers';
@@ -150,7 +152,7 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
   // Fabric/Power BI model view (table cards + relationship lines + measures),
   // with NO Power BI dependency. Monitoring shows the query-load chart + recent
   // requests on real sys.dm_pdw_exec_requests via the dedicated pool.
-  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring' | 'migrate'>('query');
+  const [editorTab, setEditorTab] = useState<'query' | 'model' | 'monitoring' | 'migrate' | 'time-travel'>('query');
   // Visual (no-code) query canvas — Power-Query diagram-view parity.
   const [vqOpen, setVqOpen] = useState(false);
   // Query parameters auto-detected from {{name}} tokens + chart-visualize toggle.
@@ -614,13 +616,19 @@ export function WarehouseEditor({ item, id }: { item: FabricItemType; id: string
       }
       main={
         <div className={s.pad}>
-          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring' | 'migrate')}>
+          <TabList selectedValue={editorTab} onTabSelect={(_, d) => setEditorTab(d.value as 'query' | 'model' | 'monitoring' | 'migrate' | 'time-travel')}>
             <Tab value="query" icon={<Play20Regular />}>Query</Tab>
             <Tab value="model" icon={<Flowchart20Regular />}>Model</Tab>
             <Tab value="monitoring" icon={<DataBarVertical20Regular />}>Monitoring</Tab>
+            <Tab value="time-travel" icon={<History20Regular />}>Time travel</Tab>
             <Tab value="migrate" icon={<ArrowImport20Regular />}>Migrate</Tab>
           </TabList>
           {editorTab === 'migrate' && <SqlMigrationWizard />}
+          {editorTab === 'time-travel' && (
+            isNew
+              ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Clone, time travel, restore points, COPY INTO, and snapshots activate once the warehouse item is saved.</MessageBarBody></MessageBar>
+              : <WarehouseTimeTravelTab id={id} />
+          )}
           {editorTab === 'monitoring' && (
             isNew
               ? <MessageBar intent="info"><MessageBarBody><MessageBarTitle>Save the warehouse first</MessageBarTitle>Monitoring activates once the warehouse item is saved.</MessageBarBody></MessageBar>
