@@ -5,6 +5,25 @@ screenshots**. The same run is a **full functional UAT** — it walks every tab 
 config option, so it validates the feature *and* produces the tutorial in one
 pass. Tutorials are re-captured whenever a UI changes.
 
+## In-app rendering (Learning Hub)
+
+The captured walkthroughs surface **in-product** in the Learning Hub
+(`/learn` → **Guides & reference**). Each editor guide card carries a **View
+walkthrough** button that opens a polished, web3 `StepWalkthrough` dialog:
+numbered steps, each with its clean screenshot + a concise caption of what to do.
+
+- Step **captions** come from the item's real authored Learn content
+  (`getLearn(slug).steps`) — never invented text.
+- Step **screenshots** attach by index via `loomStepImageUrl(slug, n)`, gated on
+  what has actually been captured (`EDITOR_STEP_IMAGE_COUNTS`). A step with no
+  captured screenshot renders an **honest "screenshot coming" placeholder**, not
+  a broken image (per `no-vaporware` / no-scaffold).
+
+When a slug's multi-step screenshots are (re)published as
+`docs/fiab/tutorials/img/editor-<slug>-1.png … -N.png`, bump its entry in
+`EDITOR_STEP_IMAGE_COUNTS` (in `apps/fiab-console/lib/learn/content.ts`) and the
+images slot straight into the walkthrough.
+
 ## How a capture works
 
 `apps/fiab-console/e2e/tutorial-capture.uat.ts` captures **all three coverage
@@ -19,13 +38,22 @@ dimensions** in one pass (gate with `LOOM_TUTORIAL_DIMENSIONS`):
 The full expected set is **155** surfaces (109 + 29 + 17).
 
 For each surface it then:
-1. **Closes the "Learn about this item" Drawer** (`[aria-label="Close"]`) so the
-   full surface is visible in every shot.
+1. **Guarantees a clean surface** — the capture navigates with the
+   `?screenshot=1` flag so the "Learn about this item" Drawer never auto-opens,
+   and before **every** shot runs a bulletproof `closeAllOverlays()` sweep that
+   dismisses any Drawer / LearnPopover / help overlay / first-run tour (explicit
+   Close → Escape, looped until no `[role="dialog"]` is visible). The overlay can
+   therefore **never bleed into a screenshot** — the exact defect this process
+   guards against.
 2. Walks every tab / config control as a functional check and captures **one
    screenshot per step**.
-3. **Stages** the screenshots + a per-surface `tutorial.md` into
-   `temp/azure-screenshots/redacted/loom-tutorials/<slug>/` and appends to
-   `MANIFEST.md`.
+3. **Stages** the screenshots + a per-surface `tutorial.md` **and a
+   `steps.json` step manifest** (`{ slug, title, summary, steps:[{n,caption,image}] }`)
+   into `temp/azure-screenshots/redacted/loom-tutorials/<slug>/` and appends to
+   `MANIFEST.md`. The `steps.json` manifest is what makes the walkthrough
+   **data-driven**: the Learning Hub's `StepWalkthrough` renderer and any docs
+   consumer read the ordered steps from it, so regenerated screenshots slot
+   straight back in without re-parsing markdown.
 
 ## Run it
 

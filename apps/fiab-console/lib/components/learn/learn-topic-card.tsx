@@ -16,11 +16,16 @@
 import * as React from 'react';
 import {
   Text, Badge, Button, makeStyles, tokens, mergeClasses,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
 } from '@fluentui/react-components';
-import { Open16Regular, BookOpen16Regular, ArrowDownload16Regular, Apps16Regular } from '@fluentui/react-icons';
+import {
+  Open16Regular, BookOpen16Regular, ArrowDownload16Regular, Apps16Regular,
+  ImageMultiple16Regular, Dismiss24Regular,
+} from '@fluentui/react-icons';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
-import type { LearnTopic } from '@/lib/learn/content';
+import { StepWalkthrough } from '@/lib/components/learn/step-walkthrough';
+import { getWalkthrough, type LearnTopic } from '@/lib/learn/content';
 
 const useStyles = makeStyles({
   card: {
@@ -135,6 +140,9 @@ const useStyles = makeStyles({
     textDecorationLine: 'none',
     ':hover': { textDecorationLine: 'underline' },
   },
+  walkBtn: { alignSelf: 'flex-start' },
+  dialogSurface: { maxWidth: '860px', width: '90vw' },
+  dialogContent: { maxHeight: '72vh', overflowY: 'auto' },
 });
 
 export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactElement {
@@ -146,6 +154,14 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
   // When the topic maps to an installable content-bundle app, the footer shows
   // an "Install live example" button that opens the shared install wizard.
   const [installOpen, setInstallOpen] = React.useState(false);
+  // Editor guides carry a real, data-driven visual walkthrough (authored step
+  // captions + captured screenshots). Only editor guides resolve a walkthrough;
+  // tutorials/use-cases keep their external doc links.
+  const [walkOpen, setWalkOpen] = React.useState(false);
+  const walkthrough = React.useMemo(
+    () => (topic.section === 'Editor guides' ? getWalkthrough(topic.visualType) : null),
+    [topic.section, topic.visualType],
+  );
 
   const showImg = !!topic.thumbUrl && imgOk;
 
@@ -185,6 +201,17 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
         {topic.summary && <Text size={200} className={s.summary}>{topic.summary}</Text>}
 
         <div className={s.links}>
+          {walkthrough && (
+            <Button
+              className={s.walkBtn}
+              size="small"
+              appearance="primary"
+              icon={<ImageMultiple16Regular />}
+              onClick={() => setWalkOpen(true)}
+            >
+              View walkthrough
+            </Button>
+          )}
           <a className={mergeClasses(s.primary)} href={topic.primaryUrl}
              target="_blank" rel="noreferrer">
             <BookOpen16Regular />
@@ -222,6 +249,41 @@ export function LearnTopicCard({ topic }: { topic: LearnTopic }): React.ReactEle
           open={installOpen}
           onOpenChange={setInstallOpen}
         />
+      )}
+
+      {walkthrough && (
+        <Dialog open={walkOpen} onOpenChange={(_, d) => setWalkOpen(d.open)}>
+          <DialogSurface className={s.dialogSurface}>
+            <DialogBody>
+              <DialogTitle
+                action={
+                  <Button
+                    appearance="subtle"
+                    aria-label="Close"
+                    icon={<Dismiss24Regular />}
+                    onClick={() => setWalkOpen(false)}
+                  />
+                }
+              >
+                {topic.title} — visual walkthrough
+              </DialogTitle>
+              <DialogContent className={s.dialogContent}>
+                <StepWalkthrough
+                  visualType={topic.visualType}
+                  title={topic.title}
+                  summary={topic.summary}
+                  steps={walkthrough}
+                  docsUrl={topic.primaryUrl}
+                  docsLabel={topic.hasLoomDoc ? 'Open the full Loom guide' : 'Open the docs'}
+                  msLearnUrl={topic.hasLoomDoc ? topic.msLearnUrl : undefined}
+                />
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setWalkOpen(false)}>Close</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
       )}
     </article>
   );
