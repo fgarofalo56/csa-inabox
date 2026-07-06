@@ -20,7 +20,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSession } from '@/lib/auth/session';
 import { isTenantAdmin } from '@/lib/auth/feature-gate';
-import { computeDspmAiPosture, DspmAiNotConfiguredError } from '@/lib/azure/dspm-ai-client';
+import { computeDspmAiPosture, DspmAiNotConfiguredError, DSPM_AI_DEFAULT_WINDOW_DAYS } from '@/lib/azure/dspm-ai-client';
 import { apiServerError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -43,7 +43,7 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const days = Math.max(1, Math.min(90, Number(req.nextUrl.searchParams.get('days') || '30') || 30));
+  const days = Math.max(1, Math.min(90, Number(req.nextUrl.searchParams.get('days') || String(DSPM_AI_DEFAULT_WINDOW_DAYS)) || DSPM_AI_DEFAULT_WINDOW_DAYS));
 
   try {
     const result = await computeDspmAiPosture(s.claims.oid, days);

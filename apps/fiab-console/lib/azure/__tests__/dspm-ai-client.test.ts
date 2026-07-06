@@ -44,22 +44,28 @@ vi.mock('../monitor-client', () => ({
   MonitorNotConfiguredError: mocks.MonitorNotConfiguredError,
 }));
 
-import { computeDspmAiPosture, DspmAiNotConfiguredError } from '../dspm-ai-client';
+import { computeDspmAiPosture, DspmAiNotConfiguredError, clearDspmAiCache } from '../dspm-ai-client';
 
 const ORIG = process.env.LOOM_COSMOS_ENDPOINT;
 beforeEach(() => {
+  // Drop the posture TTL memo so each test's fresh mocks aren't shadowed by a
+  // prior test's cached result (same tenant+window key).
+  clearDspmAiCache();
   process.env.LOOM_COSMOS_ENDPOINT = 'https://acct.documents.azure.com:443/';
+  // Shape mirrors the client's PROJECTED Cosmos query
+  // (SELECT c.state.sensitivityLabel, c.state.sources), i.e. the two state
+  // sub-fields are flattened onto the row — NOT the whole state blob.
   mocks.state.itemsResources = [
-    { id: 'lh1', displayName: 'Sales LH', itemType: 'lakehouse', workspaceId: 'ws1', state: { sensitivityLabel: 'Confidential' } },
-    { id: 'wh1', displayName: 'Ops WH', itemType: 'warehouse', workspaceId: 'ws1', state: { sensitivityLabel: 'Internal' } },
-    { id: 'pub1', displayName: 'Public DS', itemType: 'lakehouse', workspaceId: 'ws1', state: {} },
+    { id: 'lh1', displayName: 'Sales LH', itemType: 'lakehouse', workspaceId: 'ws1', sensitivityLabel: 'Confidential' },
+    { id: 'wh1', displayName: 'Ops WH', itemType: 'warehouse', workspaceId: 'ws1', sensitivityLabel: 'Internal' },
+    { id: 'pub1', displayName: 'Public DS', itemType: 'lakehouse', workspaceId: 'ws1' },
     {
       id: 'da1', displayName: 'Revenue agent', itemType: 'data-agent', workspaceId: 'ws1',
-      state: { sources: [
+      sources: [
         { id: 'lh1', name: 'Sales LH', type: 'lakehouse' },
         { id: 'wh1', name: 'Ops WH', type: 'warehouse' },
         { name: 'Public DS', type: 'lakehouse' },
-      ] },
+      ],
     },
   ];
   labelsMock.mockResolvedValue([
@@ -128,11 +134,10 @@ describe('computeDspmAiPosture', () => {
     mocks.state.itemsResources.push(
       {
         id: 'pf1', displayName: 'Forecast flow', itemType: 'prompt-flow', workspaceId: 'ws1',
-        state: { sources: [{ id: 'lh1', name: 'Sales LH', type: 'lakehouse' }] },
+        sources: [{ id: 'lh1', name: 'Sales LH', type: 'lakehouse' }],
       },
       {
         id: 'oa1', displayName: 'Ops watcher', itemType: 'operations-agent', workspaceId: 'ws1',
-        state: {},
       },
     );
     const r = await computeDspmAiPosture('tenant');
@@ -145,5 +150,18 @@ describe('computeDspmAiPosture', () => {
     const oa = r.agents.find((a) => a.agentId === 'oa1')!;
     expect(oa.totalSourceCount).toBe(0);
     expect(oa.sensitiveSourceCount).toBe(0);
+  });
+
+  it('DEGRADES (partial results, not a wholesale failure) when the usage query times out', async () => {
+    // A heavy-window Log Analytics timeout must NOT fail the whole report: the
+    // label-exposure join still renders, usage columns go blank, and a
+    // `degraded` signal names the source so the panel can show a partial bar.
+    queryLogsMock.mockRejectedValue(new Error('Request to https://api.loganalytics.azure.com timed out after 30000ms'));
+    const r = await computeDspmAiPosture('tenant');
+    expect(r.summary.agentCount).toBe(1);
+    expect(r.agents[0].maxLabel).toBe('Confidential'); // core report intact
+    expect(r.agents[0].usageCalls).toBe(0);            // usage blank
+    expect(r.gates.usage).toBeUndefined();             // NOT an honest-gate (it IS configured)
+    expect(r.degraded.some((d) => d.source === 'usage')).toBe(true);
   });
 });

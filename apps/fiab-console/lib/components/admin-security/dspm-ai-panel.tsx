@@ -22,6 +22,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   Spinner, Caption1, Body1, Badge, Button, Tooltip,
   MessageBar, MessageBarBody, MessageBarTitle,
+  Dropdown, Option, Field,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
@@ -60,6 +61,7 @@ interface ApiResp {
   agents?: AgentRow[];
   summary?: Summary;
   gates?: { mip?: NotConfiguredHint; usage?: NotConfiguredHint };
+  degraded?: { source: string; reason: string }[];
   code?: string;
   hint?: NotConfiguredHint;
   reason?: string;
@@ -103,20 +105,50 @@ const useStyles = makeStyles({
   statLabel: { fontSize: '12px', color: tokens.colorNeutralForeground3, textTransform: 'uppercase', letterSpacing: '0.04em' },
   chips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalS },
   sourceChips: { display: 'flex', flexWrap: 'wrap', gap: tokens.spacingHorizontalXS },
-  loadingBox: { display: 'flex', justifyContent: 'center', padding: tokens.spacingVerticalXXL },
+  loadingBox: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: tokens.spacingVerticalS, padding: tokens.spacingVerticalXXL },
   gap: { marginBottom: tokens.spacingVerticalL },
   muted: { color: tokens.colorNeutralForeground3 },
+  toolbar: {
+    display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between',
+    gap: tokens.spacingHorizontalM, marginBottom: tokens.spacingVerticalL, flexWrap: 'wrap',
+  },
+  toolbarActions: { display: 'flex', alignItems: 'flex-end', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' },
+  windowDropdown: { minWidth: '150px' },
+  retryRow: { marginTop: tokens.spacingVerticalS },
 });
 
-export function DspmAiPanel({ days = 30 }: { days?: number }) {
+/**
+ * Usage-window options (days). The window is the dominant cost knob for the
+ * heavy Log Analytics scan, so letting the operator narrow it is the honest
+ * lever to make a slow query fast — and it mirrors the time-range filter the
+ * real Purview DSPM-for-AI "Apps and agents" dashboard exposes. Narrowing only
+ * changes usage attribution; every agent still appears (the list is from Cosmos).
+ */
+const WINDOW_OPTIONS = [7, 14, 30, 60, 90];
+
+/**
+ * Per-call client timeout for the DSPM report (ms). This report legitimately
+ * runs a HEAVY multi-source join (full Cosmos estate + Microsoft Graph label
+ * ordering + a Log Analytics usage scan), which can exceed the global 6s
+ * clientFetch ceiling. We pass a generous 90s budget for THIS call only (never
+ * changing the global default, which every other spinner-gated page relies on)
+ * so a legitimately slow query completes instead of being aborted at 6s and
+ * mis-reported to the operator as a timeout.
+ */
+const DSPM_FETCH_TIMEOUT_MS = 90_000;
+
+export function DspmAiPanel({ days: initialDays = 14 }: { days?: number }) {
   const s = useStyles();
   const [resp, setResp] = useState<ApiResp | null>(null);
   const [loading, setLoading] = useState(true);
+  const [days, setDays] = useState<number>(
+    WINDOW_OPTIONS.includes(initialDays) ? initialDays : 14,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await clientFetch(`/api/admin/dspm-ai?days=${days}`);
+      const r = await clientFetch(`/api/admin/dspm-ai?days=${days}`, undefined, DSPM_FETCH_TIMEOUT_MS);
       setResp(await r.json());
     } catch (e) {
       setResp({ ok: false, error: e instanceof Error ? e.message : String(e) });
@@ -192,6 +224,33 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
         emits (Log Analytics KQL). No Microsoft Fabric / Power BI dependency. No synthetic data.
       </Body1>
 
+      {/* Toolbar — usage-window scope + refresh. Narrowing the window is the
+          honest lever to make a heavy query fast (it only changes usage
+          attribution; every agent still appears). Hidden behind the hard/admin
+          gate where a query can't run. */}
+      {!(resp && !resp.ok && (resp.code === 'dspm_ai_not_configured' || resp.code === 'admin_only')) && (
+        <div className={s.toolbar}>
+          <Field label="Usage window" hint="Narrows the Log Analytics scan — every agent still appears; only usage attribution changes">
+            <Dropdown
+              className={s.windowDropdown}
+              value={`Last ${days} days`}
+              selectedOptions={[String(days)]}
+              disabled={loading}
+              onOptionSelect={(_e, d) => { const n = Number(d.optionValue); if (n) setDays(n); }}
+            >
+              {WINDOW_OPTIONS.map((w) => (
+                <Option key={w} value={String(w)} text={`Last ${w} days`}>{`Last ${w} days`}</Option>
+              ))}
+            </Dropdown>
+          </Field>
+          <div className={s.toolbarActions}>
+            <Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>
+              {loading ? 'Scanning…' : 'Refresh'}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* HARD gate — Cosmos unset (whole surface). */}
       {resp && !resp.ok && resp.code === 'dspm_ai_not_configured' && (
         <NotConfiguredBar surface="DSPM for AI" hint={resp.hint} />
@@ -209,6 +268,24 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
           <MessageBarBody>
             <MessageBarTitle>Could not load DSPM for AI report</MessageBarTitle>
             {resp.error || 'unknown error'}
+            {' '}This query can be heavier across a large estate — try a narrower usage window above, or retry.
+            <div className={s.retryRow}>
+              <Button size="small" icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Retry</Button>
+            </div>
+          </MessageBarBody>
+        </MessageBar>
+      )}
+
+      {/* Non-fatal degradation — an enrichment source timed out / failed for this
+          window, but the core label-exposure report still rendered. */}
+      {resp?.ok && resp.degraded && resp.degraded.length > 0 && (
+        <MessageBar intent="warning" className={s.gap}>
+          <MessageBarBody>
+            <MessageBarTitle>Showing partial results</MessageBarTitle>
+            {resp.degraded.map((d) => (d.source === 'usage'
+              ? 'Per-agent usage metering (Log Analytics) timed out or failed for this window'
+              : 'Sensitivity-label ordering (Microsoft Graph) was temporarily unavailable')).join('; ')}
+            {' '}— the label-exposure report below is still accurate. Narrow the usage window or retry to restore the rest.
           </MessageBarBody>
         </MessageBar>
       )}
@@ -223,7 +300,14 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
         </div>
       )}
 
-      {loading && !resp && <div className={s.loadingBox}><Spinner label="Computing AI data-exposure posture…" /></div>}
+      {loading && !resp && (
+        <div className={s.loadingBox}>
+          <Spinner label="Scanning agents and their sensitive-data exposure…" />
+          <Caption1 className={s.muted}>
+            Joining the estate with Microsoft Graph labels and Log Analytics usage. A heavier window can take a moment.
+          </Caption1>
+        </div>
+      )}
 
       {/* Empty estate — API responded ok but no agents exist yet. */}
       {resp?.ok && resp.summary && resp.summary.agentCount === 0 && (
@@ -239,7 +323,6 @@ export function DspmAiPanel({ days = 30 }: { days?: number }) {
         <>
           <Section
             title="AI data-exposure posture"
-            actions={<Button icon={<ArrowSync24Regular />} onClick={load} disabled={loading}>Refresh</Button>}
             bare
           >
             <div className={s.statsRow}>

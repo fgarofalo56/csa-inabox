@@ -157,6 +157,8 @@ const ALLOWLIST = new Set([
   'LOOM_DIRECT_LAKE_COSMOS_DB',     // opt-in Direct Lake mirror
   'LOOM_DQ_SOURCE_CONNECTION_STRING', // handled by _CONNECTION_STRING pattern; kept for clarity
   'LOOM_DSPM_AI_AGENT_ITEM_TYPES',  // classifier config list (code default)
+  'LOOM_DSPM_AI_WINDOW_DAYS',       // opt-in default usage-window override (code default 14)
+  'LOOM_DSPM_AI_TTL_MS',            // opt-in posture-memo TTL tuning (code default 60s)
   'LOOM_EVENTSTREAM_EVENTS_TABLE',  // ADX table default (code default)
   'LOOM_FABRIC_GRAPH_WORKSPACE',    // opt-in Fabric graph workspace
   'LOOM_FABRIC_SEMANTIC_MODEL_ID',  // opt-in Fabric semantic model
