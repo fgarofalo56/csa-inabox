@@ -79,6 +79,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: '/thread', label: 'Lineage' },
       { href: '/monitor', label: 'Monitor' },
+      { href: '/org-reports', label: 'Reports' },
       { href: '/scheduler', label: 'Scheduler' },
       { href: '/copilot', label: 'Copilot' },
     ],
@@ -105,7 +106,6 @@ export const NAV_SECTIONS: NavSection[] = [
  */
 export const DEMOTED_NAV_ITEMS: NavItem[] = [
   { href: '/semantic-model', label: 'Semantic models' },
-  { href: '/org-reports', label: 'Organization reports' },
   { href: '/data-agent', label: 'Data agents' },
 ];
 
