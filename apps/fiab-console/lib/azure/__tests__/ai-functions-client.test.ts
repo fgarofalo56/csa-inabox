@@ -36,6 +36,32 @@ vi.mock('@azure/identity', async () => {
   };
 });
 
+// aoaiEmbed is the unified-client collaborator (it has its own aoai-chat-client
+// tests). Here we mock it at the module boundary so callAiFn's embed/similarity
+// orchestration (dimension summary + server-side cosine) is what's under test,
+// without threading the real AOAI target resolver. The mock still POSTs through
+// the stubbed global fetch, so `lastBody.input` assertions keep working.
+vi.mock('@/lib/azure/aoai-chat-client', async () => {
+  const actual = await vi.importActual<any>('@/lib/azure/aoai-chat-client');
+  return {
+    ...actual,
+    aoaiEmbed: vi.fn(async (opts: any) => {
+      const res: any = await (globalThis.fetch as any)(
+        'https://fake-aoai.openai.azure.com/embeddings',
+        { method: 'POST', body: JSON.stringify({ input: opts.input }) },
+      );
+      const j = await res.json();
+      return {
+        vectors: (j.data || []).map((d: any) => d.embedding),
+        model: opts.deployment || 'text-embedding-3-large',
+        usage: j.usage
+          ? { promptTokens: j.usage.prompt_tokens, totalTokens: j.usage.total_tokens }
+          : undefined,
+      };
+    }),
+  };
+});
+
 import { callAiFn, isAiFn, AI_FN_NAMES, NoAoaiDeploymentError } from '../ai-functions-client';
 import { resolveAoaiTarget } from '@/lib/azure/copilot-orchestrator';
 
