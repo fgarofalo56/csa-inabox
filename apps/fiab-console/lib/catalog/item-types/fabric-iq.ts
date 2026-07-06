@@ -181,7 +181,7 @@ export const fabricIqItems: FabricItemType[] = [
   // Doc-only mappings in docs/migrations/palantir-foundry/ are superseded here
   // by built Azure-native item types. All default Azure-native (no Fabric / no
   // Power BI workspace) per .claude/rules/no-fabric-dependency.md.
-  { slug: 'workshop-app', displayName: 'Workshop app', restType: 'WorkshopApp', category: 'Fabric IQ', preview: true,
+  { slug: 'workshop-app', displayName: 'Workshop app', restType: 'WorkshopApp', category: 'Loom Apps', preview: true,
     description: 'Operational low-code app bound to an Ontology — object views, link traversal, and write-back actions.',
     learnContent: {
       "overview": "Workshop is Palantir Foundry's low-code operational application builder. The CSA Loom equivalent (Atelier) binds an app to a Loom Ontology rather than to a database: pages render object views over the ontology's entity types, and actions write back to the bound Lakehouse/Warehouse. Azure-native — it runs on Azure Container Apps over the ontology's existing data bindings; no Microsoft Fabric workspace required.",
@@ -193,7 +193,7 @@ export const fabricIqItems: FabricItemType[] = [
       ],
       "docsUrl": "https://learn.microsoft.com/power-apps/maker/canvas-apps/getting-started"
     } },
-  { slug: 'slate-app', displayName: 'Slate app', restType: 'SlateApp', category: 'Fabric IQ', preview: true,
+  { slug: 'slate-app', displayName: 'Slate app', restType: 'SlateApp', category: 'Loom Apps', preview: true,
     templateOf: 'workshop-app', templateId: 'slate-workshop-app',
     description: 'Backed template — scaffolds a real Workshop app + Data API (data-api-builder) stack over a query surface. Azure-native; deploys to Azure Static Web Apps. No Fabric.',
     learnContent: {

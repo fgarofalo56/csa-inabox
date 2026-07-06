@@ -69,7 +69,6 @@ export const CATEGORY_COLORS: Record<string, string> = {
   'Synapse Analytics':      '#1a1342', // navy
   'Azure Databricks':       '#b91c4b', // red-pink
   'Azure Data Factory':     '#0050b3', // blue
-  'Azure Data Lake Analytics': '#0050b3',
   'Azure AI Foundry':       '#7c3aed', // purple
   'Azure SQL Database':     '#1a7f4e', // green
   'Azure Geoanalytics':     '#0d7377', // teal
@@ -79,6 +78,7 @@ export const CATEGORY_COLORS: Record<string, string> = {
   'Power Platform':         '#0d7377', // teal
   'AI & Agents':            '#4b1d8f', // deep purple
   'Streaming analytics':    '#c2410c', // orange
+  'Loom Apps':              '#0b6a8f', // ocean blue
 };
 
 export const NEUTRAL_COLOR = '#6b7280';
@@ -131,6 +131,12 @@ const ICON_BY_SLUG: Record<string, (props: { color?: string }) => ReactNode> = {
   'map':                   (p) => <Map20Regular style={{ color: p.color }} />,
   'data-agent':            (p) => <ChatMultiple20Regular style={{ color: p.color }} />,
   'operations-agent':      (p) => <Bot20Regular style={{ color: p.color }} />,
+
+  // Loom Apps — data apps, low-code apps, and org apps (Azure-native)
+  'loom-app':              (p) => <AppFolder20Regular style={{ color: p.color }} />,
+  'rayfin-app':            (p) => <Apps20Regular style={{ color: p.color }} />,
+  'slate-app':             (p) => <Apps20Regular style={{ color: p.color }} />,
+  'workshop-app':          (p) => <Apps20Regular style={{ color: p.color }} />,
 
   // Power BI
   'semantic-model':        (p) => <Layer20Regular style={{ color: p.color }} />,

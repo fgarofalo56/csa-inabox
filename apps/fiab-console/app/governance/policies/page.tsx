@@ -94,7 +94,7 @@ const useStyles = makeStyles({
 });
 
 /** Preset icon key → Fluent icon (kept in the client, presets stay icon-free). */
-function presetIcon(key: string): JSX.Element {
+function presetIcon(key: string) {
   switch (key) {
     case 'person': return <Person24Regular />;
     case 'money': return <Money24Regular />;

@@ -43,7 +43,8 @@ const reg = (loader: () => Promise<Record<string, unknown>>, name: string): Edit
   dynamic(() => loader().then((m) => ({ default: m[name] as EditorComponent })), { ssr: false });
 
 export const EDITOR_REGISTRY: Record<string, EditorComponent> = {
-  // Fabric Apps (Build 2026 preview)
+  // Loom Apps (Azure-native app building — Fabric Apps parity)
+  'loom-app':             reg(() => import('./loom-app-editor'),         'LoomAppEditor'),
   'rayfin-app':           reg(() => import('./rayfin-app-editor'),        'RayfinAppEditor'),
   // Data Marketplace — consumer discovery (F14/F18) over the loom-data-products AI Search index
   'data-marketplace':     reg(() => import('./data-marketplace'),        'DataMarketplaceEditor'),
