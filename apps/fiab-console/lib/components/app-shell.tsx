@@ -20,6 +20,7 @@ import {
   SignOut24Regular, Settings24Regular, Person24Regular,
   Question24Regular, ChatHelp24Regular,
   Navigation24Regular, Library24Regular, CompassNorthwest24Regular,
+  PanelLeftExpand24Regular,
 } from '@fluentui/react-icons';
 import Link from 'next/link';
 import { LeftNav } from './left-nav';
@@ -33,6 +34,7 @@ import { FeedbackWidget, openFeedback } from './feedback-widget';
 import { GlobalErrorBoundary, GlobalErrorListeners } from './error-boundary';
 import { AppLauncher } from './app-launcher';
 import { WorkspaceSwitcher } from './workspace-switcher';
+import { ObjectExplorer, toggleObjectExplorer } from './object-explorer';
 import { TabStrip } from './tab-strip';
 import { SavedStatus } from './saved-status';
 import { NotificationsButton } from './notifications-button';
@@ -187,6 +189,10 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Tooltip>
         <AppLauncher />
         <WorkspaceSwitcher />
+        <Tooltip content="Object explorer — browse items across every workspace" relationship="label">
+          <Button appearance="transparent" className={styles.iconBtn} icon={<PanelLeftExpand24Regular />}
+            onClick={toggleObjectExplorer} aria-label="Toggle object explorer" data-tour="object-explorer" />
+        </Tooltip>
         <TabStrip />
         <SavedStatus />
         <TopbarSearch />
@@ -262,6 +268,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       </main>
       <CommandPalette />
       <CopilotPane />
+      <ObjectExplorer />
       <FeedbackWidget />
       <GlobalErrorListeners />
       <GlobalJobToaster />
