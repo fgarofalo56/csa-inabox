@@ -112,14 +112,28 @@ interface Props {
    * state) can omit it.
    */
   dirty?: boolean;
+  /**
+   * The item's real display NAME (e.g. "Sales Data") — from the editor's own
+   * loaded record (rel-T103). When present it titles the editor + breadcrumb
+   * instead of the "<Type> (<guid8>)" fallback, so the chrome shows what the
+   * user named the item rather than a GUID fragment. Editors that already hold
+   * the query data pass it through; when absent the chrome falls back to its own
+   * best-effort item fetch (below) and finally to the GUID-fragment format — so
+   * omitting it is a no-op regression-wise.
+   */
+  displayName?: string;
 }
 
-export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false }: Props) {
+export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel, rightPanelLabel = 'Copilot', dirty = false, displayName }: Props) {
   const styles = useStyles();
   // Shared unsaved-changes guard — one wiring covers every editor that threads
   // a `dirty` signal. Returns the confirm dialog (or null) to render below.
   const unsavedGuard = useUnsavedChangesGuard(dirty);
   const [leftCollapsed, setLeftCollapsed] = useState(false);
+  // Best-effort real item name captured from the chrome's own item fetch (below)
+  // — the fallback source when an editor doesn't pass `displayName` in, so every
+  // editor still shows the real name for a persisted item (rel-T103).
+  const [fetchedName, setFetchedName] = useState<string | null>(null);
   // Share dialog (Fabric "Grant people access") — reachable from EVERY editor's
   // header, not just the standalone Manage-permissions page.
   const [shareOpen, setShareOpen] = useState(false);
@@ -127,7 +141,14 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
   // canvas keeps the width the operator chose across visits to this item type.
   const [rightCollapsed, setRightCollapsed] = useCollapsibleState(`right.${item.slug}`, false);
   const isNew = id === 'new';
-  const title = isNew ? `New ${item.displayName.toLowerCase()}` : `${item.displayName} (${id.substring(0, 8)})`;
+  // Real item NAME resolution (rel-T103): prefer the name the editor passed in,
+  // then the name from the chrome's own best-effort item fetch, and only then
+  // fall back to the "<Type> (<guid8>)" format so an untitled / still-loading
+  // item still reads sensibly. New items have no persisted name yet.
+  const resolvedName = displayName ?? fetchedName ?? undefined;
+  const title = isNew
+    ? `New ${item.displayName.toLowerCase()}`
+    : (resolvedName ?? `${item.displayName} (${id.substring(0, 8)})`);
 
   // Resolve which workspace this item belongs to so the header shows a
   // workspace › item breadcrumb (Fabric's editor breadcrumb) and the topbar
@@ -141,7 +162,12 @@ export function ItemEditorChrome({ item, id, ribbon, leftPanel, main, rightPanel
     if (isNew) return;
     let cancelled = false;
     getItem(item.slug, id)
-      .then((it) => getWorkspace(it.workspaceId))
+      .then((it) => {
+        // Capture the real item name for the title/breadcrumb fallback (rel-T103)
+        // off the SAME fetch that resolves the workspace — no extra request.
+        if (!cancelled && it?.displayName) setFetchedName(it.displayName);
+        return getWorkspace(it.workspaceId);
+      })
       .then((ws) => {
         if (cancelled) return;
         const ref = { id: ws.id, name: ws.name };
