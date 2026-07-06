@@ -563,8 +563,33 @@ function SourceInspector({
   const [previewBusy, setPreviewBusy] = useState(false);
   const [previewEvents, setPreviewEvents] = useState<ReceivedEventRow[] | null>(null);
   const [previewGate, setPreviewGate] = useState<string | null>(null);
+  // Mirrored-DB change-feed (mirror-cdf) picker + drain state.
+  const [mirrors, setMirrors] = useState<MirrorOption[] | null>(null);
+  const [drainMsg, setDrainMsg] = useState<string | null>(null);
+  const [drainBusy, setDrainBusy] = useState(false);
 
   const noProvision = value.kind === 'sample';
+
+  // Load the workspace's mirrored databases (+ their tables) when the source is
+  // a Mirrored-DB change feed, so the operator picks a real mirror + tables.
+  useEffect(() => {
+    if (value.kind !== 'mirror-cdf' || !itemId || mirrors) return;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch(`/api/items/eventstream/${itemId}/mirror-cdf`);
+        const j = await r.json();
+        if (alive && j.ok && Array.isArray(j.mirrors)) setMirrors(j.mirrors);
+        else if (alive) setMirrors([]);
+      } catch { if (alive) setMirrors([]); }
+    })();
+    return () => { alive = false; };
+  }, [value.kind, itemId, mirrors]);
+
+  const selectedMirror = useMemo(
+    () => (mirrors || []).find((m) => m.id === value.mirrorItemId) || null,
+    [mirrors, value.mirrorItemId],
+  );
 
   const copy = useCallback((text?: string) => {
     if (text && typeof navigator !== 'undefined' && navigator.clipboard) {
@@ -612,6 +637,27 @@ function SourceInspector({
     }
   }, [itemId, nodeIdx]);
 
+  // mirror-cdf: produce the Spark-staged Delta change rows to the Event Hub.
+  const drainCdf = useCallback(async () => {
+    if (!itemId) return;
+    setDrainBusy(true); setDrainMsg('Producing staged change rows to the Event Hub…'); setErr(null);
+    try {
+      const r = await fetch(`/api/items/eventstream/${itemId}/mirror-cdf`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ action: 'drain', nodeIdx }),
+      });
+      const j = await r.json();
+      setDrainMsg(j.ok
+        ? `Produced ${j.produced ?? 0} change row(s) to Event Hub "${j.hub || value.eventHubName || ''}" from ${j.files ?? 0} staged file(s).`
+        : `Drain failed: ${j.error || 'unknown'}`);
+    } catch (e: any) {
+      setDrainMsg(`Drain failed: ${e?.message || e}`);
+    } finally {
+      setDrainBusy(false);
+    }
+  }, [itemId, nodeIdx, value.eventHubName]);
+
   const previewEventsFetch = useCallback(async () => {
     if (!itemId) return;
     setPreviewBusy(true); setPreviewGate(null); setPreviewEvents(null); setErr(null);
@@ -648,6 +694,7 @@ function SourceInspector({
           <Option value="iothub">IoT Hub</Option>
           <Option value="kafka">Kafka</Option>
           <Option value="cdc-mirror">CDC (database change feed)</Option>
+          <Option value="mirror-cdf">Mirrored-DB change feed (Delta CDF)</Option>
           <Option value="custom-app">Custom app (provision Event Hub)</Option>
           <Option value="sample">Sample data</Option>
         </Dropdown>
@@ -739,6 +786,72 @@ function SourceInspector({
             onChange={(_: unknown, d: any) => onChange({ eventHubName: d.value })} />
         </Field>
       )}
+      {value.kind === 'mirror-cdf' && (
+        <>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Reads a mirrored database's Bronze Delta change data feed
+            (<code>readChangeFeed</code>) via a Synapse Spark batch and produces each change row to
+            an Event Hub the stream reads. Azure-native — no Microsoft Fabric required.
+          </Caption1>
+          <Field label="Mirrored database" required>
+            <Dropdown
+              value={selectedMirror?.name || ''}
+              selectedOptions={value.mirrorItemId ? [value.mirrorItemId] : []}
+              placeholder={mirrors === null ? 'Loading…' : (mirrors.length ? 'Select a mirror' : 'No mirrored databases in this workspace')}
+              onOptionSelect={(_: unknown, d: any) => {
+                const m = (mirrors || []).find((x) => x.id === d.optionValue);
+                onChange({
+                  mirrorItemId: d.optionValue as string,
+                  mirrorWorkspaceId: m?.workspaceId,
+                  mirrorTables: [],
+                  provisionedEndpoint: undefined,
+                });
+              }}
+            >
+              {(mirrors || []).map((m) => (
+                <Option key={m.id} value={m.id}>{m.name}</Option>
+              ))}
+            </Dropdown>
+          </Field>
+          {selectedMirror && (
+            <Field label="Tables" hint="Change feed is read from each selected table's managed Delta table">
+              <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+                {(selectedMirror.tables || []).length === 0 && (
+                  <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+                    This mirror has no replicated tables recorded yet. Start the mirror first.
+                  </Caption1>
+                )}
+                {(selectedMirror.tables || []).map((tbl) => {
+                  const checked = (value.mirrorTables || []).includes(tbl);
+                  return (
+                    <label key={tbl} style={{ display: 'flex', alignItems: 'center', gap: tokens.spacingHorizontalXS }}>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        aria-label={`Include table ${tbl}`}
+                        onChange={() => {
+                          const set = new Set(value.mirrorTables || []);
+                          if (set.has(tbl)) set.delete(tbl); else set.add(tbl);
+                          onChange({ mirrorTables: Array.from(set) });
+                        }}
+                      />
+                      <Caption1>{tbl}</Caption1>
+                    </label>
+                  );
+                })}
+              </div>
+            </Field>
+          )}
+          <Field label="Start from Delta version" hint="Change feed commit version to read from (0 = from the beginning, replays existing rows as inserts)">
+            <SpinButton
+              min={0}
+              value={value.cdfStartingVersion ?? 0}
+              onChange={(_: unknown, d: any) => onChange({ cdfStartingVersion: d.value ?? Number(d.displayValue) ?? 0 })}
+              aria-label="CDF starting version"
+            />
+          </Field>
+        </>
+      )}
       {value.kind === 'sample' && (
         <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
           Sample data needs no ingest endpoint — the stream runtime generates events for testing.
@@ -759,6 +872,19 @@ function SourceInspector({
           <MessageBarBody>Save the eventstream to enable source provisioning.</MessageBarBody>
         </MessageBar>
       )}
+      {value.kind === 'mirror-cdf' && itemId && (
+        <div className={s.wizardActions}>
+          <Button
+            appearance="outline"
+            icon={drainBusy ? <Spinner size="tiny" /> : <Send20Regular />}
+            disabled={drainBusy || !value.mirrorItemId}
+            onClick={drainCdf}
+          >
+            {drainBusy ? 'Producing…' : 'Produce staged changes to Event Hub'}
+          </Button>
+        </div>
+      )}
+      {drainMsg && <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>{drainMsg}</Caption1>}
       {err && (
         <MessageBar intent="error">
           <MessageBarBody>
@@ -875,6 +1001,7 @@ const TRANSFORM_KINDS: { value: TransformKind; label: string }[] = [
   { value: 'group-by', label: 'Group by' },
   { value: 'window', label: 'Window' },
   { value: 'project', label: 'Project' },
+  { value: 'cdc-flatten', label: 'CDC flatten (DeltaFlow)' },
   { value: 'join', label: 'Join' },
   { value: 'union', label: 'Union' },
 ];
@@ -896,12 +1023,21 @@ interface ReceivedEventRow {
   body?: unknown;
 }
 
+/** A mirrored-database candidate for the mirror-cdf source picker. */
+interface MirrorOption {
+  id: string;
+  name: string;
+  workspaceId: string;
+  tables: string[];
+}
+
 function kindLabel(k: SourceKind): string {
   switch (k) {
     case 'eventhub': return 'Event Hubs';
     case 'iothub': return 'IoT Hub';
     case 'kafka': return 'Kafka';
     case 'cdc-mirror': return 'CDC (database change feed)';
+    case 'mirror-cdf': return 'Mirrored-DB change feed (Delta CDF)';
     case 'custom-app': return 'Custom app (provision Event Hub)';
     case 'sample': return 'Sample data';
     default: return k;
@@ -1159,6 +1295,48 @@ export function AsaTransformInspector({
             onChange={(_: unknown, d: any) => onChange({ selectFields: csvToArr(d.value) })}
           />
         </Field>
+      )}
+
+      {/* ---- CDC FLATTEN (DeltaFlow) ---- */}
+      {value.kind === 'cdc-flatten' && (
+        <>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Flattens a Debezium change envelope (before / after / op / ts) into analytics-ready
+            rows that mirror the source table, plus change-metadata columns
+            (<code>__op</code>, <code>__changed_at</code>). Parity with Fabric Eventstream DeltaFlow.
+          </Caption1>
+          <Field label="Table columns to flatten" required hint="Comma-separated source columns (kept from after, falling back to before for deletes)">
+            <Input
+              value={arrToCsv(value.cdcColumns)}
+              placeholder="OrderID, CustomerName, OrderTotal, OrderDate"
+              onChange={(_: unknown, d: any) => onChange({ cdcColumns: csvToArr(d.value) })}
+            />
+          </Field>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+            <Field label="After field" style={{ flex: 1, minWidth: 120 }}>
+              <Input value={value.cdcAfterField ?? 'after'} placeholder="after"
+                onChange={(_: unknown, d: any) => onChange({ cdcAfterField: d.value })} />
+            </Field>
+            <Field label="Before field" style={{ flex: 1, minWidth: 120 }}>
+              <Input value={value.cdcBeforeField ?? 'before'} placeholder="before"
+                onChange={(_: unknown, d: any) => onChange({ cdcBeforeField: d.value })} />
+            </Field>
+          </div>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+            <Field label="Operation field" style={{ flex: 1, minWidth: 120 }} hint="Debezium op: c/r/u/d">
+              <Input value={value.cdcOpField ?? 'op'} placeholder="op"
+                onChange={(_: unknown, d: any) => onChange({ cdcOpField: d.value })} />
+            </Field>
+            <Field label="Timestamp field" style={{ flex: 1, minWidth: 120 }} hint="Epoch-millis change time">
+              <Input value={value.cdcTsField ?? 'ts_ms'} placeholder="ts_ms"
+                onChange={(_: unknown, d: any) => onChange({ cdcTsField: d.value })} />
+            </Field>
+          </div>
+          <Field label="Source record field (optional)" hint="Emits __schema / __table from Debezium 'source' metadata">
+            <Input value={value.cdcSourceField || ''} placeholder="source"
+              onChange={(_: unknown, d: any) => onChange({ cdcSourceField: d.value })} />
+          </Field>
+        </>
       )}
 
       {/* ---- JOIN ---- */}

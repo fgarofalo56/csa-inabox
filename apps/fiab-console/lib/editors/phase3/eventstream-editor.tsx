@@ -40,7 +40,7 @@ import {
   type TransformNode as VisualTransformNode,
   type SinkNode as VisualSinkNode,
 } from '@/lib/components/eventstream/visual-designer';
-import { compileToSaql } from '@/lib/azure/asa-query-compiler';
+import { compileToSaql, cdcFlattenSelectList } from '@/lib/azure/asa-query-compiler';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useWorkspaces, WorkspacePicker } from './workspace-picker';
@@ -88,7 +88,7 @@ interface EsFieldMap {
   cast?: string;
 }
 
-type EsOpKind = 'filter' | 'manage-fields' | 'aggregate' | 'group-by' | 'expand' | 'union' | 'join';
+type EsOpKind = 'filter' | 'manage-fields' | 'aggregate' | 'group-by' | 'expand' | 'cdc-flatten' | 'union' | 'join';
 
 const ES_OPERATOR_KINDS: Array<{ value: EsOpKind; label: string; icon: ReactNode; hint: string }> = [
   { value: 'filter', label: 'Filter', icon: <Filter20Regular />, hint: 'Keep only events matching a WHERE condition.' },
@@ -96,6 +96,7 @@ const ES_OPERATOR_KINDS: Array<{ value: EsOpKind; label: string; icon: ReactNode
   { value: 'aggregate', label: 'Aggregate', icon: <MathFormula20Regular />, hint: 'Windowed aggregate (SUM/COUNT/AVG/MIN/MAX) over a tumbling/hopping window.' },
   { value: 'group-by', label: 'Group by', icon: <MathFormula20Regular />, hint: 'Group events by columns + window and aggregate each group.' },
   { value: 'expand', label: 'Expand', icon: <DataArea20Regular />, hint: 'Flatten an array column into one row per element (CROSS APPLY GetArrayElements).' },
+  { value: 'cdc-flatten', label: 'CDC flatten', icon: <Branch20Regular />, hint: 'DeltaFlow: flatten Debezium before/after/op/ts into tabular rows + __op/__changed_at metadata.' },
   { value: 'union', label: 'Union', icon: <Merge20Regular />, hint: 'Merge all upstream sources into one stream.' },
   { value: 'join', label: 'Join', icon: <Branch20Regular />, hint: 'Temporal JOIN with another source within a time bound.' },
 ];
@@ -122,6 +123,8 @@ function esDefaultOperator(kind: EsOpKind, n: number): Record<string, any> {
       };
     case 'expand':
       return { ...base, expandField: '', expandAlias: 'element', expandOutput: '' };
+    case 'cdc-flatten':
+      return { ...base, cdcColumns: [] as string[], cdcAfterField: 'after', cdcBeforeField: 'before', cdcOpField: 'op', cdcTsField: 'ts_ms', cdcSourceField: '' };
     case 'union':
       return { ...base };
     case 'join':
@@ -181,6 +184,7 @@ function esManageFieldsSelectList(t: any): string {
 function esSelectList(t: any): string {
   switch (t.kind) {
     case 'manage-fields': return esManageFieldsSelectList(t);
+    case 'cdc-flatten': return cdcFlattenSelectList(t);
     case 'aggregate':
     case 'group-by':
     case 'window': return esAggregateSelectList(t);
@@ -657,6 +661,7 @@ export function EventstreamEditor({ item, id }: { item: FabricItemType; id: stri
         { label: 'Aggregate', onClick: () => ribbonAdd('transform', { kind: 'aggregate' }) },
         { label: 'Group by', onClick: () => ribbonAdd('transform', { kind: 'group-by' }) },
         { label: 'Expand', onClick: () => ribbonAdd('transform', { kind: 'expand' }) },
+        { label: 'CDC flatten', onClick: () => ribbonAdd('transform', { kind: 'cdc-flatten' }) },
         { label: 'Union', onClick: () => ribbonAdd('transform', { kind: 'union' }) },
         { label: 'Join', onClick: () => ribbonAdd('transform', { kind: 'join' }) },
       ]},
@@ -1939,6 +1944,36 @@ function EsOperatorCard({
           </Field>
           <Field label="Output column" style={{ minWidth: 140 }} hint="Name for the flattened value">
             <Input value={op.expandOutput || ''} onChange={(_: unknown, d: any) => onChange({ expandOutput: d.value })} placeholder="tag" />
+          </Field>
+        </div>
+      )}
+
+      {/* CDC FLATTEN (DeltaFlow) */}
+      {kind === 'cdc-flatten' && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS }}>
+          <Caption1 style={{ color: tokens.colorNeutralForeground3 }}>
+            Flattens a Debezium change envelope into analytics-ready rows that mirror the source
+            table, plus change-metadata columns (__op, __changed_at). Parity with Fabric Eventstream DeltaFlow.
+          </Caption1>
+          <Field label="Table columns to flatten" hint="Comma-separated source columns (kept from after, falling back to before for deletes)">
+            <Input value={csv(op.cdcColumns)} onChange={(_: unknown, d: any) => onChange({ cdcColumns: toArr(d.value) })} placeholder="OrderID, CustomerName, OrderTotal" />
+          </Field>
+          <div style={{ display: 'flex', gap: tokens.spacingHorizontalS, flexWrap: 'wrap' }}>
+            <Field label="After field" style={{ flex: 1, minWidth: 110 }}>
+              <Input value={op.cdcAfterField ?? 'after'} onChange={(_: unknown, d: any) => onChange({ cdcAfterField: d.value })} placeholder="after" />
+            </Field>
+            <Field label="Before field" style={{ flex: 1, minWidth: 110 }}>
+              <Input value={op.cdcBeforeField ?? 'before'} onChange={(_: unknown, d: any) => onChange({ cdcBeforeField: d.value })} placeholder="before" />
+            </Field>
+            <Field label="Op field" style={{ minWidth: 90 }} hint="c/r/u/d">
+              <Input value={op.cdcOpField ?? 'op'} onChange={(_: unknown, d: any) => onChange({ cdcOpField: d.value })} placeholder="op" />
+            </Field>
+            <Field label="Timestamp field" style={{ minWidth: 120 }} hint="epoch-millis">
+              <Input value={op.cdcTsField ?? 'ts_ms'} onChange={(_: unknown, d: any) => onChange({ cdcTsField: d.value })} placeholder="ts_ms" />
+            </Field>
+          </div>
+          <Field label="Source record field (optional)" hint="Emits __schema / __table from the Debezium 'source' metadata">
+            <Input value={op.cdcSourceField || ''} onChange={(_: unknown, d: any) => onChange({ cdcSourceField: d.value })} placeholder="source" />
           </Field>
         </div>
       )}
