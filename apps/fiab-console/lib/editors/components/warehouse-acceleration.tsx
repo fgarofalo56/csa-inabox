@@ -7,20 +7,20 @@ import { clientFetch } from '@/lib/client-fetch';
  * (Fabric Build 2026). Two honest tiers, both wired to the real BFF
  * (/api/items/warehouse/[id]/query-acceleration):
  *
- *   1. GPU acceleration — a Fabric-engine-only capability. On the Azure-native
- *      default (Synapse Dedicated SQL pool, which has no GPU) the toggle is an
- *      HONEST GATE: it renders, is non-actionable, and a warning MessageBar
- *      names the exact opt-in (LOOM_WAREHOUSE_BACKEND=fabric-warehouse + a bound
- *      Fabric workspace). It is enabled + on only when the Fabric backend is
- *      opted into. We never fake GPU compute on Synapse.
+ *   1. GPU acceleration — a Fabric-warehouse-engine capability Loom does NOT
+ *      provision (the Fabric backend is not built). The Azure-native warehouse
+ *      (Synapse Dedicated SQL pool) has no GPU, so the toggle is an HONEST
+ *      DISCLOSURE: it renders, is non-actionable, and a MessageBar names Loom's
+ *      Azure-native GPU-class answer — Databricks Photon / a Databricks SQL
+ *      warehouse. We never fake GPU compute on Synapse.
  *
  *   2. Result-set caching — the REAL Azure-native query-acceleration knob. The
  *      Switch issues a live `ALTER DATABASE … SET RESULT_SET_CACHING { ON | OFF }`
  *      via the BFF and reflects sys.databases.is_result_set_caching_on. No mocks.
  *
- * Per no-fabric-dependency.md the surface is 100% functional with
- * LOOM_DEFAULT_FABRIC_WORKSPACE unset; per no-vaporware.md every control hits a
- * real backend or shows an honest gate.
+ * Per no-fabric-dependency.md the surface is 100% functional with no Fabric
+ * dependency; per no-vaporware.md every control hits a real backend or shows an
+ * honest gate.
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -32,12 +32,12 @@ import {
 } from '@fluentui/react-components';
 import { Flash24Regular, Database20Regular, Rocket20Regular, History20Regular } from '@fluentui/react-icons';
 
-type WarehouseBackend = 'synapse-dedicated' | 'fabric-warehouse';
+type WarehouseBackend = 'synapse-dedicated';
 
 interface GpuStatus {
   available: boolean;
   enabled: boolean;
-  engine: 'fabric' | 'synapse-dedicated';
+  engine: 'synapse-dedicated';
   detail: string;
 }
 
@@ -171,7 +171,7 @@ export function WarehouseAcceleration({
       });
       const j = await r.json();
       if (!j.ok) setError(j.error || 'GPU acceleration is not available on this backend.');
-      else setNotice('GPU acceleration is active on the Fabric warehouse engine.');
+      else setNotice('GPU acceleration is active.');
       await load();
     } catch (e: any) {
       setError(e?.message || String(e));
@@ -206,13 +206,13 @@ export function WarehouseAcceleration({
                   <Badge appearance="filled" color={poolOnline ? 'success' : 'warning'}>
                     {status.poolState}
                   </Badge>
-                  <Badge appearance="tint" color={status.backend === 'fabric-warehouse' ? 'brand' : 'informative'}>
+                  <Badge appearance="tint" color="informative">
                     backend: {status.backend}
                   </Badge>
                 </div>
 
                 <div className={s.cardStack}>
-                  {/* ---- GPU acceleration tier (Fabric-only; honest gate) ---- */}
+                  {/* ---- GPU acceleration tier (honest disclosure — no GPU on Synapse) ---- */}
                   <div className={s.card}>
                     <div className={s.cardHeader}>
                       <Rocket20Regular />
@@ -222,7 +222,7 @@ export function WarehouseAcceleration({
                         color={gpuAvailable ? 'brand' : 'informative'}
                         style={{ marginInlineStart: 'auto' }}
                       >
-                        {gpuAvailable ? 'Fabric engine' : 'Opt-in'}
+                        {gpuAvailable ? 'Active' : 'Databricks Photon'}
                       </Badge>
                     </div>
                     <div className={s.row}>
@@ -236,9 +236,9 @@ export function WarehouseAcceleration({
                       {busy && gpuAvailable && <Spinner size="tiny" />}
                     </div>
                     {!gpuAvailable ? (
-                      <MessageBar intent="warning">
+                      <MessageBar intent="info">
                         <MessageBarBody>
-                          <MessageBarTitle>GPU acceleration requires the Fabric backend</MessageBarTitle>
+                          <MessageBarTitle>GPU-class acceleration on the Azure-native path</MessageBarTitle>
                           {status.gpu.detail}
                         </MessageBarBody>
                       </MessageBar>
@@ -283,8 +283,10 @@ export function WarehouseAcceleration({
                 </div>
 
                 <Caption1 className={s.footnote}>
-                  GPU acceleration is a Fabric-engine capability. The Azure-native default delivers query
-                  acceleration via result-set caching plus the dedicated pool&apos;s batch-mode columnar engine.
+                  GPU acceleration is a Fabric-warehouse-engine capability with no Synapse equivalent;
+                  Loom&apos;s Azure-native GPU-class answer is Databricks Photon / a Databricks SQL
+                  warehouse. The dedicated pool delivers query acceleration via result-set caching plus
+                  its batch-mode columnar engine.
                 </Caption1>
               </>
             )}

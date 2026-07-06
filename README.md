@@ -121,10 +121,22 @@ Capability coverage:
 | **Data Engineering**    | Apache Spark on Synapse/Databricks with dbt transformations              | Fabric Data Engineering (Spark)              |
 | **Data Integration**    | Azure Data Factory / Synapse Pipelines for ETL/ELT                       | Fabric Data Factory                          |
 | **Data Warehousing**    | Synapse Dedicated SQL Pools and Serverless SQL                           | Fabric Warehouse                             |
+| **Warehouse acceleration** | Databricks Photon (vectorized C++ engine) / Databricks SQL warehouse for GPU-class throughput + Synapse Dedicated result-set caching | Fabric GPU-accelerated Warehouse             |
 | **Real-Time Analytics** | Azure Data Explorer + Event Hubs streaming                               | Real-Time Intelligence (Eventhouse / KQL DB) |
 | **AI/ML**               | Azure Machine Learning + Azure OpenAI integration                        | Fabric Data Science + Copilot                |
 | **Data Governance**     | Microsoft Purview for cataloging, classification, and lineage            | OneLake Catalog (Purview-powered)            |
 | **Observability**       | Log Analytics + Azure Monitor + custom KQL dashboards                    | Fabric Monitoring Hub                        |
+
+> **Warehouse acceleration is a positioning, not a GPU claim.** Fabric's
+> GPU-accelerated Warehouse runs on capacity GPU compute; the Azure-native
+> warehouse (Synapse Dedicated SQL) has no GPU. Loom's honest 1:1 answer for
+> GPU-class throughput is **Databricks Photon** / a **Databricks SQL warehouse**,
+> plus **result-set caching** on the dedicated pool for repeat queries — surfaced
+> in the Warehouse "Query acceleration" dialog. See
+> [`docs/fiab/parity/warehouse-query-acceleration.md`](docs/fiab/parity/warehouse-query-acceleration.md).
+> Per-feature parity grades and the full ledger live in
+> [`docs/fiab/parity/MASTER-SCORECARD.md`](docs/fiab/parity/MASTER-SCORECARD.md)
+> (re-baselined 2026-07-06, rev.7).
 
 ---
 

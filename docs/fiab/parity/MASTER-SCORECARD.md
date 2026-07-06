@@ -161,6 +161,61 @@ the per-service parity-doc staleness, closed by this rev.
 
 ---
 
+## rev.7 — Wave-6 Fabric-parity re-baseline + GPU-Warehouse positioning (2026-07-06, rel-T95)
+
+> **Scope:** a re-baseline pass over the Fabric-feature parity claims after the
+> public-release Wave-6 build cohort (rel-T81…T95). Each feature below was
+> re-verified against **current code** (route + editor + client read back to a
+> real Azure REST / data-plane / ARM call — no commit-message trust). Grades are
+> honest: only shipped-and-working features are marked BUILT; the genuine Wave-6
+> gaps (rel-T81…T93 still open) stay ❌ and are tracked in
+> `PRPs/active/public-release/PRP.md` + `PRPs/active/fabric-parity/`.
+
+### Newly-confirmed BUILT (Fabric-parity features shipped since rev.6)
+
+| Fabric feature | Loom status | Azure-native backend | Verified surface |
+|---|:--:|---|---|
+| Data Activator (Reflex) | **built ✅** | Azure Monitor scheduled-query alert (ADX-native RTI) | `app/api/items/activator/**` (route + `[id]/{start,stop,rules}`) + `lib/editors/phase3/activator-editor.tsx` + `lib/azure/activator-monitor.ts` |
+| User Data Functions (UDF) | **built ✅** | Azure Function App invoke (`LOOM_UDF_FUNCTION_BASE`) | `app/api/items/user-data-function/[id]/invoke/route.ts` + `lib/editors/phase4/user-data-function-editor.tsx` |
+| Data API Builder (DAB) | **built ✅** | DAB config authoring (container) | `lib/editors/data-api-builder-editor.tsx` (rev.3 sub-doc `data-api-builder.md` B+) |
+| Protection policies (MIP/DLP) | **built ✅** | Cosmos defs + reconciler over real RBAC/label plane | `app/api/admin/protection-policies` + `app/governance/protection-policies` + `lib/azure/protection-policy-{client,reconciler}.ts` (+ test) |
+| Workspace identity (trusted workspace access) | **built ✅** | UAMI/workspace federated identity + trusted-resource networking | `lib/azure/workspace-identity-client.ts` (+ test) + `lib/components/network/trusted-workspace-access.tsx` + `app/api/admin/workspaces/[id]/networking/trusted-resources/route.ts` |
+
+These five were flagged in the rel-T95 evidence as "shipped but possibly still
+❌/D in the ledger"; all five are real built surfaces and are hereby graded
+**built ✅**. No Fabric capacity or workspace is required for any of them (per
+`no-fabric-dependency.md`).
+
+### GPU-Warehouse — honest positioning row
+
+Fabric Build 2026 shipped a **GPU-accelerated Warehouse**. Loom does NOT claim a
+GPU data warehouse: the Azure-native warehouse (Synapse Dedicated SQL pool) runs
+CPU batch-mode columnar compute with no GPU. The honest 1:1 positioning:
+
+| Fabric capability | Loom's Azure-native answer | Notes |
+|---|---|---|
+| GPU-accelerated Warehouse (capacity GPU compute) | **Databricks Photon** (vectorized C++ engine) / a **Databricks SQL warehouse** for GPU-class throughput, plus **Synapse Dedicated result-set caching** for repeat-query acceleration | GPU-class acceleration, not a literal GPU DW. Surfaced honestly in the Warehouse "Query acceleration" dialog: GPU toggle is a non-actionable disclosure naming Photon/SQL-warehouse; result-set caching is the real `ALTER DATABASE … SET RESULT_SET_CACHING` knob. See `docs/fiab/parity/warehouse-query-acceleration.md`. |
+
+### Trust-cleanup note (rel-T94)
+
+The two **dead Fabric opt-in knobs** were removed so no advertised backend
+selector 503s: `LOOM_DATAFLOW_BACKEND=fabric` (dataflow refresh always-503) and
+`LOOM_WAREHOUSE_BACKEND=fabric-warehouse` (unbuilt "preview" provisioner stub) —
+including their UI badges, the bicep `loomWarehouseFabricWorkspace` param +
+`LOOM_WAREHOUSE_FABRIC_WORKSPACE` env, and their doc references. Both items
+remain 100% functional on their Azure-native path (ADF Spark; Synapse Dedicated
+SQL pool).
+
+### Remaining honest gaps (NOT re-graded — genuine open work)
+
+The rel-T81…T93 Fabric-parity items still open (e.g. estate-wide catalog search
+depth, PREDICT batch-scoring stepper, and the other Wave-6 rows) remain genuine
+❌ gaps and are intentionally **not** marked built here. The rev.6 12-service
+grade distribution above is unchanged by this rev — rev.7 only re-baselines the
+Fabric-feature-level claims and adds the GPU-Warehouse positioning.
+
+---
+
 ## Deepened sub-surfaces (rev.3 — 2026-06-01)
 
 
@@ -488,7 +543,8 @@ effort-to-impact (unwired-backend items are starred ★ as quick wins).
   **secret-reveal** (Tier 4 #28) components *once* and mount across services —
   they recur in nearly every audit's missing list.
 
-_Last updated: 2026-06-10 (rev.6 — Wave-8→11 re-audit + count recompute,
-audit-T31). Source: 12 per-service parity audits + the rev.6 gap-closure map
-above, reconciled against `docs/fiab/prp/AUDIT-2026-06-10.md` and the
-PR #1054–#1123 ledger. Originally 2026-05-31._
+_Last updated: 2026-07-06 (rev.7 — Wave-6 Fabric-parity re-baseline + GPU-Warehouse
+positioning row, rel-T95). Prior: 2026-06-10 (rev.6 — Wave-8→11 re-audit + count
+recompute, audit-T31). Source: 12 per-service parity audits + the rev.6
+gap-closure map above, reconciled against `docs/fiab/prp/AUDIT-2026-06-10.md` and
+the PR #1054–#1123 ledger. Originally 2026-05-31._

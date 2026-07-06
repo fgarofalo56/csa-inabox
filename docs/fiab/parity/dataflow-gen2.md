@@ -4,13 +4,13 @@ Source UI: Microsoft Fabric / ADF "Power Query" editor
 (https://learn.microsoft.com/azure/data-factory/wrangling-overview,
 https://learn.microsoft.com/power-query/power-query-ui)
 
-Azure-native backend (DEFAULT, no Fabric): the authored Power Query (M) is
-compiled to an ADF **WranglingDataFlow** resource and executed on ADF Spark via
-an **ExecuteWranglingDataflow** activity. The output query is written to the
-chosen destination (ADLS Gen2 Parquet/CSV or an Azure SQL table). The Fabric
-`RefreshDataflow` activity does not exist in ADF's ARM schema, so it is not used
-on the default path. Fabric is opt-in only (`LOOM_DATAFLOW_BACKEND=fabric` + a
-bound `LOOM_DEFAULT_FABRIC_WORKSPACE`).
+Azure-native backend (the only backend, no Fabric): the authored Power Query
+(M) is compiled to an ADF **WranglingDataFlow** resource and executed on ADF
+Spark via an **ExecuteWranglingDataflow** activity. The output query is written
+to the chosen destination (ADLS Gen2 Parquet/CSV or an Azure SQL table). The
+Fabric `RefreshDataflow` activity does not exist in ADF's ARM schema, so it is
+not used. There is no Fabric opt-in for this item — it runs 100% on Azure with
+no Fabric capacity or workspace.
 
 ## Power Query Online feature inventory → Loom coverage
 
@@ -26,7 +26,7 @@ bound `LOOM_DEFAULT_FABRIC_WORKSPACE`).
 | Ribbon — Home (choose/remove cols, keep rows, distinct, promote headers, group by) | ✅ built | `appendStep` → real `Table.*` M |
 | Ribbon — Transform (filter, sort, rename, reorder, change type, merge, append) | ✅ built | `appendStep` → real `Table.*` M |
 | Ribbon — Add column (custom, index, duplicate) | ✅ built | `appendStep` → real `Table.AddColumn/…` M |
-| Data preview (inline rows) | ⚠️ honest-gate | ADF has no inline M-eval endpoint; preview rows come from a real ADF run (Save & Run). Fabric opt-in enables inline preview. MessageBar `intent="warning"`. |
+| Data preview (inline rows) | ⚠️ honest-gate | ADF has no inline M-eval endpoint; preview rows come from a real ADF run (Save & Run). MessageBar `intent="warning"`. |
 | Output destination — ADLS Gen2 (Parquet/CSV) | ✅ built | `DestinationPicker` → `upsertLinkedService` (AzureBlobFS, factory MI) + `upsertDataset` (Parquet/DelimitedText) wired as the WranglingDataFlow sink |
 | Output destination — Azure SQL table | ✅ built | `DestinationPicker` → `AzureSqlTable` dataset over a real linked service (`/api/adf/linked-services`) |
 | Refresh / Run | ✅ built | `POST /api/items/dataflow/[id]/refresh` → `upsertWranglingDataFlow` + `runWranglingDataFlow` (ExecuteWranglingDataflow), returns ADF runId |
@@ -51,10 +51,10 @@ MessageBar, allowed by `no-vaporware.md` / `ui-parity.md`.
 
 ## Infra / bicep sync
 
-- `LOOM_DATAFLOW_BACKEND` env (default `adf`) — `platform/fiab/bicep/modules/admin-plane/main.bicep`.
+- Azure-native ADF is the only backend — no `LOOM_DATAFLOW_BACKEND` knob.
 - ADF system-assigned MI → **Storage Blob Data Contributor** on the DLZ ADLS
   account — `platform/fiab/bicep/modules/landing-zone/adf.bicep` (wired from
   `landing-zone/main.bicep` `storage.outputs.storageAccountName`).
 - Gov clouds: ADF ARM host is now cloud-aware (`management.usgovcloudapi.net`
-  under `AZURE_CLOUD=AzureUSGovernment`). Fabric is unavailable in GCC-High/IL5,
-  so `loomDataflowBackend` stays `adf` there.
+  under `AZURE_CLOUD=AzureUSGovernment`). ADF is the backend in every cloud —
+  no Fabric dependency, so this item works identically in GCC-High/IL5.

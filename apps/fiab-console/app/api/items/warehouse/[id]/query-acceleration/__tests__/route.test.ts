@@ -1,9 +1,10 @@
 /**
  * BFF route test for GET/POST /api/items/warehouse/[id]/query-acceleration.
  *
- * Asserts the Azure-native default (Synapse Dedicated SQL pool) is fully
- * functional with LOOM_DEFAULT_FABRIC_WORKSPACE unset, GPU is an honest
- * Fabric-only gate, and result-set caching issues a real ALTER DATABASE.
+ * Asserts the Azure-native warehouse (Synapse Dedicated SQL pool) is fully
+ * functional with no Fabric dependency, GPU is an honest always-unavailable
+ * disclosure (Loom's answer = Databricks Photon / SQL warehouse), and
+ * result-set caching issues a real ALTER DATABASE.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -31,7 +32,6 @@ beforeEach(() => {
   process.env.LOOM_SYNAPSE_WORKSPACE = 'syn-ws';
   delete process.env.LOOM_WAREHOUSE_BACKEND;
   delete process.env.LOOM_DEFAULT_FABRIC_WORKSPACE;
-  delete process.env.LOOM_WAREHOUSE_FABRIC_WORKSPACE;
 });
 
 afterEach(() => { vi.restoreAllMocks(); vi.resetModules(); });
@@ -44,7 +44,7 @@ describe('GET /api/items/warehouse/[id]/query-acceleration', () => {
     expect(r.status).toBe(401);
   });
 
-  it('Azure-native default: backend synapse, GPU unavailable, RSC live state', async () => {
+  it('Azure-native: backend synapse, GPU unavailable + honest disclosure, RSC live state', async () => {
     const { GET } = await import('@/app/api/items/warehouse/[id]/query-acceleration/route');
     const r = await GET();
     const j = await r.json();
@@ -52,20 +52,20 @@ describe('GET /api/items/warehouse/[id]/query-acceleration', () => {
     expect(j.ok).toBe(true);
     expect(j.backend).toBe('synapse-dedicated');
     expect(j.gpu.available).toBe(false);
-    expect(j.gpu.detail).toContain('LOOM_WAREHOUSE_BACKEND=fabric-warehouse');
+    expect(j.gpu.detail).toContain('Databricks Photon');
     expect(j.resultSetCaching.enabled).toBe(true);
     expect(j.resultSetCaching.supported).toBe(true);
   });
 
-  it('Fabric opt-in: GPU available when backend + workspace bound', async () => {
+  it('GPU stays unavailable even if a Fabric workspace is bound (no Fabric backend)', async () => {
     process.env.LOOM_WAREHOUSE_BACKEND = 'fabric-warehouse';
-    process.env.LOOM_WAREHOUSE_FABRIC_WORKSPACE = 'ws-123';
+    process.env.LOOM_DEFAULT_FABRIC_WORKSPACE = 'ws-123';
     const { GET } = await import('@/app/api/items/warehouse/[id]/query-acceleration/route');
     const r = await GET();
     const j = await r.json();
-    expect(j.backend).toBe('fabric-warehouse');
-    expect(j.gpu.available).toBe(true);
-    expect(j.gpu.engine).toBe('fabric');
+    expect(j.backend).toBe('synapse-dedicated');
+    expect(j.gpu.available).toBe(false);
+    expect(j.gpu.engine).toBe('synapse-dedicated');
   });
 });
 
@@ -83,13 +83,13 @@ describe('POST /api/items/warehouse/[id]/query-acceleration', () => {
     expect(altered).toBe(true);
   });
 
-  it('GPU request on Azure-native backend → honest 409 gate', async () => {
+  it('GPU request → honest 409 disclosure gate', async () => {
     const { POST } = await import('@/app/api/items/warehouse/[id]/query-acceleration/route');
     const r = await POST(reqWith({ tier: 'gpu', accelerate: true }));
     const j = await r.json();
     expect(r.status).toBe(409);
     expect(j.ok).toBe(false);
-    expect(j.code).toBe('gpu_requires_fabric');
+    expect(j.code).toBe('gpu_unavailable');
   });
 
   it('409 when pool offline', async () => {

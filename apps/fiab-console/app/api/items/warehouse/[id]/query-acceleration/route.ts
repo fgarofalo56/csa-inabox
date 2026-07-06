@@ -3,16 +3,16 @@
  *
  * Query acceleration for the Warehouse editor — the Azure-native parity of
  * Fabric's "GPU-accelerated warehouse" (Fabric Build 2026). Per
- * no-fabric-dependency.md this surface is 100% functional with
- * LOOM_DEFAULT_FABRIC_WORKSPACE UNSET, on the Synapse Dedicated SQL pool
- * (the DEFAULT warehouse backend). The two acceleration tiers are honest:
+ * no-fabric-dependency.md this surface is 100% functional with no Fabric
+ * capacity or workspace, on the Synapse Dedicated SQL pool (the only warehouse
+ * backend). The two acceleration tiers are honest:
  *
- *   - GPU acceleration is a Fabric-engine-only capability. The Azure-native
- *     default (Synapse Dedicated SQL) runs on CPU batch-mode compute and has
- *     NO GPU. We do NOT pretend otherwise — `gpu.available` is true ONLY when
- *     the Fabric backend is explicitly opted into (LOOM_WAREHOUSE_BACKEND=
- *     fabric-warehouse + a bound Fabric workspace). Otherwise the toggle
- *     surfaces an honest gate naming exactly what's required.
+ *   - GPU acceleration is a Fabric-warehouse-engine capability that Loom does
+ *     NOT provision (the Fabric backend is not built). The Azure-native
+ *     warehouse (Synapse Dedicated SQL) runs CPU batch-mode compute and has NO
+ *     GPU. We do NOT pretend otherwise — `gpu.available` is always false and the
+ *     disclosure names Loom's Azure-native GPU-class answer: Databricks Photon /
+ *     a Databricks SQL warehouse.
  *
  *   - Result-set caching is the REAL Azure-native query-acceleration knob on
  *     the Synapse Dedicated SQL pool. The toggle issues a real
@@ -21,7 +21,7 @@
  *
  * GET  → { ok, backend, gpu, resultSetCaching }
  * POST → { accelerate: boolean }  toggles result-set caching on the live pool
- *        (Azure-native path), or returns the honest GPU gate (Fabric path).
+ *        (Azure-native path), or returns the honest GPU disclosure gate.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -33,43 +33,33 @@ import { escapeSqlLiteral } from '@/lib/sql/quoting';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-type WarehouseBackend = 'synapse-dedicated' | 'fabric-warehouse';
+type WarehouseBackend = 'synapse-dedicated';
 
 function backend(): WarehouseBackend {
-  return process.env.LOOM_WAREHOUSE_BACKEND === 'fabric-warehouse'
-    ? 'fabric-warehouse'
-    : 'synapse-dedicated';
+  // Synapse Dedicated SQL pool is the only provisionable warehouse backend
+  // (per no-fabric-dependency.md — the Fabric Warehouse backend is not built).
+  return 'synapse-dedicated';
 }
 
 /**
- * GPU acceleration is realized only by the Fabric warehouse engine, and only
- * when a capacity-backed Fabric workspace is bound. On the Azure-native default
- * we report it honestly as unavailable with the exact opt-in requirement.
+ * GPU acceleration is a Fabric-warehouse-engine capability that Loom does NOT
+ * provision (the Fabric backend is not built). The Azure-native warehouse
+ * (Synapse Dedicated SQL) runs CPU batch-mode compute with no GPU, so we report
+ * GPU honestly as unavailable and name Loom's Azure-native GPU-class answer
+ * (Databricks Photon / a Databricks SQL warehouse) plus the real dedicated-pool
+ * acceleration knob (result-set caching, below).
  */
 function gpuStatus() {
-  const be = backend();
-  const fabricWorkspace =
-    process.env.LOOM_DEFAULT_FABRIC_WORKSPACE || process.env.LOOM_WAREHOUSE_FABRIC_WORKSPACE;
-  if (be === 'fabric-warehouse' && fabricWorkspace) {
-    return {
-      available: true as const,
-      enabled: true as const,
-      engine: 'fabric' as const,
-      detail:
-        'GPU-accelerated query execution is served by the Fabric warehouse engine on the bound capacity.',
-    };
-  }
   return {
     available: false as const,
     enabled: false as const,
     engine: 'synapse-dedicated' as const,
-    // Honest disclosure — Azure-native default has no GPU compute.
     detail:
-      'The Azure-native default (Synapse Dedicated SQL pool) runs CPU batch-mode compute and has no GPU. ' +
-      'GPU acceleration is a Fabric-engine capability — opt in by setting ' +
-      'LOOM_WAREHOUSE_BACKEND=fabric-warehouse and binding a capacity-backed Fabric workspace ' +
-      '(LOOM_WAREHOUSE_FABRIC_WORKSPACE). On the Azure-native path, enable result-set caching below for ' +
-      'real query acceleration.',
+      'The Azure-native warehouse (Synapse Dedicated SQL pool) runs CPU batch-mode ' +
+      'columnar compute and has no GPU. Loom\'s Azure-native answer to Fabric\'s ' +
+      'GPU-accelerated warehouse is Databricks Photon (a vectorized C++ engine) or a ' +
+      'Databricks SQL warehouse for GPU-class throughput; on the dedicated pool, enable ' +
+      'result-set caching below for real repeat-query acceleration.',
   };
 }
 
@@ -108,7 +98,7 @@ export async function GET() {
     resultSetCaching: {
       // Real Azure-native acceleration knob. null = pool offline / unreadable.
       enabled: resultSetCaching,
-      supported: backend() === 'synapse-dedicated',
+      supported: true,
       detail:
         'Result-set caching stores query results so repeat queries return from cache without re-execution — the Azure-native query-acceleration parity for the Synapse Dedicated SQL pool.',
     },
@@ -123,38 +113,24 @@ export async function POST(req: NextRequest) {
   const accelerate = body?.accelerate === true;
   const tier = (body?.tier || 'result-set-caching').toString();
 
-  // GPU tier is Fabric-only. Honest gate — never silently no-op a control.
+  // GPU tier is not available on the Azure-native warehouse — honest disclosure
+  // gate (never silently no-op a control). Loom's GPU-class answer is Databricks
+  // Photon / a Databricks SQL warehouse (see gpu.detail).
   if (tier === 'gpu') {
     const gpu = gpuStatus();
-    if (!gpu.available) {
-      return NextResponse.json(
-        {
-          ok: false,
-          code: 'gpu_requires_fabric',
-          error:
-            'GPU acceleration requires the opt-in Fabric warehouse backend. ' + gpu.detail,
-          gpu,
-        },
-        { status: 409 },
-      );
-    }
-    // Fabric engine GPU acceleration is on by default when the backend is bound;
-    // there is no per-warehouse on/off knob on the engine itself.
-    return NextResponse.json({ ok: true, tier: 'gpu', enabled: true, gpu });
-  }
-
-  // Azure-native default: result-set caching ALTER DATABASE on the live pool.
-  if (backend() !== 'synapse-dedicated') {
     return NextResponse.json(
       {
         ok: false,
-        code: 'not_supported_on_backend',
-        error: `Result-set caching applies to the Synapse Dedicated SQL pool backend, not '${backend()}'.`,
+        code: 'gpu_unavailable',
+        error:
+          'GPU-accelerated query execution is not available on the Azure-native warehouse. ' + gpu.detail,
+        gpu,
       },
       { status: 409 },
     );
   }
 
+  // Azure-native: result-set caching ALTER DATABASE on the live pool.
   const poolName = process.env.LOOM_SYNAPSE_DEDICATED_POOL;
   if (!poolName) {
     return NextResponse.json(
