@@ -192,6 +192,122 @@ const costColumns = (ccy: string): LoomColumn<CostRow>[] => [
   { key: 'pctOfTotal', label: '% of total', getValue: (r) => r.pctOfTotal, render: (r) => `${r.pctOfTotal}%`, width: 120 },
 ];
 
+// ---- AI token consumption (Copilot + AI functions) --------------------------
+// Real per-persona AOAI token counts from App Insights copilot.usage events
+// (via /api/admin/copilot-usage), including the `ai-function` persona emitted by
+// the AI Functions surface. estCostUsd is a list-price estimate over the REAL
+// token counts — surfaced here so the chargeback view attributes AI spend the
+// same way it attributes every other engine.
+
+interface AiPersonaRow {
+  persona: string; promptTokens: number; completionTokens: number; totalTokens: number; calls: number; estCostUsd?: number;
+}
+interface AiUsageData {
+  byPersona: AiPersonaRow[];
+  totals: { promptTokens: number; completionTokens: number; totalTokens: number; calls: number; estCostUsd?: number };
+  days: number;
+}
+interface AiUsageResp { ok: boolean; data?: AiUsageData | null; noEvents?: boolean; gate?: { message: string }; error?: string }
+
+const AI_PERSONA_LABELS: Record<string, string> = {
+  'cross-item': 'Cross-item Copilot',
+  'help-chat': 'Help chat widget',
+  'ai-function': 'AI functions',
+  'data-agent': 'Data agent',
+  notebook: 'Notebook Copilot',
+  unknown: 'Other',
+};
+
+function AiTokenConsumption() {
+  const styles = useStyles();
+  const [resp, setResp] = useState<AiUsageResp | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await clientFetch('/api/admin/copilot-usage?days=30', { cache: 'no-store' }, 30_000);
+      setResp(await r.json());
+    } catch (e) {
+      setResp({ ok: false, error: (e as Error).message });
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  const data = resp?.ok ? resp.data ?? null : null;
+  const rows = data?.byPersona ?? [];
+  const columns: LoomColumn<AiPersonaRow>[] = [
+    { key: 'persona', label: 'Surface', width: 220, render: (r) => AI_PERSONA_LABELS[r.persona] || r.persona },
+    { key: 'calls', label: 'Calls', getValue: (r) => r.calls, render: (r) => num(r.calls), width: 110 },
+    { key: 'totalTokens', label: 'Total tokens', getValue: (r) => r.totalTokens, render: (r) => <strong>{num(r.totalTokens)}</strong>, width: 160 },
+    { key: 'promptTokens', label: 'Prompt', getValue: (r) => r.promptTokens, render: (r) => num(r.promptTokens), width: 130 },
+    { key: 'completionTokens', label: 'Completion', getValue: (r) => r.completionTokens, render: (r) => num(r.completionTokens), width: 130 },
+    { key: 'estCostUsd', label: 'Est. cost', getValue: (r) => r.estCostUsd ?? 0, render: (r) => money(r.estCostUsd ?? 0, 'USD'), width: 130 },
+  ];
+
+  return (
+    <Section title="AI token consumption (Copilot + AI functions)">
+      <Caption1 className={styles.derivation}>
+        Real Azure OpenAI prompt/completion tokens per surface over the last 30 days, from
+        Application Insights <code>copilot.usage</code> events (includes the AI Functions surface).
+        Estimated cost applies published list prices to the real token counts.
+      </Caption1>
+      {loading && !resp && (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: tokens.spacingVerticalXL }}>
+          <Spinner size="small" label="Querying App Insights…" />
+        </div>
+      )}
+      {resp && !resp.ok && resp.gate && (
+        <MessageBar intent="warning">
+          <MessageBarBody>
+            <MessageBarTitle>AI token metering not configured</MessageBarTitle>
+            {resp.gate.message}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {resp && resp.ok && resp.noEvents && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            <MessageBarTitle>No AI calls recorded yet</MessageBarTitle>
+            Run a Copilot or AI Function call — per-surface token counts appear here within ~5 minutes of App Insights ingestion.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {resp && !resp.ok && !resp.gate && (
+        <MessageBar intent="error">
+          <MessageBarBody>
+            <MessageBarTitle>Couldn’t load AI token usage</MessageBarTitle>
+            {resp.error || 'unknown error'}
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {data && (
+        <>
+          <div className={styles.kpiGrid}>
+            <div className={styles.kpi}>
+              <span className={styles.kpiHead}><DataHistogram20Regular /> <Caption1>AI tokens (30d)</Caption1></span>
+              <span className={styles.kpiValue}>{num(data.totals.totalTokens)}</span>
+              <span className={styles.kpiSub}>{num(data.totals.calls)} calls across all surfaces</span>
+            </div>
+            <div className={styles.kpi}>
+              <span className={styles.kpiHead}><Money20Regular /> <Caption1>Estimated AI cost (30d)</Caption1></span>
+              <span className={styles.kpiValue}>{money(data.totals.estCostUsd || 0, 'USD')}</span>
+              <span className={styles.kpiSub}>real tokens × published list price</span>
+            </div>
+          </div>
+          <LoomDataTable<AiPersonaRow>
+            columns={columns} rows={rows} getRowId={(r) => r.persona}
+            ariaLabel="AI token consumption by surface"
+            empty={<EmptyState title="No AI usage in window" body="No copilot.usage events recorded in the last 30 days." />}
+          />
+        </>
+      )}
+    </Section>
+  );
+}
+
 export default function UsageChargebackPage() {
   const styles = useStyles();
   const [tab, setTab] = useState<TabId>('overview');
@@ -427,6 +543,8 @@ export default function UsageChargebackPage() {
               <Caption1 className={styles.derivation} style={{ marginTop: tokens.spacingVerticalL }}>
                 Scope: <code>{model.scope}</code> · generated {new Date(model.generatedAt).toLocaleString()} · source: Azure Cost Management + Azure Monitor (real, no sample data).
               </Caption1>
+
+              <AiTokenConsumption />
             </>
           )}
         </>

@@ -283,6 +283,89 @@ export async function aoaiChatRaw(opts: AoaiChatRawOptions): Promise<any> {
   return res.json();
 }
 
+// ── Embeddings ───────────────────────────────────────────────────────────────
+
+/** Options for {@link aoaiEmbed}. */
+export interface AoaiEmbedOptions {
+  /** One text or a batch of texts to embed (the AOAI `input` field). */
+  input: string | readonly string[];
+  /**
+   * Embeddings deployment name. Defaults to `LOOM_AOAI_EMBED_DEPLOYMENT`,
+   * then `text-embedding-3-large`. This is distinct from the CHAT deployment —
+   * the endpoint + api-version are shared (resolved via {@link resolveAoaiTarget}),
+   * only the deployment segment differs.
+   */
+  deployment?: string;
+  /** Tenant Copilot config — forwarded to target resolution (endpoint/token). */
+  cfg?: TenantCopilotConfig | null;
+  /** Pre-resolved chat target — its endpoint + apiVersion are reused (the
+   *  embeddings deployment is swapped in), avoiding a second Foundry lookup. */
+  target?: AoaiTarget;
+}
+
+/** Result of {@link aoaiEmbed}: one vector per input, plus the token usage. */
+export interface AoaiEmbedResult {
+  vectors: number[][];
+  /** The embeddings deployment that served the request. */
+  model: string;
+  usage?: { promptTokens: number; totalTokens: number };
+}
+
+/**
+ * Real Azure OpenAI EMBEDDINGS data-plane call — the unified client's embeddings
+ * primitive (used by the AI-functions `embed` / `similarity` operations).
+ *
+ * Reuses the SAME target resolution + `cogScope` bearer token as the chat path
+ * (so it is Commercial- AND Gov-correct with no literal endpoint), then POSTs to
+ * `/openai/deployments/<embeddingsDeployment>/embeddings`. Returns one vector per
+ * input plus the real `usage` (prompt/total tokens) from the response.
+ *
+ * No-vaporware: a missing chat/embeddings deployment still surfaces the honest
+ * gate — {@link resolveAoaiTarget} throws {@link NoAoaiDeploymentError} when AOAI
+ * is unconfigured, and a 404 (embeddings model not deployed) throws an error that
+ * names `LOOM_AOAI_EMBED_DEPLOYMENT` as the exact remediation.
+ */
+export async function aoaiEmbed(opts: AoaiEmbedOptions): Promise<AoaiEmbedResult> {
+  const base = opts.target ?? (await resolveAoaiTarget(opts.cfg ?? null));
+  const deployment = (
+    opts.deployment || process.env.LOOM_AOAI_EMBED_DEPLOYMENT || 'text-embedding-3-large'
+  ).trim();
+  const url = `${base.endpoint}/openai/deployments/${encodeURIComponent(deployment)}/embeddings?api-version=${base.apiVersion}`;
+  const token = await aoaiToken();
+  const res = await fetchWithTimeout(
+    url,
+    {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ input: opts.input }),
+    },
+    LLM_FETCH_TIMEOUT_MS,
+  );
+  if (res.status === 404) {
+    const t = await res.text().catch(() => '');
+    throw new Error(
+      `Azure OpenAI embeddings deployment "${deployment}" not found. Deploy a text-embedding model ` +
+        `(e.g. text-embedding-3-large) on the Foundry hub and set LOOM_AOAI_EMBED_DEPLOYMENT. ${t.slice(0, 200)}`,
+    );
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => '');
+    throw new Error(`AOAI embeddings ${res.status}: ${t.slice(0, 300)}`);
+  }
+  const j: any = await res.json();
+  const rows: any[] = Array.isArray(j?.data) ? j.data : [];
+  const vectors: number[][] = rows
+    .map((d) => (Array.isArray(d?.embedding) ? (d.embedding as number[]) : []))
+    .filter((v) => v.length > 0);
+  if (vectors.length === 0) throw new Error('AOAI embeddings returned no vectors.');
+  const u = j?.usage || {};
+  return {
+    vectors,
+    model: deployment,
+    usage: u.total_tokens != null ? { promptTokens: u.prompt_tokens ?? 0, totalTokens: u.total_tokens ?? 0 } : undefined,
+  };
+}
+
 // ── Streaming completion (SSE passthrough) ───────────────────────────────────
 
 /**

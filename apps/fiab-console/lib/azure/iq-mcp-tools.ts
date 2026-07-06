@@ -18,6 +18,7 @@ import {
   queryIqSignals,
   searchIq,
 } from './iq-mcp';
+import { searchCatalog } from './catalog-search';
 
 export interface IqMcpTool {
   name: string;
@@ -31,6 +32,25 @@ export interface IqMcpTool {
 
 /** The static MCP tool catalog this server exposes (tools/list). */
 export const IQ_MCP_TOOLS: IqMcpTool[] = [
+  {
+    name: 'catalog_search',
+    description:
+      'Search the ENTIRE Loom catalog — every workspace ITEM the caller can access (owned + shared) — by name, item type, description, and tags. Returns ranked results with the owning workspace and a deep-link path. Use this to locate lakehouses, warehouses, notebooks, semantic models, reports, pipelines, datasets, KQL databases, and any other item across the whole estate. Aliased as find_items.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search text matched against item name, type, description, and tags. Empty returns the most recently updated items (browse mode).',
+        },
+        type: {
+          type: 'string',
+          description: 'Optional item-type filter, e.g. "lakehouse", "warehouse", "notebook". Comma-separate for multiple types.',
+        },
+        limit: { type: 'number', description: 'Max results to return (default 30, max 200).' },
+      },
+    },
+  },
   {
     name: 'iq_overview',
     description:
@@ -118,6 +138,22 @@ export async function callIqTool(
 ): Promise<{ content: Array<{ type: 'text'; text: string }> }> {
   const a = args || {};
   switch (toolName) {
+    // Estate-wide catalog search — every accessible workspace item, ranked.
+    // `find_items` is accepted as an alias of `catalog_search`.
+    case 'catalog_search':
+    case 'find_items': {
+      const query = String(a.query ?? a.q ?? '');
+      const types = String(a.type ?? '')
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean);
+      const limit = typeof a.limit === 'number' ? a.limit : undefined;
+      // tenantId is the acting caller's oid (session oid, or the validated
+      // x-user-oid for token callers); searchCatalog scopes to the workspaces
+      // that oid owns or is shared into.
+      return asContent(await searchCatalog({ oid: tenantId, q: query, types, limit }));
+    }
+
     case 'iq_overview':
       return asContent(await getIqOverview(tenantId));
 
