@@ -44,6 +44,7 @@ import {
 import { ItemEditorChrome } from './item-editor-chrome';
 import { NewItemCreateGate } from './new-item-gate';
 import { safeModelJson } from './model-fetch';
+import { PredictWizard } from './components/predict-wizard';
 import type { FabricItemType } from '@/lib/catalog/fabric-item-types';
 import type { RibbonTab } from '@/lib/components/ribbon';
 import { useSharedEditorStyles } from './shared-styles';
@@ -152,7 +153,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
   const [model, setModel] = useState<ModelSummary | null>(null);
   const [versions, setVersions] = useState<ModelVersion[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  const [tab, setTab] = useState<'detail' | 'versions' | 'deploy'>('detail');
+  const [tab, setTab] = useState<'detail' | 'versions' | 'deploy' | 'predict'>('detail');
 
   // ---- MLflow stages + lineage (decorate the ARM version table) ----
   const [mlflowVersions, setMlflowVersions] = useState<MlflowVersionLite[]>([]);
@@ -390,6 +391,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
       ]},
       { label: 'Serve', actions: [
         { label: deploying ? 'Deploying…' : 'Real-time endpoint', onClick: createEndpoint, disabled: deploying || !versions.length },
+        { label: 'Batch score (PREDICT)', onClick: (bound?.modelName && versions.length) ? () => setTab('predict') : undefined, disabled: !bound?.modelName || !versions.length },
       ]},
     ]},
   ], [loading, bindLoading, bound?.modelName, load, loadMlflowVersions, loadBinding, pickWs, unbind, deploying, createEndpoint, versions, selected, openStageDialog]);
@@ -565,6 +567,7 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                     <Tab value="detail">Detail</Tab>
                     <Tab value="versions">Versions ({versions.length})</Tab>
                     <Tab value="deploy">Deploy</Tab>
+                    <Tab value="predict">Batch score</Tab>
                   </TabList>
 
                   {tab === 'detail' && (
@@ -795,6 +798,16 @@ function MlModelEditorBody({ item, id }: { item: FabricItemType; id: string }) {
                         </DialogSurface>
                       </Dialog>
                     </>
+                  )}
+
+                  {tab === 'predict' && (
+                    <PredictWizard
+                      apiBase={apiBase}
+                      modelName={bound.modelName}
+                      workspaceName={bound.workspaceName}
+                      versions={versions.map((v) => ({ version: v.version }))}
+                      defaultVersion={selected || model.latestVersion || undefined}
+                    />
                   )}
                 </>
               )}
