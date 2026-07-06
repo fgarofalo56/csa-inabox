@@ -130,7 +130,7 @@ Grouped by dimension; each is a direct file:line finding. (High-verified finding
 - M13 AI functions 5 of 9 (missing similarity/fix_grammar/generate_response/embeddings) (`ai-functions-client.ts:44-52`).
 - M14 Airflow is BYO-webserver only; day-one OSS `airflow.bicep` host unbuilt (`airflow-job/[id]/connection/route.ts`).
 - M15 PREDICT guided batch scoring absent (`README.md:152` ❌ P5).
-- M16 Item "sharing" is share-link tokens only; people-picker grant dialog only partially evidenced (`[type]/[id]/share/route.ts`; `item-permissions-client.ts` unrouted).
+- M16 RESOLVED (rel-T87): people-picker "Grant people access" dialog (`lib/dialogs/share-item-dialog.tsx`) is wired on EVERY editor via `ItemEditorChrome` → real grant route `[type]/[id]/permissions/route.ts` (Cosmos `item-permissions` + ADLS ACL + Storage RBAC), and item read/write now resolves item-level grants: `lib/auth/item-access.ts` (`resolveItemAccessByOid`) chains owner → workspace ACL → item-grant, consulted by `/api/cosmos-items/[type]/[id]`. Share-link tokens (`[type]/[id]/share/route.ts`) remain the separate anonymous-link path. Grade D→B.
 - M17 Tabbed multitasking + object explorer (Fabric GA Apr 2026) absent and untracked.
 - M18 Workspace outbound access protection (OAP, Fabric GA Mar 2026) unbuilt + untracked.
 
