@@ -68,13 +68,17 @@ an RCE-to-data-plane escalation.
 - **Trace:** `app/api/items/report/[id]/script-visual/route.ts:49-55,296-307`; bicep `script-runner-app.bicep`.
 - **Fix:** confirm `script-runner-app.bicep` assigns the dedicated least-privilege UAMI (not the Console UAMI) and grants it ONLY AcrPull; add a test/assert. Task #27 (in-progress) owns this surface.
 
-### 5. Warehouse "Fabric Warehouse" opt-in branch is an unbuilt stub — P2 (low impact)
-`LOOM_WAREHOUSE_BACKEND=fabric-warehouse` always returns `status:'remediation'` ("Fabric Warehouse
-provisioning is preview … on the v3.4 roadmap"). This is an **opt-in, non-default** branch and is
-compliant with no-fabric-dependency (the Azure-native dedicated path is the default), but it is an
-incomplete code path that advertises a backend it cannot deliver.
-- **Trace:** `lib/install/provisioners/warehouse.ts:532-558`.
-- **Fix:** either build the Fabric Warehouse TDS-proxy path or remove the `fabric-warehouse` enum value so the env can't select an unbuilt backend.
+### 5. Warehouse "Fabric Warehouse" opt-in branch is an unbuilt stub — P2 (low impact) — RESOLVED (rel-T94)
+`LOOM_WAREHOUSE_BACKEND=fabric-warehouse` always returned `status:'remediation'` ("Fabric Warehouse
+provisioning is preview … on the v3.4 roadmap"). This was an **opt-in, non-default** branch and was
+compliant with no-fabric-dependency (the Azure-native dedicated path is the default), but it was an
+incomplete code path that advertised a backend it could not deliver.
+- **Trace:** `lib/install/provisioners/warehouse.ts` (former `fabric-warehouse` block).
+- **Resolution (rel-T94):** the `fabric-warehouse` enum value was **removed** — from the provisioner,
+  the `query-acceleration` route (GPU is now an always-honest disclosure pointing at Databricks Photon /
+  SQL warehouse), the warehouse-acceleration UI, the bicep `loomWarehouseFabricWorkspace` param +
+  `LOOM_WAREHOUSE_FABRIC_WORKSPACE` env, and the parity docs. The env can no longer select an unbuilt
+  backend. Same disposition applied to the dead `LOOM_DATAFLOW_BACKEND=fabric` refresh branch.
 
 ## Verification notes
 - Greps clean: no `return []`/`return {}`/`MOCK_`/`SAMPLE_`/`TODO` stubs in analytics editors or

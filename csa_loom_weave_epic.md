@@ -127,8 +127,7 @@ Both paths are LIVE today — Warp brands them as one experience.
 - Spark emit: `lib/editors/spark-job-definition-editor.tsx`,
   `synapse-spark-editor.tsx`, `databricks-editors.tsx`, plus Dataflow Gen2
   `lib/editors/dataflow-gen2-editor.tsx` (compiles authored Power Query M into an
-  ADF WranglingDataFlow running on ADF Spark; Azure-native default, Fabric opt-in
-  via `LOOM_DATAFLOW_BACKEND=fabric`).
+  ADF WranglingDataFlow running on ADF Spark; Azure-native, no Fabric required).
 
 #### The Warp surface (this epic)
 

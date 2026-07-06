@@ -673,8 +673,7 @@ export function PowerQueryHost({
                   <MessageBarTitle>Live preview runs on ADF Spark</MessageBarTitle>
                   ADF has no inline Power Query evaluation endpoint, so Loom does not fabricate
                   sample rows. Set an Output destination, then <strong>Save &amp; Run</strong> to
-                  execute this mashup on ADF and write real rows. Opt into Fabric
-                  (<code>LOOM_DATAFLOW_BACKEND=fabric</code> + a bound workspace) for inline preview.
+                  execute this mashup on ADF and write real rows.
                 </MessageBarBody>
               </MessageBar>
               <Body1 className={s.mPreviewLabel}>

@@ -4,12 +4,11 @@ import { clientFetch } from '@/lib/client-fetch';
 /**
  * DataflowGen2Editor — Azure-native Dataflow Gen2 (Power Query Online parity).
  *
- * DEFAULT backend: no Fabric. Authored Power Query (M) is saved to Cosmos and,
- * on Run, compiled into an ADF WranglingDataFlow that executes on ADF Spark and
- * writes the output query to the chosen ADLS / Azure SQL destination.
- *
- * Fabric is strictly opt-in (LOOM_DATAFLOW_BACKEND=fabric + a bound workspace);
- * the editor renders fully and Runs against Azure with no Fabric workspace.
+ * Backend: no Fabric. Authored Power Query (M) is saved to Cosmos and, on Run,
+ * compiled into an ADF WranglingDataFlow that executes on ADF Spark and writes
+ * the output query to the chosen ADLS / Azure SQL destination. Per
+ * no-fabric-dependency.md this is the only backend — the editor renders fully
+ * and Runs against Azure with no Fabric capacity or workspace.
  *
  * Workspace selector below is the LOOM (Cosmos) workspace the dataflow item
  * lives in — NOT a Fabric workspace — so dataflows scope to a Loom workspace
@@ -71,7 +70,7 @@ function useWorkspaces() {
   return { workspaces, error, hint, loading };
 }
 
-interface DataflowConfig { backend: string; adfConfigured: boolean; adfMissing: string | null; adlsConfigured: boolean; fabricWorkspaceBound: boolean; }
+interface DataflowConfig { backend: string; adfConfigured: boolean; adfMissing: string | null; adlsConfigured: boolean; }
 function useDataflowConfig() {
   const [config, setConfig] = useState<DataflowConfig | null>(null);
   useEffect(() => {
@@ -297,8 +296,8 @@ export function DataflowGen2Editor({ item, id }: Props) {
         <div className={s.pad}>
           <div className={s.toolbar}>
             <Badge appearance="filled" color="brand">Dataflow Gen2</Badge>
-            <Badge appearance="outline" color={config?.backend === 'fabric' ? 'warning' : 'success'}>
-              {config?.backend === 'fabric' ? 'Fabric (opt-in)' : 'Azure-native (ADF)'}
+            <Badge appearance="outline" color="success">
+              Azure-native (ADF)
             </Badge>
             <div style={{ display: 'flex', flexDirection: 'column', gap: tokens.spacingVerticalXS, minWidth: 280 }}>
               <Caption1>Workspace</Caption1>
@@ -334,7 +333,7 @@ export function DataflowGen2Editor({ item, id }: Props) {
             <Button appearance={copilotOpen ? 'primary' : 'outline'} icon={<Sparkle20Regular />} onClick={() => setCopilotOpen((v) => !v)}>{copilotOpen ? 'Copilot on' : 'Copilot'}</Button>
           </div>
 
-          {config && !config.adfConfigured && config.backend !== 'fabric' && (
+          {config && !config.adfConfigured && (
             <MessageBar intent="warning">
               <MessageBarBody className={s.breakText}>
                 <MessageBarTitle>Data Factory not configured</MessageBarTitle>

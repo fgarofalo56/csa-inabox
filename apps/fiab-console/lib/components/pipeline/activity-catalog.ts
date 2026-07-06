@@ -112,7 +112,7 @@ export const ACTIVITY_CATALOG: ActivityTypeDef[] = [
     description:
       'Run a Power Query (M) dataflow on ADF Spark via ExecuteWranglingDataflow. ' +
       'On the Azure-native path Loom publishes a WranglingDataFlow resource and ' +
-      'runs it; set LOOM_DATAFLOW_BACKEND=fabric + bind a workspace for the Fabric path.',
+      'runs it — no Fabric capacity or workspace required.',
     category: 'move-transform', type: 'ExecuteWranglingDataflow', namePrefix: 'Dataflow',
     color: '#7719aa', fg: '#fff', runnable: true,
     build: (name) => ({
@@ -1127,7 +1127,7 @@ export const ACTIVITIES: ActivityDef[] = [
   {
     type: 'ExecuteWranglingDataflow', displayName: 'Dataflow Gen2 (Power Query)',
     category: 'Move & transform',
-    description: 'Run a Power Query (M) wrangling data flow on ADF Spark. Azure-native default; Fabric opt-in via LOOM_DATAFLOW_BACKEND.',
+    description: 'Run a Power Query (M) wrangling data flow on ADF Spark. Azure-native — no Fabric required.',
     hasInnerActivities: false, referencesDataset: false, referencesLinkedService: false,
     settings: [
       { key: 'dataFlow', path: 'dataFlow.referenceName', label: 'Wrangling data flow', kind: 'text',

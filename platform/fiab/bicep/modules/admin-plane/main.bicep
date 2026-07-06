@@ -1100,10 +1100,9 @@ param loomCopilotBackend string = ''
 
 // Phase-2 warehouse provisioner backend folded into loomBackends.warehouse
 // (kept as a var to stay under the ARM 256-param ceiling — data-eng sweep).
+// Synapse Dedicated SQL pool is the only warehouse backend (no Fabric — the
+// Fabric Warehouse backend is not built; per no-fabric-dependency.md).
 var loomWarehouseBackend = loomBackends.?warehouse ?? 'synapse-dedicated'
-
-@description('Opt-in only: Fabric workspace id that backs the warehouse when loomWarehouseBackend=fabric-warehouse. Required to surface GPU-accelerated query execution; leave empty for the Azure-native Synapse default (result-set caching acceleration).')
-param loomWarehouseFabricWorkspace string = ''
 
 // =====================================================================
 // Azure-native backend selectors (no-fabric-dependency)
@@ -1174,7 +1173,6 @@ param loomBackends object = {
   catalog: 'azure'
   bi: ''
   domains: 'cosmos'
-  dataflow: 'adf'
   dataproducts: ''
   orgVisuals: 'enabled'
   // Folded out of standalone params (data-eng deploy-readiness sweep) to stay
@@ -3107,7 +3105,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             { name: 'LOOM_TENANT_ADMIN_OID', value: effectiveTenantAdminOid }
             { name: 'LOOM_DEFAULT_FABRIC_WORKSPACE', value: loomDefaultFabricWorkspace }
             { name: 'LOOM_WAREHOUSE_BACKEND', value: loomWarehouseBackend }
-            { name: 'LOOM_WAREHOUSE_FABRIC_WORKSPACE', value: loomWarehouseFabricWorkspace }
             // ----------------------------------------------------------------
             // Azure-native backend selectors (no-fabric-dependency)
             // ----------------------------------------------------------------
@@ -3123,7 +3120,6 @@ module appDeployments 'app-deployments.bicep' = if (containerPlatform == 'contai
             // are emitted once each above from the effective-* vars — rel-T31/B7.)
             // Analysis Services XMLA endpoint (semantic-model column metadata, PR #984).
             { name: 'LOOM_AAS_SERVER_URL', value: !empty(loomAasServerUrl) ? loomAasServerUrl : (deployAas ? analysisServices.outputs.aasServerUrl : '') }
-            { name: 'LOOM_DATAFLOW_BACKEND', value: loomBackends.dataflow }
             // BI backend for the semantic-model / report / dashboard / scorecard
             // editors + refresh routes. effectiveBiBackend = 'aas' when an AAS
             // server is present (Azure-native tabular default), else '' →

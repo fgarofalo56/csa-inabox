@@ -7,9 +7,8 @@
  * Parquet/CSV or an Azure SQL table) by materialising the matching ADF
  * dataset + linked service, then wiring it as the dataflow sink.
  *
- * This is the DEFAULT, no-Fabric backend (LOOM_DATAFLOW_BACKEND unset or
- * 'adf'). The Fabric path is strictly opt-in (LOOM_DATAFLOW_BACKEND=fabric +
- * a bound LOOM_DEFAULT_FABRIC_WORKSPACE) and gated honestly when not present.
+ * This is the only backend — Azure-native, no Fabric (per
+ * no-fabric-dependency.md). No Fabric capacity or workspace is required.
  *
  * No mocks — every step is a real ARM call against the DLZ Data Factory.
  */

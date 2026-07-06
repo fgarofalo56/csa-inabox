@@ -35,10 +35,9 @@ describe('activity-catalog', () => {
     expect(office?.runnable).toBe(false);
     expect(office?.remediation).toBeTruthy();
     // NOTE: DataflowGen2 is NOT asserted here. Per .claude/rules/no-fabric-dependency.md
-    // it now runs on the Azure-native path (ADF Spark via ExecuteWranglingDataflow /
-    // a published WranglingDataFlow resource), so it is correctly `runnable: true`
-    // with Fabric strictly opt-in (LOOM_DATAFLOW_BACKEND=fabric). It is no longer a
-    // Fabric-only activity.
+    // it runs on the Azure-native path (ADF Spark via ExecuteWranglingDataflow /
+    // a published WranglingDataFlow resource), so it is correctly `runnable: true`.
+    // ADF is the only backend — no Fabric. It is not a Fabric-only activity.
   });
 
   it('every catalog entry has a build() that produces a valid PipelineActivity', () => {
