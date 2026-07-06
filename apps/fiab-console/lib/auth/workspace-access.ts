@@ -72,7 +72,7 @@ export interface WorkspaceAccess {
 }
 
 /** Cross-partition point-lookup of a workspace by id (bounded — single id). */
-async function readWorkspaceById(workspaceId: string): Promise<Workspace | null> {
+export async function readWorkspaceById(workspaceId: string): Promise<Workspace | null> {
   const ws = await workspacesContainer();
   const { resources } = await ws.items
     .query<Workspace>({

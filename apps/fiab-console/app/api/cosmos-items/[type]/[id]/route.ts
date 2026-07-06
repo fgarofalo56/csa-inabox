@@ -13,8 +13,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getSession } from '@/lib/auth/session';
-import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
-import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { itemsContainer } from '@/lib/azure/cosmos-client';
+import { resolveItemAccessByOid } from '@/lib/auth/item-access';
+import type { WorkspaceItem } from '@/lib/types/workspace';
 import { apiError } from '@/lib/api/respond';
 
 export const runtime = 'nodejs';
@@ -22,27 +23,6 @@ export const dynamic = 'force-dynamic';
 
 function err(error: string, status: number, code?: string) {
   return apiError(error, status, code === undefined ? undefined : { code });
-}
-
-async function loadItem(itemId: string, type: string, tenantId: string): Promise<WorkspaceItem | null> {
-  const items = await itemsContainer();
-  const { resources } = await items.items
-    .query<WorkspaceItem>({
-      query: 'SELECT * FROM c WHERE c.id = @id AND c.itemType = @t',
-      parameters: [{ name: '@id', value: itemId }, { name: '@t', value: type }],
-    })
-    .fetchAll();
-  const item = resources[0];
-  if (!item) return null;
-  const ws = await workspacesContainer();
-  try {
-    const { resource } = await ws.item(item.workspaceId, tenantId).read<Workspace>();
-    if (!resource || resource.tenantId !== tenantId) return null;
-  } catch (e: any) {
-    if (e?.code === 404) return null;
-    throw e;
-  }
-  return item;
 }
 
 export async function GET(
@@ -53,9 +33,11 @@ export async function GET(
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
-    if (!item) return err('Item not found', 404, 'not_found');
-    return NextResponse.json(item);
+    // READ resolves via owner → workspace ACL → item-level grant (rel-T87), so
+    // a user the item was shared with can open it (any role admits read).
+    const access = await resolveItemAccessByOid(session, params.id, params.type);
+    if (!access) return err('Item not found', 404, 'not_found');
+    return NextResponse.json(access.item);
   } catch (e: any) {
     return err(e?.message || 'Failed to fetch item', 500, 'cosmos_error');
   }
@@ -68,8 +50,12 @@ export async function PATCH(req: NextRequest, props: { params: Promise<{ type: s
   let body: any;
   try { body = await req.json(); } catch { return err('Invalid JSON', 400, 'bad_json'); }
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
-    if (!item) return err('Item not found', 404, 'not_found');
+    // WRITE requires a write-capable role: workspace Owner/Admin/Member, or an
+    // item-level grant that includes `Edit`. A read-only share cannot mutate.
+    const access = await resolveItemAccessByOid(session, params.id, params.type);
+    if (!access) return err('Item not found', 404, 'not_found');
+    if (!access.canWrite) return err('Read-only access', 403, 'forbidden');
+    const item = access.item;
     const next: WorkspaceItem = {
       ...item,
       displayName: typeof body.displayName === 'string' && body.displayName.trim() ? body.displayName.trim() : item.displayName,
@@ -93,8 +79,15 @@ export async function DELETE(
   const session = getSession();
   if (!session) return err('Unauthorized', 401, 'unauthorized');
   try {
-    const item = await loadItem(params.id, params.type, session.claims.oid);
-    if (!item) return err('Item not found', 404, 'not_found');
+    // DELETE is destructive: require WORKSPACE-level write (owner or a
+    // workspace Admin/Member). An item-level `Edit` grant confers edit, not
+    // delete (matches Fabric — sharing an item never lets the grantee delete it).
+    const access = await resolveItemAccessByOid(session, params.id, params.type);
+    if (!access) return err('Item not found', 404, 'not_found');
+    if (!access.canWrite || access.via === 'item-grant') {
+      return err('Delete requires workspace write access', 403, 'forbidden');
+    }
+    const item = access.item;
     const items = await itemsContainer();
 
     // Cascade: when a lakehouse is deleted, also drop its auto-paired SQL

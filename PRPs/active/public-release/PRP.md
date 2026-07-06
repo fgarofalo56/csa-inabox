@@ -630,10 +630,11 @@ earlier ones (noted per item). Categories: **ADD** (net-new), **UPDATE** (fix ex
 - **Acceptance:** `airflow.bicep` ACA host (webserver+scheduler + Postgres Flex + DAG share); item works out-of-box, Commercial + Gov.
 - **Deps:** none.
 
-### rel-T87 — Finish the people-picker item-sharing grant dialog (P4)
+### rel-T87 — Finish the people-picker item-sharing grant dialog (P4) — DONE
 - **Category:** ENHANCE · **Severity:** Medium · **Effort:** M
 - **Evidence:** `[type]/[id]/share/route.ts` (share-link tokens only); `item-permissions-client.ts` unrouted; `README.md:178` D.
 - **Acceptance:** People-picker grant dialog wired to `item-permissions-client` on every editor; close the P4 row with evidence. (Depends on the tid/ACL model.)
+- **Resolution:** The people-picker "Grant people access" dialog (`lib/dialogs/share-item-dialog.tsx`, reusing the Manage-Access Entra `/api/admin/permissions/principals` search + a role/permission-type surface) is opened from the Share ribbon action in `ItemEditorChrome`, so EVERY item type gets it. It POSTs to the real grant route `app/api/items/[type]/[id]/permissions/route.ts`, which writes the Cosmos `item-permissions` row and mirrors ADLS POSIX ACL + Storage RBAC via `item-permissions-client` (Azure-native default; Fabric /share strictly opt-in). Item read/write now consults item-level grants: new `lib/auth/item-access.ts::resolveItemAccessByOid` chains owner → workspace ACL (`resolveWorkspaceAccessByOid`) → item-grant, and `/api/cosmos-items/[type]/[id]` GET/PATCH/DELETE resolve through it (a shared user can open + a shared `Edit` user can save; delete stays workspace-write-only). tid boundary enforced on the grant path; `LOOM_MULTIUSER_ACL` kill switch honored. Unit test: `lib/auth/__tests__/item-access.test.ts`.
 - **Deps:** rel-T11.
 
 ### rel-T88 — Tabbed multitasking + object explorer (Fabric GA Apr 2026)

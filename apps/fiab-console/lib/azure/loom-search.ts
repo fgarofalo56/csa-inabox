@@ -176,6 +176,54 @@ export async function searchLoomItems(opts: {
   return j.value as LoomHit[];
 }
 
+/**
+ * Estate-wide item ranking scoped to an EXPLICIT set of workspace ids (rel-T92).
+ *
+ * Unlike {@link searchLoomItems} (which filters by the caller's own `tenantId`),
+ * this filters by `workspaceId` so it also returns items in workspaces SHARED
+ * with the caller — those docs are keyed by the OWNER's oid in the index, so a
+ * tenantId filter would miss them. The caller MUST pass a workspace-id set that
+ * has already been ACL/tid-resolved (see catalog-search.searchCatalog); this
+ * function does no access control of its own. Returns null when AI Search is
+ * unconfigured (caller falls back to Cosmos) and [] when the id set is empty.
+ */
+export async function searchLoomItemsInWorkspaces(opts: {
+  q: string; workspaceIds: string[]; top?: number; itemType?: string;
+}): Promise<LoomHit[] | null> {
+  if (!isSearchConfigured()) return null;
+  const { q, top = 30, itemType } = opts;
+  // Guard the search.in value list — workspace ids are system tokens (UUID/slug),
+  // but drop any that carry the delimiter or a quote so the OData filter is safe.
+  const workspaceIds = opts.workspaceIds.filter((w) => w && !/['|]/.test(w));
+  if (workspaceIds.length === 0) return [];
+  const svc = searchService();
+  const tok = await searchToken();
+  const filters: string[] = ["kind eq 'item'"];
+  // search.in(field, 'a|b|c', '|') — the documented multi-value membership test;
+  // avoids a giant OR chain and stays well under the filter-length limit.
+  filters.push(`search.in(workspaceId, '${workspaceIds.join('|')}', '|')`);
+  if (itemType) filters.push(`itemType eq '${escapeSqlLiteral(itemType)}'`);
+  const body = {
+    search: q || '*',
+    queryType: 'simple',
+    searchMode: 'any',
+    top,
+    filter: filters.join(' and '),
+    select: 'id,kind,itemType,tenantId,workspaceId,displayName,description,url,touchedAt',
+  };
+  const res = await fetchWithTimeout(`https://${svc}.search.windows.net/indexes/${INDEX}/docs/search?api-version=${SEARCH_API}`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text();
+    throw new FoundryError(res.status, t, `loom-items workspace search failed: ${t.slice(0, 240)}`);
+  }
+  const j: any = await res.json();
+  return j.value as LoomHit[];
+}
+
 /** Convenience for callers that just want a doc shape from a workspace / item record. */
 export function docForWorkspace(ws: { id: string; tenantId: string; name: string; description?: string; updatedAt?: string; createdAt: string }): LoomDoc {
   return {
