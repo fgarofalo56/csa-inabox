@@ -52,13 +52,18 @@ export default defineConfig({
     // never mistaken for a hang.
     testTimeout: 30_000,
     hookTimeout: 30_000,
-    // CI-only single retry: jsdom component tests (Fluent Dialog portals,
+    // CI-only retry: jsdom component tests (Fluent Dialog portals,
     // Tabster focus management) exhibit rotating timing flakes on slow CI
     // runners — worse under coverage instrumentation — that never reproduce
     // locally even under --sequence.shuffle. A deterministic failure still
-    // fails (it fails the retry too); only genuine timing races recover.
-    // Local runs keep retry 0 so flakes stay visible to developers.
-    retry: process.env.CI ? 1 : 0,
+    // fails (it fails every retry too); only genuine timing races recover.
+    // Bumped 1→2 (2026-07-06): the geo-dataset / kql-dashboard portal-dialog
+    // pair periodically failed BOTH the run and its single retry under
+    // coverage-slowed CI, reddening main after otherwise-green merges; a
+    // second retry clears the timing race without masking real regressions
+    // (those fail all three attempts). Local runs keep retry 0 so flakes
+    // stay visible to developers.
+    retry: process.env.CI ? 2 : 0,
     include: [
       'lib/**/__tests__/**/*.test.{ts,tsx}',
       'app/**/__tests__/**/*.test.{ts,tsx}',
