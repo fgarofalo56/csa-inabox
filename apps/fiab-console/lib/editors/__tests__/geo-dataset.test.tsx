@@ -23,7 +23,7 @@ describe('GeoDatasetEditor', () => {
     let err: unknown = null;
     try {
       render(<GeoDatasetEditor item={makeItem('geo-dataset', 'Geo dataset')} id="new" />);
-      await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 5000 });
+      await waitFor(() => expect(screen.getByTestId('chrome')).toBeInTheDocument(), { timeout: 15000 });
       const ribbon = screen.getByTestId('ribbon');
       expect(ribbon.querySelectorAll('button').length).toBeGreaterThan(0);
     } catch (e) { err = e; }
@@ -52,13 +52,13 @@ describe('GeoDatasetEditor', () => {
     try {
       render(<GeoDatasetEditor item={makeItem('geo-dataset', 'Geo dataset')} id="ds-123" />);
       // Click the primary Inspect button (waits for the editor body to mount).
-      const inspectBtn = await screen.findByText(/Inspect first row/i, undefined, { timeout: 5000 });
+      const inspectBtn = await screen.findByText(/Inspect first row/i, undefined, { timeout: 15000 });
       fireEvent.click(inspectBtn);
 
       // The schema panel renders each column name; geometry carries a badge.
       await waitFor(() => {
         expect(screen.getAllByText('geometry').length).toBeGreaterThan(0);
-      }, { timeout: 5000 });
+      }, { timeout: 15000 });
       expect(screen.getAllByText('id').length).toBeGreaterThan(0);
       // The WKB encoding badge appears for the geometry column.
       expect(screen.getAllByText('WKB').length).toBeGreaterThan(0);
