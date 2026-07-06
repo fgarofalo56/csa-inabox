@@ -25,6 +25,51 @@ This file is maintained automatically by
 [Conventional Commits](https://www.conventionalcommits.org/). See
 [RELEASE.md](RELEASE.md) for the release process.
 
+## [0.56.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.55.0...csa-inabox-v0.56.0) (2026-07-06)
+
+
+### Features
+
+* **admin/mcp:** inline enable + configure for the remote built-in MCP family ([#1682](https://github.com/fgarofalo56/csa-inabox/issues/1682)) ([e9200fe](https://github.com/fgarofalo56/csa-inabox/commit/e9200fe863bd6e201bd139eb458eb0bde064758a))
+* **fiab-console/learn:** visual step-by-step walkthroughs + bulletproof capture (no Learn-overlay bleed) ([#1681](https://github.com/fgarofalo56/csa-inabox/issues/1681)) ([75526e8](https://github.com/fgarofalo56/csa-inabox/commit/75526e89f9cbf3cfb39e9c47fb30612111ac7d48))
+* **fiab/data-products:** data contract designer — schema + SLOs + quality expectations (studio tab + wizard step + detail view) ([#1679](https://github.com/fgarofalo56/csa-inabox/issues/1679)) ([67e53bc](https://github.com/fgarofalo56/csa-inabox/commit/67e53bc9b02a1870c3cbcfac6e2001f5af7c5ae9))
+* **loom,ai:** complete AI functions 5→9 + per-call cost stats (rel-T85) ([#1658](https://github.com/fgarofalo56/csa-inabox/issues/1658)) ([16474cc](https://github.com/fgarofalo56/csa-inabox/commit/16474ccbf4c28cac77f211721355915800361488))
+* **loom,ai:** data-agent M365 publish deep-links + SDK/Terraform roadmap (rel-T93) ([#1661](https://github.com/fgarofalo56/csa-inabox/issues/1661)) ([9ff6df9](https://github.com/fgarofalo56/csa-inabox/commit/9ff6df99db2512b0367386876bc4682b85f2f17b))
+* **loom,airflow:** day-one OSS Apache Airflow host on ACA (rel-T86) ([#1665](https://github.com/fgarofalo56/csa-inabox/issues/1665)) ([93ddb45](https://github.com/fgarofalo56/csa-inabox/commit/93ddb45c8d473d1082f9c4fd4ccef94e4288af1f))
+* **loom,authz:** people-picker item-sharing grant on every editor (rel-T87, P4) ([#1655](https://github.com/fgarofalo56/csa-inabox/issues/1655)) ([c110a3d](https://github.com/fgarofalo56/csa-inabox/commit/c110a3de96bc8e0c102ec4ca93c381c07c0e383e))
+* **loom,catalog:** estate-wide catalog search API + loom-cli find + MCP tool (rel-T92) ([#1656](https://github.com/fgarofalo56/csa-inabox/issues/1656)) ([a44fd99](https://github.com/fgarofalo56/csa-inabox/commit/a44fd99ae835fb6c8966c480582c96455664b038))
+* **loom,connections:** Test-connection probe + require host, referential-integrity delete gate (rel-T98/T99) ([#1673](https://github.com/fgarofalo56/csa-inabox/issues/1673)) ([02f5303](https://github.com/fgarofalo56/csa-inabox/commit/02f53039af87dff3beb600bbc6f6798eb5d35953))
+* **loom,governance:** workspace outbound access protection — real NSG egress allow-list (rel-T89) ([#1663](https://github.com/fgarofalo56/csa-inabox/issues/1663)) ([af69df5](https://github.com/fgarofalo56/csa-inabox/commit/af69df5a8c3d687586263386e7d4a5e0a918569b))
+* **loom,ml:** PREDICT guided batch-scoring stepper on AML model + Spark (rel-T84) ([#1659](https://github.com/fgarofalo56/csa-inabox/issues/1659)) ([2fae205](https://github.com/fgarofalo56/csa-inabox/commit/2fae2056ded7faedc1d597c4fcd4cd57a802710e))
+* **loom,notebook:** Data Wrangler visual data-prep on an Azure pandas host (rel-T83) ([#1667](https://github.com/fgarofalo56/csa-inabox/issues/1667)) ([30402ac](https://github.com/fgarofalo56/csa-inabox/commit/30402ac361139f99f418740a653f226e80dfa53d))
+* **loom,rti:** Mirrored-DB change feed source + DeltaFlow CDC-flatten operator on the eventstream canvas (rel-T90/T91) ([#1666](https://github.com/fgarofalo56/csa-inabox/issues/1666)) ([9198499](https://github.com/fgarofalo56/csa-inabox/commit/9198499727ccb93ee8599c731fcca463d4223fc1))
+* **loom,scheduler:** unified cross-item job scheduler — visual cron wizard, run history, failure alerts (rel-T81) ([#1668](https://github.com/fgarofalo56/csa-inabox/issues/1668)) ([faadcf0](https://github.com/fgarofalo56/csa-inabox/commit/faadcf08a70f79214877422512cf90d00cda4ed1))
+* **loom,shell:** cross-workspace object explorer (rel-T88 tabbed multitasking + object explorer) ([#1662](https://github.com/fgarofalo56/csa-inabox/issues/1662)) ([f634e85](https://github.com/fgarofalo56/csa-inabox/commit/f634e857b6aa4056b40cb4972a6f73176d3dc004))
+* **loom,warehouse:** time-travel / CLONE / restore points / COPY INTO / snapshots (rel-T82) ([#1664](https://github.com/fgarofalo56/csa-inabox/issues/1664)) ([91b25d6](https://github.com/fgarofalo56/csa-inabox/commit/91b25d63d054ac04e36ac9ac97da3cf7eb2e0a01))
+* **loom/governance:** DLP default-on + best-practice default policy + policy library ([#1680](https://github.com/fgarofalo56/csa-inabox/issues/1680)) ([453663c](https://github.com/fgarofalo56/csa-inabox/commit/453663ce94c6651cae2ee30c3e7a3eadf7075d89))
+* **loom:** Loom Apps (Fabric-Apps parity, Azure-native) + remove dead ADLA category ([#1683](https://github.com/fgarofalo56/csa-inabox/issues/1683)) ([54c3009](https://github.com/fgarofalo56/csa-inabox/commit/54c3009e933018dfebc1ad89b36a4aa8507d0608))
+
+
+### Bug Fixes
+
+* **fiab-console:** rel-T107 disposition residual raw-JSON authoring surfaces ([#1669](https://github.com/fgarofalo56/csa-inabox/issues/1669)) ([3b7b49d](https://github.com/fgarofalo56/csa-inabox/commit/3b7b49ddc650e1eec1b3e1cb5ef2633cf59a573b))
+* **fiab-console:** stop DSPM-for-AI report timing out (parallelize sources + client scope selector) ([#1678](https://github.com/fgarofalo56/csa-inabox/issues/1678)) ([b91e2cb](https://github.com/fgarofalo56/csa-inabox/commit/b91e2cb1477c000d779ff4dbaa646c9f6c1b777d)), closes [#1549](https://github.com/fgarofalo56/csa-inabox/issues/1549)
+* **loom,api:** API-layer truth + hygiene — honest catalog seed, list pagination, degraded signal (rel-T96/T97/T108) ([#1674](https://github.com/fgarofalo56/csa-inabox/issues/1674)) ([65aa1fb](https://github.com/fgarofalo56/csa-inabox/commit/65aa1fbbe649be14d9c866c3b770b28ab0404275))
+* **loom,editors:** show item display name in editor chrome + wire generic-fallback ribbon (rel-T103/T104) ([#1671](https://github.com/fgarofalo56/csa-inabox/issues/1671)) ([ed85bf5](https://github.com/fgarofalo56/csa-inabox/commit/ed85bf5690e069fee6038c86670fe4d865bdf762))
+* **loom:** destructive-op confirms + truthful delete disclosure (rel-T100/T101/T102) ([#1672](https://github.com/fgarofalo56/csa-inabox/issues/1672)) ([a88fab9](https://github.com/fgarofalo56/csa-inabox/commit/a88fab97af1c0975eb7649e140fa5fe391ce9cad))
+
+
+### Documentation
+
+* **loom,parity:** remove dead Fabric opt-in branches + re-baseline parity ledger + GPU-DW row (rel-T94/T95) ([#1660](https://github.com/fgarofalo56/csa-inabox/issues/1660)) ([a18fe18](https://github.com/fgarofalo56/csa-inabox/commit/a18fe1839dff0bf81a829cc89e57a71d8b2b7c25))
+* **loom:** v1 support boundaries + user-visible branding consolidation (rel-T105, rel-T106) ([#1670](https://github.com/fgarofalo56/csa-inabox/issues/1670)) ([06b1d9e](https://github.com/fgarofalo56/csa-inabox/commit/06b1d9e72f05171ec6d26384a497762d841e64af))
+
+
+### Tests
+
+* **ci:** bump vitest CI retry 1→2 for portal-dialog timing flakes ([#1675](https://github.com/fgarofalo56/csa-inabox/issues/1675)) ([216fde3](https://github.com/fgarofalo56/csa-inabox/commit/216fde36ce9574a9270759701450dbad89f24fe8))
+* **ci:** give geo-dataset/kql-dashboard portal-dialog waits 15s headroom ([#1676](https://github.com/fgarofalo56/csa-inabox/issues/1676)) ([0ae6bca](https://github.com/fgarofalo56/csa-inabox/commit/0ae6bcabab30e3a41117d16cc0f348bf2d991a84))
+
 ## [0.55.0](https://github.com/fgarofalo56/csa-inabox/compare/csa-inabox-v0.54.0...csa-inabox-v0.55.0) (2026-07-05)
 
 
