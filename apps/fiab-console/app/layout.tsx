@@ -6,7 +6,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'CSA Loom Console',
-  description: 'The Microsoft Fabric workspace experience for Azure tenants where Fabric is not yet available.',
+  description: 'CSA Loom — a productized Microsoft Fabric parity layer for Azure tenants where Fabric is not yet available.',
   robots: { index: false, follow: false },
 };
 
