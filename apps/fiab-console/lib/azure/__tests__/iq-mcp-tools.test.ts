@@ -20,8 +20,22 @@ vi.mock('../iq-mcp', () => ({
   searchIq: vi.fn(async (_t: string, term: string) => [{ layer: 'ontology', kind: 'entity', name: term, itemId: 'o1', itemName: 'Ont' }]),
 }));
 
+// Mock the estate-wide catalog search so the dispatcher is tested in isolation.
+vi.mock('../catalog-search', () => ({
+  searchCatalog: vi.fn(async (opts: { oid: string; q: string; types?: string[]; limit?: number }) => ({
+    ok: true,
+    q: opts.q,
+    backend: 'cosmos',
+    total: 1,
+    workspacesSearched: 2,
+    hits: [{ id: 'it1', workspaceId: 'w1', workspaceName: 'WS', itemType: 'lakehouse', displayName: opts.q || 'Bronze', tags: [], url: '/items/lakehouse/it1', score: 55 }],
+    _echo: opts,
+  })),
+}));
+
 import { IQ_MCP_TOOLS, callIqTool } from '../iq-mcp-tools';
 import * as backend from '../iq-mcp';
+import * as catalogSearch from '../catalog-search';
 
 const TENANT = 'tenant-abc';
 
@@ -94,6 +108,23 @@ describe('callIqTool dispatch', () => {
     await expect(callIqTool('iq_search', {}, TENANT)).rejects.toThrow(/term is required/);
     const out = parse(await callIqTool('iq_search', { term: 'customer' }, TENANT));
     expect(out[0].name).toBe('customer');
+  });
+
+  it('catalog_search scopes to the acting tenant and returns ranked hits', async () => {
+    const out = parse(await callIqTool('catalog_search', { query: 'bronze', type: 'lakehouse', limit: 10 }, TENANT));
+    expect(catalogSearch.searchCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ oid: TENANT, q: 'bronze', types: ['lakehouse'], limit: 10 }),
+    );
+    expect(out.ok).toBe(true);
+    expect(out.hits[0].itemType).toBe('lakehouse');
+  });
+
+  it('find_items is an alias of catalog_search', async () => {
+    const out = parse(await callIqTool('find_items', { query: 'sales' }, TENANT));
+    expect(catalogSearch.searchCatalog).toHaveBeenCalledWith(
+      expect.objectContaining({ oid: TENANT, q: 'sales' }),
+    );
+    expect(out.ok).toBe(true);
   });
 
   it('iq_query_signals requires kql and forwards it', async () => {

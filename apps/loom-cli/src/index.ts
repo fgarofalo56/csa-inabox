@@ -15,6 +15,7 @@ import { CliError, LoomApiErrorGuard } from './errors.js';
 import { runAuth } from './commands/auth.js';
 import { runWorkspace } from './commands/workspace.js';
 import { runItem } from './commands/item.js';
+import { runFind } from './commands/find.js';
 import { CLI_NAME, CLI_VERSION } from './constants.js';
 
 const HELP = `${CLI_NAME} v${CLI_VERSION} — CSA Loom CLI (wraps the Loom REST API)
@@ -51,10 +52,17 @@ ITEM
   loom item delete <type> <id>
   loom item types                                     List valid item types.
 
+FIND
+  loom find <query> [--type <itemType>] [--limit N]   Estate-wide catalog search
+                                                      (every accessible workspace,
+                                                       matched by name/type/desc/tags).
+  loom find --all [--limit N]                         Browse most-recent items.
+
 EXAMPLES
   loom auth login --api-url https://loom.example.azurefd.net
   loom workspace create "Analytics" --description "Team WS" --output json
   loom item create <wsId> --type lakehouse --name "Bronze"
+  loom find "bronze" --type lakehouse
 `;
 
 function pickGlobals(flags: Record<string, string | boolean>): GlobalOptions {
@@ -97,6 +105,11 @@ async function main(): Promise<number> {
         return 0;
       case 'item':
         await runItem(sub, rest, opts);
+        return 0;
+      case 'find':
+        // `find` is a flat command — the whole query follows the verb (no
+        // sub-command), so pass every positional after `find` through.
+        await runFind({ positionals: positionals.slice(1), flags }, opts);
         return 0;
       case 'help':
         process.stdout.write(HELP + '\n');
