@@ -79,6 +79,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: '/thread', label: 'Lineage' },
       { href: '/monitor', label: 'Monitor' },
+      { href: '/scheduler', label: 'Scheduler' },
       { href: '/copilot', label: 'Copilot' },
     ],
   },
