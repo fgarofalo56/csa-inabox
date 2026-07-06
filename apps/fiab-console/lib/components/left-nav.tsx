@@ -31,6 +31,7 @@ import {
   DataPie24Regular,
   Table24Regular,
   AddCircle24Regular,
+  CalendarClock24Regular,
   type FluentIcon,
 } from '@fluentui/react-icons';
 import { CopilotIcon } from './icons/copilot-icon';
@@ -59,6 +60,7 @@ const ICON_BY_HREF: Record<string, FluentIcon | typeof CopilotIcon> = {
   '/marketplace': StoreMicrosoft24Regular,
   '/governance': ShieldCheckmark24Regular,
   '/monitor': ChartMultiple24Regular,
+  '/scheduler': CalendarClock24Regular,
   '/realtime-hub': Flash24Regular,
   '/activator-hub': Alert24Regular,
   '/business-events': Send24Regular,
