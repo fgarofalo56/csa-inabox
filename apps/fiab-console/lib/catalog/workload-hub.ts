@@ -61,7 +61,7 @@ export const WORKLOAD_GROUPS: readonly WorkloadGroupDef[] = [
     name: 'Data Engineering',
     description: 'Lakehouses, notebooks, and Spark — on ADLS Gen2 + Delta, Synapse, and Azure Databricks for ETL/ELT at scale.',
     tier: 'core',
-    categories: ['Data Engineering', 'Synapse Analytics', 'Azure Databricks', 'Azure Data Lake Analytics'],
+    categories: ['Data Engineering', 'Synapse Analytics', 'Azure Databricks'],
   },
   {
     key: 'data-factory',
@@ -142,10 +142,10 @@ export const WORKLOAD_GROUPS: readonly WorkloadGroupDef[] = [
   },
   {
     key: 'fabric-apps',
-    name: 'Fabric Apps',
-    description: 'Code-first app backends (database, auth, Data APIs, storage) and model-bound web apps built with the Rayfin SDK.',
+    name: 'Loom Apps',
+    description: 'Build and distribute data apps on Azure — data-app backends (Azure Functions + Cosmos + Static Web Apps), ontology-bound low-code apps, and org apps that bundle workspace items into a distributable, audience-scoped experience.',
     tier: 'core',
-    categories: ['Fabric Apps'],
+    categories: ['Loom Apps'],
   },
   {
     key: 'geoanalytics',

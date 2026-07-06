@@ -102,7 +102,6 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Azure Databricks',
   'Azure Data Factory',
   'Streaming analytics',
-  'Azure Data Lake Analytics',
   'Azure AI Foundry',
   'Azure SQL Database',
   'Azure Geoanalytics',
@@ -111,7 +110,7 @@ export const WORKLOAD_CATEGORIES: readonly WorkloadCategory[] = [
   'Copilot Studio',
   'Power Platform',
   'AI & Agents',
-  'Fabric Apps',
+  'Loom Apps',
 ];
 
 export function itemsByCategory(category: WorkloadCategory): FabricItemType[] {

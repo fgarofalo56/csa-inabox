@@ -50,7 +50,6 @@ const PRIMARY_ACTIONS: Record<string, string[]> = {
   'Synapse Analytics': ['Run', 'Save', 'Create'],
   'Azure Databricks': ['Run', 'Create', 'Save'],
   'Azure Data Factory': ['Save', 'Publish', 'Run'],
-  'Azure Data Lake Analytics': ['Submit', 'Run'],
   'Azure AI Foundry': ['Deploy', 'Run', 'Test', 'Save'],
   'Azure SQL Database': ['Run', 'Create'],
   'Azure Geoanalytics': ['Run', 'Save'],
@@ -59,6 +58,7 @@ const PRIMARY_ACTIONS: Record<string, string[]> = {
   'Copilot Studio': ['Save', 'Publish', 'Test'],
   'Power Platform': ['Open', 'Save'],
   'AI & Agents': ['Ask', 'Send', 'Run'],
+  'Loom Apps': ['Save', 'Publish', 'Add'],
 };
 
 /**
