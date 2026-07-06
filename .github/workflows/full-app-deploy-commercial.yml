@@ -180,6 +180,8 @@ jobs:
             ctx: ./apps/fiab-direct-lake-shim
           - app: loom-copilot-maf
             ctx: ./apps/copilot-maf
+          - app: loom-wrangler-host
+            ctx: ./apps/fiab-wrangler-host
     steps:
       - uses: actions/checkout@v4
       - name: Azure login
