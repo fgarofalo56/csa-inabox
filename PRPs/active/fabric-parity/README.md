@@ -149,7 +149,7 @@ parity-gap · **D** = stubbed/broken · **❌** = missing.
 | COPY INTO ingestion wizard | Synapse TDS COPY INTO + UAMI credential | **❌** | P3 |
 | RLS / CLS / DDM builders | Synapse SQL security policies | **C** | P3/P4 |
 | **Data Science** notebooks, AutoML, experiments | Synapse Spark + AML/OSS MLflow | **B** | — |
-| PREDICT batch scoring (ML model) | SynapseML MLFlowTransformer Spark job | **❌** | P5 |
+| PREDICT batch scoring (ML model) | SynapseML MLFlowTransformer Spark job | **B** | P5 |
 | Real-time endpoint test/lifecycle/auto-sleep | AML managed online endpoint / ACA scale-0 | **D** | P5 |
 | AI Functions (9) + Text Analytics / Translator | AOAI (chat + embeddings) + Azure AI Language/Translator (+OSS) | **B** (9/9 AI functions ✅; Text Analytics/Translator still P5) | P5 |
 | **Real-Time Intelligence** Eventhouse/KQL DB | Azure Data Explorer (ADX) | **A** | — |
