@@ -596,18 +596,25 @@ export async function captureUserMcpOboTokens(
 ): Promise<void> {
   if (!oid) return;
   try {
-    const { REMOTE_BUILTIN_MCP_CATALOG } = await import('@/lib/mcp/catalog');
+    const { REMOTE_BUILTIN_MCP_CATALOG, effectiveRemoteState } = await import('@/lib/mcp/catalog');
     const { saveUserOboToken } = await import('@/lib/azure/mcp-obo-token-store');
+    // Per-tenant inline overrides so a server an admin enabled from the UI (env
+    // left it off) also gets its per-user delegated token minted here. Never
+    // throws — {} on any error, so login falls back to pure-env behaviour.
+    const { getRemoteBuiltinOverrides } = await import('@/lib/azure/mcp-remote-config-store');
+    const overrides = await getRemoteBuiltinOverrides(oid).catch(() => ({}));
     for (const entry of REMOTE_BUILTIN_MCP_CATALOG) {
       // Only Entra-OBO servers mint a per-user delegated token here.
       if (entry.auth !== 'entra-obo') continue;
-      // Opt-in gate: skip any server the admin hasn't enabled / endpoint-configured.
-      if (!entry.configured()) continue;
+      // Opt-in gate: skip any server not effectively enabled/endpoint-configured
+      // (env OR admin override).
+      const eff = effectiveRemoteState(entry, (overrides as Record<string, any>)[entry.id]);
+      if (!eff.configured) continue;
       // Resolve the OBO audience: the entry's oboResource, or — for a per-org
-      // server like Dataverse (oboResource '') — the configured endpoint origin,
+      // server like Dataverse (oboResource '') — the effective endpoint origin,
       // matching the catalog's msRemoteMcpScopeUris() derivation so the token is
       // cached under the same resource the remote MCP client looks it up by.
-      const resource = entry.oboResource?.trim() || originOf(entry.endpoint);
+      const resource = entry.oboResource?.trim() || originOf(eff.endpoint);
       if (!resource) continue;
       const minted = await acquireUserDelegatedToken(account, resource, entry.oboScopes ?? []);
       if (minted?.accessToken) {

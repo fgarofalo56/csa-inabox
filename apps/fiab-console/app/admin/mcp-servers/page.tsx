@@ -81,6 +81,7 @@ export default function McpServersPage() {
         tips: [
           'Deploy secrets go to Key Vault as secretRefs — never plaintext in the form.',
           'Microsoft Learn (learn.microsoft.com/api/mcp) is the only default-on server; every other server is strictly opt-in.',
+          'Enable + configure each opt-in Microsoft remote server inline — the enable toggle, the endpoint, and the Key Vault secret name — no env-var redeploy required.',
           'Fabric / Power BI MCP servers never sit on a default path — they connect only when explicitly opted in.',
         ],
       }}
