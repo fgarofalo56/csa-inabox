@@ -96,6 +96,7 @@ export function AirflowJobEditor({ item, id }: Props) {
   const [jobs, setJobs] = useState<JobLite[] | null>(null);
   const [jobId, setJobId] = useState(id !== 'new' ? id : '');
   const [active, setActive] = useState<JobLite | null>(null);
+  const [managedHost, setManagedHost] = useState(false);
   const [tab, setTab] = useState<string>('dags');
   const [dags, setDags] = useState<DagLite[] | null>(null);
   const [dagsErr, setDagsErr] = useState<{ error: string; code?: string; hint?: string } | null>(null);
@@ -146,6 +147,7 @@ export function AirflowJobEditor({ item, id }: Props) {
       const r = await clientFetch(`/api/items/airflow-job?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setJobs([]); return; }
+      setManagedHost(Boolean(j.managedHost));
       setJobs(j.jobs || []);
       if (!jobId && (j.jobs || []).length) setJobId(j.jobs[0].id);
     } catch { setJobs([]); }
@@ -156,6 +158,7 @@ export function AirflowJobEditor({ item, id }: Props) {
       const r = await clientFetch(`/api/items/airflow-job/${encodeURIComponent(jid)}?workspaceId=${encodeURIComponent(wsId)}`);
       const j = await r.json();
       if (!j.ok) { setActive(null); return; }
+      if (typeof j.managedHost === 'boolean') setManagedHost(j.managedHost);
       setActive(j.job);
       setEditUrl(j.job?.webserverUrl || '');
       setEditGit(j.job?.gitRepo || '');
@@ -326,7 +329,7 @@ export function AirflowJobEditor({ item, id }: Props) {
               <TreeItem key={j.id} itemType="leaf" value={j.id} onClick={() => setJobId(j.id)}>
                 <TreeItemLayout iconBefore={<FlowchartCircle20Regular />}>
                   {jobId === j.id ? <strong>{j.displayName}</strong> : j.displayName}
-                  <br /><Caption1>{j.webserverUrl ? 'connected' : 'not configured'}</Caption1>
+                  <br /><Caption1>{j.webserverUrl ? 'BYO webserver' : managedHost ? 'managed host' : 'not configured'}</Caption1>
                 </TreeItemLayout>
               </TreeItem>
             ))}
@@ -364,7 +367,7 @@ export function AirflowJobEditor({ item, id }: Props) {
                     <DialogContent>
                       <Field label="Display name" required><Input value={cName} onChange={(_, d) => setCName(d.value)} /></Field>
                       <Field label="Description"><Textarea value={cDesc} onChange={(_, d) => setCDesc(d.value)} /></Field>
-                      <Field label="Airflow webserver URL (optional now, required for DAG listing)" hint="e.g. https://airflow.contoso.com">
+                      <Field label="Airflow webserver URL (optional — BYO override)" hint={managedHost ? 'Leave blank to use the managed host. Set to point this job at your own Airflow.' : 'e.g. https://airflow.contoso.com'}>
                         <Input value={cUrl} onChange={(_, d) => setCUrl(d.value)} />
                       </Field>
                       <Field label="Git repo (optional)" hint="DAG source repo URL">
@@ -392,16 +395,16 @@ export function AirflowJobEditor({ item, id }: Props) {
                     primaryAction={workspaceId ? { label: 'New job', onClick: () => setCreateOpen(true) } : undefined}
                   />
                 )}
-                {jobId && !active?.webserverUrl && (
+                {jobId && !active?.webserverUrl && !managedHost && (
                   <MessageBar intent="warning">
                     <MessageBarBody>
-                      <MessageBarTitle>Connect an Airflow webserver</MessageBarTitle>
-                      No webserver URL is configured for this job. Open the <strong>Settings</strong> tab and paste the Airflow webserver URL (e.g. <code>https://airflow.contoso.com</code>).
-                      See <a href={loomDocUrl('fiab/v3-tenant-bootstrap')} target="_blank" rel="noreferrer">the tenant bootstrap guide</a> for the AAD ingress + bearer-token bootstrap.
+                      <MessageBarTitle>No Airflow webserver available</MessageBarTitle>
+                      This deployment has no managed Airflow host wired in (set <code>LOOM_AIRFLOW_ENDPOINT</code> by deploying <code>platform/fiab/bicep/modules/admin-plane/airflow.bicep</code>), and no BYO webserver URL is set for this job. Open the <strong>Settings</strong> tab to point this job at an existing Airflow webserver (e.g. <code>https://airflow.contoso.com</code>).
+                      See <a href={loomDocUrl('fiab/v3-tenant-bootstrap')} target="_blank" rel="noreferrer">the tenant bootstrap guide</a> for details.
                     </MessageBarBody>
                   </MessageBar>
                 )}
-                {jobId && active?.webserverUrl && dags === null && (
+                {jobId && (active?.webserverUrl || managedHost) && dags === null && !dagsErr && (
                   <>
                     <Spinner size="small" label="Calling Airflow REST…" labelPosition="after" />
                     <TableSkeleton rows={4} />
@@ -567,7 +570,12 @@ export function AirflowJobEditor({ item, id }: Props) {
               <MessageBar intent="info">
                 <MessageBarBody>
                   <MessageBarTitle>Airflow connections</MessageBarTitle>
-                  Connections (HTTP, AWS, Azure, etc.) are an Airflow-native construct, managed in the Airflow webserver Admin UI. Open <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{active?.webserverUrl || '(configure URL)'}/connection/list/</code> with the webserver admin role to add or edit them.
+                  Connections (HTTP, AWS, Azure, etc.) are an Airflow-native construct, managed in the Airflow webserver Admin UI.
+                  {active?.webserverUrl
+                    ? <> Open <code style={{ overflowWrap: 'anywhere', wordBreak: 'break-word' }}>{active.webserverUrl}/connection/list/</code> with the webserver admin role to add or edit them.</>
+                    : managedHost
+                      ? <> The day-one managed host runs on an internal-only ingress — reach its Admin UI over the workspace VNet / VPN at <code>/connection/list/</code> to add or edit them.</>
+                      : <> Configure a webserver in the Settings tab first.</>}
                 </MessageBarBody>
               </MessageBar>
             )}
@@ -583,7 +591,15 @@ export function AirflowJobEditor({ item, id }: Props) {
                 )}
                 {active && (
                   <>
-                    <Field label="Airflow webserver URL" required hint="The URL the BFF will hit /api/v1/dags against.">
+                    {managedHost && (
+                      <MessageBar intent="success">
+                        <MessageBarBody>
+                          <MessageBarTitle>Using the managed Airflow host</MessageBarTitle>
+                          This deployment runs a day-one Apache Airflow host on Azure Container Apps — DAGs, runs, and logs work out-of-box with no extra setup. Leave the webserver URL blank to use it, or set a URL below to point this job at your own Airflow instead (BYO override).
+                        </MessageBarBody>
+                      </MessageBar>
+                    )}
+                    <Field label="Airflow webserver URL" hint={managedHost ? 'Optional — leave blank to use the managed host. Set to override with a BYO Airflow webserver.' : 'The URL the BFF will hit /api/v1/dags against.'}>
                       <Input value={editUrl} onChange={(_, d) => setEditUrl(d.value)} placeholder="https://airflow.contoso.com" />
                     </Field>
                     <Field label="Git repo (DAG source)" hint="Optional. Used by the DAG sync worker (preview).">

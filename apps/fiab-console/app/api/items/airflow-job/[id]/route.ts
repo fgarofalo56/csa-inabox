@@ -7,6 +7,7 @@ import { getSession } from '@/lib/auth/session';
 import { assertOwner } from '@/lib/auth/workspace-guard';
 import { itemsContainer } from '@/lib/azure/cosmos-client';
 import type { WorkspaceItem } from '@/lib/types/workspace';
+import { managedAirflowConfigured } from '@/lib/airflow/endpoint';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,6 +27,7 @@ export async function GET(req: NextRequest, ctx: { params: Promise<{ id: string 
     const state = (resource.state || {}) as Record<string, unknown>;
     return NextResponse.json({
       ok: true,
+      managedHost: managedAirflowConfigured(),
       job: {
         id: resource.id,
         displayName: resource.displayName,

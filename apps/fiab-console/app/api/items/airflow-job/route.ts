@@ -14,6 +14,7 @@ import { apiError, apiServerError } from '@/lib/api/respond';
 import { getSession } from '@/lib/auth/session';
 import { itemsContainer, workspacesContainer } from '@/lib/azure/cosmos-client';
 import type { Workspace, WorkspaceItem } from '@/lib/types/workspace';
+import { managedAirflowConfigured } from '@/lib/airflow/endpoint';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -43,6 +44,10 @@ export async function GET(req: NextRequest) {
     }, { partitionKey: workspaceId }).fetchAll();
     return NextResponse.json({
       ok: true, workspaceId,
+      // Is the day-one managed Airflow host wired into this deployment? The
+      // editor uses this to show items with no BYO URL as "managed host" (they
+      // still work) rather than "not configured".
+      managedHost: managedAirflowConfigured(),
       jobs: resources.map(r => ({
         id: r.id, displayName: r.displayName, description: r.description,
         webserverUrl: (r.state as any)?.webserverUrl || null,
