@@ -38,6 +38,7 @@ import {
   PeopleTeam24Regular, Dismiss24Regular, Delete20Regular,
   PersonAdd20Regular, Search16Regular,
 } from '@fluentui/react-icons';
+import { useConfirm } from '@/lib/components/confirm-dialog';
 
 type WorkspaceRoleName = 'Admin' | 'Member' | 'Contributor' | 'Viewer';
 type PrincipalType = 'User' | 'Group' | 'ServicePrincipal';
@@ -150,7 +151,11 @@ function ManageAccessBody({ workspaceId }: { workspaceId: string }) {
   const [data, setData] = useState<ListResponse | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
-  const [removing, setRemoving] = useState<string | null>(null);
+  // Outcome of the last member-removal — a success confirmation or a warning
+  // that the mirrored Azure RBAC (or opt-in Fabric) revoke did NOT complete, so
+  // a silent RBAC-revoke failure is surfaced instead of swallowed.
+  const [removeNotice, setRemoveNotice] = useState<{ intent: 'success' | 'warning'; text: string } | null>(null);
+  const { confirm, dialog: confirmDialog } = useConfirm();
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -166,15 +171,52 @@ function ManageAccessBody({ workspaceId }: { workspaceId: string }) {
 
   useEffect(() => { void load(); }, [load]);
 
-  const remove = useCallback(async (principalId: string) => {
-    setRemoving(principalId);
-    try {
-      await clientFetch(`/api/workspaces/${workspaceId}/role-assignments/${encodeURIComponent(principalId)}`, { method: 'DELETE' });
-      await load();
-    } finally {
-      setRemoving(null);
-    }
-  }, [workspaceId, load]);
+  // Removing a member deletes their Cosmos role row AND revokes the mirrored
+  // Azure RBAC assignment on the workspace resource group — a destructive,
+  // access-revoking action, so it is guarded by an explicit danger confirm. The
+  // BFF `{ ok }` is checked (a failure keeps the dialog open with an inline
+  // error); a non-active `rbac`/`fabric` side-effect surfaces a warning so an
+  // un-revoked RBAC grant is never lost silently.
+  const remove = useCallback(async (r: RoleAssignment) => {
+    setRemoveNotice(null);
+    await confirm({
+      title: 'Remove member?',
+      danger: true,
+      confirmLabel: 'Remove',
+      body: (
+        <>
+          Remove <strong>{r.displayName}</strong> ({r.role}) from this workspace? This deletes their
+          role assignment and revokes the mirrored Azure RBAC role on the workspace resource group.
+          This can&apos;t be undone (you can re-add them later).
+        </>
+      ),
+      onConfirm: async () => {
+        const res = await clientFetch(
+          `/api/workspaces/${workspaceId}/role-assignments/${encodeURIComponent(r.principalId)}`,
+          { method: 'DELETE' },
+        );
+        const json = await res.json().catch(() => ({} as any));
+        if (!res.ok || !json?.ok) {
+          // Thrown message shows inline in the dialog; it stays open for retry.
+          throw new Error(json?.error || `Remove failed (HTTP ${res.status})`);
+        }
+        // Member row removed. Surface any side-effect that did NOT fully revoke.
+        const warns: string[] = [];
+        if (json.rbac && json.rbac.status !== 'active') {
+          warns.push(`Azure RBAC revoke is ${json.rbac.status}${json.rbac.detail ? ` — ${json.rbac.detail}` : ''}`);
+        }
+        if (json.fabric && json.fabric.status !== 'active') {
+          warns.push(`Fabric role revoke is ${json.fabric.status}${json.fabric.detail ? ` — ${json.fabric.detail}` : ''}`);
+        }
+        setRemoveNotice(
+          warns.length
+            ? { intent: 'warning', text: `${r.displayName} removed, but ${warns.join('; ')}` }
+            : { intent: 'success', text: `${r.displayName} removed.` },
+        );
+        await load();
+      },
+    });
+  }, [confirm, workspaceId, load]);
 
   const canManage = data?.callerRole === 'admin';
   const rows = data?.roleAssignments ?? [];
@@ -209,6 +251,13 @@ function ManageAccessBody({ workspaceId }: { workspaceId: string }) {
       )}
       {loadError && (
         <MessageBar intent="error"><MessageBarBody>{loadError}</MessageBarBody></MessageBar>
+      )}
+      {removeNotice && (
+        <MessageBar intent={removeNotice.intent}>
+          <MessageBarBody style={{ overflowWrap: 'anywhere', wordBreak: 'break-word', minWidth: 0 }}>
+            {removeNotice.text}
+          </MessageBarBody>
+        </MessageBar>
       )}
 
       <div className={styles.toolbar}>
@@ -261,8 +310,8 @@ function ManageAccessBody({ workspaceId }: { workspaceId: string }) {
                   </TableCell>
                   <TableCell>
                     <Button appearance="subtle" size="small" icon={<Delete20Regular />}
-                      disabled={!canManage || removing === r.principalId}
-                      onClick={() => remove(r.principalId)} aria-label={`Remove ${r.displayName}`} />
+                      disabled={!canManage}
+                      onClick={() => void remove(r)} aria-label={`Remove ${r.displayName}`} />
                   </TableCell>
                 </TableRow>
               );
@@ -277,6 +326,7 @@ function ManageAccessBody({ workspaceId }: { workspaceId: string }) {
         onClose={() => setAddOpen(false)}
         onAdded={() => { setAddOpen(false); void load(); }}
       />
+      {confirmDialog}
     </div>
   );
 }

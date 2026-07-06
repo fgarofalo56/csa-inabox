@@ -68,13 +68,13 @@ FALLBACK
   Reply with the "no grounding" line above and stop.`;
 
 const SEED_DOC_1 = `CSA Loom is a tenant-aware administrative plane that sits on top of \
-the Fabric-in-a-Box (FiaB) reference deployment. It exposes per-tenant \
+the CSA Loom reference deployment. It exposes per-tenant \
 catalogs of "apps" and "workloads" in Cosmos DB, gated by a NextAuth/MSAL \
 session, and routed through Front Door + Application Gateway with private \
 endpoints to every backing service. The data-plane (Cosmos, Key Vault, AI \
 Search, Storage) is private-endpoint-locked, so all reads and writes \
 flow through the container app's managed identity. This makes Loom the \
-single human-facing surface for FiaB while keeping the data-plane invisible \
+single human-facing surface for the platform while keeping the data-plane invisible \
 from the public internet.`;
 
 const SEED_DOC_2 = `Loom workspace items are stored in a Cosmos container partitioned by \
@@ -292,7 +292,7 @@ MessageBar naming the exact env var / role to provision (no fake data):
           {
             id: 'doc-001-chunk-0',
             tenantId: 'tenant-demo',
-            title: 'CSA Loom: tenant-aware admin plane on FiaB',
+            title: 'CSA Loom: tenant-aware admin plane',
             content: SEED_DOC_1,
             source_url: 'https://sample.docs.csa-loom.invalid/architecture/overview',
             chunk_index: 0,
@@ -325,7 +325,7 @@ MessageBar naming the exact env var / role to provision (no fake data):
           {
             id: 'doc-004-chunk-0',
             tenantId: 'tenant-demo',
-            title: 'Per-tenant Fabric workspaces in FiaB',
+            title: 'Per-tenant workspaces in CSA Loom',
             content: SEED_DOC_4,
             source_url: 'https://sample.docs.csa-loom.invalid/fabric/workspaces',
             chunk_index: 0,

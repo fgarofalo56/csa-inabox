@@ -331,6 +331,11 @@ function GeoMapEditorBody({ item, id }: { item: FabricItemType; id: string }) {
             <Input value={state.tileLayerUrl} onChange={(_: unknown, d: any) => setState((p) => ({ ...p, tileLayerUrl: d.value }))} placeholder="https://…/tiles/{z}/{x}/{y}.pbf" />
           </div>
           <Subtitle2>Data overlay (GeoJSON)</Subtitle2>
+          {/* rel-T107 — PARITY JSON VIEW (allowed). This is a GeoJSON DATA PAYLOAD, not an
+              item-config blob: a FeatureCollection of geometry rendered live in the SVG map
+              below (1:1 with authoring a GeoJSON overlay in Azure Maps). GeoJSON has no typed
+              form equivalent — the artifact IS the JSON document. Validated on change and by
+              the ribbon "Validate overlay" action; persisted via PATCH /api/cosmos-items. */}
           <MonacoTextarea value={state.overlayGeoJson || ''} onChange={(v) => setState((p) => ({ ...p, overlayGeoJson: v }))} language="json" height={200} minHeight={160} ariaLabel="Overlay GeoJSON" />
           {parseErr && <MessageBar intent="error"><MessageBarBody>Invalid GeoJSON: {parseErr}</MessageBarBody></MessageBar>}
           {previewMsg && <MessageBar intent={previewMsg.intent}><MessageBarBody>{previewMsg.text}</MessageBarBody></MessageBar>}

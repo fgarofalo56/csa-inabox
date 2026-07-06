@@ -997,7 +997,7 @@ export function DataProductDetailEditor({ item: itemProp, id }: { item?: FabricI
     return <ConsumerDataProductDetail id={id} />;
   }
 
-  return <ItemEditorChrome item={item} id={id} ribbon={ribbon} main={main} />;
+  return <ItemEditorChrome item={item} id={id} displayName={product?.name} ribbon={ribbon} main={main} />;
 }
 
 // ============================================================================

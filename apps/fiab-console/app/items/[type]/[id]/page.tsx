@@ -1,5 +1,5 @@
 'use client';;
-import { use } from "react";
+import { use, useState } from "react";
 
 /**
  * Per-item-type editor route. Dispatches to a rich editor from the
@@ -22,26 +22,40 @@ import { getEditor } from '@/lib/editors/registry';
 import { ItemEditorChrome } from '@/lib/editors/item-editor-chrome';
 import { EmptyState } from '@/lib/components/empty-state';
 import { getItem, type WorkspaceItem } from '@/lib/api/workspaces';
-import type { RibbonTab } from '@/lib/components/ribbon';
+import { ShareItemDialog } from '@/lib/dialogs/share-item-dialog';
+import { ArrowSync16Regular, Share16Regular, People16Regular } from '@fluentui/react-icons';
+import type { RibbonTab, RibbonGroup } from '@/lib/components/ribbon';
 import type { PipelineRuntime } from '@/lib/components/pipeline/types';
 
-/** Generic ribbon. The Share group's Share + Permissions actions navigate to
- *  the universal item-permissions page (/items/[type]/[id]/permissions) which
- *  hosts the Share dialog + live Manage-permissions list (F6). */
-function genericRibbon(onManagePermissions: () => void): RibbonTab[] {
-  return [
-    { id: 'home', label: 'Home', groups: [
-      { label: 'Item', actions: [{ label: 'Save' }, { label: 'Save as' }, { label: 'Refresh' }] },
-      { label: 'Share', actions: [
-        { label: 'Share', onClick: onManagePermissions },
-        { label: 'Permissions', onClick: onManagePermissions },
-        { label: 'Sensitivity' },
-        { label: 'Endorse' },
-      ] },
-      { label: 'Run', actions: [{ label: 'Recent runs' }, { label: 'Schedule' }] },
-      { label: 'Source control', actions: [{ label: 'Commit' }, { label: 'Update' }] },
-    ]},
-  ];
+/** Generic ribbon for item types without a focused editor yet. Only REAL,
+ *  wired actions ship here (no-vaporware.md / ui-parity.md — no dead disabled
+ *  buttons):
+ *    • Refresh    → refetches the persisted item query (['item', type, id]).
+ *    • Share      → opens the fully-wired ShareItemDialog (Fabric "Grant people
+ *                   access") for this item.
+ *    • Permissions→ navigates to the universal item-permissions page
+ *                   (/items/[type]/[id]/permissions) — the live Manage-permissions
+ *                   list (F6).
+ *  These only apply to a persisted item, so on `/new` (nothing saved yet) the
+ *  ribbon renders with no action groups rather than dead buttons. Save/Sensitivity/
+ *  Endorse/Run/Source-control were dropped from the generic shell: they had no
+ *  generic backend and the chrome header already exposes Copilot, Share,
+ *  Endorsement, Lineage, and Thread for every item. */
+function genericRibbon(
+  isNew: boolean,
+  handlers: { onRefresh: () => void; onShare: () => void; onManagePermissions: () => void },
+): RibbonTab[] {
+  const groups: RibbonGroup[] = [];
+  if (!isNew) {
+    groups.push({ label: 'Item', actions: [
+      { label: 'Refresh', icon: <ArrowSync16Regular />, onClick: handlers.onRefresh },
+    ] });
+    groups.push({ label: 'Share', actions: [
+      { label: 'Share', icon: <Share16Regular />, onClick: handlers.onShare },
+      { label: 'Permissions', icon: <People16Regular />, onClick: handlers.onManagePermissions },
+    ] });
+  }
+  return [{ id: 'home', label: 'Home', groups }];
 }
 
 interface Props {
@@ -52,6 +66,9 @@ export default function ItemEditorPage(props: Props) {
   const params = use(props.params);
   const { type, id } = params;
   const router = useRouter();
+  // Generic-fallback Share dialog (rel-T104) — the generic ribbon's Share action
+  // opens this fully-wired ShareItemDialog for the persisted item.
+  const [shareOpen, setShareOpen] = useState(false);
   // [WAVE-C] The unified create-step (new-item-dialog configure step) creates a
   // HEAD instance (e.g. `data-pipeline`) and carries the user's chosen runtime /
   // template forward via the query string — `?runtime=adf&templateId=geo-enrich`.
@@ -165,12 +182,33 @@ export default function ItemEditorPage(props: Props) {
     : `${persisted?.displayName ?? item.displayName} (${id.substring(0, 8)})`;
 
   return (
-    <ItemEditorChrome item={item} id={id} ribbon={genericRibbon(() => router.push(`/items/${type}/${id}/permissions`))} main={
-      <EmptyState
-        icon="◰"
-        title={headline}
-        body={`${item.displayName} (REST type: ${item.restType}) uses the generic editor shell until its focused editor ships in a follow-on phase. The ribbon, sharing, sensitivity, and source-control affordances are wired and behave identically across every item type.`}
+    <>
+      <ItemEditorChrome
+        item={item}
+        id={id}
+        displayName={persisted?.displayName}
+        ribbon={genericRibbon(isNew, {
+          onRefresh: () => { void q.refetch(); },
+          onShare: () => setShareOpen(true),
+          onManagePermissions: () => router.push(`/items/${type}/${id}/permissions`),
+        })}
+        main={
+          <EmptyState
+            icon="◰"
+            title={headline}
+            body={`${item.displayName} (REST type: ${item.restType}) uses the generic editor shell until its focused editor ships in a follow-on phase. The ribbon's Refresh, Share, and Permissions actions are wired and behave identically across every item type.`}
+          />
+        }
       />
-    } />
+      {!isNew && (
+        <ShareItemDialog
+          open={shareOpen}
+          itemId={id}
+          itemType={type}
+          onClose={() => setShareOpen(false)}
+          onGranted={() => setShareOpen(false)}
+        />
+      )}
+    </>
   );
 }

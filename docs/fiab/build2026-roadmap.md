@@ -1,7 +1,7 @@
 # Build 2026 → CSA Loom adoption roadmap
 
 Research across the Build 2026 announcements (12 agents, grounded in each page +
-the repo). Relevance to CSA Loom (a Fabric-in-a-Box data/AI/governance console).
+the repo). Relevance to CSA Loom (an Azure-native, Microsoft Fabric–parity data/AI/governance console).
 
 | Announcement | Loom relevance |
 |---|---|
