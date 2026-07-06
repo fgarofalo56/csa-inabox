@@ -37,13 +37,14 @@ import {
   Text, Badge, Dropdown, Option, Button, Subtitle2, Caption1,
   TabList, Tab, type SelectTabData,
   MessageBar, MessageBarBody, Spinner,
+  Dialog, DialogSurface, DialogBody, DialogTitle, DialogContent, DialogActions,
   makeStyles, tokens,
 } from '@fluentui/react-components';
 import {
   BookOpen24Regular, Open16Regular, DocumentBulletList16Regular, ArrowDownload16Regular,
   NotebookAdd24Regular, Apps16Regular, SearchInfo24Regular,
   Grid24Regular, Notebook24Regular, Database24Regular, CompassNorthwest24Regular,
-  BookStar24Regular, FolderOpen20Regular,
+  BookStar24Regular, FolderOpen20Regular, ImageMultiple16Regular, Dismiss24Regular,
 } from '@fluentui/react-icons';
 import { PageShell } from '@/lib/components/page-shell';
 import { EmptyState as SharedEmptyState } from '@/lib/components/empty-state';
@@ -52,13 +53,14 @@ import { ViewToggle, type LoomView } from '@/lib/components/ui/view-toggle';
 import { TileGrid } from '@/lib/components/ui/tile-grid';
 import { itemVisual } from '@/lib/components/ui/item-type-visual';
 import { LearnTopicCard } from '@/lib/components/learn/learn-topic-card';
+import { StepWalkthrough } from '@/lib/components/learn/step-walkthrough';
 import { InstallAppDialog } from '@/lib/components/apps/install-app-dialog';
 import { getCoreSurfaceTutorials } from '@/lib/components/learn/core-surface-tutorials';
 import { NotebookImportWizard } from '@/lib/learn/notebook-import-wizard';
 import { NotebookGalleryCard, type NotebookSample } from '@/lib/components/learn/notebook-gallery-card';
 import { LearningHubCopilot, type StarterPrompt } from '@/lib/components/learn/learning-hub-copilot';
 import {
-  getLearnCatalog, loomDocUrl, type LearnTopic,
+  getLearnCatalog, getWalkthrough, loomDocUrl, type LearnTopic,
 } from '@/lib/learn/content';
 
 type HubTab = 'gallery' | 'notebooks' | 'samples' | 'tours' | 'guides';
@@ -164,6 +166,8 @@ const useStyles = makeStyles({
   },
 
   footer: { paddingTop: tokens.spacingVerticalL, color: tokens.colorNeutralForeground3 },
+  dialogSurface: { maxWidth: '860px', width: '90vw' },
+  dialogContent: { maxHeight: '72vh', overflowY: 'auto' },
 });
 
 function matches(t: LearnTopic, q: string): boolean {
@@ -218,6 +222,12 @@ export default function LearnPage(): React.ReactElement {
   const [sort, setSort] = React.useState<SortKey>('relevance');
   const [view, setView] = React.useState<LoomView>('tile');
   const [installTopic, setInstallTopic] = React.useState<{ appId: string; title: string } | null>(null);
+  // Guides list-view "View walkthrough" opens a shared step-by-step dialog.
+  const [walkTopic, setWalkTopic] = React.useState<LearnTopic | null>(null);
+  const walkSteps = React.useMemo(
+    () => (walkTopic ? getWalkthrough(walkTopic.visualType) : null),
+    [walkTopic],
+  );
 
   // The set of topics the active tab filters over (gallery/tours/guides).
   const tabPool = tab === 'gallery' ? useCases : tab === 'tours' ? tours : guides;
@@ -503,6 +513,12 @@ export default function LearnPage(): React.ReactElement {
                             </Text>
                           </div>
                           <div className={s.listLinks}>
+                            {t.section === 'Editor guides' && getWalkthrough(t.visualType) && (
+                              <Button size="small" appearance="primary" icon={<ImageMultiple16Regular />}
+                                onClick={() => setWalkTopic(t)}>
+                                View walkthrough
+                              </Button>
+                            )}
                             <a className={s.listPrimary} href={t.primaryUrl} target="_blank" rel="noreferrer">
                               <DocumentBulletList16Regular />{t.primaryLabel}<Open16Regular />
                             </a>
@@ -562,6 +578,38 @@ export default function LearnPage(): React.ReactElement {
           open={!!installTopic}
           onOpenChange={(o) => { if (!o) setInstallTopic(null); }}
         />
+      )}
+
+      {/* Shared visual walkthrough dialog for the guides list-view. */}
+      {walkTopic && walkSteps && (
+        <Dialog open={!!walkTopic} onOpenChange={(_, d) => { if (!d.open) setWalkTopic(null); }}>
+          <DialogSurface className={s.dialogSurface}>
+            <DialogBody>
+              <DialogTitle
+                action={
+                  <Button appearance="subtle" aria-label="Close" icon={<Dismiss24Regular />}
+                    onClick={() => setWalkTopic(null)} />
+                }
+              >
+                {walkTopic.title} — visual walkthrough
+              </DialogTitle>
+              <DialogContent className={s.dialogContent}>
+                <StepWalkthrough
+                  visualType={walkTopic.visualType}
+                  title={walkTopic.title}
+                  summary={walkTopic.summary}
+                  steps={walkSteps}
+                  docsUrl={walkTopic.primaryUrl}
+                  docsLabel={walkTopic.hasLoomDoc ? 'Open the full Loom guide' : 'Open the docs'}
+                  msLearnUrl={walkTopic.hasLoomDoc ? walkTopic.msLearnUrl : undefined}
+                />
+              </DialogContent>
+              <DialogActions>
+                <Button appearance="secondary" onClick={() => setWalkTopic(null)}>Close</Button>
+              </DialogActions>
+            </DialogBody>
+          </DialogSurface>
+        </Dialog>
       )}
     </PageShell>
   );

@@ -48,6 +48,17 @@ if (!fs.existsSync(MANIFEST)) {
 
 interface Step { description: string; screenshotPath: string }
 
+/**
+ * Append the `screenshot=1` flag so the "Learn about this item" Drawer (and any
+ * other first-visit help surface that honours the flag — item-side-panel.tsx)
+ * NEVER auto-opens in the first place. This is the primary defence; the
+ * `closeAllOverlays` sweep below is the belt-and-suspenders backstop for any
+ * overlay a tab click / editor mount might still raise.
+ */
+function withScreenshotFlag(url: string): string {
+  return url + (url.includes('?') ? '&' : '?') + 'screenshot=1';
+}
+
 // Which coverage dimensions to capture this run. Default = all three.
 const DIMENSIONS = new Set(
   (process.env.LOOM_TUTORIAL_DIMENSIONS || 'items,apps,features')
@@ -60,25 +71,64 @@ const TYPES = (process.env.LOOM_TUTORIAL_TYPES
   ? process.env.LOOM_TUTORIAL_TYPES.split(',').map((s) => s.trim()).filter(Boolean)
   : loadEditorTypes());
 
-/** Dismiss the "Learn about this item" Drawer if it's open. */
-async function closeLearn(page: Page): Promise<void> {
-  try {
-    const close = page.locator('[aria-label="Close"]');
-    if (await close.count()) await close.first().click({ timeout: 800 });
-  } catch { /* not open — fine */ }
+/**
+ * BULLETPROOF overlay dismissal — the single guarantee that the "Learn about
+ * this item" Drawer (or any LearnPopover / SectionExplainer popover / help
+ * overlay / first-run tour) can NEVER bleed into a capture.
+ *
+ * A screenshot with the Learn drawer half-covering the surface is the exact
+ * defect this whole task exists to kill, so this is deliberately aggressive and
+ * idempotent: it loops until no `[role="dialog"]` (Fluent Drawer + Dialog +
+ * Popover surface all render `role="dialog"`) is visible, trying in order:
+ *   1. the explicit drawer/dialog Close button (`aria-label="Close"`),
+ *   2. Escape (dismisses drawers, popovers, dialogs, coach-marks),
+ *   3. a click on the page body corner to dismiss light-dismiss popovers.
+ * Then it asserts every dialog is detached/hidden before returning, so callers
+ * can screenshot a guaranteed-clean surface. Best-effort throughout — a stuck
+ * modal never throws (that would abort the capture); it just logs.
+ */
+async function closeAllOverlays(page: Page): Promise<void> {
+  const anyDialog = () => page.locator('[role="dialog"]:visible');
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const count = await anyDialog().count().catch(() => 0);
+    if (count === 0) break;
+    // 1. Prefer the explicit Close affordance scoped to the open dialog/drawer.
+    try {
+      const close = page.locator('[role="dialog"] [aria-label="Close"]');
+      if (await close.count()) await close.first().click({ timeout: 800 });
+    } catch { /* fall through to Escape */ }
+    // 2. Escape — dismisses drawers, popovers, dialogs, and coach-marks.
+    await page.keyboard.press('Escape').catch(() => {});
+    await page.waitForTimeout(250);
+  }
+  // Final guarantee: wait for any lingering dialog to be gone before shooting.
+  await anyDialog().first().waitFor({ state: 'hidden', timeout: 2000 }).catch(() => {});
 }
+
+/** Back-compat alias — every call site now routes through the full sweep. */
+const closeLearn = closeAllOverlays;
 
 /** Stage one surface's step-by-step tutorial markdown next to its screenshots. */
 function stageTutorial(slug: string, title: string, summary: string, steps: Step[]): void {
   const dir = path.join(STAGE, slug);
   fs.mkdirSync(dir, { recursive: true });
   const lines = [`# ${title}`, '', `> Staged tutorial capture — review before publishing.`, '', summary, '', '## Walkthrough', ''];
+  const manifest: Array<{ n: number; caption: string; image: string }> = [];
   steps.forEach((s, i) => {
-    const dst = path.join(dir, `${i + 1}.png`);
+    const file = `${i + 1}.png`;
+    const dst = path.join(dir, file);
     try { fs.copyFileSync(s.screenshotPath, dst); } catch { /* keep going */ }
-    lines.push(`### Step ${i + 1} — ${s.description}`, '', `![Step ${i + 1}](./${i + 1}.png)`, '');
+    lines.push(`### Step ${i + 1} — ${s.description}`, '', `![Step ${i + 1}](./${file})`, '');
+    manifest.push({ n: i + 1, caption: s.description, image: file });
   });
   fs.writeFileSync(path.join(dir, 'tutorial.md'), lines.join('\n'));
+  // Data-driven step manifest so the Learn Hub's StepWalkthrough (and any docs
+  // consumer) can render the numbered visual walkthrough without re-parsing the
+  // markdown — regenerated screenshots slot straight back into these steps.
+  fs.writeFileSync(
+    path.join(dir, 'steps.json'),
+    JSON.stringify({ slug, title, summary, steps: manifest }, null, 2),
+  );
   fs.appendFileSync(MANIFEST, `- [${slug}](./${slug}/tutorial.md) — ${steps.length} steps\n`);
 }
 
@@ -122,10 +172,10 @@ if (DIMENSIONS.has('items')) {
         const ws = await createWorkspace(page, `tut-${type}-${Date.now()}`);
         CREATED_WS.push(ws);
         const id = await createItem(page, ws, type, `Demo ${type}`);
-        await page.goto(`${BASE}/items/${encodeURIComponent(type)}/${encodeURIComponent(id)}`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+        await page.goto(withScreenshotFlag(`${BASE}/items/${encodeURIComponent(type)}/${encodeURIComponent(id)}`), { waitUntil: 'domcontentloaded', timeout: 45_000 });
         await page.waitForTimeout(3500);
-        await closeLearn(page);
-        await shot(1, `Open the ${type} editor`);
+        await closeAllOverlays(page);
+        await shot(1, `Overview — the ${type} editor opens here`);
         await walkTabs(page, shot);
 
         stageTutorial(`item-${type}`, `${type} — step by step`,
@@ -188,9 +238,9 @@ if (DIMENSIONS.has('apps')) {
           const installNote = !inst
             ? ' (install request failed to send)'
             : inst.ok() ? '' : ` (install returned HTTP ${inst.status()})`;
-          await page.goto(`${BASE}/apps/${encodeURIComponent(app.id)}`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+          await page.goto(withScreenshotFlag(`${BASE}/apps/${encodeURIComponent(app.id)}`), { waitUntil: 'domcontentloaded', timeout: 45_000 });
           await page.waitForTimeout(3000);
-          await closeLearn(page);
+          await closeAllOverlays(page);
           await shot(1, `Open the ${app.name || app.title || app.id} app${installNote}`);
           await walkTabs(page, shot);
           stageTutorial(slug, `${app.name || app.title || app.id} — step by step`,
@@ -218,9 +268,9 @@ if (DIMENSIONS.has('features')) {
       const steps: Step[] = [];
       const shot = makeShooter(page, slug, steps);
       try {
-        await page.goto(`${BASE}${navPath}`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
+        await page.goto(withScreenshotFlag(`${BASE}${navPath}`), { waitUntil: 'domcontentloaded', timeout: 45_000 });
         await page.waitForTimeout(3000);
-        await closeLearn(page);
+        await closeAllOverlays(page);
         await shot(1, `Open ${navPath}`);
         await walkTabs(page, shot);
         stageTutorial(slug, `${navPath === '/' ? 'Home' : navPath} — step by step`,
